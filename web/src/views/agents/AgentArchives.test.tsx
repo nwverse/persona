@@ -88,11 +88,31 @@ const flush = async () => {
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
 const titles = () => [...el.querySelectorAll("[data-agent-archives] a")].map((a) => a.textContent ?? "");
+const archiveLinks = () => [...el.querySelectorAll("[data-agent-archives] a")].map((a) => a.getAttribute("href"));
+const showMore = () => [...el.querySelectorAll("button")].find((b) => b.textContent === t("agents-archives.show_more"));
+
+function chooseFilter(label: string, value: string) {
+  const select = el.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  act(() => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(select.value).toBe(value);
+}
+
+function search(value: string) {
+  const input = el.querySelector("input")!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 
 describe("Archived agents", () => {
   it("lists the archived agents newest first and restores one", async () => {
     act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
     await flush();
+    chooseFilter(t("agents-archives.computer"), "mac");
     expect(titles().map((x) => x.slice(0, 13))).toEqual(["Release notes", "Fix the build"]);
     const restore = [...el.querySelectorAll("[data-agent-archives] button")].find((b) => b.getAttribute("title") === t("agents-archives.restore_label", { title: "Fix the build" })) as HTMLButtonElement;
     await act(async () => restore.click());
@@ -108,6 +128,67 @@ describe("Archived agents", () => {
     expect(filterArchived(hub.archived, "/w/b", machines).map((s) => s.session_id)).toEqual(["b"]);
     expect(filterArchived(hub.archived, "studio", machines)).toHaveLength(2);
     expect(filterArchived(hub.archived, "codex", machines).map((s) => s.session_id)).toEqual(["b"]);
+  });
+
+  it("appends matching rows in order and resets the visible batch on each filter change", async () => {
+    const matches = Array.from({ length: 120 }, (_, n) => row(String(n).padStart(3, "0"), { agent: "codex" }));
+    const expected = matches.map((s) => `/s/mac/${s.session_id}`);
+    hub.archived = [...matches, row("other", { machine_id: "laptop", agent: "codex", title: "Agent 000 from Studio" })];
+    act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
+    await flush();
+    expect(archiveLinks()).toHaveLength(40);
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(t("agents-archives.showing", { shown: 40, matches: 121 }));
+    act(() => showMore()!.click());
+    expect(archiveLinks()).toHaveLength(80);
+
+    chooseFilter(t("agents-archives.computer"), "mac");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    act(() => showMore()!.click());
+    chooseFilter(t("agents-archives.runtime"), "codex");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    act(() => showMore()!.click());
+    search("Studio");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    act(() => showMore()!.click());
+    expect(archiveLinks()).toEqual(expected.slice(0, 80));
+    expect(document.activeElement?.getAttribute("href")).toBe(expected[40]);
+    act(() => showMore()!.click());
+    expect(archiveLinks()).toEqual(expected);
+    expect(document.activeElement?.getAttribute("href")).toBe(expected[80]);
+    expect(el.querySelector('[role="status"]')?.textContent).toBe(t("agents-archives.showing", { shown: 120, matches: 120 }));
+    expect(showMore()).toBeUndefined();
+
+    act(() => {
+      el.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(el.querySelector("input")!.value).toBe("");
+    expect(archiveLinks()).toEqual(expected.slice(0, 40));
+    expect(hub.posted).toEqual([]);
+  });
+
+  it("intersects exact computer and runtime identities with text, including empty intersections", async () => {
+    hub.archived = [
+      row("history", { agent: undefined, source_kind: "codex_history", title: "Release notes" }),
+      row("changelog", { agent: "codex", title: "Changelog" }),
+      row("claude", { agent: "claude", title: "Codex release notes" }),
+      row("laptop", { machine_id: "laptop", agent: "codex", title: "Studio release notes" }),
+    ];
+    act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
+    await flush();
+    chooseFilter(t("agents-archives.computer"), "mac");
+    chooseFilter(t("agents-archives.runtime"), "codex");
+    search("release");
+    expect(archiveLinks()).toEqual(["/s/mac/history"]);
+    chooseFilter(t("agents-archives.computer"), "laptop");
+    expect(archiveLinks()).toEqual(["/s/laptop/laptop"]);
+    search("");
+    chooseFilter(t("agents-archives.runtime"), "claude");
+    expect(archiveLinks()).toEqual([]);
+    expect(el.textContent).toContain(t("agents-archives.no_filter_results"));
+    expect(showMore()).toBeUndefined();
+    chooseFilter(t("agents-archives.runtime"), "");
+    expect(archiveLinks()).toEqual(["/s/laptop/laptop"]);
+    expect(hub.posted).toEqual([]);
   });
 
   it("says when there are none, and when the list cannot be read", async () => {
@@ -129,6 +210,18 @@ describe("Archived agents", () => {
     act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
     await flush();
     expect(el.textContent).toContain(t("agents-archives.unsupported_title"));
+  });
+
+  it("goes back to the Agents list from its header, at every width (a phone had only the sidebar button)", async () => {
+    history.replaceState(null, "", "/agents/archived");
+    act(() => root.render(<AgentArchives onToggleSidebar={() => {}} />));
+    await flush();
+    const back = el.querySelector<HTMLButtonElement>(`header button[aria-label="${t("agents-archives.back")}"]`);
+    expect(back).not.toBeNull();
+    // not hidden at any width, unlike the sidebar button beside it
+    expect(back!.className).not.toMatch(/\bhidden\b/);
+    act(() => back!.click());
+    expect(location.pathname).toBe("/agents");
   });
 });
 
@@ -154,6 +247,21 @@ describe("the row menu", () => {
     expect(busy[1].detail).toBeUndefined();
     const serving = keys({ ...live, ports: [{ port: 3000 }] }, hub.features);
     expect(serving.map((i) => [i.key, Boolean(i.disabled)])).toEqual([["archive", false], ["close", false]]);
+  });
+
+  it("removes an untouched Persona start from the Hub list even when its computer cannot close it", () => {
+    const leftover: Session = { ...live, started_by_persona: true, status: "unknown", state: "unknown", updated_at: "0001-01-01T00:00:00Z" };
+    const actions = (s: Session) => keys(s, hub.features).map((item) => item.key);
+    expect(actions(leftover)).toEqual(["archive", "delete"]);
+    expect(actions({ ...leftover, updated_at: undefined })).toContain("delete");
+    expect(actions({ ...live, status: "offline", state: "offline", start_error: "missing launcher" })).toContain("delete");
+    for (const changes of [
+      { updated_at: "2026-11-20T03:00:00Z" }, { started_by_persona: false }, { starting: true },
+      { last_text: "A previous exchange" }, { rev: 3 }, { source_kind: "codex_history" },
+      { awaiting_first_message: true }, { status: "working", state: "working" }, { pending_interactions: 1 },
+      { capabilities: { read: true, send: true, terminal: true } }, { assistant: true }, { archived: true },
+      { undelivered: [{ id: "send", text: "later", at: "2026-11-20T03:00:00Z", state: "waiting", computer: "Studio" }] },
+    ] satisfies Partial<Session>[]) expect(actions({ ...leftover, ...changes })).not.toContain("delete");
   });
 
   it("opens the one Close… dialog for the row", async () => {

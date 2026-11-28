@@ -68,6 +68,7 @@
     <string name="settings_ext_state_error">出错了</string>
     <string name="settings_ext_state_unknown">状态未知</string>
     <string name="settings_ext_run_pack">合集本身不运行程序；成员独立启用、设置和卸载。</string>
+    <string name="settings_ext_run_pack_members_follow">合集本身不运行程序；成员独立设置和卸载。</string>
     <string name="settings_ext_run_running">正在运行</string>
     <string name="settings_ext_run_idle">暂未运行，用到时自动启动</string>
     <string name="settings_ext_source_builtin">内置</string>
@@ -161,6 +162,12 @@
     <string name="settings_ext_read_only">这个扩展写在它所属助手的 manager.json 里：开关和设置去那里改，改完重启这个助手。</string>
     <string name="settings_ext_enabled">启用</string>
     <string name="settings_ext_enabled_note">停用后它不再运行，提供的连接器等也一起关掉；设置和密钥留着。</string>
+    <string name="settings_ext_enable_footer_pack">停用合集会一起停用它的成员，成员随之停止运行。重新启用合集时，会重新启用当初由合集停用的成员；你自己单独启用或停用过的成员保持你的选择。</string>
+    <string name="settings_ext_enable_footer_pack_off">重新启用合集会重新启用 %1$s。你自己单独启用或停用过的成员保持你的选择。</string>
+    <string name="settings_ext_enable_footer_pack_alone">停用合集只会停用合集本身。请到每个成员自己的页面启用或停用它。</string>
+    <string name="settings_ext_disable_pack_title">停用「%1$s」和它的成员？</string>
+    <string name="settings_ext_disable_pack_body">它的成员也会一起停用：%1$s。只是停用，不会卸载，设置和数据都会保留。重新启用合集时会重新启用它们。</string>
+    <string name="settings_ext_disable_all">一起停用</string>
     <string name="settings_ext_unavailable">读不到</string>
     <string name="settings_ext_still_needed">还缺：%1$s</string>
     <string name="settings_ext_channel_link">这是一个对话渠道</string>
@@ -231,6 +238,12 @@
     <string name="settings_ext_preview_again">重新预览</string>
     <string name="settings_ext_uninstall_title">卸载 %1$s？</string>
     <string name="settings_ext_uninstall_text">会停掉它，删掉它的设置和密钥；它提供的连接器也一起去掉。</string>
+    <string name="settings_ext_uninstall_keep_result">软件包也会删除，数据文件夹会保留在 hub 所在的机器上。卸载后若还有需要手动清理的项目，会逐条列出。</string>
+    <string name="settings_ext_uninstall_delete_data_result">软件包和数据文件夹也会删除。卸载后若还有需要手动清理的项目，会逐条列出。</string>
+    <string name="settings_ext_removal_warnings_text">已卸载。还有一些项目需要你手动清理。</string>
+    <string name="settings_ext_removal_warnings_header">需要手动清理</string>
+    <string name="settings_ext_removal_copy">复制全部警告</string>
+    <string name="settings_ext_removal_done">好</string>
     <string name="settings_ext_dependents_title">一起停用依赖它的扩展？</string>
     <string name="settings_ext_dependents_text">%1$s 依赖 %2$s，会一起停用。</string>
     <string name="settings_ext_dependents_unnamed">其他扩展依赖 %1$s，会一起停用。</string>
@@ -255,6 +268,10 @@
     <string name="settings_ext_token_changed">已换 token</string>
     <string name="settings_ext_remove_market_title">删除 %1$s？</string>
     <string name="settings_ext_remove_market_text">hub 不再读这个市场。从它装的扩展留着，但不再升级，直到用同样的地址把市场加回来。</string>
+    <plurals name="settings_ext_remove_market_affected">
+        <item quantity="other">hub 不再读这个市场。从它装的 %1$d 个扩展留着，但不再升级，直到用同样的地址把市场加回来。</item>
+    </plurals>
+    <string name="settings_ext_remove_market_unused">hub 不再读这个市场。没有扩展是从它装的。</string>
     <string name="settings_ext_remove">删除</string>
     <string name="settings_ext_market_removed">已删除市场</string>
     <string name="settings_ext_market_address">地址</string>
@@ -373,4 +390,62 @@
     <string name="settings_subscriptions_counts_on">%1$d 个开着</string>
     <string name="settings_subscriptions_counts_failing">%1$d 个开着 · %2$d 个出错</string>
     <string name="settings_subscriptions_counts_none">可以订阅</string>
+    <string name="settings_ext_notification_expired">通知已过期，请在扩展页重试。</string>
+    <string name="settings_ext_notification_wrong_scope">找不到原 hub 或助手，请重新连接后在扩展页重试。</string>
+    <string name="settings_ext_notification_unlock">请先解锁手机，再执行这条通知的操作。</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="other">在 %1$d 台机器上运行</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="other">%1$d 台机器异常</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="other">%1$d 台机器离线</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="other">正在 %1$d 台机器上启动</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="other">%1$d 台机器已停止</item>
+    </plurals>
+    <string name="settings_ext_graph">关系图</string>
+    <string name="settings_ext_graph_zoom_out">缩小</string>
+    <string name="settings_ext_graph_zoom_in">放大</string>
+    <string name="settings_ext_graph_fit">适应窗口</string>
+    <string name="settings_ext_graph_full_screen">全屏</string>
+    <string name="settings_ext_graph_open">全屏打开关系图</string>
+    <string name="settings_ext_graph_fold">折叠</string>
+    <plurals name="settings_ext_graph_show_hidden">
+        <item quantity="other">显示 %1$d 个隐藏节点</item>
+    </plurals>
+    <string name="settings_ext_graph_under">位于 %1$s 下</string>
+    <string name="settings_ext_graph_progress">%1$d%%</string>
+    <string name="settings_ext_use_reference">使用引用</string>
+    <string name="settings_ext_reference_placeholder">op://vault/item/field</string>
+    <string name="settings_ext_reference_hint">这个扩展需要时由它的提供方给出值，Persona 只保存引用。</string>
+    <string name="settings_ext_from_provider">来自 %1$s</string>
+    <string name="settings_ext_secret_from_provider">来自 %1$s：%2$s</string>
+    <string name="settings_ext_secret_reference_saved">%1$s 已改用引用</string>
+    <string name="settings_ext_users_title">使用方</string>
+    <string name="settings_ext_users_footer">这些设置会从它这里取值；保存设置就等于长期允许它们取用。</string>
+    <string name="settings_ext_user_launcher">「%1$s」的 Key</string>
+    <string name="settings_ext_user_launcher_machine">%2$s 上「%1$s」的 Key</string>
+    <string name="settings_ext_rules_title">总是交给 Agent</string>
+    <string name="settings_ext_rules_footer">在这台电脑上用这个启动器、由你自己发起的 Agent 会直接拿到值，不再询问。</string>
+    <string name="settings_ext_rule_label">%2$s 上的「%1$s」</string>
+    <string name="settings_ext_rule_remove">移除</string>
+    <string name="settings_ext_rule_remove_title">移除这条规则？</string>
+    <string name="settings_ext_rule_remove_body">下次 %2$s 上的 %1$s 需要它时，会重新请你批准。</string>
+    <string name="settings_ext_rule_removed">规则已移除</string>
+    <string name="settings_ext_secret_set_hint">已设置 · 末 4 位 %1$s</string>
+    <string name="settings_ext_entry_untitled">条目 %1$d</string>
+    <string name="settings_ext_entry_save_before_secret">保存此条目后才能设置密钥。</string>
+    <string name="settings_ext_entry_secret">密钥</string>
+    <string name="settings_ext_entry_remove">移除%1$s</string>
+    <string name="settings_ext_entry_add">添加条目</string>
+    <string name="settings_ext_entry_editor_hint">每个条目都有单独的密钥，单独存储且保存后不再显示。</string>
+    <string name="settings_ext_entry_rebind_hint">保存更改后的地址会清除该条目的密钥。</string>
+    <string name="settings_ext_entry_remove_title">移除「%1$s」？</string>
+    <string name="settings_ext_entry_remove_body">保存时将删除此条目及其已保存的密钥。</string>
+    <string name="settings_ext_entry_remove_confirm">移除条目</string>
 </resources>

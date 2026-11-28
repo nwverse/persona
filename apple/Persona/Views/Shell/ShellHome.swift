@@ -12,7 +12,11 @@ struct ShellHome: View {
     @Environment(\.shellRailEdge) private var railEdge
     var pending: PendingStart?
     var error: String?
+    /// Clear context (#5100): the same composer, an empty middle. Not the centered new-chat page.
+    var cleared = false
     @Binding var launcher: String?
+    /// The model picked under `launcher` (#11472).
+    @Binding var launcherModel: String?
     @Binding var mode: String
     @Binding var effort: String
     var openInbox: (InboxItem) -> Void
@@ -42,6 +46,10 @@ struct ShellHome: View {
                     // The page's height inside its margins, the message at its bottom (a long one runs up out of it, as the
                     // chat shows its newest end).
                     .containerRelativeFrame(.vertical, alignment: .bottom)
+            } else if cleared {
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("main-cleared")
             } else {
                 VStack(alignment: .leading, spacing: Theme.Space.xl) {
                     // Its errors stay over the composer, where the send was.
@@ -76,16 +84,19 @@ struct ShellHome: View {
                         }
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.error = $0 }
                     }
-                    ReadinessHomeCard(route: $route)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
-                        .onDisappear { room.card = 0 }
+                    VStack(spacing: Theme.Space.m) {
+                        PushHealthNotice(group: model.hub?.group ?? "")
+                        ReadinessHomeCard(route: $route)
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.card = $0 }
+                    .onDisappear { room.card = 0 }
                 }
-                if pending == nil, !mentionOpen {
+                if pending == nil, !mentionOpen, !cleared {
                     ShellNeedsYou(maxHeight: room.needs(withError: shownError != nil, top: AssistantTopBar.room(railEdge)), openInbox: openInbox).shellScaled()
                 }
                 if let m = model.assistantManagerOffline { ManagerOfflineNote(manager: m) }
-                StarterComposer(disabled: pending != nil || model.assistantManagerOffline != nil, shell: StarterComposer.ShellModes(launcher: $launcher, mode: $mode, effort: $effort),
-                                gate: model.readinessGate(route: $route), send: send)
+                StarterComposer(disabled: pending != nil || model.assistantManagerOffline != nil, shell: StarterComposer.ShellModes(launcher: $launcher, launcherModel: $launcherModel, mode: $mode, effort: $effort),
+                                gate: model.readinessGate(route: $route), offersClear: cleared && pending == nil, send: send)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room.composerAtRest($0, typeSize: typeSize) }
                     .onPreferenceChange(MentionMenuOpen.self) { open in withAnimation(Theme.Motion.standard) { mentionOpen = open } }
             }
@@ -104,6 +115,7 @@ struct ShellHome: View {
             }
             .background(Theme.pageBackground.ignoresSafeArea(edges: .bottom))
         }
+        .keepsHeightUnderUndockedKeyboard() // the composer stays at the bottom under a floating keyboard (#2565)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { room.pageAtRest($0) }
         .navigationTitle(model.assistantShownName)
         .task(id: launcher) { if pending == nil { await model.warmAssistant(launcher: launcher) } }
@@ -223,6 +235,9 @@ struct ShellNeedsYou: View {
         #endif
         // The current assistant's, as its Agents and Inbox pages list them.
         let agents = model.scopedInteractions.filter { !model.isMuted($0.sessionKey) }.map(Line.agent)
+        #if os(iOS)
+        if model.hiddenNavigationPages.contains(.inbox) { return agents }
+        #endif
         let inbox = InboxStore.shared.scopedItems
             .filter { !$0.isDone && $0.triage == .action }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
@@ -428,6 +443,7 @@ struct ShellDestinations: ViewModifier {
     /// (#6332), whose one path has the Agents' (`AgentsDestinations`), the split's first pages without a back.
     var agentRoutes = true
     @StateObject private var accounts = InboxAccountState()
+    @State private var pusher = SplitPush()
 
     /// The explicit closure from Assistant, or this destination's own path in the unified Sidebar layout.
     private var routeChat: ((InboxChatRoute) -> Void)? {
@@ -436,20 +452,26 @@ struct ShellDestinations: ViewModifier {
         return { path.append($0) }
     }
 
+    private var splitPush: SplitPush {
+        pusher.set { [path = $path] value in path.wrappedValue.append(value) }
+    }
+
     func body(content: Content) -> some View {
         if enabled {
             content
-                // ☰ beside Back on a place's pages: the sidebar opens at any depth, so a place is changed without
-                // popping it (docs/design/sidebar-navigation.md). In the Sidebar layout a place is the split's first
-                // page, with no back to the conversation under it (#6332).
+                // A place's root has ☰ in place of Back; only its sub-pages have Back. The drawer stays
+                // available without putting two leading buttons on the same page (docs/design/sidebar-navigation.md).
                 .navigationDestination(for: ShellRoute.self) { route in
-                    routed(place(route).modifier(ShellPlaceSidebarButton()).modifier(FirstPage(on: !agentRoutes)))
+                    // Last: in the shell this must override a split page's `navigationBarBackButtonHidden(false)`.
+                    routed(place(route).modifier(FirstPage(on: !agentRoutes)).modifier(ShellPlaceRoot()))
                 }
                 .modifier(InboxDestinations(accounts: accounts.accounts, inboxChat: routeChat, openFeishu: { path.append($0) }))
-                .modifier(AgentRoutes(on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
+                .modifier(AgentRoutes(path: $path, on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
                 .navigationDestination(for: InboxChatRoute.self) { r in routed(ChatView(key: r.key, itemManager: r.manager).id(r.key)) }
                 .environment(\.feishuOpen) { path.append($0) }
                 .environment(\.pushInboxChat, routeChat)
+                .environment(\.shellInboxAccounts, accounts)
+                .environment(\.splitPush, splitPush)
                 #if DEBUG
                 .onAppear { ShellTrace.shared.note("inbox chat closure available=\(routeChat != nil)") }
                 #endif
@@ -460,11 +482,14 @@ struct ShellDestinations: ViewModifier {
 
     /// Injects on each returned destination, not only the stack's root content (the iPad split drops the latter).
     private func routed<Content: View>(_ content: Content) -> some View {
-        content.modifier(InboxDestinationEnvironment(chat: routeChat, openFeishu: { path.append($0) }))
+        content
+            .modifier(InboxDestinationEnvironment(chat: routeChat, openFeishu: { path.append($0) }))
+            .environment(\.splitPush, splitPush)
     }
 
     /// What the Agents list registers as well: here only where it does not (the shell, the iPad's Persona tab).
     private struct AgentRoutes: ViewModifier {
+        @Binding var path: NavigationPath
         var on: Bool
         var chat: ((InboxChatRoute) -> Void)?
         var openFeishu: ((FeishuRoute) -> Void)?
@@ -473,15 +498,19 @@ struct ShellDestinations: ViewModifier {
             if on {
                 content
                     .navigationDestination(for: TodoDetailRoute.self) { r in
-                        TodoDetailView(todoID: r.id).modifier(ShellPlaceSidebarButton())
+                        TodoDetailView(todoID: r.id, openDetail: { (route: TodoDetailRoute) in path.append(route) })
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: MachineDetailRoute.self) { r in
-                        MachineDetailView(ref: r.ref).modifier(ShellPlaceSidebarButton())
+                        MachineDetailView(ref: r.ref)
+                            .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
+                    .navigationDestination(for: MachineUsageMapRoute.self) { r in
+                        UsageMapView(route: r)
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: TerminalsRoute.self) { r in
-                        TerminalsView(only: r.machine).modifier(ShellPlaceSidebarButton())
+                        TerminalsView(only: r.machine)
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: SessionKey.self) { key in
@@ -502,15 +531,26 @@ struct ShellDestinations: ViewModifier {
         }
     }
 
-    @ViewBuilder private func place(_ route: ShellRoute) -> some View {
+    private func place(_ route: ShellRoute) -> some View { Self.place(route, path: $path, accounts: accounts) }
+
+    /// A place's page: pushed here, or drawn as the Sidebar layout's root (#8359, `AssistantView.sidebarRootPage`).
+    @ViewBuilder static func place(_ route: ShellRoute, path: Binding<NavigationPath>, accounts: InboxAccountState) -> some View {
         switch route {
-        case .inbox: InboxPage(path: $path, accountState: accounts, embedded: true)
-        case .todos: TodosView()
+        case .inbox: InboxPage(path: path, accountState: accounts, embedded: true)
+        case .todos:
+            #if os(iOS)
+            TodosPlacePage(openDetail: { (route: TodoDetailRoute) in path.wrappedValue.append(route) }) // V1 (#10465), else TodosView
+            #else
+            TodosView(openDetail: { (route: TodoDetailRoute) in path.wrappedValue.append(route) })
+            #endif
         case .machines: MachinesView()
         case .extensionPage(let r): ExtensionNavPage(route: r)
         case .profile: AssistantProfileView()
         case .routines: AssistantRoutinesView()
         case .knowledge: KnowledgeView()
+        #if os(iOS)
+        case .starred: StarredMessagesPage()
+        #endif
         case .recordings:
             #if os(iOS) || os(visionOS)
             RecordingsPage()
@@ -521,28 +561,30 @@ struct ShellDestinations: ViewModifier {
     }
 }
 
-/// ☰ beside Back on the pages of a place the shell's sidebar opened (docs/design/sidebar-navigation.md): it opens the drawer
-/// over the page as it is, so the user can go to another place and come back to this one where they left it. Only in the
-/// iPhone shell; the iPad's sidebar is a column of its own.
-struct ShellPlaceSidebarButton: ViewModifier {
+/// ☰ is the one leading control at the root of a place the shell's sidebar opened; a sub-page has only Back.
+/// Returning to the conversation goes through a conversation row in the drawer. Only in the iPhone shell;
+/// the iPad's sidebar is a column of its own.
+struct ShellPlaceRoot: ViewModifier {
     @Environment(\.shell) private var shell
 
     func body(content: Content) -> some View {
         #if os(iOS)
         if let shell {
-            content.toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        Haptics.tap()
-                        shell.drawer.open()
-                    } label: {
-                        Label(String(localized: "Chat History [Shell Components 60636b]"), systemImage: Theme.Icon.sidebarMenu)
-                            .labelStyle(.iconOnly)
+            content
+                .navigationBarBackButtonHidden(true)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            Haptics.tap()
+                            shell.drawer.open()
+                        } label: {
+                            Label(String(localized: "Chat History [Shell Components 60636b]"), systemImage: Theme.Icon.sidebarMenu)
+                                .labelStyle(.iconOnly)
+                        }
+                        .tint(Color.primary)
+                        .accessibilityIdentifier("shell-place-sidebar")
                     }
-                    .tint(Color.primary) // as Back beside it, not the accent
-                    .accessibilityIdentifier("shell-place-sidebar")
                 }
-            }
         } else {
             content
         }

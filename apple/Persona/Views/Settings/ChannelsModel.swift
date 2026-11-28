@@ -1,6 +1,7 @@
 import Observation
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // Settings › Channels (docs/extensions/channels.md): every way of talking to Persona — the apps, the Feishu bot, WeChat, /agent in
 // Feishu, voice, the chat app bots plugins contribute — as GET /api/v1/channels lists them; one channel's page (its
@@ -204,7 +205,9 @@ enum ChannelText {
 @Observable final class ChannelsModel {
     struct Deps {
         var api: () -> APIClient?
-        static var live: Deps { .init(api: { AppModel.shared.api }) }
+        /// Whether the hub offers the Lark bot (`module.lark`, #15995): its channel is listed only then.
+        var larkBot: () -> LarkBotEntry = { .offered }
+        static var live: Deps { .init(api: { AppModel.shared.api }, larkBot: { LarkModule.botEntry }) }
     }
 
     private(set) var channels: [HubChannel]?
@@ -226,7 +229,7 @@ enum ChannelText {
         loading = true
         defer { if revision == read { loading = false } }
         do {
-            let l = try await api.channels()
+            let l = deps.larkBot().listing(try await api.channels())
             guard revision == read, !Task.isCancelled, api.sameSettingsScope(as: deps.api()) else { return }
             channels = l
             sections = ChannelText.sections(l)

@@ -2,7 +2,7 @@ package persona.core.data
 
 import persona.core.contracts.*
 import persona.core.contracts.api.*
-import persona.feature.inbox.*
+import persona.core.contracts.generated.InboxStoredSources
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.TestScope
@@ -15,6 +15,7 @@ import org.junit.Test
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import persona.core.inbox.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class InboxRepositoryTest {
@@ -27,6 +28,70 @@ class InboxRepositoryTest {
         }
     }
 
+    @Test fun storedSourcesRoundTripThroughLiveResponseAndColdCache() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-stored-sources-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            val snapshots = ListSnapshotStore(directory.resolve("snapshots"))
+            val transport = FakeTransport().apply {
+                storedSources = buildJsonObject { put("lark", true); put("mail", false) }
+            }
+            val repository = repository(transport, directory, owner, FakeHub(), snapshots = snapshots)
+            val live = withTimeout(5_000) { repository.snapshot.first { it.refreshes > 0 } }
+            assertEquals(InboxStoredSources(lark = true, mail = false), live.storedSources)
+            repository.refresh() // returns after the cache write
+            val cached = snapshots.restore<JsonObject>("hub/generation:inbox")!!
+            assertEquals(true, cached.getValue("stored_sources").jsonObject.getValue("lark").jsonPrimitive.boolean)
+            assertEquals(false, cached.getValue("stored_sources").jsonObject.getValue("mail").jsonPrimitive.boolean)
+
+            transport.onInbox = { awaitCancellation() }
+            val restoredRepository = repository(transport, directory, owner, FakeHub(), snapshots = snapshots)
+            val restored = withTimeout(5_000) { restoredRepository.snapshot.first { it.storedSources != null } }
+            assertEquals(InboxStoredSources(lark = true, mail = false), restored.storedSources)
+
+            val nullTransport = FakeTransport().apply { storedSources = JsonNull }
+            val nullRepository = repository(nullTransport, directory, owner, FakeHub(), snapshots = snapshots)
+            val unknown = withTimeout(5_000) { nullRepository.snapshot.first { it.refreshes > 0 } }
+            assertNull(unknown.storedSources)
+            assertNull(snapshots.restore<JsonObject>("hub/generation:inbox")!!["stored_sources"])
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun assistantConnectorKeepsItsConversationUrl() = runTest {
+        val directory = Files.createTempDirectory("assistant-connector-url").toFile()
+        val url = "https://hub.example.com/chat/server/session-1"
+        try {
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(buildJsonObject {
+                    put("id", "assistant:1"); put("source", "assistant"); put("kind", "assistant_post")
+                    put("account_name", "Assistant"); put("title", "Morning briefing"); put("preview", "Ready")
+                    put("connector", buildJsonObject {
+                        put("thread", "server/session-1"); put("label", "Assistant"); put("url", url)
+                    })
+                }))
+            }
+            val repository = repository(transport, directory, backgroundScope, FakeHub())
+            val record = repository.snapshot.first { it.records.isNotEmpty() }.records.single()
+            val connector = JsonCodec.encodeToJsonElement(InboxConnectorRef.serializer(), record.connector!!).jsonObject
+            assertEquals(url, connector["url"]?.jsonPrimitive?.content)
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun anApprovalDisplayCopyDoesNotBecomeASecondInboxRow() = runTest {
+        val directory = Files.createTempDirectory("inbox-approval-mirror-test").toFile()
+        try {
+            val original = Interaction("original", "box", "side", kind = "permission")
+            val mirror = original.copy(id = "display", sessionId = "main", mirrorOf = original.id)
+            val repository = repository(FakeTransport(), directory, backgroundScope, FakeHub(),
+                pending = listOf(original, mirror))
+            val shown = repository.snapshot.first { it.interactions.isNotEmpty() }.interactions
+            assertEquals(listOf("original"), shown.map { it.id })
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test fun persistentSnapshotSubscribersDoNotPollAHubButInboxEventsStillRefresh() = runTest {
         val directory = Files.createTempDirectory("inbox-no-poll-test").toFile()
         try {
@@ -34,33 +99,32 @@ class InboxRepositoryTest {
             val hub = FakeHub()
             val repository = repository(transport, directory, backgroundScope, hub)
             repeat(5) { backgroundScope.launch { repository.snapshot.collect() } }
-            val initial = settledCalls(transport)
+            val initial = completedRefreshCalls(repository, transport, 1)
             assertTrue(initial > 0)
             advanceTimeBy(60_000); runCurrent()
             assertEquals("shell and capsule subscribers must not start fast full-list polling", initial, transport.inboxCalls.get())
             hub.events.emit(InboxEvent())
             runCurrent()
             advanceTimeBy(1_001)
-            assertEquals(initial + 1, settledCalls(transport))
+            assertEquals(initial + 1, completedRefreshCalls(repository, transport, initial + 1))
             advanceTimeBy(300_000)
-            assertEquals("a slow poll still covers a missed event", initial + 2, settledCalls(transport))
+            assertEquals("a slow poll still covers a missed event", initial + 2, completedRefreshCalls(repository, transport, initial + 2))
         } finally { directory.deleteRecursively() }
     }
 
     /**
-     * Refreshes cross real IO threads; waiting for them with a suspending `first` lets virtual time jump ahead to the
-     * slow poll. Wait in real time instead, until the hub stops being called.
+     * Refreshes cross real IO threads; suspending on the snapshot lets virtual time jump to the slow poll.
+     * Pump current work in real time until the expected refresh publishes its result. An unchanged request count
+     * can still mean the previous refresh holds its lock while real IO runs.
      */
-    private fun TestScope.settledCalls(transport: FakeTransport): Int {
-        val deadline = System.currentTimeMillis() + 5_000
-        var calls = -1
-        while (System.currentTimeMillis() < deadline) {
-            runCurrent(); Thread.sleep(50); runCurrent()
-            val now = transport.inboxCalls.get()
-            if (now == calls && now > 0) return now
-            calls = now
+    private fun TestScope.completedRefreshCalls(repository: RealInboxRepository, transport: FakeTransport, refreshes: Int): Int {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (System.nanoTime() < deadline) {
+            runCurrent()
+            if (repository.snapshot.value.refreshes >= refreshes) return transport.inboxCalls.get()
+            Thread.yield()
         }
-        error("refreshes did not settle")
+        error("refresh $refreshes did not finish; completed ${repository.snapshot.value.refreshes}")
     }
 
     @Test fun updatingWaitsForEveryLarkPageAndPreservesVerifiedWindowOnOnline() = runBlocking {
@@ -570,8 +634,8 @@ class InboxRepositoryTest {
             repository.refresh()
             val avatar = repository.snapshot.value.records.single().avatar!!
             assertEquals("hub/generation:https://cdn.example.com/avatar/bot.jpg", avatar.cacheKey)
-            avatar.read()
-            avatar.read()
+            val _ = avatar.read()
+            val _ = avatar.read()
             // Read once as an avatar (the hub transport reads a full https URL directly); the second is cached.
             assertEquals(listOf("https://cdn.example.com/avatar/bot.jpg"), transport.avatarRefs)
         } finally {
@@ -598,11 +662,11 @@ class InboxRepositoryTest {
             }
             val other = image(ManagerPins.of(listOf(listOf("lark", "conversations", "feed")), "m-3"))
             assertEquals("hub/generation#m-3:/api/v1/lark/media/img", other.cacheKey)
-            other.read()
+            val _ = other.read()
             assertEquals("m-3", transport.messageManagers.last())
             val default = image(null)
             assertEquals("hub/generation:/api/v1/lark/media/img", default.cacheKey)
-            default.read()
+            val _ = default.read()
             assertNull(transport.messageManagers.last())
             assertEquals(listOf("/api/v1/lark/media/img" to "m-3", "/api/v1/lark/media/img" to null), transport.mediaReads)
         } finally {
@@ -654,8 +718,8 @@ class InboxRepositoryTest {
             assertEquals("hub/generation:/api/v1/lark/media/key?size=144", avatars["lark:chat:1"]?.cacheKey)
             assertNull(avatars["lark:dm:1"])
             assertNull(avatars["mail:1"])
-            avatars["lark:chat:1"]!!.read()
-            avatars["lark:chat:1"]!!.read()
+            val _ = avatars["lark:chat:1"]!!.read()
+            val _ = avatars["lark:chat:1"]!!.read()
             // Read with the pairing at the thumbnail size, and once: the second comes from the bytes cache.
             assertEquals(listOf("/api/v1/lark/media/key?size=144"), transport.mediaRefs)
             assertEquals(transport.mediaRefs, transport.avatarRefs)
@@ -664,6 +728,111 @@ class InboxRepositoryTest {
             repository.refresh()
             assertEquals(before, repository.snapshot.value.records)
         } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun connectorRowsUseAvatarUrlAtLarkThumbnailSizeAndCacheIt() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-connector-avatar-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val picture = "/api/v1/avatars/telegram/YS51MS41MDE"
+        val sized = "$picture?size=144"
+        try {
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(
+                    buildJsonObject {
+                        put("id", "telegram:1"); put("source", "telegram"); put("kind", "dm"); put("title", "Person")
+                        // A connector's top-level avatar and its superseded raw media ref are not its picture URL.
+                        put("avatar", "/api/v1/lark/media/not-the-connector-picture")
+                        putJsonObject("connector") {
+                            put("thread", "u1"); put("avatar_url", picture); put("media_ref", "raw-connector-ref")
+                        }
+                    },
+                    buildJsonObject {
+                        put("id", "telegram:2"); put("source", "telegram"); put("kind", "dm"); put("title", "No picture")
+                        putJsonObject("connector") { put("thread", "u2"); put("media_ref", "raw-connector-ref") }
+                    },
+                    buildJsonObject {
+                        put("id", "lark:chat:1"); put("source", "lark"); put("kind", "group"); put("title", "Group")
+                        put("avatar", "/api/v1/lark/media/key"); putJsonObject("lark") { put("feed_id", "chat") }
+                    },
+                ))
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val records = repository.snapshot.value.records.associate { it.item.id to it }
+            val connector = records.getValue("telegram:1")
+            assertEquals("hub/generation:$sized", connector.avatar?.cacheKey)
+            assertNull(records.getValue("telegram:2").avatar)
+            assertEquals("hub/generation:/api/v1/lark/media/key?size=144", records.getValue("lark:chat:1").avatar?.cacheKey)
+            val decoded = JsonCodec.encodeToJsonElement(InboxConnectorRef.serializer(), connector.connector!!).jsonObject
+            assertEquals(picture, decoded["avatar_url"]?.jsonPrimitive?.content)
+
+            val _ = connector.avatar!!.read()
+            val _ = connector.avatar!!.read()
+            val _ = records.getValue("lark:chat:1").avatar!!.read()
+            assertEquals(listOf(sized, "/api/v1/lark/media/key?size=144"), transport.avatarRefs)
+            // Rebuilding the same row retains its equal image and the authenticated bytes cache.
+            repository.refresh()
+            val rebuilt = repository.snapshot.value.records.single { it.item.id == "telegram:1" }
+            assertEquals(connector, rebuilt)
+            val _ = rebuilt.avatar!!.read()
+            assertEquals(listOf(sized, "/api/v1/lark/media/key?size=144"), transport.avatarRefs)
+        } finally {
+            owner.coroutineContext[Job]!!.cancelAndJoin()
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun connectorPicturesStayWithTheirManagerAndPreviousOwner() = runBlocking {
+        val directory = Files.createTempDirectory("inbox-connector-avatar-manager-test").toFile()
+        val owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val picture = "/api/v1/avatars/telegram/shared"
+        val sized = "$picture?size=144"
+        fun item(manager: String?, done: Boolean = false) = buildJsonObject {
+            put("id", "telegram:shared"); put("source", "telegram"); put("kind", "dm"); put("title", "Shared"); put("version", "v1")
+            putJsonObject("connector") { put("thread", "u1"); put("avatar_url", picture) }
+            if (manager != null) put("manager", manager)
+            if (done) { put("done_at", "2026-11-04T08:00:00Z"); put("done_by", "user") }
+        }
+        try {
+            AssistantManagerChoice.choose("hub", null, "assistant")
+            val transport = FakeTransport().apply {
+                items = JsonArray(listOf(item("assistant"), item("m-3")))
+                onMedia = { _ ->
+                    when (currentCoroutineContext()[RequestManager]?.id) {
+                        "" -> byteArrayOf(1)
+                        "m-3" -> byteArrayOf(3)
+                        else -> error("connector picture read by the wrong manager")
+                    }
+                }
+                // A single-item answer is unstamped and must inherit the previous record's owner.
+                onSetDone = { _, done -> buildJsonObject { put("item", item(null, done)) } }
+            }
+            val repository = repository(transport, directory, owner, FakeHub())
+            withTimeout(5_000) { repository.snapshot.first { it.contentSource != null } }
+            repository.refresh()
+            val records = repository.snapshot.value.records.associate { it.manager to it }
+            val default = records.getValue("assistant").avatar!!
+            val other = records.getValue("m-3").avatar!!
+            assertEquals("hub/generation:$sized", default.cacheKey)
+            assertEquals("hub/generation#m-3:$sized", other.cacheKey)
+            assertArrayEquals(byteArrayOf(1), default.read())
+            assertArrayEquals(byteArrayOf(3), other.read())
+            assertArrayEquals(byteArrayOf(1), default.read())
+            assertArrayEquals(byteArrayOf(3), other.read())
+            assertEquals(listOf(sized to "", sized to "m-3"), transport.mediaReads)
+
+            transport.onInbox = { throw IOException("offline") }
+            repository.setDone(records.getValue("m-3").item.id, true)
+            val updated = repository.snapshot.value.records.single { it.manager == "m-3" }.avatar!!
+            assertEquals("hub/generation#m-3:$sized", updated.cacheKey)
+            assertArrayEquals(byteArrayOf(3), updated.read())
+            assertEquals("the rebuilt row must use the other manager's kept bytes", 2, transport.mediaReads.size)
+        } finally {
+            AssistantManagerChoice.reset(); AssistantManagerChoice.forgetItems()
             owner.coroutineContext[Job]!!.cancelAndJoin()
             directory.deleteRecursively()
         }
@@ -725,8 +894,8 @@ class InboxRepositoryTest {
             }
             val repository = repository(transport, directory, owner, FakeHub())
             val zone = java.time.ZoneId.of("Asia/Shanghai")
-            assertEquals(listOf(persona.feature.inbox.InboxDoneDay(java.time.LocalDate.of(2026, 11, 10), 120),
-                persona.feature.inbox.InboxDoneDay(java.time.LocalDate.of(2026, 11, 3), 4)), repository.doneDays("m-3fa21c", zone))
+            assertEquals(listOf(persona.core.inbox.InboxDoneDay(java.time.LocalDate.of(2026, 11, 10), 120),
+                persona.core.inbox.InboxDoneDay(java.time.LocalDate.of(2026, 11, 3), 4)), repository.doneDays("m-3fa21c", zone))
             assertEquals(listOf<Pair<String?, String>>("m-3fa21c" to "Asia/Shanghai"), asked)
             fun refused(code: Int) = object : IOException("hub $code"), persona.core.contracts.api.HubCodedFailure {
                 override val status: Int = code
@@ -1214,8 +1383,8 @@ class InboxRepositoryTest {
             assertEquals(listOf("received", "something_new"), listed.event.chain.map { it.kind })
             assertEquals(1L, listed.event.chain.first().link?.positionValue)
 
-            val request = persona.feature.inbox.SuggestionRequest("lark:c:1", 2, persona.feature.inbox.SuggestionAction.Confirm, "好的，改过")
-            assertEquals(persona.feature.inbox.SuggestionOutcome.Done, repository.actOnSuggestion(request))
+            val request = persona.core.inbox.SuggestionRequest("lark:c:1", 2, persona.core.inbox.SuggestionAction.Confirm, "好的，改过")
+            assertEquals(persona.core.inbox.SuggestionOutcome.Done, repository.actOnSuggestion(request))
             assertEquals(listOf("lark:c:1", 2L, "confirm", "好的，改过", request.clientId), transport.seen.single())
             repository.snapshot.value.records.single().let {
                 assertEquals("working", it.item.status)
@@ -1224,8 +1393,8 @@ class InboxRepositoryTest {
             }
 
             transport.answer = { throw InboxSuggestionStale(item(3, "action", "done")) }
-            val stale = persona.feature.inbox.SuggestionRequest("lark:c:1", 2, persona.feature.inbox.SuggestionAction.Reject)
-            assertEquals(persona.feature.inbox.SuggestionOutcome.Stale, repository.actOnSuggestion(stale))
+            val stale = persona.core.inbox.SuggestionRequest("lark:c:1", 2, persona.core.inbox.SuggestionAction.Reject)
+            assertEquals(persona.core.inbox.SuggestionOutcome.Stale, repository.actOnSuggestion(stale))
             assertEquals(3L, repository.snapshot.value.records.single().event.suggestion?.version)
         } finally {
             owner.coroutineContext[Job]!!.cancelAndJoin()
@@ -1668,7 +1837,7 @@ class InboxRepositoryTest {
 
     private fun repository(transport: FakeTransport, directory: java.io.File, owner: CoroutineScope,
         hub: FakeHub, snapshots: ListSnapshotStore? = null, sender: MainConversationSender? = null,
-        refreshWindowMillis: Long = 1_000): RealInboxRepository = RealInboxRepository(
+        pending: List<Interaction> = emptyList(), refreshWindowMillis: Long = 1_000): RealInboxRepository = RealInboxRepository(
         object : InboxAssistantConnection { override val current = MutableStateFlow<InboxAssistantTransport?>(transport) },
         InboxReplyJournal(directory, "hub/generation"),
         object : SessionsRepository {
@@ -1677,7 +1846,7 @@ class InboxRepositoryTest {
             override suspend fun refresh() = Unit
         },
         object : InteractionCenter {
-            override val pending = MutableStateFlow<List<Interaction>>(emptyList())
+            override val pending = MutableStateFlow(pending)
             override suspend fun refresh() = Unit
             override suspend fun resolve(id: String, resolution: Resolution) = Unit
         }, owner, snapshots = snapshots, hubConnection = hub, mainConversationSender = sender,
@@ -1706,7 +1875,9 @@ class InboxRepositoryTest {
     private class FakeTransport(override val scope: String = "hub/generation") : InboxAssistantTransport {
         var onReply: suspend (String) -> JsonObject = { JsonObject(emptyMap()) }
         var items = JsonArray(emptyList())
+        var storedSources: JsonElement? = null
         val mediaRefs = mutableListOf<String>()
+        var onMedia: suspend (String) -> ByteArray = { byteArrayOf(1) }
         var onMessages: suspend (Long?, String?, String?) -> JsonObject = { _, _, _ -> buildJsonObject {
             put("messages", JsonArray(emptyList())); put("sync_state", "complete")
         } }
@@ -1717,7 +1888,10 @@ class InboxRepositoryTest {
         override suspend fun doneHistory(manager: String?, before: String?, beforeId: String?, limit: Int) = onDoneHistory(manager)
         val inboxCalls = java.util.concurrent.atomic.AtomicInteger()
         var onInbox: suspend () -> Unit = {}
-        override suspend fun inbox(): JsonObject { inboxCalls.incrementAndGet(); onInbox(); return buildJsonObject { put("items", items) } }
+        override suspend fun inbox(): JsonObject { inboxCalls.incrementAndGet(); onInbox(); return buildJsonObject {
+            put("items", items)
+            storedSources?.let { put("stored_sources", it) }
+        } }
         /** Each single-item read: the hub id and the manager its request named (RequestManager). */
         val itemCalls = mutableListOf<Pair<String, String?>>()
         var onItem: suspend (String) -> JsonObject = { throw UnsupportedOperationException() }
@@ -1760,7 +1934,7 @@ class InboxRepositoryTest {
         val mediaReads = mutableListOf<Pair<String, String?>>()
         override suspend fun media(ref: String): ByteArray {
             mediaReads += ref to currentCoroutineContext()[RequestManager]?.id
-            return byteArrayOf(1).also { mediaRefs += ref }
+            return onMedia(ref).also { mediaRefs += ref }
         }
         /** Each Moments read with the manager its request names (RequestManager). */
         val momentsReads = mutableListOf<Pair<String, String?>>()

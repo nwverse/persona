@@ -8,15 +8,9 @@
     <string name="settings_pairing_notice_local_denied">Local network access wasn\'t granted. Allow it in system settings, then come back and try again.</string>
     <string name="settings_pairing_notice_camera_denied">Camera access is off. You can enter the address and pairing code by hand.</string>
     <string name="settings_pairing_notice_clipboard_empty">There\'s no pairing link on the clipboard.</string>
+    <string name="settings_pairing_help">Help</string>
     <string name="settings_pairing_welcome_title">Welcome to Persona</string>
-    <string name="settings_pairing_welcome_body">Connect your hub to this phone to check on the agents on your computers and handle what needs you.</string>
-    <string name="settings_pairing_welcome_agents">Watch them work, answer questions, approve plans and tool use.</string>
-    <string name="settings_pairing_welcome_inbox_title">Inbox</string>
-    <string name="settings_pairing_welcome_inbox">Lark and mail in one place. AI sorts them and drafts replies.</string>
-    <string name="settings_pairing_welcome_assistant_title">Persona assistant</string>
-    <string name="settings_pairing_welcome_assistant">Works with your knowledge base. Phone data is asked for separately when needed.</string>
-    <string name="settings_pairing_welcome_push">Notifications work without Google services: the phone gets the hub\'s messages over a persistent connection.</string>
-    <string name="settings_pairing_welcome_connect">Connect hub</string>
+    <string name="settings_pairing_welcome_guide">No hub yet?</string>
     <string name="settings_pairing_failed_title">Couldn\'t connect</string>
     <string name="settings_pairing_failed_body">Follow the tip below, then try again.</string>
     <string name="settings_pairing_stopped_at">Stopped at \"%1$s\"</string>
@@ -96,6 +90,12 @@
     <string name="settings_pairing_scan_title">Scan pairing QR code</string>
     <string name="settings_pairing_scan_hint">Fit the QR code the hub showed when it was installed,\nor the one from Connect a new device on a signed-in device,\nin the frame</string>
     <string name="settings_pairing_scan_manual">Can\'t scan? Enter manually</string>
+    <string name="settings_pairing_scan_photo">Choose from Photos</string>
+    <string name="settings_pairing_scan_camera_unavailable">Camera is unavailable. Choose a photo of the QR code instead.</string>
+    <string name="settings_pairing_scan_photo_reading">Reading QR code…</string>
+    <string name="settings_pairing_scan_photo_unreadable">The QR code in this photo couldn\'t be read. Try another one.</string>
+    <string name="settings_pairing_scan_photo_none">No QR code was found in this photo. Try another one.</string>
+    <string name="settings_pairing_scan_photo_multiple">This photo contains more than one QR code. Choose a photo with one QR code.</string>
 
     <!-- Hubs -->
     <string name="settings_hubs_title">Hubs</string>
@@ -140,7 +140,6 @@
     <string name="settings_hub_update_turn_off">Turn off</string>
     <string name="settings_hub_update_got_it">Got it</string>
     <string name="settings_hub_update_auto">Update hub automatically</string>
-    <string name="settings_hub_update_retry">Retry</string>
     <string name="settings_hub_update_now_title">Update now?</string>
     <string name="settings_hub_update_now">Update now</string>
     <string name="settings_hub_update_now_more">Update now…</string>
@@ -215,6 +214,8 @@
     <string name="settings_engine_retry">Retry</string>
     <string name="settings_engine_continue">Continue for now</string>
     <string name="settings_engine_save_failed">Couldn\'t save: %1$s</string>
+    <string name="settings_engine_orca_chats">Start new Agents as Orca chats</string>
+    <string name="settings_engine_orca_chats_detail">New Agent opens Claude Code and Codex in Orca\'s chat view instead of a terminal. A launcher you pick still opens a terminal, and the assistant\'s Agents always do.</string>
 
     <!-- Candidate addresses (Diagnostics) -->
     <string name="settings_endpoint_hint_unchanged">The address hasn\'t changed</string>

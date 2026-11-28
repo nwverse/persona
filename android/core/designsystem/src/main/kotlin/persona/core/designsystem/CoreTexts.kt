@@ -78,6 +78,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.ExpiresInHours -> -R.plurals.designsystem_core_expires_in_hours
     CoreText.Key.ExpiresInDays -> -R.plurals.designsystem_core_expires_in_days
     CoreText.Key.RequestFromSubagent -> R.string.designsystem_core_request_from_subagent
+    CoreText.Key.RequestFromSide -> R.string.designsystem_core_request_from_side
     CoreText.Key.RequestFromMcp -> R.string.designsystem_core_request_from_mcp
     CoreText.Key.RequestFromMcpConfigured -> R.string.designsystem_core_request_from_mcp_configured
     CoreText.Key.RequestFromTerminal -> R.string.designsystem_core_request_from_terminal
@@ -109,6 +110,8 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.ApiBadRequest -> R.string.designsystem_core_api_bad_request
     CoreText.Key.ApiUnavailable -> R.string.designsystem_core_api_unavailable
     CoreText.Key.ApiFailed -> R.string.designsystem_core_api_failed
+    CoreText.Key.ApiConversationInvalid -> R.string.designsystem_core_api_conversation_invalid
+    CoreText.Key.ApiConversationInvalidLabel -> R.string.designsystem_core_api_conversation_invalid_label
     CoreText.Key.TaskNeedsYou -> R.string.designsystem_core_task_needs_you
     CoreText.Key.TaskInterrupted -> R.string.designsystem_core_task_interrupted
     CoreText.Key.TaskWorking -> R.string.designsystem_core_task_working
@@ -125,6 +128,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.StateAwaitingReply -> R.string.designsystem_core_state_awaiting_reply
     CoreText.Key.StateWorking -> R.string.designsystem_core_state_working
     CoreText.Key.StateBackgroundWaiting -> R.string.designsystem_core_state_background_waiting
+    CoreText.Key.StateJustFinished -> R.string.designsystem_core_state_just_finished
     CoreText.Key.StateWorkingBackground -> R.string.designsystem_core_state_working_background
     CoreText.Key.StateWaiting -> R.string.designsystem_core_state_waiting
     CoreText.Key.StateMuted -> R.string.designsystem_core_state_muted
@@ -219,6 +223,9 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.SourceIdentityConflict -> R.string.designsystem_core_source_identity_conflict
     CoreText.Key.SourceClaudeBackground -> R.string.designsystem_core_source_claude_background
     CoreText.Key.SourceClaudeDesktop -> R.string.designsystem_core_source_claude_desktop
+    CoreText.Key.AgentsCodexApp -> R.string.designsystem_core_agents_codex_app
+    CoreText.Key.AgentsDesktopApp -> R.string.designsystem_core_agents_desktop_app
+    CoreText.Key.AgentsRecentlyUsed -> R.string.designsystem_core_agents_recently_used
     CoreText.Key.SourceClaudeTerminal -> R.string.designsystem_core_source_claude_terminal
     CoreText.Key.SourceNoSend -> R.string.designsystem_core_source_no_send
     CoreText.Key.ReadOnlyBecause -> R.string.designsystem_core_read_only_because
@@ -227,17 +234,32 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.EngineHerdrApp -> R.string.designsystem_core_engine_herdr_app
     CoreText.Key.EngineOrca -> R.string.designsystem_core_engine_orca
     CoreText.Key.EngineTern -> R.string.designsystem_core_engine_tern
+    CoreText.Key.EngineRex -> R.string.designsystem_core_engine_rex
     CoreText.Key.EnginePaseo -> R.string.designsystem_core_engine_paseo
     CoreText.Key.EngineCindy -> R.string.designsystem_core_engine_cindy
+    CoreText.Key.EngineT3code -> R.string.designsystem_core_engine_t3code
+    CoreText.Key.EngineNone -> R.string.designsystem_core_engine_none
+    CoreText.Key.EngineNoneDetail -> R.string.designsystem_core_engine_none_detail
     CoreText.Key.EngineOffline -> R.string.designsystem_core_engine_offline
     CoreText.Key.EngineUnknown -> R.string.designsystem_core_engine_unknown
     CoreText.Key.EngineFound -> R.string.designsystem_core_engine_found
     CoreText.Key.EngineFoundVersion -> R.string.designsystem_core_engine_found_version
     CoreText.Key.EngineMissing -> R.string.designsystem_core_engine_missing
+    CoreText.Key.EngineStopped -> R.string.designsystem_core_engine_stopped
+    CoreText.Key.EngineStoppedVersion -> R.string.designsystem_core_engine_stopped_version
+    CoreText.Key.EngineIncompatibleVersion -> R.string.designsystem_core_engine_incompatible_version
     CoreText.Key.EngineFooter -> R.string.designsystem_core_engine_footer
     CoreText.Key.EngineFooterOffline -> R.string.designsystem_core_engine_footer_offline
+    CoreText.Key.EngineFooterNone -> R.string.designsystem_core_engine_footer_none
+    CoreText.Key.EngineFooterNoneOffline -> R.string.designsystem_core_engine_footer_none_offline
     CoreText.Key.EngineSwitched -> R.string.designsystem_core_engine_switched
     CoreText.Key.EngineSavedOffline -> R.string.designsystem_core_engine_saved_offline
+    CoreText.Key.EngineSetNotice -> R.string.designsystem_core_engine_set_notice
+    CoreText.Key.EngineFooterSet -> R.string.designsystem_core_engine_footer_set
+    CoreText.Key.EngineFooterSetOffline -> R.string.designsystem_core_engine_footer_set_offline
+    CoreText.Key.EngineFooterSetOne -> R.string.designsystem_core_engine_footer_set_one
+    CoreText.Key.EngineFooterSetOneOffline -> R.string.designsystem_core_engine_footer_set_one_offline
+    CoreText.Key.EngineDefaultChanged -> R.string.designsystem_core_engine_default_changed
     CoreText.Key.ToolRun -> R.string.designsystem_core_tool_run
     CoreText.Key.ToolRead -> R.string.designsystem_core_tool_read
     CoreText.Key.ToolEdit -> R.string.designsystem_core_tool_edit
@@ -391,6 +413,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.KnowledgeMeetings -> R.string.designsystem_core_knowledge_meetings
     CoreText.Key.KnowledgeEvents -> R.string.designsystem_core_knowledge_events
     CoreText.Key.KnowledgeRecordings -> R.string.designsystem_core_knowledge_recordings
+    CoreText.Key.KnowledgeTopics -> R.string.designsystem_core_knowledge_topics
     CoreText.Key.MailError -> R.string.designsystem_core_mail_error
     CoreText.Key.MailOutlook -> R.string.designsystem_core_mail_outlook
     CoreText.Key.MailGmail -> R.string.designsystem_core_mail_gmail
@@ -402,6 +425,7 @@ private fun resourceOf(key: CoreText.Key): Int = when (key) {
     CoreText.Key.HeadlineAgentPermission -> R.string.designsystem_core_headline_agent_permission
     CoreText.Key.HeadlineAgentPermissionDetail -> R.string.designsystem_core_headline_agent_permission_detail
     CoreText.Key.HeadlineSecretRun -> R.string.designsystem_core_headline_secret_run
+    CoreText.Key.HeadlineSecretHandoff -> R.string.designsystem_core_headline_secret_handoff
     CoreText.Key.HeadlineScreen -> R.string.designsystem_core_headline_screen
     CoreText.Key.HeadlineNeedsYou -> R.string.designsystem_core_headline_needs_you
     CoreText.Key.AskQuestion -> R.string.designsystem_core_ask_question

@@ -4,13 +4,14 @@
 // The count is the sidebar's own red "Needs you" count (stateCounts().badge in lib/sessions.ts: quiet tasks' agents are told
 // about in the main conversation, not counted), so the tab and the sidebar never disagree.
 import { useSyncExternalStore } from "react";
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import { agentKey } from "./pins";
 import { homeKey } from "./folded-rows";
 import { isDelegating } from "./delegate";
+import { supervisorHeld, supervisorHeldOnly } from "./supervisor-held";
 import { isMuted } from "./session-actions";
 import type { AgentMutes } from "./agent-groups";
-import { byTime } from "./times";
+import { byTime, timeOrNaN } from "./times";
 import type { AgentState, Interaction, Session } from "./types";
 
 const SITE = "Persona";
@@ -40,22 +41,51 @@ export type AttentionEvent = { kind: "needs" | "finished"; key: string; card?: I
  *   short wait (SETTLE_MS). The hub also drops a turn started by a background task's report (`WokeByTask`) and one
  *   the assistant already pushed about; the web client does not see those and chimes for them.
  * A session with no earlier state (the first snapshot, a new session) produces nothing, so opening the page does not chime.
- * A session "Needs you" only for questions the assistant is still looking at (`interactions`, lookingOnly) counts as
- * working: the hub pushes nothing for them either, and it becomes "Needs you" here once the assistant hands one to the user.
+ * A session "Needs you" only for questions the assistant is still looking at (`interactions`, lookingOnly), or only for
+ * cards its task's supervisor holds (supervisorHeldOnly), counts as working: the hub pushes nothing for them either, and
+ * it becomes "Needs you" here once the assistant or the supervisor hands one to the user.
  */
-export function detectTransitions(prev: ReadonlyMap<string, AgentState>, sessions: Session[], mutes: AgentMutes, interactions: readonly Interaction[] = []): { next: Map<string, AgentState>; events: AttentionEvent[] } {
+/** Whether an urgency level is held back (non-interrupting) while hub push grading is on. */
+export function isHeldLevel(level: string | undefined): boolean {
+  return level === "P1" || level === "P2";
+}
+
+/** Whether a "Needs you" session waits only on held (P1/P2) non-delegating cards. A card the assistant is still looking
+ *  at, or one a task's supervisor holds (lib/supervisor-held.ts), is not the user's yet and is passed over. */
+export function heldOnlyNeeds(s: Pick<Session, "machine_id" | "session_id">, interactions: readonly Interaction[]): boolean {
+  const key = agentKey(s);
+  let sawHeld = false;
+  for (const ix of interactions) {
+    if (notYetTheUsers(ix) || homeKey(ix) !== key) continue;
+    if (!isHeldLevel(ix.push_level)) return false;
+    sawHeld = true;
+  }
+  return sawHeld;
+}
+
+/** A card nothing is pushed for yet: a question the assistant is still looking at (#544), or a card a task's supervisor
+ *  holds until it passes it up (supervisorHeld). */
+function notYetTheUsers(ix: Interaction): boolean {
+  return isDelegating(ix) || supervisorHeld(ix);
+}
+
+export function detectTransitions(prev: ReadonlyMap<string, AgentState>, sessions: Session[], mutes: AgentMutes, interactions: readonly Interaction[] = [], grading = false): { next: Map<string, AgentState>; events: AttentionEvent[] } {
   const next = new Map<string, AgentState>();
   const events: AttentionEvent[] = [];
   const looking = lookingOnly(interactions);
+  // as for those: a session "Needs you" only for cards its task's supervisor holds is at work (the supervisor is)
+  for (const key of supervisorHeldOnly(interactions)) looking.add(key);
   for (const s of sessions) {
+    if (s.hidden_by_directory) continue;
     const key = agentKey(s);
-    const state = stateOf(s);
+    const state = activityOf(s);
     const now = state === "needs_you" && looking.has(key) ? "working" : state;
     next.set(key, now);
     const was = prev.get(key);
     if (was === undefined || was === now || s.quiet) continue;
-    if (now === "needs_you") events.push({ kind: "needs", key });
-    else if (was === "working" && now === "unread" && !isMuted(s, mutes)) events.push({ kind: "finished", key });
+    if (now === "needs_you") {
+      if (!grading || !heldOnlyNeeds(s, interactions)) events.push({ kind: "needs", key });
+    } else if (was === "working" && now === "unread" && !isMuted(s, mutes) && !grading) events.push({ kind: "finished", key });
   }
   return { next, events };
 }
@@ -94,26 +124,31 @@ export type CardEvent = { kind: "needs"; key: string; card: Interaction; follows
  *  screen re-read) is not new. */
 export const FORGET_CARD_MS = 10 * 60_000;
 
+/** One pending arrival's identity; a timestamp-less legacy card retains its ID-only key. */
+export function cardArrivalKey(ix: Pick<Interaction, "id" | "created_at">): string {
+  return ix.created_at ? `${ix.id}\n${ix.created_at}` : ix.id;
+}
+
 /**
  * The cards that arrived between two snapshots for a session that stayed "Needs you" (`was` the states of the last snapshot,
  * `next` this one's, as detectTransitions works them out). A session that only now becomes "Needs you" is detectTransitions'
  * (its notification is about its oldest card), so a card is announced once: by the transition or here; `bare` is the
- * sessions whose transition had no card yet, whose first card follows it (CardEvent.follows). `known` is the card ids
+ * sessions whose transition had no card yet, whose first card follows it (CardEvent.follows). `known` is the card occurrence keys
  * seen pending, with when they last were, undefined before the first snapshot (opening the page announces nothing).
  * Quiet tasks' sessions are left out, as detectTransitions does; several new cards for one session make one event, the oldest.
- * A question the assistant is still looking at is neither announced nor remembered: when it hands the same card to the
- * user, that is when it arrives.
+ * A question the assistant is still looking at, or a card a task's supervisor holds, is neither announced nor
+ * remembered: when it hands the same card to the user, that is when it arrives.
  */
-export function detectNewCards(known: ReadonlyMap<string, number> | undefined, interactions: readonly Interaction[], was: ReadonlyMap<string, AgentState>, next: ReadonlyMap<string, AgentState>, sessions: readonly Session[], bare: ReadonlySet<string>, now: number): { ids: Map<string, number>; events: CardEvent[] } {
+export function detectNewCards(known: ReadonlyMap<string, number> | undefined, interactions: readonly Interaction[], was: ReadonlyMap<string, AgentState>, next: ReadonlyMap<string, AgentState>, sessions: readonly Session[], bare: ReadonlySet<string>, now: number, grading = false): { ids: Map<string, number>; events: CardEvent[] } {
   const ids = new Map<string, number>();
   for (const [id, at] of known ?? []) if (now - at < FORGET_CARD_MS) ids.set(id, at);
-  const waiting = interactions.filter((ix) => !isDelegating(ix));
-  for (const ix of waiting) ids.set(ix.id, now);
+  const waiting = interactions.filter((ix) => !ix.mirror_of && !notYetTheUsers(ix));
+  for (const ix of waiting) ids.set(cardArrivalKey(ix), now);
   if (!known) return { ids, events: [] };
   const quiet = new Set(sessions.filter((s) => s.quiet).map(agentKey));
   const first = new Map<string, Interaction>();
   for (const ix of waiting) {
-    if (known.has(ix.id)) continue;
+    if (known.has(cardArrivalKey(ix)) || (grading && isHeldLevel(ix.push_level))) continue;
     // a child session's card is announced for its parent (#5120), the session the lists show and its link opens
     const key = ix.session_id === "" ? `card:${ix.id}` : homeKey(ix);
     if (ix.session_id === "") { first.set(key, ix); continue; }
@@ -149,12 +184,13 @@ export interface Turn {
 export function trackTurns(prev: ReadonlyMap<string, Turn>, sessions: Session[], now: number): Map<string, Turn> {
   const next = new Map<string, Turn>();
   for (const s of sessions) {
+    if (s.hidden_by_directory) continue;
     const key = agentKey(s);
     const was = prev.get(key);
     if (stateOf(s) === "working") {
       if (was && (was.endedAt === undefined || now - was.endedAt < SETTLE_MS)) next.set(key, { start: was.start });
       else {
-        const since = s.state_since ? Date.parse(s.state_since) : NaN;
+        const since = timeOrNaN(s.state_since);
         next.set(key, { start: Number.isNaN(since) ? now : Math.min(since, now) });
       }
     } else if (was) next.set(key, was.endedAt === undefined ? { start: was.start, endedAt: now } : was);
@@ -246,7 +282,8 @@ export function setAttentionSoundEnabled(on: boolean): void {
   listeners.forEach((l) => l());
 }
 
-function subscribe(l: () => void) {
+/** Calls `l` when the setting changes here or in another tab; returns the unsubscribe. */
+export function onAttentionSoundChange(l: () => void): () => void {
   listeners.add(l);
   window.addEventListener("storage", l);
   return () => {
@@ -256,5 +293,5 @@ function subscribe(l: () => void) {
 }
 
 export function useAttentionSoundSetting(): boolean {
-  return useSyncExternalStore(subscribe, attentionSoundEnabled, () => false);
+  return useSyncExternalStore(onAttentionSoundChange, attentionSoundEnabled, () => false);
 }

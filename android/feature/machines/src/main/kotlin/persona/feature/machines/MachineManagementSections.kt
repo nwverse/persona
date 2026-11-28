@@ -17,6 +17,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import persona.core.contracts.Machine
 import persona.core.contracts.api.AgentLauncher
+import persona.core.contracts.isTraeCliId
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.engines.Engines
@@ -95,7 +96,8 @@ internal fun LazyListScope.machineControls(
     }
     item("engine") {
         JGroupItem(GroupPosition.of(first, rows)) {
-            JRow(stringResource(R.string.machines_engine), leadingIcon = PhIcons.TerminalWindow, value = Engines.currentName(machine), onClick = onEngine)
+            // A set of several engines (set up on the web) is named in full: "herdr + Orca + Paseo" (#17052).
+            JRow(stringResource(R.string.machines_engine), leadingIcon = PhIcons.TerminalWindow, value = Engines.summary(machine).text(), onClick = onEngine)
         }
     }
     if (botmux != null) item("botmux") {
@@ -117,7 +119,10 @@ internal fun LazyListScope.machineControls(
     }
     item("controls-note") {
         Column(Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            MachineCaption(stringResource(if (botmux == null) R.string.machines_engine_note else R.string.machines_botmux_note))
+            // With no terminal engine the engine note says what is shown instead; the botmux note still follows when there is a switch.
+            if (Engines.isNone(machine)) MachineCaption(stringResource(R.string.machines_engine_note_none))
+            if (botmux != null) MachineCaption(stringResource(R.string.machines_botmux_note))
+            else if (!Engines.isNone(machine)) MachineCaption(stringResource(R.string.machines_engine_note))
             MachineCaption(if (machine.kind == "local") stringResource(R.string.machines_local_note)
                 else stringResource(R.string.machines_ssh_note, machine.sshHost?.takeIf { it.isNotBlank() } ?: machine.id))
         }
@@ -180,11 +185,12 @@ internal fun LazyListScope.machineLaunchers(online: Boolean, state: MachineActio
     }
     itemsIndexed(launchers, key = { _, it -> "launcher-${it.name}" }, contentType = { _, _ -> "launcher" }) { index, launcher ->
         val model = launcherModel(launcher)
+        val title = if (isTraeCliId(launcher.name) || isTraeCliId(launcher.agentType)) launcher.title else launcher.name
         JGroupItem(GroupPosition.of(index, launchers.size)) {
             JRow(chevron = onLauncher != null, onClick = onLauncher?.let { open -> { open(launcher.name) } }, trailing = if (model == null) null else ({
                 Text(model, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
             })) {
-                Text(launcher.name, style = PersonaTheme.type.code, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(title, style = PersonaTheme.type.code, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

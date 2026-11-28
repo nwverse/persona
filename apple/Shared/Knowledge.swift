@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The knowledge base under the hub's ~/.persona/data (docs/assistant/knowledge.md): projects, topics, chats, people, docs,
 /// meetings and events, each ranked by importance (P0–P3) and relevance to the user, with free tags. Topics (#3783, #7251)
@@ -30,6 +31,12 @@ nonisolated enum KBKind: String, CaseIterable, Identifiable, Sendable {
         case .recordings: Theme.Icon.recording
         }
     }
+
+    /// The kinds Knowledge offers as chips: recordings are listed under meetings (#8731, "one home for meetings"), with
+    /// the meetings imported from connected apps, so there is one place for meetings and notes.
+    static var listed: [KBKind] { allCases.filter { $0 != .recordings } }
+    /// The list that shows this kind's entries: recordings' is meetings'.
+    var listedAs: KBKind { self == .recordings ? .meetings : self }
 }
 
 nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
@@ -42,11 +49,48 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
     var tags: [String]?
     var updated: Date?
     var extra: String?
+    /// A recording's kind: meeting, note or day (#8870); nil on other kinds and from a hub before it.
+    var recordingKind: String?
+    /// A chat's source; a document's, meeting's or event's connector (#8872); nil from a hub before it.
+    var source: String?
+    /// A recording's imported meeting: the id of the meetings item it overlaps, as the meetings list has it (#8872).
+    var meetingID: String?
+    /// In the meetings list, a recording that stands for an imported meeting too: that meeting (`KBList.meetings`).
+    var imported: KBImportedMeeting? = nil
+    /// A project's parent as it shows (#12927); nil at the top level and from a hub before it. Read only here.
+    var parent: String? = nil
+    /// A project's milestone flags (#12927); nil without any and from a hub before them. Read only here.
+    var milestones: [KBMilestone]? = nil
+    /// A recording whose in-flight state the hub holds back, and why (#15214); nil when nothing is paused.
+    var paused: RecordingPause? = nil
 
     enum CodingKeys: String, CodingKey {
-        case kind, id, name, importance, relevance, tags, updated, extra
+        case kind, id, name, importance, relevance, tags, updated, extra, source, parent, milestones, paused
         case oneLine = "one_line"
+        case recordingKind = "recording_kind"
+        case meetingID = "meeting_id"
     }
+
+    /// The pill a recording's row carries in the meetings list: notes and all-day recordings are the exceptions among
+    /// meetings, so only they are marked; a meeting, an imported one, or a recording from an older hub, none.
+    var recordingTag: String? {
+        guard kind == KBKind.recordings.rawValue else { return nil }
+        switch recordingKind {
+        case "note": return String(localized: "Note [Recording Kind]")
+        case "day": return String(localized: "All-Day")
+        default: return nil
+        }
+    }
+
+    /// The pill a recording's row carries while the hub's recording module is off and its minutes or upload wait for it
+    /// (#15214); none for a reason this app doesn't know.
+    var pausedTag: String? {
+        guard kind == KBKind.recordings.rawValue, paused?.isModuleOff == true else { return nil }
+        return String(localized: "Paused")
+    }
+
+    /// The phone's own recording this entry is, when it has it: its page opens instead of the hub's copy.
+    var localRecording: UUID? { kind == KBKind.recordings.rawValue ? UUID(uuidString: id) : nil }
 
     /// Projects: "short · active" → Short-term / Long-term and the status.
     var projectKind: String? {
@@ -63,6 +107,36 @@ nonisolated struct KBEntry: Codable, Identifiable, Hashable, Sendable {
 nonisolated struct KBList: Decodable, Sendable {
     var items: [KBEntry]
     var tags: [String]?
+
+    /// The meetings list (#8731): the meetings imported from connected apps and the recordings made in Persona, with
+    /// each tag once. A meeting both recorded and imported is one row (#8872): the recording's, which carries the
+    /// imported meeting (`imported`), and the imported meeting's own row goes.
+    static func meetings(_ meetings: KBList, recordings: KBList) -> KBList {
+        var tags: [String] = []
+        for t in (meetings.tags ?? []) + (recordings.tags ?? []) where !tags.contains(t) { tags.append(t) }
+        let byID = Dictionary(meetings.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var covered = Set<String>()
+        let recs = recordings.items.map { r -> KBEntry in
+            guard let id = r.meetingID, let m = byID[id] else { return r }
+            covered.insert(m.id)
+            var r = r
+            r.imported = KBImportedMeeting(id: m.id, url: KBImportedMeeting.link(m.extra), source: m.source)
+            return r
+        }
+        return KBList(items: meetings.items.filter { !covered.contains($0.id) } + recs, tags: tags)
+    }
+
+    /// Newest first, entries with no time last; otherwise in the order given.
+    static func newestFirst(_ items: [KBEntry]) -> [KBEntry] {
+        items.enumerated().sorted { a, b in
+            switch (a.element.updated, b.element.updated) {
+            case let (x?, y?) where x != y: x > y
+            case (.some, nil): true
+            case (nil, .some): false
+            default: a.offset < b.offset
+            }
+        }.map(\.element)
+    }
 }
 
 nonisolated struct KBDetail: Decodable, Sendable {
@@ -74,10 +148,48 @@ nonisolated struct KBDetail: Decodable, Sendable {
     var log: [String]?
     var recent: String?
     var links: [KBEntry]?
+    /// Links the user keeps out of automatic updates. Older hubs omit this list.
+    var removed: [KBEntry]?
     /// A project's Moments posts (the hub's LinkMoments), newest first.
     var moments: [KBMomentRef]?
     /// A topic's knowledge points (docs/assistant/knowledge.md "Topics").
     var points: [KBTopicPoint]?
+    /// A recording whose in-flight state the hub holds back, and why (#15214); nil when nothing is paused.
+    var paused: RecordingPause?
+
+    /// A recording's imported meeting (#8872): `meta.imported_meeting` and the link the hub resolves for it; nil without
+    /// one, or with nothing to open.
+    var importedMeeting: KBImportedMeeting? {
+        guard kind == KBKind.recordings.rawValue else { return nil }
+        return KBImportedMeeting.of(meta, links: links)
+    }
+}
+
+/// The meeting imported from a connected app that a recording stands for too (#8872): its id, its notes' link and the
+/// connector it came from.
+nonisolated struct KBImportedMeeting: Codable, Hashable, Sendable {
+    var id: String
+    var url: URL?
+    var source: String?
+
+    /// A meetings item's `extra` as a link: its notes in the app, nil when it has none.
+    static func link(_ extra: String?) -> URL? {
+        guard let s = extra?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+        return URL(string: s)
+    }
+
+    /// From a recording's detail: `meta.imported_meeting`, with its notes' link and connector from the link the hub
+    /// resolves for it; nil without one, or with no link to open.
+    static func of(_ meta: JSONValue?, links: [KBEntry]?) -> KBImportedMeeting? {
+        of(id: meta?["imported_meeting"]?["id"]?.string, links: links)
+    }
+
+    /// The imported meeting `id` among a detail's `links`, with its notes' link; nil without either.
+    static func of(id: String?, links: [KBEntry]?) -> KBImportedMeeting? {
+        guard let id, let link = (links ?? []).first(where: { $0.kind == KBKind.meetings.rawValue && $0.id == id }),
+              let url = Self.link(link.extra) else { return nil }
+        return KBImportedMeeting(id: id, url: url, source: link.source)
+    }
 }
 
 /// One knowledge point of a topic: what it is (`kind`), the text, the reason or cause (`why`), the subtopics it is under
@@ -142,6 +254,67 @@ nonisolated struct KBDetailResponse: Decodable, Sendable {
     var detail: KBDetail
     var agents: [Session]?
     var matches: [KBMatch]?
+    /// A project's place in the project tree (#12927): parent, the way down, children, milestones. Nil from a hub
+    /// before it. The app reads it only; moving projects and editing milestones is on the web for now.
+    var tree: KBProjectTree?
+    /// A chat's Inbox items (#15356, docs/assistant/knowledge.md "A chat's Inbox items"); nil for none, and from a hub
+    /// before them.
+    var inbox: [KBInboxItem]?
+}
+
+/// A milestone flag on a project (#12927): a title, an optional target day (YYYY-MM-DD) and whether it was accepted
+/// (open, accepted, not_accepted). Every field is optional so a hub's later additions or a damaged flag never fail
+/// the list it is in.
+nonisolated struct KBMilestone: Codable, Hashable, Sendable {
+    var id: String?
+    var title: String?
+    var target: String?
+    var state: String?
+}
+
+/// A project as a tree names it: its parent, the ones above it, the ones under it.
+nonisolated struct KBProjectRef: Decodable, Hashable, Sendable {
+    var id: String
+    var name: String?
+    var status: String?
+    var children: Int?
+}
+
+/// `tree` of a project's detail (`GET /api/v1/kb/projects/{id}`, #12927).
+nonisolated struct KBProjectTree: Decodable, Sendable {
+    var parent: KBProjectRef?
+    var ancestors: [KBProjectRef]?
+    var children: [KBProjectRef]?
+    var milestones: [KBMilestone]?
+    var depth: Int?
+}
+
+/// An Inbox item a chat's page lists: what its row draws, and `messages`, the rows of the page's `recent` it holds, each
+/// by its day and its lines as written there (the hub matched them on time, sender and text).
+nonisolated struct KBInboxItem: Decodable, Identifiable, Hashable, Sendable {
+    var id: String
+    var title: String
+    var tier: String?
+    /// An open item's section (action, working, fyi, noise) as the Inbox has it.
+    var status: String?
+    var summary: String?
+    var preview: String?
+    var updatedAt: Date?
+    var doneAt: Date?
+    var messages: [Row]?
+
+    /// A row of the chat's recent messages: its day ("2026-10-30") and its lines, "- 10:15 name: text" and any indented
+    /// ones after it.
+    nonisolated struct Row: Decodable, Hashable, Sendable {
+        var day: String
+        var line: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, tier, status, summary, preview, messages
+        case updatedAt = "updated_at"
+        case doneAt = "done_at"
+    }
 }
 
 /// A change made in the app; tagging set here is kept over the automatic one.

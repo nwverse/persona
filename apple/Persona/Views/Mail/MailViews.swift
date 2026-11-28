@@ -1,6 +1,7 @@
 import AuthenticationServices
 import SwiftUI
 import WebKit
+import PersonaWire
 
 extension APIClient {
     struct AccountsResponse: Decodable { var accounts: [MailAccount] }
@@ -196,10 +197,6 @@ struct MailDetailView: View {
         .sheet(isPresented: $askClaude) {
             NewChatPrefilled(prompt: String(localized: "Use mail_read to read the email (account_id: \(summary.accountID), mailbox: \(summary.mailbox), uid: \(summary.uid), subject: \(summary.subject ?? "")), summarize the key points, and draft a suggested reply."))
         }
-        #if DEBUG && os(macOS)
-        // `-showMailAskClaude YES` (with an inbox mail open): the 「让 Claude 处理」 sheet.
-        .onAppear { if UserDefaults.standard.bool(forKey: "showMailAskClaude") { askClaude = true } }
-        #endif
         .task {
             guard let api = model.api else { return }
             do {
@@ -286,7 +283,6 @@ struct NewChatPrefilled: View {
     }
 }
 
-#if os(iOS) || os(visionOS)
 struct HTMLView: UIViewRepresentable {
     var html: String
     @Binding var height: CGFloat
@@ -297,6 +293,9 @@ struct HTMLView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let v = WKWebView(frame: .zero, configuration: config)
+        #if os(iOS)
+        CallMediaGuard.shared.register(v) // a mail's media stays still while a system call is live
+        #endif
         v.scrollView.isScrollEnabled = false
         v.isOpaque = false
         v.backgroundColor = .clear
@@ -340,7 +339,6 @@ struct HTMLView: UIViewRepresentable {
         }
     }
 }
-#endif
 
 struct ComposeDraft: Identifiable {
     let id = UUID()
@@ -390,12 +388,7 @@ struct ComposeView: View {
                 TextField(String(localized: "Cc"), text: $draft.cc).keyboardType(.emailAddress).textInputAutocapitalization(.never)
                 TextField(String(localized: "Subject"), text: $draft.subject)
                 Section {
-                    #if os(macOS)
-                    // A grouped Mac form shows a titled field as label + trailing value: the body took the right half.
-                    TextField(String(localized: "Message [Mail Views d661c3]"), text: $draft.body, prompt: Text("Message [Mail Views d661c3]"), axis: .vertical).labelsHidden().lineLimit(10...40)
-                    #else
                     TextField(String(localized: "Message [Mail Views d661c3]"), text: $draft.body, axis: .vertical).lineLimit(10...40)
-                    #endif
                 }
                 if let error { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
             }
@@ -403,7 +396,7 @@ struct ComposeView: View {
             .navigationTitle("New Email")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
                         if sending { ProgressView() } else { Label("Send", systemImage: Theme.Icon.sendMail) }
@@ -452,7 +445,7 @@ struct MailAccountsView: View {
 
     var body: some View {
         if inSheet {
-            NavigationStack { page.toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } } }
+            NavigationStack { page.toolbar { SheetClose { dismiss() } } }
         } else {
             page
         }
@@ -470,14 +463,6 @@ struct MailAccountsView: View {
                                     .font(Theme.Font.label).foregroundStyle(a.status == "error" ? Theme.danger : .secondary)
                             }
                         }
-                        #if os(macOS)
-                        // A Mac form has no swipe to delete: the row's menu removes the account (#1221).
-                        .contextMenu {
-                            Button("Delete Account", role: .destructive) {
-                                Task { await delete([a.id]) }
-                            }
-                        }
-                        #endif
                     }
                     .onDelete { idx in
                         let ids = idx.map { accounts[$0].id }
@@ -551,7 +536,7 @@ struct MailAccountsView: View {
     }
 }
 
-/// The Other IMAP footer for a QQ / NetEase address: where its authorization code is made, and a button to that web mail (#5123).
+/// The password footer for a QQ / NetEase / Gmail / iCloud address: where its authorization code or app password is made, and a button to that page (#5123, #9389).
 private struct CodeGuideSteps: View {
     let guide: CodeGuide
     @Environment(\.openURL) private var openURL
@@ -563,13 +548,28 @@ private struct CodeGuideSteps: View {
                 Text("Servers fill in automatically. The password is an authorization code, not your QQ password: on a computer, open QQ Mail on the web, go to Settings › Account & Security › Security Settings, turn on “POP3/IMAP/SMTP/Exchange/CardDAV service”, verify as prompted, then tap “Generate authorization code” and paste the 16-character code above.")
             case .netease:
                 Text("Servers fill in automatically. The password is an authorization code, not your login password: on a computer, open NetEase Mail on the web, go to Settings › POP3/SMTP/IMAP and turn on “IMAP/SMTP service”. After you verify with your phone as prompted, the code is shown: paste it above.")
+            case .gmail:
+                Text("The password is an app password, not your Google password: turn on 2-Step Verification for the Google account, then open App passwords, create one and paste the 16-character password above.")
+            case .icloud:
+                Text("The password is an app-specific password, not your Apple Account password: sign in to your Apple Account, open Sign-In and Security › App-Specific Passwords, create one and paste it above.")
             }
             Button { openURL(guide.webMail) } label: {
-                Label(guide.provider == .qq ? String(localized: "Open QQ Mail on the web") : String(localized: "Open NetEase Mail on the web"), systemImage: Theme.Icon.safari)
+                Label(guide.buttonTitle, systemImage: Theme.Icon.safari)
                     .lineLimit(1)
             }
             .font(Theme.Font.caption)
             .accessibilityIdentifier("mail.codeGuide.open")
+        }
+    }
+}
+
+private extension CodeGuide {
+    var buttonTitle: String {
+        switch provider {
+        case .qq: String(localized: "Open QQ Mail on the web")
+        case .netease: String(localized: "Open NetEase Mail on the web")
+        case .gmail: String(localized: "Open Google App passwords")
+        case .icloud: String(localized: "Open Apple Account")
         }
     }
 }
@@ -646,7 +646,7 @@ struct AddMailAccountView: View {
                         TextField(String(localized: "Gmail address"), text: $form.email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecretField(String(localized: "App password"), filled: String(localized: "Filled in. Tap Connect."), text: $form.password, identifier: "mail.password")
                     } footer: {
-                        Text("Once google.client_id is in the assistant's manager.json and the hub restarts, “Sign In with Google” appears here (a one-time setup). Until then, add the account with an app password: turn on 2-Step Verification for the Google account, then create a 16-character password under Google Account › Security › App passwords and enter it here (not your Google password).")
+                        CodeGuideSteps(guide: .gmailAppPassword)
                     }
                 } else if form.kind == .gmail {
                     Section {
@@ -693,12 +693,7 @@ struct AddMailAccountView: View {
                 Section {
                 } footer: {
                     // 2026-11-01: 「AI 一键添加」 (paste and recognize) is gone; Persona adds accounts itself (mail_account_add).
-                    #if os(macOS)
-                    // On macOS the add-account confirmation card appears in the Mac app, not on a phone (#4070).
-                    Label("You can also just tell Persona “Add a mail account for me”, give it the address and password, and confirm in the app.", systemImage: Theme.Icon.ai)
-                    #else
                     Label("You can also just tell Persona “Add a mail account for me”, give it the address and password, and confirm on your phone.", systemImage: Theme.Icon.ai)
-                    #endif
                 }
             }
             .themedPage()
@@ -707,7 +702,7 @@ struct AddMailAccountView: View {
             // Ask before offering "Sign in with Google" (#2442); an older hub or a failed read keeps the button.
             .task { form.gmailAppPassword = (try? await requestAPI()?.googleConfig())?.configured == false }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 if form.request != nil {
                     ToolbarItem(placement: .confirmationAction) {
                         Button { Task { await save() } } label: { if saving { ProgressView() } else { Text("Connect [V N C Page a55741]") } }

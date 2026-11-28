@@ -9,6 +9,7 @@ The config lives outside the repository so clean worktrees (releases) see it too
   python3 scripts/persona_config.py export-options <out.plist> [upload|export]
   python3 scripts/persona_config.py get <dotted.key>  # one value, e.g. hub.url
 """
+import io
 import json
 import os
 import plistlib
@@ -70,11 +71,20 @@ def env(cfg: dict) -> dict:
         "PERSONA_SIM": cfg.get("simulator", ""),
         # Where scripts/release/publish.sh puts personad and install.sh (the site/ worker's domain), and the wrangler to run.
         "PERSONA_PUBLISH_URL": get(cfg, "publish.site_url", "").rstrip("/"),
-        # Where the personad built here looks for its updates (-X main.updateURL): publish.update_url, else <site_url>/dl.
-        "PERSONA_UPDATE_URL": update_url(cfg),
+        # Where the personad built here looks for its updates (-X main.updateURL): an existing environment override,
+        # then publish.update_url, else <site_url>/dl.
+        "PERSONA_UPDATE_URL": update_url(cfg, os.environ.get("PERSONA_UPDATE_URL")),
         "PERSONA_WRANGLER": os.path.expanduser(get(cfg, "publish.wrangler", "")),
+        # Existing opt-in entitlements: each feature's include selects the generated file and contributes its property.
+        # Siri's later include then replaces that path with its own generated file when its overlay is on.
+        "PERSONA_CARPLAY_VOICE": "YES" if opted_in(cfg, "app.carplay_voice") else "NO",
+        "PERSONA_HEALTH_BACKGROUND_DELIVERY": "YES" if opted_in(cfg, "app.health_background_delivery") else "NO",
+        "PERSONA_HOMEKIT": "YES" if opted_in(cfg, "app.homekit") else "NO",
         # Meta glasses (docs/apple/meta-glasses.md): the project.yml include that adds the Meta Wearables SDK is on only for YES.
         "PERSONA_META_WEARABLES": "YES" if get(cfg, "app.meta_wearables.enabled", False) is True else "NO",
+        # Siri calls (docs/apple/siri.md "Calling Persona"): the project.yml include that adds the SiriKit extension is on
+        # only for YES (app.siri_calls; its entitlement is in OPT_IN, its App IDs in asc_signing.py).
+        "PERSONA_SIRI_CALLS": "YES" if opted_in(cfg, "app.siri_calls") else "NO",
     }
     # Which Xcode builds (and releases) the app; a DEVELOPER_DIR already in the environment wins. iPhone Duo needs
     # Xcode 27 or later: built with an older one, the app does not reach under the status bar and the camera.
@@ -86,11 +96,11 @@ def env(cfg: dict) -> dict:
     return out
 
 
-def update_url(cfg: dict) -> str:
+def update_url(cfg: dict, override=None) -> str:
     """The update source built into personad (-X main.updateURL, docs/operations/hub-update.md "Update source"):
-    publish.update_url as given (the directory latest.json is in, e.g. a GitHub repository's releases/latest/download),
-    else publish.site_url's dl/, else none. A hub's hub.json update.url still replaces it at run time."""
-    value = get(cfg, "publish.update_url", "")
+    a non-empty environment override, then publish.update_url as given (the directory latest.json is in, e.g. a GitHub
+    repository's releases/latest/download), else publish.site_url's dl/, else none. hub.json update.url still replaces it."""
+    value = override or get(cfg, "publish.update_url", "")
     if value in ("", None):
         site = get(cfg, "publish.site_url", "")
         return site.rstrip("/") + "/dl" if isinstance(site, str) and site.strip() else ""
@@ -122,6 +132,11 @@ def watch_app_group(cfg: dict) -> str:
     return group
 
 
+def call_intents_bundle_id(cfg: dict) -> str:
+    """The SiriKit extension (apple/siri-calls.yml, app.siri_calls): a child of the app's Bundle ID, as the others."""
+    return get(cfg, "app.bundle_id", "") + ".callintents"
+
+
 def provisioning_profiles(cfg: dict) -> dict[str, str]:
     """Configured signing names are account resources, not product display names."""
     bid = get(cfg, "app.bundle_id", "")
@@ -133,6 +148,10 @@ def provisioning_profiles(cfg: dict) -> dict[str, str]:
         bid + ".notify": "Persona Notify App Store",
         bid + ".share": "Persona Share App Store",
     }
+    # Only in a build with the extension: without it the export options stay as they were. A dict literal assigned to
+    # `profiles`, as above: the privacy check reads the published default names from such literals only.
+    if opted_in(cfg, "app.siri_calls"):
+        profiles = {**profiles, call_intents_bundle_id(cfg): "Persona Call Intents App Store"}
     overrides = get(cfg, "app_store.provisioning_profiles", {})
     if not isinstance(overrides, dict):
         sys.exit("app_store.provisioning_profiles must be a Bundle ID to profile name object")
@@ -143,29 +162,65 @@ def provisioning_profiles(cfg: dict) -> dict[str, str]:
     return profiles
 
 
-# The app's entitlements. The CarPlay voice entitlement needs Apple's approval first (docs/apple/carplay.md); the generated copy
-# sits in apple/, outside the Persona/ source folder, so XcodeGen does not pick it up as a resource.
+# The app's entitlements. The opt-in ones need the capability on the App ID first (CarPlay voice: Apple's approval,
+# docs/apple/carplay.md; HealthKit background delivery, docs/assistant/health.md; HomeKit, docs/apple/phone-tools.md "Home";
+# Siri calls, SIRIKIT, docs/operations/release.md "Siri calls"); the generated copy sits in apple/,
+# outside the Persona/ source folder, so XcodeGen does not pick it up as a resource.
 APP_ENTITLEMENTS = os.path.join("Persona", "Resources", "Persona.entitlements")
-CARPLAY_ENTITLEMENTS = "PersonaCarPlay.entitlements"
+OPT_IN_ENTITLEMENTS = "PersonaOptIn.entitlements"
+# config.json switch → the entitlement it adds.
+OPT_IN = {
+    "app.carplay_voice": "com.apple.developer.carplay-voice-based-conversation",
+    "app.health_background_delivery": "com.apple.developer.healthkit.background-delivery",
+    "app.homekit": "com.apple.developer.homekit",
+    # With the SiriKit extension (env PERSONA_SIRI_CALLS): the app holds Siri's entitlement. apple/siri-calls.yml signs
+    # with its own generated copy (PersonaSiriCalls.entitlements): XcodeGen sets CODE_SIGN_ENTITLEMENTS from the target's
+    # `entitlements` path over PERSONA_APP_ENTITLEMENTS.
+    "app.siri_calls": "com.apple.developer.siri",
+}
+
+
+def opted_in(cfg: dict, switch: str) -> bool:
+    # Only JSON true turns one on: a string like "false" is truthy in Python.
+    return get(cfg, switch, False) is True
 
 
 def app_entitlements(cfg: dict) -> str:
-    # Opt-in: an App ID without the approved entitlement cannot sign it, so signing without it must keep working.
-    # Returns the path relative to apple/. Only JSON true turns it on: a string like "false" is truthy in Python.
-    if get(cfg, "app.carplay_voice", False) is not True:
+    # Opt-in: an App ID without the capability cannot sign its entitlement, so signing without them must keep working.
+    # Returns the path relative to apple/.
+    added = [key for switch, key in OPT_IN.items() if opted_in(cfg, switch)]
+    if not added:
         return APP_ENTITLEMENTS
     with open(os.path.join(ROOT, "apple", APP_ENTITLEMENTS), "rb") as f:
         entitlements = plistlib.load(f)
-    entitlements["com.apple.developer.carplay-voice-based-conversation"] = True
-    with open(os.path.join(ROOT, "apple", CARPLAY_ENTITLEMENTS), "wb") as f:
-        plistlib.dump(entitlements, f)
-    return CARPLAY_ENTITLEMENTS
+    for key in added:
+        entitlements[key] = True
+    write_if_changed(os.path.join(ROOT, "apple", OPT_IN_ENTITLEMENTS), plistlib.dumps(entitlements))
+    return OPT_IN_ENTITLEMENTS
+
+
+def write_if_changed(out: str, data: bytes) -> bool:
+    """Writes `data` to `out` unless it already holds exactly that, and says whether it wrote (#10713).
+
+    sim.sh and the other build scripts generate these files before every build. Rewriting an unchanged file still
+    changes its modification time, which Xcode takes as a change: a new xcconfig invalidates every target's settings,
+    a new entitlements file signs the app again."""
+    try:
+        with open(out, "rb") as f:
+            if f.read() == data:
+                return False
+    except FileNotFoundError:
+        pass
+    with open(out, "wb") as f:
+        f.write(data)
+    return True
 
 
 def xcconfig(cfg: dict):
-    # Generated, git-ignored: the committed project only says $(PERSONA_BUNDLE_ID).
+    # Generated, git-ignored: the committed project only says $(PERSONA_BUNDLE_ID). Written only when its content
+    # changed (write_if_changed).
     out = os.path.join(ROOT, "apple", "Config.xcconfig")
-    with open(out, "w") as f:
+    with io.StringIO() as f:
         f.write("// Generated from %s by scripts/persona_config.py; do not edit or commit.\n" % path())
         f.write("PERSONA_BUNDLE_ID = %s\n" % get(cfg, "app.bundle_id", ""))
         # The App Group the app shares files with the widget extension (docs/operations/release.md "App Group").
@@ -177,6 +232,10 @@ def xcconfig(cfg: dict):
         f.write("PERSONA_PUSH_RELAY = %s\n" % get(cfg, "app.push_relay", "").rstrip("/").replace("//", "/$()/"))
         # Which entitlements the app signs with (app_entitlements; docs/apple/carplay.md).
         f.write("PERSONA_APP_ENTITLEMENTS = %s\n" % app_entitlements(cfg))
+        # Workout reports right after a workout (Info.plist PersonaHealthBackgroundDelivery, with its entitlement above).
+        f.write("PERSONA_HEALTH_BACKGROUND_DELIVERY = %s\n" % ("YES" if opted_in(cfg, "app.health_background_delivery") else "NO"))
+        # Home's tools are offered only when the app signs with HomeKit (Info.plist PersonaHomeKit; docs/apple/phone-tools.md "Home").
+        f.write("PERSONA_HOMEKIT = %s\n" % ("YES" if opted_in(cfg, "app.homekit") else "NO"))
         # "No hub yet?" on the first screen opens this page (docs/operations/getting-started.md published; empty: the row is hidden).
         f.write("PERSONA_GETTING_STARTED_URL = %s\n" % get(cfg, "publish.getting_started_url", "").replace("//", "/$()/"))
         # Meta Wearables (docs/apple/meta-glasses.md): 0 means Developer Mode (no attestation), as Meta's docs say.
@@ -190,6 +249,7 @@ def xcconfig(cfg: dict):
         for suffix in ("BUNDLE_ID", "APP_GROUP", "PUSH_RELAY", "APP_ENTITLEMENTS", "GETTING_STARTED_URL",
                        "META_APP_ID", "META_CLIENT_TOKEN", "TUNNEL_INCLUDE", "TUNNEL_LDFLAGS"):
             f.write(LEGACY_PREFIX + suffix + " = $(PERSONA_" + suffix + ")\n")
+        write_if_changed(out, f.getvalue().encode())
 
 
 def tunnel_core(cfg: dict) -> tuple[str, str]:

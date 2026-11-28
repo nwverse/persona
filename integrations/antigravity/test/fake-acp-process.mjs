@@ -10,7 +10,11 @@ import { appendFileSync, closeSync, existsSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 const [pidFile, mode = 'ok', marker] = process.argv.slice(2)
-if (pidFile) appendFileSync(pidFile, `${process.pid}\n`)
+if (pidFile) {
+  appendFileSync(pidFile, `${process.pid}\n`)
+  appendFileSync(`${pidFile}.cwds`, `${process.cwd()}\n`)
+appendFileSync(`${pidFile}.config-dirs`, `${process.env.ANTIGRAVITY_CLI_CONFIG_DIR || ''}\n`)
+}
 
 let first = false
 if ((mode === 'silent-once' || mode === 'fail-once') && marker && !existsSync(marker)) {
@@ -42,9 +46,12 @@ rl.on('line', (line) => {
         send({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: 'initialize failed' } })
         return
       }
-      send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentInfo: { name: 'fake-agy', version: '9.9.9' } } })
+      send({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: 1, agentInfo: { name: 'fake-agy', version: '9.9.9' }, ...(mode === 'auth-methods' ? { authMethods: [{ id: 'oauth-personal', name: 'Personal OAuth' }, { id: 'gemini-api-key' }] } : {}) } })
       return
     case 'session/list':
+      if (mode === 'null-frame') {
+        process.stdout.write('null\n123\n"str"\n[]\n')
+      }
       if (mode === 'close-stdin') {
         setInterval(() => {}, 1 << 30)
         rl.removeAllListeners('close')

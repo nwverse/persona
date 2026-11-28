@@ -62,14 +62,15 @@ final class NodeMenuUITests: XCTestCase {
         let row = text(app, containing: "给天气 App 加主屏幕小组件")
         XCTAssertTrue(reveal(app, row), "no row for the agent")
         row.press(forDuration: 1.2)
-        XCTAssertTrue(app.buttons["拆分窗格"].waitForExistence(timeout: 5), "no 拆分窗格 in the row's menu")
+        app.openAgentMenuMore() // the pane's items are More's (#13396)
+        XCTAssertTrue(app.buttons["终端分屏"].waitForExistence(timeout: 5), "no 终端分屏 in the row's menu")
     }
 
     @MainActor func testAgentRowSplitsPullsAndClosesItsTab() throws {
         let app = launch()
         rowMenu(app)
         XCTAssertTrue(app.buttons["Git"].exists)
-        XCTAssertTrue(app.buttons["关闭标签页…"].exists)
+        XCTAssertTrue(app.buttons["关闭标签页"].exists)
         shot(app, "row-menu")
 
         app.buttons["Git"].tap()
@@ -86,7 +87,7 @@ final class NodeMenuUITests: XCTestCase {
         XCTAssertEqual(pulled.first?["pane"], "w1:p1", "git ran somewhere other than the agent's pane")
 
         rowMenu(app)
-        app.buttons["拆分窗格"].tap()
+        app.buttons["终端分屏"].tap()
         XCTAssertTrue(app.buttons["向右拆分"].waitForExistence(timeout: 3))
         app.buttons["向右拆分"].tap()
         XCTAssertTrue(text(app, containing: "已新建窗格").waitForExistence(timeout: 10))
@@ -95,7 +96,7 @@ final class NodeMenuUITests: XCTestCase {
         XCTAssertEqual(split?["direction"], "right")
 
         rowMenu(app)
-        app.buttons["关闭标签页…"].tap()
+        app.buttons["关闭标签页"].tap()
         let confirm = app.buttons.matching(NSPredicate(format: "label == %@", "关闭标签页")).firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "closing a tab did not ask first")
         XCTAssertNotEqual(try actions().last?["route"], "tabs/close", "the tab closed before the answer")

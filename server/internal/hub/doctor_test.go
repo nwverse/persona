@@ -90,7 +90,7 @@ func TestDoctorReadOnly(t *testing.T) {
 	}
 	out := reportText(d)
 	for _, want := range []string{pin, cert.Leaf.NotAfter.UTC().Format(time.RFC3339), "Problem | security.allow_public_plaintext: Plain HTTP from the internet is on",
-		"2001:db8::2", "OK | Running hub: The loopback health check passed"} {
+		"2001:db8::2", "OK | Running hub: The health check on this machine passed"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing output %q in:\n%s", want, out)
 		}

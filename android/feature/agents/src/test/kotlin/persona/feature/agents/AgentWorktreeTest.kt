@@ -77,6 +77,87 @@ class AgentWorktreeTest {
         }
     }
 
+    /** A Paseo workspace picked (#8856): Paseo is asked, makes the worktree, and the start goes into the workspace it made. */
+    @Test fun aPaseoWorkspacePickedStartsInANewWorktreePaseoMakes() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = Store()
+        val service = Service().apply {
+            catalog = listOf(
+                AgentWorkspace("first/paseo/main", "first", "paseo", "main", "weather", "/code/weather", "main"),
+                AgentWorkspace("first/orca/tree", "first", "orca", "tree", "fix", "/code/weather-fix", "fix"),
+            )
+            madeWorkspace = "made-for-it"
+        }
+        val model = NewAgentViewModel(service, store, MutableStateFlow(listOf(Machine("first", online = true))))
+        try {
+            advanceUntilIdle()
+            model.selection(model.state.value.selection.copy(launcher = "claude"))
+            val rows = model.state.value.workspaces.flatMap { s -> s.rows.map { it.workspace } }
+            // an Orca workspace's worktree is Orca's to make too (#17050): Orca is asked, and the switch shows, off
+            model.pickWorkspace(rows.first { it.source == "orca" })
+            advanceUntilIdle()
+            assertEquals("first:/code/weather-fix:orca", service.asked.last())
+            assertTrue(model.state.value.worktreeOffered)
+            assertFalse(model.state.value.inWorktree)
+
+            model.pickWorkspace(rows.first { it.source == "paseo" })
+            advanceUntilIdle()
+            // Paseo says where its worktree goes
+            assertEquals("first:/code/weather:paseo", service.asked.last())
+            assertTrue(model.state.value.worktreeOffered)
+            model.inWorktree(true)
+            // a switch turned on does not carry to another choice
+            model.chooseByFolder()
+            assertFalse(model.state.value.inWorktree)
+            advanceUntilIdle()
+            model.pickWorkspace(rows.first { it.source == "paseo" })
+            assertFalse(model.state.value.inWorktree)
+            advanceUntilIdle()
+            model.inWorktree(true)
+            model.prompt("Fix the login bug")
+            model.submit()
+            advanceUntilIdle()
+            assertEquals(listOf("first:/code/weather:Fix the login bug::paseo"), service.added)
+            val request = requireNotNull(service.request)
+            assertEquals("/wt/persona-fix-the-login-bug", request.cwd)
+            assertEquals("made-for-it", request.workspaceId)
+            assertEquals("paseo", request.host)
+            assertEquals("/code/weather", store.operation?.folder)
+        } finally {
+            model.viewModelScope.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
+    /** An Orca workspace picked (#17050): Orca makes the worktree as a child of it, and the start goes into the one made. */
+    @Test fun anOrcaWorkspacePickedStartsInANewWorktreeOrcaMakes() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = Store()
+        val service = Service().apply {
+            catalog = listOf(AgentWorkspace("first/orca/tree", "first", "orca", "tree", "fix", "/code/weather-fix", "fix"))
+            madeWorkspace = "made-for-it"
+        }
+        val model = NewAgentViewModel(service, store, MutableStateFlow(listOf(Machine("first", online = true))))
+        try {
+            advanceUntilIdle()
+            model.selection(model.state.value.selection.copy(launcher = "claude"))
+            model.pickWorkspace(model.state.value.workspaces.flatMap { s -> s.rows.map { it.workspace } }.single())
+            advanceUntilIdle()
+            model.inWorktree(true)
+            model.prompt("Fix the login bug")
+            model.submit()
+            advanceUntilIdle()
+            assertEquals(listOf("first:/code/weather-fix:Fix the login bug::orca"), service.added)
+            val request = requireNotNull(service.request)
+            assertEquals("/wt/persona-fix-the-login-bug", request.cwd)
+            assertEquals("made-for-it", request.workspaceId)
+            assertEquals("orca", request.host)
+        } finally {
+            model.viewModelScope.cancel()
+            Dispatchers.resetMain()
+        }
+    }
+
     private class Store : AgentCreationStore {
         var operation: AgentStartOperation? = null
         val saved = mutableMapOf<String, AgentDefaults>()
@@ -92,6 +173,8 @@ class AgentWorktreeTest {
         val asked = mutableListOf<String>()
         val added = mutableListOf<String>()
         var failAdd = false
+        var catalog = emptyList<AgentWorkspace>()
+        var madeWorkspace: String? = null
         var starts = 0
         var request: AgentStartRequest? = null
         override suspend fun launchers(machineId: String) = listOf(AgentLauncher("claude"))
@@ -109,7 +192,9 @@ class AgentWorktreeTest {
         override suspend fun addWorktree(machineId: String, cwd: String, nameHint: String, branch: String, kind: String?): WorktreeAdded {
             if (failAdd) throw java.io.IOException("worktree_failed")
             added += "$machineId:$cwd:$nameHint:$branch" + (kind?.let { ":$it" } ?: "")
-            return WorktreeAdded("/wt/" + AgentWorktree.slug(branch), branch.trim())
+            val made = branch.trim().ifEmpty { AgentWorktree.branch(nameHint) }
+            return WorktreeAdded("/wt/" + AgentWorktree.slug(made), made, workspaceId = madeWorkspace)
         }
+        override suspend fun workspaces(machineId: String) = catalog.filter { it.machineId == machineId }
     }
 }

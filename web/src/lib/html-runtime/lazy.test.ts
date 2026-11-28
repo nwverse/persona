@@ -24,16 +24,19 @@ describe("the html card runtime on the first screen", () => {
     expect(ALL.filter((f) => f.code.includes("quickjs-wasmfile-release-sync/wasm")).map((f) => f.path)).toEqual(["lib/html-runtime/host.ts"]);
   });
 
-  it("starts the worker only from host.ts, and only HtmlCard (lazy) and the dev pages load host.ts", () => {
+  it("starts the worker only from host.ts, and only the lazy cards (HtmlCard, VisualizationCard) load host.ts", () => {
     expect(ALL.filter((f) => /new Worker\(new URL\("\.\/html-runtime\.worker/.test(f.code)).map((f) => f.path)).toEqual(["lib/html-runtime/host.ts"]);
     const host = ALL.filter((f) => staticImports(f.code).some((i) => /html-runtime\/host$|^\.\/host$/.test(i))).map((f) => f.path).sort();
-    expect(host).toEqual(["ui/HtmlCard.tsx"]);
+    expect(host).toEqual(["ui/HtmlCard.tsx", "views/chat/VisualizationCard.tsx"]);
   });
 
   it("reaches the card from the first screen only through a lazy import", () => {
-    const card = ALL.find((f) => f.path === "ui/AssistantCard.tsx")!;
-    expect(staticImports(card.code).filter((i) => /HtmlCard|html-runtime|html-bridge|html-actions/.test(i))).toEqual([]);
-    expect(card.code).toMatch(/lazy\(\(\) => import\("\.\/HtmlCard"\)\)/);
+    const shell = ALL.find((f) => f.path === "ui/AssistantCard.tsx")!;
+    const body = ALL.find((f) => f.path === "ui/AssistantCardBody.tsx")!;
+    expect(staticImports(shell.code).filter((i) => /AssistantCardBody|HtmlCard|assistant-html|html-runtime|html-bridge|html-actions/.test(i))).toEqual([]);
+    expect(shell.code).toMatch(/lazyPage\(\(\) => import\("\.\/AssistantCardBody"\)/);
+    expect(staticImports(body.code).filter((i) => /HtmlCard|html-runtime|html-bridge|html-actions/.test(i))).toEqual([]);
+    expect(body.code).toMatch(/lazy\(\(\) => import\("\.\/HtmlCard"\)\)/);
     // nothing but the card itself imports the card, its bridge or its hub calls (type-only imports aside)
     const statics = ALL.filter((f) => f.path !== "ui/HtmlCard.tsx" && staticImports(f.code).some((i) => /\/HtmlCard$|html-bridge$|html-actions$/.test(i))).map((f) => f.path);
     expect(statics).toEqual([]);

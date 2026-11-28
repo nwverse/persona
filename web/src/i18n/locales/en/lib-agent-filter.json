@@ -1,10 +1,7 @@
 {
   "all": "All",
   "feishu": "Lark group",
-  "terminal": "Terminal",
-  "botmux": "botmux",
-  "botmux_show": "Show botmux sessions",
-  "botmux_hide": "Hide botmux sessions",
+  "terminal": "In a tab",
   "search_in": "Search in",
   "scope_all": "Full text",
   "scope_title": "Title",

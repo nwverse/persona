@@ -89,9 +89,15 @@
     <string name="settings_devices_empty_detail">配对后可在这里查看和撤销设备。</string>
     <string name="settings_devices_unnamed">未命名设备</string>
     <string name="settings_devices_this">本机</string>
+    <string name="settings_devices_online">在线</string>
+    <string name="settings_devices_group_devices">设备</string>
+    <string name="settings_devices_group_browsers">浏览器</string>
+    <string name="settings_devices_group_links">电脑</string>
+    <string name="settings_devices_group_integrations">集成与受限访问</string>
     <string name="settings_devices_platform_role">%1$s，%2$s</string>
     <string name="settings_devices_role_full">完整权限</string>
     <string name="settings_devices_role_answer">只能回答</string>
+    <string name="settings_devices_role_scoped">受限访问</string>
     <string name="settings_devices_role_unknown">角色未提供</string>
     <string name="settings_devices_added">添加于：%1$s</string>
     <string name="settings_devices_last_used">最近使用：%1$s</string>
@@ -124,6 +130,10 @@
     <string name="settings_notify_quiet_end">结束</string>
     <string name="settings_notify_quiet_footer">这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。只要你有一台设备在免打扰时段内，聊天机器人对未回答卡片的提醒也会顺延。按这台手机的时区计算。</string>
     <string name="settings_notify_quiet_footer_zone">这段时间里，Agent 做完不再通知（早上的「今天要知道的」卡片会汇总），需要你的事照常送达但不响铃。你让助手设的提醒照常提醒。只要你有一台设备在免打扰时段内，聊天机器人对未回答卡片的提醒也会顺延。目前按设置时所在的%1$s计算，在这里改动后改按这台手机的时区计算。</string>
+    <string name="settings_notify_low_distraction">推送分级</string>
+    <string name="settings_notify_low_distraction_subtitle">只提醒要你处理的事，其余留给简报</string>
+    <string name="settings_notify_low_distraction_footer">对你所有的设备生效。开启后，要你回答、批准或拍板的事、你设的提醒和主对话的通知照常提醒；任务结论、「请验收」和其他对话的通知留给简报和「被拦推送」，Agent 做完不再提醒。</string>
+    <string name="settings_notify_low_distraction_save_failed">保存失败，推送分级已恢复原样。</string>
     <string name="settings_reading">正在读取</string>
     <string name="settings_retry_read">重试读取</string>
     <string name="settings_saving">正在保存…</string>
@@ -131,6 +141,8 @@
     <string name="settings_not_provided">未提供</string>
     <string name="settings_about_build">构建号</string>
     <string name="settings_devices_watch">手表</string>
+    <string name="settings_devices_web">网页</string>
+    <string name="settings_devices_link">Persona Link</string>
     <string name="settings_devices_phone_unknown">手机（平台未提供）</string>
     <string name="settings_devices_platform_unknown">平台未提供</string>
     <string name="settings_devices_no_record">尚无记录</string>
@@ -282,7 +294,7 @@
     <string name="settings_off">关闭</string>
     <string name="settings_retry_cleanup">重试清理</string>
     <string name="settings_try_demo">没有 Hub？先体验一下</string>
-    <string name="settings_style_title">界面风格</string>
+    <string name="settings_style_title">外观</string>
     <string name="settings_avatar_title">形象</string>
     <string name="settings_about_persona">关于 Persona</string>
     <string name="settings_phone_data_title">手机数据</string>
@@ -319,6 +331,8 @@
     <string name="settings_row_claude_subtitle">各台电脑上的常用选项，可以一起改</string>
     <string name="settings_row_codex">Codex 设置</string>
     <string name="settings_row_codex_subtitle">各台电脑上 Codex 的常用选项，可以一起改</string>
+    <string name="settings_row_agy">Antigravity 设置</string>
+    <string name="settings_row_agy_subtitle">各台电脑上 Antigravity 的常用选项，可以一起改</string>
     <string name="settings_section_connectors">连接器</string>
     <string name="settings_row_phone_subtitle">通讯录、日历、照片、位置和剪贴板</string>
     <string name="settings_row_mail">邮箱</string>
@@ -354,6 +368,7 @@
     <string name="settings_ready_needs_confirm">需要手动确认</string>
     <string name="settings_ready_skipped_note">已跳过，可随时回来设置</string>
     <string name="settings_ready_open">去设置</string>
+    <string name="settings_ready_allow_notifications">允许</string>
     <string name="settings_ready_open_failed">系统设置打不开，请从手机设置进入 Persona 应用详情。</string>
     <string name="settings_ready_undo_confirm">撤销确认</string>
     <string name="settings_ready_mark_done">已完成</string>
@@ -421,6 +436,8 @@
     <string name="settings_triage_actions_about">模型服务临时出错（503 等）后自动发「继续」，最多 3 次；在等部署、CI 或另一个 Agent 的，到点叫醒它自己去查。这两项会让 Agent 用它自己的模型再跑一轮。推代码、部署、给别人发消息这类事 Hub 只会问你，不会自己做。</string>
     <string name="settings_triage_closeout">要收尾记录</string>
     <string name="settings_triage_closeout_about">Agent 干了活却没交代做完没有、合没合、部署没有、还缺什么就停下时，拦它一次让它补上这份记录；会多花它自己模型的一小轮</string>
+    <string name="settings_triage_closeout_ask">事后问一次进展</string>
+    <string name="settings_triage_closeout_ask_about">没人督办的 Agent 干了活停下来，却没交收尾记录、也看不出做完没有时，Persona 问它一次已做工作的进展；会花它自己模型的一轮</string>
     <string name="settings_triage_reply_reminder">看过没回时提醒</string>
     <string name="settings_triage_reply_reminder_about">Agent 问了你、你看过 30 分钟还没回，就提醒一次；只按规则判断，不花 token。</string>
     <plurals name="settings_notify_long_turn">

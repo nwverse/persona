@@ -1,6 +1,6 @@
 # Lessons: real-time voice (GPT-Live upstream, `personad voice`)
 
-Read before changing `server/internal/voice`, `server/internal/prompts/voice/`, or voice-mode timing constants (`docs/assistant/voice.md` 4.5 / 4.9).
+Read before changing `server/internal/modules/voice`, `server/internal/prompts/voice/`, or voice-mode timing constants (`docs/assistant/voice.md` 4.5 / 4.9).
 Current protocol: `docs/extensions/extensions.md`, "Voice" and "Built-in voice extension". Voice-mode design: `docs/assistant/voice.md` (#3496).
 
 ## How we tested (2026-11-06)
@@ -123,7 +123,7 @@ Unboxed (control group):
 | --- | --- | --- |
 | Missing or invalid key | Upgrade rejected: HTTP 401, `text/plain` body `Unauthorized` (standard shape) | `{"type":"error","fatal":true,"message":"语音会话没能建立：HTTP 401: Unauthorized"}` ("Voice session could not be established: HTTP 401: Unauthorized"), then closes with 1011. |
 | Banned account | Service docs say HTTP 403 during upgrade; could not reproduce. | Same as above, "HTTP 403: …" |
-| Model backend temporarily unavailable | Upgrade succeeds first (101); after `session.start`, returns `error{type: server_error, code: upstream_unavailable}`, then closes with 1008 about 0.1–0.2 s later. **The message contains the service's internal deployment diagnostics** (cluster, data center, etc.). | App receives the message **verbatim** appended to `语音会话没能建立：…` ("Voice session could not be established: …"). |
+| Model backend temporarily unavailable | Upgrade succeeds first (101); after `session.start`, returns `error{type: server_error, code: upstream_unavailable}`, then closes with 1008 about 0.1–0.2 s later. **The message contains the service's internal deployment diagnostics** (cluster, data center, etc.). Since 2026-11 the service may answer `session.started` first and send this error a few tens of milliseconds later (seen for most models of one service at once, while two others worked with the same key). | Error before `session.started`: the App receives the message **verbatim** appended to `语音会话没能建立：…` ("Voice session could not be established: …"). After it: the session counts as started (the App already has `ready`), each such session is a drop and is reconnected; once the reconnects run out the call ends with `upstream_unavailable` and the service's words (`voice-upstream.unavailable`). Before that fix the App was told `upstream_failed`, "语音连接断了，重连也没成功" ("the connection dropped and reconnecting failed"), which hid the cause. |
 | Unknown model | `error{invalid_request, param: session.model}`, connection **stays open**. | Same as above (`connect()` returns on `error` without waiting for closure). |
 | Unknown field / extension | `unknown_parameter` / `unsupported_extension`, connection stays open. | — |
 | thinking over 500 tokens | `invalid_request` (append token limit exceeded) | Already prevented by `clipTokens(…, 450)`. |
@@ -359,6 +359,8 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
     and Retry, and Retry ends the same way at once; no crash report. To drive the real socket and UI there, use `-openVoice silent`
     (`VoiceSample.SilentAudio`: no microphone and no speaker, it reports playing for as long as the received PCM lasts). Audio itself can only be checked
     on a device, or on a simulator whose Mac lets it record.
+    `CallScreenTests`' three walks are such a check (#10553): on a Mac with no audio input at all (a Mac Studio with no microphone
+    attached) every call there ends this way, from `main` and from the commit that added them alike, and the tests say so.
   - **Reading it**: the app's own log is in the simulator (`xcrun simctl spawn <udid> log show --predicate 'process == "Persona"'`); the TCC and
     `coreaudiod` side is in the Mac's (`log show --predicate 'process == "tccd" AND eventMessage CONTAINS "kTCCServiceMicrophone"'`).
 - **The voice bar was squeezed when cards were up**: the cards and the composer share the footer's height; offered too little, the bar shrank 在听 with
@@ -483,13 +485,13 @@ Other values: allowing 450 tokens per append (500-token limit, rejection observe
   connected in about 0.2 s and its TLS handshake never got an answer; the IPv6 address finished TLS in about 0.4 s.
 - **Why Go never tried the other address**: Go orders addresses by RFC 6724, which ranks ULA IPv6 below IPv4, and `net.Dialer` moves on to
   the next address only when TCP fails. TCP to the IPv4 address succeeded, so every attempt sat out the handshake timeout there.
-- **Fix**: providers without `ssh` dial through `dialTLS` (`server/internal/voice/dial.go`), the `DialTLSContext` of the client used for
+- **Fix**: providers without `ssh` dial through `dialTLS` (`server/internal/modules/voice/dial.go`), the `DialTLSContext` of the client used for
   `GET /models`, `GET /voices` and the session WebSocket. It resolves the host, keeps the resolver's order and tries one address at a time
   at the TLS level: 4 s for TCP plus the handshake (the last address 15 s, so a slow host with one address is not cut short), the first
   completed handshake wins, and that address is tried first next time, so only the first connection after a restart waits on the dead one.
   When every address fails, the error names each address and why. ALPN offers only `http/1.1`: the WebSocket upgrade needs HTTP/1.1.
   Providers with `ssh` still dial through that machine.
-- **Checking it**: `server/internal/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
+- **Checking it**: `server/internal/modules/voice/dial_test.go` points a name at a local listener that accepts TCP and never speaks, then a working
   TLS server, for both `GET /models` and the session dial.
 
 - **Opaque CONNECT tunnels** (#2745): the egress proxy can replay a bounded, complete ClientHello while no server byte has arrived; TCP success alone is insufficient. Preserve record/TCP fragments and stop before early application data. Observe both directions so server-first protocols are not delayed, and resume ordinary relay when the client sniff window expires.
@@ -527,6 +529,40 @@ Measured against a gateway's `/v1/realtime` (`gpt-realtime-1.5`, the GA Realtime
 - iOS holds the voice while nothing is playing until 200 ms has gathered, or the first piece has waited 300 ms, then
   plays it all at once (`VoicePlayout`); a player that runs dry mid-reply gathers again. A service that sends faster
   than it plays fills the lead almost at once, so this adds next to no latency there.
+- **A fixed lead shorter than one piece is no cushion** (#12922, 2026-11-22). The measured service sends a reply about
+  four times faster than it plays, but in 384 ms pieces (12,288 bytes at 16 kHz). One piece always met the 200 ms lead,
+  and a player that ran dry gathered only one piece again. So once the phone's link carried a little less than the
+  voice (a mobile network, a tunnel), the first second or two played smoothly and then every piece played on its own
+  with a gap after it: a syllable or two at a time. Replaying recorded arrival times through the playout gave one gap
+  per piece at 94 % of the voice's rate. Now a player that runs dry mid-reply (the next piece comes within 1.5 s of the
+  last one finishing) raises the lead for the rest of the call, to 0.6, 1.2 and then 2.0 s. The wait scales with it,
+  and while a raised lead gathers, what is held plays once nothing more has come for 1 s. The same replay gives 2
+  pauses at 94 % and 4 at 60 %. Each stall and the call's total are logged (`voice` category). Size the lead in
+  pieces as the service actually sends them, not in milliseconds picked for 40 ms deltas.
+- **A player's completions are an output latency late** (#13963, 2026-11-24). #12923 judged "the player ran dry" by
+  `.dataPlayedBack`, which comes once the buffer has gone out of the device, then hops to the main actor. A link at 90–94 %
+  of the voice leaves a 25–43 ms gap after each 384 ms piece, shorter than a phone's output latency, so every piece came
+  while the last one's completion was still on its way: it went straight to a player that was already silent, the gap
+  was heard, and no stall was counted. With 50 ms of latency or more the lead never left 200 ms (replay: a 30 s reply
+  at 90 % had 77 gaps of 43 ms and no stall counted). The replay tests passed because they gave the playout the exact
+  play end. Read the player's render position instead (`VoicePlayerClock`: `playerTime(forNodeTime: lastRenderTime)`
+  against where what was scheduled ends), and count less than 50 ms left as run dry: the render position is a render
+  cycle old, and the piece still has to be scheduled. A replay of a player has to model what the code can observe and
+  when (output latency, render cycles), not the truth.
+- Before blaming the link, measure the upstream on its own. A probe call over the extension's unix socket gives each
+  binary frame's arrival time and size: the service's speed and its piece size. The hub forwards bytes as they come,
+  so whatever is left between the hub and the player is the phone's link or the app.
+- **Silence timers cannot tell a slow voice's pause from the end of its reply** (#14933, 2026-11-25). Voices that make
+  their audio slower than they play, or a sentence at a time, broke both guesses the playout made from the silences: a
+  pause over `quiet` (1 s) played a raised lead half-gathered, and one over the stall window (1.5 s) split the reply in
+  two, so the lead never grew past it. Under 0.67× a fixed wait of 1.5× the lead ran out before the lead could gather at
+  all. The extension knows where each reply begins and ends (`reply` frames, #14932): inside a marked reply every dry
+  player is a stall and the end plays what is held at once. Deeper leads only help there: without the frames the tail of
+  every reply waits `quiet` for the lead, and a replay of 1.2 s sentences with 1.2 s pauses kept its 3 gaps but gained
+  1.2 s of silence with a 3.5 s step, so the old 2 s top stays for extensions that send no edges. Replays (0.60× for
+  23 s: 7 gaps before, 6 without the frames, 4 with; three such replies: 11, 11, 5; 2 s pauses between sentences: 5,
+  5, 3) judge a change by gaps and by total silence: fewer, longer pauses can add up to more silence on a single long
+  reply.
 
 ## Meeting transcription against the real service (#3862, 2026-11-13)
 

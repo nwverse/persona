@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "names": {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "traex": "TRAE CLI",
+    "traecli": "TRAE CLI",
+    "trae": "TRAE",
+    "opencode": "opencode",
+    "pi": "pi",
+    "omp": "Oh My Pi",
+    "gemini": "Gemini CLI",
+    "cursor": "Cursor"
+  }
+}

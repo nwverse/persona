@@ -6,6 +6,7 @@ import { useSyncExternalStore } from "react";
 import { getPanel, openPanel, type Panel } from "./panel";
 import type { Session } from "./types";
 import { otherBackground, recentWorkflows } from "./workflows";
+import { byTime } from "./times";
 
 export type BackgroundPanel = Extract<Panel, { kind: "background" }>;
 
@@ -23,14 +24,14 @@ export function openBackgroundPanel(mid: string, sid: string, run?: string) {
 /** The header's button: closes the session's panel when it is open, else opens it at its list. */
 export function toggleBackgroundPanel(mid: string, sid: string) {
   if (backgroundPanelOf(getPanel(), mid, sid)) openPanel(null);
-  else openBackgroundPanel(mid, sid);
+  else openPanel({ kind: "background", mid, sid }, { push: false });
 }
 
 /** Whether the session has anything the panel lists now: a /loop, a background task, or a workflow run that runs or ended
  *  within the day the node keeps it (lib/workflows.ts recentWorkflows). The header's button shows only then. */
 export function hasBackgroundWork(s: Session | undefined, now: number): boolean {
   if (!s) return false;
-  return Boolean(s.loop) || otherBackground(s).length > 0 || recentWorkflows(s, now).length > 0;
+  return Boolean(s.loop) || otherBackground(s).length > 0 || (s.background_ended?.length ?? 0) > 0 || recentWorkflows(s, now).length > 0;
 }
 
 /** The composer's `/workflows` (cindy's): opens the panel instead of going to the Agent. */
@@ -45,8 +46,7 @@ export function isWorkflowsCommand(text: string, images: number): boolean {
  *  among those the panel lists (recentWorkflows: a run that ended over a day ago is not one of them). */
 export function latestWorkflowRun(s: Session | undefined, now = Date.now()): string | undefined {
   const runs = recentWorkflows(s, now);
-  const at = (w: (typeof runs)[number]) => Date.parse(w.started_at ?? "") || 0;
-  const pick = (list: typeof runs) => list.slice().sort((a, b) => at(b) - at(a))[0];
+  const pick = (list: typeof runs) => list.slice().sort((a, b) => byTime(b.started_at, a.started_at))[0];
   return (pick(runs.filter((w) => w.running)) ?? pick(runs))?.task_id;
 }
 
@@ -55,6 +55,8 @@ export function latestWorkflowRun(s: Session | undefined, now = Date.now()): str
 export interface BackgroundChat {
   stopLoop: () => void;
   jumpToCall?: (call: string) => void;
+  /** Whether the parent chat currently holds a launching tool call or placed child card for `call`. */
+  hasCall?: (call: string) => boolean;
 }
 
 const chats = new Map<string, BackgroundChat[]>();

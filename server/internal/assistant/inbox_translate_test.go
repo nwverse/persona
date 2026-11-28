@@ -16,7 +16,6 @@ import (
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/mail"
 )
 
 func TestForeignScript(t *testing.T) {
@@ -311,7 +310,7 @@ func TestTranslateMailUnknownAccount(t *testing.T) {
 	bridge := &failingMailHub{Hub: h.Service.hub}
 	setHub(h.Service, bridge)
 	const req = `{"account_id":"none","uid":1,"target":"zh-Hans"}`
-	unknown := &mail.UnknownAccountError{Account: "none"}
+	unknown := unknownMailAccount("none") // the mail module's error for an account no longer connected
 	for _, err := range []error{unknown, fmt.Errorf("read mail: %w", unknown)} {
 		bridge.err = err
 		status, body := serveJSON(t, h.Service, "POST", "/api/v1/translate/mail", "ja", req)
@@ -328,3 +327,44 @@ func TestTranslateMailUnknownAccount(t *testing.T) {
 		t.Fatalf("other failure: %d %v", status, body)
 	}
 }
+
+func TestGoldenTranslationLanguage(t *testing.T) {
+	for _, locale := range []string{"en", "zh-Hans", "ja"} {
+		t.Run(locale, func(t *testing.T) {
+			h := newInboxHub(t)
+			h.f.hello.Locale = locale
+			model, calls := captureModel(t, `{"texts":["Bonjour"],"subject":"Avis","text":"Le 5 juin."}`)
+			h.in.mu.Lock()
+			h.in.models[purposeTranslate] = model
+			h.in.mail = &fakeMail{bodies: map[uint32]assistantwire.InboxMailMessage{7: {Subject: "Notice <X>", Text: "June 5."}}}
+			h.in.mu.Unlock()
+			ctx := context.Background()
+			texts, err := h.translateTexts(ctx, []string{"Hello <X>"}, "fr")
+			if err != nil || len(texts) != 1 || texts[0] != "Bonjour" {
+				t.Fatalf("batch: %q, %v", texts, err)
+			}
+			ref := assistantwire.InboxMailRef{AccountID: "acc1", UID: 7, Mailbox: "INBOX"}
+			mail, err := h.translateMail(ctx, ref, "fr")
+			if err != nil || mail.Subject != "Avis" || mail.Text != "Le 5 juin." {
+				t.Fatalf("mail: %+v, %v", mail, err)
+			}
+			got := calls()
+			if len(got) != 2 {
+				t.Fatalf("model calls: %d", len(got))
+			}
+			goldenCall(t, "translate_texts."+locale, got[0])
+			goldenCall(t, "translate_mail."+locale, got[1])
+		})
+	}
+}
+
+// unknownMailAccount stands for the mail module's UnknownAccountError: the core reaches it only through its code,
+// status and localized text.
+type unknownMailAccount string
+
+func (u unknownMailAccount) Error() string { return u.Text(i18n.En) }
+func (u unknownMailAccount) Text(l i18n.Lang) string {
+	return i18n.T(l, "mail-errors.account_unknown", i18n.Args{"account": string(u)})
+}
+func (unknownMailAccount) Code() string    { return "mail_account_unknown" }
+func (unknownMailAccount) HTTPStatus() int { return http.StatusNotFound }

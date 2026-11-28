@@ -22,19 +22,19 @@ struct JHost {
     vm: JavaVM,
     host: GlobalRef,
     changed: JMethodID,
+    changed_chat: Option<JMethodID>,
     run: JMethodID,
 }
 
 impl JHost {
-    /// Calls a `void` method of the host with one argument, on the core's worker thread.
-    fn call(&self, env: &mut JNIEnv, method: JMethodID, argument: jvalue) {
-        // The method ids were looked up on this object's class, with these signatures.
+    /// Calls a `void` method on the worker thread. Arguments must match the method's signature.
+    fn call(&self, env: &mut JNIEnv, method: JMethodID, arguments: &[jvalue]) {
         let _ = unsafe {
             env.call_method_unchecked(
                 self.host.as_obj(),
                 method,
                 ReturnType::Primitive(Primitive::Void),
-                &[argument],
+                arguments,
             )
         };
         if env.exception_check().unwrap_or(false) {
@@ -48,16 +48,40 @@ impl Host for JHost {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
             return;
         };
-        self.call(&mut env, self.changed, jvalue { j: version as jlong });
+        self.call(&mut env, self.changed, &[jvalue { j: version as jlong }]);
+    }
+    fn changed_chat(&self, chat: &str, version: u64) {
+        let Some(method) = self.changed_chat else {
+            self.changed(version);
+            return;
+        };
+        let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
+            return;
+        };
+        let Ok(chat) = env.new_string(chat) else {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            return;
+        };
+        self.call(
+            &mut env,
+            method,
+            &[jvalue { l: chat.as_raw() }, jvalue { j: version as jlong }],
+        );
+        let _ = env.delete_local_ref(chat);
     }
     fn run(&self, effect: &[u8]) {
         let Ok(mut env) = self.vm.attach_current_thread_permanently() else {
             return;
         };
         let Ok(array) = env.byte_array_from_slice(effect) else {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
             return;
         };
-        self.call(&mut env, self.run, jvalue { l: array.as_raw() });
+        self.call(&mut env, self.run, &[jvalue { l: array.as_raw() }]);
         // The worker never returns to Java, so its local references are freed by hand.
         let _ = env.delete_local_ref(array);
     }
@@ -68,6 +92,18 @@ fn core(handle: jlong) -> Option<Arc<persona_core_runtime::Runtime>> {
         return None;
     }
     crate::runtime(handle as usize as *const PersonaCore)
+}
+
+fn optional_changed_chat(env: &mut JNIEnv, class: &jni::objects::JClass) -> Option<JMethodID> {
+    match env.get_method_id(class, "changedChat", "(Ljava/lang/String;J)V") {
+        Ok(method) => Some(method),
+        Err(_) => {
+            if env.exception_check().unwrap_or(false) {
+                let _ = env.exception_clear();
+            }
+            None
+        }
+    }
 }
 
 fn boolean(value: bool) -> jboolean {
@@ -85,14 +121,20 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_create(
         let config = env.convert_byte_array(&config).ok()?;
         let class = env.get_object_class(&host).ok()?;
         let changed = env.get_method_id(&class, "changed", "(J)V").ok()?;
+        let changed_chat = optional_changed_chat(&mut env, &class);
         let run = env.get_method_id(&class, "run", "([B)V").ok()?;
         let host = JHost {
             vm: env.get_java_vm().ok()?,
             host: env.new_global_ref(&host).ok()?,
             changed,
+            changed_chat,
             run,
         };
-        create(&config, Arc::new(host))
+        let handle = crate::next_handle();
+        if handle == u64::MAX {
+            return None;
+        }
+        create(&config, Arc::new(host), handle)
     }))
     .ok()
     .flatten()
@@ -111,7 +153,8 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_dispatch(
         let Ok(action) = env.convert_byte_array(&action) else {
             return false;
         };
-        runtime.dispatch(&action)
+        // Move the Vec<u8> straight into the worker's channel; no second copy on the main thread.
+        runtime.dispatch_owned(action)
     }))
     .map_or(JNI_FALSE, boolean)
 }
@@ -155,6 +198,229 @@ pub extern "system" fn Java_persona_core_rustcore_NativeBridge_destroy(_env: JNI
     if handle != 0 {
         unsafe { crate::persona_core_free(handle as *mut PersonaCore) }
     }
+}
+
+/// Projects the source-derived WebSocket envelope from one raw JSON document. Pure diagnostic function (#8955).
+/// It does not route an event or use a runtime handle; malformed input returns an empty string.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectWireEnvelope<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let projection = persona_core_domain::wire_envelope::project(input.as_bytes())?;
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects the Agents list from a JSON input string. Debug/test only: no Release Android export.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectSort<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::sort::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::sort::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects a session_state or hub_state fixture through the same pure host adapter as ArkTS. Debug/test only: no
+/// Release Android export, production adapter or persisted client state.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectState<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::state::FixtureInput = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::state::project_fixture(&input).ok()?;
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects static transcript rows into turns from a JSON input string. Pure function, no runtime handle needed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTurns<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::turns::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::turns::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Splits streamed text into finished blocks and an unfinished tail. Pure function, no runtime handle needed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamChunks<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_chunks::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_chunks::split(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Repairs only an open code fence and reports this slice's code/text end state. Pure function, no runtime handle.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectStreamRepair<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_repair::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_repair::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Applies a caller-supplied drawn-info predicate to Apple's still-open picture fence. Pure function, no runtime.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectPlainOpenFence<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::stream_repair::PlainFenceInput = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::stream_repair::plain_open_fence(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Applies one question-answer operation from a JSON input string. Debug/test only: no Release Android export.
+/// The pure projection runs on a bounded Rust worker; the caller waits at most one second.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectAnswer<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let json = crate::answer_shadow::call(crate::answer_shadow::Operation::Project, input)?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Formats a question option's display text and recommendation flag. Debug/test only: no Release Android export.
+/// The pure projection runs on the same bounded worker as question answers.
+#[cfg(not(feature = "release-android"))]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_displayAnswer<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let label: String = env.get_string(&input).ok()?.into();
+        let json = crate::answer_shadow::call(crate::answer_shadow::Operation::Display, label)?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects background-task calls, descriptions and notice status sequences from JSON items. Pure function.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectTaskIndex<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::task_index::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::task_index::project(&input);
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
+}
+
+/// Projects the viewed-image strip for the first represented work group in a lines input. Pure function.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_persona_core_rustcore_NativeBridge_projectViewedImages<'a>(
+    mut env: JNIEnv<'a>,
+    _class: JClass<'a>,
+    input: JString<'a>,
+) -> JString<'a> {
+    catch_unwind(AssertUnwindSafe(|| {
+        let input: String = env.get_string(&input).ok()?.into();
+        let input: persona_core_domain::viewed_images::Input = serde_json::from_str(&input).ok()?;
+        let projection = persona_core_domain::viewed_images::project(&input)?;
+        let json = serde_json::to_string(&projection).ok()?;
+        env.new_string(json).ok()
+    }))
+    .ok()
+    .flatten()
+    .or_else(|| env.new_string("").ok())
+    .unwrap_or_default()
 }
 
 #[cfg(any(target_os = "android", feature = "test-support"))]

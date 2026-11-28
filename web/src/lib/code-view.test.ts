@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildTree, filterEntries, gapBefore, hunkRows, hunkSides, languageOf, placeThreads, splitRows, tokenLines, wideView, type Hunk } from "./code-view";
+import { ancestors, buildTree, filterEntries, gapBefore, hunkRows, hunkSides, languageOf, placeThreads, splitRows, tokenLines, wideView, type Hunk } from "./code-view";
 
 describe("文件树", () => {
   it("builds directories from paths, folds single chains, sorts directories first", () => {
@@ -21,6 +21,14 @@ describe("文件树", () => {
 
   it("filters files by path", () => {
     expect(filterEntries([{ path: "a/Retry.go" }, { path: "b.go" }, { path: "a", kind: "dir" }], "retry").map((e) => e.path)).toEqual(["a/Retry.go"]);
+  });
+
+  it("normalizes slashes when listing a path's ancestor directories", () => {
+    expect(ancestors("src/upload/client.go")).toEqual(["src", "src/upload"]);
+    expect(ancestors("/src/upload/client.go")).toEqual(["src", "src/upload"]);
+    expect(ancestors("/src//upload/client.go/")).toEqual(["src", "src/upload"]);
+    expect(ancestors("/README.md")).toEqual([]);
+    expect(ancestors("/")).toEqual([]);
   });
 });
 
@@ -47,6 +55,24 @@ describe("diff", () => {
     expect(gapBefore(hs, 1)).toBe(24);
   });
 
+  it("counts hidden lines before and after pure-deletion hunks", () => {
+    const midDelete: Hunk[] = [
+      { old_start: 5, new_start: 4, lines: ["-e", "-f"] },
+      { old_start: 9, new_start: 7, lines: ["-i", "+I"] },
+      { old_start: 11, new_start: 8, lines: ["-k"] },
+    ];
+    expect(gapBefore(midDelete, 0)).toBe(4);
+    expect(gapBefore(midDelete, 1)).toBe(2);
+    expect(gapBefore(midDelete, 2)).toBe(1);
+
+    const topDelete: Hunk[] = [
+      { old_start: 1, new_start: 0, lines: ["-a", "-b"] },
+      { old_start: 6, new_start: 4, lines: ["-f", "+F"] },
+    ];
+    expect(gapBefore(topDelete, 0)).toBe(0);
+    expect(gapBefore(topDelete, 1)).toBe(3);
+  });
+
   it("puts threads at their lines, the rest at the end", () => {
     const c = [{ author: "a" }];
     const { at, rest } = placeThreads(
@@ -62,6 +88,7 @@ describe("高亮", () => {
   it("picks a grammar from the language or the path", () => {
     expect(languageOf("Go")).toBe("go");
     expect(languageOf(undefined, "src/a.tsx")).toBe("typescript");
+    expect(languageOf(undefined, "src/app.ts")).toBe("typescript"); // a .ts the hub sent as text (#7974)
     expect(languageOf(undefined, "Makefile")).toBe("makefile");
     expect(languageOf(undefined, "x.unknown")).toBe("");
   });
@@ -85,8 +112,16 @@ describe("高亮", () => {
   });
 });
 
-it("wants a wide page for split views, code and diffs", () => {
+it("wants a wide page for split and columns views, code, diffs, and canvas components", () => {
+  expect(wideView(null)).toBe(false);
+  expect(wideView(undefined)).toBe(false);
   expect(wideView({ layout: "split", sections: [] })).toBe(true);
+  expect(wideView({ layout: "columns", sections: [] })).toBe(true);
   expect(wideView({ sections: [{ items: [{ type: "diff" }] }] })).toBe(true);
-  expect(wideView({ sections: [{ items: [{ type: "row" }] }] })).toBe(false);
+  expect(wideView({ sections: [{ items: [{ type: "code" }] }] })).toBe(true);
+  expect(wideView({ sections: [{ items: [{ type: "graph" }] }] })).toBe(true);
+  expect(wideView({ sections: [{ items: [{ type: "scene" }] }] })).toBe(true);
+  expect(wideView({ sections: [{ items: [{ type: "map" }] }] })).toBe(true);
+  expect(wideView({ sections: [{ items: [{ type: "row" }] }, { items: [{ type: "graph" }] }] })).toBe(true);
+  expect(wideView({ sections: [{ items: [{ type: "row" }, { type: "text" }, { type: "chart" }, { type: "table" }] }] })).toBe(false);
 });

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -53,11 +54,17 @@ type Preview struct {
 	previous              *Manifest // immutable consent baseline captured when the preview was staged
 	source                Source
 	marketSpec, marketKey string
+	builtinHandoff        bool
 	verifiedMarketKey     string       // verified entry and package, separate from the mutable market's pin
 	fingerprint           string       // all staged package bytes/modes as approved at preview
 	root                  string       // the staged package
 	l10n                  Translations // its translations, for the name and description shown (In)
 	staging               string
+	// config is the upgraded extension's saved settings at preview after any declared fixed-slot migration: the
+	// addresses its "config:" lines name. migrationBase and migrating make installation reject configuration drift.
+	config        json.RawMessage
+	migrationBase json.RawMessage
+	migrating     bool
 }
 
 // MarketTrust is the market address and trusted public key pinned at preview time; it adds no protocol field.
@@ -147,13 +154,22 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 			return nil, i18n.Err("extension-market_security.signature")
 		}
 		verifiedKey = e.verifiedKey
+	} else if len(mk.TrustedKeys) > 0 {
+		// A private market with owner keys: the entry must come from a catalog one of them verified, unchanged since.
+		if e.verifiedKey == "" || !slices.Contains(mk.TrustedKeys, e.verifiedKey) || e.verifiedEntry != entryFingerprint(e) {
+			return nil, i18n.Err("extension-market_security.private_signature")
+		}
+		verifiedKey = e.verifiedKey
+	}
+	if err := e.EngineProblem(r.build); err != nil {
+		return nil, err
 	}
 	pkg := e.PackageFor(Platform())
 	if pkg == nil {
 		return nil, fmt.Errorf("%s 没有这台 hub（%s）能用的包", e.Parsed.ID, Platform())
 	}
 	src := Source{Kind: "market", Path: marketID + "/" + e.Parsed.ID}
-	pv, err := r.previewIdentity(ctx, src, upgrade, renameFrom, func(dir string) (string, error) {
+	pv, err := r.previewIdentity(ctx, src, upgrade, renameFrom, IsOfficialMarket(mk.Spec.String()) && verifiedKey != "" && verifiedKey == Official.SigningKey, func(dir string) (string, error) {
 		file, name, err := mk.Download(ctx, pkg, dir)
 		if err != nil {
 			return "", err
@@ -175,7 +191,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		}
 		return nil, fmt.Errorf("下载的包（%s %s）的完整清单和市场索引（%s %s）不一致", m.ID, m.Version, e.Parsed.ID, e.Parsed.Version)
 	}
-	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), mk.TrustedKey
+	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), TrustPin(mk.Spec.String(), mk.TrustedKey, mk.TrustedKeys)
 	pv.verifiedMarketKey = verifiedKey
 	pv.RenameFrom, pv.replaces = renameFrom, e.Replaces
 	return pv, nil
@@ -189,7 +205,7 @@ func MorePermissions(cur *Extension, m *Manifest) bool {
 		len(NewTools(was, m)) > 0 || len(newSecrets(was, m)) > 0 ||
 		slices.ContainsFunc(m.Topics(), func(t string) bool { return !slices.Contains(was.Topics(), t) }) ||
 		slices.ContainsFunc(m.Surfaces(), func(t string) bool { return !slices.Contains(was.Surfaces(), t) }) ||
-		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 ||
+		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 || len(newRepositoryHosts(was, m)) > 0 ||
 		slices.ContainsFunc(m.ContributesTo(), func(t string) bool { return !slices.Contains(was.ContributesTo(), t) })
 }
 
@@ -198,6 +214,25 @@ func (r *Registry) Discard(previewID string) {
 	if pv, _ := r.take(previewID); pv != nil {
 		r.dropStaging(pv)
 	}
+}
+
+// DetachPreview removes previewID from the registry immediately under r.mu and returns a cleanup
+// function that removes its staging files from disk (nil if absent). Callers that hold another
+// lock can detach atomically before releasing their lock and invoke the cleanup afterward.
+func (r *Registry) DetachPreview(previewID string) func() {
+	if previewID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	pv := r.previews[previewID]
+	if pv != nil {
+		delete(r.previews, previewID)
+	}
+	r.mu.Unlock()
+	if pv == nil {
+		return nil
+	}
+	return func() { r.dropStaging(pv) }
 }
 
 // PreviewMarketOf is the market a preview's package comes from ("" when it does not, or the preview is gone).
@@ -230,10 +265,10 @@ func (r *Registry) PreviewUpload(ctx context.Context, name string, body io.Reade
 
 // preview checks what stage put into a fresh staging directory (or what a remote plugin says of itself).
 func (r *Registry) preview(ctx context.Context, src Source, upgrade string, stage func(dir string) (string, error), candidates ...*Manifest) (*Preview, error) {
-	return r.previewIdentity(ctx, src, upgrade, "", stage, candidates...)
+	return r.previewIdentity(ctx, src, upgrade, "", false, stage, candidates...)
 }
 
-func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, renameFrom string, stage func(dir string) (string, error), candidates ...*Manifest) (*Preview, error) {
+func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, renameFrom string, verifiedOfficial bool, stage func(dir string) (string, error), candidates ...*Manifest) (*Preview, error) {
 	upgrade = r.CanonicalID(upgrade)
 	r.expire()
 	pv := &Preview{ID: newID(), source: src, ExpiresAt: r.now().Add(previewFor)}
@@ -328,16 +363,25 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 		}
 		pv.RenameFrom = renameFrom
 	}
+	if cur != nil && errors.Is(cur.problemErr, ErrIdentity) {
+		return fail(ErrIdentity)
+	}
+	pv.builtinHandoff = cur != nil && cur.Record.Source == SourceBuiltin && r.handoffs[m.ID] && upgrade == m.ID
+	if pv.builtinHandoff || cur != nil && cur.Record.BuiltinPredecessor {
+		if !verifiedOfficial || cur.Record.ID != m.ID || renameFrom != "" || r.keptOff[m.ID] != nil {
+			return fail(ErrIdentity)
+		}
+	}
 	switch {
-	case upgrade == "" && cur != nil && !r.yielding(cur):
+	case upgrade == "" && cur != nil && (!r.yielding(cur) || r.handoffs[m.ID]):
 		return fail(fmt.Errorf("已经有一个叫 %s 的扩展（%s）：要换新版本用升级", m.ID, cur.Record.Source))
 	case upgrade != "" && upgrade != m.ID && renameFrom == "":
 		return fail(fmt.Errorf("这个包是 %s，不是 %s", m.ID, upgrade))
-	case upgrade != "" && (cur == nil || cur.Record.Source != SourceInstalled):
+	case upgrade != "" && !pv.builtinHandoff && (cur == nil || cur.Record.Source != SourceInstalled):
 		return fail(i18n.Err("extension-status.upgrade_not_installed", i18n.Args{"id": upgrade}))
 	case upgrade != "" && cur.Record.AttachedPackage():
 		return fail(i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": cur.Record.ID}))
-	case upgrade != "" && !NewerVersion(m.Version, cur.Record.Version):
+	case upgrade != "" && !pv.builtinHandoff && !NewerVersion(m.Version, cur.Record.Version):
 		return fail(fmt.Errorf("%s 不比已装的 %s 新", m.Version, cur.Record.Version))
 	}
 	if renameFrom != "" {
@@ -358,7 +402,21 @@ func (r *Registry) previewIdentity(ctx context.Context, src Source, upgrade, ren
 		pv.Upgrade, pv.From = true, cur.Record.Version
 		pv.MorePermissions = MorePermissions(cur, m)
 		pv.previous = cur.Full
-		pv.AddedPermissions = Added(cur.Full, m)
+		pv.migrationBase = compactConfig(cur.Record.Config)
+		sealed, err := r.store.ExtensionSecrets(ctx, cur.Record.StorageKey())
+		if err != nil {
+			return fail(err)
+		}
+		pv.config, pv.migrating, err = migrateFixedSlots(cur.Full, m, pv.migrationBase, sealed)
+		if err != nil {
+			return fail(err)
+		}
+		nextSchema, _ := ParseSchema(m.Configuration)
+		if err := checkEntrySecretNamespace(m, nextSchema, pv.config); err != nil {
+			return fail(err)
+		}
+		pv.Permissions = ExplainWith(i18n.Default, m, pv.config)
+		pv.AddedPermissions = AddedWith(i18n.Default, cur.Full, m, pv.config)
 	}
 	r.previews[pv.ID] = pv
 	return pv, nil // the check is done when the hub has resolved its bundle too (it says so)
@@ -472,6 +530,11 @@ func (r *Registry) conflictsCandidates(m *Manifest, candidates []*Manifest) erro
 			if who, ok := r.reserved[point][id]; ok {
 				errs = append(errs, fmt.Errorf("%s 里的 %q 已经是 %s 的", point, id, who))
 			}
+			// UI routes, contribution switches and page state already name the owning extension.
+			// Only IDs inside that manifest must be unique (checked by Manifest.Validate).
+			if point == "ui" {
+				continue
+			}
 			for otherID, other := range owners {
 				if otherID != m.ID && slices.Contains(other.Items(point), id) {
 					errs = append(errs, fmt.Errorf("%s 里的 %q 已经是扩展 %s 的", point, id, otherID))
@@ -479,15 +542,33 @@ func (r *Registry) conflictsCandidates(m *Manifest, candidates []*Manifest) erro
 			}
 		}
 	}
-	// A reference names one provider by its scheme, so two installed extensions cannot both claim one.
+	errs = append(errs, claimClashes(m, owners)...)
+	return errors.Join(errs...)
+}
+
+// claimClashes are what m claims that only one installed extension may, and another of owners (installed manifests by
+// extension id) already does: a secret reference scheme (a reference names its provider by it) and a repository host
+// (an address on it goes to its provider). An extension that is off, has a problem or has the contribution switched off
+// keeps its claims. Preview, rollback and dev install ask through conflictsCandidates; validatePlan asks again when the
+// plan commits, so a claim made between the preview and the commit, or by another package of the plan, is refused too.
+func claimClashes(m *Manifest, owners map[string]*Manifest) []error {
+	ids := slices.Sorted(maps.Keys(owners))
+	var errs []error
 	for _, scheme := range m.Schemes() {
-		for otherID, other := range owners {
-			if otherID != m.ID && slices.Contains(other.Schemes(), scheme) {
+		for _, otherID := range ids {
+			if other := owners[otherID]; otherID != m.ID && other != nil && slices.Contains(other.Schemes(), scheme) {
 				errs = append(errs, fmt.Errorf("secret_providers: the scheme %q is already extension %s's", scheme, otherID))
 			}
 		}
 	}
-	return errors.Join(errs...)
+	for _, host := range m.RepositoryHosts() {
+		for _, otherID := range ids {
+			if other := owners[otherID]; otherID != m.ID && other != nil && slices.Contains(other.RepositoryHosts(), host) {
+				errs = append(errs, fmt.Errorf("repository_providers: the host %q is already extension %s's", host, otherID))
+			}
+		}
+	}
+	return errs
 }
 
 // The manifest actually read from the package overrides the planned one with the same ID; the market's description

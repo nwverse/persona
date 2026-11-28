@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ var specialPrompt = "fix \"the\" 'build' $HOME `whoami` \\n;\n第二行：中文
 const startThread = "01a19a00-0000-7000-8000-00000000c0de"
 
 var startFileRE = regexp.MustCompile(` codex-start '?([^' ]+?)'?$`)
+
+// startRolloutVersion is the Codex version codexStartHerdr's rollouts name.
+var startRolloutVersion = "0.169.0"
 
 // ran is the launcher's words the last start's file held, ranAgent its HERDR_AGENT.
 var (
@@ -73,7 +77,7 @@ func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, stri
 			dir := mkdir(t, filepath.Join(home, ".codex", "sessions", day.Format("2006"), day.Format("01"), day.Format("02")))
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			resolved, _ := filepath.EvalSymlinks(cwd) // Codex records the shell's working directory, resolved
-			meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": resolved}})
+			meta, _ := json.Marshal(map[string]any{"timestamp": now, "type": "session_meta", "payload": map[string]any{"id": startThread, "cwd": resolved, "cli_version": startRolloutVersion}})
 			user, _ := json.Marshal(map[string]any{"timestamp": now, "type": "event_msg", "payload": map[string]any{"type": "item_completed",
 				"item": map[string]any{"type": "UserMessage", "id": "u1", "content": []any{map[string]any{"type": "text", "text": prompt}}}}})
 			_ = os.WriteFile(filepath.Join(dir, "rollout-2026-11-02T10-00-00-"+startThread+".jsonl"), []byte(string(meta)+"\n"+string(user)+"\n"), 0o600)
@@ -85,12 +89,16 @@ func codexStartHerdr(t *testing.T, delay time.Duration) (*Node, *fakeHerdr, stri
 func withCodexLaunchers(t *testing.T, launchers map[string][]string) {
 	t.Helper()
 	launcherCache.Lock()
-	old, oldAt := launcherCache.codex, launcherCache.at
-	launcherCache.codex, launcherCache.at = launchers, time.Now()
+	old, oldAt, oldAliases := launcherCache.codex, launcherCache.at, launcherCache.codexAliases
+	aliases := make(map[string]bool, len(launchers))
+	for name := range launchers {
+		aliases[name] = true
+	}
+	launcherCache.codex, launcherCache.at, launcherCache.codexAliases = launchers, time.Now(), aliases
 	launcherCache.Unlock()
 	t.Cleanup(func() {
 		launcherCache.Lock()
-		launcherCache.codex, launcherCache.at = old, oldAt
+		launcherCache.codex, launcherCache.at, launcherCache.codexAliases = old, oldAt, oldAliases
 		launcherCache.Unlock()
 	})
 }
@@ -141,6 +149,59 @@ func TestCodexStartAnswersWithTheThread(t *testing.T) {
 	}
 }
 
+// herdr numbers its workspaces again after its server restarts, so a start's new tab can get the pane id of a tab an
+// older session ran in, and the hub hands that session's binding back on every connection (#14682). The Codex started
+// there is its own session only: until its thread is known the pane is not listed as the older session, which then is
+// not left behind in the new folder, and the older session's record no longer names the pane.
+func TestCodexStartInAReusedPaneIsNoOlderSession(t *testing.T) {
+	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+	n, f, cwd, _ := codexStartHerdr(t, time.Second)
+	const older = "5b0e9a52-6f3c-4d21-9a7e-2c8b1d4f6e30" // ran in a tab w1:p2 before herdr's restart
+	n.state.put(older, sessionState{Launcher: "claude", Cwd: mkdir(t, filepath.Join(n.home, "elsewhere")), Pane: "w1:p2"})
+	n.mu.Lock()
+	n.panes["w1:p2"] = older // as the hub's stored bindings come back (fetchState)
+	n.mu.Unlock()
+	typed := make(chan struct{}, 1)
+	f.after(func(c herdrCall) {
+		if c.Method == "pane.send_input" && str(c.Params["pane_id"]) == "w1:p2" {
+			select {
+			case typed <- struct{}{}:
+			default:
+			}
+		}
+	})
+	params, _ := json.Marshal(map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hello"})
+	done := make(chan error, 1)
+	go func() {
+		_, err := n.handle(context.Background(), "session.start", params)
+		done <- err
+	}()
+	select {
+	case <-typed:
+	case err := <-done:
+		t.Fatalf("the start ended before it typed anything: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the start typed nothing in 10 s")
+	}
+	// Codex runs in the pane and has written no thread yet: herdr names no session for it.
+	for _, s := range listSessions(t, n) {
+		if s.SessionID == older && (s.Agent == "codex" || s.PaneID != "" || s.Cwd == cwd) {
+			t.Errorf("while the start waits for its thread, the older session is listed as the new tab's: %+v", s)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range listSessions(t, n) {
+		if s.SessionID == older && (s.Agent == "codex" || s.PaneID != "" || s.Cwd == cwd) {
+			t.Errorf("after the start, the older session is listed as the new tab's: %+v", s)
+		}
+	}
+	if st, _ := n.state.get(older); st.Pane != "" {
+		t.Errorf("the older session's record still names the pane: %+v", st)
+	}
+}
+
 func TestCodexStartUsesThePurposeModel(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"cx": {"codex", "--model=old", "-c", "model_reasoning_effort=low"}})
 	n, _, _, _ := codexStartHerdr(t, 0)
@@ -151,6 +212,30 @@ func TestCodexStartUsesThePurposeModel(t *testing.T) {
 	want := []string{"codex", "-c", "model_reasoning_effort=low", "--model", "purpose-model"}
 	if strings.Join(ran, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("runs %q, want %q", ran, want)
+	}
+}
+
+func TestCodexExecutionArgsBeforePromptSeparator(t *testing.T) {
+	got := codexExecutionArgs([]string{"codex", "--"}, modelExecution{Model: "purpose", Effort: "high"})
+	want := []string{"codex", "--model", "purpose", "-c", "model_reasoning_effort=high", "--"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+}
+
+func TestCodexPromptOnlyTaskKeepsLauncherPermissions(t *testing.T) {
+	args := []string{"codex", "-c", `sandbox_mode="danger-full-access"`, "--ask-for-approval", "on-request"}
+	withCodexLaunchers(t, map[string][]string{"task-codex": args})
+	n, _, _, _ := codexStartHerdr(t, 0)
+	_, err := request(t, n, "session.start", map[string]any{
+		"cwd": "~/proj", "launcher": "task-codex", "permission_mode": "default",
+		"prompt": "Inspect the project. Do not edit files, commit, or make external changes.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ran, args) {
+		t.Fatalf("prompt-only launch changed runtime permissions: %q, want %q", ran, args)
 	}
 }
 
@@ -232,6 +317,8 @@ func TestCodexStartBypassLauncherArguments(t *testing.T) {
 			n, _, _, _ := codexStartHerdr(t, 0)
 			launchKeyHome(t)
 			dir := t.TempDir()
+			// Native starts read shell rc files; keep the fake launcher away from the user's rc.
+			t.Setenv("ZDOTDIR", dir)
 			self, err := os.Executable()
 			if err != nil {
 				t.Fatal(err)
@@ -291,15 +378,37 @@ func TestCodexStartBypassLauncherArguments(t *testing.T) {
 	}
 }
 
-func TestCodexStartRefusals(t *testing.T) {
+func TestCodexStartAsyncRequestReturnsTheRealThread(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
-	n, _, _, cmds := codexStartHerdr(t, 0)
-	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
-	if code, _ := refusalOf(t, err); code != "codex_needs_prompt" {
-		t.Errorf("async: %v", err)
+	n, _, cwd, cmds := codexStartHerdr(t, 100*time.Millisecond)
+	res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
+	if err != nil {
+		t.Fatalf("Codex async request: %v", err)
 	}
-	if len(*cmds) != 0 {
-		t.Errorf("ran %q", *cmds)
+	s := decodeSessions(t, []any{res["session"]})[0]
+	if s.SessionID != startThread || s.Agent != "codex" || s.Cwd != cwd || s.Starting {
+		t.Fatalf("answered %+v, want the completed Codex thread %s", s, startThread)
+	}
+	if len(*cmds) != 1 || !slices.Equal(ran, []string{"codex"}) {
+		t.Fatalf("Codex commands %q, argv %q", *cmds, ran)
+	}
+}
+
+func TestCodexStartWaitFromEnv(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 180 * time.Second},
+		{" 4m30s ", 270 * time.Second},
+		{"invalid", 180 * time.Second},
+		{"0s", 180 * time.Second},
+		{"-1s", 180 * time.Second},
+	} {
+		t.Setenv(codexStartWaitEnv, tc.value)
+		if got := codexStartWaitFromEnv(); got != tc.want {
+			t.Errorf("%s=%q: got %s, want %s", codexStartWaitEnv, tc.value, got, tc.want)
+		}
 	}
 }
 
@@ -315,11 +424,12 @@ func TestCodexStartFailures(t *testing.T) {
 		t.Errorf("err %v after %s", err, time.Since(start))
 	}
 	old := codexStartWait
-	codexStartWait = 1500 * time.Millisecond
+	t.Setenv(codexStartWaitEnv, "1500ms")
+	codexStartWait = codexStartWaitFromEnv()
 	t.Cleanup(func() { codexStartWait = old })
 	f.setScreen("w1:p2", "› Ask Codex to do anything\n")
 	_, err = request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "nocodex", "prompt": "hi"})
-	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") {
+	if err == nil || !strings.Contains(err.Error(), "1.5 秒内没认出它这次的会话") {
 		t.Errorf("timeout: %v", err)
 	}
 }
@@ -399,9 +509,11 @@ func TestCodexStartFailureShowsATopDialog(t *testing.T) {
 	t.Cleanup(func() { codexStartWait = old })
 	n, f, _, _ := codexStartHerdr(t, time.Hour)
 	tallPane(f, 51)
-	f.setScreen("w1:p2", "  Sign in with ChatGPT\n\n› 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n  3. Sign in another way\n\n  Press enter to continue\n")
+	// A dialog the start does not answer: neither the trust dialog, an update offer nor the sign-in screen, which ends
+	// the start at once (TestCodexStartOnSignInScreenFailsAtOnce).
+	f.setScreen("w1:p2", "  Pick a color theme\n\n› 1. Dark\n  2. Light\n  3. Match the terminal\n\n  Press enter to continue\n")
 	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi"})
-	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Sign in another way") {
+	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Match the terminal") {
 		t.Errorf("err %v", err)
 	}
 	if keys := f.trace("pane.send_keys"); len(keys) != 0 {
@@ -457,7 +569,18 @@ func TestCodexStartHelper(t *testing.T) {
 	if os.Getenv("PERSONA_CODEX_START_HELPER") == "1" {
 		var args []string
 		_ = json.Unmarshal([]byte(os.Getenv("PERSONA_CODEX_START_ARGS")), &args)
-		err := CodexStart(args)
+		start := CodexStart
+		if i := slices.Index(os.Args, "--"); i >= 0 {
+			switch os.Args[i+1] {
+			case "codex-start":
+			case "tab-start":
+				start = TabStart
+			default:
+				t.Fatalf("unexpected helper command %q", os.Args[i+1])
+			}
+			args = os.Args[i+2:]
+		}
+		err := start(args)
 		fmt.Println(err)
 		os.Exit(3)
 	}
@@ -528,6 +651,386 @@ func TestCodexStartScopesOrcaHooksWithoutChangingExplicitLaunchers(t *testing.T)
 	}
 }
 
+func TestCodexStartPreservesNativeShellFunction(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh not installed")
+	}
+	dir := t.TempDir()
+	file, out := filepath.Join(dir, "start.json"), filepath.Join(dir, "out")
+	program := filepath.Join(dir, "codex")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$PERSONA_TEST_LAUNCHER_MARK\" \"$@\" > \"$OUT\"\n"
+	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc := `export PATH="$PERSONA_TEST_CODEX_BIN:$PATH"
+function codex { PERSONA_TEST_LAUNCHER_MARK=from-function command codex --function-flag "$@"; }
+alias codex='codex --alias-already-expanded'
+`
+	if err := os.WriteFile(filepath.Join(dir, ".zshrc"), []byte(rc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ name, prompt string }{
+		{"with_first_message", specialPrompt},
+		{"without_first_message", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _ := json.Marshal(codexStartFile{Argv: []string{"codex", "--alias-already-expanded"}, Prompt: tt.prompt})
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+			cmd.Env = append(os.Environ(), "HOME="+dir, "ZDOTDIR="+dir, "SHELL=/bin/zsh",
+				"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "OUT="+out, "PERSONA_TEST_CODEX_BIN="+dir,
+				"PERSONA_HOME="+filepath.Join(dir, "state"), "PERSONA_AGENT_SANDBOX=off",
+				"PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("%v: %s", err, b)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "from-function\n--function-flag\n--alias-already-expanded\n"
+			if tt.prompt != "" {
+				want += "--\n" + tt.prompt + "\n"
+			}
+			if string(got) != want {
+				t.Fatalf("launcher environment/flags or literal prompt lost: got %d bytes, want %d; prefix %q",
+					len(got), len(want), got[:min(100, len(got))])
+			}
+		})
+	}
+}
+
+func TestCodexStartHonorsLoginShellWithBothRCFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not installed")
+	}
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	for _, shell := range []struct {
+		name, path, marker, flag string
+	}{
+		{"bash", bash, "from-bash", "--from-bash"},
+		{"zsh", zsh, "from-zsh", "--from-zsh"},
+	} {
+		for _, prompt := range []struct {
+			name  string
+			value string
+		}{
+			{"with_first_message", specialPrompt},
+			{"without_first_message", ""},
+		} {
+			for _, lookup := range []string{"inherited_path", "rc_path", "function_only"} {
+				t.Run(shell.name+"/"+prompt.name+"/"+lookup, func(t *testing.T) {
+					root := t.TempDir()
+					home := filepath.Join(root, "home")
+					bin := filepath.Join(root, "bin")
+					if err := os.MkdirAll(home, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.MkdirAll(bin, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					for name, path := range map[string]string{"bash": bash, "zsh": zsh} {
+						if err := os.Symlink(path, filepath.Join(bin, name)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					out := filepath.Join(root, "fake-codex.out")
+					launcherBin := bin
+					if lookup != "inherited_path" {
+						launcherBin = filepath.Join(root, "launchers")
+						if err := os.MkdirAll(launcherBin, 0o700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					program := filepath.Join(launcherBin, "codex")
+					script := "#!/bin/sh\n{\nprintf 'RC=%s\\n' \"$PERSONA_TEST_RC\"\nprintf 'FUNCTION=%s\\n' \"$PERSONA_TEST_FUNCTION\"\nfor arg do printf 'arg=%s\\n' \"$arg\"; done\n} > \"$OUT\"\n"
+					if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+						t.Fatal(err)
+					}
+					rcPath, command := "", "command codex"
+					if lookup == "rc_path" {
+						rcPath = "export PATH=" + shellQuote(launcherBin) + ":\"$PATH\"\n"
+					} else if lookup == "function_only" {
+						command = "command " + shellQuote(program)
+					}
+					bashRC := rcPath + "export PERSONA_TEST_RC=from-bash\n" +
+						"codex() { export PERSONA_TEST_FUNCTION=from-bash; " + command + " --from-bash \"$@\"; }\n"
+					zshRC := rcPath + "export PERSONA_TEST_RC=from-zsh\n" +
+						"codex() { export PERSONA_TEST_FUNCTION=from-zsh; " + command + " --from-zsh \"$@\"; }\n"
+					if err := os.WriteFile(filepath.Join(home, ".bashrc"), []byte(bashRC), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte(zshRC), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					file := filepath.Join(root, "start.json")
+					b, err := json.Marshal(codexStartFile{
+						Argv:   []string{"codex", "--launcher-flag", "argument with spaces"},
+						Prompt: prompt.value,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(file, b, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					args, err := json.Marshal([]string{file})
+					if err != nil {
+						t.Fatal(err)
+					}
+					cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+					cmd.Dir = root
+					cmd.Env = []string{
+						"HOME=" + home,
+						"ZDOTDIR=" + home,
+						"SHELL=" + shell.path,
+						"PATH=" + bin,
+						"PWD=" + root,
+						"OUT=" + out,
+						"PERSONA_HOME=" + filepath.Join(home, "persona"),
+						"PERSONA_AGENT_SANDBOX=off",
+						"PERSONA_CODEX_START_HELPER=1",
+						"PERSONA_CODEX_START_ARGS=" + string(args),
+					}
+					if b, err := cmd.CombinedOutput(); err != nil {
+						t.Fatalf("CodexStart helper: %v: %s", err, b)
+					}
+					got, err := os.ReadFile(out)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := "RC=" + shell.marker + "\nFUNCTION=" + shell.marker + "\n"
+					want += "arg=" + shell.flag + "\narg=--launcher-flag\narg=argument with spaces\n"
+					if prompt.value != "" {
+						want += "arg=--\narg=" + prompt.value + "\n"
+					}
+					if string(got) != want {
+						t.Fatalf("launcher shell, arguments, or literal prompt differ: got %q, want %q", got, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestCodexStartDefersLookupOnlyWithASupportedShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	for _, explicit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicit_path=%t", explicit), func(t *testing.T) {
+			root := t.TempDir()
+			bin := mkdir(t, filepath.Join(root, "empty-path"))
+			out := filepath.Join(root, "out")
+			program := filepath.Join(root, "codex")
+			if err := os.WriteFile(program, []byte("#!/bin/sh\nprintf executed > \"$OUT\"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			command := "codex"
+			if explicit {
+				command = program
+			}
+			file := filepath.Join(root, "start.json")
+			b, _ := json.Marshal(codexStartFile{Argv: []string{command}})
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+			cmd.Dir = root
+			cmd.Env = []string{
+				"HOME=" + root, "ZDOTDIR=" + root, "SHELL=/bin/sh", "PATH=" + bin, "OUT=" + out,
+				"PERSONA_HOME=" + filepath.Join(root, "persona"), "PERSONA_AGENT_SANDBOX=off",
+				"PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS=" + string(args),
+			}
+			output, err := cmd.CombinedOutput()
+			if explicit {
+				if err != nil {
+					t.Fatalf("explicit launcher without a supported shell: %v: %s", err, output)
+				}
+				if got, err := os.ReadFile(out); err != nil || string(got) != "executed" {
+					t.Fatalf("explicit launcher output %q: %v", got, err)
+				}
+			} else {
+				if err == nil || !strings.Contains(string(output), "codex not found in PATH") {
+					t.Fatalf("native lookup without a supported shell: %v: %s", err, output)
+				}
+				if _, err := os.Stat(out); !os.IsNotExist(err) {
+					t.Fatalf("a relative codex outside PATH was executed, or stat failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestCodexStartRestoresShellContextAfterRC(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, `project with "quotes"`)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	physicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "linked project")
+	if err := os.Symlink(dir, linkedDir); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, shell, prompt string
+		symlink             bool
+	}{
+		{"zsh with prompt", "zsh", specialPrompt, false},
+		{"zsh without prompt", "zsh", "", false},
+		{"bash with prompt", "bash", specialPrompt, false},
+		{"bash without prompt", "bash", "", false},
+		{"zsh symlink with prompt", "zsh", specialPrompt, true},
+		{"zsh symlink without prompt", "zsh", "", true},
+		{"bash symlink with prompt", "bash", specialPrompt, true},
+		{"bash symlink without prompt", "bash", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requestedDir := dir
+			if tc.symlink {
+				requestedDir = linkedDir
+			}
+			shell, err := exec.LookPath(tc.shell)
+			if err != nil {
+				t.Skipf("%s not installed", tc.shell)
+			}
+			home := filepath.Join(root, tc.shell+"-home")
+			bin := filepath.Join(root, tc.shell+"-bin")
+			caseName := strings.ReplaceAll(tc.name, " ", "-")
+			marker := filepath.Join(root, caseName+"-injected")
+			literal := "value with spaces;$(touch " + marker + ")"
+			if err := os.MkdirAll(home, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(root, caseName+".out")
+			program := filepath.Join(bin, "codex")
+			script := `#!/bin/sh
+{
+printf 'cwd=%s\n' "$(pwd -P)"
+printf 'PWD=%s\n' "$PWD"
+printf 'CODEX_HOME=%s\n' "${CODEX_HOME-unset}"
+printf 'PERSONA_TEST_LITERAL=%s\n' "${PERSONA_TEST_LITERAL-unset}"
+printf 'HERDR_AGENT=%s\n' "${HERDR_AGENT-unset}"
+printf 'PERSONA_TEST_FUNCTION=%s\n' "${PERSONA_TEST_FUNCTION-unset}"
+if env | grep -q '^__PERSONA_CODEX_START_'; then printf 'carrier=leaked\n'; else printf 'carrier=clear\n'; fi
+for arg do printf 'arg=%s\n' "$arg"; done
+} > "$OUT"
+`
+			if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			rc := "export PATH=" + shellQuote(bin) + `:"$PATH"
+cd /
+export CODEX_HOME=/from-rc
+export PERSONA_TEST_LITERAL=from-rc
+export HERDR_AGENT=from-rc
+function codex {
+  if env | grep -q '^__PERSONA_CODEX_START_'; then
+    printf 'carrier leaked into launcher function\n' > "$OUT"
+    return 1
+  fi
+  PERSONA_TEST_FUNCTION=from-function command codex --function-flag "$@"
+}
+alias codex='codex --alias-already-expanded'
+`
+			rcName := ".zshrc"
+			if tc.shell == "bash" {
+				rcName = ".bashrc"
+			}
+			if err := os.WriteFile(filepath.Join(home, rcName), []byte(rc), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(root, caseName+"-start.json")
+			b, _ := json.Marshal(codexStartFile{
+				Argv:   []string{"CODEX_HOME=/from-launcher", "PERSONA_TEST_LITERAL=" + literal, "PERSONA_TEST_FUNCTION=from-launcher", "codex", "--launcher-flag", "argument with spaces"},
+				Prompt: tc.prompt,
+				Dir:    requestedDir,
+				Agent:  "codex",
+			})
+			if err := os.WriteFile(file, b, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			args, _ := json.Marshal([]string{file})
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+			cmd.Env = append(os.Environ(), "HOME="+home, "ZDOTDIR="+home, "SHELL="+shell,
+				"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "OUT="+out,
+				"PERSONA_HOME="+filepath.Join(root, "persona-home"), "PERSONA_AGENT_SANDBOX=off",
+				"PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+			if b, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("CodexStart helper: %v: %s", err, b)
+			}
+			got, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "cwd=" + physicalDir + "\nPWD=" + requestedDir + "\nCODEX_HOME=/from-launcher\nPERSONA_TEST_LITERAL=" + literal + "\nHERDR_AGENT=codex\nPERSONA_TEST_FUNCTION=from-function\ncarrier=clear\n"
+			want += "arg=--function-flag\narg=--launcher-flag\narg=argument with spaces\n"
+			if tc.prompt != "" {
+				want += "arg=--\narg=" + tc.prompt + "\n"
+			}
+			if string(got) != want {
+				t.Errorf("Codex context/args = %q, want %q", got, want)
+			}
+			if _, err := os.Stat(marker); err == nil {
+				t.Errorf("launcher assignment was evaluated as shell code; created %s", marker)
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCodexStartExecKeepsExplicitAssignmentsOutOfArgv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Windows launchers do not use a Unix shell")
+	}
+	t.Setenv("PERSONA_AGENT_SANDBOX", "off")
+	secretValue := "private value with spaces"
+	secretAssignment := "CODEX_HOME=" + secretValue
+	_, argv, env, _ := codexStartExec("/opt/bin/codex", []string{"codex", "--flag"}, nil, []string{secretAssignment})
+	joinedArgv := strings.Join(argv, "\x00")
+	if strings.Contains(joinedArgv, secretAssignment) || strings.Contains(joinedArgv, secretValue) {
+		t.Fatalf("explicit launcher secret appeared in helper argv: %q", argv)
+	}
+	var carrier string
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok && strings.HasPrefix(name, "__PERSONA_CODEX_START_") && value == secretAssignment {
+			carrier = name
+		}
+	}
+	if carrier == "" {
+		t.Fatalf("explicit assignment was not preserved in an environment carrier")
+	}
+	if !slices.Contains(argv, carrier) {
+		t.Fatalf("helper argv does not refer to its environment carrier %q: %q", carrier, argv)
+	}
+}
+
 // codex-start's environment: the file's agent replaces a HERDR_AGENT the shell had (appended, the inherited one would
 // come first, the one getenv and herdr read); no agent (tab-start) leaves HERDR_AGENT as it was. The launcher's own
 // words go in after what the shell had, as before. `env` prints the environment exactly as it was exec'd.
@@ -536,9 +1039,9 @@ func TestCodexStartReplacesAnInheritedHerdrAgent(t *testing.T) {
 	if err != nil {
 		t.Skip("no env(1)")
 	}
-	for _, tc := range []struct{ name, agent, want string }{
-		{"codex", "codex", "HERDR_AGENT=codex"},
-		{"tab-start", "", "HERDR_AGENT=inherited"},
+	for _, tc := range []struct{ name, agent, want, marker string }{
+		{"codex-start", "codex", "HERDR_AGENT=codex", codexStartMarker},
+		{"tab-start", "", "HERDR_AGENT=inherited", "PERSONA_CODEX_START=inherited"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			file := filepath.Join(t.TempDir(), "start.json")
@@ -546,20 +1049,25 @@ func TestCodexStartReplacesAnInheritedHerdrAgent(t *testing.T) {
 			if err := os.WriteFile(file, b, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			args, _ := json.Marshal([]string{file})
-			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
-			cmd.Env = append(os.Environ(), "HERDR_AGENT=inherited", "PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+			cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$", "--", tc.name, file)
+			cmd.Env = append(os.Environ(), "HERDR_AGENT=inherited", "PERSONA_CODEX_START=inherited", "PERSONA_CODEX_START_HELPER=1")
 			out, err := cmd.Output()
 			if err != nil {
 				t.Fatalf("%v: %s", err, out)
 			}
-			var agents []string
+			var agents, markers []string
 			mark := false
 			for _, kv := range strings.Split(string(out), "\n") {
 				if strings.HasPrefix(kv, "HERDR_AGENT=") {
 					agents = append(agents, kv)
 				}
+				if strings.HasPrefix(kv, "PERSONA_CODEX_START=") {
+					markers = append(markers, kv)
+				}
 				mark = mark || kv == "CODEX_MARK=launcher"
+			}
+			if !slices.Equal(markers, []string{tc.marker}) {
+				t.Errorf("start markers %q, want %q", markers, tc.marker)
 			}
 			if !slices.Equal(agents, []string{tc.want}) || !mark {
 				t.Errorf("environment has %q (launcher's variable: %v), want %s", agents, mark, tc.want)
@@ -602,7 +1110,121 @@ alias dmcc='ANTHROPIC_BASE_URL=http://127.0.0.1:8 claude'
 	}
 	// Plain codex on the PATH is a launcher of its own.
 	list, codex, _, _ = mergeLaunchers(launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd)
-	if len(list) != 2 || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
+	if len(list) != 1 || list[0].Name != "codex" || list[0].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Errorf("plain codex: %+v %v", list, codex)
+	}
+}
+
+func TestCodexStartUsesSupportedNativeShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native Codex starts do not use a Unix shell")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not installed")
+	}
+	zsh, zerr := exec.LookPath("zsh")
+	for _, mode := range []struct {
+		name string
+		zsh  bool
+	}{{"zsh", true}, {"bash-fallback", false}} {
+		for _, userShell := range []string{"sh", "dash", "fish", "ksh"} {
+			t.Run(mode.name+"/SHELL-"+userShell, func(t *testing.T) {
+				if mode.zsh && zerr != nil {
+					t.Skip("zsh not installed")
+				}
+				root := t.TempDir()
+				home := filepath.Join(root, "home")
+				bin := filepath.Join(root, "bin")
+				traps := filepath.Join(root, "traps")
+				dir := filepath.Join(root, `project with "quotes"`)
+				for _, d := range []string{home, bin, traps, dir} {
+					if err := os.MkdirAll(d, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				physicalDir, err := filepath.EvalSymlinks(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(bash, filepath.Join(bin, "bash")); err != nil {
+					t.Fatal(err)
+				}
+				if mode.zsh {
+					if err := os.Symlink(zsh, filepath.Join(bin, "zsh")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				out := filepath.Join(root, "fake-codex.out")
+				literalMarker := filepath.Join(root, "literal-was-executed")
+				literal := "value with spaces;$(printf injected > " + shellQuote(literalMarker) + ")"
+				fake := `
+{
+printf 'cwd=%s\n' "$(pwd -P)"
+printf 'PWD=%s\n' "$PWD"
+if [[ ${CODEX_HOME+x} == x ]]; then printf 'CODEX_HOME=set:<%s>\n' "$CODEX_HOME"; else printf 'CODEX_HOME=unset\n'; fi
+printf 'PERSONA_TEST_LITERAL=%s\n' "$PERSONA_TEST_LITERAL"
+printf 'HERDR_AGENT=%s\n' "$HERDR_AGENT"
+printf 'FUNCTION=%s\n' "$PERSONA_TEST_FUNCTION"
+carrier=clear
+for name in $(compgen -e); do case "$name" in __PERSONA_CODEX_START_*) carrier=leaked;; esac; done
+printf 'carrier=%s\n' "$carrier"
+for arg do printf 'arg=%s\n' "$arg"; done
+} > "$OUT"
+`
+				if err := os.WriteFile(filepath.Join(bin, "codex"), []byte("#!"+bash+"\n"+fake), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				trapMarker := filepath.Join(root, "unsupported-shell-ran")
+				for _, name := range []string{"sh", "dash", "fish", "ksh"} {
+					trap := "#!/bin/sh\nprintf 'executed\\n' > " + shellQuote(trapMarker) + "\nexit 0\n"
+					if err := os.WriteFile(filepath.Join(traps, name), []byte(trap), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				rc := "export PATH=" + shellQuote(bin) + "\ncd /\nexport CODEX_HOME=from-rc HERDR_AGENT=from-rc PERSONA_TEST_LITERAL=from-rc\n" +
+					"codex() { export PERSONA_TEST_FUNCTION=from-function; command codex --function-flag \"$@\"; }\n"
+				rcName := ".zshrc"
+				if !mode.zsh {
+					rcName = ".bashrc"
+				}
+				if err := os.WriteFile(filepath.Join(home, rcName), []byte(rc), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				startFile := filepath.Join(root, "start.json")
+				b, err := json.Marshal(codexStartFile{Argv: []string{"CODEX_HOME=", "PERSONA_TEST_LITERAL=" + literal, "codex", "argument with spaces"}, Dir: dir, Agent: "codex"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(startFile, b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				args, _ := json.Marshal([]string{startFile})
+				cmd := exec.Command(os.Args[0], "-test.run=^TestCodexStartHelper$")
+				cmd.Dir = root
+				env := withoutEnv(os.Environ(), []string{"HOME", "ZDOTDIR", "SHELL", "PATH", "PWD", "OUT", "CODEX_HOME", "HERDR_AGENT", "PERSONA_TEST_LITERAL", "PERSONA_TEST_FUNCTION", "PERSONA_HOME", "PERSONA_AGENT_SANDBOX", "PERSONA_CODEX_START_HELPER", "PERSONA_CODEX_START_ARGS"})
+				cmd.Env = append(env, "HOME="+home, "ZDOTDIR="+home, "SHELL="+filepath.Join(traps, userShell), "PATH="+bin, "PWD="+root,
+					"OUT="+out, "CODEX_HOME=outer", "HERDR_AGENT=inherited", "PERSONA_TEST_LITERAL=outer", "PERSONA_HOME="+filepath.Join(root, "persona-home"),
+					"PERSONA_AGENT_SANDBOX=off", "PERSONA_CODEX_START_HELPER=1", "PERSONA_CODEX_START_ARGS="+string(args))
+				if b, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("CodexStart: %v: %s", err, b)
+				}
+				got, err := os.ReadFile(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "cwd=" + physicalDir + "\nPWD=" + dir + "\nCODEX_HOME=set:<>\nPERSONA_TEST_LITERAL=" + literal + "\nHERDR_AGENT=codex\nFUNCTION=from-function\ncarrier=clear\narg=--function-flag\narg=argument with spaces\n"
+				if string(got) != want {
+					t.Errorf("fake Codex observation = %q, want %q", got, want)
+				}
+				for _, marker := range []string{literalMarker, trapMarker} {
+					if _, err := os.Stat(marker); err == nil {
+						t.Errorf("unexpected shell execution marker: %s", marker)
+					} else if !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -20,15 +21,53 @@ type agentLauncher struct {
 	AgentType string `json:"agent_type,omitempty"`
 }
 
-// ompOptionsRefusal: omp's model and thinking level come from its own config.yml, not from a start's arguments.
-const ompOptionsRefusal = "omp 的模型和思考强度由 omp 自己的配置决定，这次没有启动。"
+func ompOptionsRefusal(ctx context.Context) error {
+	return refusal("omp_options", i18n.T(i18n.From(ctx), "rpc-errors.omp_options"), nil)
+}
 
-// launcherAgentType is the agent a launcher starts when nothing else says: codex, traex and omp by name, else claude.
+func ompStartModelHost(kind string) bool {
+	return kind == proto.EngineHerdr || kind == proto.EngineOrca
+}
+
+// Both the model picker and the start verify that this launcher runs omp and forwards the requested model.
+func (n *Node) checkOmpStartModel(ctx context.Context, launcher, model string) error {
+	if launcher != ompAgent || !ompStartModelHost(n.startKind(ctx)) {
+		return ompOptionsRefusal(ctx)
+	}
+	if _, managed := n.managedLauncher(launcher); managed || n.runtimeOfIn(ctx, launcher) != nil {
+		return ompOptionsRefusal(ctx)
+	}
+	agent, err := n.launcherModelCheck(ctx, launcher, model)
+	if err == nil && agent != ompAgent {
+		return ompOptionsRefusal(ctx)
+	}
+	return err
+}
+
+// launcherAgentType is the agent a launcher starts when nothing else says: pi, the Cursor CLI and the Antigravity CLI
+// by name (workagent.go), codex, traex and omp by name, else claude.
 func launcherAgentType(name string) string {
+	if _, _, ok := workAgent(name); ok {
+		return name
+	}
 	if name == "codex" || name == traexAgent || name == ompAgent {
 		return name
 	}
 	return "claude"
+}
+
+// Managed wrappers need not be named after the CLI they run. An explicit type wins.
+func (n *Node) startAgentType(launcher, declared string) string {
+	if declared != "" {
+		return declared
+	}
+	if l, ok := n.managedLauncher(launcher); ok && l.AgentType() == traexAgent {
+		return traexAgent
+	}
+	if kind := n.agentKindOf(launcher, ""); kind == agyAgent || kind == traexAgent {
+		return kind
+	}
+	return launcherAgentType(launcher)
 }
 
 func typedLaunchers(list []proto.Launcher) []agentLauncher {
@@ -66,7 +105,7 @@ func otherAgentCommand(launcher, resume, prompt string, shells ...string) string
 // break as a space (csh ends the command at one, quote open or not).
 func typedArg(text string, shells ...string) string {
 	text = strings.ReplaceAll(inertControls(text), "\t", " ")
-	if !takesAssign(shells...) {
+	if !takesAssign(startCommandShells(shells)...) {
 		text = strings.NewReplacer("\r\n", " ", "\r", " ", "\n", " ").Replace(text)
 	}
 	return text
@@ -75,7 +114,7 @@ func typedArg(text string, shells ...string) string {
 // startOtherAgent opens a new tab in ws (a new space when ""), runs the launcher there (resuming a session when
 // resume is set, with the first message as its argument) and waits until the host reports an agent of that kind in
 // the tab with a session id that was not running before (or the one resumed).
-func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, launcher, kind, prompt, resume, ws, tabName string) (*proto.Session, error) {
+func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, launcher, kind, prompt, resume, ws, tabName string, options ...modelExecution) (*proto.Session, error) {
 	created, err := n.newTab(ctx, launch, cwd, ws, tabName, resume) // retire.go
 	if err != nil {
 		return nil, err
@@ -88,22 +127,51 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		existing[id] = true
 	}
 	n.mu.Unlock()
+	if kind == traexAgent && resume == "" {
+		// The host may report an old conversation before the new process claims its own.
+		for id := range n.traexThreads() {
+			existing[id] = true
+		}
+		for _, r := range rollouts(n.traexHome()) {
+			existing[r.id] = true
+		}
+	}
 	if err := n.settleShell(ctx, pane); err != nil { // the fresh shell at rest first (shellsettle.go, #2570)
 		return nil, n.startTabFailed(ctx, launch, created, ws, resume, err)
 	}
 	// A Codex wrapper is told to herdr as Codex (hostherdr.go); a compatible CLI is herdr's to detect. The node's
 	// directory in front, the assistant's environment left out (agentenv.go).
-	shells := paneShells(ctx, created)
+	shells := n.startPaneShells(ctx, launch, created)
 	// The first message keeps its line breaks only in a start file: typed out, the line may meet csh, which runs each
 	// line on its own (typedArg), and Orca does not say which shell it opened.
 	argShells := shells
 	if !n.typesStartFile(launch, shells...) {
 		argShells = nil
 	}
-	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(launcher, resume, prompt, argShells...))
+	command := n.launcherCommand(launcher)
+	var model, effort string
+	execution := executionOption(options)
+	if kind == traexAgent && resume == "" {
+		model, effort = execution.Model, execution.Effort
+		if model != "" {
+			command += " -m " + shellQuote(model)
+		}
+		if effort != "" {
+			command += " -c " + shellQuote("model_reasoning_effort="+effort)
+		}
+	} else if kind == ompAgent && resume == "" && execution.Model != "" {
+		model = execution.Model
+		command += " --model " + shellQuote(model)
+	}
+	if model != "" || effort != "" {
+		if prompt != "" {
+			command += " --" // The first message is positional text, even when it begins with a dash.
+		}
+	}
+	cmd := withHerdrAgent(typedHerdrAgent(launch, kind, shells...), otherAgentCommand(command, resume, prompt, argShells...))
 	// Not in the agent sandbox (agentsandbox.go).
 	n.notePaneStart(launcher)
-	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentCommand(cmd, shellQuote, shells...), shells...) // typedstart.go
+	done, err := n.runAgentCommand(ctx, launch, created, ws, "", n.agentStartCommand(cmd, shellQuote, shells...), shells...) // typedstart.go
 	if err != nil {
 		return nil, err
 	}
@@ -121,11 +189,16 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 		if err := n.refreshHosts(ctx); err != nil {
 			continue
 		}
+		confirmed := ""
+		if kind == traexAgent {
+			confirmed = n.traexLiveThread(pane, resume)
+		}
 		n.mu.Lock()
 		var id string
 		var agent host.Agent
 		for candidate, a := range n.agents {
 			if a.PaneID == pane && a.Agent == kind && candidate != "" &&
+				(kind != traexAgent || candidate == confirmed) &&
 				((resume == "" && !existing[candidate]) || candidate == resume) {
 				id, agent = candidate, a
 				break
@@ -144,11 +217,24 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 				continue
 			}
 		}
-		n.state.put(id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC()})
+		st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, StartedAt: time.Now().UTC()}
+		if resume != "" {
+			if previous, ok := n.state.get(id); ok {
+				if kind == traexAgent {
+					model, effort = previous.Model, previous.ModelEffort
+					st.Model, st.ModelEffort = model, effort
+				}
+				st.Cwd = keepSpaceCwd(previous.Cwd, st.Cwd)
+			}
+		}
+		n.putAgentState(ctx, launch, id, st)
+		if effort != "" {
+			n.noteModes(id, "", effort)
+		}
 		n.bindPane(pane, id)
 		session := n.sessionFor(id, agent)
 		session.Agent = kind
-		n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, ID: id})
+		n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, ID: id, Model: model, Effort: effort})
 		return session, nil
 	}
 }

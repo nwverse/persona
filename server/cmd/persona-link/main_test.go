@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,6 +17,26 @@ import (
 	"github.com/nwverse/persona/server/internal/link"
 )
 
+// A stripped release retains the build number the manifest verifier needs on every platform, including Windows.
+// `-v` reports that same number alongside the version and channel, as personad and persona-node do.
+func TestVersionReportsReleaseBuild(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the release connector")
+	}
+	bin := filepath.Join(t.TempDir(), "persona-link")
+	cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=v1 -X main.channel=release -X main.build=202611141527", "-o", bin, ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "version", "-v").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(out), "v1\nchannel release, build 202611141527\n"; got != want {
+		t.Fatalf("version -v = %q, want %q", got, want)
+	}
+}
+
 // fakeEnv is a Linux computer with a systemd user instance, unless the test changes it; nothing it does reaches the
 // real one. calls records the commands run; onCommand answers them.
 type fakeEnv struct {
@@ -25,6 +46,9 @@ type fakeEnv struct {
 	systemd   bool // /run/systemd/system
 	linger    bool
 	onCommand func(args string) (string, error)
+	// trayCalls is what was done to the Windows tray; trayUp and trayAuto are whether it runs and starts at sign-in.
+	trayCalls        []string
+	trayUp, trayAuto bool
 }
 
 func newFakeEnv(t *testing.T) *fakeEnv {
@@ -65,6 +89,28 @@ func newFakeEnv(t *testing.T) *fakeEnv {
 	f.passthrough = func(name string, args ...string) error {
 		f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 		return nil
+	}
+	f.tray = trayControl{
+		setAutostart: func(exe string, on bool) error {
+			f.trayAuto = on
+			if !on {
+				f.trayCalls = append(f.trayCalls, "autostart off")
+				return nil
+			}
+			f.trayCalls = append(f.trayCalls, "autostart "+exe)
+			return nil
+		},
+		autostart:       func() bool { return f.trayAuto },
+		registerLinks:   func(exe string) error { f.trayCalls = append(f.trayCalls, "links "+exe); return nil },
+		unregisterLinks: func() { f.trayCalls = append(f.trayCalls, "unlinks") },
+		removeData:      func() error { f.trayCalls = append(f.trayCalls, "data"); return nil },
+		start:           func(exe string) error { f.trayCalls = append(f.trayCalls, "start "+exe); f.trayUp = true; return nil },
+		quit: func(string, time.Duration) bool {
+			f.trayCalls = append(f.trayCalls, "quit")
+			f.trayUp = false
+			return true
+		},
+		running: func(string) bool { return f.trayUp },
 	}
 	return f
 }
@@ -370,6 +416,12 @@ hub：「家里」，互联组共 3 台 hub
 func TestUninstall(t *testing.T) {
 	f := newFakeEnv(t)
 	f.pairHere(t)
+	routeFile := link.RouteHintPath(f.configPath())
+	for _, p := range []string{routeFile, routeFile + ".tmp"} {
+		if err := os.WriteFile(p, []byte("route hint"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_ = os.MkdirAll(filepath.Dir(f.unitPath()), 0o755)
 	_ = os.WriteFile(f.unitPath(), []byte("x"), 0o644)
 	if _, _, err := f.installBinary(); err != nil {
@@ -378,7 +430,8 @@ func TestUninstall(t *testing.T) {
 	if err := uninstall(f.env, nil); err != nil {
 		t.Fatal(err)
 	}
-	if fileExists(f.unitPath()) || !fileExists(f.configPath()) || !fileExists(f.binPath()) {
+	if fileExists(f.unitPath()) || !fileExists(f.configPath()) || !fileExists(f.binPath()) ||
+		!fileExists(routeFile) || !fileExists(routeFile+".tmp") {
 		t.Fatal("uninstall takes the service away, nothing else")
 	}
 	if !strings.Contains(strings.Join(f.calls, "\n"), "systemctl --user disable --now persona-link.service") ||
@@ -397,7 +450,7 @@ func TestUninstall(t *testing.T) {
 	if err := uninstall(f.env, []string{"--purge"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{f.configPath(), link.StatusPath(f.configPath()), f.logPath(), f.binPath()} {
+	for _, p := range []string{f.configPath(), link.StatusPath(f.configPath()), f.logPath(), f.binPath(), routeFile, routeFile + ".tmp"} {
 		if fileExists(p) {
 			t.Errorf("%s still there", p)
 		}

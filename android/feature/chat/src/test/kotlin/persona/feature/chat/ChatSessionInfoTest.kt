@@ -59,7 +59,7 @@ class ChatSessionInfoTest {
         val all = rows(session, info)
         assertEquals("claude-opus-5", all.getValue("运行")["模型"])
         assertEquals("2.1.320", all.getValue("运行")["Claude Code"])
-        assertEquals("自动改文件", all.getValue("运行")["权限"])
+        assertEquals("允许编辑", all.getValue("运行")["权限"])
         assertEquals("很高", all.getValue("运行")["思考强度"])
         assertEquals("4.8 万 tokens", all.getValue("用量")["上下文"])
         assertFalse("压缩" in all.getValue("用量"))
@@ -165,5 +165,28 @@ class ChatSessionInfoTest {
         assertEquals("not a Persona conversation", null, row(claude.copy(assistant = true)))
         assertEquals("not Codex", null, row(claude.copy(agent = "codex")))
         assertEquals("not offline", null, row(claude.copy(state = "offline")))
+    }
+
+    /**
+     * A Paseo provider's session that lists its modes (#8261): its mode in its own words, no mode reported being its own
+     * approval, never Ask First; and no counts the node says nobody gives (`usage_unknown`), where zeros stood.
+     */
+    @Config(qualifiers = "en")
+    @Test fun aProvidersSessionSaysItsOwnModeAndLeavesOutCountsNobodyGives() {
+        val grok = Session(machineId = "m", sessionId = "paseo-agent-1", agent = "paseo", agentLabelHint = "Grok", launcher = "grok",
+            status = "idle", sourceKind = "runtime", capabilities = SessionCapabilities(read = true, send = true, modes = false,
+                permissionModes = listOf("default", "bypassPermissions")))
+        val info = SessionInfo(sessionId = "paseo-agent-1", model = "grok-5", usageUnknown = true, startedAt = "2026-11-01T02:00:00Z")
+        val all = rows(grok, info)
+        assertEquals("Follow launcher", all.getValue("Run")["Permissions"])
+        assertEquals("Full access", rows(grok.copy(permissionMode = "bypassPermissions"), info).getValue("Run")["Permissions"])
+        val usage = all.getValue("Usage")
+        for (label in listOf("Context", "Compactions", "Chat", "Generated")) assertFalse(label, label in usage)
+        assertTrue("Started" in usage)
+        // Counts it has are shown as before, zeros too; a session without the list keeps Claude Code's words.
+        val counted = rows(grok, info.copy(usageUnknown = false, turns = 0)).getValue("Usage")
+        assertTrue("Chat" in counted && "Context" in counted)
+        assertEquals("Default permissions", rows(grok.copy(capabilities = grok.capabilities?.copy(permissionModes = null), permissionMode = "default"), info)
+            .getValue("Run")["Permissions"])
     }
 }

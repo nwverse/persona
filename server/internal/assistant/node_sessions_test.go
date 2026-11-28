@@ -33,9 +33,9 @@ func TestSessionReadersAnswerAsBefore(t *testing.T) {
 		name      string
 		got, want bool
 	}{
-		{"a listed agent is not gone", ft.s.agentGone(proto.Interaction{MachineID: "mac", SessionID: "s1"}), false},
-		{"an unlisted agent is gone", ft.s.agentGone(proto.Interaction{MachineID: "mac", SessionID: "none"}), true},
-		{"a machine listing nothing has none gone", ft.s.agentGone(proto.Interaction{MachineID: "idle", SessionID: "none"}), false},
+		{"a listed agent is not gone", larkHost{ft.s}.AgentGone(proto.Interaction{MachineID: "mac", SessionID: "s1"}), false},
+		{"an unlisted agent is gone", larkHost{ft.s}.AgentGone(proto.Interaction{MachineID: "mac", SessionID: "none"}), true},
+		{"a machine listing nothing has none gone", larkHost{ft.s}.AgentGone(proto.Interaction{MachineID: "idle", SessionID: "none"}), false},
 		{"a working child", children(proto.Session{SessionID: "r1"}), true},
 		{"a blocked grandchild under a done child", children(proto.Session{SessionID: "r2"}), true},
 		{"a done child", children(proto.Session{SessionID: "r3"}), false},
@@ -103,6 +103,9 @@ func busyBoard(t *testing.T) *Service {
 // it into new bytes (28.4 MB in all); now it allocates the decorated list alone. Each bound is the measured bytes per
 // call + 3%.
 func TestSessionReadersCopyNoList(t *testing.T) {
+	if raceEnabled {
+		t.Skip("race instrumentation allocates")
+	}
 	if !isolated(t) {
 		return
 	}
@@ -113,11 +116,11 @@ func TestSessionReadersCopyNoList(t *testing.T) {
 		most uint64
 		read func()
 	}{
-		{"agentGone", 2225, func() { s.agentGone(proto.Interaction{MachineID: "box", SessionID: "session-08199"}) }},
+		{"agentGone", 2225, func() { larkHost{s}.AgentGone(proto.Interaction{MachineID: "box", SessionID: "session-08199"}) }},
 		{"completionChildrenRunning", 1690, func() { s.completionChildrenRunning("box", proto.Session{SessionID: "session-00100"}) }},
 		{"decoratedUnarchived", 13710700, func() { s.decoratedUnarchived("box") }},
 		{"publishList", 13715100, func() { s.publishList("box") }},
-		{"GET /api/v1/workspaces", 177600, func() { boardCall(board, "GET", "/api/v1/workspaces", "", roleFull) }},
+		{"GET /api/v1/workspaces", 186100, func() { boardCall(board, "GET", "/api/v1/workspaces", "", roleFull) }},
 	} {
 		c.read()
 		const runs = 20

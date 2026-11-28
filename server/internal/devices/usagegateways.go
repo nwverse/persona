@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"sort"
 	"strconv"
@@ -43,6 +44,9 @@ type UsageConfig struct {
 	// PollMinutes is how often each gateway is asked (default 5, at most a day).
 	PollMinutes int                 `json:"poll_minutes,omitempty"`
 	Sources     []UsageSourceConfig `json:"sources,omitempty"`
+	// HiddenProviders are providers ("codex", "claude"…) the usage bars leave out (#11753). Display only: nodes and
+	// gateways are still read and the scheduler's capacity view still counts them.
+	HiddenProviders []string `json:"hidden_providers,omitempty"`
 }
 
 // UsageSourceConfig is one gateway.
@@ -50,13 +54,37 @@ type UsageSourceConfig struct {
 	ID string `json:"id"`
 	// Name is what the sidebar calls the source ("Relay").
 	Name string `json:"name"`
-	// Type: relay | generic (usagesource; an older manager.json's earlier name of relay reads as relay).
+	// Type: relay | relay_key | generic | extension (usagesource; an older manager.json's earlier name of relay reads as relay).
 	Type string `json:"type"`
 	URL  string `json:"url"`
-	// Key is the gateway's management key (a secret: manager.json is 0600; no API answer or log ever has it).
+	// Extension and Launcher are for the extension type only (usagesource.TypeExtension): the extension that reads, by
+	// id, and the launcher whose gateway it reads. URL and Key stay empty; the launcher has both.
+	Extension string `json:"extension,omitempty"`
+	Launcher  string `json:"launcher,omitempty"`
+	// Key is the gateway's management key, for relay_key an ordinary API key of the gateway (a secret either way:
+	// manager.json is 0600; no API answer or log ever has it).
 	Key     string `json:"key,omitempty"`
 	Enabled *bool  `json:"enabled,omitempty"`
+	direct  *DirectUsageSource
 }
+
+// DirectUsageSource is an installed contribution, separate from persisted manager settings.
+type DirectUsageSource struct {
+	extension    string
+	contribution string
+	name         string
+	updatedAt    time.Time
+}
+
+// NewDirectUsageSource describes an installed direct usage contribution at a settings revision.
+func NewDirectUsageSource(extension, contribution, name string, updatedAt time.Time) DirectUsageSource {
+	return DirectUsageSource{extension: extension, contribution: contribution, name: name, updatedAt: updatedAt}
+}
+
+func (s DirectUsageSource) Extension() string    { return s.extension }
+func (s DirectUsageSource) Contribution() string { return s.contribution }
+func (s DirectUsageSource) Name() string         { return s.name }
+func (s DirectUsageSource) UpdatedAt() time.Time { return s.updatedAt }
 
 // UnmarshalJSON reads a source as manager.json has it, older type names included (usagesource.StoredType): a section
 // written before the relay type had its name keeps working, and the next edit of the source saves the new name.
@@ -84,7 +112,10 @@ func (c UsageConfig) interval() time.Duration {
 // fingerprint changes when what a source reads changes (its type, address or key): the samples of the old one are
 // not the new one's.
 func (s UsageSourceConfig) fingerprint() string {
-	sum := sha256.Sum256([]byte(s.Type + "\x00" + s.URL + "\x00" + s.Key))
+	sum := sha256.Sum256([]byte(s.Type + "\x00" + s.URL + "\x00" + s.Key + "\x00" + s.Extension + "\x00" + s.Launcher))
+	if s.direct != nil {
+		sum = sha256.Sum256([]byte(s.ID + "\x00" + s.direct.updatedAt.Format(time.RFC3339Nano)))
+	}
 	return hex.EncodeToString(sum[:8])
 }
 
@@ -111,6 +142,11 @@ type usageGateways struct {
 	wake  chan struct{}
 	// fetch reads one source (usagesource.Fetch; tests put their own).
 	fetch func(ctx context.Context, cfg usagesource.Config, now time.Time) (usagesource.Result, error)
+	// fetchExtension reads one extension source (Options.UsageExtension; nil: none can be read here).
+	fetchExtension func(ctx context.Context, extension, launcher string) (json.RawMessage, error)
+	discoverDirect func() []DirectUsageSource
+	fetchDirect    func(context.Context, DirectUsageSource) (json.RawMessage, error)
+	direct         []UsageSourceConfig
 	// changed is called when the answers changed (the merged list is stale).
 	changed func()
 	logf    func(string, ...any)
@@ -137,12 +173,21 @@ func (g *usageGateways) setConfig(cfg UsageConfig) {
 
 func (g *usageGateways) setLocked(cfg UsageConfig) {
 	cfg.Sources = slices.Clone(cfg.Sources)
+	cfg.HiddenProviders = canonicalHiddenUsageProviders(cfg.HiddenProviders)
 	g.cfg = cfg
+	g.pruneLocked()
+}
+
+func (g *usageGateways) sourcesLocked() []UsageSourceConfig {
+	return slices.Concat(g.cfg.Sources, g.direct)
+}
+
+func (g *usageGateways) pruneLocked() {
 	if g.state == nil {
 		g.state = map[string]*gatewayState{}
 	}
 	keep := map[string]bool{}
-	for _, s := range cfg.Sources {
+	for _, s := range g.sourcesLocked() {
 		keep[s.ID] = true
 		if st := g.state[s.ID]; st != nil && st.fingerprint != s.fingerprint() {
 			delete(g.state, s.ID)
@@ -155,11 +200,20 @@ func (g *usageGateways) setLocked(cfg UsageConfig) {
 	}
 }
 
+func canonicalHiddenUsageProviders(in []string) []string {
+	var out []string
+	for _, provider := range in {
+		out = append(out, canonicalUsageProvider(provider))
+	}
+	return uniqueSorted(out)
+}
+
 func (g *usageGateways) config() UsageConfig {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	c := g.cfg
 	c.Sources = slices.Clone(c.Sources)
+	c.HiddenProviders = slices.Clone(c.HiddenProviders)
 	return c
 }
 
@@ -199,18 +253,41 @@ func (g *usageGateways) run(ctx context.Context) {
 
 // pollDue reads, in parallel, the sources that were never read or whose last attempt is older than the interval.
 func (g *usageGateways) pollDue(ctx context.Context, now time.Time) {
+	var direct []UsageSourceConfig
+	if g.discoverDirect != nil {
+		for _, d := range g.discoverDirect() {
+			direct = append(direct, UsageSourceConfig{
+				ID: "extension:" + d.extension + "/" + d.contribution, Name: d.name, Type: usagesource.TypeExtension,
+				Extension: d.extension, direct: &d,
+			})
+		}
+	}
 	g.mu.Lock()
+	changedSources := !slices.EqualFunc(g.direct, direct, func(a, b UsageSourceConfig) bool { return *a.direct == *b.direct })
+	if changedSources {
+		g.direct = direct
+		g.pruneLocked()
+	}
+	changed := g.changed
+	defer func() {
+		if changedSources && changed != nil {
+			changed()
+		}
+	}()
 	if !g.cfg.on() {
 		g.mu.Unlock()
 		return
 	}
-	interval := g.cfg.interval()
 	var due []UsageSourceConfig
-	for _, s := range g.cfg.Sources {
+	for _, s := range g.sourcesLocked() {
+		interval := g.cfg.interval()
 		if !s.on() {
 			continue
 		}
 		st := g.state[s.ID]
+		if s.direct != nil && st != nil && st.okAt.IsZero() {
+			interval = usageGatewayTick
+		}
 		if st != nil && (st.reading || now.Sub(st.triedAt) < interval) {
 			continue
 		}
@@ -240,7 +317,13 @@ func (g *usageGateways) read(ctx context.Context, s UsageSourceConfig, now time.
 	if fetch == nil {
 		fetch = usagesource.Fetch
 	}
-	res, err := fetch(c, usagesource.Config{Type: s.Type, URL: s.URL, Key: s.Key}, now)
+	var res usagesource.Result
+	var err error
+	if s.Type == usagesource.TypeExtension {
+		res, err = g.readExtension(c, s, now)
+	} else {
+		res, err = fetch(c, usagesource.Config{Type: s.Type, URL: s.URL, Key: s.Key}, now)
+	}
 	g.mu.Lock()
 	st := g.state[s.ID]
 	if st == nil || st.fingerprint != s.fingerprint() { // edited or removed while it was being read
@@ -269,6 +352,28 @@ func (g *usageGateways) read(ctx context.Context, s UsageSourceConfig, now time.
 	}
 }
 
+// readExtension asks the extension of an extension source (usage.query): its answer is checked and cut to size
+// (usagesource.FromExtension). The extension's own errors are not kept: only that it failed.
+func (g *usageGateways) readExtension(ctx context.Context, s UsageSourceConfig, now time.Time) (usagesource.Result, error) {
+	var raw json.RawMessage
+	var err error
+	switch {
+	case s.direct != nil && g.fetchDirect != nil:
+		raw, err = g.fetchDirect(ctx, *s.direct)
+	case s.direct == nil && g.fetchExtension != nil && s.Extension != "" && s.Launcher != "":
+		raw, err = g.fetchExtension(ctx, s.Extension, s.Launcher)
+	default:
+		return usagesource.Result{}, &usagesource.Error{Code: usagesource.CodeBadConfig}
+	}
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return usagesource.Result{}, &usagesource.Error{Code: usagesource.CodeTimeout}
+		}
+		return usagesource.Result{}, &usagesource.Error{Code: usagesource.CodeUnreachable}
+	}
+	return usagesource.FromExtension(raw, now)
+}
+
 // accounts are the samples of every source that is on, as the sidebar's merge takes them: named after their source,
 // with the gateway's account id (qualified by the source) as their identity. A source whose last read failed still
 // gives its last answer, marked as such.
@@ -279,10 +384,16 @@ func (g *usageGateways) accounts(now time.Time) []proto.UsageAccount {
 		return nil
 	}
 	var out []proto.UsageAccount
-	for _, s := range g.cfg.Sources {
+	for _, s := range g.sourcesLocked() {
 		st := g.state[s.ID]
 		if !s.on() || st == nil {
 			continue
+		}
+		extensionIDs := make(map[[2]string]int)
+		for _, a := range st.samples {
+			if a.Pass && a.Ref != "" {
+				extensionIDs[[2]string{canonicalUsageProvider(a.Provider), a.Ref}]++
+			}
 		}
 		for n, a := range st.samples {
 			if now.Sub(a.SampledAt) > usageHubMaxAge {
@@ -290,7 +401,14 @@ func (g *usageGateways) accounts(now time.Time) []proto.UsageAccount {
 			}
 			a.Windows = slices.Clone(a.Windows)
 			a.Sources = []string{s.Name}
-			if a.Ref != "" {
+			if a.Pass {
+				// Extension rows never merge. Prefer their own account ID so a reorder does not retarget a pin.
+				a.Origin = s.ID + "#" + strconv.Itoa(n)
+				if a.Ref != "" && extensionIDs[[2]string{canonicalUsageProvider(a.Provider), a.Ref}] == 1 {
+					a.Origin = s.ID + ":account:" + a.Ref
+				}
+				a.Ref = ""
+			} else if a.Ref != "" {
 				a.Ref = s.ID + ":" + a.Ref
 				a.Origin = a.Ref
 			} else {
@@ -407,6 +525,5 @@ func uniqueSorted(list []string) []string {
 	return slices.Compact(out)
 }
 
-// UsageGatewayAccounts is devicewire.MethodUsageGatewayAccounts: the gateway sources' account lists, as the hub's
-// last read of each had them (usageGateways.gatewayAccounts).
+// UsageGatewayAccounts returns the last-read gateway account lists for the bus and the local extension manager.
 func (d *Devices) UsageGatewayAccounts() proto.GatewayAccounts { return d.usageGW.gatewayAccounts() }

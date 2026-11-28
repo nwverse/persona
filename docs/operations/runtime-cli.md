@@ -35,6 +35,9 @@ at 7 s. With `personactl.py settle` after launch, each shot measured 4.3–5.3 s
 | `state` | | `tab`, `openChat`, `assistant`, `visibleSession`, `settingsOpen`, `settingsDepth`, `style`, `color`, `appearance`, `connection`, `paired`, `appState` (active / inactive / background), `screen` (window width and height, pt) |
 | `settle` | `timeout` (8 s), `every` (150 ms), `stable` (3 times), `pixels` (0), `ignore` (element filters, one or more sets; their frames aren't compared), `ignorePad` (6 pt), `ignoreRects` (`[[x, y, w, h]]`, pt) | `settled`, `frames`, `changed`, `box` (where the last two frames still differ) |
 | `freeze` | `on` (default true; false restores), `reduceMotion` (default true), `layers` (strip / pause / none, default strip) | `frozen`, `reduceMotion`, `paused`; see "Screens that never stop moving" |
+| `screenRoutes` | | `screens`: each live screen's routes as last measured (`route`: lan / tailscale / relay, `inUse`, `srttMs`, `minRttMs`, `jitterMs`, `packetLoss`, `samples`, `healthy`, `via`), `lastChange` (`to`, `transport`: tcp / udp, `reason`) and, while a UDP flow carries the video, `flow` (`route` kind, `loss`, `parity`, `overhead`, `rttMs`, `scale`, #7873); kinds and numbers only, never addresses (#6398, `RuntimeCLI+ScreenRoutes.swift`) |
+| `screenRoute` | `action` (drop / mute / unmute), `kind` (lan / tailscale) | Makes the phone's direct routes of that kind break (`drop`) or go silent (`mute`: nothing they carry arrives, as when a network drops packets without closing anything), to try falling back to the hub without touching the Mac's or the network's settings |
+| `screenFlow` | `action` (mute / unmute) | Makes the phone's UDP flows go silent (`mute`: nothing arrives on them, as when a network drops UDP), to try the video falling back to the route's TLS connection (#7873) |
 | `online` | `timeout` (15 s) | `nudged` (whether it reconnected); on timeout it errors with the current state. When `personactl.py online` is connected to `mock_scenarios.py` it also returns `mockRestarts` (see "Injecting state") |
 | `reset` | `coldChats` (keep no chats in memory; reload from disk cache then the hub, as after launch), `dropChatCache` (also clear the disk cache, = `-openChatsFresh YES`) | A new view tree, route unchanged, as if just launched. Answers like `state` |
 | `tree` | Element filters (below) | `elements`: each accessibility element's `id` (accessibilityIdentifier), `label`, `value`, `traits`, `frame` (screen coordinates, pt), `visible` (tappable), `onScreen` (frame is on screen), `actions` (the names of its custom accessibility actions, when it has any), `hint` (its accessibility hint, when nonempty); with `containers`, also each container that has an id, marked `container: true`, and every element's `in` (the id of the nearest such container around it in the tree, whatever is drawn over it) |
@@ -45,12 +48,13 @@ at 7 s. With `personactl.py settle` after launch, each shot measured 4.3–5.3 s
 | `wait-loaded` | `session` (`<machine>/<session>`; if omitted, the one on screen: the chat open on the Agents page or the assistant's; it only waits, it won't open it), `timeout` (15 s) | Waits until this chat first gets its history from the hub (or an error) and the rows are rebuilt (unchanged for 300 ms); `items`, `rows`, `error`, `waited` (ms). Errors on timeout |
 | `activate` | Element filters, `allowHidden`, `action` | Does what a VoiceOver double-tap does on the first tappable match (the button's action, opening a menu); `activated` false means it doesn't respond (menu items). `action`: performs the element's custom accessibility action of that name instead (VoiceOver's Actions rotor), and errors with the names it has when there is none; a failed bubble's Resend / Delete are its menu's items and its actions too. If there are matches but none tappable it reports `not visible`, and doesn't activate elements on the page the shell has hidden; with `allowHidden: true` or an `index` it picks the way `find` does |
 | `alert` | `button` | The alert the App shows (SwiftUI's `.alert`): `title` and `buttons`; with `button`, presses it as a tap does (the alert goes, then that button's action runs). An alert's buttons take no accessibility activation, so `activate` can't press them; errors with `no alert` when none is up |
+| `recording` | `action` (`stop`, `delete`, or none), `id` (for `delete`) | `state`, `recording` (its id), `elapsed`; with `stop`, ends the recording being made as End and Write the Minutes does (`MeetingRecorder.stop`): `stopped`; with `delete`, deletes the recording `id` here and then on the hub, as the row's Delete does once confirmed (`RecordingDeletion.run`): `deleted`. For a script that records a meeting (#9417): a confirmation dialog's buttons take no accessibility activation, and `alert` dismisses one without running its SwiftUI action |
 | `scroll` | `pages` (screens; negative goes up, each screen is 0.8 of the height) or `to` (top / bottom); `at` (`[x, y]`, pt) | Sets the offset of the largest scroll view on screen directly, no momentum; only picks ones that are drawn (the page the shell hides is the same size but transparent); with `at`, the smallest drawn one under that point instead (a list inside a panel over the page, such as the Needs You tray over the chat); `offset`, `contentHeight`, `frame` (which one moved) |
 | `type` | `text`, optionally element filters (activates it first to take focus, picked as in `activate`) | Types into the focused text field |
 | `dismiss-keyboard` | | Dismisses the keyboard |
 | `snapshot` | `path` or none (returns base64), `scale` | PNG of the App window (no status bar; to compare pixel by pixel with old screenshots use `personactl.py screenshot`) |
 | `pasteboard` | `text`, or omit it to place a solid-color image (`width`, `height`, default 40 × 30 pt) | `changeCount`, `hasImages`; behaves like copying in another App, triggering the composer's Paste chip (can be captured without UI tests) |
-| `share` | `text` (default Persona), `url`, `images` (0–4 solid pictures), `files` (0–4 small PDFs, the first named with a space) | `presented`, `items`; opens the system share sheet from the current window to check whether Share › Persona is listed (`ShareSheetTests` picks it) |
+| `share` | `text` (default Persona), `url`, `images` (0–4 solid pictures), `files` (0–4 small PDFs, the first named with a space), `fileMB` (each file that many MB, sparse: the sheet's size footer and its slow-upload hint, #2282) | `presented`, `items`; opens the system share sheet from the current window to check whether Share › Persona is listed (`ShareSheetTests` picks it) |
 | `navigate` | `scene` (home / assistant / agents / chat / inbox / settings / machines), `session` (`<machine>/<session>`, required for chat and assistant), `machine` (open one machine under machines), `defaults` (flags read only when a page is built, e.g. `{"openAllWork": true}`), `keep` (don't swap in a new view tree), `coldChats`, `dropChatCache` (as in `reset`) | Lands on the same page as the corresponding launch flag (`-newAssistant`, `-openAssistant`, `-tab dev`, `-openSession`, `-tab mail`, `-tab settings`, `-openMachines`), by default on a new view tree (the window's root is replaced with a new `RootView`, so chats pushed on the Agents page, drawers and scroll positions all start over). Answers like `state` |
 | `set-style` | `style` (glass / clay / island / lark / beautiful), `color` (theme color) | Like `state`; the whole tree is rebuilt in the new style |
 | `set-appearance` | `value` (light / dark / system) | Changes only the App: goes through **Settings › Appearance › Light & Dark** (`AppModel.colorScheme`, which is persisted; restore with `system` afterwards); `personactl.py appearance` by default changes the whole simulator (`simctl ui appearance`, the status bar changes too; screenshot scripts use this) |
@@ -229,7 +233,7 @@ scripts/app/personactl.py screenshot shot.jpg        # the window as the App dra
 ```
 
 - Works through the hub: `state`, `settle`, `tree`, `find`, `wait`, `tap` (accessibility activation only), `scroll`, `type`, `navigate`, `set-style`, `snapshot` / `screenshot`, `freeze`, `wait-loaded`.
-- Doesn't work: `launch` (on a real device, install the DEBUG build with Xcode / devicectl and open the App yourself), `reset` (not done yet; `navigate` also swaps in a new view tree),
+- Doesn't work: `launch` (on a real device, install the DEBUG build with Xcode / devicectl and open the App yourself; after `scripts/app/sim.sh`, first run `native/app-core/scripts/build-apple.sh` with no flag, `docs/operations/testing.md` "Development builds"), `reset` (not done yet; `navigate` also swaps in a new view tree),
   real touches that need `idb` (`tap` on menu items, `longpress`, `swipe`, `drag`, `background` / `foreground`), and `simctl` light/dark (`appearance` changes only the App instead).
 - Answers are WebSocket messages: an answer over 16 MB is an error (with the size); use JPEG (`.jpg`) or a smaller `scale` for screenshots.
 - When `type` has element filters and accessibility activation can't take focus (common with SwiftUI text fields), the App makes the text field under that element the first responder (what tapping it would do, without a touch);
@@ -274,7 +278,7 @@ PERSONACTL_UDID=<udid> HUB=… scripts/app/cli-tests/sync_cases.py send_tied_by_
 - The App is paired as `mock-<device>`. A two-device case's other device is scripted, as in `scripts/mock/test_sync_case_mock.py`, and the case runs once for each device the App can be (`<case>@<device>`).
 - Each step: the mock plays the hub's side, the runner does the user's action in the App (type and Send, a card's Allow / Deny, a failed bubble's Resend / Delete through `activate` `action:`, the alert a refusal raises through `alert`, relaunch), waits the step's `wait`, then compares the step's `expect` and the three invariants with what the chat shows.
 - The chat is read through its marks (`chatMark`, containers listed by `tree --containers`): `chat.user.<item>`, `chat.answer.<item>`, `chat.outbox.<state>.<message>` (the new-conversation page's first message too), `chat.card.<interaction>`, `chat.live`. An element belongs to the mark it is `in`, whatever is drawn over it. Rows scrolled out of sight still count: the chat's list keeps them in the tree.
-- The case is loaded with its times moved to now (`"now": true`): the simulator runs on the real clock, the cases are dated January 2026.
+- The simulator runs on the real clock. The runner loads each case with `"now": true` to shift its January 2026 timestamps to the present. In a new chat the mock dates transcript additions when it appends them so the first message can match its transcript line after a cold launch.
 - No `idb` needed. Every run terminates the App and deletes its `Library/Caches/state` and `chats-*` instead of reinstalling it, and a relaunch keeps `-pairURL` (`keep`): without one the App asks for notifications, a system alert only a touch answers, and the App stays inactive behind it with no socket. The runner fails at once with that hint when the App is not active after a launch; reboot your own simulator to clear such an alert. Don't switch `-ui.scheme` either: the App's icon follows it and the system says so in another alert.
 - Waits run in real time (the wake case waits 600 s); `SYNC_CASE_WAIT_CAP=<seconds>` shortens longer ones. `SYNC_CASE_TRACE=1` prints every step's view.
 - The assistant page has no queue strip, so `status` is not compared (the web's runner doesn't either).
@@ -284,6 +288,23 @@ Not migrated, staying in XCUITest permanently: `testScrollingTheLongList` (`XCTO
 `testImageViewerStaysOpenThroughUpdates` (image viewer). Not migrated yet: `testFilterBarHugsTheTop` (#740), `testScrolledListHoldsStillThroughUpdates` (the CLI version is flaky),
 `testStateGroupingOpensSeenInOneTap` (could be migrated, but the CLI is slower).
 
+#### First-message recovery in a new conversation
+
+`SyncScenarioTests` drives `AppModel`. `AppModel.askPersona` calls `AssistantStart` when there is no main conversation. To exercise the pending message, failed bubble and Resend action, drive the new-conversation page in `AssistantView`. The two `chat.new` cases stay listed as known issues in the AppModel harness (#12238).
+
+Install the DEBUG app on a booted iOS simulator and start the mock hub as above. Set `PERSONACTL_BUNDLE` if the installed app uses a different bundle ID from the local configuration. Run both scenarios with the on-screen driver.
+
+```sh
+PERSONACTL_UDID=<udid> HUB=http://127.0.0.1:18760 scripts/app/cli-tests/sync_cases.py \
+  start_answer_cut_then_receipt start_refused_then_resent_new_op
+```
+
+- `start_answer_cut_then_receipt` checks that an interrupted start recovers from the original operation's receipt and that the first message and its reply each appear once.
+- `start_refused_then_resent_new_op` checks that the refused first message remains as a failed bubble and that Resend starts the conversation with a fresh operation ID.
+
+The summary for this run should read `2 passed, 0 known, 0 failed of 2 runs`.
+For a slow simulator launch, set `SYNC_CASE_LAUNCH_WAIT=180` to give the Runtime CLI up to 180 seconds to answer.
+
 ## Protocol and security
 
 - DEBUG builds only: the files under `apple/Persona/Debug/` are wrapped entirely in `#if DEBUG && os(iOS)`, and the entry point is one line, `RuntimeCLI.startIfAsked()`, in `AppDelegate`'s existing
@@ -292,7 +313,8 @@ Not migrated, staying in XCUITest permanently: `testScrollingTheLongList` (`XCTO
 - Loopback only: `127.0.0.1:<port>` (the simulator and the Mac share loopback).
 - One-time token: `launch` generates a random one each time, passes it to the App via the launch argument `-runtimeCLIToken`, and stores it in `~/.cache/personactl/<udid>.json` (0600); requests with the wrong token are rejected outright.
 - One request per connection: one line of JSON `{"token", "cmd", "args"}`, one line of JSON back. All commands run on the main thread (MainActor).
-- `scripts/release/release.sh` checks that `strings` of the Release binary contain no `runtimeCLI`, `RuntimeCLI` or `_AXSSetAutomationEnabled`.
+- `scripts/release/release.sh` checks that `strings` of the Release binary contain no `runtimeCLI`, `RuntimeCLI` or `_AXSSetAutomationEnabled`
+  (the names are `RUNTIME_CLI` in `scripts/release/debug_switches.py`, which reads all of the output, #10654).
 
 ## Adding commands
 

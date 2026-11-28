@@ -4,12 +4,14 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// the feature modules (the health page is one: docs/web/web.md "Modules")
+import { MODULES } from "../modules";
 // jsdom has no matchMedia (the sidebar's modules read it when they load) and no ResizeObserver (its highlight)
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-import { COLLAPSED_KEY, getLayout, setSidebarCollapsed } from "../lib/layout";
+import { COLLAPSED_KEY, getLayout, setSidebarCollapsed, useLayout } from "../lib/layout";
 import { setAllFolded } from "../lib/sidebar-api";
 import { refresh, reset } from "../lib/store";
 import type { AssistantInfo, Session } from "../lib/types";
@@ -80,15 +82,78 @@ describe("folding the whole sidebar", () => {
     act(() => open.click());
     expect(getLayout().sidebarCollapsed).toBe(false);
   });
+
+  it("omits duplicate collapse, search bar, and top rail buttons when MacBayTools hosts them (#17136)", async () => {
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
+    await flush();
+    expect(button("收起侧边栏")).toBeUndefined();
+    expect([...host.querySelectorAll("button")].find((b) => b.textContent?.includes("搜索会话"))).toBeUndefined();
+
+    act(() => root.render(<SidebarRail route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
+    await flush();
+    expect(button("展开侧边栏")).toBeUndefined();
+    expect(host.querySelector("[data-rail-top-controls]")).toBeNull();
+  });
+});
+
+describe("the focus across a fold (web usability audit item 23)", () => {
+  // as App.tsx draws the column: the rail in place of the sidebar, so the button pressed is taken away
+  function Column({ shortcuts = false }: { shortcuts?: boolean }) {
+    const folded = useLayout().sidebarCollapsed;
+    return (
+      <div data-sidebar-column>
+        {shortcuts && <Keys />}
+        {folded ? <SidebarRail route={{ name: "todos" }} onSearch={() => {}} onNewAgent={() => {}} /> : <Sidebar route={{ name: "todos" }} onSearch={() => {}} onNewAgent={() => {}} />}
+      </div>
+    );
+  }
+  function Keys() {
+    useShortcuts({ route: { name: "todos" }, narrow: false, toggleDrawer: () => {} });
+    return null;
+  }
+
+  it("moves to the expand button after folding by the keyboard, and back to collapse after opening", async () => {
+    act(() => root.render(<Column />));
+    await flush();
+    const fold = button("收起侧边栏")!;
+    fold.focus();
+    act(() => fold.click()); // Enter and Space on a focused button click it
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(document.activeElement).toBe(button("展开侧边栏"));
+    act(() => button("展开侧边栏")!.click());
+    expect(getLayout().sidebarCollapsed).toBe(false);
+    expect(document.activeElement).toBe(button("收起侧边栏"));
+  });
+
+  it("takes no focus when the button was not focused (Safari doesn't focus a clicked button)", async () => {
+    act(() => root.render(<Column />));
+    await flush();
+    act(() => button("收起侧边栏")!.click());
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("keeps the focus in the column when the shortcut folds it from a row inside", async () => {
+    act(() => root.render(<Column shortcuts />));
+    await flush();
+    host.querySelector<HTMLAnchorElement>('a[href="/todos"]')!.focus();
+    act(() => void dispatchEvent(new KeyboardEvent("keydown", { key: "b", code: "KeyB", ctrlKey: true, altKey: true, bubbles: true, cancelable: true })));
+    expect(getLayout().sidebarCollapsed).toBe(true);
+    expect(document.activeElement).toBe(button("展开侧边栏"));
+  });
 });
 
 describe("localized page names in the drawer and desktop sidebar (#3579)", { timeout: 30_000 }, () => {
+// the health module, when this run has it (the core-only lane, #13932, runs with no module)
+  const HEALTH = MODULES.some((m) => m.id === "health");
+  // without it the same pages less Health
+  const withHealth = <T,>(xs: readonly T[]) => (HEALTH ? [...xs] : xs.filter((_, i) => i !== 2));
   const locales = [
     { lang: "en", full: ["Overview", "Inbox", "Health", "Scheduled tasks", "Knowledge", "Machines"], short: ["Home", "Inbox", "Health", "Tasks", "KB", "Hosts"] },
     { lang: "ja", full: ["概要", "受信トレイ", "ヘルスケア", "定期タスク", "ナレッジ", "マシン"], short: ["概要", "受信", "健康", "定期", "ナレッジ", "マシン"] },
     { lang: "zh-Hans", full: ["总览", "收件箱", "健康", "定时任务", "知识库", "机器"], short: ["总览", "收件箱", "健康", "定时任务", "知识库", "机器"] },
-  ] as const;
-  const paths = ["/overview", "/inbox", "/health", "/routines", "/kb", "/machines"];
+  ].map((l) => ({ ...l, full: withHealth(l.full), short: withHealth(l.short) }));
+  const paths = withHealth(["/overview", "/inbox", "/health", "/routines", "/kb", "/machines"]);
   const pageLink = (path: string) => host.querySelector<HTMLAnchorElement>(`a[href="${path}"]`)!;
   function DrawerPages() {
     const { pages } = useNavPages();
@@ -168,6 +233,42 @@ describe("the shortcut", () => {
 });
 
 describe("folding a block of the sidebar", () => {
+  it("keeps the Hub notice directly under Settings when Pages folds and reopens", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(
+      String(url).endsWith("/hub/update") ? { state: "building" } : {},
+    )));
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    await act(() => vi.dynamicImportSettled());
+    const notice = host.querySelector('[data-testid="hub-notice"]')!;
+    const settings = host.querySelector('a[href="/settings"]')!;
+    expect(settings.nextElementSibling).toBe(notice);
+    expect(notice.closest("[data-sidebar-agents]")).toBeNull();
+    expect(host.querySelectorAll('[data-testid="hub-notice"]')).toHaveLength(1);
+    const fold = settings.closest("[data-sidebar-group]")!.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
+    act(() => fold.click());
+    expect(notice.closest("[inert]")).not.toBeNull();
+    act(() => fold.click());
+    expect(notice.closest("[inert]")).toBeNull();
+  });
+
+  it("places the drawer notice beneath the grid row containing Settings", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ state: "building" })));
+    const onNavigate = vi.fn();
+    const pages = (["home", "settings", "inbox", "machines"] as const).map((name) => ({
+      k: name, label: name, icon: "gear" as const, to: { name },
+    }));
+    act(() => root.render(<NavGrid showHubNotice pages={pages} activeKey="home" go={() => () => {}} onNavigate={onNavigate} />));
+    await flush();
+    await act(() => vi.dynamicImportSettled());
+    const notice = host.querySelector('[data-testid="hub-notice"]')!;
+    expect(notice.closest("nav")).toBe(host.querySelector('a[href="/settings"]')!.closest("nav"));
+    expect(notice.parentElement!.style.gridRowStart).toBe("2");
+    act(() => notice.querySelector("button")!.click());
+    expect(location.pathname + location.search).toBe("/settings?tab=hub");
+    expect(onNavigate).toHaveBeenCalledOnce();
+  });
+
   it("folds 页面 under its title and keeps it", async () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
@@ -178,7 +279,7 @@ describe("folding a block of the sidebar", () => {
     expect(localStorage.getItem("fold:pages")).toBe("1");
     expect(sectionBody("页面").hasAttribute("inert")).toBe(true);
     // the Persona row stays above it
-    expect(host.querySelector('a[title="Persona 的主对话"]')).not.toBeNull();
+    expect(host.querySelector('a[aria-description="Persona 主对话"]')).not.toBeNull();
   });
 
   it("gives a section and its chevron the same fold tokens in both directions", async () => {
@@ -252,46 +353,18 @@ describe("folding a block of the sidebar", () => {
   });
 });
 
-describe("ordering the Agents list (G099)", () => {
-  const item = (label: string) => [...document.querySelectorAll<HTMLElement>('[role^="menuitem"]')].find((el) => el.textContent?.includes(label));
-
-  it("offers 状态优先 / 最近更新 under the grouping and keeps the choice", async () => {
-    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
-    await flush();
-    act(() => button("Agent 列表选项")!.click());
-    expect(item("状态优先")).toBeDefined();
-    expect(item("按机器")).toBeUndefined(); // the groupings are the segments now (#2812)
-    act(() => item("最近更新")!.click());
-    await flush();
-    expect(localStorage.getItem("persona.agentSort")).toBe("updated");
-    expect(button("Agent 列表选项：最近更新")).toBeDefined();
-  });
-
-  it("is not offered under 按状态, whose sections are the states, and a menu with nothing left is not there (#6447)", async () => {
-    localStorage.setItem("persona.agentGrouping", "state");
+describe("ordering the Agents list (#11801)", () => {
+  it("ignores the old per-browser activity sort key: the choice is the hub's now (Settings › Agents)", async () => {
     localStorage.setItem("persona.agentSort", "updated");
     await withAgent();
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
-    expect(host.querySelector('[role="radio"][aria-label="按状态"]')!.getAttribute("aria-checked")).toBe("true");
     expect(host.querySelector('[aria-label^="Agent 列表选项"]')).toBeNull();
     expect(host.querySelector("[data-sidebar-agents-controls] [data-testid=agents-fold-all]")).not.toBeNull();
   });
 });
 
 describe("the Agents fold-all button (#3027, #6447)", () => {
-  it("is the only 全部折叠 / 全部展开: the list menu does not repeat them", async () => {
-    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
-    await flush();
-    const menu = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.getAttribute("aria-label") === "Agent 列表选项")!;
-    act(() => menu.click());
-    await flush();
-    const item = (label: string) => [...document.querySelectorAll<HTMLElement>("[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]")].find((el) => el.textContent?.includes(label));
-    expect(item("状态优先")).toBeDefined();
-    expect(item("全部折叠")).toBeUndefined();
-    expect(item("全部展开")).toBeUndefined();
-  });
-
   it("opens with 全部展开 the spaces folded by hand, and leaves the other blocks", async () => {
     localStorage.setItem("fold:space:mac/a", "1");
     localStorage.setItem("persona.agentGrouping", "machine");
@@ -312,11 +385,11 @@ describe("the Agents fold-all button (#3027, #6447)", () => {
   });
 });
 
-describe("the main conversation: the column's first row, Persona with the app's mark (#2004, #5109), marked 主对话 (#6293)", () => {
+describe("the main conversation: the column's first row, Main chat with its home symbol (#10544)", () => {
   const conv = (id: string, title: string): Session => ({ machine_id: "hub", session_id: id, title, cwd: "/", status: "idle", state: "idle", assistant: true, pending_interactions: id === "main" ? 2 : 0 });
   const assistant: AssistantInfo = { machine_id: "hub", main: "main", leaders: ["c1"], conversations: [conv("main", "Persona"), conv("c1", "整理周报")] };
   const block = (title: string) => button(title)!.closest(".mt-1, .mt-3") as HTMLElement;
-  const mainRow = () => host.querySelector<HTMLAnchorElement>('a[title="Persona 的主对话"]')!;
+  const mainRow = () => host.querySelector<HTMLAnchorElement>('a[aria-description="Persona 主对话"]')!;
   const load = async () => {
     vi.stubGlobal("fetch", vi.fn((url: string) => {
       const body = new URL(url, "http://x").pathname === "/api/v1/assistant" ? assistant : {};
@@ -365,24 +438,25 @@ describe("the main conversation: the column's first row, Persona with the app's 
     await load();
     const rows = [...host.querySelectorAll<HTMLAnchorElement>("[data-sidebar-rows] a")];
     expect(rows[0]).toBe(mainRow());
-    expect(mainRow().textContent).toContain("Persona");
-    // the brand row reads as a conversation, not a heading: a small "主对话" under the name (#6293)
+    expect(mainRow().textContent).toContain("主对话");
+    // One Main chat title instead of another assistant face and name.
     const mark = mainRow().querySelector("[data-row-line]:not([data-draft])");
-    expect(mark?.textContent).toBe("主对话");
-    expect(mainRow().querySelector("svg.rounded-full")).not.toBeNull();
+    expect(mark).toBeNull();
+    expect(mainRow().querySelector('path[d^="M3 10.5 12 3"]')).not.toBeNull();
+    expect(mainRow().querySelector("canvas,img")).toBeNull();
     expect(mainRow().textContent).toContain("2"); // its pending count
     // the line parts it from the pages, which come after it
     const line = host.querySelector("[data-persona-divider]")!;
     expect(mainRow().compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(line.compareDocumentPosition(button("页面")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(host.querySelectorAll('a[title="Persona 的主对话"]')).toHaveLength(1);
+    expect(host.querySelectorAll('a[aria-description="Persona 主对话"]')).toHaveLength(1);
     expect(host.querySelectorAll("[data-persona-divider]")).toHaveLength(1);
     expect(host.querySelector('a[href="/persona/main"]')).toBeNull();
     // "Persona chats"starts with the other conversations, the main one not in it
-    expect(block("Persona 对话").querySelector('a[title="Persona 的主对话"]')).toBeNull();
+    expect(block("Persona 对话").querySelector('a[aria-description="Persona 主对话"]')).toBeNull();
     expect(block("Persona 对话").textContent).toContain("整理周报");
     // its ⋯ opens the conversation's menu
-    expect(mainRow().parentElement!.querySelector('button[aria-label="对话的操作"]')).not.toBeNull();
+    expect(mainRow().parentElement!.querySelector('button[aria-label="对话操作"]')).not.toBeNull();
   });
 
   it("stays on show however 页面 and「Persona 对话」are folded", async () => {

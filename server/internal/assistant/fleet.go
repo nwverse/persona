@@ -9,9 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount/fleetcountadapt"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,17 +32,33 @@ import (
 // pushes to deliver) and keeps the last of them while the manager is away; it relays the apps' answers here
 // (fleetRoutes) and delivers the pushes (APNs, the relay, its apps' notify events).
 
+// interactionAdmission serializes first-create history checks and registration
+// for one interaction ID without keeping fleet.mu held across database reads.
+// refs includes both the holder and waiters, so an idle gate can be removed.
+type interactionAdmission struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // fleetBook is what the manager keeps of it.
 type fleetBook struct {
 	mu           sync.Mutex
 	interactions map[string]*pending
-	seen         map[[2]string]time.Time // (machine, session) -> when the user last looked at it
-	seenLoaded   bool                    // seen holds the table's times (loadSeen succeeded once)
-	stateSince   map[[2]string]stateMark // (machine, session) -> its state and when it entered it
-	notified     map[string]time.Time    // assistant conversation -> when it last pushed with notify_user
+	admissions   map[string]*interactionAdmission
+	seen         map[[2]string]time.Time      // (machine, session) -> when the user last looked at it
+	seenLoaded   bool                         // seen holds the table's times (loadSeen succeeded once)
+	stateSince   map[[2]string]stateMark      // (machine, session) -> its state and when it entered it
+	stateListed  map[string]bool              // scratch ids for pruning stateSince, cleared and reused under mu
+	upstream     map[[2]string]upstreamStreak // (machine, session) -> consecutive no-work upstream 5xx turns (fleet_upstream.go)
+	notified     map[string]time.Time         // assistant conversation -> when it last pushed with notify_user
 	// reportSent: assistant conversation -> when a scheduled run or a task notice was sent into it (noteReportTurn):
 	// the turn it starts is pushed however short it is.
 	reportSent map[string]time.Time
+	// cardTell serializes telling the hub a card with checking it is still held (fleet_ix.go tellCard).
+	cardTell sync.Mutex
+	// A card can be withdrawn while it is being told. Reconnect takes both locks to order its
+	// complete inventory with new cards and withdrawals on the same connection.
+	cardEnd sync.Mutex
 	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
 	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
@@ -60,6 +78,11 @@ type fleetBook struct {
 	// shorten them on their own Service before any session list comes, so an upgrade loop another test left running
 	// never reads what this one writes (#4554).
 	upgradeEvery, upgradeFor time.Duration
+	upgrades                 sync.WaitGroup // active screen-upgrade loops; database-backed fixtures wait during teardown
+	completionRuns           sync.WaitGroup // delayed turn completions already running when a fixture tears down
+	resolvedRuns             sync.WaitGroup // answered cards' hooks still running (interactionResolvedSoon)
+	completionTimers         map[*time.Timer]struct{}
+	completionStopped        bool // test teardown only: no new delayed completion after the drain starts
 	// hooked: Persona's hooks run in the session (a hook event came since the manager started).
 	hooked map[[2]string]bool
 	// stopSig: the signature of the reply each session's latest Stop ended its turn with; pushedSig: the one a
@@ -68,6 +91,11 @@ type fleetBook struct {
 	turns              *turnTracker // "machine/session" -> the turn in progress, for the finished push
 	clients            assistantwire.Clients
 	prev               map[string]map[string]turnPrev // each machine's list setSessions saw last, by session id
+	// prevConn: the node connection (devices' ConnectedAt) each machine's prev list came on.
+	// heldRows: the last listed row of each Agent with a held message, by machine and session. These display-only
+	// copies recreate a missing row; the devices' inventory stays authoritative for delivery.
+	heldRows map[string]map[string]proto.Session
+	prevConn map[string]time.Time
 
 	// sent: what is kept of each machine's last session list told the hub (fleet.sessions): its length and digest, not
 	// its bytes. sentMu is held while a list is decorated, encoded into enc and told (publishList), so the lists reach
@@ -75,16 +103,36 @@ type fleetBook struct {
 	sentMu sync.Mutex
 	sent   map[string]sentList
 	enc    bytes.Buffer
+	// archived is what was told of each machine's archived rows (fleet.archived, tellArchived), under sentMu.
+	archived map[string]archivedSent
+	// views and archViews: the arrays the views of each list and of its archived rows told apart are decided in
+	// (fleet_views.go), under sentMu.
+	views, archViews fleetcountadapt.Views
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
 	shown   map[string][]proto.Session
+	// finishedDue: when the first Just finished row of each machine's list, as last decorated to be told, runs out
+	// of its window (#9751), under shownMu. Nothing else tells a list again when only time passes (republishFinished).
+	finishedDue map[string]time.Time
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
 	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
-	// cards sent without the rest of the list.
-	foldMu sync.Mutex
-	folds  map[string]sessionFold
+	// cards sent without the rest of the list. foldMeta / crossParents / crossChildren track only machines
+	// participating in cross-machine subagent hierarchies so unrelated machines stay on the local fast path.
+	foldMu        sync.Mutex
+	folds         map[string]sessionFold
+	foldMeta      map[string][]foldEntry
+	crossParents  map[string]map[string]bool // childMachine -> referenced parentMachines
+	crossChildren map[string]map[string]bool // parentMachine -> referencing childMachines
+
+	// subagents: durable child (machine, session) -> parent/task provenance restored on demand by visible
+	// target identity from a2a_tasks, legacy dispatches, and task_spawn todo agents (subagent_index.go).
+	subagentsMu           sync.RWMutex
+	subagentsLegacyLoaded bool
+	subagents             map[[2]string]subagentLink
+	subagentsChecked      map[string]map[string]struct{} // machine -> checked sessionIDs
+	subagentsByTask       map[string][2]string
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -104,6 +152,8 @@ type fleetBook struct {
 	live liveState // the Live Activity's content as last told (fleet_live.go)
 
 	started sync.Once
+	// The first reconnect and the first arriving card both wait for prior-process cleanup.
+	restored sync.Once
 
 	q        fleetQueue // what the nodes' events start for the assistant, in order (fleet_follow.go)
 	followMu sync.Mutex
@@ -116,6 +166,7 @@ type fleetBook struct {
 type fleetReport struct {
 	mu        sync.RWMutex
 	got       bool
+	seq       uint64                 // highest sequenced Snapshot.Seq applied (0: none yet)
 	sessions  map[string]SessionView // by session id
 	work      map[[2]string]proto.WorkState
 	workOn    bool
@@ -133,6 +184,7 @@ type fleetReport struct {
 type fleetStore interface {
 	InsertInteraction(ctx context.Context, ix proto.Interaction) error
 	FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error
+	FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error)
 	InteractionOutcome(ctx context.Context, id string) (status string, res *proto.Resolution, err error)
 	Interactions(ctx context.Context, machine, session string, limit int) ([]db.InteractionRecord, error)
 	AllowAlways(ctx context.Context, session, tool string, keys []string) error
@@ -166,9 +218,62 @@ func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interactio
 	return g.st.InsertInteraction(ctx, ix)
 }
 
+// interactionDeadlineUpdater is the durable counterpart of publishing an extended prepared-approval deadline.
+// A store that keeps interaction history but cannot update it must not leave the database advertising a stale expiry.
+type interactionDeadlineUpdater interface {
+	UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error
+}
+
+func (g guardedStore) UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(interactionDeadlineUpdater)
+	if !ok {
+		return errNoTable
+	}
+	return st.UpdateInteractionDeadline(ctx, id, created, expires)
+}
+
+func (s *Service) updateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error {
+	st := s.fleetStore()
+	if st == nil {
+		return nil // no interaction table: the in-memory card is the only card
+	}
+	return st.(interactionDeadlineUpdater).UpdateInteractionDeadline(ctx, id, created, expires)
+}
+
+// resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting
+// auto-approval. A store without both fails closed: the setting is not changed without its queryable decision record.
+type resolvedInteractionInserter interface {
+	InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error
+	MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) error
+}
+
+func (g guardedStore) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.InsertResolvedInteraction(ctx, ix, res)
+}
+
+func (g guardedStore) MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(resolvedInteractionInserter)
+	if !ok {
+		return errNoTable
+	}
+	return st.MarkResolvedInteractionOutcome(ctx, id, created, outcome, at)
+}
+
 func (g guardedStore) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) (err error) {
 	defer guard(&err)
 	return g.st.FinishInteraction(ctx, id, status, res)
+}
+
+func (g guardedStore) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error) {
+	defer guard(&err)
+	return g.st.FinishInteractionOccurrence(ctx, ix, status, res)
 }
 
 func (g guardedStore) InteractionOutcome(ctx context.Context, id string) (status string, res *proto.Resolution, err error) {
@@ -235,16 +340,21 @@ func (s *Service) fleetOn() bool { return s.devs != nil }
 // fleetStart starts the fleet's loops, once. The seen times are read again on each call until they could be: a
 // database that failed while the manager started does not leave every session the user had looked at unread.
 // restoreInteractions stays once: expiring the stale rows later would cancel the ones created since.
+//
+// ctx is the manager run's: the loops end with it. They used to run on with its cancellation taken off, so a run that
+// ended (a revoked token, a restart in place for a new binary) left them reading its closed store every 15 s and
+// telling the hub an old fleet (#16215). The one-time reads still finish when the run ends meanwhile.
 func (s *Service) fleetStart(ctx context.Context) {
 	if !s.fleetOn() {
 		return
 	}
+	once := context.WithoutCancel(ctx)
 	s.fleet.started.Do(func() {
-		s.restoreInteractions(ctx)
+		s.restoreInteractions(once)
 		go s.expireLoop(ctx)
 		go s.liveLoop(ctx)
 	})
-	s.loadSeen(ctx)
+	s.loadSeen(once)
 }
 
 // ---- the states (docs/protocol/agent-states.md) ----
@@ -281,15 +391,40 @@ func agentState(sess proto.Session, seenAt time.Time) string {
 // goes on. Needs-you stays first; a stopped one (offline) has nothing running. Not the assistant's conversations:
 // their Monitors and background tasks stay on, and a conversation always "Working" would skip every scheduled run.
 // What waits for a turn to end (the finished push, scheduled runs, the hub's own update) reads the host's status.
+// Background commands the node found stalled, with nothing else running, do not make it working (#16418): they keep
+// their rows and background_stalled_since for a look, and the finished turn settles.
 func backgroundState(state string, sess proto.Session) string {
 	if sess.Assistant || !backgroundRunning(sess) {
 		return state
 	}
 	switch state {
 	case proto.StateUnread, proto.StateIdle, proto.StateUnknown:
+		if backgroundStalledShellOnly(sess) {
+			return state
+		}
 		return proto.StateWorking
 	}
 	return state
+}
+
+// stalledAfterTurn: an agent's finished turn that backgroundState left as it was for its stalled background commands
+// alone (backgroundStalledShellOnly): its row keeps background_stalled_since though it is not background_working.
+func stalledAfterTurn(sess proto.Session) bool {
+	switch sess.State {
+	case proto.StateUnread, proto.StateIdle, proto.StateUnknown:
+		return !sess.Assistant && sess.Status != proto.StatusWorking && backgroundStalledShellOnly(sess)
+	}
+	return false
+}
+
+// backgroundStalledShellOnly (#16418): all the background work left is background commands, and the node found them
+// stalled (Session.BackgroundStalledSince: no CPU and no output past its grace, or their shells gone). No subagent,
+// workflow or Monitor runs: a Monitor wakes the agent by itself, and those are work whatever its shells do.
+func backgroundStalledShellOnly(sess proto.Session) bool {
+	if sess.BackgroundStalledSince == 0 || len(sess.Background) == 0 || backgroundIsWork(sess) {
+		return false
+	}
+	return !slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind != "shell" })
 }
 
 // stateWithBackground is backgroundState, and whether the background work is all that makes it working
@@ -327,16 +462,31 @@ var rateLimited = lazyre.New(`(?i)\b429\b|rate[ _-]?limit|too many requests|usag
 // turnErrorCode is what a turn's model API error says is wrong, for a card that says what to fix (Session.TurnErrorCode,
 // docs/assistant/onboarding.md 5.2); "" when it does not say.
 func turnErrorCode(text string) string {
+	if code := proto.UnrecoverableTurnErrorCode(text); code != "" {
+		return code
+	}
 	t := strings.TrimSpace(text)
 	switch {
 	case strings.HasPrefix(strings.ToLower(t), "not logged in"):
 		return proto.TurnErrorNotLoggedIn
 	case strings.Contains(t, "There's an issue with the selected model"):
 		return proto.TurnErrorModelRoute
+	case assistantwire.ToolSearchRefused(t):
+		// Before the classes below: a gateway's words for it may say "not supported" next to "model". The node resent
+		// the turn once with every tool loaded and starts the conversation that way from now on (#10365).
+		return proto.TurnErrorToolSearchUnsupported
+	case assistantwire.ImageLimitErrorText(t):
+		// Accumulated pictures pushed the request past the model API's size or multi-image limit (#13045).
+		return proto.TurnErrorImagesTooLarge
+	case modelretry.AccountExhausted(t):
+		// Explicit upstream account-pool exhaustion (#13372): ahead of model_route in case the message also names the model.
+		return proto.TurnErrorUpstreamUnavailable
 	}
 	switch classifyLauncherError(t) { // the launcher health checks' classes (launcher_health.go)
 	case errKindUsageLimit:
 		return proto.TurnErrorRateLimited
+	case errKindUpstream:
+		return proto.TurnErrorUpstreamUnavailable
 	case errKindAuth:
 		return proto.TurnErrorAuthFailed
 	case errKindModelRoute:
@@ -357,6 +507,9 @@ func sessionTurnErrorCode(c proto.Session) string {
 		return ""
 	}
 	code := turnErrorCode(c.TurnError)
+	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" {
+		return code
+	}
 	if c.TurnErrorKind == proto.TurnErrorUsageLimit {
 		return proto.TurnErrorRateLimited
 	}
@@ -366,6 +519,13 @@ func sessionTurnErrorCode(c proto.Session) string {
 				(code == proto.TurnErrorModelRoute || strings.Contains(strings.ToLower(c.TurnError), "model_not_found")) {
 			return proto.TurnErrorModelFallbackUnavailable
 		}
+	}
+	// Preserve a node's transcript-streak upstream_unavailable code (#13372), including on a 503 whose words also
+	// matched model_route, while keeping auth, sign-in, 429 and tool-search codes ahead of it.
+	if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable &&
+		(code == "" || code == proto.TurnErrorUpstreamUnavailable ||
+			(code == proto.TurnErrorModelRoute && modelretry.UpstreamServerError(c.TurnError))) {
+		return proto.TurnErrorUpstreamUnavailable
 	}
 	return code
 }
@@ -383,7 +543,7 @@ func signedOut(c proto.Session) bool {
 // agent's record says so).
 func userTurnError(code string) bool {
 	switch code {
-	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable:
+	case proto.TurnErrorNotLoggedIn, proto.TurnErrorAuthFailed, proto.TurnErrorModelRoute, proto.TurnErrorModelFallbackUnavailable, proto.TurnErrorImagesTooLarge:
 		return true
 	}
 	return false
@@ -417,7 +577,13 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 	// The list is the node's whole list, kept across a disconnect (devices.Machine.setSessions): a session no longer
 	// in it has ended. Forget its mark and its hook flag. A hook flag for a session never listed yet (its hook came
 	// before the node's next list) has no mark and stays.
-	listed := make(map[string]bool, len(list))
+	listed := s.fleet.stateListed
+	if listed == nil {
+		listed = make(map[string]bool, len(list))
+		s.fleet.stateListed = listed
+	} else {
+		clear(listed)
+	}
 	for _, sess := range list {
 		listed[sess.SessionID] = true
 	}
@@ -432,20 +598,22 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 // backgroundWaiting (Session.BackgroundWaiting, #6045): working only because of background work, and that work only
 // waits: the node found its background commands waiting, and no subagent or workflow runs (those are work).
 func backgroundWaiting(sess proto.Session) bool {
-	if !sess.BackgroundWorking || !sess.BackgroundWaiting {
-		return false
-	}
+	return sess.BackgroundWorking && sess.BackgroundWaiting && !backgroundIsWork(sess)
+}
+
+// backgroundIsWork: a subagent or workflow runs, which is work whatever its background commands do.
+func backgroundIsWork(sess proto.Session) bool {
 	for _, a := range sess.Subagents {
 		if a.Running {
-			return false
+			return true
 		}
 	}
 	for _, w := range sess.Workflows {
 		if w.Running {
-			return false
+			return true
 		}
 	}
-	return !slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
+	return slices.ContainsFunc(sess.Background, func(t proto.BackgroundTask) bool { return t.Kind == "agent" || t.Kind == "workflow" })
 }
 
 func backgroundRunning(sess proto.Session) bool {

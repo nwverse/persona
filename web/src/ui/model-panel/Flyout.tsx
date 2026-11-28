@@ -1,6 +1,6 @@
 // A model's setup flyout (#5032, after Cindy's ModelConfigFlyout and UnifiedFlyoutHost): 264 px, outside the panel's left
 // edge (right when the left has no room), its top a little above the row's. From the top: the model's name and a star;
-// the provider and the context window; the effort slider (two levels or more) and Fast (where the model has it); the
+// the provider and the context window; the effort slider (two levels or more) and Speed (where the model offers it); the
 // Agent that runs it; and a footer that is as tall in its three states: recommended, customized (with "Reset to
 // recommended"), a saved favorite (with "Remove from favorites"). Opened by Customize, a right-click or ←, never by
 // hover; a click outside closes it, and so does Esc (the panel's key handler, which gives the focus back to the row).
@@ -9,17 +9,17 @@ import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { agentName } from "../../lib/agent-kind";
 import { contextSize, flyoutPlace, priceAmount, priceTier, shownEffort, type EngineChoice, type PanelConfig, type PanelRow } from "../../lib/model-panel";
-import { effortTitle } from "../../lib/session-actions";
 import { AgentMark } from "../AgentMark";
 import { cx } from "../atoms";
 import { Icon } from "../icons";
+import { SpeedSwitch } from "./Columns";
 import { EffortSlider } from "./EffortSlider";
 
 const FLYOUT_WIDTH = 264;
 
 export type FlyoutMode = "recommended" | "customized" | "favorite";
 
-export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, onEngine, onEffort, onFast, onReset, onStar, onClose }: {
+export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, focusOnOpen, extra, reposition, engines, setupElsewhere, onEngine, onEffort, onSpeed, onReset, onStar, onClose }: {
   /** The row it belongs to, and the panel it sits beside. */
   rowEl: HTMLElement;
   panelEl: HTMLElement;
@@ -38,9 +38,11 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
   /** The engines the model runs with here (lib/model-panel.ts engineChoices), its own first: more than one draws them as
    *  small pills, the others picked on a click; absent or one: the row's engine as a static block. */
   engines?: EngineChoice[];
+  /** The panel's columns hold the effort and speed (#12315): the flyout keeps the rarer setup only. */
+  setupElsewhere?: boolean;
   onEngine?: (choice: EngineChoice) => void;
   onEffort: (effort: string) => void;
-  onFast: (on: boolean) => void;
+  onSpeed: (speed: string) => void;
   onReset: () => void;
   onStar: () => void;
   onClose: () => void;
@@ -86,7 +88,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
 
   useEffect(() => {
     if (!focusOnOpen) return;
-    const first = ['[role="slider"]:not([aria-disabled])', "[data-fast-toggle]:not(:disabled)", "button:not(:disabled)"];
+    const first = ['[role="slider"]:not([aria-disabled])', "[data-panel-speed]:not([aria-disabled])", "button:not(:disabled)"];
     for (const sel of first) {
       const el = ref.current?.querySelector<HTMLElement>(sel);
       if (!el) continue;
@@ -96,7 +98,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, when it opens
   }, [row.key]);
 
-  const slider = model.efforts.length > 1;
+  const slider = !setupElsewhere && model.efforts.length > 1;
+  const speeds = !setupElsewhere && model.speeds;
   // none set and no default known (a Claude Code model for a new Agent): the slider says so rather than sit on the lowest
   const effort = shownEffort(setup, model);
   const name = model.name;
@@ -110,7 +113,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
       aria-label={t("ui-modelpanel.setup_of", { model: name })}
       data-model-flyout
       className="fixed z-50 flex flex-col rounded-[12px] bg-surface p-3.5 pb-3 shadow-overlay transition-[top] duration-150 ease-out"
-      style={{ width: FLYOUT_WIDTH, maxWidth: "calc(100vw - 16px)", left: at?.left ?? -9999, top: at?.top ?? -9999, visibility: at ? undefined : "hidden" }}
+      style={{ width: FLYOUT_WIDTH, maxWidth: "calc(100vw - 16px)", left: at?.left, top: at?.top, visibility: at ? undefined : "hidden" }}
     >
       <div className="flex items-start gap-2">
         <span title={name} className={cx("line-clamp-2 min-w-0 flex-1 text-[14px] leading-[1.35] font-semibold break-words text-ink", model.custom && "font-mono")}>{name}</span>
@@ -130,27 +133,18 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
         {provider.name}
         {model.context ? ` · ${t("ui-modelpanel.context", { value: contextSize(model.context) })}` : ""}
       </div>
-      {(slider || model.fast) && (
-        <div className="flex items-center gap-2 pt-3.5">
-          {slider && <EffortSlider stops={model.efforts} value={effort} recommended={model.defaultEffort} labelOf={effortTitle} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />}
-          {model.fast && (
-            <button
-              type="button"
-              data-fast-toggle
-              disabled={disabled}
-              aria-pressed={Boolean(setup.fast)}
-              title={t("ui-modelpanel.fast")}
-              aria-label={t("ui-modelpanel.fast")}
-              onClick={() => onFast(!setup.fast)}
-              className={cx(
-                "ml-auto flex size-7 shrink-0 items-center justify-center rounded-full border transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-                setup.fast ? "border-transparent bg-fast-tint text-fast" : "border-line-strong text-ink-3 enabled:hover:bg-hover-2",
-              )}
-            >
-              <Icon name="bolt" size={14} className="fill-current" />
-            </button>
-          )}
+      {slider && (
+        <div className="pt-3.5">
+          <EffortSlider stops={model.efforts} value={effort} recommended={model.variants ? undefined : model.defaultEffort} unsetLabel={t("ui-modelpanel.effort_unset")} onChange={onEffort} disabled={disabled} />
         </div>
+      )}
+      {speeds && (
+        <div className="pt-2">
+          <SpeedSwitch options={speeds} speed={setup.speed} disabled={disabled} onSpeed={onSpeed} />
+        </div>
+      )}
+      {!setupElsewhere && (model.effortUnavailable || model.effortNote) && (
+        <p className="pt-2 text-label leading-[1.4] text-ink-3">{model.effortUnavailable || model.effortNote}</p>
       )}
       {extra && <div className="pt-2">{extra}</div>}
       <div role="group" aria-label={t("ui-modelpanel.engine")} className="pt-2">
@@ -164,7 +158,7 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
                 data-engine-choice={c.engine}
                 aria-pressed={c.own}
                 disabled={disabled || c.own || c.blocked !== undefined}
-                title={c.own ? agentName(c.engine) : c.blocked || t("ui-modelpanel.engine_via", { provider: c.provider.name })}
+                title={c.own ? agentName(c.engine, c.provider.engineLabel) : c.blocked || t("ui-modelpanel.engine_via", { provider: c.provider.name })}
                 onClick={() => onEngine?.(c)}
                 className={cx(
                   "flex h-[26px] max-w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-[12px] leading-4 transition-colors duration-150",
@@ -173,8 +167,8 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
                   !c.own && "disabled:cursor-not-allowed",
                 )}
               >
-                <AgentMark agent={c.engine} size={12} decorative className="shrink-0 text-ink-2" />
-                <span className="min-w-0 truncate">{agentName(c.engine)}</span>
+                <AgentMark agent={c.engine} label={c.provider.engineLabel} size={12} decorative className="shrink-0 text-ink-2" />
+                <span className="min-w-0 truncate">{agentName(c.engine, c.provider.engineLabel)}</span>
                 {c.own && <Icon name="check" size={12} stroke={2.5} className="shrink-0 text-ink" />}
               </button>
             ))}
@@ -183,9 +177,9 @@ export function Flyout({ rowEl, panelEl, row, setup, mode, starred, disabled, fo
           <div className="flex min-h-7 items-center gap-1 rounded-control bg-hover-2 pr-1">
             <span className="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 px-1 text-ink">
               <span aria-hidden className="inline-flex size-4 shrink-0 items-center justify-center">
-                <AgentMark agent={provider.engine} size={12} decorative className="text-ink-2" />
+                <AgentMark agent={provider.engine} label={provider.engineLabel} size={12} decorative className="text-ink-2" />
               </span>
-              <span className="min-w-0 truncate text-[12px] leading-4">{agentName(provider.engine)}</span>
+              <span className="min-w-0 truncate text-[12px] leading-4">{agentName(provider.engine, provider.engineLabel)}</span>
             </span>
             <Icon name="check" size={12} stroke={2.5} className="shrink-0 text-ink" />
           </div>

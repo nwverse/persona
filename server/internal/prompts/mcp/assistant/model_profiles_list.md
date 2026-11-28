@@ -1,4 +1,4 @@
-List editable model profiles, current profile, changed fields, rollback and recent audit events. Profiles contain model settings only, never credentials.
+List saved profiles, active profile, drift, rollback previews and audit events.{{template "shared/mcp_language" .}}
 
 ```json
 {

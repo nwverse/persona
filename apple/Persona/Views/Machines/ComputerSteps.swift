@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// What a tool that operates a Mac does, in words (#1323, #1343): the assistant's computer_run / computer_state and
 /// an agent's own Cua Driver MCP tools (mcp__cua-driver__click…). 「点 AC → 6 → × → 7 → =」 rather than its JSON.
@@ -7,6 +8,18 @@ nonisolated enum ComputerSteps {
     static func isComputerTool(_ name: String) -> Bool {
         let base = ToolPresentation.baseName(name)
         return base == "computer_run" || base == "computer_state" || isCuaTool(name)
+    }
+
+    /// The Mac a tool call operates: the one computer_* names (by id or name, in the chat's group of hubs), or the
+    /// chat's own for an agent's Cua Driver tools (mcp__cua-driver__click…).
+    static func machine(_ name: String, input: JSONValue, chat: MachineRef?, machines: [Machine]) -> MachineRef? {
+        let base = ToolPresentation.baseName(name)
+        if base == "computer_state" || base == "computer_run" {
+            guard let named = input["machine"]?.string, !named.isEmpty else { return nil }
+            let group = chat?.group ?? ""
+            return machines.first { $0.group == group && ($0.id == named || $0.name.caseInsensitiveCompare(named) == .orderedSame) }?.ref
+        }
+        return ComputerSteps.isCuaTool(name) ? chat : nil
     }
 
     static func isCuaTool(_ name: String) -> Bool {
@@ -170,7 +183,7 @@ nonisolated struct ComputerActivity: Hashable, Sendable {
             if item.kind == .toolResult, let id = item.toolUseID { resultAt[id] = item.ts ?? .distantPast }
             guard item.kind == .toolUse, let name = item.toolName, ComputerSteps.isComputerTool(name), let id = item.toolUseID else { continue }
             let input = item.toolInput ?? .object([:])
-            guard let ref = ScreenEntry.machine(name, input: input, chat: chat, machines: machines) else { return nil }
+            guard let ref = ComputerSteps.machine(name, input: input, chat: chat, machines: machines) else { return nil }
             let done = resultAt[id]
             return ComputerActivity(machine: ref, machineName: machines.first { $0.ref == ref }?.name ?? ref.id,
                                     step: ComputerSteps.describe(name, input: input), running: done == nil,

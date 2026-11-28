@@ -7,19 +7,26 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
-import type { ChannelDetail } from "../../lib/channels";
+import { ApiError, setPairedToken } from "../../lib/api";
+import type { ChannelDetail, ChannelTestResult } from "../../lib/channels";
 
-type Asked = { kind: "get" | "put" | "unbind" | "test"; body?: unknown; answer: (d: ChannelDetail) => void };
+type Asked = {
+  kind: "get" | "put" | "unbind" | "test";
+  body?: unknown;
+  answer: (d: ChannelDetail | ChannelTestResult) => void;
+  reject: (err: unknown) => void;
+};
 const hub = vi.hoisted(() => ({ asked: [] as Asked[] }));
 
 vi.mock("../../lib/channels", async (original) => ({
   ...(await original<typeof import("../../lib/channels")>()),
-  channelDetail: () => new Promise((resolve) => hub.asked.push({ kind: "get", answer: resolve })),
-  updateChannel: (_id: string, body: unknown) => new Promise((resolve) => hub.asked.push({ kind: "put", body, answer: resolve })),
-  unbindChannel: () => new Promise((resolve) => hub.asked.push({ kind: "unbind", answer: resolve })),
-  testChannel: () => new Promise((resolve) => hub.asked.push({ kind: "test", answer: resolve })),
+  channelDetail: () => new Promise((resolve, reject) => hub.asked.push({ kind: "get", answer: resolve, reject })),
+  updateChannel: (_id: string, body: unknown) => new Promise((resolve, reject) => hub.asked.push({ kind: "put", body, answer: resolve, reject })),
+  unbindChannel: () => new Promise((resolve, reject) => hub.asked.push({ kind: "unbind", answer: resolve, reject })),
+  testChannel: () => new Promise((resolve, reject) => hub.asked.push({ kind: "test", answer: resolve, reject })),
 }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
+import { toast } from "../../ui/atoms";
 import { ChannelPage } from "./Channels";
 
 vi.hoisted(() => {
@@ -31,19 +38,25 @@ vi.hoisted(() => {
 /** The hub's detail with features a and b on or off as given. */
 const detail = (a: boolean, b: boolean): ChannelDetail => ({
   id: "demo", name: "Demo", kind: "im", source: "builtin", installed: true, enabled: true, state: "connected",
-  account: { name: "owner" }, capabilities: {}, bind: "none", target: { kind: "main" },
+  account: { name: "owner" }, capabilities: { push: true }, bind: "none", target: { kind: "main" },
   features: [{ id: "a", title: "Feature A", on: a }, { id: "b", title: "Feature B", on: b }],
   waiting: { answers: 0, asks: 0 },
 });
 
 let host: HTMLDivElement;
 let root: Root;
+let onSettings: ReturnType<typeof vi.fn<(url: string) => void>>;
 const settle = async () => {
   for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
 };
-const answer = async (a: Asked | undefined, d: ChannelDetail) => {
+const answer = async (a: Asked | undefined, d: ChannelDetail | ChannelTestResult) => {
   expect(a).toBeTruthy();
   await act(async () => a!.answer(d));
+  await settle();
+};
+const fail = async (a: Asked | undefined, err: unknown) => {
+  expect(a).toBeTruthy();
+  await act(async () => a!.reject(err));
   await settle();
 };
 const sw = (label: string) => host.querySelector<HTMLButtonElement>(`button[role="switch"][aria-label="${label}"]`)!;
@@ -56,17 +69,138 @@ const byText = (text: string) =>
 const puts = () => hub.asked.filter((a) => a.kind === "put");
 
 beforeEach(async () => {
+  setPairedToken("");
   hub.asked = [];
+  vi.mocked(toast).mockReset();
+  onSettings = vi.fn<(url: string) => void>();
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
-  await act(async () => root.render(<ChannelPage id="demo" onBack={() => {}} onSettings={() => {}} />));
+  await act(async () => root.render(<ChannelPage id="demo" onBack={() => {}} onSettings={onSettings} />));
+  await act(async () => vi.dynamicImportSettled());
   await answer(hub.asked.shift(), detail(false, false));
   hub.asked = [];
 });
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+});
+
+it("offers a test message only when the connected channel can send without a reply", async () => {
+  expect(byText(t("settings-channels.send_test"))).toBeDefined();
+
+  const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-channels.refresh")}"]`)!;
+  await act(async () => refresh.click());
+  await answer(hub.asked.shift(), { ...detail(false, false), source: "plugin", capabilities: { format: "plain" } });
+
+  expect(byText(t("settings-channels.send_test"))).toBeUndefined();
+  expect(byText(t("settings-channels.check_connection"))).toBeUndefined();
+});
+
+it("offers Check connection for reply-only channels and displays the returned note", async () => {
+  const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-channels.refresh")}"]`)!;
+  await act(async () => refresh.click());
+  await answer(hub.asked.shift(), {
+    ...detail(false, false),
+    source: "plugin",
+    kind: "mention",
+    capabilities: { format: "plain", reply_only: true },
+  });
+
+  expect(byText(t("settings-channels.send_test"))).toBeUndefined();
+  const check = byText(t("settings-channels.check_connection"));
+  expect(check).toBeDefined();
+  expect(host.textContent).toContain(t("settings-channels.check_connection_footer"));
+
+  await act(async () => check.click());
+  await settle();
+  const req = hub.asked.shift();
+  expect(req?.kind).toBe("test");
+  const note = "Demo is connected and ready. It only replies to incoming messages, so no test message was sent.";
+  await answer(req, { ok: true, reply_only: true, note });
+
+  expect(toast).toHaveBeenCalledWith(note, "ok");
+  expect(host.querySelector('[role="status"]')?.textContent).toBe(note);
+});
+
+it("displays non-502 cannot_send error messages cleanly without gateway wording", async () => {
+  const sendTest = byText(t("settings-channels.send_test"));
+  await act(async () => sendTest.click());
+  await settle();
+  const req = hub.asked.shift();
+  expect(req?.kind).toBe("test");
+  const explanation = "This channel only replies to incoming messages.";
+  await fail(req, new ApiError(409, explanation, { code: "cannot_send", error: explanation }, true, undefined, "/channels/demo/test"));
+
+  expect(toast).toHaveBeenCalledWith(explanation, "error");
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe(explanation);
+  expect(host.textContent).not.toContain("502");
+});
+
+describe("ChannelPage target override hint", () => {
+  const refreshWith = async (next: ChannelDetail) => {
+    const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-channels.refresh")}"]`)!;
+    await act(async () => refresh.click());
+    await answer(hub.asked.shift(), next);
+  };
+
+  it("stays hidden when target_override is absent (inactive or older hub)", () => {
+    expect(host.textContent).not.toContain(t("settings-channels.target_override_topics"));
+    expect(host.textContent).not.toContain(t("settings-channels.target_override_threads"));
+    expect(host.textContent).not.toContain(t("settings-channels.target_override_generic"));
+    expect(byText(t("settings-channels.target_override_extension_settings"))).toBeUndefined();
+    expect(byText(t("settings-channels.target_override_settings"))).toBeUndefined();
+  });
+
+  it("explains where groups, topics and direct messages go in groups_and_topics mode", async () => {
+    await refreshWith({ ...detail(false, false), target_override: { mode: "groups_and_topics" } });
+    expect(host.textContent).toContain(t("settings-channels.target_override_groups_and_topics"));
+    expect(host.textContent).not.toContain(t("settings-channels.target_override_topics"));
+  });
+
+  it("shows the group topic routing hint with an extension settings shortcut when active", async () => {
+    await refreshWith({
+      ...detail(false, false),
+      source: "plugin",
+      plugin: "topic-ext",
+      settings_url: "settings/plugins/topic-ext",
+      target_override: { mode: "topics" },
+    });
+
+    expect(host.textContent).toContain(t("settings-channels.target_override_topics"));
+    const link = byText(t("settings-channels.target_override_extension_settings"));
+    expect(link).toBeDefined();
+    await act(async () => link.click());
+    expect(onSettings).toHaveBeenCalledWith("settings/plugins/topic-ext");
+  });
+
+  it("shows the thread routing hint without a settings link when settings_url is absent", async () => {
+    await refreshWith({
+      ...detail(false, false),
+      source: "plugin",
+      settings_url: undefined,
+      target_override: { mode: "threads" },
+    });
+
+    expect(host.textContent).toContain(t("settings-channels.target_override_threads"));
+    expect(byText(t("settings-channels.target_override_extension_settings"))).toBeUndefined();
+    expect(byText(t("settings-channels.target_override_settings"))).toBeUndefined();
+  });
+
+  it("uses the general settings label for built-in channels and falls back gracefully on unknown modes", async () => {
+    await refreshWith({
+      ...detail(false, false),
+      source: "builtin",
+      settings_url: "settings/connectors/feishu-bot",
+      target_override: { mode: "future_mode" },
+    });
+
+    expect(host.textContent).toContain(t("settings-channels.target_override_generic"));
+    const link = byText(t("settings-channels.target_override_settings"));
+    expect(link).toBeDefined();
+    await act(async () => link.click());
+    expect(onSettings).toHaveBeenCalledWith("settings/connectors/feishu-bot");
+  });
 });
 
 describe("ChannelPage saves", () => {
@@ -84,22 +218,18 @@ describe("ChannelPage saves", () => {
     expect(sw("Feature A").getAttribute("aria-checked")).toBe("true");
   });
 
-  it("reads again when a refresh was sent while a change was out", async () => {
+  it("waits for the write before reading a refresh requested during the change", async () => {
     await flip("Feature A");
     const change = hub.asked.shift();
-    // a refresh while the change is out: the hub serves its read before the change lands
     await act(async () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-channels.refresh")}"]`)!.click());
-    await settle();
-    const read = hub.asked.shift();
-    expect(read?.kind).toBe("get");
-    await answer(read, detail(false, true));
+    expect(hub.asked).toHaveLength(0);
     await answer(change, detail(true, false));
-    // the change's answer is older than the read, so it is not shown; the page asks again
-    expect(sw("Feature B").getAttribute("aria-checked")).toBe("true");
+    expect(sw("Feature A").getAttribute("aria-checked")).toBe("true");
     const again = hub.asked.shift();
     expect(again?.kind).toBe("get");
     await answer(again, detail(true, true));
     expect(sw("Feature A").getAttribute("aria-checked")).toBe("true");
+    expect(sw("Feature B").getAttribute("aria-checked")).toBe("true");
     expect(sw("Feature A").disabled).toBe(false);
     expect(hub.asked).toHaveLength(0);
   });
@@ -145,5 +275,28 @@ describe("ChannelPage saves", () => {
     expect(hub.asked.map((a) => a.kind)).toEqual(["unbind"]);
     await answer(hub.asked.shift(), { ...detail(true, false), state: "not_connected", account: undefined });
     expect(sw("Feature A").disabled).toBe(false);
+  });
+
+  it("closes open unbind and target picker dialogs when switching to another channel", async () => {
+    // Open the unbind dialog on demo, then switch to another channel while mounted.
+    await act(async () => byText(t("settings-channels.unbind")).click());
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    await act(async () => root.render(<ChannelPage id="other" onBack={() => {}} onSettings={onSettings} />));
+    await answer(hub.asked.shift(), { ...detail(false, false), id: "other", name: "Other" });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    // Open the target picker on other, then switch back to demo while mounted.
+    const targetRow = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      b.textContent?.includes(t("settings-channels.target_row")),
+    )!;
+    await act(async () => targetRow.click());
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    await act(async () => root.render(<ChannelPage id="demo" onBack={() => {}} onSettings={onSettings} />));
+    await answer(hub.asked.shift(), detail(false, false));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 });

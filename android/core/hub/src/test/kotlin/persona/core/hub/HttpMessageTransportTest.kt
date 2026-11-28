@@ -9,6 +9,7 @@ import persona.core.contracts.Session
 import persona.core.contracts.api.MessageRequest
 import persona.core.contracts.api.MessageEvidence
 import persona.core.contracts.api.MessageTransportResult
+import persona.core.contracts.api.MessageVia
 import java.net.InetAddress
 import java.security.MessageDigest
 import java.util.Base64
@@ -177,8 +178,23 @@ class HttpMessageTransportTest {
                     assertEquals(MessageEvidence.Receipt(MessageTransportResult.Accepted), transport.reconcile(message, 0))
                     repeat(2) { withTimeout(5000) { requests.receive() } }
 
+                    val heldBody = Base64.getEncoder().encodeToString("""{"delivered":"later"}""".toByteArray())
+                    val heldReceipt = """{"state":"done","result":{"status":202,"body":"$heldBody"}}"""
+                    val heldEvidence = MessageEvidence.Receipt(MessageTransportResult.Held)
+                    for ((items, expectation) in listOf(
+                        MockResponse().setResponseCode(503) to heldEvidence,
+                        MockResponse().setBody("""{"items":[{"id":"other","role":"user","text":"hello","ts":"2026-11-03T09:00:00Z"}]}""") to heldEvidence,
+                        MockResponse().setBody("""{"items":[{"id":"echo","role":"user","client_msg_id":"stable-id"}]}""") to MessageEvidence.Shown,
+                    )) {
+                        responses.send(MockResponse().setBody(heldReceipt))
+                        responses.send(items)
+                        assertEquals(expectation, transport.reconcile(message, 0))
+                        repeat(2) { withTimeout(5000) { requests.receive() } }
+                    }
+
                     val results = listOf(
                         MockResponse().setBody("""{"ok":true}""") to MessageTransportResult.Accepted,
+                        MockResponse().setResponseCode(202).setBody("""{"delivered":"later"}""") to MessageTransportResult.Held,
                         MockResponse().setResponseCode(202).setBody("""{"state":"pending"}""") to MessageTransportResult.NoReceipt,
                         MockResponse().setResponseCode(202).setBody("""{"state":"unknown"}""") to MessageTransportResult.NoReceipt,
                         MockResponse().setResponseCode(409).setBody("""{"error":"draft","code":"input_draft","delivered":"none","retryable":false}""") to
@@ -200,7 +216,14 @@ class HttpMessageTransportTest {
                         assertFalse("launcher" in body)
                         assertFalse("model" in body)
                         assertNull("only the message that carries a launcher switch out says so", body["apply_switch"])
+                        assertNull("an ordinary typed message has no provenance mark", body["via"])
                     }
+                    responses.send(MockResponse().setResponseCode(202).setBody(
+                        """{"delivered":"later","undelivered":{"id":"stable-id","text":"hello","at":"2026-11-17T10:00:00Z","state":"waiting"}}"""))
+                    assertTrue("202 delivered=later is kept by the assistant, not accepted as delivered",
+                        transport.send(message) is MessageTransportResult.Kept)
+                    assertEquals("/api/v1/sessions/machine/session%2Fencoded/messages",
+                        (withTimeout(5000) { requests.receive() }.path).zhAny())
                     responses.send(MockResponse().setBody("""{"ok":true}"""))
                     assertEquals(MessageTransportResult.Accepted,
                         transport.send(message.copy(launcher = "runtime", model = "model-id")))
@@ -213,6 +236,12 @@ class HttpMessageTransportTest {
                     assertEquals(MessageTransportResult.Accepted, transport.send(message.copy(applySwitch = true)))
                     val switching = JsonCodec.parseToJsonElement(withTimeout(5000) { requests.receive() }.body.readUtf8()).jsonObject
                     assertEquals(JsonPrimitive(true), switching["apply_switch"])
+                    for (via in listOf(MessageVia.Share, MessageVia.Intent, MessageVia.Card)) {
+                        responses.send(MockResponse().setBody("""{"ok":true}"""))
+                        assertEquals(MessageTransportResult.Accepted, transport.send(message.copy(via = via)))
+                        val marked = JsonCodec.parseToJsonElement(withTimeout(5000) { requests.receive() }.body.readUtf8()).jsonObject
+                        assertEquals(via, marked["via"]?.jsonPrimitive?.content)
+                    }
                     // A first Codex send returns the new thread before it enters the session-list window.
                     val firstReply = """{"ok":true,"session":{"machine_id":"","session_id":"thread","agent":"codex","pane_id":"pane"}}"""
                     responses.send(MockResponse().setBody(firstReply))
@@ -237,6 +266,98 @@ class HttpMessageTransportTest {
                         transport.send(message.copy(scope = HubScope("test-hub", "other-generation")))
                         fail("Expected scope mismatch")
                     } catch (_: IllegalArgumentException) { }
+                } finally { jobs.cancel() }
+            }
+        }
+    }
+
+    @Test fun reconcileChecksTranscriptAndReportsFinalizedUnknownReceipts() = runBlocking {
+        val certificate = HeldCertificate.Builder().commonName("example.com").build()
+        val fingerprint = Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256").digest(certificate.certificate.publicKey.encoded))
+        val ready = CompletableDeferred<Unit>()
+        val responses = Channel<MockResponse>(Channel.UNLIMITED)
+        val requests = Channel<RecordedRequest>(Channel.UNLIMITED)
+        val jobs = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        MockWebServer().use { server ->
+            server.useHttps(HandshakeCertificates.Builder().heldCertificate(certificate).build().sslSocketFactory(), false)
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse = when (request.requestUrl!!.encodedPath) {
+                    "/api/v1/health" -> MockResponse().setBody("""{"ok":true,"hub_id":"test-hub"}""")
+                    "/api/v1/ws" -> MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            webSocket.send("""{"type":"hello","hub_id":"test-hub","features":["client_ops"]}""")
+                        }
+                    })
+                    else -> {
+                        requests.trySend(request)
+                        runBlocking { responses.receive() }
+                    }
+                }
+            }
+            server.start(InetAddress.getLoopbackAddress(), 0)
+            val origin = server.url("/").newBuilder().host(InetAddress.getLoopbackAddress().hostAddress!!).build().toString()
+            lateinit var transport: HttpMessageTransport
+            OkHttpHubConnection(HubConnectionConfig("test-hub", fingerprint, "test-token",
+                listOf(Endpoint(origin, "lan")), "test"), HubNetwork("initial", available = false),
+                onReady = { transport.onReady(); ready.complete(Unit) }).use { connection ->
+                try {
+                    val pairing = HubScope("test-hub", "generation")
+                    transport = HttpMessageTransport(pairing, connection, jobs)
+                    val message = MessageRequest(pairing, SessionKey("machine", "session"), "hello", "stable-id")
+                    connection.updateNetwork(HubNetwork("online"))
+                    withTimeout(5000) { ready.await(); transport.readyToSend.first { it } }
+
+                    // 1. Saved unknown receipt with transcript match converges to Shown.
+                    val unknownBody = Base64.getEncoder().encodeToString(
+                        """{"code":"send_failed","delivered":"unknown","error":"uncertain"}""".toByteArray())
+                    responses.send(MockResponse().setBody("""{"state":"unknown","result":{"status":502,"body":"$unknownBody"}}"""))
+                    responses.send(MockResponse().setBody("""{"items":[{"id":"e1","role":"user","kind":"text","text":"hello","client_msg_id":"stable-id"}]}"""))
+                    assertEquals(MessageEvidence.Shown, transport.reconcile(message, 0))
+                    repeat(2) { withTimeout(5000) { requests.receive() } }
+
+                    // 2. Saved unknown receipt without transcript match returns the decoded HubError receipt.
+                    responses.send(MockResponse().setBody("""{"state":"unknown","result":{"status":502,"body":"$unknownBody"}}"""))
+                    responses.send(MockResponse().setBody("""{"items":[]}"""))
+                    assertEquals(
+                        MessageEvidence.Receipt(MessageTransportResult.HubError("send_failed", "unknown", "uncertain", false)),
+                        transport.reconcile(message, 0),
+                    )
+                    repeat(2) { withTimeout(5000) { requests.receive() } }
+
+                    // 3. Recovered unknown op (result=null) without transcript match reports Receipt(NoReceipt), not null.
+                    responses.send(MockResponse().setBody("""{"state":"unknown","result":null}"""))
+                    responses.send(MockResponse().setBody("""{"items":[]}"""))
+                    assertEquals(MessageEvidence.Receipt(MessageTransportResult.NoReceipt), transport.reconcile(message, 0))
+                    repeat(2) { withTimeout(5000) { requests.receive() } }
+
+                    // 4. Recovered unknown op (result=null) with transcript match converges to Shown.
+                    responses.send(MockResponse().setBody("""{"state":"unknown","result":null}"""))
+                    responses.send(MockResponse().setBody("""{"items":[{"id":"e2","role":"user","kind":"text","text":"hello","ts":"2026-11-03T09:00:00Z"}]}"""))
+                    assertEquals(MessageEvidence.Shown, transport.reconcile(message, 0))
+                    repeat(2) { withTimeout(5000) { requests.receive() } }
+
+                    // 5. Transcript read error does not drop a finalized unknown receipt.
+                    responses.send(MockResponse().setBody("""{"state":"unknown","result":null}"""))
+                    responses.send(MockResponse().setResponseCode(503))
+                    assertEquals(MessageEvidence.Receipt(MessageTransportResult.NoReceipt), transport.reconcile(message, 0))
+                    repeat(2) { withTimeout(5000) { requests.receive() } }
+
+                    // 6. Saved unknown receipt with delivered:"none" returns the receipt directly without hitting /items.
+                    val notDeliveredBody = Base64.getEncoder().encodeToString(
+                        """{"code":"node_unreachable","delivered":"none","retryable":true,"error":"machine offline"}""".toByteArray())
+                    responses.send(MockResponse().setBody("""{"state":"unknown","result":{"status":503,"body":"$notDeliveredBody"}}"""))
+                    assertEquals(
+                        MessageEvidence.Receipt(MessageTransportResult.HubError("node_unreachable", "none", "machine offline", true)),
+                        transport.reconcile(message, 0),
+                    )
+                    assertEquals("/api/v1/ops/stable-id", withTimeout(5000) { requests.receive() }.path)
+
+                    // 7. Pending op remains null so retries keep the same opId.
+                    responses.send(MockResponse().setBody("""{"state":"pending"}"""))
+                    responses.send(MockResponse().setBody("""{"items":[]}"""))
+                    assertNull(transport.reconcile(message, 0))
+                    repeat(2) { withTimeout(5000) { requests.receive() } }
                 } finally { jobs.cancel() }
             }
         }

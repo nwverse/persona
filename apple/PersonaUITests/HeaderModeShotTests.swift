@@ -81,7 +81,7 @@ final class HeaderModeShotTests: XCTestCase {
             sleep(1)
             shot("menu-can-allow", scheme)
             assertMenuTitle()
-            menuItem(["全部放行", "Allow Everything"]).tap() // i18n-ignore: the test runs in zh-Hans
+            menuItem(["完全访问", "Full access"]).tap() // i18n-ignore: the test runs in zh-Hans
             XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "going into Allow Everything asks first")
             shot("confirm-allow", scheme)
             cancelAlert()
@@ -93,7 +93,7 @@ final class HeaderModeShotTests: XCTestCase {
             sleep(1)
             shot("menu-in-allow", scheme)
             assertMenuTitle()
-            menuItem(["只做计划", "Plan Only"]).tap() // i18n-ignore: the test runs in zh-Hans
+            menuItem(["计划模式", "Plan mode"]).tap() // i18n-ignore: the test runs in zh-Hans
             XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "leaving Allow Everything with no way back asks first")
             shot("confirm-leave", scheme)
             cancelAlert()
@@ -228,19 +228,7 @@ final class HeaderModeShotTests: XCTestCase {
         let title = app.descendants(matching: .any)[folded ? "chat.compactTitle" : "chat.title"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 20), "the chat did not open: \(session)")
         sleep(folded ? 5 : 3) // folded 3 s after it opens; the backlog is in and the header has settled
-        dismissIconNote()
-    }
-
-    /// The app icon follows the color scheme (`AppIconChoice`), and the system says so in an alert over the page when a
-    /// launch switches it: closed before the shot.
-    @MainActor private func dismissIconNote() {
-        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        guard board.alerts.firstMatch.waitForExistence(timeout: 2) else { return }
-        for label in ["OK", "好"] where board.alerts.buttons[label].exists { // i18n-ignore: the system's own button
-            board.alerts.buttons[label].tap()
-            sleep(1)
-            return
-        }
+        HomeScreen.dismissIconNote()
     }
 
     /// A menu row by its first words: the modes are switches, which the system may list as buttons, switches or menu items.

@@ -1,0 +1,184 @@
+{
+  "name": "kb_update",
+  "description": "Write settled facts to the KB. Projects: the fields below (dirs: `\u003cmachine\u003e:\u003cpath\u003e`, linking Agents); merge_into folds a duplicate, unmerge reverses it, each alone in its call. Other kinds take annotations; recordings (phone-owned) only tags, pinned, projects; topics only name, note, aliases, tags. Explicit tags beat automatic ones. remove_* (ids) unlinks only that link, for good. At the user's word only: parent (\"\" = top level); milestone adds (no id), edits or removes (id, remove) a flag; its result has the undo. project_mode/source_urls: reference-only keeps pointers and aliases, details stay at the source; full, alone, restores detail writes.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "kind",
+      "id"
+    ],
+    "properties": {
+      "kind": {
+        "type": "string",
+        "enum": [
+          "projects",
+          "chats",
+          "people",
+          "docs",
+          "meetings",
+          "events",
+          "recordings",
+          "topics"
+        ]
+      },
+      "id": {
+        "type": "string",
+        "description": "id, or a project's name (created when new)"
+      },
+      "merge_into": {
+        "type": "string",
+        "description": "projects: fold into this target (slug or name)"
+      },
+      "unmerge": {
+        "type": "boolean",
+        "description": "projects: undo its merge"
+      },
+      "parent": {
+        "type": "string"
+      },
+      "milestone": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string",
+            "description": "YYYY-MM-DD"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "accepted",
+              "not_accepted"
+            ]
+          },
+          "remove": {
+            "type": "boolean"
+          }
+        }
+      },
+      "name": {
+        "type": "string"
+      },
+      "project_kind": {
+        "type": "string",
+        "enum": [
+          "short",
+          "long"
+        ]
+      },
+      "project_mode": {
+        "type": "string",
+        "enum": [
+          "full",
+          "reference-only"
+        ],
+        "description": "user-directed"
+      },
+      "source_urls": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "user-directed; replace; empty list clears"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused",
+          "done"
+        ]
+      },
+      "goal": {
+        "type": "string"
+      },
+      "my_role": {
+        "type": "string"
+      },
+      "note": {
+        "type": "string"
+      },
+      "importance": {
+        "type": "string",
+        "enum": [
+          "P0",
+          "P1",
+          "P2",
+          "P3"
+        ]
+      },
+      "relevance": {
+        "type": "integer"
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "summary": {
+        "type": "string",
+        "description": "Markdown, replaces summary.md"
+      },
+      "log": {
+        "type": "string",
+        "description": "one line appended to a project's timeline"
+      },
+      "aliases": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "remove_aliases": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "projects: aliases that are not this project's (another's name, too generic)"
+      },
+      "chats": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "remove_chats": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "people": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "remove_people": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "dirs": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "projects": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

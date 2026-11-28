@@ -62,12 +62,47 @@ class HttpMessageTransport(
             } catch (failure: HubFailure) {
                 if (failure.status == 404) null else throw failure
             }
-            if (receipt?.get("state")?.jsonPrimitive?.content in setOf("done", "failed", "unknown")) {
+            val opState = receipt?.get("state")?.jsonPrimitive?.contentOrNull
+            if (opState in setOf("done", "failed", "unknown")) {
                 val saved = receipt?.get("result") as? JsonObject
                 val status = saved?.get("status")?.jsonPrimitive?.intOrNull
                 val body = saved?.get("body")?.jsonPrimitive?.contentOrNull
+                if (opState == "unknown") {
+                    val result = if (status != null && body != null) {
+                        decodeResult(request.session, status, String(Base64.getDecoder().decode(body), Charsets.UTF_8))
+                    } else {
+                        MessageTransportResult.NoReceipt
+                    }
+                    // When the saved error proves nothing reached the node, return it directly without fuzzy transcript matching.
+                    if (result is MessageTransportResult.HubError &&
+                        (result.delivered == "none" || (result.code == "assistant_offline" && result.delivered == null))) {
+                        return MessageEvidence.Receipt(result)
+                    }
+                    // Otherwise check the transcript first so messages that already landed converge to Shown;
+                    // a recovered row with result=null still reports Receipt(NoReceipt) rather than null.
+                    val shown = try {
+                        transcriptEvidence(request, createdAt, allowTextMatch)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    return shown ?: MessageEvidence.Receipt(result)
+                }
                 if (status != null && body != null) {
                     val result = decodeResult(request.session, status, String(Base64.getDecoder().decode(body), Charsets.UTF_8))
+                    if (result == MessageTransportResult.Held) {
+                        // A failed follow-up read does not undo the manager's receipt. Only an exact
+                        // transcript echo can promote it to Agent delivery.
+                        val shown = try {
+                            transcriptEvidence(request, createdAt, false)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            null
+                        }
+                        return shown ?: MessageEvidence.Receipt(result)
+                    }
                     if (result != MessageTransportResult.Accepted) return MessageEvidence.Receipt(result)
                     // A successful receipt still needs the transcript to replace the local bubble: an item tagged with
                     // this id, or (older hubs; Claude Code keeps its own id for the message) one with its words.
@@ -93,6 +128,12 @@ class HttpMessageTransport(
         if (reply?.get("state")?.jsonPrimitive?.contentOrNull in setOf("pending", "unknown"))
             return MessageTransportResult.NoReceipt
         if (status in 200..299) {
+            if (reply?.get("delivered")?.jsonPrimitive?.contentOrNull == "later") {
+                val kept = reply?.get("undelivered") as? JsonObject
+                // An offline Agent names its computer. Assistant conversations do not; a bare replay stays Held as upstream.
+                return if (kept == null || kept["computer"] != null) MessageTransportResult.Held
+                    else MessageTransportResult.Kept
+            }
             onAccepted(target, reply)
             return MessageTransportResult.Accepted
         }
@@ -131,6 +172,7 @@ class HttpMessageTransport(
             request.launcher?.let { put("launcher", it) }
             request.model?.let { put("model", it) }
             if (request.applySwitch) put("apply_switch", true)
+            request.via?.let { put("via", it) }
         }.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         return try {
             // Non-2xx replies throw HubFailure (handled below); a 2xx body may still be a pending receipt.

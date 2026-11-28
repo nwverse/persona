@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -58,6 +58,7 @@ func (w *botWorld) takenFrom(t *testing.T) (id, from string) {
 // owner action, is kept as a source and audited (never the words), and the group does not become a chat the bot may send
 // into or one that is read.
 func TestAIElsewhereOwnerCommandIsHandedMarked(t *testing.T) {
+	needsLarkModule(t)
 	for _, c := range []struct{ name, text string }{
 		{"plain", "@_user_1 /ai 查一下发版说明"},
 		{"upper case", "@_user_1 /AI 查一下发版说明"},
@@ -122,9 +123,11 @@ func (w *botWorld) audited(t *testing.T, action string, check func(detail string
 // 2. Anything short of "the owner, @-ing the bot, starting with /ai" does nothing and says nothing: no reply, no
 // reaction, nothing handed over, nothing kept.
 func TestAIElsewhereEverythingElseIsDroppedSilently(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
+	w.botStarted(t)
 	total := w.api.total()
 	otherAt := []map[string]any{{"key": "@_user_1", "id": map[string]any{"open_id": "ou_someone"}, "name": "Someone"}}
 	for _, c := range []struct {
@@ -169,6 +172,7 @@ func TestAIElsewhereEverythingElseIsDroppedSilently(t *testing.T) {
 
 // 3. The bot's own id is read when start-up did not get it, so its @ is still told from anyone else's.
 func TestAIElsewhereReadsTheBotIDWhenStartUpDidNot(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.h.bots.mu.Lock()
@@ -185,6 +189,7 @@ func TestAIElsewhereReadsTheBotIDWhenStartUpDidNot(t *testing.T) {
 // goes; a send into the group, a reply under any other message in it, a card, a reply that names another chat, and a
 // long one are all refused, and a reply whose original is gone is not turned into a message of the group.
 func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -192,7 +197,7 @@ func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.
 	eventually(t, 5*time.Second, "taken", func() bool { return len(w.handed()) == 1 })
 	w.api.inChat("om_src", askChat)
 	w.api.inChat("om_other", askChat)
-	card := feishubot.NewCard("t", "green", "a").Markdown("a card").JSON()
+	card := botcard.NewCard("t", "green", "a").Markdown("a card").JSON()
 
 	// Refused, and nothing reaches Feishu for any of them.
 	before := w.api.total()
@@ -244,7 +249,7 @@ func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.
 	w.api.rejectReply = 230011
 	w.api.mu.Unlock()
 	before = w.api.total()
-	if err := w.sendErr(assistantwire.FeishuText, map[string]any{"text": "结论三", "reply_to": "om_src_gone", "chat_id": askChat}); !feishubot.MessageGone(err) {
+	if err := w.sendErr(assistantwire.FeishuText, map[string]any{"text": "结论三", "reply_to": "om_src_gone", "chat_id": askChat}); !botcard.MessageGone(err) {
 		t.Fatalf("a reply whose original is gone: %v", err)
 	}
 	if sent := w.api.since(before); strings.Contains(sent, "receive_id_type=chat_id") || strings.Contains(sent, askChat) {
@@ -255,16 +260,17 @@ func TestAIElsewhereTheGroupStaysClosedExceptForAReplyUnderTheSource(t *testing.
 // The hint a group gets when nothing is opted in, the reaction and the like are the assistant's replies; here only that
 // a source is bounded and that it goes with the owner.
 func TestAISourcesAreBoundedAndGoWithTheOwner(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	for i := range botAISourcesKeep + 5 {
-		w.h.takeAISource(askChat, fmt.Sprintf("om_s%d", i))
+		w.h.takeAISource(askChat, fmt.Sprintf("om_s%d", i), "")
 	}
 	set := w.settings()
 	if len(set.AISources) != botAISourcesKeep || set.aiSource("om_s0", time.Now()) != nil || set.aiSource(fmt.Sprintf("om_s%d", botAISourcesKeep+4), time.Now()) == nil {
 		t.Fatalf("%d sources kept; first one still there: %v", len(set.AISources), set.aiSource("om_s0", time.Now()) != nil)
 	}
-	w.h.takeAISource(askChat, fmt.Sprintf("om_s%d", botAISourcesKeep+4)) // again: nothing changes
+	w.h.takeAISource(askChat, fmt.Sprintf("om_s%d", botAISourcesKeep+4), "") // again: nothing changes
 	if got := len(w.settings().AISources); got != botAISourcesKeep {
 		t.Fatalf("%d after taking one twice", got)
 	}
@@ -272,7 +278,7 @@ func TestAISourcesAreBoundedAndGoWithTheOwner(t *testing.T) {
 	w.h.bots.mu.Lock()
 	w.h.bots.set.AISources[0].At = time.Now().Add(-botAISourcesKeepFor - time.Hour)
 	w.h.bots.mu.Unlock()
-	w.h.takeAISource(askChat, "om_new")
+	w.h.takeAISource(askChat, "om_new", "")
 	if set := w.settings(); set.aiSource("om_new", time.Now()) == nil || len(set.AISources) != botAISourcesKeep {
 		t.Fatalf("old sources were not dropped: %d", len(set.AISources))
 	}
@@ -285,7 +291,7 @@ func TestAISourcesAreBoundedAndGoWithTheOwner(t *testing.T) {
 		t.Fatalf("unpaired, the sources stay: %d / %d", len(w.settings().AISources), len(saved.AISources))
 	}
 	// And the settings can never carry a reply rule for a source with no owner.
-	if _, found, _ := aiSourceReply(FeishuBotSettings{AISources: []BotAISource{{ChatID: askChat, MessageID: "om_a"}}}, "", "om_a", "x", time.Now()); found {
+	if _, found, _ := aiSourceReply(FeishuBotSettings{AISources: []BotAISource{{ChatID: askChat, MessageID: "om_a"}}}, "", "om_a", "x", time.Now(), false); found {
 		t.Fatal("a source counts with no owner")
 	}
 }
@@ -293,6 +299,7 @@ func TestAISourcesAreBoundedAndGoWithTheOwner(t *testing.T) {
 // The home topic group: the one marked, else the first opted in; /topics home marks (opting in when need be) and moves
 // it; /topics off takes the mark with the group; the app's list keeps it unless it says otherwise; two homes are refused.
 func TestHomeTopicGroup(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	if got := w.settings().homeChat(); got != "" {
@@ -375,6 +382,7 @@ func TestHomeTopicGroup(t *testing.T) {
 
 // A rich-text "@bot /ai …" (a post message: the @ is a node of its own) is taken like a text one.
 func TestAIElsewhereTakesARichTextCommand(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	post := `{"title":"","content":[[{"tag":"at","user_id":"@_user_1","user_name":"Persona"},{"tag":"text","text":" /ai 查一下发版说明"}]]}`
@@ -395,6 +403,7 @@ func TestAIElsewhereTakesARichTextCommand(t *testing.T) {
 
 // What is not an "/ai" is not asked about the bot at all: a group's ordinary messages cost no call to Feishu.
 func TestAIElsewhereAsksNothingForOrdinaryMessages(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.h.bots.mu.Lock()
@@ -415,6 +424,7 @@ func TestAIElsewhereAsksNothingForOrdinaryMessages(t *testing.T) {
 
 // A new App ID (or any restart of the connection) forgets the bot's own id: the old one must not tell the new bot's @.
 func TestBotRestartForgetsItsOwnID(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.h.bots.mu.Lock()
@@ -443,6 +453,7 @@ func TestBotRestartForgetsItsOwnID(t *testing.T) {
 // A source takes at most botSourceReplies replies, however they end, and no reply once it is older than botAISourcesKeepFor
 // (the usual rules refuse it then); the count is kept with the settings.
 func TestAISourceReplyCapAndExpiry(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.send(t, askEvent("om_cap", "ou_me", "@_user_1 /ai 查一下", atBot, nil))
@@ -495,6 +506,7 @@ func TestAISourceReplyCapAndExpiry(t *testing.T) {
 // An emoji goes only on a message of the owner's private chat, of a group opted in, or one an "/ai" was taken from; on
 // a message of any other chat it is refused (and so is taking one away), and nothing reaches Feishu for it.
 func TestReactionsOnlyWhereTheBotMayWrite(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
@@ -535,5 +547,55 @@ func TestReactionsOnlyWhereTheBotMayWrite(t *testing.T) {
 	}
 	if err := w.sendErr(assistantwire.FeishuReact, map[string]any{"emoji": "OnIt"}); err == nil {
 		t.Fatal("a reaction with no message")
+	}
+}
+
+func TestSourceAnswerTargetsOnlyTheOriginalRequest(t *testing.T) {
+	needsLarkModule(t)
+	w := newBotWorld(t)
+	w.pair(t)
+	w.send(t, askEvent("om_answer_source", "ou_me", "@_user_1 /ai Check the release notes", atBot, nil))
+	eventually(t, 5*time.Second, "taken", func() bool { return len(w.handed()) == 1 })
+	text := "Final answer\n\n- Item one\n- Item two"
+	params := map[string]any{"chat_id": askChat, "reply_to": "om_answer_source", "text": text, "full_answer": true, "uuid": "sr:answer"}
+	before := w.api.total()
+	assertDenied := func(p map[string]any) {
+		t.Helper()
+		var re *rpc.Error
+		if err := w.sendErr(assistantwire.FeishuText, p); !errors.As(err, &re) || re.Code != assistantwire.CodeChatDenied {
+			t.Fatalf("expected a refused send, got %v", err)
+		}
+	}
+	assertDenied(params)
+	if code, _ := w.do(t, "PUT", "/api/v1/bots/feishu", `{"source_report_full_reply":true}`); code != 200 {
+		t.Fatal(code)
+	}
+	assertDenied(map[string]any{"chat_id": askChat, "text": text, "full_answer": true})
+	assertDenied(map[string]any{"chat_id": askChat, "reply_to": "om_other", "text": text, "full_answer": true})
+	assertDenied(map[string]any{"chat_id": topicOther, "reply_to": "om_answer_source", "text": text, "full_answer": true})
+	if sent := w.api.since(before); strings.Contains(sent, "POST /open-apis/im/v1/messages") {
+		t.Fatalf("sent an unauthorized answer: %s", sent)
+	}
+	if err := w.sendErr(assistantwire.FeishuText, params); err != nil {
+		t.Fatal(err)
+	}
+	w.api.find(t, "POST /open-apis/im/v1/messages/om_answer_source/reply", `"msg_type":"post"`, `"uuid":"sr:answer"`, "- Item two")
+	if code, _ := w.do(t, "PUT", "/api/v1/bots/feishu", `{"source_report_full_reply":false}`); code != 200 {
+		t.Fatal(code)
+	}
+	assertDenied(params)
+	if code, _ := w.do(t, "PUT", "/api/v1/bots/feishu", `{"source_report_full_reply":true}`); code != 200 {
+		t.Fatal(code)
+	}
+
+	w.api.mu.Lock()
+	w.api.rejectReply = 230011 // the original was withdrawn
+	w.api.mu.Unlock()
+	before = w.api.total()
+	if err := w.sendErr(assistantwire.FeishuText, params); !botcard.MessageGone(err) {
+		t.Fatalf("expected a missing parent error, got %v", err)
+	}
+	if sent := w.api.since(before); strings.Contains(sent, "receive_id_type=chat_id") {
+		t.Fatalf("the full answer detoured to the group: %s", sent)
 	}
 }

@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { errorText } from "../../lib/api";
-import { ago } from "../../lib/format";
-import { extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type ExtensionUpgrade, type HubExtensionDetail } from "../../lib/extensions";
+import { ago, safeWebURL } from "../../lib/format";
+import { extensionTypeText, extensionUpgrades, sourceText, upgradeAction, upgradeDetail, upgradeNote, type ExtensionUpgrade, type HubExtensionDetail } from "../../lib/extensions";
 import { getCatalog, marketOf, type CatalogItem } from "../../lib/extension-market";
 import { toolText } from "../../lib/extension-auth";
 import { formatNumber, t } from "../../i18n";
@@ -10,7 +10,7 @@ import { Button } from "../../ui/atoms";
 import { Group, Row, Switch, SettingsHint, SettingsSection } from "./SettingsParts";
 
 /** Host-owned lifecycle UI for every extension. Only the configuration slot contains extension-supplied fields/pages. */
-export function ExtensionSettingsPage({ detail: d, manager, busy, offline = false, configuration, information, saveBar, memberNames, onEnabled, onAutoUpgrade, onUpgrade, onUninstall, onChecked }: {
+export function ExtensionSettingsPage({ detail: d, manager, busy, offline = false, configuration, configurationTitle = true, information, saveBar, memberNames, onEnabled, onAutoUpgrade, onUpgrade, onUninstall, onChecked }: {
   detail: HubExtensionDetail;
   /** A pack's members by their installed names (#4122). */
   memberNames?: Record<string, string>;
@@ -18,6 +18,8 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
   busy: boolean;
   offline?: boolean;
   configuration: ReactNode;
+  /** The configuration's heading shows: false when every group in it has a heading of its own (#8853). */
+  configurationTitle?: boolean;
   information?: ReactNode;
   saveBar?: ReactNode;
   onEnabled: (on: boolean) => void;
@@ -45,7 +47,7 @@ export function ExtensionSettingsPage({ detail: d, manager, busy, offline = fals
           </Row>
         </Group>
       </section>
-      <SettingsSection name="configuration" title={t("settings-extensions.configuration_title")}>
+      <SettingsSection name="configuration" title={t("settings-extensions.configuration_title")} showTitle={configurationTitle}>
         {configuration}
         {saveBar}
       </SettingsSection>
@@ -78,7 +80,7 @@ export function enableFooter(d: HubExtensionDetail, names: Record<string, string
 }
 
 /** Capabilities follow the full-rights market routes, not a manifest's configuration or arbitrary source URL. */
-function lifecycleReason(d: HubExtensionDetail, removing: boolean): string {
+export function lifecycleReason(d: HubExtensionDetail, removing: boolean): string {
   if (d.source === "builtin") return t(removing ? "settings-extensions.builtin_uninstall" : "settings-extensions.builtin_updates");
   if (d.read_only || d.source === "hub.json" || d.source === "dev" || d.attached || d.source === "installed") {
     return t(removing ? "settings-extensions.external_uninstall" : "settings-extensions.external_updates");
@@ -86,7 +88,7 @@ function lifecycleReason(d: HubExtensionDetail, removing: boolean): string {
   return t("settings-extensions.action_unknown");
 }
 
-function Updates({ d, manager, busy, market, canCheck, automatic, reason, onToggle, onUpgrade, onChecked }: {
+export function Updates({ d, manager, busy, market, canCheck, automatic, reason, onToggle, onUpgrade, onChecked }: {
   d: HubExtensionDetail; manager?: string; busy: boolean; market: string; canCheck: boolean; automatic: boolean; reason: string;
   onToggle: (on: boolean) => void; onUpgrade: (market: string, id: string) => void; onChecked: () => Promise<void>;
 }) {
@@ -131,7 +133,9 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
   const action = u ? upgradeAction(u) || (u.state === "available" ? t("lib-extensions.action_upgrade") : null) : null;
   const note = d.upgrade_note ? upgradeNote(d.upgrade_note) : null;
   const paused = d.auto_upgrade_paused;
-  const footer = !automatic ? reason : paused === "market_removed" ? t("settings-extensions.market_removed") : paused ? t("settings-extensions.upgrade_paused_footer") : t("settings-extensions.upgrade_footer");
+  // A reason already in Update status's row stays there: the auto-upgrade row adds one only when it has its own.
+  const footer = !automatic ? (canCheck ? reason : null) : paused === "market_removed" ? t("settings-extensions.market_removed") : paused ? t("settings-extensions.upgrade_paused_footer") : t("settings-extensions.upgrade_footer");
+  const autoNote = globalAuto === false ? t("settings-extensions.global_upgrade_off") : footer;
   const descriptionId = useId();
   return (
     <Group title={t("settings-extensions.upgrade_title")}>
@@ -147,31 +151,33 @@ function Updates({ d, manager, busy, market, canCheck, automatic, reason, onTogg
       {/* While the manager's master switch is off, the extension's own switch keeps its value but can't be flipped: it applies
           again once the master switch is back on (#1828). */}
       <Row label={t("settings-extensions.auto_upgrade")}>
-        <Switch on={d.auto_upgrade ?? false} onChange={onToggle} disabled={busy || checking || !automatic || !!paused || globalAuto === false} label={t("settings-extensions.auto_upgrade")} describedBy={descriptionId} />
+        <Switch on={d.auto_upgrade ?? false} onChange={onToggle} disabled={busy || checking || !automatic || !!paused || globalAuto === false}
+          label={t("settings-extensions.auto_upgrade")} describedBy={autoNote ? descriptionId : undefined} />
       </Row>
-      <SettingsHint id={descriptionId} caution={globalAuto === false}>
-        {globalAuto === false ? t("settings-extensions.global_upgrade_off") : footer}
-      </SettingsHint>
+      {autoNote && <SettingsHint id={descriptionId} caution={globalAuto === false}>{autoNote}</SettingsHint>}
       {note && d.upgrade_note && <Row label={note} hint={ago(d.upgrade_note.at)} wrapHint />}
       {d.previous_version && <Row label={t("settings-extensions.previous_version")} mono wrapValue>{d.previous_version}</Row>}
     </Group>
   );
 }
 
-function Information({ d }: { d: HubExtensionDetail }) {
-  let home = "";
-  try { home = d.homepage && new URL(d.homepage).protocol === "https:" ? d.homepage : ""; } catch { /* Invalid manifest URL stays unavailable. */ }
+export function Information({ d }: { d: HubExtensionDetail }) {
+  const home = safeWebURL(d.homepage, true) ?? "";
   const missing = t("settings-extensions.not_provided");
   const source = d.attached ? t("settings-extensions.source_attached") : d.source === "hub.json" ? t("settings-extensions.source_configured") : d.source === "dev" ? t("settings-extensions.source_development") : sourceText(d.source) || missing;
   const provenance = d.attached ? t("settings-extensions.source_attached") : d.source === "installed" && d.origin && !marketOf(d.origin) ? t("settings-extensions.local_source") : d.origin || missing;
+  const outsideMarket = !!d.attached || d.source === "hub.json" || d.source === "dev" || (d.source === "installed" && !marketOf(d.origin));
+  const type = extensionTypeText(d.kind);
   return (
     <Group title={t("settings-extensions.about_title")}>
       <Row label={t("settings-extensions.version")} mono wrapValue>{d.version || missing}</Row>
       {d.attached?.version && <Row label={t("settings-extensions.reported_version")} mono wrapValue>{d.attached.version}</Row>}
       <Row label={t("settings-extensions.extension_id")} mono wrapValue><span className="select-text">{d.id}</span></Row>
       <Row label={t("settings-extensions.source")} wrapValue>{source}</Row>
-      <Row label={t("settings-extensions.runtime")} mono wrapValue>{d.kind || missing}</Row>
+      <Row label={t("settings-extensions.extension_type")} wrapValue>{type || missing}</Row>
+      <Row label={t("settings-extensions.runtime")} hint={type ? t("settings-extensions.runtime_hint") : undefined} wrapHint>{missing}</Row>
       <Row label={t("settings-extensions.installed_from")} mono wrapValue><span data-extension-provenance className="min-w-0 break-all select-text">{provenance}</span></Row>
+      {outsideMarket && <SettingsHint><span data-extension-source-notice>{t("settings-extensions.source_outside_market")}</span></SettingsHint>}
       {packageDownloads(d.downloads) !== null && <Row label={t("settings-extensions.package_downloads_label")} hint={t("settings-extensions.package_downloads_definition")} wrapHint><span data-extension-downloads>{formatNumber(d.downloads!)}</span></Row>}
       {d.publisher && <Row label={t("settings-extensions.publisher")} wrapValue>{d.publisher}</Row>}
       {(d.tools ?? []).map((x) => <Row key={x.name} label={x.title || x.name} hint={t("settings-extensions.tool_title")}>{toolText(x)}</Row>)}

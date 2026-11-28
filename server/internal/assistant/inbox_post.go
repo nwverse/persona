@@ -8,12 +8,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // The assistant's own Inbox source (#6430, docs/assistant/inbox.md "Assistant rows"): a row the assistant puts into the
@@ -25,12 +29,17 @@ import (
 // conversation's page as url), so an older app shows a normal row and opens the conversation. One conversation has
 // one row: a post within inboxPostWindow of the row's last one updates it (and opens it again when handled); a later
 // one starts a new row.
+//
+// A post's text is the assistant's Markdown (a briefing with headings and lists). The row keeps it as it was written in
+// body, which the detail draws (#9041); its summary, preview and chain message are the same words without the marks
+// on one line, so a list row or an app that does not know body never shows ** or - .
 const (
 	inboxPostSource = "assistant"
 	inboxPostKind   = "assistant_post"
 	inboxPostWindow = 30 * time.Minute
-	// A post's fields are cut like the Inbox's own: a title and a line for the list, a summary for the detail.
-	inboxPostTitleMax, inboxPostSummaryMax, inboxPostReasonMax = 80, 600, 120
+	// A post's fields are cut like the Inbox's own: a title and a line for the list, a summary for the detail. The body
+	// is the whole text of a long briefing, cut only past a few screens.
+	inboxPostTitleMax, inboxPostSummaryMax, inboxPostReasonMax, inboxPostBodyMax = 80, 600, 120, 6000
 )
 
 // A task's inbox setting: what of its runs goes into the Inbox.
@@ -124,8 +133,9 @@ func (s *Service) toolInboxPost(ctx context.Context, machine, self string, args 
 	default:
 		return "", fmt.Errorf("tier %q: use \"action\" (needs the user) or \"fyi\" (worth knowing)", a.Tier)
 	}
-	if s.justMeNow(machine, self) || s.inHealth(ctx, self) {
-		// Like notify_user: a meeting's side turn and a health conversation put nothing where the lists can show it.
+	if pol := s.selfPolicy(ctx, self); s.justMeNow(machine, self) || pol.Redact || pol.HideFromExtensions {
+		// Like notify_user: a meeting's side turn and a conversation of a private space put nothing where the lists
+		// (and the extensions that read them) can show it.
 		return "", errors.New("this conversation can't be put into the Inbox")
 	}
 	if !s.inboxPostOn(ctx) {
@@ -147,15 +157,27 @@ type inboxPosted struct {
 	updated bool
 }
 
+// inboxPostConversation stamps only a post's save: ordinary edits of previously
+// derived Inbox rows remain independent of their source conversation.
+type inboxPostConversation struct{}
+
 // postToInbox puts machine's conversation session into the Inbox. Under the hood it is a generic connector row of the
 // source "assistant", thread = the conversation. A post within inboxPostWindow of the conversation's row updates that
 // row, reopened when it was handled; any other makes a new one. The user's own policy for the source still applies.
 func (s *Service) postToInbox(ctx context.Context, machine, session string, a inboxPostArgs, now time.Time) (inboxPosted, error) {
+	// A delayed tool call or scheduled completion must not copy a deleted
+	// transcript into a new or existing Inbox row. Keep the check and save
+	// together with respect to deletion, while preserving already saved rows.
+	s.conversationWrites.RLock()
+	defer s.conversationWrites.RUnlock()
+	if err := s.conversationAvailable(ctx, machine, session); err != nil {
+		return inboxPosted{}, err
+	}
 	if err := s.inboxReady(ctx); err != nil {
 		return inboxPosted{}, err
 	}
 	title := clip(oneLine(strings.TrimSpace(a.Title)), inboxPostTitleMax)
-	summary := clip(oneLine(strings.TrimSpace(a.Summary)), inboxPostSummaryMax)
+	body, summary := inboxPostText(a.Summary)
 	tier := a.Tier
 	if tier == "" {
 		tier = TierFYI
@@ -169,49 +191,129 @@ func (s *Service) postToInbox(ctx context.Context, machine, session string, a in
 	thread := machine + "/" + session
 	sum := sha1.Sum([]byte(thread + "\n" + now.UTC().Format(time.RFC3339Nano)))
 	thing := connector.InboxThing{Thread: thread, Kind: inboxPostKind, Label: label, Title: title,
-		Preview: clip(summary, 120), Context: title + "\n" + summary, At: now, Last: hex.EncodeToString(sum[:8]), URL: link,
+		Preview: clip(summary, 120), Context: title + "\n" + body, At: now, Last: hex.EncodeToString(sum[:8]), URL: link,
 		Tier: connector.Tier(tier), Why: clip(oneLine(strings.TrimSpace(a.Reason)), inboxPostReasonMax)}
+	// The chain's received entry says the post in plain words, not the context's Markdown lines.
+	said := []InboxChainMessage{{Text: clip(summary, chainMessageText)}}
 
 	b := &s.inbox
-	b.mu.Lock()
-	var open *InboxItem
-	for _, it := range b.items {
-		if it.Source == inboxPostSource && it.Connector != nil && it.Connector.Thread == thread &&
-			(open == nil || newerItem(it, open)) {
-			open = it
+	// The candidate remains detached until its guarded DB commit succeeds. A
+	// reader of the live Book must never see a post that admission can reject.
+	it := &InboxItem{ID: inboxPostSource + ":" + hex.EncodeToString(sum[:8]), Source: inboxPostSource,
+		Kind: inboxPostKind, Account: inboxPostSource, AccountName: label, StartedAt: now, Count: 1}
+	var live *InboxItem
+	var before InboxItem
+	var updated bool
+	var published bool
+	apply := func(row *InboxItem) {
+		prev := seenOf(row)
+		fillConnectorItem(row, thing)
+		row.DoneAt, row.DoneBy, row.Read = nil, "", false
+		b.noteReceived(row, prev, said)
+		row.Summary, row.Body, row.TriagedBy, row.Urgent = summary, body, "rules", false
+		b.noteTriaged(row)
+		b.applyPolicyTier(row)
+	}
+	writeCtx := context.WithValue(ctx, inboxPostConversation{}, [2]string{machine, session})
+	failed := s.saveInboxPrepared(writeCtx, []*InboxItem{it}, func(row *InboxItem) *InboxItem {
+		// Saving is serialized before selecting the target, so concurrent posts
+		// still coalesce into the latest committed row for this conversation.
+		for _, current := range b.items {
+			if current.Source == inboxPostSource && current.Connector != nil && current.Connector.Thread == thread &&
+				(live == nil || newerItem(current, live)) {
+				live = current
+			}
 		}
-	}
-	var w *inboxWrite
-	var it *InboxItem
-	updated := open != nil && now.Sub(open.UpdatedAt) <= inboxPostWindow
-	if updated {
-		it = open
-		w = beginWrite(it)
-		prev := seenOf(it)
-		fillConnectorItem(it, thing)
-		it.DoneAt, it.DoneBy, it.Read = nil, "", false
-		b.noteReceived(it, prev, nil)
-	} else {
-		it = &InboxItem{ID: inboxPostSource + ":" + hex.EncodeToString(sum[:8]), Source: inboxPostSource, Account: inboxPostSource,
-			AccountName: label, StartedAt: now, Count: 1}
-		fillConnectorItem(it, thing)
-		b.noteReceived(it, inboxSeen{}, nil)
-		b.items[it.ID] = it
-		w = newWrite(it)
-	}
-	it.Summary, it.TriagedBy, it.Urgent = summary, "rules", false
-	b.noteTriaged(it)
-	b.applyPolicyTier(it) // the user's own rule for the source wins over what the post asked
-	b.settle(w)
-	b.mu.Unlock()
-	if failed := s.saveWrites(ctx, []*inboxWrite{w}, "an assistant post"); failed[it.ID] {
+		updated = live != nil && now.Sub(live.UpdatedAt) <= inboxPostWindow
+		if updated {
+			before = *live
+			before.Chain = slices.Clone(live.Chain)
+			*row = before
+			row.Chain = slices.Clone(before.Chain)
+		} else {
+			live = nil
+		}
+		apply(row)
+		return row
+	}, func(failed map[string]bool) {
+		if failed[it.ID] {
+			return // nothing private entered the shared Book; there is nothing to roll back
+		}
+		if live == nil {
+			if b.items[it.ID] != nil {
+				return
+			}
+			b.items[it.ID] = it
+		} else if b.items[it.ID] == live && reflect.DeepEqual(*live, before) {
+			*live = *it // publish the exact committed snapshot when no concurrent edit needs rebasing
+		} else if b.items[it.ID] == live {
+			// Rebase the committed post on the live item: notes added while IO
+			// was pending keep their chain entries, and concurrent user fields
+			// (for example Read or DoneAt) remain the user's newer values.
+			latest := *live
+			live.Chain = slices.Clone(live.Chain)
+			apply(live)
+			live.ArrivedOf, live.ArrivedAt = it.ArrivedOf, it.ArrivedAt
+			value, previous, current := reflect.ValueOf(live).Elem(), reflect.ValueOf(before), reflect.ValueOf(latest)
+			for i := range value.NumField() {
+				field := value.Type().Field(i)
+				if !field.IsExported() {
+					continue // reflect can neither read nor set it: rebaseInboxBookkeeping does, below
+				}
+				if field.Name == "Chain" || field.Name == "ChainSeq" {
+					continue // apply appended the post to the chain that already holds the concurrent notes
+				}
+				if !reflect.DeepEqual(current.Field(i).Interface(), previous.Field(i).Interface()) {
+					value.Field(i).Set(current.Field(i))
+				}
+			}
+			rebaseInboxBookkeeping(live, &before, &latest)
+		} else {
+			return // a concurrent removal/replacement owns the live row now
+		}
+		b.touched(it.ID)
+		published = true
+	})
+	if failed[it.ID] || !published {
 		return inboxPosted{}, errInboxNotPersisted
 	}
 	return inboxPosted{id: it.ID, updated: updated}, nil
 }
 
+// rebaseInboxBookkeeping is postToInbox's rebase for InboxItem's unexported fields, which the reflect loop there
+// cannot read (reflect.Value.Interface panics on them): as for the exported ones, a value that changed on the live row
+// while the post's IO was pending (latest differs from before) stays the live row's; otherwise live keeps what the
+// post's apply gave it. A new unexported field of InboxItem belongs here (TestInboxPostRebaseCoversUnexportedFields).
+func rebaseInboxBookkeeping(live, before, latest *InboxItem) {
+	if !reflect.DeepEqual(latest.externalMoves, before.externalMoves) {
+		live.externalMoves = latest.externalMoves
+	}
+	if latest.externalChecking != before.externalChecking {
+		live.externalChecking = latest.externalChecking
+	}
+	if latest.replyClassifySerial != before.replyClassifySerial {
+		live.replyClassifySerial = latest.replyClassifySerial
+	}
+	if latest.receivedInCollection != before.receivedInCollection {
+		live.receivedInCollection = latest.receivedInCollection
+	}
+}
+
+// inboxPostText is a post's text as the row keeps it: body, the Markdown as written (cut past inboxPostBodyMax), and
+// summary, its words without the marks on one line (cut to inboxPostSummaryMax). Text that is all marks keeps them.
+func inboxPostText(text string) (body, summary string) {
+	body = clip(strings.TrimSpace(text), inboxPostBodyMax)
+	summary = oneLine(textfmt.PlainMarkdown(body))
+	if summary == "" {
+		summary = oneLine(body)
+	}
+	return body, clip(summary, inboxPostSummaryMax)
+}
+
 // inboxPostEvery ends a run of a task set to "every": its conversation (machine, session) just finished a turn, and the
-// row says what the run answered. A run that failed or answered nothing puts nothing there (the failure is told as ever).
+// row says what the run answered: its whole last reply, read from the conversation, as written (the session list's
+// last_text is a line cut at 200 characters, kept only when the reply cannot be read). A run that failed or answered
+// nothing puts nothing there (the failure is told as ever).
 func (s *Service) inboxPostEvery(ctx context.Context, machine, session string) {
 	sc, err := s.lockedSchedule(ctx)
 	if err != nil {
@@ -232,9 +334,13 @@ func (s *Service) inboxPostEvery(ctx context.Context, machine, session string) {
 	if !ok || sess.Status == proto.StatusWorking || strings.TrimSpace(sess.TurnError) != "" || strings.TrimSpace(sess.LastText) == "" {
 		return
 	}
+	text := sess.LastText
+	if _, answer := s.lastTurn(ctx, machine, session); answer != "" {
+		text = wire.AssistantCardText(answer) // a view block as the words it falls back to, as last_text has it
+	}
 	reason := i18n.T(s.inbox.userLang(), "assistant-inbox_post.every_reason")
 	if _, err := s.postToInbox(ctx, machine, session, inboxPostArgs{Title: task.labelIn(s.inbox.userLang()),
-		Summary: sess.LastText, Tier: TierFYI, Reason: reason}, time.Now()); err != nil {
+		Summary: text, Tier: TierFYI, Reason: reason}, time.Now()); err != nil {
 		s.logf("task %s: Inbox row: %v", task.ID, err)
 	}
 }

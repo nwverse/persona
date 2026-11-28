@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import os
+import PersonaWire
 
 /// One message of a terminal stream (docs/protocol/protocol.md「Terminal stream」).
 nonisolated enum TerminalEvent: Sendable {
@@ -24,16 +26,20 @@ nonisolated enum ServerEvent: Sendable {
     /// What changed in a machine's list since the last (a hub that has `sessions_delta`, asked for on connect): the
     /// sessions new or different, whole, and the ids gone (docs/protocol/protocol.md「Session deltas」).
     case sessionsDelta(machineID: String, upsert: [Session], remove: [String])
-    /// A lightweight hint, never an authoritative row checkpoint.
-    case sessionsList(revision: String)
+    /// A lightweight hint, never an authoritative row checkpoint. `changes`: which rows changed since which revision,
+    /// when the hub can say (`SessionListChanges`).
+    case sessionsList(revision: String, changes: SessionListChanges? = nil)
     /// hasMore is nil when the event cannot know (a catch-up after since_seq): only pages from the end tell. moreAfter:
     /// the hub capped a catch-up, more came after these.
     case items(SessionKey, [Item], backlog: Bool, hasMore: Bool?, span: ItemSpan, moreAfter: Bool)
     case screen(SessionKey, text: String, status: SessionStatus)
     case delta(SessionKey, text: String)
+    /// Claude's current status line; nil clears it on recovery, turn end or unwatch.
+    case live(SessionKey, SessionLive?)
     case interaction(Interaction)
     /// assistant: what the assistant answered and why, when it answered the question for the user (#544).
     case interactionResolved(String, assistant: AssistantAnswer?)
+    case interactionResolvedOccurrence(String, assistant: AssistantAnswer?, createdAt: String)
     /// The user changed the assistant's answer, on this device or another: only the questions that changed (#544).
     case interactionReanswered(id: String, answers: [String: String])
     case toolCall(callID: String, name: String, args: JSONValue)
@@ -66,6 +72,11 @@ nonisolated enum ServerEvent: Sendable {
     /// Tasks from an assistant conversation (docs/assistant/unified-entry.md): the todos changed (pull them), a conversation's
     /// feed grew, a plan changed.
     case todos
+    /// The user's saved prompts changed (#7329, #9436): read `GET /api/v1/assistant/saved-prompts` again. `manager`: the
+    /// assistant whose list it is when not the default one; only the shown assistant's counts.
+    case savedPrompts(manager: String?)
+    /// An invalidation for the assistant's starred snapshots. The event does not carry saved text.
+    case starredMessages(manager: String?)
     /// The personas the hub offers changed, e.g. a tiered look moved to another tier (docs/apple/persona.md): list them again.
     case personas
     /// The avatar chosen on the hub changed (another device chose one, or the hub went back to the default when its
@@ -77,6 +88,14 @@ nonisolated enum ServerEvent: Sendable {
     /// The direction tree changed on the hub (#4352): a to-do, an Agent's session, a direction or its name. No payload:
     /// the clients read `GET /api/v1/assistant/directions/tree` again, and on every (re)connect.
     case directions
+    /// Intake changed; values and notes are read through the health route, never broadcast.
+    case healthIntake
+    case healthItems
+    case healthStrength
+    /// The kept Dashboards pages changed (#15017): one kept, pinned, unpinned, renamed, removed or restored, or the switch
+    /// turned. No payload: the places (`GET /api/v1/extensions/-/ui`) are read again. A page's content comes as
+    /// `extension_ui` with extension `-pages`.
+    case assistantPages
     case assistantFeed(FeedItem)
     case assistantView(ExtensionAssistantView)
     case assistantViewAction(conversation: String, action: ExtensionViewAction)
@@ -91,9 +110,18 @@ nonisolated enum ServerEvent: Sendable {
     /// An extension's data changed (`ui.invalidate`, docs/extensions/extensions.md「ui.invalidate」): its interface `id` (nil: all of
     /// them) is drawn again where it is shown.
     case extensionInvalidate(extension: String, id: String?)
+    /// The text_lookup extension point changed (turned on or off, another contribution, its saved words or its
+    /// underline setting, #10977): the app reads `GET /api/v1/text-lookup` again.
+    case textLookupChanged
     /// A meeting's conversation changed (#3862, docs/assistant/meeting-minutes.md「The `meeting_live` event」): content-free,
     /// only the parts that changed (an open set) and their revisions; the app reads the newer parts with `GET …/live?parts=`.
     case meetingLive(recordingID: String, changed: [String], revs: [String: Int64])
+    /// An urgent call moved on (docs/assistant/urgent-call.md): a phone still ringing for one answered or settled
+    /// elsewhere stops.
+    case urgentCall(id: String, state: String)
+    /// How a send stands at the hub (`message_send_state`, `todo_send_state`): only passed on while this socket's hello
+    /// vouches for its kind (`LiveConnection.receiptTrust`).
+    case sendReceipt(SendReceipt)
     case error(SessionKey?, String)
 
     private struct EventType: Decodable { var type: String }
@@ -105,9 +133,11 @@ nonisolated enum ServerEvent: Sendable {
         var sessionID: String?
         var machines: [Machine]?
         var sessions: [Session]?
+        var live: SessionLive?
         var upsert: [Session]?
         var remove: [String]?
-        var revision: String?
+        /// Session-list revisions are opaque strings; health-item revisions are integers.
+        var revision: JSONValue?
         var items: [Item]?
         var backlog: Bool?
         var hasMore: Bool?
@@ -178,6 +208,7 @@ nonisolated enum ServerEvent: Sendable {
         var git: Bool?
         /// interaction_resolved's, for a question the assistant answered; raw so no other event's keys can break the envelope.
         var answeredBy: JSONValue?
+        var createdAt: String?
         var reason: JSONValue?
         var answers: JSONValue?
         /// interaction_reanswered's.
@@ -187,15 +218,17 @@ nonisolated enum ServerEvent: Sendable {
         var manager: JSONValue?
         /// meeting_live's.
         var recordingID: String?
-        /// meeting_live's list of parts; raw, since other messages use `changed` for other shapes.
+        /// meeting_live's list of parts, and the ids a `sessions_list` hint names; raw, since the shapes differ.
         var changed: JSONValue?
+        /// A `sessions_list` hint's starting revision; raw, so another message's `since` of another shape cannot break it.
+        var since: JSONValue?
 
         enum CodingKeys: String, CodingKey {
-            case type, machines, sessions, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
+            case type, machines, sessions, live, upsert, remove, revision, items, backlog, text, status, interaction, id, name, args, event, message, error, revs, fleet, history
             case features, epoch, seq, full, cols, rows, data, unsupported, state, desktops, mesh, channel, build, update, item, view, action, key, conversation, plan
             case plugin, badge, invalidate, cwd, dirs, git, operation, auth, source, conversations, account, reason, answers, resolution, manager
-            case effective, changed
-            case answeredBy = "answered_by", recordingID = "recording_id"
+            case effective, changed, since
+            case answeredBy = "answered_by", createdAt = "created_at", recordingID = "recording_id"
             case extensionID = "extension"
             case hubID = "hub_id", hubName = "hub_name", protocolVersion = "protocol", minAppBuild = "min_app_build", publicURL = "public_url"
             case settingsChanged = "settings_changed", olAccount = "ol_account"
@@ -222,7 +255,7 @@ nonisolated enum ServerEvent: Sendable {
 
     static func decode(_ data: Data) -> ServerEvent? {
         // A source subscription was saved, ran or was deleted (#2041): its pages are drawn again, as an invalidate of theirs.
-        // Read before the envelope, whose `revision` is a string where this event's is a number; the hub's compact JSON is
+        // Read before the envelope, whose fields may belong to other event shapes; the hub's compact JSON is
         // looked for first, so every other message skips the extra decode.
         if data.range(of: subscriptionType) != nil, (try? JSON.decoder.decode(EventType.self, from: data))?.type == "subscription" {
             return .extensionInvalidate(extension: SubscriptionsUI.id, id: nil)
@@ -230,9 +263,13 @@ nonisolated enum ServerEvent: Sendable {
         guard let e = try? JSON.decoder.decode(Envelope.self, from: data) else { return nil }
         let key = e.machineID.flatMap { m in e.sessionID.map { SessionKey(machineID: m, sessionID: $0) } }
         switch e.type {
+        // The receipt markers are read on their own, so no other event's keys can break the envelope over them.
         case "hello": return .hello(HubHello(features: e.features ?? [], hubID: e.hubID, hubName: e.hubName, mesh: e.mesh?.hubs,
                                              channel: e.channel, build: e.build, protocolVersion: e.protocolVersion,
-                                             minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) }))
+                                             minAppBuild: e.minAppBuild, publicURL: e.publicURL.flatMap { URL(string: $0) },
+                                             sendReceipts: SendReceiptTrust.decode(hello: data),
+                                             imageLimits: ImageLimitsTable.decode(hello: data)))
+        case SendReceipt.messageType, SendReceipt.todoType: return SendReceipt.decode(type: e.type, data).map { .sendReceipt($0) }
         case "hub_update": return e.update.map { .hubUpdate($0) }
         case "extension_operation", "plugin_operation": return e.operation.map { .extensionOperation($0, manager: e.manager?.string) }
         case "extension_auth": return e.extensionID.map { .extensionAuth(extension: $0, e.auth?.value, manager: e.manager?.string) }
@@ -240,7 +277,7 @@ nonisolated enum ServerEvent: Sendable {
         case "sessions":
             guard let m = e.machineID else { return nil }
             return .sessions(machineID: m, (e.sessions ?? []).map { var s = $0; s.machineID = m; return s })
-        case "sessions_list": return e.revision.map { .sessionsList(revision: $0) }
+        case "sessions_list": return e.revision?.string.map { .sessionsList(revision: $0, changes: SessionListChanges(since: e.since, changed: e.changed)) }
         case "sessions_delta":
             guard let m = e.machineID else { return nil }
             return .sessionsDelta(machineID: m, upsert: (e.upsert ?? []).map { var s = $0; s.machineID = m; return s }, remove: e.remove ?? [])
@@ -254,11 +291,17 @@ nonisolated enum ServerEvent: Sendable {
         case "delta":
             guard let key else { return nil }
             return .delta(key, text: e.text ?? "")
+        case "live":
+            guard let key else { return nil }
+            return .live(key, e.live)
         case "interaction": return e.interaction.map { .interaction(Elicitation.withFieldOrder($0, from: data)) }
         case "interaction_resolved":
             guard let id = e.id else { return nil }
             let assistant = e.answeredBy?.string == AssistantAnswer.assistant
                 ? AssistantAnswer(answers: Delegated.answers(in: e.answers), reason: e.reason?.string ?? "") : nil
+            if let createdAt = e.createdAt {
+                return .interactionResolvedOccurrence(id, assistant: assistant, createdAt: createdAt)
+            }
             return .interactionResolved(id, assistant: assistant)
         case "interaction_reanswered":
             guard let id = e.id else { return nil }
@@ -283,12 +326,20 @@ nonisolated enum ServerEvent: Sendable {
         case "agents.prefs": return .agents(sessionIDs: ["agents.prefs"])
         case "inbox": return .inbox
         case "todos": return .todos
+        case "assistant_saved_prompts": return .savedPrompts(manager: e.manager?.string)
+        case "assistant_starred": return .starredMessages(manager: e.manager?.string)
+        case "text_lookup_changed": return .textLookupChanged
         case "personas": return .personas
         case "look":
             guard (e.effective ?? e.id).map({ !$0.isEmpty }) == true else { return nil }
             return .look(id: e.id, effective: e.effective)
         case "managers": return .managers
         case "directions": return .directions
+        // The app refreshes the home totals and any open reserved intake page for this hub.
+        case "health_strength": return .healthStrength
+        case "health_items": return .healthItems
+        case "health_intake": return .healthIntake
+        case "assistant_pages": return .assistantPages
         case "assistant_feed": return e.item.map { .assistantFeed($0) }
         case "assistant_view":
             guard let view = e.view, !view.id.isEmpty, view.version > 0,
@@ -324,6 +375,9 @@ nonisolated enum ServerEvent: Sendable {
         case "terminal_control":
             guard let key, let state = e.state else { return nil }
             return .terminal(key, .control(state: state, cols: e.cols, rows: e.rows, why: e.error))
+        case "urgent_call":
+            guard let id = e.id, !id.isEmpty, let state = e.state else { return nil }
+            return .urgentCall(id: id, state: state)
         case "meeting_live":
             guard let id = e.recordingID, !id.isEmpty else { return nil }
             let changed = (e.changed?.array ?? []).compactMap { part -> String? in
@@ -349,6 +403,7 @@ nonisolated extension ServerEvent {
             return .items(k(key), items, backlog: backlog, hasMore: hasMore, span: span, moreAfter: moreAfter)
         case .screen(let key, let text, let status): return .screen(k(key), text: text, status: status)
         case .delta(let key, let text): return .delta(k(key), text: text)
+        case .live(let key, let live): return .live(k(key), live)
         case .interaction(let ix): var ix = ix; ix.group = group; return .interaction(ix)
         case .hookEvent(let key, let event, let message, let lastText):
             return .hookEvent(k(key), event: event, message: message, lastText: lastText)
@@ -356,9 +411,11 @@ nonisolated extension ServerEvent {
         case .error(let key, let message): return .error(key.map(k), message)
         case .sessionsDelta(let machine, let upsert, let remove):
             return .sessionsDelta(machineID: machine, upsert: upsert.map { var s = $0; s.group = group; return s }, remove: remove)
-        case .sessionsList, .hello, .interactionResolved, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
-             .personas, .look, .managers, .directions, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
-             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive: return self
+        case .sendReceipt(let receipt): var receipt = receipt; receipt.key.group = group; return .sendReceipt(receipt)
+        case .sessionsList, .hello, .interactionResolved, .interactionResolvedOccurrence, .interactionReanswered, .toolCall, .revs, .lark, .messaging, .agents, .inbox, .fleet, .hubUpdate, .desktops, .todos,
+             .personas, .look, .managers, .directions, .healthIntake, .healthItems, .healthStrength, .assistantPages, .assistantFeed, .assistantView, .assistantViewAction, .assistantViewBlock, .taskPlan, .pluginBadge,
+             .extensionInvalidate, .fsChanged, .extensionOperation, .extensionAuth, .meetingLive, .urgentCall, .savedPrompts, .starredMessages,
+             .textLookupChanged: return self
         }
     }
 }
@@ -473,6 +530,12 @@ final class LiveConnection {
     @ObservationIgnored private(set) var resumed = false
     /// Only this connection's authenticated hello may enable canonical outbound contracts.
     private(set) var personaContracts = false
+    /// The send receipts this connection's authenticated hello vouches for (docs/protocol/protocol.md "Message feedback
+    /// (#5258)"): none until it comes, and none again as soon as the socket drops, another opens or the credential
+    /// changes. A receipt of a kind it does not vouch for is dropped here, before `onEvent`. Observed, so what offers
+    /// to check a send's receipt follows the current socket; written only when it changes (`trust`), since every
+    /// attempt clears it.
+    private(set) var receiptTrust = SendReceiptTrust.untrusted
     /// Where the app is in the hub's numbered broadcasts: kept across reconnects, cleared with another hub.
     @ObservationIgnored private(set) var cursor = EventCursor()
     /// iOS/Mac list clients opt in; watch/extension consumers retain their existing full-list contract.
@@ -502,6 +565,10 @@ final class LiveConnection {
     @ObservationIgnored var makeLocalForTests: (() -> LocalSocket)?
     #endif
     @ObservationIgnored private var generation = 0
+    /// Requests made while the foreground connection chooses its way wait for that same attempt. They do not wait
+    /// for the WebSocket hello: once the route is installed, HTTP can use it independently.
+    @ObservationIgnored private var routeTask: Task<Void, Never>?
+    @ObservationIgnored private var routeWaiters: [UUID: CheckedContinuation<ServerConfig?, Error>] = [:]
     @ObservationIgnored private var backoff: TimeInterval = 1
     /// The hub said `hub_restarting` on this socket: its close is a restart whatever the close code.
     @ObservationIgnored private var restartNotice = false
@@ -551,7 +618,9 @@ final class LiveConnection {
 
     func disconnect() {
         personaContracts = false
+        trust(.untrusted)
         generation += 1
+        cancelRoute()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         local?.close()
@@ -597,10 +666,48 @@ final class LiveConnection {
         ping(task, generation)
     }
 
+    /// The config selected by an attempt already in progress, or the current config when routing has finished.
+    /// A closed or superseded attempt cancels its requests instead of sending directly while the tunnel is absent.
+    func waitForRoute() async throws -> ServerConfig? {
+        try Task.checkCancellation()
+        guard routeTask != nil else { return config }
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                routeWaiters[id] = continuation
+            }
+        } onCancel: { [weak self] in
+            Task { @MainActor in
+                self?.routeWaiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func finishRoute(_ result: Result<ServerConfig?, Error>) {
+        let waiting = routeWaiters
+        routeWaiters.removeAll()
+        for continuation in waiting.values { continuation.resume(with: result) }
+    }
+
+    private func cancelRoute() {
+        routeTask?.cancel()
+        routeTask = nil
+        finishRoute(.failure(CancellationError()))
+    }
+
+    #if DEBUG
+    /// Deterministic ordering in route-recovery tests; no polling is added to the connection itself.
+    var waitingForRouteForTests: Int { routeWaiters.count }
+    #endif
+
     private func open() {
         guard let config, !suspended else { return }
         personaContracts = false
+        trust(.untrusted)
         generation += 1
+        cancelRoute()
+        attemptBegan = Date()
         let gen = generation
         task?.cancel(with: .goingAway, reason: nil)
         local?.close()
@@ -613,26 +720,36 @@ final class LiveConnection {
         state = .connecting
         stalled = false
         nextTry = nil
-        Task { @MainActor [weak self] in
+        routeTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled else { return }
             let picked = await route()
-            guard let self, gen == self.generation, !self.suspended else { return }
+            guard let self, gen == self.generation, !self.suspended, !Task.isCancelled else { return }
             if let picked, picked != self.config {
                 self.config = picked
                 self.onRoute?(picked)
             }
+            self.routeTask = nil
             self.openSocket(self.config ?? config, gen)
+            self.finishRoute(.success(self.config))
         }
     }
 
     /// The hub `route` picked for the next attempt.
     @ObservationIgnored var onRoute: ((ServerConfig) -> Void)?
+    /// What an attempt came to at the address it went to (#11390): `answers` once it connects, and when it fails before
+    /// connecting, why (`HubOutcome(failure:)`), with when the attempt began. A connected socket dropping is not an
+    /// attempt: the next one says.
+    @ObservationIgnored var onAttempt: ((ServerConfig, HubOutcome, Date) -> Void)?
+    /// When the current attempt began (`open`, before its route is picked): what `onAttempt` reports belongs to it.
+    @ObservationIgnored private var attemptBegan = Date()
 
     private func openSocket(_ given: ServerConfig, _ gen: Int) {
         let config = credential?(given) ?? given
         if config != given { self.config = config }
         var comps = URLComponents(url: config.url.appending(path: "/api/v1/ws"), resolvingAgainstBaseURL: false)!
         comps.scheme = config.url.scheme == "https" ? "wss" : "ws"
-        comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream)
+        comps.queryItems = Self.queryItems(cursor, sessionList: usesSessionList, extensionStream: usesExtensionUIStream, sessionLive: true,
+                                           todoReceipts: Self.asksTodoReceipts(RequestClientMetadata.current))
         var req = URLRequest(url: HubTransport.resolve(comps.url!, hub: config.url))
         config.authorize(&req)
         req.setValue(LanguageStore.shared.launched, forHTTPHeaderField: "Accept-Language")
@@ -653,10 +770,14 @@ final class LiveConnection {
 
     /// The socket URL's query: session lists as deltas (an older hub ignores the question and sends whole lists), the
     /// extensions' install steps (`extension_operation`, #3307), the managers' roster changes (`managers`,
-    /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`), and
+    /// docs/assistant/managers.md), Persona Link entries in the `desktops` event (`desktops_link`, `DesktopDevice`),
+    /// Claude's live status (`session_live`), a to-do write's receipts (`todo_send_state`, also in `client_hello`: here
+    /// the hub knows it from the upgrade on, so a write it takes before the hello's answer still says Processing), and
     /// where to resume the broadcasts from once a hello gave a stream.
-    static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false) -> [URLQueryItem] {
-        [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionList ? "sessions_list," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature)] + cursor.queryItems
+    static func queryItems(_ cursor: EventCursor, sessionList: Bool = false, extensionStream: Bool = false, sessionLive: Bool = false,
+                           todoReceipts: Bool = false) -> [URLQueryItem] {
+        let approvalMirrors = helloFeatures(RequestClientMetadata.current).contains(approvalMirrorsFeature) ? "," + approvalMirrorsFeature : ""
+        return [URLQueryItem(name: "features", value: (extensionStream ? "extension_ui_stream_v1," : "") + (sessionLive ? "session_live," : "") + (sessionList ? "sessions_list," + SessionListChanges.feature + "," : "") + (todoReceipts ? SendReceipt.todoFeature + "," : "") + "sessions_delta,extension_operations,managers,desktops_link," + HubNaming.feature + approvalMirrors)] + cursor.queryItems
     }
 
     private func heartbeat(_ t: URLSessionWebSocketTask, _ gen: Int) {
@@ -697,6 +818,25 @@ final class LiveConnection {
         }
     }
 
+    /// One ping on this connection for the live screen's Connection Stats (#6558): the round trip to the hub, or nil
+    /// without a connection or without a pong within 5 s. The heartbeat's kind of ping; it changes none of its state.
+    func roundTrip() async -> TimeInterval? {
+        guard state == .connected, let t = task else { return nil }
+        let sent = Date.now
+        return await withCheckedContinuation { (c: CheckedContinuation<TimeInterval?, Never>) in
+            let done = OSAllocatedUnfairLock(initialState: false)
+            let finish: @Sendable (TimeInterval?) -> Void = { v in
+                let first = done.withLock { was -> Bool in
+                    defer { was = true }
+                    return !was
+                }
+                if first { c.resume(returning: v) }
+            }
+            t.sendPing { @Sendable error in finish(error == nil ? Date.now.timeIntervalSince(sent) : nil) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 5) { finish(nil) }
+        }
+    }
+
     private func receive(_ t: URLSessionWebSocketTask, _ gen: Int) {
         let prepare = prepareEvent
         t.receive { [weak self, prepare] result in
@@ -709,6 +849,7 @@ final class LiveConnection {
             }
             let event = data.flatMap(ServerEvent.decode)
             let meta = data.map(FrameMeta.read) ?? FrameMeta()
+            if let data { DevProbe.frame(type: meta.type, bytes: data.count) }
             if let event { prepare?(event) }
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
@@ -718,8 +859,10 @@ final class LiveConnection {
                     let first = self.state != .connected
                     if first { self.endDrop() }
                     if meta.type != "extension_ui_stream" { self.note(meta) } // private sessions have no broadcast cursor
-                    if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
+                    if case .hello(let hello)? = event { self.heard(hello) }
                     if first {
+                        DevProbe.socket(.connected)
+                        if let on = self.config { self.onAttempt?(on, .answers, self.attemptBegan) }
                         self.state = .connected
                         self.sayHello()
                         self.backoff = 1
@@ -728,10 +871,13 @@ final class LiveConnection {
                         self.onConnected?()
                     }
                     self.extensionStreamFrame(data, event: event)
-                    if let event { self.onEvent?(event) }
+                    if let event, self.passes(event) { self.onEvent?(event) }
                     self.receive(t, gen)
                 case .failure(let err):
+                    DevProbe.socket(.dropped)
+                    let attempt = self.state != .connected // not a drop: this attempt never connected
                     self.personaContracts = false
+                    self.trust(.untrusted)
                     let planned = self.restartNotice || (!self.closedQuiet && t.closeCode == .goingAway)
                     self.dropped(restart: planned)
                     // The handshake's answer: 401 is the hub refusing this credential, not the hub being away.
@@ -743,6 +889,9 @@ final class LiveConnection {
                     self.state = .failed(refused ? String(localized: "The hub doesn't accept this device's credentials (401)")
                                          : access?.localizedDescription ?? err.localizedDescription)
                     self.stalled = false
+                    if attempt, let on = self.config {
+                        self.onAttempt?(on, refused || access != nil ? HubOutcome.refusedHandshake : HubOutcome(failure: err), self.attemptBegan)
+                    }
                     self.scheduleReconnect(gen)
                 }
             }
@@ -773,7 +922,7 @@ final class LiveConnection {
             let first = self.state != .connected
             if first { self.endDrop() }
             if meta.type != "extension_ui_stream" { self.note(meta) }
-            if case .hello(let hello)? = event { self.personaContracts = hello.features.contains(HubNaming.feature) }
+            if case .hello(let hello)? = event { self.heard(hello) }
             if first {
                 self.state = .connected
                 self.sayHello()
@@ -781,15 +930,32 @@ final class LiveConnection {
             }
             self.lastHeard = .now
             self.extensionStreamFrame(data, event: event)
-            if let event { self.onEvent?(event) }
+            if let event, self.passes(event) { self.onEvent?(event) }
         }, dropped: { [weak self] in
             guard let self, gen == self.generation else { return }
             self.personaContracts = false
+            self.trust(.untrusted)
             self.dropped(restart: self.restartNotice)
             self.state = .failed(String(localized: "Connection lost"))
             self.stalled = false
             self.scheduleReconnect(gen)
         })
+    }
+
+    /// This socket's authenticated hello: what it may send under the canonical contracts, and which receipts to trust.
+    private func heard(_ hello: HubHello) {
+        personaContracts = hello.features.contains(HubNaming.feature)
+        trust(hello.sendReceipts)
+    }
+
+    private func trust(_ new: SendReceiptTrust) {
+        if receiptTrust != new { receiptTrust = new }
+    }
+
+    /// Whether an event goes on to `onEvent`: a send receipt only while this socket's hello vouches for its kind.
+    private func passes(_ event: ServerEvent) -> Bool {
+        guard case .sendReceipt(let receipt) = event else { return true }
+        return receiptTrust.admits(receipt)
     }
 
     /// What a message says about the connection: the broadcast stream's place, whether this hello resumed it, a
@@ -873,23 +1039,49 @@ final class LiveConnection {
     /// device for the assistant (`AppVersion`). Older hubs ignore unknown fields and keep their existing defaults.
     private func sayHello() {
         let client = RequestClientMetadata.current
-        send(["type": "client_hello", "locale": LanguageStore.shared.launched, "features": Self.helloFeatures(client),
+        send(["type": "client_hello", "locale": LanguageStore.shared.launched,
+              "features": Self.helloFeatures(client) + (followsMessaging ? [Self.larkViaMessagingFeature] : []),
               "platform": client.platform, "version": client.version, "os": AppVersion.helloOS])
     }
 
+    /// The app's Feishu screens follow the hub's `messaging` events (a messaging source, #2138), so the legacy `lark`
+    /// event, which `AppModel.handle` drops then, need not come: said in `client_hello` (`lark_via_messaging`), and
+    /// said again in a new one when it changes (#9591). A busy Feishu account sent 40–50 of them a minute.
+    var followsMessaging = false {
+        didSet { if followsMessaging != oldValue, state == .connected { sayHello() } }
+    }
+
+    nonisolated static let larkViaMessagingFeature = "lark_via_messaging"
+
     /// `elicitation` (MCP forms and links, `ElicitationForm`) from the iOS app alone: the frozen Mac app and visionOS
-    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open.
+    /// don't declare it, so the hub hands those cards to the terminal when they are the only apps open. The iOS app
+    /// alone also asks for `todo_send_state` (`SendReceipt.todoFeature`, on the socket's URL too), since only its to-do
+    /// page writes to a to-do with an op id.
     /// `persona_card_ring` (```persona-card rings, `PersonaCard.swift`) from the apps that build the chat (iOS, Mac,
     /// visionOS), not the watch or the extensions: a client without it gets each ring as a stacked bar (the hub's
     /// card_compat.go), which every build before the ring draws.
+    /// `tool_views` (out-of-band declarative UI views on tool results, e.g. UI version 12 maps) from the iOS app alone
+    /// in this release; watch, widgets, extensions and un-updated apps omit it so hubs filter those fields out.
     nonisolated static func helloFeatures(_ client: RequestClientMetadata) -> [String] {
         let iOSApp = RequestClientMetadata.Platform.iOS.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue
         let chatApps = [RequestClientMetadata.Platform.iOS, .macOS, .visionOS].map { $0.rawValue + "-" + RequestClientMetadata.Surface.app.rawValue }
-        return [HubNaming.feature] + (client.platform == iOSApp ? ["elicitation"] : []) + (chatApps.contains(client.platform) ? [cardRingFeature] : [])
+        return [HubNaming.feature]
+            + (client.platform == iOSApp ? ["elicitation", UndeliveredMessage.agentHoldFeature, SendReceipt.todoFeature, toolViewsFeature] : [])
+            + (chatApps.contains(client.platform) ? [cardRingFeature, "closeout.markdown.v1", approvalMirrorsFeature] : [])
+    }
+
+    /// Whether this app asks for `todo_send_state` (`helloFeatures`), which the socket's URL then says as well.
+    nonisolated static func asksTodoReceipts(_ client: RequestClientMetadata) -> Bool {
+        helloFeatures(client).contains(SendReceipt.todoFeature)
     }
 
     /// The client_hello feature that says this app draws ```persona-card rings (#3068).
     nonisolated static let cardRingFeature = "persona_card_ring"
+    /// The client_hello / X-Persona-Features feature that says this app draws `tool_views` inline in chats.
+    nonisolated static let toolViewsFeature = "tool_views"
+
+    /// Main-conversation display copies are sent only to clients that deduplicate their aggregate views.
+    nonisolated static let approvalMirrorsFeature = "approval_mirrors"
 
     func send(_ object: [String: Any]) {
         if let local {

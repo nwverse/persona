@@ -29,6 +29,10 @@ const featureMeetingLiveView = assistantwire.CapabilityMeetingLiveView
 // docs/assistant/meeting-minutes.md "Phase 2b: highlights"); only with meeting_live_view.
 const featureMeetingHighlights = assistantwire.CapabilityMeetingHighlights
 
+// featureMeetingNotes: the default manager takes a room meeting's notes role (#8851, docs/assistant/meeting-minutes.md
+// "The notes role (#8851)"); only with meeting_live_view, whose topics and highlights a notes room keeps.
+const featureMeetingNotes = assistantwire.CapabilityMeetingNotes
+
 // featureMeetingEcho: the default manager takes Persona's echo marked on a meeting's upload (#5905,
 // docs/assistant/meeting-minutes.md "Persona's echo"); only with meeting_attendance.
 const featureMeetingEcho = assistantwire.CapabilityMeetingEcho
@@ -37,6 +41,10 @@ const featureMeetingEcho = assistantwire.CapabilityMeetingEcho
 // docs/assistant/meeting-minutes.md "Phase 5: hub transcription"); only with meeting_conversation and
 // meeting_live_view, whose lines it writes.
 const featureMeetingTranscription = assistantwire.CapabilityMeetingTranscription
+
+// featureMeetingSpeakers: the default manager serves speaker separation data on hub-transcribed meetings (#17674,
+// docs/assistant/meeting-minutes.md "Speakers (#17674)"); only with meeting_transcription.
+const featureMeetingSpeakers = assistantwire.CapabilityMeetingSpeakers
 
 // meetingAttendanceFeatures is the feature while the default manager is connected and named the capability in its
 // hello; nothing otherwise, so a phone offers no role to an older manager, which would ignore it.
@@ -85,6 +93,16 @@ func (h *Hub) meetingHighlightsFeatures() []string {
 	return []string{featureMeetingHighlights}
 }
 
+// meetingNotesFeatures is meeting_notes while the default manager names it beside meeting_live_view (and so
+// meeting_conversation and meeting_attendance); nothing otherwise, so a phone sends notes to no manager that would
+// read it as an unknown role (off).
+func (h *Hub) meetingNotesFeatures() []string {
+	if len(h.meetingLiveViewFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingNotes) {
+		return nil
+	}
+	return []string{featureMeetingNotes}
+}
+
 // meetingEchoFeatures is meeting_echo while the default manager names it beside meeting_attendance (Persona speaks
 // only in a meeting it attends); nothing otherwise, so a phone sends no echo line to a manager that would put it into
 // the minutes.
@@ -104,6 +122,16 @@ func (h *Hub) meetingTranscriptionFeatures() []string {
 		return nil
 	}
 	return []string{featureMeetingTranscription}
+}
+
+// meetingSpeakersFeatures is meeting_speakers while the default manager names it beside meeting_transcription (and so
+// meeting_live_view, meeting_conversation and meeting_attendance); nothing otherwise, so no client expects speaker
+// fields or edit routes from a manager that has none.
+func (h *Hub) meetingSpeakersFeatures() []string {
+	if len(h.meetingTranscriptionFeatures()) == 0 || !h.defaultManagerNames(assistantwire.CapabilityMeetingSpeakers) {
+		return nil
+	}
+	return []string{featureMeetingSpeakers}
 }
 
 // defaultManagerNames: the default manager (the one the recordings' routes go to) is connected and named capability

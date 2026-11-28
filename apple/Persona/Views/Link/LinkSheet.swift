@@ -1,9 +1,8 @@
 import BeautifulUI
 import SwiftUI
-#if canImport(UIKit)
 import UIKit
-#endif
 import WebKit
+import PersonaWire
 
 // Links open inside the app, Telegram-style (CLAUDE.md): a sheet that rises to 60%, drags up to full screen and down
 // to close, with the chat behind it still usable. Feishu docs open in the native reader and company-feed links as the
@@ -216,6 +215,10 @@ struct LinkSheet: View {
 
     private var header: some View {
         HStack(spacing: Theme.Space.m) {
+            // The way out first, as on every presented page (#9653); the page's own actions after the title.
+            Button { dismiss() } label: { ThemedIcon(Theme.Icon.close).sheetBarLabel() }
+                .accessibilityLabel("Close")
+                .accessibilityIdentifier("link-close")
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(title.isEmpty ? (isFeishuDoc ? String(localized: "Lark Doc") : feishuRoute != nil ? String(localized: "Moments") : (target.forwarded != nil ? nil : target.url.host) ?? String(localized: "Web Pages")) : title)
                     .font(Theme.Font.secondaryStrong).lineLimit(1)
@@ -255,9 +258,6 @@ struct LinkSheet: View {
                 Button { UIPasteboard.general.url = target.url; Haptics.success() } label: { Label("Copy Link", systemImage: Theme.Icon.link) }
                 if target.forwarded == nil { browserItems } // the phone's loopback means nothing to another app
             } label: { ThemedIcon(Theme.Icon.moreMenu) }
-            Button { dismiss() } label: { ThemedIcon(Theme.Icon.clear).symbolRenderingMode(.hierarchical) }
-                .accessibilityLabel("Close")
-                .accessibilityIdentifier("link-close")
         }
         .font(Theme.Font.title)
         .padding(.horizontal, Theme.Space.l)
@@ -270,11 +270,7 @@ struct LinkSheet: View {
     }
 
     @ViewBuilder private var browserItems: some View {
-        #if os(iOS) || os(visionOS)
         Button { UIApplication.shared.open(target.url) } label: { Label("Open in Safari", systemImage: Theme.Icon.safari) }
-        #else
-        Button { UIApplication.shared.open(target.url) } label: { Label("Open in Browser", systemImage: Theme.Icon.safari) }
-        #endif
         ShareLink(item: target.url) { Label("Share", systemImage: Theme.Icon.share) }
     }
 
@@ -308,7 +304,9 @@ struct LinkSheet: View {
 // MARK: - Web views
 
 /// WKWebViews kept warm: the links of the latest answers load in the background, so opening one shows a finished
-/// page. All share the default (on-disk) website data store, so assets and logins carry over.
+/// page. A link the user opens loads in the default (on-disk) website data store, so its assets and logins carry over.
+/// A preloaded one loads in an in-memory store instead, seeded with the default store's cookies so signed-in sites
+/// still preload signed in: preloads of pages nobody opened had filled WebKit's disk cache (760 MB on one phone, #8352).
 /// On iPhone, iPad and Vision Pro a view serves one opening of its link: once a sheet has shown it, the pool lets it go
 /// (`release`, from `PooledWebView`), so a later tap on the link starts on the link's own page with no back/forward
 /// history, not where the last opening was left (#4074).
@@ -321,9 +319,14 @@ final class WebViewPool {
     private let config: WKWebViewConfiguration = {
         let c = WKWebViewConfiguration()
         c.websiteDataStore = .default()
-        #if os(iOS) || os(visionOS)
         c.allowsInlineMediaPlayback = true
-        #endif
+        return c
+    }()
+    /// Preloads' store: in memory only, gone with the process.
+    private let preloadConfig: WKWebViewConfiguration = {
+        let c = WKWebViewConfiguration()
+        c.websiteDataStore = .nonPersistent()
+        c.allowsInlineMediaPlayback = true
         return c
     }()
 
@@ -337,12 +340,18 @@ final class WebViewPool {
             if Self.isLoopback(url), !v.isLoading { v.load(Self.request(url)) }
             return v
         }
-        let v = SelectableWebView(frame: .zero, configuration: config)
-        #if os(iOS) || os(visionOS)
+        return make(url, configuration: config)
+    }
+
+    private func make(_ url: URL, configuration: WKWebViewConfiguration) -> SelectableWebView {
+        let key = url.absoluteString
+        let v = SelectableWebView(frame: .zero, configuration: configuration)
         v.scrollView.showsVerticalScrollIndicator = false
         v.scrollView.showsHorizontalScrollIndicator = false
-        #endif
         v.allowsBackForwardNavigationGestures = true
+        #if os(iOS)
+        CallMediaGuard.shared.register(v) // a page's media stays still while a system call is live
+        #endif
         v.load(Self.request(url))
         views[key] = v
         touch(key)
@@ -359,6 +368,9 @@ final class WebViewPool {
     func release(_ v: WKWebView, for url: URL) {
         let key = url.absoluteString
         guard views[key] === v else { return }
+        // A sign-in done on a preloaded page is kept: its cookies go to the default store.
+        let store = v.configuration.websiteDataStore
+        if store === preloadConfig.websiteDataStore { Task { await Self.copyCookies(from: store, to: .default()) } }
         views[key] = nil
         order.removeAll { $0 == key }
         if !Self.isLoopback(url) { _ = view(for: url) }
@@ -383,7 +395,17 @@ final class WebViewPool {
     /// Starts loading links that may be opened soon (not the ones a native Feishu view opens).
     func preload(_ urls: [URL]) {
         let lark = AppModel.shared.larkFeatures
-        for u in urls.prefix(3) where views[u.absoluteString] == nil && FeishuLinks.route(u, lark: lark) == nil { _ = view(for: u) }
+        let wanted = urls.prefix(3).filter { views[$0.absoluteString] == nil && FeishuLinks.route($0, lark: lark) == nil }
+        guard !wanted.isEmpty else { return }
+        Task {
+            await Self.copyCookies(from: .default(), to: preloadConfig.websiteDataStore)
+            for u in wanted where views[u.absoluteString] == nil { _ = make(u, configuration: preloadConfig) }
+        }
+    }
+
+    /// Every cookie of one store set in another (an existing cookie of the same name, domain and path is replaced).
+    private static func copyCookies(from: WKWebsiteDataStore, to: WKWebsiteDataStore) async {
+        for c in await from.httpCookieStore.allCookies() { await to.httpCookieStore.setCookie(c) }
     }
 
     private func touch(_ key: String) {
@@ -397,7 +419,6 @@ final class WebViewPool {
     }
 }
 
-#if os(iOS) || os(visionOS)
 /// A WKWebView whose selection menu has Edit with AI and Add as Context.
 final class SelectableWebView: WKWebView {
     var onPick: ((String, String) -> Void)?
@@ -462,7 +483,6 @@ struct PooledWebView: UIViewRepresentable {
         }
     }
 }
-#endif
 
 // MARK: - In messages
 
@@ -640,13 +660,12 @@ struct PickTextSheet: View {
             }
             .navigationTitle("Select Text [Link Sheet 409a5a]")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
         }
         .presentationDetents([.medium, .large])
     }
 }
 
-#if os(iOS) || os(visionOS)
 struct PickTextView: UIViewRepresentable {
     var text: String
     var actions = PickAction.ai
@@ -690,4 +709,3 @@ struct PickTextView: UIViewRepresentable {
         }
     }
 }
-#endif

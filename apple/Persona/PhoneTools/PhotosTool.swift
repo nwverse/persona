@@ -1,8 +1,7 @@
 import Foundation
 import Photos
-#if canImport(UIKit)
 import UIKit
-#endif
+import PersonaWire
 
 /// Photo tools: list recent assets and hand one image back to Claude.
 enum PhotosTool {

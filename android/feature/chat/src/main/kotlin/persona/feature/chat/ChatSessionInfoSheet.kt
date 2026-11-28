@@ -19,11 +19,15 @@ import persona.core.contracts.Session
 import persona.core.contracts.SessionInfo
 import persona.core.contracts.parseTime
 import persona.core.designsystem.*
+import persona.core.domain.sort.isBotmux
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.domain.answer.Delegated
 import persona.core.domain.lines.tokenCount
 import persona.core.domain.sort.canSend
+import persona.core.domain.sort.listedModes
+import persona.core.domain.sort.displayTitle
+import persona.core.domain.sort.displayTitleDetail
 import persona.core.domain.sort.resumeCommand
 import java.time.Instant
 import java.time.ZoneId
@@ -116,6 +120,7 @@ internal fun sessionInfoSections(
     val directory = res.getString(R.string.chat_info_directory)
     val branch = res.getString(R.string.chat_info_branch)
     val resume = res.getString(R.string.chat_info_resume_command)
+    val mode = info.permissionMode.orSession(session.permissionMode)
     return buildList {
         session.todo?.let { todo ->
             add(SessionInfoSection(res.getString(R.string.chat_info_todo_section), listOf(
@@ -134,22 +139,29 @@ internal fun sessionInfoSections(
                     res.getString(if (appServer) R.string.chat_info_route_app_server else R.string.chat_info_route_terminal),
                     note = session.codexRouteNote?.takeIf { !appServer && it.isNotBlank() })
             },
-            SessionInfoRow(res.getString(R.string.chat_info_permission), SessionModes.modeLabel(info.permissionMode.orSession(session.permissionMode), res)),
+            // A session that lists its own modes (#8261) runs in one of them: no mode reported is its own approval.
+            SessionInfoRow(res.getString(R.string.chat_info_permission), session.listedModes?.let { listed ->
+                SessionModes.listedOption(mode?.takeIf { it in listed } ?: "default").title(res)
+            } ?: SessionModes.modeLabel(mode, res)),
             SessionInfoRow(res.getString(R.string.chat_info_effort), SessionModes.effortLabel(info.effort.orSession(session.effort), res)),
             // #582: on / off / unknown, as the node last saw it
             SessionInfoRow(Ultracode.NAME, Ultracode.infoWord(session, res)).takeIf { Ultracode.infoShown(session, features) },
         )))
+        // Counts nobody gives (#8261, `usage_unknown`: a runtime's session with no transcript here) are left out, not zeros.
+        val counted = !info.usageUnknown
         add(SessionInfoSection(res.getString(R.string.chat_info_usage_section), buildList {
-            add(SessionInfoRow(res.getString(R.string.chat_info_context), res.getString(R.string.chat_info_tokens, formatTokens(info.contextTokens, res))))
+            if (counted) add(SessionInfoRow(res.getString(R.string.chat_info_context), res.getString(R.string.chat_info_tokens, formatTokens(info.contextTokens, res))))
             // The share of the window, live from the session list; none while the window is unknown.
             ContextUsage.of(session)?.let { usage ->
                 add(SessionInfoRow(res.getString(R.string.chat_info_context_left), res.getString(R.string.chat_info_context_left_value, usage.left),
                     usage = usage))
             }
-            if (info.compactions > 0) add(SessionInfoRow(res.getString(R.string.chat_info_compactions),
+            if (counted && info.compactions > 0) add(SessionInfoRow(res.getString(R.string.chat_info_compactions),
                 res.getQuantityString(R.plurals.chat_info_compaction_count, info.compactions, info.compactions)))
-            add(SessionInfoRow(res.getString(R.string.chat_info_turns), res.getQuantityString(R.plurals.chat_info_turn_count, info.turns, info.turns)))
-            add(SessionInfoRow(res.getString(R.string.chat_info_output), res.getString(R.string.chat_info_tokens, formatTokens(info.outputTokens, res))))
+            if (counted) {
+                add(SessionInfoRow(res.getString(R.string.chat_info_turns), res.getQuantityString(R.plurals.chat_info_turn_count, info.turns, info.turns)))
+                add(SessionInfoRow(res.getString(R.string.chat_info_output), res.getString(R.string.chat_info_tokens, formatTokens(info.outputTokens, res))))
+            }
             parseTime(info.startedAt)?.let {
                 add(SessionInfoRow(res.getString(R.string.chat_info_started),
                     LocalizedFormats.format(it, LocalizedFormats.MONTH_DAY_TIME, locale, zone)))
@@ -172,6 +184,7 @@ internal fun ChatSessionInfoSheet(
     machine: Machine?,
     state: ChatChromeState,
     onOpenTodo: ((String) -> Unit)? = null,
+    preferHerdrTabName: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     val copyText = rememberCopy()
@@ -190,8 +203,12 @@ internal fun ChatSessionInfoSheet(
     }
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_info_title), scrollable = true) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            Text(session.displayTitle, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink, maxLines = 2,
+            Text(session.displayTitle(preferHerdrTabName), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink, maxLines = 2,
                 overflow = TextOverflow.Ellipsis)
+            session.displayTitleDetail(preferHerdrTabName)?.let { cliTitle ->
+                Text(cliTitle, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
             val status = Status.entries.firstOrNull { it.name == session.agentState.name }
             Text(listOfNotNull(status?.localizedLabel, machine?.displayName ?: session.machineId, session.spaceName?.takeIf(String::isNotBlank))
                 .joinToString(" / "), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
@@ -201,9 +218,11 @@ internal fun ChatSessionInfoSheet(
         session.externalLink?.let { url ->
             JGroupItem(GroupPosition.of(0, 1), Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.chat_host_open_feishu), leadingIcon = PersonaIcons.openExternal, chevron = false,
-                    onClick = { runCatching { uriHandler.openUri(url) } })
+                    onClick = { val _ = runCatching { uriHandler.openUri(url) } })
             }
         }
+        // A BotMux session reads as in Lark, or as its raw transcript (BotmuxMessages.kt).
+        if (session.isBotmux) BotmuxModeRow(Modifier.padding(top = Tokens.Space.m))
         // The questions the assistant answered for this agent; its own conversations have none.
         if (!session.assistant) DelegatedHistorySection(session, state)
         val loaded = info
@@ -242,7 +261,7 @@ internal fun ChatSessionInfoSheet(
  * caution colour from [ContextUsage.WARN_USED] percent used; read out as one line with the share used and the window.
  */
 @Composable
-private fun ContextUsageRow(label: String, value: String, usage: ContextUsage) {
+internal fun ContextUsageRow(label: String, value: String, usage: ContextUsage) {
     val palette = PersonaTheme.palette
     val spoken = stringResource(R.string.chat_info_context_spoken, value, usage.used, usage.detail)
     Column(Modifier.clearAndSetSemantics { contentDescription = spoken }) {
@@ -261,7 +280,7 @@ private fun ContextUsageRow(label: String, value: String, usage: ContextUsage) {
  * new answer reaches the Agent as a message). Nothing while it loads or when there are none; a failure says so with Retry.
  */
 @Composable
-private fun DelegatedHistorySection(session: Session, state: ChatChromeState) {
+internal fun DelegatedHistorySection(session: Session, state: ChatChromeState) {
     val res = LocalResources.current
     var answers by remember(session.key) { mutableStateOf<List<DelegatedAnswer>?>(null) }
     var failure by remember(session.key) { mutableStateOf<String?>(null) }

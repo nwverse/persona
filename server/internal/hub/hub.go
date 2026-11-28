@@ -4,6 +4,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -15,16 +16,20 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/hubedge"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
 type Hub struct {
+	// projectReview: wakes the owner-input relay (project_review.go).
+	projectReview projectReviewRelay
 	passwordLogin passwordLoginState
+	browserLogin  browserLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
 	errs hubErrors
 
-	deployCtx     context.Context // canceled with the hub; accepted node updates resume from Postgres
+	deployCtx     context.Context // canceled with the hub; node updates finish before the database closes
 	nodeWorkers   sync.WaitGroup
 	shutdown      *shutdownBudget
 	wsStopping    bool // guarded by mu; prevents new WaitGroup additions during shutdown
@@ -40,21 +45,50 @@ type Hub struct {
 	extRoster rosterSeen
 	// extLost are when this hub started and when managers' bus connections ended here lately (extensions_proof.go).
 	extLost busLosses
+	// clarificationProofs are short-lived, one-time full-device web question proofs.
+	clarificationProofs hubClarificationProofBook
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
-	cfg       *Config
-	version   string
-	build     update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
-	upd       *updater     // updating itself to the publisher's release (selfupdate.go)
-	logger    *log.Logger
-	traffic   trafficLog // privacy-safe minute counters, flushed to the journal
-	machines  []*Machine
-	byID      map[string]*Machine
-	push      *Pusher
-	agentWork agentWork    // whether the manager is there to ask (agents_link.go)
-	store     Store        // nil in unit tests: nothing is persisted
-	lockTests lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)
+	cfg      *Config
+	version  string
+	build    update.Build    // channel, build number, where updates come from (docs/operations/hub-update.md)
+	upd      *updater        // updating itself to the publisher's release (selfupdate.go)
+	recovery recoveryService // read-only whole-install Recovery inventory (recovery_routes.go)
+	// quiesce and assistantProc pause the hub's own writers for a Web
+	// development snapshot (quiesce.go).
+	quiesce       writeQuiescer
+	assistantProc assistantGate
+	// deviceFinishes: device sessions that ended while a snapshot paused
+	// writes, written on resume (devicesessions.go).
+	deviceFinishesMu      sync.Mutex
+	deviceFinishesFlushMu sync.Mutex
+	deviceFinishes        []deviceSessionFinish
+	deviceFinishesRunning bool
+	testAfterFinishAppend func()
+	testAfterFinishRefuse func()
+	clientOps             clientOpsWake
+	codexPendingMu        sync.Mutex
+	codexPending          map[string]*codexSaveEntry
+	looksGoneMu           sync.Mutex
+	looksGonePending      []string
+	assistantProfileSave  assistantProfileSaveState
+	logger                *log.Logger
+	traffic               trafficLog // privacy-safe minute counters, flushed to the journal
+	machines              []*Machine
+	byID                  map[string]*Machine
+	// fs.watch: generation fences stale node writes, and forced replays survive machine-ID recreation.
+	fsWatchGenMu         sync.Mutex
+	fsWatchGen           map[string]uint64
+	fsWatchEpoch         uint64
+	fsWatchEpochDeferred atomic.Bool
+	fsWatchForceMu       sync.Mutex
+	fsWatchForceByID     map[string]bool
+	push                 *Pusher
+	gradingReconcile     pushGradingLayerReconciler
+	agentWork            agentWork    // whether the manager is there to ask (agents_link.go)
+	store                Store        // nil in unit tests: nothing is persisted
+	lockTests            lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)
 
 	terms terminals  // the terminal tab's live streams (terminal.go)
 	fulls fullRelays // the web's full herdr views (herdrclient.go)
@@ -63,6 +97,8 @@ type Hub struct {
 	trust   machineTrust // the computers waiting to be confirmed (machine_trust.go)
 	// machineAdd: one computer is added for a pairing code at a time (machines_add.go), so two get different ids.
 	machineAdd sync.Mutex
+	// linkSwitch: the switches of ssh computers to Persona Link under way (link_switch.go).
+	linkSwitch linkSwitches
 
 	// handedOver: the managers' pushes and outbox items delivered lately, so one sent again is delivered once
 	// (outbox_relay.go).
@@ -80,6 +116,8 @@ type Hub struct {
 	// handoffRecorded: the refused approvals of hand-off cards recorded lately (secret_handoff.go).
 	handoffRecorded handoffRecorded
 
+	// machineEventsMu keeps machine-list snapshots in the order they are queued.
+	machineEventsMu sync.Mutex
 	// sessionsSent: each machine's last session list sent to the apps, as encoded (broadcastSessions).
 	sessionsMu   sync.Mutex
 	sessionsSent map[string][]sentSession
@@ -107,18 +145,29 @@ type Hub struct {
 	// deltas: the live text of each session's message being generated, as last relayed (machine, session -> text): a
 	// client subscribing in the middle of it gets it after the backlog instead of waiting for the next token.
 	deltas     map[[2]string]string
+	ttft       hubTTFTTracker
 	phoneTools map[string]db.PhoneToolRegistration
 	calls      map[string]chan proto.ToolResult
 	wokeAt     map[string]time.Time // device -> last silent push to wake it for a tool call
 	live       *liveActivities      // the lock screen / Dynamic Island activity (liveactivity.go)
+	// primaryPhone: the device the owner chose to take phone calls first (phone_primary.go); the zero value is
+	// Automatic. Under mu; primaryPhoneMu keeps one choice written at a time.
+	primaryPhone   phonePrimary
+	primaryPhoneMu sync.Mutex
 
 	// phoneToolsMu: one phone tool registration written at a time, so the rows and phoneTools agree on the latest.
 	// Never held with mu taken first; the write it covers runs outside mu (#5358).
 	phoneToolsMu sync.Mutex
 	phoneWrites  phoneWriteQueue
 
+	// helloWrites persists client metadata in ordered, coalescing consumers (hello_writes.go).
+	helloWrites      helloWriteWorkers
+	phoneToolUpdates phoneToolUpdates
+
 	// askVia replaces fleet.ask in tests that play the manager (waitInteraction).
 	askVia func(context.Context, proto.Interaction) (proto.Resolution, error)
+	// prepared owns hub-side retained settings handles (prepared_settings.go).
+	prepared preparedSettings
 	// reported is what the manager told of the nodes' interactions and the fleet (fleet_link.go).
 	reported fleetCache
 
@@ -129,12 +178,16 @@ type Hub struct {
 	others    managerStates // the other managers' (manager_state.go)
 	moving    moves         // who carries what changing (ownership_moves.go)
 	// userLocale: the user's language, an i18n.Lang; langs: each device's language that decides it (locale.go)
-	userLocale   atomic.Value
-	langs        userLangs
-	apps         clientApps   // the apps' versions as they last said (client_apps.go)
-	deleted      deletedBook  // conversations taken out of the apps' lists (deleted_sessions.go)
+	userLocale atomic.Value
+	langs      userLangs
+	apps       clientApps  // the apps' versions as they last said (client_apps.go)
+	deleted    deletedBook // conversations taken out of the apps' lists (deleted_sessions.go)
+
+	deletedConversationContent map[[2]string]bool // Manager/conversation transport tombstones; guarded by mu.
+
 	secret       secretState  // secretkey.go
 	devtok       devTokens    // device token lookups (devicetokens.go)
+	readonlyMu   sync.Mutex   // serializes active-cap checks on read-only session issuance (readonly_sessions.go)
 	shareIngress shareIngress // anonymous admission limits; no sharing business state
 	public       publicState  // TLS identity, listener and advertised addresses (public.go)
 	sends        sendLog      // messages being / just sent, by client_msg_id (send.go)
@@ -147,6 +200,9 @@ type Hub struct {
 
 	mesh  meshState // the other hubs of the mesh group (mesh.go)
 	fleet fleet     // guards machines and byID (machines.go)
+	// historyReads are the history rows an extension's or scoped token was given lately, which it may read though
+	// the live list does not have them (sessions_history.go).
+	historyReads historyReads
 
 	todoLinks todoLinks // what the assistant reports of its todos' agents (assistant_todos.go)
 
@@ -197,6 +253,7 @@ type Store interface {
 	LiveActivities(ctx context.Context) ([]db.LiveActivity, error)
 	SaveLiveActivity(ctx context.Context, v db.LiveActivity) error
 	ClaimLiveActivityStart(ctx context.Context, device, startToken string, at time.Time, cooldown, maxAge time.Duration) (time.Time, bool, error)
+	HoldLiveActivityStart(ctx context.Context, device string, asOf time.Time, hold time.Duration) (bool, error)
 	Setting(ctx context.Context, key string, out any) (bool, error)
 	PutSetting(ctx context.Context, key string, v any) error
 	TakeSetting(ctx context.Context, key string, out any) (bool, error)
@@ -208,13 +265,20 @@ type Store interface {
 	CreatePairToken(ctx context.Context, hash string, expiresAt time.Time, machine string) error
 	PairTokenByHash(ctx context.Context, hash string) (*db.PairToken, error)
 	RedeemPairToken(ctx context.Context, pairHash string, device db.DeviceToken, tokenHash string) (bool, error)
+	// A switch of an ssh computer to Persona Link (link_switch.go): whether it has a link already, and undoing exactly
+	// the code a switch made and the credential it became.
+	MachineLinkInUse(ctx context.Context, machine string) (bool, error)
+	RevokeLinkPair(ctx context.Context, hash, machine string) (credentialID string, found bool, err error)
 }
 
 func Run(ctx context.Context, b update.Build) error {
 	claimInherited() // before anything can start a process: runHub starts the manager before it listens (listen.go)
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	// An update that keeps failing goes back before anything else can fail, the config included (selfupdate.go).
-	updating := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
+	updating, err := newUpdater(&Hub{build: b, version: b.Version, logger: logger}).boot()
+	if err != nil {
+		return fmt.Errorf("update recovery: %w", err)
+	}
 	cfg, err := LoadConfig()
 	if err != nil {
 		return err
@@ -249,6 +313,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.teeErrors()                  // the log's error lines become reports while an extension takes them (error_reports.go)
 	h.builtinLooks = builtinPersonaFS()
 	h.live = newLiveActivities(h)
+	if err := cfg.checkPrivateNetworkOnly(); err != nil {
+		return err // before anything starts that could reach past the private network
+	}
 	h.upd = newUpdater(h)
 	h.upd.confirmed = !updating // an update under way is confirmed by this process (its watchdog waits for that)
 	h.upd.logSource()
@@ -256,18 +323,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	if err != nil {
 		return err
 	}
-	defer func() {
-		cancel()
-		budget.step(h, "node connections", func(context.Context) error {
-			h.nodeWorkers.Wait()
-			return nil
-		})
-		if h.stopping.Load() {
-			budget.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
-		}
-		budget.step(h, "close database", database.CloseContext)
-	}()
+	defer h.closeDatabaseAfterWorkers(cancel, database.CloseContext)
 	h.store = database
+	h.startHelloWriters()
 	go func() {
 		select {
 		case <-stop.Done():
@@ -287,23 +345,32 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.importLegacy(ctx)
 	h.loadUserLang(ctx)
 	h.loadPhoneTools()
+	h.loadPhonePrimary(ctx)
 	if err := h.startPhoneWrites(ctx); err != nil {
 		return err
 	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
+	h.push.quiesce = &h.quiesce
+	h.push.revoked = h.isDeviceRevoked
+	h.push.web = newWebPusher(h.store, h.logf) // browsers' subscriptions and the VAPID key, in the hub's settings (#7459)
+	h.push.web.quiesce = &h.quiesce
+	h.push.web.revoked = h.isDeviceRevoked
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen
 	h.push.hubID = h.hubID
 	h.push.userLang = h.userLang
 	h.push.userLoc = h.userLocation
+	h.push.attention = h.attentionMode
+	h.push.privateOnly = cfg.Security.PrivateNetworkOnly          // own APNs key only, sealed (push.go relayed, push_send.go)
 	h.push.devicesChanged = func() { go h.fleetClientsChanged() } // a phone that takes MCP forms by push (fleet_link.go)
+	go h.projectReviewOwnerLoop(ctx)
 	go h.push.maintenanceLoop(ctx)
 	// The machines are the manager's to connect (devices_link.go); until it reports them they show as before a
 	// restart (what it handed over), before the assistant's process starts and takes that hand-over.
 	h.loadMachineTrust(ctx) // before the manager connects them and the assistant asks (machine_trust.go)
-	go h.machineTrustLoop(ctx)
 	h.startDevices(ctx)
+	go h.machineTrustLoop(ctx)
 	h.initMesh(ctx) // before the manager connects: a member leaves its computers to the center (mesh_group.go)
 	go h.terminalKeepalive(ctx)
 	go h.fullKeepalive(ctx)
@@ -329,13 +396,35 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	return h.serveHTTP(ctx)
 }
 
+// closeDatabaseAfterWorkers is runHub's real cleanup sequence. serveHTTP has already closed and joined app socket
+// handlers when this starts; accepted hello reports drain before the finite node workers and the database close.
+func (h *Hub) closeDatabaseAfterWorkers(cancel context.CancelFunc, closeDatabase func(context.Context) error) {
+	cancel()
+	h.shutdown.step(h, "hello writes", func(context.Context) error {
+		h.stopHelloWriters()
+		return nil
+	})
+	h.shutdown.step(h, "node connections", func(context.Context) error {
+		h.nodeWorkers.Wait()
+		return nil
+	})
+	if h.stopping.Load() {
+		h.shutdown.step(h, "hand over the event log", func(ctx context.Context) error { h.saveEventLog(ctx); return nil })
+	}
+	// Every stop, planned or not: the next process may be a build from before hub_push_sent (push_grading.go mirrorSent).
+	h.shutdown.step(h, "delivered pushes for an older build", h.push.mirrorSent)
+	h.shutdown.step(h, "close database", closeDatabase)
+}
+
 func (h *Hub) logf(format string, args ...any) { h.logger.Printf(format, args...) }
 
 func (h *Hub) broadcastMachines() {
 	if h.pruneSessionListMachines() {
 		h.broadcastSessionListNotice()
 	}
+	h.machineEventsMu.Lock()
 	h.broadcast(map[string]any{"type": "machines", "machines": h.machineList()})
+	h.machineEventsMu.Unlock()
 	h.meshTouch() // a member's record says which of its computers the center can reach through it
 	h.assistantUpdated()
 }
@@ -374,9 +463,66 @@ func (h *Hub) loadPhoneTools() {
 // phoneToolsTimeout bounds a phone tool registration's write (the pool has no statement_timeout); tests shorten it.
 var phoneToolsTimeout = 5 * time.Second
 
-// setPhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled
-// database used to stop every broadcast and client message with it (#5358).
+// setPhoneTools records a phone's latest tool set. With a store, one consumer writes registrations in message order;
+// only the newest pending registration for each device is saved. The connection's live tool names were already
+// updated by onClientMessage, so calls to that phone do not wait for persistence (#6889).
 func (h *Hub) setPhoneTools(registration db.PhoneToolRegistration) {
+	if h.store == nil {
+		h.writePhoneTools(registration)
+		return
+	}
+	q := &h.phoneToolUpdates
+	h.startHelloWriters()
+	q.mu.Lock()
+	if replacePendingPhoneToolsLocked(q, registration) {
+		q.mu.Unlock()
+		wakeHelloWriter(h.helloWrites.toolsWake)
+		return
+	}
+	q.mu.Unlock()
+	// Only a distinct pending device consumes room. Replacing an already queued device needs no slot and can never
+	// leave one connection stuck behind its own repeated registration for that device.
+	if !h.admitHelloReport(h.helloWrites.toolsSlot, phoneToolsTimeout, &h.helloWrites.toolsDrop, "phone tools") {
+		return
+	}
+	q.mu.Lock()
+	replaced := replacePendingPhoneToolsLocked(q, registration)
+	if !replaced {
+		if q.pending == nil {
+			q.pending = map[string]db.PhoneToolRegistration{}
+		}
+		q.pending[registration.DeviceID] = registration
+		q.order = append(q.order, registration.DeviceID)
+	}
+	q.mu.Unlock()
+	if replaced {
+		// Another producer queued this device while this one waited for admission. Its existing slot covers the update.
+		releaseHelloReports(h.helloWrites.toolsSlot, 1)
+	}
+	wakeHelloWriter(h.helloWrites.toolsWake)
+}
+
+// replacePendingPhoneToolsLocked replaces a queued device and moves it to its latest message position. The caller
+// holds q.mu; false means the device needs a newly admitted pending entry.
+func replacePendingPhoneToolsLocked(q *phoneToolUpdates, registration db.PhoneToolRegistration) bool {
+	if _, queued := q.pending[registration.DeviceID]; !queued {
+		return false
+	}
+	q.pending[registration.DeviceID] = registration
+	for i, id := range q.order {
+		if id == registration.DeviceID {
+			copy(q.order[i:], q.order[i+1:])
+			q.order[len(q.order)-1] = registration.DeviceID
+			break
+		}
+	}
+	return true
+}
+
+// writePhoneTools saves a phone's tools, then lists them. The write runs outside h.mu, the hub's global lock: a stalled
+// database used to stop every broadcast and client message with it (#5358). Only the phone-tool consumer calls this
+// for a persistent hub, so an older registration cannot finish after and replace a newer one.
+func (h *Hub) writePhoneTools(registration db.PhoneToolRegistration) {
 	defer h.wakePhoneWrites()
 	h.phoneToolsMu.Lock()
 	defer h.phoneToolsMu.Unlock()
@@ -459,19 +605,40 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 			return phoneWriteResult(existing)
 		}
 	}
-	c := h.phoneClient(name)
-	if c == nil && queue {
-		return h.enqueuePhoneWrite(ctx, name, args)
+	// Which device takes it (docs/apple/phone-tools.md "Which device takes a call"): the primary device the owner chose
+	// while it offers the tool, else the automatic order (phone_primary.go).
+	primary, primaryName, offers := h.primaryPhoneFor(name)
+	wakeFor := ""
+	if offers {
+		wakeFor = primary
 	}
-	if c == nil && phoneOnScreenTools[name] {
-		return proto.TextResult(phoneNotOnScreen, true)
+	c := h.phoneClientPreferring(name, wakeFor)
+	if c == nil || (offers && c.device != primary) { // nobody connected takes it, or the primary device is not connected
+		switch {
+		case queue: // waits for the phone: with a primary device, for that one, even while another is connected
+			return h.enqueuePhoneWrite(ctx, name, args)
+		case phoneOnScreenTools[name]: // never woken for (#4192); a connected device stands in
+			if c == nil {
+				return proto.TextResult(phoneNotOnScreen, true)
+			}
+		default:
+			c = nil
+			if woken := h.wakePhone(ctx, name, wakeFor); woken != nil {
+				c = woken
+			} else if offers && ctx.Err() == nil {
+				// The primary device did not come: another connected device answers, unless the caller has gone
+				// meanwhile (a write would ask on that device for a call nobody waits for).
+				c = h.phoneClientPreferring(name, wakeFor)
+			}
+		}
 	}
-	if c == nil {
-		c = h.wakePhone(ctx, name)
+	if c == nil && offers {
+		return proto.TextResult(prompts.RenderPhonePrimaryOffline(prompts.PhonePrimaryOffline{Primary: primaryName}), true)
 	}
 	if c == nil {
 		return proto.TextResult("The user's iPhone is not connected and did not wake up in the background: ask them to open the Persona app, then retry.", true)
 	}
+	standIn := primary != "" && c.device != primary // a primary device is chosen, and another one answers
 	id := randomHex(8)
 	ch := make(chan proto.ToolResult, 1)
 	h.mu.Lock()
@@ -495,6 +662,20 @@ func (h *Hub) callPhoneWithWait(ctx context.Context, name string, args json.RawM
 	}
 	select {
 	case r := <-ch:
+		r = annotateHealthSnapshot(name, r)
+		if !r.IsError && (name == "phone_calendar_create_event" || name == "phone_reminders_create") {
+			// A completed quick-result write came from this selected connection. Queued receipts returned above have
+			// no executing device, and older clients leave whichever identity fields they do not supply absent.
+			h.mu.Lock()
+			r.SourceDeviceName = c.name
+			h.mu.Unlock()
+			c.mu.Lock()
+			r.SourceDevicePlatform = c.meta.Platform
+			c.mu.Unlock()
+		}
+		if standIn {
+			r = withStandInNote(r, h.standInName(c), primaryName)
+		}
 		return r
 	case <-ctx.Done():
 		if confirmed {
@@ -547,11 +728,13 @@ var phoneConfirmedTools = map[string]bool{
 var phoneOnScreenTools = map[string]bool{
 	"phone_clipboard_get": true,
 	"phone_clipboard_set": true,
+	// The system's Health permission screen shows only over the app on screen (#13740).
+	"phone_health_request_access": true,
 }
 
 // phoneNotOnScreen is the answer to a phoneOnScreenTools call no connected phone can take.
 const phoneNotOnScreen = "Persona is not open on the user's phone, and the phone lets only the app on screen use the " +
-	"clipboard: ask the user to open Persona, then retry."
+	"clipboard or ask for Health access: ask the user to open Persona, then retry."
 
 // requestPhoneWake selects a provider and asks iOS to wake it without waiting for a connection.
 // It reports whether a provider can be woken, including when a recent request throttles this push.
@@ -560,9 +743,13 @@ func (h *Hub) requestPhoneWake(name string) bool {
 		return false
 	}
 	h.mu.Lock()
+	primary, offers := h.primaryPhoneLocked(name)
 	var candidates []db.PhoneToolRegistration
 	for _, r := range h.phoneTools {
 		if r.Platform != "" && r.Platform != "ios" {
+			continue
+		}
+		if offers && r.CredentialID != primary { // with a primary device chosen, that one is woken (phone_primary.go)
 			continue
 		}
 		for _, tool := range r.Tools {
@@ -607,8 +794,9 @@ func (h *Hub) requestPhoneWake(name string) bool {
 	return true
 }
 
-// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect.
-func (h *Hub) wakePhone(ctx context.Context, name string) *client {
+// wakePhone asks iOS to wake the app in the background (silent push) and waits briefly for it to connect: with primary
+// not empty, for the primary device's app (another device connecting does not end the wait), else for any phone's.
+func (h *Hub) wakePhone(ctx context.Context, name, primary string) *client {
 	if !h.requestPhoneWake(name) {
 		return nil
 	}
@@ -618,7 +806,7 @@ func (h *Hub) wakePhone(ctx context.Context, name string) *client {
 	t := time.NewTicker(300 * time.Millisecond)
 	defer t.Stop()
 	for {
-		if c := h.phoneClient(name); c != nil {
+		if c := h.phoneClientOf(name, primary); c != nil {
 			h.logf("phone woke up for a tool call in %d ms", time.Since(start).Milliseconds())
 			return c
 		}

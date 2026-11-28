@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { BoardModel, boundCard, cardSessions, columnCards, directory, sameDirectory, selectedColumn, optimisticBoard, type BoardCard, type BoardState, type Workspace } from "./workspace-board";
+import { BoardModel, boardUnsupported, boundCard, cardSessions, columnCards, directory, sameDirectory, selectedColumn, optimisticBoard, type BoardCard, type BoardState, type Workspace } from "./workspace-board";
 import { href, parse } from "./router";
 import type { Session } from "./types";
 const card = (id: string, patch: Partial<BoardCard> = {}): BoardCard => ({ id, machine_id: "computer", workspace_id: `space-${id}`, title: id, cwd: `/projects/${id}`, source: "directory", column_id: "todo", pinned: false, archived: false, ...patch });
@@ -48,6 +49,15 @@ describe("workspace board projection", () => {
     expect(cardSessions(c, [session("computer", "C:\\repo\\one\\..\\two\\")])).toHaveLength(1);
     expect(boundCard({ ...initial(), cards: [c] }, { machine_id: "computer", cwd: "C:\\repo\\two\\" } as Workspace)?.id).toBe(c.id);
   });
+  it("compares Windows directory components without case changes to displayed paths", () => {
+    expect(directory("C:\\Projects\\Demo")).toBe("c:/Projects/Demo");
+    expect(sameDirectory("C:\\Projects\\Demo", "c:/projects/demo/")).toBe(true);
+    expect(sameDirectory("\\\\Server\\Share\\Projects\\Demo", "//server/share/projects/demo")).toBe(true);
+    expect(sameDirectory("/Projects/Demo", "/projects/demo")).toBe(false);
+    const c = card("windows", { cwd: "C:\\Projects\\Demo" });
+    expect(cardSessions(c, [session("computer", "c:/projects/demo")])).toHaveLength(1);
+    expect(boundCard({ ...initial(), cards: [c] }, { machine_id: "computer", cwd: "c:/projects/demo" } as Workspace)).toBe(c);
+  });
   it("recognizes archived bindings for restoration, scoped to a machine", () => {
     const board = initial(), w = { machine_id: "computer", cwd: "/projects/old/" } as Workspace;
     expect(boundCard(board, w)?.archived).toBe(true);
@@ -88,7 +98,7 @@ describe("workspace board HTTP contract", () => {
     const request = vi.fn(async (path: string, init?: unknown) => { if (path === "/workspaces") return { workspaces: [] }; if (init) throw new ApiError(409, "conflict", {}); return { ...initial(), revision: ++reads === 1 ? 3 : 5 }; });
     const model = new BoardModel(request as never); await model.refresh();
     expect(await model.mutate({ action: "update_card", id: "a", pinned: true })).toBe(false);
-    expect(model.snapshot().board?.revision).toBe(5); expect(model.snapshot().error).toContain("已经重新加载");
+    expect(model.snapshot().board?.revision).toBe(5); expect(model.snapshot().error).toContain("已重新加载");
   });
   it("honors server can_write on first load and 403 on revoked access", async () => {
     const request = vi.fn(async (path: string) => path === "/workspaces" ? { workspaces: [] } : { ...initial(), can_write: false });
@@ -106,7 +116,19 @@ describe("workspace board HTTP contract", () => {
   it("retains cards when discovery fails and describes unsupported hubs", async () => {
     const model = new BoardModel((async (path: string) => { if (path === "/workspaces") throw new Error("node unsupported"); return initial(); }) as never);
     await model.refresh(); expect(model.snapshot().board?.cards).toHaveLength(4); expect(model.snapshot().discoveryError).toContain("unsupported");
-    const old = new BoardModel((async () => { throw new ApiError(503, "unsupported", {}); }) as never); await old.refresh(); expect(old.snapshot().error).toContain("更新 hub");
+    const old = new BoardModel((async () => { throw new ApiError(503, "unsupported", { code: "not_supported" }); }) as never); await old.refresh(); expect(old.snapshot().error).toContain("更新 hub"); expect(old.snapshot().unsupported).toBe(true);
+    const older = new BoardModel((async () => { throw new ApiError(404, "Not Found", { code: "not_found" }); }) as never); await older.refresh(); expect(older.snapshot().unsupported).toBe(true);
+  });
+  it("tells a manager that is away (503 assistant_offline) from a hub without the board: Retry helps, updating does not", async () => {
+    let away = true;
+    const model = new BoardModel((async (path: string) => { if (path === "/workspaces") return { workspaces: [] }; if (away) throw new ApiError(503, "assistant offline", { code: "assistant_offline" }); return initial(); }) as never);
+    await model.refresh();
+    expect(model.snapshot().unsupported).toBe(false);
+    expect(model.snapshot().error).not.toContain("更新 hub");
+    expect(boardUnsupported(new ApiError(503, "x", {}))).toBe(false); // a proxy's 503, with no code: passes too
+    away = false; await model.refresh();
+    expect(model.snapshot()).toMatchObject({ error: "", unsupported: false });
+    expect(model.snapshot().board?.cards).toHaveLength(4);
   });
   it("does not let an in-flight GET overwrite a completed mutation", async () => {
     const stale = deferred<BoardState>(); let reads = 0;

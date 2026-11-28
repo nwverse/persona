@@ -1,8 +1,9 @@
+import { conversationDeletionScope, deletedConversationID, onConversationDeleted } from "./conversation-deleted";
 // Tasks dispatched from an assistant conversation (docs/assistant/unified-entry.md, iOS TasksStore / Shared/Tasks.swift): the plans,
 // each conversation's feed (what the hub inserted into it), where those go among the chat's lines, the day lines and
 // the quick results. A task is a todo whose `origin` is the conversation; its state is the todo's (lib/todos.ts).
 import { useSyncExternalStore } from "react";
-import { api, ApiError, enc } from "./api";
+import { api, ApiError, enc, isNetworkFailure } from "./api";
 import { formatDate, t } from "../i18n";
 import { parseAPIError } from "./api-errors";
 import { getState, onHubEvent, putTodo, refreshTodos, todosPushed } from "./store";
@@ -14,13 +15,34 @@ import type { RuleSuggestion } from "./rule-suggestion";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { closePanel, getPanel } from "./panel";
-import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, routedConversationManager } from "./manager-choice";
-import type { ChatLine } from "./turns";
+import { BUILTIN_MANAGER, conversationManager, defaultManager, itemHeaders, MANAGER_HEADER, managerHeaderFor, noteConversation, routedConversationManager } from "./manager-choice";
+import { canonicalMcpToolName, stripToolResultTimestampHeaders, type ChatLine } from "./turns";
 import type { Item } from "./types";
 import { upsertTaskCards, type TaskCardMetadata } from "./task-cards";
 
 export type TaskWorkspace = "new" | "none" | { existing: string } | { new: { branch?: string } };
 export interface TaskWorkspaceResolved { machine: string; path: string; branch?: string; workspace_id?: string; created?: boolean }
+
+export type PlanTaskDispatchReason =
+  | "only"
+  | "first"
+  | "score"
+  | "quota"
+  | "unavailable"
+  | "kept"
+  | "switched"
+  | "over_pace"
+  | (string & {});
+
+export interface PlanTaskDispatch {
+  tier?: string;
+  candidate?: number;
+  of?: number;
+  launcher?: string;
+  model?: string;
+  reason: PlanTaskDispatchReason;
+  args?: Record<string, string | number | boolean>;
+}
 
 export interface PlanTask {
   title: string;
@@ -38,17 +60,36 @@ export interface PlanTask {
   ultracode?: boolean;
   readonly?: boolean;
   why?: string;
+  /** The reasoning effort the assistant chose for its Agent (task_plan's `effort`); absent: the launcher's default. */
+  effort?: string;
+  /** The to-do the task runs on; cleared on an older plan once a later one continues that to-do (#11854). */
   todo_id?: string;
+  /** The to-do this task carries on in (task_plan's `continues`) or runs on instead of a new one (`todo_id`, kept as
+   *  `reuse_todo`): both stay when `todo_id` is cleared. */
+  continues?: string;
+  reuse_todo?: string;
   error?: string;
   /** The failed start's coded refusal and its details (as a session's start_error_code / start_error_args). */
   error_code?: string;
   error_args?: Record<string, string>;
+  /** Its launcher could not start on that computer: the others there a Retry may start it with, the first suggested
+   *  (#10365, "Use … instead"). The hub's; absent from an older hub and for any other failure. */
+  retry_with?: string[];
   /** The brief the task will be held to (#3822, lib/brief.ts): the card shows it, and "Start" confirms it. Absent from
    *  a hub before briefs and on a plan made before them. */
   brief?: TaskBrief;
+  /** The scheduled task whose own run planned this (#8045), and its name: the card can then offer to let it start this
+   *  kind of task by itself next time. Every task of such a plan carries the same; absent everywhere else. */
+  schedule?: string;
+  schedule_title?: string;
+  /** Hub-owned candidate selection metadata for multi-candidate tiers; absent on older hubs. */
+  dispatch?: PlanTaskDispatch;
 }
 
 export interface TaskPlan {
+  space?: string;
+  /** Client-side ownership, captured from the response or event envelope. */
+  manager?: string;
   id: string;
   conversation: string;
   tasks: PlanTask[];
@@ -59,7 +100,7 @@ export interface TaskPlan {
   suggestion?: RuleSuggestion;
 }
 
-export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief" | "inbox_suggestion";
+export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief" | "inbox_suggestion" | "urgent_call";
 
 export interface FeedItem {
   id: string;
@@ -87,6 +128,7 @@ export interface TodayBody {
 
 /** `brief`: the fixed part of a morning or evening run (docs/protocol/protocol.md), as the hub worked it out when the run started. */
 export interface BriefRow {
+  evidence_link?: string;
   /** The card (waiting), the to-do (accept). */
   id: string;
   title: string;
@@ -102,6 +144,10 @@ export interface BriefRow {
   /** accept: a conclusion's verdict (left out for a deployed task); decide waits for the user's decision, and Accept takes `recommend`. */
   outcome?: TodoAsk["outcome"];
   recommend?: string;
+  /** waiting, later: the chat the card or the question came from (#2320), which Open opens in the app (#12055); a hub from
+   *  before leaves them out, and Open is then the row's `link`. */
+  machine_id?: string;
+  session_id?: string;
 }
 
 export interface BriefFailed {
@@ -144,6 +190,14 @@ export function todayFailedRow(body: TodayBody): { title: string; detail: string
   return { title: t("assistant-tasks.today_failed_n", { count }), detail: more > 0 ? `${titles} · ${t("assistant-tasks.more_asks", { count: more })}` : titles, first };
 }
 
+export interface BriefContribution {
+  extension_id: string;
+  contribution_id: string;
+  title: string;
+  facts: string[];
+  sections: { title: string; body: string }[];
+}
+
 export interface BriefBody {
   title: string;
   at: string;
@@ -164,6 +218,8 @@ export interface BriefBody {
    *  that is off would have removed how many of the last 7 days' asks or background rounds. The hub counted and worded
    *  each line; nothing is turned on from here. A hub that does not know it leaves the list out. */
   setup: BriefSetup[];
+  contributions: BriefContribution[];
+  deferred_supervision: { id: string; todo_id: string; title: string; reason: string }[];
 }
 
 /** One mechanism of a `brief` item's `setup`: `text` is the whole line (count, cost, where it is turned on). */
@@ -179,37 +235,6 @@ export interface BriefSetup {
 export function briefSetupPage(id: string): string | undefined {
   if (id === "supervisor_tier") return "/settings?tab=models&purpose=assistant.supervise";
   return ["triage_decide", "triage_auto_continue", "triage_wake", "standing_authorizations", "task_trust"].includes(id) ? "/settings?tab=persona" : undefined;
-}
-
-/** A `brief` item's body, every list a list (a hub that left one out, or an item that is not one, gives nothing to draw). */
-export function briefBody(it: FeedItem): BriefBody | undefined {
-  const b = it.kind === "brief" ? it.body : undefined;
-  if (!b || typeof b !== "object") return undefined;
-  const list = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
-  const waiting = list<BriefRow>(b.waiting);
-  const accept = list<BriefRow>(b.accept);
-  const later = list<BriefRow>(b.later);
-  const failed = list<BriefFailed>(b.failed);
-  const done = list<BriefBody["done"][number]>(b.done);
-  const progress = list<BriefBody["progress"][number]>(b.progress);
-  const num = (v: unknown, n: number) => (typeof v === "number" ? v : n);
-  return {
-    title: typeof b.title === "string" ? b.title : "",
-    at: typeof b.at === "string" ? b.at : it.at,
-    hours: num(b.hours, 12),
-    waiting_unknown: b.waiting_unknown === true,
-    waiting,
-    failed,
-    failed_total: num(b.failed_total, failed.length),
-    done,
-    done_total: num(b.done_total, done.length),
-    accept,
-    later,
-    later_total: num(b.later_total, later.length),
-    progress,
-    progress_total: num(b.progress_total, progress.length),
-    setup: list<BriefSetup>(b.setup).filter((x) => x && typeof x.id === "string" && typeof x.text === "string" && x.text !== ""),
-  };
 }
 
 /** A string field of an item's body. */
@@ -259,6 +284,14 @@ export function takenIn(feed: FeedItem[], now = new Date()): Set<string> {
 export function shownFeed(feed: FeedItem[], now = new Date()): FeedItem[] {
   const hidden = takenIn(feed, now);
   return hidden.size === 0 ? feed : feed.filter((it) => !hidden.has(it.id));
+}
+
+/** What a Persona conversation draws of its feed (#8237, docs/assistant/unified-entry.md "Receipts"): a task's card comes
+ *  once, when it is handed out, and updates in place; how it goes on (a receipt for each stretch of work, its Agent's
+ *  reports, its reviews) is its row in Needs you / In progress, never another card. The hub keeps writing them all: the
+ *  trays read them, and a hub-side reader (the "Today" card) still does. */
+export function drawnFeed(feed: FeedItem[]): FeedItem[] {
+  return feed.filter((it) => it.kind !== "receipt" && it.kind !== "report" && it.kind !== "review");
 }
 
 /** Persona's messages to task `todoId`, oldest first: what its card lists. */
@@ -369,6 +402,8 @@ interface FeedState {
 let st: FeedState = { feeds: {}, plans: {}, taskCards: {}, routes: {}, busy: {}, later: {} };
 let feedRevision = 0;
 const itemRevisions = new Map<string, number>();
+// A live plan transition or an owner action wins over an older feed snapshot.
+const planRevisions = new Map<string, number>();
 const draftOwners = new WeakMap<FeedItem, string>();
 const feedKey = (item: FeedItem) => `${item.conversation}/${item.id}`;
 const currentCard = (card: FeedItem) => st.feeds[card.conversation]?.find((it) => it.id === card.id) ?? card;
@@ -405,11 +440,10 @@ export function mergeInto(list: FeedItem[], items: FeedItem[]): FeedItem[] {
   return [...kept, ...fresh].sort((a, b) => (a.at === b.at ? a.id.localeCompare(b.id) : Date.parse(a.at) - Date.parse(b.at)));
 }
 
-/** A message card whose reply went out — from this card or from the inbox, on any device (the hub records it on the
- *  card): when, and what it said (a card sent before the hub recorded it: its draft). */
+/** When Persona sent a reply, and the actual text if the hub recorded it. */
 export function cardSent(it: FeedItem): { at: string; text: string } | undefined {
   const at = field(it, "sent_at");
-  return at ? { at, text: field(it, "sent") || field(it, "draft") || "" } : undefined;
+  return at ? { at, text: field(it, "sent") ?? "" } : undefined;
 }
 
 /** Handled elsewhere, not from this card (#4797): the hub's filed_at; a sent card is never filed. */
@@ -431,6 +465,7 @@ export function draftPlaceholder(text: string): string | undefined {
 }
 
 function received(items: FeedItem[], plans?: Record<string, TaskPlan>) {
+  items = items.filter((it) => !deletedConversationID(it.conversation));
   const feeds = { ...st.feeds };
   // one merge per conversation: merging item by item re-sorted the whole feed once per item of a 500-item page
   const byConversation = new Map<string, Map<string, FeedItem>>();
@@ -463,6 +498,7 @@ const FEED_PAGES = 40;
 /** A conversation's feed: what came since the newest item it has. A read asked for while one is out runs once more
  *  after it (a reconnect's hello during the first read on open was dropped, and what was pushed meanwhile stayed missing). */
 export async function loadFeed(conversation: string) {
+  if (deletedConversationID(conversation)) return;
   if (loading.has(conversation)) {
     again.add(conversation);
     return;
@@ -483,6 +519,7 @@ export async function loadFeed(conversation: string) {
 
 /** One bounded feed traversal. New hubs return a snapshot cursor; older hubs retain the timestamp fallback. */
 async function readFeedPages(conversation: string) {
+  const scope = conversationDeletionScope();
   let last = st.feeds[conversation]?.at(-1)?.at;
   let cursor: string | undefined;
   const endpoint = `/assistant/conversations/${enc(conversation)}/feed`;
@@ -496,12 +533,28 @@ async function readFeedPages(conversation: string) {
   for (let n = 0; n < FEED_PAGES; n++) {
     const readingAt = feedRevision;
     const query = cursor ? `?cursor=${enc(cursor)}` : `?paginate=1${last ? `&since=${enc(last)}` : ""}`;
-    const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
+    const res = await api<{ items: FeedItem[]; next_cursor?: string; plans?: Record<string, TaskPlan>; pending_plan_ids?: string[]; task_cards?: TaskCardMetadata[] | null; views?: Record<string, AssistantView>; view_actions?: Record<string, ViewAction>; view_blocks?: string[] }>(endpoint + query, { headers });
+    if (scope !== conversationDeletionScope() || deletedConversationID(conversation)) return;
     if (!st.feeds[conversation]) set({ feeds: { ...st.feeds, [conversation]: [] } });
     const items = res.items ?? [];
+    if (res.plans) for (const [id, plan] of Object.entries(res.plans)) {
+      if (deletedConversationID(plan.conversation)) { delete res.plans[id]; continue; }
+      const manager = owner ?? defaultManager();
+      noteConversation(plan.conversation, manager);
+      res.plans[id] = { ...plan, manager };
+    }
     if (owner) for (const it of items) draftOwners.set(it, owner);
     // A write or push accepted after this read started wins over the captured response.
-    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ?? undefined);
+    if (Array.isArray(res.pending_plan_ids)) {
+      const manager = owner ?? defaultManager();
+      const current = new Set(res.pending_plan_ids);
+      const plans = { ...st.plans };
+      for (const [id, plan] of Object.entries(plans)) {
+        if (plan.manager === manager && plan.state === "open" && !current.has(id) && (planRevisions.get(id) ?? 0) <= readingAt) delete plans[id];
+      }
+      set({ plans });
+    }
+    received(items.filter((it) => (itemRevisions.get(feedKey(it)) ?? 0) <= readingAt), res.plans ? Object.fromEntries(Object.entries(res.plans).filter(([id]) => (planRevisions.get(id) ?? 0) <= readingAt)) : undefined);
     if (res.task_cards?.length) set({ taskCards: { ...st.taskCards, [conversation]: upsertTaskCards(st.taskCards[conversation] ?? [], res.task_cards) } });
     // the cards' snapshot comes whole with every page: what an event missed comes back here
     applySnapshot(conversation, res);
@@ -544,7 +597,11 @@ onHubEvent("hello", (m) => {
 });
 onHubEvent("task_plan", (m) => {
   const p = m.plan as TaskPlan | undefined;
-  if (p) set({ plans: { ...st.plans, [p.id]: p } });
+  if (p && !deletedConversationID(p.conversation)) {
+    noteConversation(p.conversation, typeof m.manager === "string" ? m.manager : BUILTIN_MANAGER);
+    planRevisions.set(p.id, ++feedRevision);
+    set({ plans: { ...st.plans, [p.id]: { ...p, manager: typeof m.manager === "string" ? m.manager : BUILTIN_MANAGER } } });
+  }
 });
 
 // ── actions ──
@@ -623,12 +680,16 @@ export function conversationHeaders(conversation: string): Record<string, string
   return routed ? itemHeaders(routed) : undefined;
 }
 
-export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[]) {
+/** Starts an open plan. `scheduleGrant` (#8045): the owner lets the scheduled task whose run planned it start this kind
+ *  of task by itself from now on; sent only when ticked, so a hub before it never sees the key. */
+export async function startPlan(plan: TaskPlan, remember: boolean, edits?: Partial<PlanTask>[], scheduleGrant = false) {
   if (st.busy[plan.id]) return;
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
-    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json: { tasks: edits, remember }, headers: conversationHeaders(plan.conversation) });
-    set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
+    const json = { tasks: edits, remember, ...(scheduleGrant ? { schedule_grant: true } : {}) };
+    const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/start`, { method: "POST", json, headers: conversationHeaders(plan.conversation) });
+    planRevisions.set(res.plan.id, ++feedRevision);
+    set({ plans: { ...st.plans, [res.plan.id]: { ...res.plan, manager: plan.manager } } });
     void refreshTodos();
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
@@ -640,7 +701,8 @@ export async function dismissPlan(plan: TaskPlan) {
   set({ busy: { ...st.busy, [plan.id]: true } });
   try {
     const res = await api<{ plan: TaskPlan }>(`/task-plans/${enc(plan.id)}/dismiss`, { method: "POST", headers: conversationHeaders(plan.conversation) });
-    set({ plans: { ...st.plans, [res.plan.id]: res.plan } });
+    planRevisions.set(res.plan.id, ++feedRevision);
+    set({ plans: { ...st.plans, [res.plan.id]: { ...res.plan, manager: plan.manager } } });
   } finally {
     set({ busy: { ...st.busy, [plan.id]: false } });
   }
@@ -653,14 +715,16 @@ export const retryKey = (todoId: string) => `retry:${todoId}`;
  * "Retry" on a task whose agent did not start (#1396): the hub starts the same task again (its plan's machine, directory,
  * prompt, launcher, model and permission) in the same todo, which it reopens at once — the card shows it starting
  * where it was. Taps while one is on its way do nothing; the hub starts one agent however many arrive. On a task the
- * model service cut off (#1516) it is "Continue": the hub tells its agent to go on, once.
+ * model service cut off (#1516) it is "Continue": the hub tells its agent to go on, once. `on`: "Use … instead", the
+ * launcher (and model) of the same computer to start it on (#10365), sent by lib/start-retry.ts retryOnLauncher, which
+ * checks the hub takes it.
  */
-export async function retryTask(todo: Todo) {
+export async function retryTask(todo: Todo, on?: { launcher: string; model?: string }) {
   const key = retryKey(todo.id);
   if (st.busy[key]) return;
   set({ busy: { ...st.busy, [key]: true } });
   try {
-    const res = await api<{ todo: Todo }>(`/todos/${enc(todo.id)}/retry`, { method: "POST" });
+    const res = await api<{ todo: Todo }>(`/todos/${enc(todo.id)}/retry`, on ? { method: "POST", json: on } : { method: "POST" });
     if (res.todo) putTodo(res.todo);
     void refreshTodos();
   } finally {
@@ -670,20 +734,49 @@ export async function retryTask(todo: Todo) {
 
 /** How a decision is answered other than by taking its recommendation (#3804): one of its options by its label, or one
  *  of the fixed responses that say the owner cannot answer it as asked. */
-export type AskAnswer = { option: string } | { response: string };
+export type AskAnswer = { option: string } | { response: string } | { answers: Record<string, string> };
 
-/** The Accept button of a `brief` item's task to verify: "accepted", or "handled" when the hub says that round is over
- *  (asked again since, or already verified). Any other failure throws. `answer`: a decision's option or fixed response
- *  instead of its recommendation. */
-export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "handled"> {
+/** The Accept button of a `brief` item's task to verify: "accepted" when the hub took it, "recorded" when no Agent could
+ *  receive the decision and the supervisor has it, or "handled" when that round is already over (409). Any other failure
+ *  throws, since nothing was taken: the Agent's node refusing it (dialog_open: a dialog has its terminal, #7343) is 423
+ *  with that code, or a 409 with it from a hub built between the two.
+ *  `answer`: a decision's option or fixed response instead of its recommendation. */
+export async function acceptBrief(todoId: string, askedAt: string, answer?: AskAnswer): Promise<"accepted" | "recorded" | "handled"> {
   try {
-    await api(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
+    const res = await postAccept(todoId, askedAt, answer);
+    void refreshTodos();
+    return res.delivered === "none" ? "recorded" : "accepted";
   } catch (e) {
-    if (e instanceof ApiError && e.status === 409) return "handled";
+    if (e instanceof ApiError && e.status === 409 && (!e.code || e.code === "conflict")) return "handled";
     throw e;
   }
-  void refreshTodos();
-  return "accepted";
+}
+
+/** The waits before an accept's second and third try (#17431): a restarting hub drops the connection or answers an
+ *  empty 502/503 for a moment. None under Vitest. */
+const ACCEPT_RETRY_MS = import.meta.env.MODE === "test" ? [0, 0] : [400, 1_200];
+
+/** A failed accept that is no answer from the hub: the connection failed, or something in front of it answered an
+ *  empty or non-JSON 502/503/504. A body with the hub's own error is an answer, never tried again. */
+function acceptGap(e: unknown): boolean {
+  if (isNetworkFailure(e)) return true;
+  return e instanceof ApiError && [502, 503, 504].includes(e.status)
+    && (!e.isJson || typeof e.body.error !== "string" || e.body.error.trim() === "");
+}
+
+/** One accept, tried again only through a gap that is no answer (acceptGap), at most ACCEPT_RETRY_MS.length times. The round (asked_at) makes a repeat safe: the hub takes a round
+ *  once, and a repeat of one it took is 409 (handled). The hub's own refusal (accept_not_taken, dialog_open, the store's
+ *  503) is an answer and is never repeated. */
+async function postAccept(todoId: string, askedAt: string, answer?: AskAnswer): Promise<{ delivered?: string }> {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await api<{ delivered?: string }>(`/todos/${enc(todoId)}/accept`, { method: "POST", json: { asked_at: askedAt, ...answer } });
+    } catch (e) {
+      const wait = ACCEPT_RETRY_MS[tries];
+      if (wait === undefined || !acceptGap(e)) throw e;
+      if (wait > 0) await new Promise((done) => setTimeout(done, wait));
+    }
+  }
 }
 
 /** The Handled button of a question in a `brief` item's `later` list: "marked", or "handled" when the hub says it is not in
@@ -706,6 +799,17 @@ export function startFailure(todo: Todo, plans: Record<string, TaskPlan>): strin
   if (todo.start_error) return todo.start_error;
   if ((todo.agents ?? []).length > 0 || !todo.plan_id) return undefined;
   return plans[todo.plan_id]?.tasks.find((t) => t.todo_id === todo.id)?.error || undefined;
+}
+
+/**
+ * Whether an Agent is being started for a to-do with none up yet (#7552): a plan made it (`plan_id`), or a plan that is
+ * not dismissed holds it as a task (a to-do a plan takes over keeps no `plan_id`), and that start has not failed.
+ * A to-do nobody dispatched (`todo_create`, a leader's piece, one made by hand) is not starting: it is "Not started".
+ */
+export function startInFlight(todo: Todo, plans: Record<string, TaskPlan>): boolean {
+  if (todo.done_at || startFailure(todo, plans)) return false;
+  if (todo.plan_id) return true;
+  return Object.values(plans).some((p) => p.state !== "dismissed" && p.tasks.some((t) => t.todo_id === todo.id && !t.error));
 }
 
 /**
@@ -878,11 +982,11 @@ function lineTime(l: DisplayLine): number | undefined {
 
 /** A reminder or an event the assistant added on the phone, from its tool call. */
 export function quickResult(use: Item, result?: Item): QuickResult | undefined {
-  const short = (use.tool_name ?? "").split("__").at(-1);
+  const short = (canonicalMcpToolName(use.tool_name) ?? "").split("__").at(-1);
   const kind = short === "phone_reminders_create" ? "reminder" : short === "phone_calendar_create_event" ? "event" : undefined;
   if (!kind || !result || result.is_error || !result.text) return undefined;
   try {
-    const o = JSON.parse(result.text) as Record<string, unknown>;
+    const o = JSON.parse(stripToolResultTimestampHeaders(result.text)) as Record<string, unknown>;
     if (typeof o.id !== "string" || !o.id) return undefined;
     const when = kind === "reminder" ? o.due : o.start;
     const place = kind === "reminder" ? o.list : o.calendar;
@@ -907,8 +1011,8 @@ export function loadedFrom(items: Item[]): number | undefined {
  *  stack on top of the newest page, with their day lines, and read as the conversation's start with its messages gone;
  *  they wait for the page that covers them. */
 export function displayLines(lines: ChatLine[], all: FeedItem[], from?: number): DisplayLine[] {
-  // the hand-offs the task cards take in are drawn there, not among the lines (#1542)
-  const feed = shownFeed(all).filter((it) => from === undefined || !(Date.parse(it.at) < from));
+  // the hand-offs the task cards take in are drawn there, not among the lines (#1542); how a task goes on is its row (#8237)
+  const feed = drawnFeed(shownFeed(all)).filter((it) => from === undefined || !(Date.parse(it.at) < from));
   const out: DisplayLine[] = [];
   let next = 0;
   for (const line of lines) {
@@ -977,3 +1081,11 @@ export function dayLabel(date: Date, now = new Date()): string {
 export function isToday(iso: string, now = new Date()): boolean {
   return new Date(iso).toDateString() === now.toDateString();
 }
+
+onConversationDeleted((_mid, sid) => {
+  const feeds = { ...st.feeds }, taskCards = { ...st.taskCards }, routes = { ...st.routes };
+  delete feeds[sid]; delete taskCards[sid]; delete routes[sid];
+  again.delete(sid); todayAsked.delete(sid);
+  const plans = Object.fromEntries(Object.entries(st.plans).filter(([, plan]) => plan.conversation !== sid));
+  set({ feeds, taskCards, routes, plans });
+});

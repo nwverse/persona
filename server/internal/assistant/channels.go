@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -26,10 +28,14 @@ const (
 )
 
 type channelPrefs struct {
-	Target   *channel.Target `json:"target,omitempty"`
-	Features map[string]bool `json:"features,omitempty"`
+	Target          *channel.Target    `json:"target,omitempty"`
+	ThreadMode      channel.ThreadMode `json:"thread_mode,omitempty"`
+	ThreadIdleHours int                `json:"thread_idle_hours,omitempty"`
+	Features        map[string]bool    `json:"features,omitempty"`
 	// Recent are the conversations its messages went to lately (newest first, a few).
 	Recent []channel.Conversation `json:"recent,omitempty"`
+	// Threads are the conversations of its threads (capabilities.threads or integrations_v2 routing), by routing key.
+	Threads map[string]*channelThread `json:"threads,omitempty"`
 }
 
 const channelRecentKeep = 5
@@ -45,13 +51,16 @@ const channelSeenKeep = 300
 
 // channelsBook is the channels' state in memory.
 type channelsBook struct {
-	mu     sync.Mutex
-	loaded bool
-	prefs  map[string]*channelPrefs
+	mu       sync.Mutex
+	bindings threadBindingIndex
+	loaded   bool
+	prefs    map[string]*channelPrefs
 	// st is what the runs wait on (channels_runs.go), loaded apart from prefs.
 	st       channelsState
 	stLoaded bool
 	live     map[string]*chanLive // run id -> its live progress (not persisted)
+	// A topic tool can arrive before the node acknowledges the message that prompted it.
+	topicStarting map[string]chan struct{}
 	// answered: conversation -> when its last run was answered (no "finished" push, no mirror for it)
 	answered map[[2]string]time.Time
 	// notified: channel + conversation (machine, session) -> when its notify_user copy arrived
@@ -63,21 +72,24 @@ type channelsBook struct {
 	// followRetry: the followed conversations whose session.follow failed -> when a run's watcher asks again
 	followRetry map[[2]string]time.Time
 	// announced: the cards this process heard of (interaction.announced, or pending when it first connected); one
-	// that came while it was not connected is taken when it is back (channelsCatchUp).
-	announced map[string]bool
-	connected bool
+	// that came while it was not connected is taken when it is back (channelsCatchUp). announcedOccurrence
+	// distinguishes a same-ID replacement. A missing timestamp is legacy/held ID-only bookkeeping.
+	announced           map[string]bool
+	announcedOccurrence map[string]time.Time
+	connected           bool
 	// ended: the cards that ended lately (interaction.ended), by when: one still being sent to a channel then is closed
-	// (or not asked) as soon as it is out.
-	ended map[string]time.Time
+	// (or not asked) as soon as it is out. endedOccurrence distinguishes a same-ID replacement.
+	ended           map[string]time.Time
+	endedOccurrence map[string]time.Time
 	// lastEnded: channel -> the latest text ask there that ended without being answered there (answered in the app,
 	// in a terminal, withdrawn), by when: a late reply to it is told so instead of going into the conversation.
 	lastEnded map[string]endedAsk
-	// generation changes on unbind so an in-flight message or question cannot restore the old binding's state.
-	generation map[string]uint64
 	// list is the hub's list of the channels, kept a moment (the runs look at it every second).
-	list   []channel.View
-	listAt time.Time
-	now    func() time.Time // tests
+	list         []channel.View
+	listAt       time.Time
+	overrides    map[string]*channel.TargetOverride
+	hasOverrides bool
+	now          func() time.Time // tests
 }
 
 func (c *channelsBook) clock() time.Time {
@@ -105,18 +117,40 @@ func (s *Service) loadChannelsLocked(ctx context.Context) {
 	c.loaded = true
 }
 
-// saveChannelsLocked writes the settings, once they were read: saving what is in memory after a failed read would
-// write one channel's settings over every other's.
-func (s *Service) saveChannelsLocked() {
+var errChannelSettingsWrite = errors.New("channel settings could not be saved")
+
+// saveChannelsLocked stages one channel's replacement while the book is locked and restores its previous entry
+// on a failed write. Callers must copy any map or slice they edit before passing the replacement here.
+func (s *Service) saveChannelsLocked(id string, next channelPrefs) error {
+	c := &s.chans
+	if !c.loaded {
+		return errChannelsUnread
+	}
+	previous, existed := c.prefs[id]
+	c.prefs[id] = &next
 	st := s.store()
-	if st == nil || !s.chans.loaded {
-		return
+	if st == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := st.PutSetting(ctx, channelsKey, s.chans.prefs); err != nil {
+	if err := st.PutSetting(ctx, channelsKey, c.prefs); err != nil {
+		if existed {
+			c.prefs[id] = previous
+		} else {
+			delete(c.prefs, id)
+		}
 		s.logf("channels: save: %v", err)
+		return fmt.Errorf("%w: %w", errChannelSettingsWrite, err)
 	}
+	return nil
+}
+
+func (c *channelsBook) prefsForUpdate(id string) channelPrefs {
+	if p := c.prefs[id]; p != nil {
+		return *p
+	}
+	return channelPrefs{}
 }
 
 // channelPrefLocked is channel id's settings (created on first use; the caller holds s.chans.mu).
@@ -166,7 +200,7 @@ func (s *Service) loadChannelStateLocked(ctx context.Context) {
 		s.saveChannelStateLocked()
 		s.logf("channels: %d runs and %d asks started while the state was unreadable kept", kept, asks)
 	}
-	if old := s.takeLegacyBotRuns(ctx); len(old) > 0 {
+	if old := s.larkModule().LegacyRuns(ctx); len(old) > 0 {
 		c.st.Runs = append(c.st.Runs, old...)
 		s.saveChannelStateLocked()
 		s.logf("channels: %d waiting turns of the Feishu bot moved to the channels' runs", len(old))
@@ -210,19 +244,32 @@ func (s *Service) saveChannelStateLocked() error {
 	return nil
 }
 
+func (s *Service) setChannelTarget(ctx context.Context, binding threadBindingRef, target channel.Target) error {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.bindings.isCurrent(binding) {
+		return nil
+	}
+	s.loadChannelsLocked(ctx)
+	p := c.prefsForUpdate(binding.channel)
+	p.Target = &target
+	return s.saveChannelsLocked(binding.channel, p)
+}
+
 // noteChannelConversation remembers that channel id's message went to a conversation (the detail's recent list, the
 // conversation's source marks).
 func (s *Service) noteChannelConversation(id, machine, session string) {
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelsLocked(context.Background())
-	p := s.channelPrefLocked(id)
-	p.Recent = slices.DeleteFunc(p.Recent, func(x channel.Conversation) bool { return x.MachineID == machine && x.SessionID == session })
+	p := c.prefsForUpdate(id)
+	p.Recent = slices.DeleteFunc(slices.Clone(p.Recent), func(x channel.Conversation) bool { return x.MachineID == machine && x.SessionID == session })
 	p.Recent = append([]channel.Conversation{{MachineID: machine, SessionID: session, At: time.Now().UTC()}}, p.Recent...)
 	if len(p.Recent) > channelRecentKeep {
 		p.Recent = p.Recent[:channelRecentKeep]
 	}
-	s.saveChannelsLocked()
+	_ = s.saveChannelsLocked(id, p) // Recent is bookkeeping for a message that already went through.
 	c.mu.Unlock()
 }
 

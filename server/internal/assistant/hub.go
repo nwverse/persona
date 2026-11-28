@@ -24,10 +24,13 @@ type Hub interface {
 	Hello(ctx context.Context) (Hello, error)
 	// DeviceCall is device.call {device, method, params}: a call to one of the user's machines (assistantwire.Device*).
 	DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error)
+	// CredentialRevoked checks the original sender before a kept message is delivered.
+	CredentialRevoked(ctx context.Context, id string) (bool, error)
 	// AppCall is app.call {app_id, method, params}: a call to an app the hub runs (App*).
 	AppCall(ctx context.Context, p AppCall) (json.RawMessage, error)
-	// NotifyRequest is notify.request {notification} → {ok}: a push for the user (nil error is ok).
-	NotifyRequest(ctx context.Context, p NotifyRequest) error
+	// NotifyRequest is notify.request {notification} → {ok, held?, reason?}: a push for the user. Held/reason say ln
+	// mode kept it for the briefing instead of alerting the phone.
+	NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error)
 	// Broadcast is ws.broadcast {message}: a live update the apps get as it is (assistant_schedule, assistant_feed,
 	// task_plan). One way: nothing comes back.
 	Broadcast(ctx context.Context, b Broadcast)
@@ -48,10 +51,12 @@ type (
 	Device              = assistantwire.Device
 	ClientApp           = assistantwire.ClientApp
 	ConfiguredLauncher  = assistantwire.ConfiguredLauncher
+	LauncherRecovery    = assistantwire.LauncherRecovery
 	HubModels           = assistantwire.HubModels
 	AppCall             = assistantwire.AppCall
 	ModelBinding        = assistantwire.ModelBinding
 	NotifyRequest       = assistantwire.NotifyRequest
+	NotifyResult        = assistantwire.NotifyResult
 	Notification        = assistantwire.Notification
 	Broadcast           = assistantwire.Broadcast
 	Snapshot            = assistantwire.Snapshot
@@ -113,6 +118,10 @@ const (
 	FeishuPost            = assistantwire.FeishuPost
 	FeishuText            = assistantwire.FeishuText
 	FeishuUpdateCard      = assistantwire.FeishuUpdateCard
+	FeishuCardCreate      = assistantwire.FeishuCardCreate
+	FeishuCardUpdate      = assistantwire.FeishuCardUpdate
+	FeishuCardStream      = assistantwire.FeishuCardStream
+	FeishuCardSettings    = assistantwire.FeishuCardSettings
 	FeishuPin             = assistantwire.FeishuPin
 	FeishuRecall          = assistantwire.FeishuRecall
 	FeishuCotCreate       = assistantwire.FeishuCotCreate
@@ -121,6 +130,7 @@ const (
 	CodeFeishuAPI         = assistantwire.CodeFeishuAPI
 	CodeChatDenied        = assistantwire.CodeChatDenied
 	FeishuFromElsewhere   = assistantwire.FeishuFromElsewhere
+	FeishuFromRead        = assistantwire.FeishuFromRead
 	FeishuReact           = assistantwire.FeishuReact
 	FeishuUnreact         = assistantwire.FeishuUnreact
 	FeishuMessages        = assistantwire.FeishuMessages

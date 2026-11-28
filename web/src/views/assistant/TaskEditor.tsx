@@ -3,22 +3,29 @@
 // prompt, permission mode, which conversation runs go into, "Run now", the last result and the task's own runs.
 // A new one has "Cancel" / "Add", so trying a template and backing out creates nothing; an existing one is saved with
 // "Save" and deleted after an inline confirmation.
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { conversationPage } from "../../lib/conversation-page";
 import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import {
-  BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
-  parseTime, PERMISSION_MODES, repeatsLabel, runDetail, runStatusWord, sameTask, taskBody, taskTitle, toLocalInput, untilLabel, validateTask,
-  TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type InboxMode, type Push, type Repeat, type Run, type Task,
+  BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, grantKinds, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
+  parseTime, PERMISSION_MODES, repeatsLabel, sameTask, taskBody, taskStartsFresh, taskTitle, toLocalInput, untilLabel, validateTask,
+  TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type GrantKind, type InboxMode, type Push, type Repeat, type Run, type Task,
 } from "../../lib/routines";
 import { hubHas, useStore } from "../../lib/store";
 import { Button, cx, Dialog, Spinner, toast, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Field, inputClass, Segmented, SectionTitle, Switch, textareaClass } from "./parts";
+import { RunLine, RunMark } from "./RunLine";
+import { lazyPage } from "../../lib/lazy-page";
 import { formatDate, t } from "../../i18n";
+
+export { RunLine, RunMark };
+
+const TaskPromptEditor = lazyPage(() => import("./TaskPromptEditor").then((m) => m.TaskPromptEditor));
+const TaskExecutionFields = lazyPage(() => import("./TaskExecutionFields").then((m) => m.TaskExecutionFields));
 
 /** Brings an inline confirmation into view once, when it appears (stable, so not on every render). */
 const reveal = (el: HTMLElement | null) => el?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
@@ -46,7 +53,6 @@ export function TaskEditor({
   const [busy, setBusy] = useState<"" | "save" | "run" | "delete" | "fresh">("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [askBypass, setAskBypass] = useState(false);
-  const [central, setCentral] = useState(false);
   const [runs, setRuns] = useState<Run[]>([]);
   const nowMs = useNow(30_000);
   const now = useMemo(() => new Date(nowMs), [nowMs]);
@@ -56,16 +62,10 @@ export function TaskEditor({
   const hasPush = useStore((s) => hubHas(s.features, TASK_PUSH_FEATURE)) || task.push === "asked";
   /** "When done, put it in the Inbox" shows when the hub takes it (task_inbox), or the task already has it. */
   const hasInbox = useStore((s) => hubHas(s.features, TASK_INBOX_FEATURE)) || !!task.inbox;
+  const hasInput = useStore((s) => hubHas(s.features, "task_input"));
+  const hasExecution = useStore((s) => hubHas(s.features, "task_execution")) || !!task.execution || !!task.cwd || !!task.launcher || !!task.model;
   /** "Cron" shows when the hub runs cron tasks (task_cron), or the task already is one. */
   const hasCron = useStore((s) => hubHas(s.features, TASK_CRON_FEATURE)) || task.repeat === "cron";
-
-  useEffect(() => {
-    let live = true;
-    api("/model-config").then(() => live && setCentral(true), () => {});
-    return () => {
-      live = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!saved?.id) return;
@@ -80,10 +80,20 @@ export function TaskEditor({
 
   /** What the hub said is wrong with the cron expression being typed ("" while it is fine or not checked yet). */
   const [cronProblem, setCronProblem] = useState("");
-  const problem = validateTask(draft, now) || (draft.repeat === "cron" && cronProblem ? cronProblem : null);
+  const problem = validateTask(draft, now, saved) || (draft.repeat === "cron" && cronProblem ? cronProblem : null);
   const changed = !saved || !sameTask(saved, draft);
-  const set = (patch: Partial<Task>) => setDraft((d) => ({ ...d, ...patch }));
+  /** The user changed a field since it opened: a new task says what is missing only from then on; until then a grey
+   *  Add is enough (a blank one opened in red before anything was typed). */
+  const [edited, setEdited] = useState(false);
+  const edit = (next: (d: Task) => Task) => {
+    setEdited(true);
+    setDraft(next);
+  };
+  const set = (patch: Partial<Task>) => edit((d) => ({ ...d, ...patch }));
   const working = busy !== "";
+  /** The time zone the hub reads a daily time and a cron expression in, named as the list's footer names it; "your time
+   *  zone" only when the hub doesn't say. */
+  const zone = useStore((s) => s.assistant?.timezone);
 
   /** Saves what changed (adds a new one); returns the task as the hub has it, null when it didn't. */
   const persist = async (): Promise<Task | null> => {
@@ -97,7 +107,18 @@ export function TaskEditor({
       ? await api<{ task: Task }>(`/assistant/tasks/${enc(saved.id)}`, { method: "PUT", json: body })
       : await api<{ task: Task }>("/assistant/tasks", { method: "POST", json: body });
     setSaved(r.task);
-    setDraft((d) => ({ ...d, id: r.task.id }));
+    // A failed Run now keeps this draft. Reconcile canonical pins without replacing edits made during the save.
+    setDraft((current) => {
+      if (current === draft) return r.task;
+      const next = {
+        ...current, id: r.task.id, state_note: r.task.state_note, model_revision: r.task.model_revision,
+        execution: r.task.execution, execution_error: r.task.execution_error,
+      };
+      for (const key of ["launcher", "model", "effort", "cwd", "execution_machine_id"] as const) {
+        if (current[key] === draft[key]) next[key] = r.task[key];
+      }
+      return next;
+    });
     onSaved(r.task);
     return r.task;
   };
@@ -147,6 +168,23 @@ export function TaskEditor({
     }
   };
 
+  /** Stops one kind from starting without asking in this task's runs (#8045): its next plan of that kind asks again. */
+  const [ungranting, setUngranting] = useState("");
+  const removeGrant = async (kind: string) => {
+    if (!saved || ungranting) return;
+    setUngranting(kind);
+    try {
+      const r = await api<{ task: Task }>(`/assistant/tasks/${enc(saved.id)}/start-grant`, { method: "DELETE", json: { kind } });
+      // only the grant: what the user is editing stays as it is
+      setSaved((s) => (s ? { ...s, start_grant: r.task.start_grant ?? null } : s));
+      onSaved(r.task);
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setUngranting("");
+    }
+  };
+
   const remove = async () => {
     if (!saved) return;
     setBusy("delete");
@@ -181,7 +219,7 @@ export function TaskEditor({
       {!creating && (
         <Button tone="quiet" icon="trash" className="text-red enabled:hover:text-red" disabled={working} onClick={() => setConfirmDelete(true)}>{t("assistant-taskeditor.delete")}</Button>
       )}
-      <span className={cx("mr-auto min-w-0 truncate text-[11.5px]", problem ? "text-red" : "text-ink-3")}>{changed && problem ? problem : ""}</span>
+      <span className={cx("mr-auto min-w-0 truncate text-[11.5px]", problem ? "text-red" : "text-ink-3")}>{changed && (edited || !creating) && problem ? problem : ""}</span>
       <Button tone="quiet" disabled={working} onClick={onClose}>{t("common.cancel")}</Button>
       <Button tone="primary" busy={busy === "save"} disabled={working || !!problem || (!creating && !changed)} onClick={() => void save()}>{creating ? t("assistant-taskeditor.add") : t("common.save")}</Button>
     </>
@@ -190,6 +228,7 @@ export function TaskEditor({
   const next = nextRun(saved ?? draft);
   const last = saved ? lastRunText(saved, now) : null;
   const own = saved?.run_session_id;
+  const freshEachRun = taskStartsFresh(draft);
 
   return (
     <Dialog open onClose={close} width={600} title={creating ? t("assistant-taskeditor.new_title") : taskTitle(saved ?? draft)} footer={footer}>
@@ -219,7 +258,7 @@ export function TaskEditor({
               <Segmented<Repeat>
                 label={t("assistant-taskeditor.repeat")}
                 value={draft.repeat}
-                onChange={(r) => setDraft((d) => withRepeat(d, r, new Date()))}
+                onChange={(r) => edit((d) => withRepeat(d, r, new Date()))}
                 options={[
                   { v: "once", label: t("assistant-taskeditor.repeat_once") },
                   { v: "daily", label: t("assistant-taskeditor.repeat_daily") },
@@ -239,9 +278,13 @@ export function TaskEditor({
                 : draft.repeat === "once"
                   ? t("assistant-taskeditor.once_hint")
                   : draft.repeat === "daily"
-                    ? t("assistant-taskeditor.daily_hint", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--" })
+                    ? zone
+                      ? t("assistant-taskeditor.daily_hint_zone", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--", zone })
+                      : t("assistant-taskeditor.daily_hint", { days: repeatsLabel(draft.weekdays), time: draft.time || "--:--" })
                     : draft.repeat === "cron"
-                    ? t("assistant-taskeditor.cron_hint", { zone: t("assistant-taskeditor.cron_hint_zone") })
+                    ? zone
+                      ? t("assistant-taskeditor.cron_hint_named", { zone })
+                      : t("assistant-taskeditor.cron_hint", { zone: t("assistant-taskeditor.cron_hint_zone") })
                     : everyOk(draft.every_minutes)
                       ? t("assistant-taskeditor.interval_hint", { every: everyLabel(draft.every_minutes ?? 0) })
                       : t("assistant-taskeditor.interval_hint_blank")}
@@ -251,21 +294,48 @@ export function TaskEditor({
             )}
           </section>
 
+          {hasExecution && <Suspense fallback={<Spinner />}><TaskExecutionFields draft={draft} saved={saved} disabled={working} onChange={set} /></Suspense>}
+
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_prompt")}</SectionTitle>
-            <textarea
+            {hasInput ? <Suspense fallback={<Spinner />}><TaskPromptEditor draft={draft} saved={saved} disabled={working} onChange={(prompt, prompt_selections) => set({ prompt, prompt_selections })} /></Suspense> : <textarea
               className={textareaClass}
               rows={6}
               value={draft.prompt}
               placeholder={t("assistant-taskeditor.prompt_placeholder")}
               aria-label={t("assistant-taskeditor.prompt_placeholder")}
               onChange={(e) => set({ prompt: e.target.value })}
-            />
+            />}
             <p className={HINT}>{t("assistant-taskeditor.prompt_hint")}</p>
           </section>
 
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_run")}</SectionTitle>
+            {draft.repeat !== "once" && (
+              <details className="mb-3">
+                <summary className="cursor-pointer">{t("assistant-taskeditor.continuity")}</summary>
+                <label className="mt-2 flex min-h-11 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(draft.fresh_each_run)}
+                    onChange={(e) => set({ fresh_each_run: e.target.checked })}
+                  />
+                  {t("assistant-taskeditor.fresh_each_run")}
+                </label>
+                <Field label={t("assistant-taskeditor.state_note")}>
+                  <textarea
+                    className={textareaClass}
+                    rows={3}
+                    disabled={working}
+                    value={draft.state_note?.text ?? ""}
+                    onChange={(e) => set({
+                      state_note: { revision: draft.state_note?.revision ?? 0, updated_at: draft.state_note?.updated_at ?? "", text: e.target.value },
+                    })}
+                  />
+                </Field>
+                <p className={HINT}>{t("assistant-taskeditor.state_note_hint")}</p>
+              </details>
+            )}
             <div>
               <Field label={t("assistant-taskeditor.permission_label")}>
                 <select
@@ -316,32 +386,22 @@ export function TaskEditor({
               </p>
             ) : (
               <p className={HINT}>
-                {t("assistant-taskeditor.permission_hint")}
+                {t("assistant-taskeditor.permission_hint", { mode: t("lib-session-actions.mode_auto") })}
                 {draft.session_id ? t("assistant-taskeditor.permission_hint_resume") : ""}
               </p>
             )}
-            {central && (
-              <button
-                type="button"
-                onClick={() => {
-                  onClose();
-                  navigate("/settings?tab=model-config&purpose=assistant");
-                }}
-                className="mt-1 inline-flex items-center gap-1 whitespace-nowrap px-1 text-[11.5px] text-accent-ink hover:underline"
-              >
-                {t("assistant-taskeditor.model_config_assistant")}
-                <Icon name="chevronRight" size={11} stroke={2.2} />
-              </button>
-            )}
           </section>
+
+          {saved && <StartGrantSection task={saved} removing={ungranting} onRemove={(kind) => void removeGrant(kind)} />}
 
           {hasPush && (
             <section>
               <SectionTitle>{t("assistant-taskeditor.section_push")}</SectionTitle>
               <Segmented<Push>
                 label={t("assistant-taskeditor.section_push")}
+                wrap
                 value={draft.push ?? ""}
-                onChange={(p) => setDraft((d) => withPush(d, p))}
+                onChange={(p) => edit((d) => withPush(d, p))}
                 options={[
                   { v: "", label: t("assistant-taskeditor.push_every") },
                   { v: "asked", label: t("assistant-taskeditor.push_asked") },
@@ -358,6 +418,7 @@ export function TaskEditor({
               <SectionTitle>{t("assistant-taskeditor.section_inbox")}</SectionTitle>
               <Segmented<InboxMode>
                 label={t("assistant-taskeditor.section_inbox")}
+                wrap
                 value={draft.inbox ?? ""}
                 onChange={(inbox) => set({ inbox })}
                 options={[
@@ -379,13 +440,16 @@ export function TaskEditor({
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_chat")}</SectionTitle>
             <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
-              {origin && draft.push !== "asked" && (
+              {origin && draft.push !== "asked" && !freshEachRun && (
                 <div className="flex items-center gap-3 px-3.5 py-2.5">
                   <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{t("assistant-taskeditor.resume_chat")}</span>
                   <Switch checked={!!draft.session_id} label={t("assistant-taskeditor.resume_chat")} onChange={(on) => set({ session_id: on ? origin : undefined })} />
                 </div>
               )}
-              {!draft.session_id &&
+              {freshEachRun && own && (
+                <LinkRow icon="chat" label={t("assistant-taskeditor.view_last")} onClick={() => open(own)} />
+              )}
+              {!freshEachRun && !draft.session_id &&
                 (own ? (
                   <>
                     <LinkRow icon="chat" label={t("assistant-taskeditor.same_chat")} onClick={() => open(own)} />
@@ -399,7 +463,9 @@ export function TaskEditor({
                 ))}
             </div>
             <p className={HINT}>
-              {draft.session_id
+              {freshEachRun
+                ? t("assistant-taskeditor.fresh_each_run")
+                : draft.session_id
                 ? t("assistant-taskeditor.chat_hint_resume")
                 : own
                   ? t("assistant-taskeditor.chat_hint_own")
@@ -438,6 +504,43 @@ export function TaskEditor({
   );
 }
 
+/** "Starts without asking" (#8045): the kinds of task this task's own runs start without the plan card, each with
+ *  Remove. Nothing when there are none: only ticking it on one of its runs' cards adds one. */
+function StartGrantSection({ task, removing, onRemove }: { task: Task; removing: string; onRemove: (kind: string) => void }) {
+  const machines = useStore((s) => s.machines);
+  const kinds = grantKinds(task);
+  if (!kinds.length) return null;
+  const place = (k: GrantKind) => [k.machine && (machines.find((m) => m.id === k.machine)?.name ?? k.machine), k.folder].filter(Boolean).join(" · ");
+  return (
+    <section data-start-grant>
+      <SectionTitle>{t("assistant-taskeditor.section_start_grant")}</SectionTitle>
+      <div className="divide-y divide-line overflow-hidden rounded-card bg-surface shadow-card">
+        {kinds.map((k) => (
+          <div key={k.key} data-start-grant-kind className="flex items-center gap-3 px-3.5 py-2.5">
+            <Icon name="folder" size={14} className="shrink-0 text-ink-3" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-meta text-ink" title={place(k)}>{place(k)}</div>
+              <div className="text-submeta text-ink-3">{t(k.readonly ? "settings-assistantsettings.trust_read" : "settings-assistantsettings.trust_edit")}</div>
+            </div>
+            <Button
+              tone="quiet"
+              size="sm"
+              className="text-red enabled:hover:text-red pointer-coarse:min-h-11"
+              busy={removing === k.key}
+              disabled={!!removing}
+              aria-label={t("assistant-taskeditor.start_grant_remove_label", { place: place(k) })}
+              onClick={() => onRemove(k.key)}
+            >
+              {t("assistant-taskeditor.start_grant_remove")}
+            </Button>
+          </div>
+        ))}
+      </div>
+      <p className={HINT}>{t("assistant-taskeditor.start_grant_note")}</p>
+    </section>
+  );
+}
+
 function LinkRow({ icon, label, onClick, busy, disabled, chevron = true }: { icon: "chat" | "plus"; label: string; onClick: () => void; busy?: boolean; disabled?: boolean; chevron?: boolean }) {
   return (
     <button type="button" disabled={disabled} onClick={onClick} className="flex w-full items-center gap-2.5 whitespace-nowrap px-3.5 py-2.5 text-left text-[13px] text-accent-ink transition-colors enabled:hover:bg-hover disabled:opacity-50">
@@ -445,47 +548,6 @@ function LinkRow({ icon, label, onClick, busy, disabled, chevron = true }: { ico
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {busy ? <Spinner /> : chevron ? <Icon name="chevronRight" size={12} stroke={2} className="text-ink-3" /> : null}
     </button>
-  );
-}
-
-/** One run in a task's history: when, how it went. */
-export function RunLine({ run, now, onOpen, showTitle }: { run: Run; now: Date; onOpen?: () => void; showTitle?: boolean }) {
-  const at = parseTime(run.at);
-  const failed = run.status !== "ok" && run.status !== "skipped";
-  const body = (
-    <>
-      <RunMark status={run.status} />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] text-ink">{showTitle ? run.title : at ? momentLabel(at, now) : runStatusWord(run)}</span>
-        <span className={cx("block truncate text-[11.5px]", failed ? "text-red" : "text-ink-3")}>
-          {showTitle && at ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} · ` : ""}
-          {runDetail(run)}
-        </span>
-      </span>
-      {onOpen && <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />}
-    </>
-  );
-  return onOpen ? (
-    <button type="button" onClick={onOpen} title={t("assistant-taskeditor.open_run")} className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left transition-colors hover:bg-hover">
-      {body}
-    </button>
-  ) : (
-    <div className="flex items-center gap-2.5 px-3.5 py-2">{body}</div>
-  );
-}
-
-export function RunMark({ status }: { status: string }) {
-  if (status === "ok")
-    return (
-      <span aria-label={t("assistant-taskeditor.status_ok")} role="img" className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-green-tint text-green">
-        <Icon name="check" size={11} stroke={3} />
-      </span>
-    );
-  if (status === "skipped") return <span aria-label={t("assistant-taskeditor.status_skipped")} role="img" className="size-[18px] shrink-0 rounded-full border-[1.5px] border-line-strong" />;
-  return (
-    <span aria-label={t("assistant-taskeditor.status_failed")} role="img" className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-field text-red">
-      <Icon name="x" size={11} stroke={3} />
-    </span>
   );
 }
 

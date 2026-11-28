@@ -205,15 +205,19 @@ func (r *Registry) SetContribution(ctx context.Context, id, point, cid string, o
 	if same {
 		return nil
 	}
-	if err := r.put(ctx, row); err != nil {
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
+	revision, err := r.put(ctx, row)
+	if err != nil {
 		return err
 	}
 	r.mu.Lock()
 	p.Record.DisabledContributions = off
+	p.Record.UpdatedAt = revision
 	p.Manifest = p.Full.Without(off)
 	r.mu.Unlock()
 	unlock()
 	r.audit(ctx, id, "contribution", actor, map[string]any{"contribution": key, "enabled": on})
-	r.changed(Change{ID: id, Kind: "contributions"})
+	mutation.changed(Change{ID: id, Kind: "contributions"})
 	return nil
 }

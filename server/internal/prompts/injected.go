@@ -1,7 +1,9 @@
 package prompts
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -10,7 +12,7 @@ import (
 
 // The hub types some messages into conversations as the user would, for the model: a quiet task's notice
 // (assistant/task_notice), a scheduled task's run (assistant/task_run), a wake-up (agents/wake), the continue after a
-// usage limit reset (agents/limit_continue), the background tasks
+// usage limit reset (agents/limit_continue) or on a backup launcher (agents/limit_fallback_continue), the background tasks
 // a node restart stopped (assistant/lost_tasks), news of an inbox item for a conversation it was handed to
 // (inbox/handoff_note), how a question asked without waiting ended (assistant/ask_later). The model reads them as they are; the apps show one line instead
 // (docs/protocol/protocol.md "Messages injected by Persona"). ParseInjected reads them back off the transcript's text, so old lines are
@@ -31,6 +33,21 @@ const noticeMarker = "这是 Persona 的任务通知"
 
 // superviseMarker is in every supervise (follow-up) message (assistant/supervise, #3124).
 const superviseMarker = "这是 Persona 的督办消息"
+
+// SuperviseRoundMarker is on its own line in a supervision message that is a round of the background supervisor starting
+// from a clean context (assistant/supervise, Fresh, #7315). The manager sends such a message as a round (IsSuperviseRound),
+// and the transcript reader keeps every round in view though they all hang from the conversation's first turn
+// (transcript/branch.go).
+const SuperviseRoundMarker = "<persona-supervision-round />"
+
+// IsSuperviseRound says whether text is a supervision message rendered as a round (SuperviseRoundMarker).
+func IsSuperviseRound(text string) bool {
+	if !strings.Contains(text, "\n"+SuperviseRoundMarker+"\n") {
+		return false
+	}
+	in := ParseInjected(text)
+	return in != nil && in.State == "supervise"
+}
 
 // inboxMarker is in every inbox note for a conversation an item was handed to (inbox/handoff_note, #1194).
 const inboxMarker = "这是 Persona 的收件箱通知"
@@ -62,6 +79,13 @@ var noticeStates = map[string]string{"做完了": "done", "在等用户": "needs
 
 var noticeLines = map[string]string{"done": "做完了", "needs": "在等你", "interrupted": "被打断了", "failed": "没开起来"}
 
+// ContinuesOwnWork says whether in is Persona going on with the conversation's own work: the continuation once a
+// usage limit reset (agents/limit_continue) or on a backup launcher (agents/limit_fallback_continue), or a wake for
+// what it waits on (agents/wake). Such a message starts neither another task nor a background round.
+func ContinuesOwnWork(in *proto.Injected) bool {
+	return in != nil && (in.State == "limit_continue" || in.State == "limit_fallback" || in.State == "wake")
+}
+
 // ParseInjected says what text is when it is one of the messages Persona writes for the model; nil for anything
 // else (what the user wrote stays theirs: only the templates' exact shapes are taken).
 func ParseInjected(text string) *proto.Injected {
@@ -78,6 +102,12 @@ func ParseInjected(text string) *proto.Injected {
 	text = strings.TrimSpace(text)
 	head, rest, _ := strings.Cut(text, "\n")
 	switch {
+	case strings.HasPrefix(head, "<persona-inbox"):
+		return parseInboxMarker(head, rest)
+	case head == "<persona-answer-again />" && strings.TrimSpace(rest) != "":
+		return &proto.Injected{Kind: proto.InjectedSystem, State: "answer_again", Line: "Persona 正在补问"}
+	case strings.HasPrefix(head, "<persona-wake"):
+		return parseWakeMarker(head, rest)
 	case strings.HasPrefix(head, "🔔 任务「"):
 		m := noticeHeadRe.FindStringSubmatch(head)
 		if m == nil || !strings.Contains(rest, noticeMarker) {
@@ -86,6 +116,14 @@ func ParseInjected(text string) *proto.Injected {
 		state := noticeStates[m[2]]
 		return &proto.Injected{Kind: proto.InjectedTaskNotice, State: state, Title: m[1], Machine: m[3],
 			Line: "任务「" + m[1] + "」" + noticeLines[state]}
+	case head == "<persona-limit-continue />" && strings.TrimSpace(rest) != "":
+		return &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_continue", Line: "用量额度重置了，Persona 让它接着做"}
+	case strings.HasPrefix(head, "<persona-limit-continue"):
+		return nil
+	case head == LimitFallbackMarker && strings.TrimSpace(rest) != "":
+		return &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_fallback", Line: "用量额度用完了，Persona 换了个启动器让它接着做"}
+	case strings.HasPrefix(head, "<persona-limit-fallback"):
+		return nil
 	case strings.HasPrefix(head, limitContinueHead):
 		// Only hubs that write it mark it: it is not in the shared fixtures the apps' own recognition runs.
 		return &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_continue", Line: "用量额度重置了，Persona 让它接着做"}
@@ -151,6 +189,61 @@ func ParseInjected(text string) *proto.Injected {
 		return &proto.Injected{Kind: proto.InjectedSystem, State: "lost_tasks", Line: line}
 	}
 	return nil
+}
+
+// wakeMetadata is the language-independent identity of newly localized wakes.
+// Legacy Chinese wakes remain readable above, including historical transcripts.
+type wakeMetadata struct {
+	Title string `json:"title"`
+}
+
+func parseWakeMarker(head, body string) *proto.Injected {
+	const start, end = "<persona-wake>", "</persona-wake>"
+	if !strings.HasPrefix(head, start) || !strings.HasSuffix(head, end) || strings.TrimSpace(body) == "" {
+		return nil
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(head, start), end)
+	var meta wakeMetadata
+	d := json.NewDecoder(strings.NewReader(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&meta) != nil || d.Decode(new(any)) != io.EOF {
+		return nil
+	}
+	// Require our canonical JSON: rejects null, absent/duplicate keys and literal
+	// closing tags. A malformed marker must never become guessed provenance.
+	canonical, _ := json.Marshal(meta)
+	if raw != string(canonical) {
+		return nil
+	}
+	return &proto.Injected{Kind: proto.InjectedFollowup, State: "wake", Title: meta.Title,
+		Line: "Persona 叫醒了它：看看「" + meta.Title + "」好了没有"}
+}
+
+// inboxMetadata is the language-independent identity of an Inbox followup.
+type inboxMetadata struct {
+	Title string `json:"title"`
+}
+
+func parseInboxMarker(head, body string) *proto.Injected {
+	const start, end = "<persona-inbox>", "</persona-inbox>"
+	if !strings.HasPrefix(head, start) || !strings.HasSuffix(head, end) || strings.TrimSpace(body) == "" {
+		return nil
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(head, start), end)
+	var meta inboxMetadata
+	d := json.NewDecoder(strings.NewReader(raw))
+	d.DisallowUnknownFields()
+	if d.Decode(&meta) != nil || d.Decode(new(any)) != io.EOF {
+		return nil
+	}
+	// Require our canonical JSON: rejects null, absent/duplicate keys and literal
+	// closing tags. A malformed marker must never become guessed provenance.
+	canonical, _ := json.Marshal(meta)
+	if raw != string(canonical) {
+		return nil
+	}
+	return &proto.Injected{Kind: proto.InjectedSystem, State: "inbox", Title: meta.Title,
+		Line: "收件箱「" + meta.Title + "」有了下文"}
 }
 
 // askLaterInjected is how the card of an ask_later message (its text after the first line) ended (#6421): the

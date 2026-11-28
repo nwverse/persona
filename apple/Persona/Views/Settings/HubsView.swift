@@ -24,13 +24,6 @@ struct HubsView: View {
                 }
             }
             Section {
-                #if os(macOS)
-                HStack {
-                    Spacer(minLength: 0)
-                    Button("Add Hub…") { showPair = true }.lineLimit(1).formButton().accessibilityIdentifier("hubs.add")
-                        .disabled(model.hubSignOut != nil) // a hub paired now could go with the disconnect
-                }
-                #else
                 Button { showPair = true } label: {
                     SettingsRow(title: String(localized: "Add Hub"), symbol: Theme.Icon.add, tint: Theme.accent)
                 }
@@ -38,7 +31,6 @@ struct HubsView: View {
                 .disabled(model.hubSignOut != nil) // a hub paired now could go with the disconnect
                 .accessibilityIdentifier("hubs.add")
                 .bareListRow()
-                #endif
             } footer: {
                 Text("A hub you add joins an existing group automatically when it's linked with a hub in it; otherwise it forms its own group. Everything shows in one list, labeled with the group it comes from.")
             }
@@ -53,13 +45,13 @@ struct HubsView: View {
         } message: {
             Text("Only changes the name on this device. Leave empty to use the hub's own name.")
         }
-        .confirmationDialog(removingGroupTitle, isPresented: removingGroupShown, titleVisibility: .visible, presenting: removingGroup) { g in
+        .accessibleConfirmationDialog(removingGroupTitle, isPresented: removingGroupShown, titleVisibility: .visible, presenting: removingGroup) { g in
             Button("Disconnect This Group", role: .destructive) { removingGroup = nil; Task { await model.disconnectGroup(g) } }
         } message: { g in
             Text(model.groupIDs.count > 1 ? String(localized: "This group's machines, agents, and cached chats are removed from this device; other groups aren't affected. To use it again, pair again.")
                                          : String(localized: "After disconnecting, you'll need to scan the code to pair again."))
         }
-        .confirmationDialog(removingHubTitle, isPresented: removingHubShown, titleVisibility: .visible, presenting: removingHub) { h in
+        .accessibleConfirmationDialog(removingHubTitle, isPresented: removingHubShown, titleVisibility: .visible, presenting: removingHub) { h in
             Button("Disconnect This Hub", role: .destructive) { removingHub = nil; Task { await model.disconnectHub(h.id) } }
         } message: { _ in
             Text("Only this hub is disconnected; the group stays connected through its other hubs.")
@@ -153,30 +145,6 @@ struct HubsView: View {
                 }
                 .accessibilityIdentifier("hubs.tunnel.\(h.id)")
             }
-            #if os(macOS)
-            // Standard buttons side by side at the group's trailing end, as a Mac form has them, not rows the width of
-            // the form (#1221).
-            HStack(spacing: Theme.Space.s) {
-                Spacer(minLength: 0)
-                if model.isMultiHub, model.hub?.group != g {
-                    Button("Make Current Hub") { model.selectHub(g) }.lineLimit(1).formButton()
-                }
-                Button("Rename… [Hubs View 5f6ecf]") { newName = model.registry.groupNames[g] ?? ""; renaming = g }
-                    .lineLimit(1).formButton()
-                    .accessibilityIdentifier("hubs.rename.\(g)")
-                if model.hubSignOut == .group(g) { RowProgress() }
-                if model.socket(g)?.rejected == true {
-                    Button("Pair Again") { showPair = true }
-                        .lineLimit(1).formButton()
-                        .disabled(model.hubSignOut != nil)
-                        .accessibilityIdentifier("hubs.repair.\(g)")
-                }
-                Button(model.groupIDs.count > 1 ? String(localized: "Disconnect This Group…") : String(localized: "Disconnect and Forget Hub…"), role: .destructive) { removingGroup = g }
-                    .lineLimit(1).formButton()
-                    .disabled(model.hubSignOut != nil)
-                    .accessibilityIdentifier("hubs.remove.\(g)")
-            }
-            #else
             if model.isMultiHub, model.hub?.group != g {
                 Button { model.selectHub(g) } label: {
                     SettingsRow(title: String(localized: "Make Current Hub"), symbol: Theme.Icon.successFilled, tint: Theme.positive)
@@ -204,7 +172,6 @@ struct HubsView: View {
             .modifier(SettingsButtonLook())
             .disabled(model.hubSignOut != nil)
             .accessibilityIdentifier("hubs.remove.\(g)")
-            #endif
         }
         .bareListRow()
     }

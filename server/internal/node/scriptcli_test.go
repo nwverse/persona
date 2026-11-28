@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -25,11 +26,24 @@ type scriptHub struct {
 	n    *Node
 	sock string
 
-	mu        sync.Mutex
-	created   []proto.Interaction
-	notified  []map[string]any
-	cancelled []string
-	larkSent  []proto.LarkSent // what the node's gate proxy told of (lark.sent)
+	mu             sync.Mutex
+	created        []proto.Interaction
+	notified       []map[string]any
+	cancelled      []string
+	codexLists     [][]proto.Interaction
+	decisions      []map[string]any
+	decisionNames  []string
+	decisionAnswer assistantwire.OutsideDecisionReply
+	larkSent       []proto.LarkSent // what the node's gate proxy told of (lark.sent)
+	lark           proto.AssistantLark
+
+	direction      func(context.Context, string, json.RawMessage) (any, error)
+	directionCalls []scriptDirectionCall
+}
+
+type scriptDirectionCall struct {
+	method string
+	params json.RawMessage
 }
 
 func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Interaction) (any, error), notify func() (any, error)) *scriptHub {
@@ -60,6 +74,28 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 			h.notified = append(h.notified, p)
 			h.mu.Unlock()
 			return notify()
+		case "direction.create", "direction.progress":
+			h.mu.Lock()
+			h.directionCalls = append(h.directionCalls, scriptDirectionCall{method: method, params: params})
+			h.mu.Unlock()
+			if h.direction != nil {
+				return h.direction(ctx, method, params)
+			}
+			return nil, nil
+		case assistantwire.MethodDecisionRaise, assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
+			var p map[string]any
+			_ = json.Unmarshal(params, &p)
+			h.mu.Lock()
+			h.decisions = append(h.decisions, p)
+			h.decisionNames = append(h.decisionNames, method)
+			answer := h.decisionAnswer
+			h.mu.Unlock()
+			return answer, nil
+		case "assistant.lark":
+			h.mu.Lock()
+			cfg := h.lark
+			h.mu.Unlock()
+			return cfg, nil
 		case proto.MethodLarkSent:
 			var s proto.LarkSent
 			_ = json.Unmarshal(params, &s)
@@ -71,6 +107,15 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 		return nil, nil
 	}
 	hub.OnEvent = func(method string, params json.RawMessage) {
+		if method == "codex.interactions" {
+			var p struct {
+				Interactions []proto.Interaction `json:"interactions"`
+			}
+			_ = json.Unmarshal(params, &p)
+			h.mu.Lock()
+			h.codexLists = append(h.codexLists, p.Interactions)
+			h.mu.Unlock()
+		}
 		var p struct {
 			ID string `json:"id"`
 		}
@@ -111,6 +156,70 @@ func newScriptHub(t *testing.T, create func(ctx context.Context, ix proto.Intera
 	return h
 }
 
+func TestDecisionScriptSocketGetAndWithdraw(t *testing.T) {
+	h := newScriptHub(t, answerWith(proto.Resolution{}), notifyOK)
+	const id = "odc_example"
+	h.mu.Lock()
+	h.decisionAnswer = assistantwire.OutsideDecisionReply{Decision: &assistantwire.OutsideDecision{ID: id}}
+	h.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	for _, call := range []struct {
+		method string
+		run    func(context.Context, nodeclient.Dialer, string, string) (assistantwire.OutsideDecisionReply, error)
+	}{
+		{"decision.get", nodeclient.DecisionGetNode},
+		{"decision.withdraw", nodeclient.DecisionWithdrawNode},
+	} {
+		reply, err := call.run(ctx, h.dial, id, "w1:p2")
+		if err != nil || reply.Decision == nil || reply.Decision.ID != id {
+			t.Fatalf("%s: %+v, %v", call.method, reply, err)
+		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.decisionNames) != 2 || h.decisionNames[0] != "decision.get" || h.decisionNames[1] != "decision.withdraw" {
+		t.Fatalf("manager methods: %v", h.decisionNames)
+	}
+	for i, params := range h.decisions {
+		if len(params) != 1 || params["id"] != id {
+			t.Errorf("%s params: %v", h.decisionNames[i], params)
+		}
+	}
+}
+
+func TestDecisionScriptRejectsBeforeForwarding(t *testing.T) {
+	h := newScriptHub(t, answerWith(proto.Resolution{}), notifyOK)
+	h.n.setBlockedAgentDirs([]string{"/work/blocked"})
+	for _, tc := range []struct {
+		name, method, input, code, message string
+	}{
+		{"malformed raise", "decision.raise", `{"decision":1}`, "invalid_decision", "bad request"},
+		{"empty id", "decision.get", `{"id":""}`, "invalid_decision", "a decision id is required"},
+		{"invalid id", "decision.withdraw", `{"id":1}`, "invalid_decision", "a decision id is required"},
+		{"blocked folder", "decision.raise", `{"decision":{},"cwd":"/work/blocked"}`, "forbidden", "this folder is blocked in Persona"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := assistantwire.OutsideDecisionReply{Code: tc.code, Error: tc.message}
+			if got := h.n.handleDecision(t.Context(), sockRequest{Kind: tc.method, Input: json.RawMessage(tc.input)}); got != want {
+				t.Errorf("reply = %+v, want %+v", got, want)
+			}
+		})
+	}
+	h.n.peer.SuspendCalls()
+	want := assistantwire.OutsideDecisionReply{Code: "unavailable", Error: rpc.ErrSuspended.Error()}
+	if got := h.n.handleDecision(t.Context(), sockRequest{Kind: "decision.get", Input: json.RawMessage(`{"id":"odc_example"}`)}); got != want {
+		t.Errorf("suspended peer reply = %+v, want %+v", got, want)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.decisions) != 0 {
+		t.Fatalf("rejected requests reached the manager: %v", h.decisions)
+	}
+}
+
 // dial is nodeclient.Dialer over the test's socket.
 func (h *scriptHub) dial(ctx context.Context, req any) ([]byte, error) {
 	var d net.Dialer
@@ -144,6 +253,36 @@ func answerWith(res proto.Resolution) func(context.Context, proto.Interaction) (
 func notifyOK() (any, error) { return map[string]any{"sent": true}, nil }
 
 func boolp(b bool) *bool { return &b }
+
+// rawScriptAsk bypasses the typed client so a new input field can be tested before nodeclient knows it.
+func rawScriptAsk(t *testing.T, h *scriptHub, input string) nodeclient.AskReply {
+	t.Helper()
+	line, err := h.dial(context.Background(), nodeclient.Request{Kind: "ask", Input: json.RawMessage(input)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep nodeclient.AskReply
+	if err := json.Unmarshal(line, &rep); err != nil {
+		t.Fatalf("bad reply %q: %v", line, err)
+	}
+	return rep
+}
+
+// scriptInteractionFormat reads the interaction's public wire shape without requiring the new Go field to exist yet.
+func scriptInteractionFormat(t *testing.T, ix proto.Interaction) string {
+	t.Helper()
+	line, err := json.Marshal(ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		Format string `json:"format"`
+	}
+	if err := json.Unmarshal(line, &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire.Format
+}
 
 // A question with options is the question card AskUserQuestion already is, from "Script" (in Chinese), under the session of the
 // caller's pane; the option chosen comes back.
@@ -211,6 +350,104 @@ func TestScriptAskWithoutOptionsIsAPermissionCard(t *testing.T) {
 				t.Fatalf("interaction %+v", ix)
 			}
 		})
+	}
+}
+
+// Markdown is a per-ask opt-in carried on either kind of interaction for the phone and web to render.
+func TestScriptAskMarkdownFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		input    string
+		res      proto.Resolution
+		kind     string
+		question string
+		answer   string
+	}{
+		{
+			name:     "permission",
+			input:    `{"question":"**Deploy?**\n\n- migrates the database","format":"markdown"}`,
+			res:      proto.Resolution{Allow: boolp(true)},
+			kind:     proto.IxPermission,
+			question: "**Deploy?**\n\n- migrates the database",
+		},
+		{
+			name:     "question",
+			input:    `{"question":"**Deploy where?**\n\n- keeps the data","options":["staging","prod"],"format":"markdown"}`,
+			res:      proto.Resolution{Answers: map[string]string{"**Deploy where?**\n\n- keeps the data": "staging"}},
+			kind:     proto.IxQuestion,
+			question: "**Deploy where?**\n\n- keeps the data",
+			answer:   "staging",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newScriptHub(t, answerWith(tc.res), notifyOK)
+			rep := rawScriptAsk(t, h, tc.input)
+			if rep.Status != nodeclient.AskAnswered || rep.Answer != tc.answer {
+				t.Fatalf("reply %+v", rep)
+			}
+			ix := h.lastCreated(t)
+			if ix.Kind != tc.kind {
+				t.Fatalf("kind %q, want %q", ix.Kind, tc.kind)
+			}
+			question := ix.Summary
+			if ix.Kind == proto.IxQuestion {
+				if len(ix.Questions) != 1 {
+					t.Fatalf("questions %+v", ix.Questions)
+				}
+				question = ix.Questions[0].Question
+			}
+			if question != tc.question {
+				t.Fatalf("question %q, want the original Markdown", question)
+			}
+			if got := scriptInteractionFormat(t, ix); got != "markdown" {
+				t.Fatalf("format %q, want markdown; interaction %s", got, mustJSON(ix))
+			}
+		})
+	}
+}
+
+// Omitted, plain and unrecognized formats retain the existing literal-text cards; only markdown opts in.
+func TestScriptAskFormatDefaultsToPlain(t *testing.T) {
+	const question = "**Keep this literal?**"
+	for _, shape := range []struct {
+		name    string
+		options string
+		res     proto.Resolution
+		kind    string
+	}{
+		{name: "permission", res: proto.Resolution{Allow: boolp(true)}, kind: proto.IxPermission},
+		{name: "question", options: `,"options":["yes","no"]`, res: proto.Resolution{Answers: map[string]string{question: "yes"}}, kind: proto.IxQuestion},
+	} {
+		for _, format := range []struct {
+			name  string
+			input string
+		}{
+			{name: "omitted"},
+			{name: "plain", input: `,"format":"plain"`},
+			{name: "unknown", input: `,"format":"html"`},
+		} {
+			t.Run(shape.name+"/"+format.name, func(t *testing.T) {
+				h := newScriptHub(t, answerWith(shape.res), notifyOK)
+				rep := rawScriptAsk(t, h, `{"question":"`+question+`"`+shape.options+format.input+`}`)
+				if rep.Status != nodeclient.AskAnswered {
+					t.Fatalf("reply %+v", rep)
+				}
+				ix := h.lastCreated(t)
+				if ix.Kind != shape.kind {
+					t.Fatalf("kind %q, want %q", ix.Kind, shape.kind)
+				}
+				gotQuestion := ix.Summary
+				if ix.Kind == proto.IxQuestion {
+					gotQuestion = ix.Questions[0].Question
+				}
+				if gotQuestion != question {
+					t.Fatalf("question %q, want the unchanged literal text", gotQuestion)
+				}
+				if got := scriptInteractionFormat(t, ix); got != "" && got != "plain" {
+					t.Fatalf("format %q, want the default plain behavior", got)
+				}
+			})
+		}
 	}
 }
 
@@ -364,7 +601,12 @@ func TestDialSocketCancel(t *testing.T) {
 			if err != nil {
 				return
 			}
-			conns <- c // a node that never answers
+			// A node that reads the request and never answers. The listener accepts before the client's DialContext
+			// has returned, and a cancel in that gap fails the dial itself (net checks ctx once the connect is
+			// done); the request line is written only after DialContext returns, so having read it means the
+			// client is connected and the cancel lands where the test means it to: while waiting for the answer.
+			_, _ = bufio.NewReader(c).ReadBytes('\n')
+			conns <- c
 		}
 	}()
 

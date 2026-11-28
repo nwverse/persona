@@ -13,8 +13,10 @@ import (
 // #4926). A round the owner did not start (a supervision message, a scheduled task or follow-up, another
 // conversation's message, a task's notice) can sit behind a long foreground command for minutes. When the owner's own
 // message reaches a conversation on such a round, it carries interject_background whatever the setting says, so the
-// node moves the running command to the background and the model reads the owner at once. For a round the owner
-// started, the setting decides as before.
+// node moves the running command to the background and the model reads the owner at once. On a round of the
+// background supervisor the node first waits for the round's turn to end, up to 30 s, so the owner's message goes into
+// a process with every tool (node/assistant_round.go awaitRoundTurn); only past that does it preempt the round. For a
+// round the owner started, the setting decides as before.
 //
 // A mark per conversation says which message started the round it is on. It is set when the manager sends a
 // background message into a conversation not seen working (call), and it lasts as long as that round: every message
@@ -57,8 +59,8 @@ type preemptBook struct {
 }
 
 // backgroundRoundKind is the kind of round text with source starts when it is one the owner did not start, else "".
-// Persona continuing the owner's own work (a usage limit that reset, a wake for what it waits on) is not one, as it
-// is no background round in the apps ("Background rounds").
+// Persona continuing the owner's own work (a usage limit that reset or moved it to a backup launcher, a wake for what
+// it waits on: prompts.ContinuesOwnWork) is not one, as it is no background round in the apps ("Background rounds").
 func backgroundRoundKind(text string, source *proto.MessageSource) string {
 	if source == nil {
 		if in := prompts.ParseInjected(text); in != nil && in.Kind == proto.InjectedTaskNotice {
@@ -70,7 +72,7 @@ func backgroundRoundKind(text string, source *proto.MessageSource) string {
 	case proto.SourceSupervision, proto.SourceConversation, proto.SourcePatrol:
 		return source.Kind
 	case proto.SourceFollowup:
-		if in := prompts.ParseInjected(text); in != nil && (in.State == "limit_continue" || in.State == "wake") {
+		if prompts.ContinuesOwnWork(prompts.ParseInjected(text)) {
 			return ""
 		}
 		return source.Kind

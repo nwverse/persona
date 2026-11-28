@@ -28,14 +28,18 @@ struct MeetingThreadView: View {
     var mode: MeetingPage.Mode
     var justMe: Bool
     var exchanges: [MeetingAsk.Exchange]
+    /// Retry and Delete Photo are offered on its photos (`MeetingRoomOffers.photoDelete`): not while the hub's
+    /// recording module is off (#15214), when the photos are only looked at.
+    var photoDelete: Bool
     @Binding var shown: Shown
 
     init(entry: RecordingEntry, mode: MeetingPage.Mode, justMe: Bool, exchanges: [MeetingAsk.Exchange],
-         shown: Binding<Shown> = .constant(Shown())) {
+         photoDelete: Bool = true, shown: Binding<Shown> = .constant(Shown())) {
         self.entry = entry
         self.mode = mode
         self.justMe = justMe
         self.exchanges = exchanges
+        self.photoDelete = photoDelete
         _shown = shown
     }
 
@@ -97,7 +101,8 @@ struct MeetingThreadView: View {
             resubscribe()
         })
         .onChange(of: wanted) { resubscribe() }
-        .onChange(of: RoomInput(items: signature(roomKey), asks: meeting.asks, ended: !entry.active), initial: true) { rebuildRoom() }
+        .onChange(of: RoomInput(items: signature(roomKey), asks: meeting.asks, ended: !entry.active,
+                                presence: entry.attendance?.presence ?? []), initial: true) { rebuildRoom() }
         .onChange(of: signature(followupKey), initial: true) { rebuildFollowup() }
         .onChange(of: sends) { markDelivered() }
         .onChange(of: JustMeInput(asks: mine, chats: chatKeys(mine).map { signature($0) }), initial: true) { rebuildReplies() }
@@ -107,7 +112,7 @@ struct MeetingThreadView: View {
             if apart != next { apart = next }
         }
         .onChange(of: report, initial: true) { _, now in shown = now }
-        .confirmationDialog("Delete This Photo?", isPresented: confirmingBinding, titleVisibility: .visible, presenting: confirming) { item in
+        .accessibleConfirmationDialog("Delete This Photo?", isPresented: confirmingBinding, titleVisibility: .visible, presenting: confirming) { item in
             Button("Delete Photo", role: .destructive) { delete(item) }
                 .accessibilityIdentifier("meeting-photo-delete-confirm")
         } message: { item in
@@ -175,7 +180,7 @@ struct MeetingThreadView: View {
         }
         // While it records the meeting hasn't ended: a line from it with nothing after (a withdrawn photo's) is no end.
         roomEntries = MeetingThread.room(model.chat(key).items, recordingID: entry.id, asks: asks.map { MeetingThread.AskInfo($0) },
-                                         ended: !entry.active)
+                                         ended: !entry.active, presence: entry.attendance?.presence ?? [])
         roomRows = mode == .after ? MeetingThread.merged(roomEntries, asks: asks) : roomEntries.map { .entry($0) }
         let photos = Set(MeetingThread.photoIDs(roomEntries))
         if roomPhotos != photos { roomPhotos = photos }
@@ -282,7 +287,7 @@ struct MeetingThreadView: View {
             ForEach(apart, id: \.self) { photoID in photoRow(photoID, inRoom: false, roomReady: ready) }
         }
         if mode == .live {
-            if roomKey == nil, role.attends, meeting.room?.known == .starting {
+            if roomKey == nil, role.answers, meeting.room?.known == .starting {
                 HStack(spacing: Theme.Space.s) {
                     ProgressView()
                     Text("Persona is joining the meeting…").font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -296,7 +301,7 @@ struct MeetingThreadView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .surface(in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
             }
-            if roomKey != nil, meeting.room?.known == .ready, role.attends, local.isEmpty, !Self.asked(roomEntries) {
+            if roomKey != nil, meeting.room?.known == .ready, role.answers, local.isEmpty, !Self.asked(roomEntries) {
                 Text(role.speaks ? String(localized: "Ask Persona about the meeting. Answers may be heard by the room.")
                      : String(localized: "Ask Persona about the meeting. Answers are shown on this screen."))
                     .font(Theme.Font.secondary).foregroundStyle(.secondary)
@@ -445,6 +450,9 @@ struct MeetingThreadView: View {
         case .joined:
             quiet(String(localized: "Persona joined the meeting"))
                 .accessibilityIdentifier("meeting-thread-joined")
+        case .left:
+            quiet(String(localized: "Persona left the meeting"))
+                .accessibilityIdentifier("meeting-thread-left")
         case .ended:
             quiet(String(localized: "The meeting ended"))
                 .accessibilityIdentifier("meeting-thread-ended")
@@ -638,7 +646,7 @@ struct MeetingThreadView: View {
     /// room's message of it, which says Photo removed once the hub's list no longer has it.
     private func photoRow(_ photoID: String, inRoom: Bool, roomReady: Bool) -> some View {
         MeetingPhotoRow(album: album, recording: entry.id, photoID: photoID, inRoom: inRoom, after: mode == .after,
-                        roomReady: roomReady, confirming: $confirming, viewing: $viewing)
+                        roomReady: roomReady, writes: photoDelete, confirming: $confirming, viewing: $viewing)
     }
 
     private var confirmingBinding: Binding<Bool> {
@@ -676,6 +684,7 @@ private struct RoomInput: Equatable {
     var items: String
     var asks: [MeetingAskWire.Ask]
     var ended: Bool
+    var presence: [RecordingPresence]
 }
 
 // MARK: Photos
@@ -703,6 +712,8 @@ private struct MeetingPhotoRow: View {
     var inRoom: Bool
     var after: Bool
     var roomReady: Bool
+    /// Retry and Delete Photo are offered (not with the hub's recording module off, #15214).
+    var writes = true
     @Binding var confirming: MeetingPhotoItem?
     @Binding var viewing: MeetingPhotoItem?
 
@@ -749,11 +760,11 @@ private struct MeetingPhotoRow: View {
             .accessibilityAction { if item.hasImage { viewing = item } }
             .accessibilityActions {
                 if item.hasImage { Button("View Photo") { viewing = item } }
-                if item.retryable, !busy, let local = item.local { Button("Retry") { MeetingPhotos.shared.retry(local.id) } }
-                if item.deletable, !busy { Button("Delete Photo") { confirming = item } }
+                if writes, item.retryable, !busy, let local = item.local { Button("Retry") { MeetingPhotos.shared.retry(local.id) } }
+                if writes, item.deletable, !busy { Button("Delete Photo") { confirming = item } }
             }
             .accessibilityIdentifier(stateIdentifier(item, busy: busy))
-            if item.failed, !busy { failedControls(item) }
+            if writes, item.failed, !busy { failedControls(item) }
             if let problem {
                 Text(problem).font(Theme.Font.caption).foregroundStyle(Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
@@ -768,7 +779,7 @@ private struct MeetingPhotoRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
         .contextMenu {
-            if item.deletable, !busy {
+            if writes, item.deletable, !busy {
                 Button(role: .destructive) { confirming = item } label: { Label("Delete Photo", systemImage: Theme.Icon.delete) }
                     .accessibilityIdentifier("meeting-photo-delete")
             }
@@ -959,8 +970,8 @@ struct MeetingPhotoViewer: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .themedGroupedPage()
-                .overlay(alignment: .topTrailing) {
-                    RecordingSheetCloseButton(title: String(localized: "Done"), identifier: "meeting-photo-viewer-done") { dismiss() }
+                .overlay(alignment: .topLeading) {
+                    RecordingCornerButton(kind: .close, identifier: "meeting-photo-viewer-done") { dismiss() }
                         .padding(.horizontal, Theme.Space.page)
                 }
             }

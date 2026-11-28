@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,14 @@ type apiSeen struct {
 // installed before the Persona-only rename (#6079), which keeps sending it until it is replaced.
 var portProbeAgents = []string{portProbeAgent, compat.PortProbeAgent}
 
+func isFakeAPICardContextPath(p string) bool {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	if len(parts) >= 2 && (parts[0] == "api" || parts[0] == "agent") && parts[1] == "v1" {
+		parts = parts[2:]
+	}
+	return len(parts) == 2 && (parts[0] == "conversations" || parts[0] == "messages") && parts[1] != ""
+}
+
 type fakeAPI struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -58,6 +67,11 @@ func newFakeAPI(t *testing.T) *fakeAPI {
 			// A Persona node on the machine running these tests (the tests run under its agents) finds this server
 			// among an agent's ports and probes it (ports.go): that GET / is not a request the gate passed on. Only
 			// the probe's whole shape is left out, never a request the gate forwards.
+			return
+		}
+		if r.Method == http.MethodGet && r.Header.Get("User-Agent") == larkCardContextAgent && isFakeAPICardContextPath(r.URL.Path) {
+			// The node's read-only approval-card context lookup is not a gated command forwarded by the proxy.
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
@@ -271,6 +285,42 @@ func TestGateProxyHoldsRequestsToTheRules(t *testing.T) {
 	}
 }
 
+// A confirmed body of exactly JSON null binds the grant to null, not to any body: another JSON body or one that is not
+// JSON is refused and leaves the grant, which the confirmed null then uses once (#8973).
+func TestGateGrantOfAJSONNullBodyTakesOnlyNull(t *testing.T) {
+	api := newFakeAPI(t)
+	n, _ := gateNode(t, api.URL)
+	p := n.gates()
+	base, release, err := p.open("ex", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	note := base + "/api/v1/notes/N1"
+	p.grant("ex", "", larkCall{Method: "POST", Path: "/notes/N1", Body: "null"}, proto.LarkLetThrough{Kind: proto.LarkThroughCard})
+	if code, _ := send(t, "POST", note, `{"text":"changed"}`); code != http.StatusForbidden {
+		t.Fatalf("another JSON body than the null confirmed: %d", code)
+	}
+	if code, _ := send(t, "POST", note, "changed", "Content-Type", "text/plain"); code != http.StatusForbidden {
+		t.Fatalf("a body that is not JSON for the null confirmed: %d", code)
+	}
+	if code, _ := send(t, "POST", note, " null "); code != http.StatusOK {
+		t.Fatalf("the confirmed null: %d", code)
+	}
+	if code, _ := send(t, "POST", note, "null"); code != http.StatusForbidden {
+		t.Fatalf("the confirmed null, sent again: %d", code)
+	}
+	var writes []apiSeen
+	for _, r := range api.requests() {
+		if r.Method != "GET" {
+			writes = append(writes, r)
+		}
+	}
+	if len(writes) != 1 || writes[0].Path != "/api/v1/notes/N1" || writes[0].Body != " null " {
+		t.Fatalf("the writes the API got: %+v", writes)
+	}
+}
+
 // What the phone confirms is what the proxy lets through, once; a refusal lets nothing through; "Always allow for this session" lets
 // the same route through again without asking.
 func TestGateLetsThroughWhatThePhoneConfirmed(t *testing.T) {
@@ -389,18 +439,26 @@ func TestGatedToolSendsThroughTheProxy(t *testing.T) {
 	assistantHub(hub)
 	skills := filepath.Join(n.home, ".persona", "skills")
 	t.Setenv("PERSONA_SKILLS_DIR", skills)
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
 	n.dir = filepath.Join(n.home, ".persona")
 	script := filepath.Join(skills, "example", "scripts", "ex.sh")
-	_ = os.MkdirAll(filepath.Dir(script), 0o755)
-	_ = os.WriteFile(filepath.Join(skills, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644)
-	_ = os.WriteFile(script, []byte(`#!/bin/bash
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skills, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte(`#!/bin/bash
 echo "token:${EXAMPLE_TOKEN:-none}"
 if [ -n "${3:-}" ]; then
   curl -sS -X "$1" -H 'content-type: application/json' --data-raw "$3" "$EXAMPLE_BASE/api/v1$2"
 else
   curl -sS -X "$1" "$EXAMPLE_BASE/api/v1$2"
 fi
-`), 0o755)
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prepareAssistantForTest(t, n, ".persona/assistant", nil, nil)
 	g := proxiedGate(api.URL)
 	g.Tool = &proto.GateTool{Name: "example_api", Description: "Run ex."}
 	n.mu.Lock()
@@ -1457,5 +1515,106 @@ func TestGateProxyReportsAWriteWhoseCommandClosedTheConnection(t *testing.T) {
 	got := hub.reportList(t, 1)
 	if r := got[0]; r.Path != "/conversations/c2/messages" || r.Text != "hi" || r.SessionID != "s1" || r.MessageRef != "" {
 		t.Fatalf("told %+v", got)
+	}
+}
+
+// The process always learns its own address at the gate proxy, even when the gate names no environment of its own or
+// lacks the base variable, and never gets it twice (#13540).
+func TestGateAddressAlwaysInEnv(t *testing.T) {
+	api := newFakeAPI(t)
+	n, cwd := gateNode(t, api.URL)
+	envOfName := func(env []string, name string) int {
+		n := 0
+		for _, kv := range env {
+			if k, _, _ := strings.Cut(kv, "="); k == name {
+				n++
+			}
+		}
+		return n
+	}
+	// No environment at all: the address is still there, once.
+	n.larkCfg.Gates[0].Env = nil
+	env, release := n.assistantLarkEnv(cwd, "")
+	release()
+	if base, ok := envOf(env, "EXAMPLE_BASE"); !ok || envOfName(env, "EXAMPLE_BASE") != 1 ||
+		!regexp.MustCompile(`^http://127\.0\.0\.1:\d+/[0-9a-f]{32}$`).MatchString(base) {
+		t.Fatalf("EXAMPLE_BASE %q in %v", base, env)
+	}
+	// The gate's other variables go in as before, and the address is not repeated.
+	n.larkCfg.Gates[0].Env = map[string]string{"EXAMPLE_BASE": "old", "EXAMPLE_ACCOUNT": "2"}
+	env, release = n.assistantLarkEnv(cwd, "")
+	release()
+	if base, _ := envOf(env, "EXAMPLE_BASE"); envOfName(env, "EXAMPLE_BASE") != 1 || base == "old" || func() bool { v, _ := envOf(env, "EXAMPLE_ACCOUNT"); return v != "2" }() {
+		t.Fatalf("environment %v", env)
+	}
+}
+
+// A gate whose API a sandboxed extension names as host.persona.internal is dialed on this machine's loopback (#13540).
+func TestGateProxyHostPersonaInternal(t *testing.T) {
+	api := newFakeAPI(t)
+	n, cwd := gateNode(t, api.URL)
+	u, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.larkCfg.Gates[0].Env["EXAMPLE_BASE"] = "http://host.persona.internal:" + u.Port()
+	env, release := n.assistantLarkEnv(cwd, "")
+	defer release()
+	base, _ := envOf(env, "EXAMPLE_BASE")
+	if code, body := send(t, "GET", base+"/api/v1/me", ""); code != http.StatusOK || body != `{"ok":true}` {
+		t.Fatalf("%d %s", code, body)
+	}
+	got := api.requests()
+	if len(got) != 1 || got[0].Host != "127.0.0.1:"+u.Port() {
+		t.Fatalf("dialed as %+v", got)
+	}
+}
+
+// A gate the node does not know yet, or one whose address is not in its environment, is asked for again at once (at
+// most every gateRefreshInterval), not after assistantLark's minute (#13540).
+func TestAssistantLarkForGateRefreshes(t *testing.T) {
+	hub := newScriptHub(t, func(context.Context, proto.Interaction) (any, error) {
+		return proto.Resolution{Allow: boolp(true)}, nil
+	}, notifyOK)
+	n := hub.n
+	stale := proto.CommandGate{Command: "ex", BaseEnv: "EX_BASE", Auth: &proto.GateAuth{}, Env: map[string]string{}}
+	fresh := stale
+	fresh.Env = map[string]string{"EX_BASE": "http://127.0.0.1:1"}
+	hub.mu.Lock()
+	hub.lark = proto.AssistantLark{Gates: []proto.CommandGate{fresh}}
+	hub.mu.Unlock()
+	n.mu.Lock()
+	n.larkCfg, n.larkCfgAt = proto.AssistantLark{Gates: []proto.CommandGate{stale}}, time.Now().Add(-5*time.Second)
+	n.mu.Unlock()
+	cfg := n.assistantLarkForGate(t.Context(), "ex")
+	if len(cfg.Gates) != 1 || cfg.Gates[0].Env["EX_BASE"] != "http://127.0.0.1:1" {
+		t.Fatalf("refreshed: %+v", cfg)
+	}
+}
+
+// An attempt just made throttles the next one even without an answer yet, so a hub outage is not dialled on every gate
+// request; once the interval has passed it is tried again (#13540).
+func TestAssistantLarkForGateThrottlesAnAttempt(t *testing.T) {
+	hub := newScriptHub(t, func(context.Context, proto.Interaction) (any, error) {
+		return proto.Resolution{Allow: boolp(true)}, nil
+	}, notifyOK)
+	n := hub.n
+	stale := proto.CommandGate{Command: "ex", BaseEnv: "EX_BASE", Auth: &proto.GateAuth{}, Env: map[string]string{}}
+	fresh := stale
+	fresh.Env = map[string]string{"EX_BASE": "http://127.0.0.1:1"}
+	hub.mu.Lock()
+	hub.lark = proto.AssistantLark{Gates: []proto.CommandGate{fresh}}
+	hub.mu.Unlock()
+	n.mu.Lock()
+	n.larkCfg, n.larkCfgAt, n.larkCfgTryAt = proto.AssistantLark{Gates: []proto.CommandGate{stale}}, time.Now().Add(-5*time.Second), time.Now()
+	n.mu.Unlock()
+	if cfg := n.assistantLarkForGate(t.Context(), "ex"); cfg.Gates[0].Env["EX_BASE"] != "" {
+		t.Fatalf("a recent attempt still called the hub: %+v", cfg)
+	}
+	n.mu.Lock()
+	n.larkCfgTryAt = time.Now().Add(-5 * time.Second)
+	n.mu.Unlock()
+	if cfg := n.assistantLarkForGate(t.Context(), "ex"); cfg.Gates[0].Env["EX_BASE"] != "http://127.0.0.1:1" {
+		t.Fatalf("a later request refreshed: %+v", cfg)
 	}
 }

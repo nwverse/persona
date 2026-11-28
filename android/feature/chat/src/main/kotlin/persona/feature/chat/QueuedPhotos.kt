@@ -1,16 +1,22 @@
 package persona.feature.chat
 
 import android.content.Context
+import android.content.res.Resources
 import android.net.Uri
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.ImagePayload
 import java.io.File
 import java.util.Base64
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
-/** Photos taken back with a queued message as the composer's attachments, and how many of them could not be put back. */
-internal data class RestoredPhotos(val attachments: List<ComposerAttachment>, val lost: Int)
+/** Photos restored as ordinary composer attachments, and how many of them could not be restored. */
+data class RestoredPhotos(val attachments: List<ComposerAttachment> = emptyList(), val lost: Int = 0)
 
 /**
  * The photos a queued message carried, which the hub returns beside a Persona conversation's queue as base64 (iOS
@@ -19,6 +25,7 @@ internal data class RestoredPhotos(val attachments: List<ComposerAttachment>, va
  * A payload that is not base64 or cannot be written is left out and counted in [RestoredPhotos.lost]. Call off the main thread.
  */
 internal fun restoredPhotos(context: Context, payloads: List<ImagePayload>,
+    limits: ImageLimits = ImageLimits.Standard,
     share: (File) -> Uri = { FileProvider.getUriForFile(context, "${context.packageName}.chat.files", it) }): RestoredPhotos {
     val folder = File(context.cacheDir, "chat-captures").apply { mkdirs() }
     val restored = payloads.mapNotNull { payload ->
@@ -28,8 +35,91 @@ internal fun restoredPhotos(context: Context, payloads: List<ImagePayload>,
             val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(payload.mime) ?: "jpg"
             val file = File.createTempFile("queued-", ".$extension", folder)
             val uri = try { file.writeBytes(bytes); share(file) } catch (error: Throwable) { file.delete(); throw error }
-            ComposerAttachment(UUID.randomUUID().toString(), file.name, uri.toString(), image = true, size = bytes.size.toLong())
+            val scaled = measurePhotoBytes(context, uri, limits) ?: measurePhotoBytes(bytes, limits)
+            ComposerAttachment(
+                UUID.randomUUID().toString(),
+                file.name,
+                uri.toString(),
+                image = true,
+                size = bytes.size.toLong(),
+                scaledBytes = scaled,
+            )
         }.getOrNull()
     }
     return RestoredPhotos(restored, payloads.size - restored.size)
 }
+
+/**
+ * Reads a forwarded message's photos on its source computer and restores each readable one as a local composer photo.
+ * A failed read or write leaves only that photo out. The original filename stays visible in the target composer.
+ */
+internal suspend fun forwardedPhotos(context: Context, paths: List<String>, read: suspend (String) -> ImagePayload,
+    limits: ImageLimits = ImageLimits.Standard,
+    share: (File) -> Uri = { FileProvider.getUriForFile(context, "${context.packageName}.chat.files", it) }): RestoredPhotos {
+    val attachments = mutableListOf<ComposerAttachment>()
+    try {
+        return withContext(Dispatchers.IO) {
+            var lost = 0
+            for (path in paths) {
+                val payload = try { read(path) } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                val restored = payload?.let { restoredPhotos(context, listOf(it), limits, share) }
+                val attachment = restored?.attachments?.singleOrNull()
+                if (attachment == null) lost++
+                else attachments += attachment.copy(name = path.trimEnd('/').substringAfterLast('/').ifEmpty { attachment.name })
+            }
+            RestoredPhotos(attachments, lost)
+        }
+    } catch (cancelled: CancellationException) {
+        // Returning to the caller can be cancelled after one or more files have already been staged.
+        withContext(NonCancellable) { discardForwardedPhotos(context, RestoredPhotos(attachments)) }
+        throw cancelled
+    }
+}
+
+/**
+ * Adds forwarded photos to the target's existing draft under [limits], spilling overflow pictures into file attachments
+ * when [canSpill] and file slots remain. Returns the attachments that could not fit; rejected captures are deleted
+ * rather than left in the cache.
+ */
+suspend fun attachForwardedPhotos(
+    context: Context,
+    composer: ChatComposerState,
+    handoffs: List<RestoredPhotos>,
+    limits: ImageLimits = ImageLimits.Standard,
+    canSpill: Boolean = true,
+    onNotice: (String) -> Unit = {},
+): List<ComposerAttachment> {
+    val photos = handoffs.flatMap(RestoredPhotos::attachments)
+    if (photos.isEmpty()) return emptyList()
+    val candidates = withContext(Dispatchers.IO) {
+        photos.map { photo ->
+            val scaled = photo.uri.takeIf { it.isNotEmpty() }
+                ?.let { measurePhotoBytes(context, Uri.parse(it), limits) }
+                ?: photo.scaledBytes
+            PhotoCandidate(photo, scaled)
+        }
+    }
+    val existing = refreshHeldPhotoSizes(context, composer.attachments, limits) { id, bytes ->
+        composer.updateAttachment(id) { if (it.scaledBytes == null) it.copy(scaledBytes = bytes) else it }
+    }
+    val plan = planComposerPhotos(existing, candidates, limits, canSpill = canSpill)
+    if (plan.added.isNotEmpty()) {
+        composer.beginEdit()
+        composer.attachments = composer.attachments + plan.added
+    }
+    if (plan.spilledByCount > 0 || plan.spilledByBytes > 0) {
+        plan.notices(context.resources, limits).forEach(onNotice)
+    }
+    withContext(Dispatchers.IO) { plan.refused.forEach { deleteCapture(context, it.uri) } }
+    return plan.refused
+}
+
+/** Drops a duplicate handoff without adding its photos twice. */
+internal suspend fun discardForwardedPhotos(context: Context, handoff: RestoredPhotos) {
+    withContext(Dispatchers.IO) { handoff.attachments.forEach { deleteCapture(context, it.uri) } }
+}
+
+/** The one short notice for source photos that could not reach the target composer. */
+fun forwardedPhotoNotice(resources: Resources, lost: Int): String = resources.getString(
+    if (lost == 1) R.string.chat_forward_photos_lost_one else R.string.chat_forward_photos_lost_other, lost)

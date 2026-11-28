@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-func TestAgentSendPreservesSideConversationProvenance(t *testing.T) {
+func TestAgentSendOmitsSideConversationSender(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
 	assigned, err := s.createTodo(ctx, "Example task", "Fix and verify the example task.", "conv1", "")
@@ -29,8 +28,13 @@ func TestAgentSendPreservesSideConversationProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages := sentToAgent(f)
-	if len(messages) != 1 || !strings.Contains(messages[0], `<persona-context kind="side-conversation">`) || !strings.Contains(messages[0], "From: conv-other") {
-		t.Fatalf("side source missing: %q", messages)
+	want := `<persona-context kind="side-conversation">
+This message does not replace or complete your assigned task. Answer it separately, then continue that task.
+</persona-context>
+<persona-side-conversation />
+Can you explain a different change?`
+	if len(messages) != 1 || messages[0] != want {
+		t.Fatalf("side instruction = %q, want %q", messages, want)
 	}
 	if _, err := s.runTool(ctx, "server", "conv1", "agent_send", args); err != nil {
 		t.Fatal(err)
@@ -38,6 +42,15 @@ func TestAgentSendPreservesSideConversationProvenance(t *testing.T) {
 	messages = sentToAgent(f)
 	if len(messages) != 2 || messages[1] != "Can you explain a different change?" {
 		t.Fatalf("owner instruction misclassified: %q", messages)
+	}
+	f.setSessions("box", proto.Session{SessionID: "s2abcdef", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusIdle})
+	unassigned := json.RawMessage(`{"machine":"box","session_id":"s2abcdef","text":"Can you explain a different change?"}`)
+	if _, err := s.runTool(ctx, "server", "conv-other", "agent_send", unassigned); err != nil {
+		t.Fatal(err)
+	}
+	messages = sentToAgent(f)
+	if len(messages) != 3 || messages[2] != "Can you explain a different change?" {
+		t.Fatalf("unassigned instruction misclassified: %q", messages)
 	}
 }
 
@@ -100,8 +113,8 @@ func TestSupervisionSummaryDedupPersists(t *testing.T) {
 		t.Fatalf("unchanged summary woke after restart: %v, %v", out, err)
 	}
 	out, _, _, err = restarted.reserveSupervision(ctx, []prompts.SuperviseEntry{entry}, []superviseSignal{g}, now.Add(30*time.Minute))
-	if err != nil || len(out) != 1 {
-		t.Fatalf("deduplication did not expire: %v, %v", out, err)
+	if err != nil || len(out) != 0 {
+		t.Fatalf("unchanged routine deduplication expired: %v, %v", out, err)
 	}
 }
 
@@ -130,6 +143,67 @@ func TestSupervisionDedupKeepsNewInformation(t *testing.T) {
 			out, _, _, err := s.reserveSupervision(context.Background(), []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(time.Minute))
 			if err != nil || len(out) != 1 {
 				t.Fatalf("new information suppressed: %v, %v", out, err)
+			}
+		})
+	}
+}
+
+// Signals whose news is not their agent's words (#6027): the owner's answer to a new round of a decision, a new
+// round's recheck or undecidable review, a retry's failure or start. A new one goes through while the stopped agent's
+// last words stay the same; the same one told again, as by a restarted manager, does not.
+func TestSupervisionDedupKeepsEachNewEvent(t *testing.T) {
+	for _, c := range []struct{ name, kind, first, next string }{
+		{"another answer to a new round", sigOwnerCannot, "explain_first@2026-11-01T12:00:00Z", "decide_yourself@2026-11-01T12:04:00Z"},
+		{"the same answer to a new round", sigOwnerCannot, "explain_first@2026-11-01T12:00:00Z", "explain_first@2026-11-01T12:04:00Z"},
+		{"a new round's recheck", sigRecheck, "recheck@2026-11-01T12:00:00Z", "recheck@2026-11-01T12:04:00Z"},
+		{"a new undecidable review", sigUndecidable, "undecidable@2026-11-01T12:00:00Z", "undecidable@2026-11-01T12:04:00Z"},
+		{"a retry that fails the same way", sigFailed, "The new tab's shell did not take the start line.", "retry 1: The new tab's shell did not take the start line."},
+		{"another retry that started", sigStarted, "retry 1", "retry 2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := &memStore{}
+			s, _ := newQuietServiceOn(t, st)
+			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+			e := prompts.SuperviseEntry{ID: "todo_example", AgentID: "agent-example", Last: "Two ways to roll it out: A or B."}
+			g := superviseSignal{Todo: e.ID, Session: e.AgentID, Kind: c.kind, Key: c.first, Detail: "Synthetic detail."}
+			reserve := func(s *Service, at time.Time) int {
+				out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, at)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return len(out)
+			}
+			if reserve(s, now) != 1 {
+				t.Fatal("the first event was not told")
+			}
+			restarted, _ := newQuietServiceOn(t, st)
+			if reserve(restarted, now.Add(5*time.Minute)) != 0 {
+				t.Fatal("the same event was told twice")
+			}
+			g.Key = c.next
+			if reserve(restarted, now.Add(6*time.Minute)) != 1 {
+				t.Fatalf("the new event (key %q) was folded into the one before (key %q)", c.next, c.first)
+			}
+		})
+	}
+}
+
+// A new turn or sweep of a signal whose key only moves with time is not news while its agent's words stay the same.
+func TestSupervisionDedupFoldsANewTurnWithTheSameWords(t *testing.T) {
+	for _, kind := range []string{sigIdle, sigStalled, sigInterrupted, sigUnjudged} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			s, _ := newQuietServiceOn(t, &memStore{})
+			now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+			e := prompts.SuperviseEntry{ID: "todo_example", AgentID: "agent-example", Last: "Still waiting for task evidence."}
+			g := superviseSignal{Todo: e.ID, Session: e.AgentID, Kind: kind, Key: "2026-11-01T12:00:00Z"}
+			if out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now); err != nil || len(out) != 1 {
+				t.Fatalf("first: %v, %v", out, err)
+			}
+			g.Key = "2026-11-01T12:10:00Z"
+			if out, _, _, err := s.reserveSupervision(ctx, []prompts.SuperviseEntry{e}, []superviseSignal{g}, now.Add(10*time.Minute)); err != nil || len(out) != 0 {
+				t.Fatalf("a new turn with the same words woke the supervisor again: %v, %v", out, err)
 			}
 		})
 	}
@@ -209,5 +283,117 @@ func TestSupervisionFinishVisibility(t *testing.T) {
 	s.promoteSupervision("conv2")
 	if _, err := s.toolSupervisionFinish(ctx, "conv2", args); err == nil {
 		t.Fatal("a user notification or question could be hidden")
+	}
+}
+
+func TestInternalAcceptedReviewDisposition(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		verdict        string
+		autoReview     bool
+		autoState      string
+		autoRound      int
+		round          int
+		parent         string
+		userRequested  bool
+		userCheck      bool
+		missingPlan    bool
+		continued      bool
+		wantBackground bool
+	}{
+		{name: "independent clean review", verdict: reviewAccepted, autoReview: true, wantBackground: true},
+		{name: "independent blocking review", verdict: reviewAccepted, autoReview: true, autoState: autoBlocking, wantBackground: true},
+		{name: "running review stays visible", verdict: reviewAccepted, autoReview: true, autoState: autoRunning},
+		{name: "failed review stays visible", verdict: reviewAccepted, autoReview: true, autoState: autoFailed},
+		{name: "cancelled review stays visible", verdict: reviewAccepted, autoReview: true, autoState: autoCancelled},
+		{name: "old-round review stays visible", verdict: reviewAccepted, autoReview: true, autoRound: 1},
+		{name: "rework", verdict: reviewAccepted, round: 1, wantBackground: true},
+		{name: "internal subtask", verdict: reviewAccepted, parent: "todo_parent", wantBackground: true},
+		{name: "continued task uses its current plan", verdict: reviewAccepted, autoReview: true, continued: true, wantBackground: true},
+		{name: "user requested wins over every internal source", verdict: reviewAccepted, autoReview: true, round: 2, parent: "todo_parent", userRequested: true},
+		{name: "owner verification stays visible", verdict: reviewAccepted, autoReview: true, userCheck: true},
+		{name: "needs user stays visible", verdict: reviewNeedsUser, autoReview: true},
+		{name: "ordinary supervised task stays visible", verdict: reviewAccepted},
+		{name: "missing plan fails open", verdict: reviewAccepted, autoReview: true, missingPlan: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, _, todo := newSupervisedService(t)
+			planID := "plan_" + todo.ID
+			s.todos.mu.Lock()
+			cur := s.todos.todos[todo.ID]
+			cur.PlanID = planID
+			if tc.autoReview {
+				state := tc.autoState
+				if state == "" {
+					state = autoClean
+				}
+				cur.Supervision.AutoReview = &AutoReview{ID: "rv_test", State: state, Round: tc.autoRound}
+			}
+			cur.Supervision.Round = tc.round
+			s.todos.mu.Unlock()
+			if tc.missingPlan {
+				s.tasks.mu.Lock()
+				for _, plan := range s.tasks.plans {
+					for i := range plan.Tasks {
+						if plan.Tasks[i].TodoID == todo.ID {
+							plan.Tasks[i].TodoID = ""
+						}
+					}
+				}
+				s.tasks.mu.Unlock()
+			}
+			if !tc.missingPlan {
+				now := time.Now().UTC()
+				if err := s.savePlan(ctx, &TaskPlan{ID: planID, Conversation: "conv1", State: planStarted, CreatedAt: now, UpdatedAt: now, Tasks: []PlanTask{{
+					TodoID: todo.ID, Title: todo.Title, UserRequested: tc.userRequested, Parent: tc.parent,
+				}}}); err != nil {
+					t.Fatal(err)
+				}
+				if tc.continued {
+					s.tasks.mu.Lock()
+					for id, plan := range s.tasks.plans {
+						if id == planID {
+							continue
+						}
+						for i := range plan.Tasks {
+							if plan.Tasks[i].TodoID == todo.ID {
+								plan.Tasks[i].TodoID = ""
+							}
+						}
+					}
+					s.tasks.mu.Unlock()
+					s.todos.mu.Lock()
+					s.todos.todos[todo.ID].PlanID = "plan_historical_" + todo.ID
+					s.todos.mu.Unlock()
+					if err := s.savePlan(ctx, &TaskPlan{ID: "plan_historical_" + todo.ID, Conversation: "conv1", State: planStarted, CreatedAt: now, UpdatedAt: now, Tasks: []PlanTask{{
+						Title: todo.Title, UserRequested: true,
+					}}}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			s.holdPushes(ctx, "conv1")
+			args := map[string]any{"verdict": tc.verdict, "user_check": tc.userCheck}
+			if tc.verdict == reviewNeedsUser {
+				args["reason"] = "Choose whether the internal result should be published"
+				args["recommend"] = "Publish it"
+			}
+			res := reviewTask(t, s, todo.ID, args)
+			var receipt struct {
+				Background bool `json:"background"`
+			}
+			_ = json.Unmarshal([]byte(res), &receipt)
+			if receipt.Background != tc.wantBackground {
+				t.Fatalf("task_review background=%v, want %v: %s", receipt.Background, tc.wantBackground, res)
+			}
+			_, err := s.toolSupervisionFinish(ctx, "conv1", json.RawMessage(`{"visibility":"silent","summary":"Handled internally."}`))
+			if tc.wantBackground && err != nil {
+				t.Fatalf("internal accepted review still promoted the round: %v", err)
+			}
+			if !tc.wantBackground && err == nil {
+				t.Fatal("a user-visible review could be hidden by a silent finish")
+			}
+		})
 	}
 }

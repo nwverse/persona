@@ -160,6 +160,11 @@ func TestTodoToolsFailedStart(t *testing.T) {
 		if err != nil || !strings.Contains(got, line) || !strings.Contains(got, "failed to start: "+reason) {
 			t.Fatalf("get: %s %v", got, err)
 		}
+		// Stored done, but not done: it says it still waits on the owner and how it starts again (#10365).
+		if !strings.Contains(got, "did not start ") || !strings.Contains(got, "not done, it still waits on the owner") ||
+			!strings.Contains(got, "task_retry") || strings.Contains(got, "\ndone ") {
+			t.Fatalf("get reads as done: %s", got)
+		}
 	})
 }
 
@@ -167,6 +172,7 @@ func TestTodoToolsFailedStart(t *testing.T) {
 // (agents work on it) is confirmed too; the user's own to-do is not.
 func TestTodoToolsConfirm(t *testing.T) {
 	todoStores(t, func(t *testing.T, e *todoEnv, _ *db.DB) {
+		e.f.hello.Assistant.AutoApproveReversibleSettings = true
 		res, err := e.tool("todo_create", map[string]any{"title": "Pay the rent"})
 		if err != nil {
 			t.Fatal(err)
@@ -267,6 +273,10 @@ func TestTodoReminders(t *testing.T) {
 		pushes := e.f.pushed()
 		if len(pushes) != 1 || pushes[0].Title != "Call the bank" || !strings.Contains(pushes[0].Body, "12-01") {
 			t.Fatalf("pushes: %+v", pushes)
+		}
+		// The owner's own reminder is theirs to act on: P0 even with push tiering on, keyed by to-do and due time.
+		if pushes[0].Level != "P0" || !strings.HasPrefix(pushes[0].RelatedKey, "todo-remind:"+id+"@") {
+			t.Fatalf("reminder level %q key %q", pushes[0].Level, pushes[0].RelatedKey)
 		}
 		if got, _ := e.todo(id); got.RemindedAt == nil {
 			t.Fatal("not marked pushed")

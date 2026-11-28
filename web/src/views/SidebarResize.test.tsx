@@ -5,7 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CHAT_MIN, getSidebarWidth, PANEL_MIN, resetSidebarWidth, setSidebarWidth, SIDEBAR_DEFAULT, SIDEBAR_WIDTH_KEY } from "../lib/layout";
+import { CHAT_MIN, getSidebarWidth, PANEL_GAP, PANEL_MIN, resetSidebarWidth, setSidebarWidth, SIDEBAR_DEFAULT, SIDEBAR_WIDTH_KEY } from "../lib/layout";
 import { closePanel, openPanel } from "../lib/panel";
 import { SIDEBAR_VAR, SidebarResize } from "./SidebarResize";
 
@@ -90,7 +90,7 @@ describe("the sidebar's resize handle", () => {
     // a 1180 window with a panel open: the page keeps CHAT_MIN and the panel its least
     setWindow(1180);
     act(() => openPanel({ kind: "files", mid: "m1", sid: "s1", cwd: "/work/demo" }));
-    expect(drawn()).toBe(`${Math.max(SIDEBAR_DEFAULT, 1180 - CHAT_MIN - PANEL_MIN)}px`);
+    expect(drawn()).toBe(`${Math.max(SIDEBAR_DEFAULT, 1180 - CHAT_MIN - PANEL_MIN - 2 * PANEL_GAP)}px`);
     act(() => closePanel());
     expect(drawn()).toBe("480px");
     // the remembered width is still the one asked for
@@ -103,5 +103,18 @@ describe("the sidebar's resize handle", () => {
     act(() => void handle().dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
     expect(drawn()).toBe(`${SIDEBAR_DEFAULT}px`);
     expect(localStorage.getItem(SIDEBAR_WIDTH_KEY)).toBeNull();
+  });
+
+  it("reserves the outer right inset when no side panel is open and supports keyboard resize", () => {
+    setSidebarWidth(480);
+    setWindow(900);
+    act(() => root.render(<Column />));
+    expect(drawn()).toBe(`${Math.max(SIDEBAR_DEFAULT, 900 - CHAT_MIN - PANEL_GAP)}px`);
+    setWindow(1440);
+    expect(drawn()).toBe("480px");
+    act(() => void handle().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true })));
+    expect(drawn()).toBe("464px");
+    act(() => void handle().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    expect(drawn()).toBe(`${SIDEBAR_DEFAULT}px`);
   });
 });

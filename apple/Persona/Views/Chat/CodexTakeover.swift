@@ -1,10 +1,7 @@
 import Observation
 import SwiftUI
-#if os(iOS)
-import UIKit
-#endif
 
-/// One flow for the iPhone chat notice and the Agents row menu.
+/// One flow for the iOS chat notice and the Agents row menu (iPhone and iPad).
 @MainActor @Observable
 final class CodexTakeoverCoordinator {
     enum Pending {
@@ -114,7 +111,7 @@ struct CodexTakeoverControl: View {
 
     var body: some View {
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone, let capability = session.capabilities?.takeover {
+        if let capability = session.capabilities?.takeover {
             HStack(spacing: Theme.Space.s) {
                 if capability.canResume {
                     Button(role: .destructive) { run { await coordinator.takeOver(session, model: model) } } label: {
@@ -146,15 +143,15 @@ struct CodexTakeoverDialogs: ViewModifier {
     func body(content: Content) -> some View {
         #if os(iOS)
         content
-            .confirmationDialog("Take over this Codex session?", isPresented: Binding(
+            .accessibleConfirmationDialog("Take over this Codex session?", isPresented: Binding(
                 get: { coordinator.needsTakeoverConfirmation }, set: { if !$0 { coordinator.pending = nil } }
-            ), titleVisibility: .visible) {
+            ), titleVisibility: .visible, hasCancel: true) {
                 Button("Take over", role: .destructive) { confirm() }
                 Button("Cancel", role: .cancel) { coordinator.pending = nil }
             } message: { Text("This will end the turn currently running in the terminal.") }
-            .confirmationDialog("Continue in a new session?", isPresented: Binding(
+            .accessibleConfirmationDialog("Continue in a new session?", isPresented: Binding(
                 get: { coordinator.needsContinuationConfirmation }, set: { if !$0 { coordinator.pending = nil } }
-            ), titleVisibility: .visible) {
+            ), titleVisibility: .visible, hasCancel: true) {
                 Button("Continue in a new session") { confirm() }
                 Button("Cancel", role: .cancel) { coordinator.pending = nil }
             } message: { Text(continuationMessage) }

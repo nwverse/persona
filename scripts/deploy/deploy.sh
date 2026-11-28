@@ -30,9 +30,13 @@ ADMIN_CIDRS="${PERSONA_ADMIN_CIDRS:-}"
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --admin-access) ADMIN_ACCESS="${2:-}"; shift ;;
+    --admin-access)
+      [ $# -ge 2 ] || { echo "--admin-access needs a value" >&2; exit 2; }
+      ADMIN_ACCESS="$2"; shift ;;
     --admin-access=*) ADMIN_ACCESS="${1#*=}" ;;
-    --admin-cidrs) ADMIN_CIDRS="${2:-}"; shift ;;
+    --admin-cidrs)
+      [ $# -ge 2 ] || { echo "--admin-cidrs needs a value" >&2; exit 2; }
+      ADMIN_CIDRS="$2"; shift ;;
     --admin-cidrs=*) ADMIN_CIDRS="${1#*=}" ;;
     *) ARGS+=("$1") ;;
   esac
@@ -137,6 +141,10 @@ COMMIT="$(git rev-parse HEAD 2>/dev/null || true)"
 # The update source built in: the config's publish.update_url, else publish.site_url's dl/ (scripts/persona_config.py
 # update_url); none without either. hub.json's update.url replaces it at run time (docs/operations/hub-update.md "Update source").
 UPDATE_URL="${PERSONA_UPDATE_URL:-${PERSONA_PUBLISH_URL:+$PERSONA_PUBLISH_URL/dl}}"
+# Without publish.update_url the hub carries the site's dl/, which may no longer take releases (#8108): say so once.
+if [ -z "$(python3 ../scripts/persona_config.py get publish.update_url 2>/dev/null)" ]; then
+  echo "note: publish.update_url is not set, so the hub's update source is ${UPDATE_URL:-none (it will not look for releases)}; publish.update_url in the config, or update.url in the hub's hub.json, sets another (docs/operations/hub-update.md \"Update source\")" >&2
+fi
 LDFLAGS="-s -w -X main.version=$VERSION -X main.channel=release -X main.build=$BUILD -X main.commit=$COMMIT${UPDATE_URL:+ -X main.updateURL=$UPDATE_URL}"
 # The runtime packages personad carries (the DSH plugin's code, docs/integrations/runtimes.md "Auto-update"), from integrations/.
 go generate ./internal/runtimepkg
@@ -145,11 +153,24 @@ TAGS="$(cat build-tags.txt)"
 # Every platform a machine can run, the same four the release and the Docker image build (docs/operations/release.md): each
 # machine gets the one it runs (machine_platform), and the hub keeps all four for "Redeploy" (#3103).
 PLATFORMS=(linux-amd64 linux-arm64 darwin-amd64 darwin-arm64)
-# persona-node is the device's own program (cmd/persona-node): the hub keeps it beside personad, and "Redeploy" gives it
-# to a machine whose node runs it (devices/deploy.go nodeBinary). Machines this script installs get personad.
+PACKAGES=()
+# Each platform gets the programs its nodes and managers can run. The connector
+# package is available for a switch from SSH to Persona Link.
 for plat in "${PLATFORMS[@]}"; do
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/personad-$plat" ./cmd/personad
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/persona-node-$plat" ./cmd/persona-node
+  for p in personad persona-node persona-manager persona-link; do
+    GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/$p-$plat" "./cmd/$p"
+    PACKAGES+=("$p-$plat")
+  done
+done
+# The Windows node programs, named with .exe as the release names them (publish.sh): no machine this script installs
+# runs Windows, but the hub keeps them for Redeploy. Without them the hub's version has no Windows build of its own,
+# and the one an earlier deploy or update left there is another build (#12958).
+WINDOWS_PLATFORMS=(windows-amd64 windows-arm64)
+for plat in "${WINDOWS_PLATFORMS[@]}"; do
+  for p in personad persona-node; do
+    GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "bin/$p-$plat.exe" "./cmd/$p"
+    PACKAGES+=("$p-$plat.exe")
+  done
 done
 # adhoc_identifiers <dir>: the darwin builds in dir, signed ad hoc again under their program's identifier
 # (com.nwverse.personad, com.nwverse.persona-node, ...) in place of the a.out Go's linker always writes. Only the name
@@ -258,17 +279,19 @@ install_bin() {
       eval "$previous"
       [ ! -f "$_PERSONA_HUB_BIN" ] || cp -p "$_PERSONA_HUB_BIN" "$root/bin/personad.prev" || return 1
     fi
-    { cp "$bin" "$root/bin/personad.new" && mv "$root/bin/personad.new" "$root/bin/personad"; } || return 1
-    if ! out=$(PERSONA_HOME="$root" "$root/bin/personad" version 2>&1); then
+    { cp "$bin" "$root/bin/personad.new"; } || return 1
+    if ! out=$(PERSONA_HOME="$root" "$root/bin/personad.new" version 2>&1); then
+      rm -f "$root/bin/personad.new"
       echo "$id: the $plat build does not run there: $out" >&2
       return 1
     fi
+    mv "$root/bin/personad.new" "$root/bin/personad" || return 1
     python3 ../scripts/persona_identity.py --alias-binaries "$root/bin" || return 1
-    PERSONA_HOME="$root" restart_resident
+    if [ "$role" != hub ]; then PERSONA_HOME="$root" restart_resident; fi
   else
     keep=
     [ "$role" = hub ] && keep='{ [ ! -f "$_PERSONA_HUB_BIN" ] || cp -p "$_PERSONA_HUB_BIN" "$PERSONA_HOME/bin/personad.prev"; } && '
-    command=$keep'mkdir -p "$PERSONA_HOME/bin" && cat > "$PERSONA_HOME/bin/personad.new" && chmod 755 "$PERSONA_HOME/bin/personad.new" && mv "$PERSONA_HOME/bin/personad.new" "$PERSONA_HOME/bin/personad" && persona_alias_binaries "$PERSONA_HOME/bin" && "$PERSONA_HOME/bin/personad" version >/dev/null'
+    command=$keep'mkdir -p "$PERSONA_HOME/bin" && cat > "$PERSONA_HOME/bin/personad.new" && chmod 755 "$PERSONA_HOME/bin/personad.new" && if "$PERSONA_HOME/bin/personad.new" version >/dev/null; then mv "$PERSONA_HOME/bin/personad.new" "$PERSONA_HOME/bin/personad" && persona_alias_binaries "$PERSONA_HOME/bin"; else result=$?; rm -f "$PERSONA_HOME/bin/personad.new"; exit "$result"; fi'
     if [ -n "$via" ]; then
       local vh quoted
       vh=$(field "$via" ssh); vh=${vh:-$via}
@@ -283,7 +306,9 @@ $command")
         echo "$id: the $plat build is not installed or does not run there: $out" >&2
         return 1
       fi
-      python3 ../scripts/persona_identity.py --service node --prefix ../scripts/deploy/node-launchd.sh | ssh "$host" 'bash -s restart-idle' 2>/dev/null || true
+      if [ "$role" != hub ]; then
+        python3 ../scripts/persona_identity.py --service node --prefix ../scripts/deploy/node-launchd.sh | ssh "$host" 'bash -s restart-idle' 2>/dev/null || true
+      fi
     fi
   fi
 }
@@ -293,7 +318,9 @@ $command")
 install_program() {
   local id=$1 plat=$2 name=$3 bin keep=
   bin="bin/$name-$plat"
-  GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  if [ "$name" != persona-manager ]; then
+    GOOS=${plat%-*} GOARCH=${plat#*-} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" -o "$bin" "./cmd/$name" || return 1
+  fi
   case $name in persona-hub | persona-manager)
     keep="{ if [ -f \"\$PERSONA_HOME/bin/$name\" ]; then cp -p \"\$PERSONA_HOME/bin/$name\" \"\$PERSONA_HOME/bin/$name.prev\"; else rm -f \"\$PERSONA_HOME/bin/$name.prev\"; fi; } && " ;;
   esac
@@ -329,6 +356,23 @@ ensure_herdr() { # machine-id
   fi 2>&1 | sed "s/^/$id: /" || true
 }
 
+# bubblewrap on a Linux hub that has none (scripts/deploy/ensure-bwrap.sh; PERSONA_SKIP_BWRAP=1 skips it): an update must
+# not leave extension sandboxes switched off. Never fails the deploy.
+ensure_bwrap() { # machine-id
+  local id=$1 host via vh
+  [ "${PERSONA_SKIP_BWRAP:-}" = 1 ] && return 0
+  host=$(field "$id" ssh); host=${host:-$id}
+  via=$(field "$id" via)
+  if is_here "$id"; then
+    sh ../scripts/deploy/ensure-bwrap.sh
+  elif [ -n "$via" ]; then
+    vh=$(field "$via" ssh); vh=${vh:-$via}
+    ssh -o ConnectTimeout=10 "$vh" "ssh -o BatchMode=yes -o ConnectTimeout=15 $host 'sh -s'" < ../scripts/deploy/ensure-bwrap.sh
+  else
+    ssh -o ConnectTimeout=10 "$host" 'sh -s' < ../scripts/deploy/ensure-bwrap.sh
+  fi 2>&1 | sed "s/^/$id: /" || true
+}
+
 # A resident node (scripts/deploy/node-launchd.sh, Mac or Linux) keeps the old binary until it restarts: it does so
 # once none of the assistant's conversations is busy, which go on across hub restarts (docs/operations/hub-restart.md).
 restart_resident() { ../scripts/deploy/node-launchd.sh restart-idle || true; }
@@ -357,21 +401,17 @@ for t in "${TARGETS[@]}"; do
   case "$t" in
     "$HUB")
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/db.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'
-      for plat in "${PLATFORMS[@]}"; do
-        remote_state "$PERSONA_HUB_SSH" 'mkdir -p "$PERSONA_HOME/bin/nodes"; n="$PERSONA_HOME/bin/nodes/'"personad-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/personad-$plat"
-        # This deploy's personad is the hub's version: a version file beside it (a release's build put there by hand,
-        # docs/operations/docker.md "Node builds") would say it is another, so it went above.
-        # persona-node says which build it is in a file beside it, and Redeploy sends it only while that is the hub's
-        # version (the hub's own updates replace personad-* alone; devices/packages.go). So the old version file
-        # goes first, the binary lands whole (a temporary file renamed), and the new version file comes last: a deploy
-        # that stops half way leaves persona-node unused, never a new or torn binary under the old version.
-        remote_state "$PERSONA_HUB_SSH" 'n="$PERSONA_HOME/bin/nodes/'"persona-node-$plat"'"; rm -f "$n.version"; cat > "$n.new" && mv "$n.new" "$n"' < "bin/persona-node-$plat"
-        printf '%s\n' "$VERSION" | remote_state "$PERSONA_HUB_SSH" 'cat > "$PERSONA_HOME/bin/nodes/'"persona-node-$plat.version"'"'
-      done
-      remote_state "$PERSONA_HUB_SSH" 'persona_alias_binaries "$PERSONA_HOME/bin/nodes"'
       hub_plat=$(machine_platform "$t") || exit 2
       install_bin "$t" "bin/personad-$hub_plat"
       for p in persona-hub persona-manager; do install_program "$t" "$hub_plat" "$p"; done
+      # Use the same publisher as Hub self-update. The private staging directory
+      # keeps a partial upload out of package lookup and away from release pointers.
+      COPYFILE_DISABLE=1 tar -C bin -cf - "${PACKAGES[@]}" |
+        remote_state "$PERSONA_HUB_SSH" 'set -e
+          staging=$(mktemp -d "$PERSONA_HOME/.node-packages.XXXXXXXX")
+          trap '\''rm -rf "$staging"'\'' EXIT
+          tar -xf - -C "$staging"
+          "$PERSONA_HOME/bin/personad" hub publish-packages "$staging"'
       # What this build contains, beside its binary: the hub's deploy checks read it before asking GitHub, and it names
       # the open PRs the build runs (docs/assistant/todo-status-sop.md "Without GitHub"). Never fails the deploy.
       if python3 ../scripts/deploy/deployed_commits.py ${COMMIT:+--commit "${COMMIT%-dirty}"} --out bin/deployed-commits.txt; then
@@ -381,8 +421,11 @@ for t in "${TARGETS[@]}"; do
         echo "hub: deployed-commits.txt not made; its deploy checks ask GitHub" >&2
       fi
       ensure_herdr "$t"
+      ensure_bwrap "$t"
       hub_admin_access
       python3 ../scripts/persona_identity.py --service hub --prepare --prefix ../scripts/deploy/hub-systemd.sh | ssh "$PERSONA_HUB_SSH" 'bash -s'
+      remote_state "$PERSONA_HUB_SSH" '"$PERSONA_HOME/bin/personad" hub sync-local-node' ||
+        echo "hub: could not request an idle restart of its resident node" >&2
       echo "$t: hub on the new binary"
       upload_web ;;
     *)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -66,28 +68,34 @@ func invalidModelParams(format string, args ...any) error {
 	return &rpc.Error{Code: bus.CodeInvalidParams, Message: "model.complete: " + fmt.Sprintf(format, args...)}
 }
 
+func strictModelParams(raw json.RawMessage, out any) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		return invalidModelParams("%v", err)
+	}
+	return nil
+}
+
 // extensionComplete answers models.extension_complete.
-func (s *Service) extensionComplete(ctx context.Context, raw json.RawMessage) (any, error) {
-	var call assistantwire.ExtensionComplete
-	if err := json.Unmarshal(raw, &call); err != nil || call.Extension == "" {
-		return nil, invalidModelParams("no extension")
+func (s *Service) extensionComplete(ctx context.Context, call assistantwire.ExtensionComplete) (assistantwire.ModelCompleteResult, error) {
+	if call.Extension == "" {
+		return assistantwire.ModelCompleteResult{}, invalidModelParams("no extension")
+	}
+	if len(call.Params) == 0 {
+		return assistantwire.ModelCompleteResult{}, invalidModelParams("params are required")
 	}
 	var p assistantwire.ModelCompleteParams
-	dec := json.NewDecoder(bytes.NewReader(call.Params))
-	dec.DisallowUnknownFields()
-	if len(call.Params) == 0 {
-		return nil, invalidModelParams("params are required")
-	}
-	if err := dec.Decode(&p); err != nil {
-		return nil, invalidModelParams("%v", err)
+	if err := strictModelParams(call.Params, &p); err != nil {
+		return assistantwire.ModelCompleteResult{}, err
 	}
 	c, err := checkModelCall(p)
 	if err != nil {
-		return nil, err
+		return assistantwire.ModelCompleteResult{}, err
 	}
 	purpose := assistantwire.ExtensionPurposePrefix + call.StorageKey()
 	if _, ok := s.extensionPurposeDef(ctx, purpose); !ok {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: the extension has no model purpose (is it on and granted models?)"}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: the extension has no model purpose (is it on and granted models?)"}
 	}
 	return s.runModelCall(ctx, purpose, "extension "+call.Extension, "this extension", c)
 }
@@ -97,19 +105,13 @@ var managerPurposes = map[string]bool{assistantwire.PurposeSubscriptionRecipe: t
 
 // purposeComplete answers models.purpose_complete: a call the manager makes itself, such as drafting a subscription's
 // recipe (#2040), on one of managerPurposes.
-func (s *Service) purposeComplete(ctx context.Context, raw json.RawMessage) (any, error) {
-	var call assistantwire.PurposeComplete
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&call); err != nil {
-		return nil, invalidModelParams("%v", err)
-	}
+func (s *Service) purposeComplete(ctx context.Context, call assistantwire.PurposeComplete) (assistantwire.ModelCompleteResult, error) {
 	if !managerPurposes[call.Purpose] {
-		return nil, invalidModelParams("purpose %q is not one the manager calls", call.Purpose)
+		return assistantwire.ModelCompleteResult{}, invalidModelParams("purpose %q is not one the manager calls", call.Purpose)
 	}
 	c, err := checkModelCall(call.Params)
 	if err != nil {
-		return nil, err
+		return assistantwire.ModelCompleteResult{}, err
 	}
 	return s.runModelCall(ctx, call.Purpose, call.Purpose, "purpose "+call.Purpose, c)
 }
@@ -162,6 +164,17 @@ func checkModelCall(p assistantwire.ModelCompleteParams) (checkedCall, error) {
 	if len(p.Label) > modelCallLabelMost {
 		return checkedCall{}, invalidModelParams("label is at most %d bytes", modelCallLabelMost)
 	}
+	if len(p.Models) > assistantwire.ModelCandidatesMost {
+		return checkedCall{}, invalidModelParams("models has at most %d entries", assistantwire.ModelCandidatesMost)
+	}
+	for i, m := range p.Models {
+		if !proto.ValidModelID(m) {
+			return checkedCall{}, invalidModelParams("models[%d] is not a model id", i)
+		}
+		if slices.Contains(p.Models[:i], m) {
+			return checkedCall{}, invalidModelParams("models[%d] repeats %s", i, m)
+		}
+	}
 	c := checkedCall{p: p, system: p.System, turns: turns, timeout: timeout}
 	if len(p.JSONSchema) > 0 && string(p.JSONSchema) != "null" {
 		if len(p.JSONSchema) > modelCallSchemaMost {
@@ -180,25 +193,39 @@ func checkModelCall(p assistantwire.ModelCompleteParams) (checkedCall, error) {
 
 // runModelCall makes c on purpose's model: with a schema, a reply that does not match it is asked for once more
 // with what did not match. who names the caller in the log line, what in the error when nothing can be called.
-func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c checkedCall) (any, error) {
-	p := c.p
+// With candidate models (c.p.Models, or the user's own list for an extension's purpose) it tries them in order
+// instead (model_candidates.go).
+func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c checkedCall) (assistantwire.ModelCompleteResult, error) {
+	if chain := s.modelCandidates(ctx, purpose, c.p.Models); chain != nil {
+		return s.runCandidates(ctx, purpose, who, c, chain)
+	}
 	b, err := s.resolveModel(ctx, purpose)
 	if err != nil {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
 	}
 	config, err := s.apiConfig(ctx, b)
 	if err != nil {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: i18n.Localize(err, s.lang(ctx))}
 	}
 	if !config.Configured() {
-		return nil, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: nothing to call for " + what + "; pick a model for it in Settings › Model configuration"}
+		return assistantwire.ModelCompleteResult{}, &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: nothing to call for " + what + "; pick a model for it in Settings › Model configuration"}
 	}
-
-	cctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-	client := s.aiClient(config)
-	turns := c.turns
 	var usage assistantwire.ModelUsage
+	started := time.Now()
+	out, outcome, err := s.attemptModel(ctx, s.countedClient(purpose, "", b.Provider, config), c, c.timeout, &usage)
+	s.logf("assistant: %s model call%s on %s: %s in %s, %d request(s), %d input + %d output tokens (cache read %d, written %d)",
+		who, labelPart(c.p.Label), config.Model, outcome, time.Since(started).Round(time.Millisecond), usage.Requests,
+		usage.InputTokens, usage.OutputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens)
+	return out, err
+}
+
+// attemptModel makes c once on client within timeout, adding what it spends to usage: the answer, or the coded
+// error (*rpc.Error) model.complete returns; outcome is what the log line says (done, failed, refused, invalid output).
+func (s *Service) attemptModel(ctx context.Context, client *ai.Client, c checkedCall, timeout time.Duration, usage *assistantwire.ModelUsage) (assistantwire.ModelCompleteResult, string, error) {
+	p := c.p
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	turns := c.turns
 	add := func(u ai.Usage) {
 		usage.InputTokens += u.InputTokens
 		usage.OutputTokens += u.OutputTokens
@@ -206,26 +233,20 @@ func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c
 		usage.CacheCreationInputTokens += u.CacheCreationInputTokens
 		usage.Requests++
 	}
-	started := time.Now()
-	logged := func(outcome string) {
-		s.logf("assistant: %s model call%s on %s: %s in %s, %d request(s), %d input + %d output tokens (cache read %d, written %d)",
-			who, labelPart(p.Label), config.Model, outcome, time.Since(started).Round(time.Millisecond), usage.Requests,
-			usage.InputTokens, usage.OutputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens)
-	}
 	var reply ai.Reply
 	var value any
+	var err error
 	for attempt := 0; ; attempt++ {
 		reply, err = client.Chat(cctx, ai.Request{System: c.system, Messages: turns, MaxTokens: p.MaxTokens})
 		if err != nil {
 			var refusal *ai.RefusalError
 			if errors.As(err, &refusal) { // the declined call still spent tokens: its usage goes back with the code
 				add(reply.Usage)
-				logged("refused (" + refusal.StopReason + ")")
-				data, _ := json.Marshal(assistantwire.ModelRefusal{StopReason: refusal.StopReason, Usage: usage})
-				return nil, &rpc.Error{Code: assistantwire.CodeModelRefused, Message: "model.complete: " + err.Error(), Data: data}
+				data, _ := json.Marshal(assistantwire.ModelRefusal{StopReason: refusal.StopReason, Usage: *usage})
+				return assistantwire.ModelCompleteResult{}, "refused (" + refusal.StopReason + ")",
+					&rpc.Error{Code: assistantwire.CodeModelRefused, Message: "model.complete: " + err.Error(), Data: data}
 			}
-			logged("failed")
-			return nil, modelCallError(cctx, err)
+			return assistantwire.ModelCompleteResult{}, "failed", modelCallError(cctx, s.requestCtxLang(cctx), err)
 		}
 		add(reply.Usage)
 		if c.schema == nil {
@@ -244,22 +265,21 @@ func (s *Service) runModelCall(ctx context.Context, purpose, who, what string, c
 			problem += " (the reply was cut off at max_tokens)"
 		}
 		if attempt > 0 {
-			logged("invalid output")
-			data, _ := json.Marshal(assistantwire.ModelInvalidOutput{Problem: problem, Text: reply.Text, Usage: usage})
-			return nil, &rpc.Error{Code: assistantwire.CodeInvalidOutput, Message: "model.complete: the reply does not match json_schema: " + problem, Data: data}
+			data, _ := json.Marshal(assistantwire.ModelInvalidOutput{Problem: problem, Text: reply.Text, Usage: *usage})
+			return assistantwire.ModelCompleteResult{}, "invalid output",
+				&rpc.Error{Code: assistantwire.CodeInvalidOutput, Message: "model.complete: the reply does not match json_schema: " + problem, Data: data}
 		}
 		turns = append(turns, ai.Message{Role: ai.RoleAssistant, Content: cmpOr(reply.Text, "(empty)")},
 			ai.Message{Role: ai.RoleUser, Content: prompts.RenderJSONSchemaRetry(problem)})
 	}
-	logged("done")
-	out := assistantwire.ModelCompleteResult{Text: reply.Text, Model: reply.Model, StopReason: "end_turn", Usage: usage}
+	out := assistantwire.ModelCompleteResult{Text: reply.Text, Model: reply.Model, StopReason: "end_turn", Usage: *usage}
 	if reply.Truncated {
 		out.StopReason = "max_tokens"
 	}
 	if c.schema != nil {
 		out.JSON, _ = json.Marshal(value)
 	}
-	return out, nil
+	return out, "done", nil
 }
 
 func labelPart(label string) string {
@@ -276,9 +296,23 @@ func cmpOr(s, fallback string) string {
 	return s
 }
 
+// directCallFailureExplanation is the plain-language cause shared by manager model calls and saved direct-API checks.
+// The caller appends the upstream's original detail; an unclassified error keeps its established message.
+func directCallFailureExplanation(l i18n.Lang, err error) string {
+	switch {
+	case ai.IsModelUnavailable(err):
+		return pt(l, "status_model_not_found")
+	case ai.IsContextTooLong(err):
+		return pt(l, "context_too_long")
+	default:
+		return ""
+	}
+}
+
 // modelCallError codes a failed request for the extension: held connection, nothing set up, out of time, or the
-// upstream's failure. A declined request (ai.RefusalError) is model_refused, coded by the caller with its usage.
-func modelCallError(ctx context.Context, err error) error {
+// upstream's failure. l is the manager request's language, or the user's language for a background call. A declined
+// request (ai.RefusalError) is model_refused, coded by the caller with its usage.
+func modelCallError(ctx context.Context, l i18n.Lang, err error) error {
 	var paused *ai.PausedError
 	switch {
 	case errors.As(err, &paused):
@@ -288,6 +322,9 @@ func modelCallError(ctx context.Context, err error) error {
 		return &rpc.Error{Code: assistantwire.CodeModelUnavailable, Message: "model.complete: " + err.Error()}
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		return &rpc.Error{Code: assistantwire.CodeModelTimeout, Message: "model.complete: timed out"}
+	}
+	if explanation := directCallFailureExplanation(l, err); explanation != "" {
+		return &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "model.complete: " + explanation + ": " + err.Error()}
 	}
 	return &rpc.Error{Code: assistantwire.CodeModelFailed, Message: "model.complete: " + err.Error()}
 }

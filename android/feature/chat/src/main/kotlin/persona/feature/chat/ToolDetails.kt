@@ -36,10 +36,12 @@ import persona.core.contracts.Item
 import persona.core.contracts.SessionKey
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.JIcon
+import persona.core.designsystem.InterfaceContent
 import persona.core.designsystem.JSpinner
 import persona.core.designsystem.JTag
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.firstBaselineAligned
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
@@ -199,10 +201,10 @@ internal fun ToolArguments(arguments: List<ToolNaming.Argument>) {
             arguments.forEach { argument ->
                 Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
                     DisableSelection {
-                        Text(argument.label, Modifier.width(column).alignByBaseline(), style = type.micro, color = palette.ink2,
+                        Text(argument.label, firstBaselineAligned(Modifier.width(column)), style = type.micro, color = palette.ink2,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Text(argument.value, Modifier.weight(1f).alignByBaseline(), style = if (argument.code) type.code else type.caption,
+                    Text(argument.value, firstBaselineAligned(Modifier.weight(1f)), style = if (argument.code) type.code else type.caption,
                         color = palette.ink, maxLines = argument.lines, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -252,12 +254,14 @@ internal fun DiffHeader(path: String, added: Int, removed: Int) {
     }
 }
 
-/** ExitPlanMode's plan as Markdown, the way it was proposed. */
+/** ExitPlanMode's collapsed plan as interface Markdown; ReaderEntry opens the full plan at the reading scale. */
 @Composable
 private fun PlanDetail(plan: String, id: String) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-        ChatMarkdown(plan, "$id/plan", PersonaTheme.type.callout)
-        ReaderEntry(plan, stringResource(R.string.chat_tool_plan_title))
+    InterfaceContent {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+            ChatMarkdown(plan, "$id/plan", PersonaTheme.type.callout)
+            ReaderEntry(plan, stringResource(R.string.chat_tool_plan_title))
+        }
     }
 }
 

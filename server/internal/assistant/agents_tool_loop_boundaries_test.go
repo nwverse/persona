@@ -88,7 +88,7 @@ func TestToolLoopReconnectContinuedProgressWithdrawsStaleCard(t *testing.T) {
 
 func TestToolLoopReadFailureDoesNotHideOrdinaryWorkWhenOff(t *testing.T) {
 	store := &workMemStore{}
-	store.failKeys = map[string]error{toolLoopsSetting: errors.New("loop storage unavailable")}
+	store.failKey(toolLoopsSetting, errors.New("loop storage unavailable"))
 	row := db.SessionWork{MachineID: "box", SessionID: "s1", TurnAt: time.Now().UTC(), Work: proto.WorkState{Phase: proto.WorkDone, Line: "Done"}}
 	if err := store.PutSessionWork(context.Background(), row); err != nil {
 		t.Fatal(err)
@@ -194,6 +194,14 @@ func expiryLoopFixture(t *testing.T) (*Service, *fakeHub, *failingLoopExpiryStor
 		t.Fatal(err)
 	}
 	return s, f, store, card
+}
+
+func TestToolLoopExpiryRecordsExpiredAttribution(t *testing.T) {
+	s, _, store, card := expiryLoopFixture(t)
+	s.checkToolLoops(context.Background())
+	if got := store.endedAs(card.ID); got != db.EndedByExpired {
+		t.Fatalf("tool-loop expiry recorded ended_by %q, want %q", got, db.EndedByExpired)
+	}
 }
 
 func TestToolLoopExpirySaveFailureRetriesEverything(t *testing.T) {

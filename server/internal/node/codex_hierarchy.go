@@ -2,7 +2,9 @@ package node
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,22 @@ var codexProjectRoots = struct {
 	entries map[string]codexProjectCacheEntry
 }{entries: make(map[string]codexProjectCacheEntry)}
 
+// codexRepositoryMarker says whether cwd or an ancestor has a .git entry. An uncertain read stays on the Git path.
+// Ordinary Codex App folders are not repositories: starting Git for each of them on every cache expiry turns an
+// unreadable working directory into a two-second stall without producing any useful project information.
+func codexRepositoryMarker(cwd string) bool {
+	for {
+		if _, err := os.Stat(filepath.Join(cwd, ".git")); err == nil || !os.IsNotExist(err) {
+			return true
+		}
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			return false
+		}
+		cwd = parent
+	}
+}
+
 // Resolve Git's shared metadata on the source machine, never by directory name.
 func codexProjectRoot(cwd string, cache map[string]string) string {
 	if cwd == "" || !filepath.IsAbs(cwd) {
@@ -41,18 +59,20 @@ func codexProjectRoot(cwd string, cache map[string]string) string {
 		return entry.root
 	}
 	root := cwd
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if common, err := git(ctx, cwd, "rev-parse", "--git-common-dir"); err == nil {
-		common = strings.TrimSpace(common)
-		if !filepath.IsAbs(common) {
-			common = filepath.Join(cwd, common)
-		}
-		common = realPath(filepath.Clean(common))
-		if filepath.Base(common) == ".git" {
-			root = filepath.Dir(common)
-		} else if top, err := git(ctx, cwd, "rev-parse", "--show-toplevel"); err == nil {
-			root = realPath(strings.TrimSpace(top))
+	if codexRepositoryMarker(cwd) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if common, err := git(ctx, cwd, "rev-parse", "--git-common-dir"); err == nil {
+			common = strings.TrimSpace(common)
+			if !filepath.IsAbs(common) {
+				common = filepath.Join(cwd, common)
+			}
+			common = realPath(filepath.Clean(common))
+			if filepath.Base(common) == ".git" {
+				root = filepath.Dir(common)
+			} else if top, err := git(ctx, cwd, "rev-parse", "--show-toplevel"); err == nil {
+				root = realPath(strings.TrimSpace(top))
+			}
 		}
 	}
 	// Failures use the same short TTL: a later git init or restored directory
@@ -68,7 +88,13 @@ func codexProjectRoot(cwd string, cache map[string]string) string {
 }
 
 func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy string, projects map[string]string) {
-	origin := readCodexOrigin(src.path)
+	n.decorateCodexSessionIn(s, src, legacy, projects, nil)
+}
+
+// decorateCodexSessionIn is decorateCodexSession with the App's state looked up once per home in a list pass
+// (codexListPass).
+func (n *Node) decorateCodexSessionIn(s *proto.Session, src codexSource, legacy string, projects map[string]string, pass *codexListPass) {
+	origin := codexThreadOrigin(src) // a rollout's first line, else the App's database row (#8191)
 	s.ParentThreadID = firstNonEmpty(s.ParentThreadID, origin.parent)
 	s.IsSubagent = origin.sub || s.ParentThreadID != ""
 	if s.ParentThreadID != "" {
@@ -84,40 +110,60 @@ func (n *Node) decorateCodexSession(s *proto.Session, src codexSource, legacy st
 	if origin.started != nil && s.Hierarchy == nil {
 		s.Hierarchy = origin.started // when the thread began, read with its origin: no read of its own (#5120)
 	}
-	if !origin.desktop {
+	if !origin.desktopThread(src, pass) {
 		// An App chat whose rollout is gone is grouped as one with a rollout (codex_appdb.go).
 		if _, app := codexAppThreadOf(src); !app {
 			return
 		}
 	}
 	s.AgentName, s.AgentSurface = "Codex App", transcript.SurfaceDesktop
-	app := loadCodexAppState(src.home)
+	app := pass.appState(src.home)
 	s.SpaceKind = "codex_app"
+	chat := src.thread
+	if s.IsSubagent {
+		chat = firstNonEmpty(origin.root, s.ParentThreadID, chat)
+	}
 	cwd := s.Cwd
-	if pid, _ := app.project(src.thread, cwd); pid != "" {
+	if pid, _ := app.project(chat, cwd); pid != "" {
 		project := app.projects[pid]
-		if len(project.RootPaths) == 1 {
+		if len(project.RootPaths) == 1 && filepath.IsAbs(project.RootPaths[0]) {
 			cwd = project.RootPaths[0]
 		}
 	}
 	s.RepoRoot = codexProjectRoot(cwd, projects)
+	if app != nil && !app.inNoProject(chat) {
+		if pid := app.assigned[chat]; pid != "" {
+			if p, ok := app.projects[pid]; ok {
+				s.SpaceID = codexDesktopProjectID(src.home, pid)
+				s.SpaceName = strings.TrimSpace(p.Name)
+				if s.SpaceName == "" && s.RepoRoot != "" {
+					s.SpaceName = filepath.Base(s.RepoRoot)
+				}
+				s.SpaceName = firstNonEmpty(s.SpaceName, "Codex project")
+				s.SpaceIndex = int32(slices.Index(app.order, pid) + 1)
+				return
+			}
+		}
+	}
 	// A chat the App keeps in no project (projectless-thread-ids) is under "Codex chats", as the App's sidebar lists it
 	// and placeCodexDesktop placed it, whatever folder the App made for it (~/Documents/Codex/<date>/<name>): by its
 	// folder it was a project of its own. A subagent goes by its chat: resolveCodexHierarchy gives it its chat's place,
 	// but not when the chat is not listed (archived in the App, or read from its database without sqlite3).
 	// A project is named as the App names it when its folder is the repository's root (folderName), else by the folder,
 	// and numbered by its place in the App's sidebar (space_index, folderPlace; 0, none, for any other).
-	chat := src.thread
-	if s.IsSubagent {
-		chat = firstNonEmpty(origin.root, s.ParentThreadID, chat)
-	}
 	if s.RepoRoot != "" && !app.inNoProject(chat) {
-		s.SpaceID, s.SpaceName = "codex-project:"+s.RepoRoot, firstNonEmpty(app.folderName(s.RepoRoot), filepath.Base(s.RepoRoot))
-		s.SpaceIndex = app.folderPlace(s.RepoRoot)
+		s.SpaceID, s.SpaceName = projectSpace+s.RepoRoot, firstNonEmpty(app.folderName(s.RepoRoot), filepath.Base(s.RepoRoot))
+		s.SpaceIndex = int32(app.folderPlace(s.RepoRoot))
 	} else {
 		s.SpaceID, s.SpaceName = "codex-chats:"+src.home, "Codex 对话"
 	}
 }
+
+// projectSpace prefixes the space of a repository's desktop-app sessions on a computer, the root following it: the Codex
+// App's chats in a project (decorateCodexSession) and the Claude desktop app's sessions (placeClaudeDesktop) alike, so
+// both apps' sessions of a repository are one project. The name is the Codex App's from before Claude's were placed:
+// pins and clients' remembered sections name spaces by it.
+const projectSpace = "codex-project:"
 
 // Public IDs isolate Codex homes. Missing parents remain explicit; cycles terminate.
 func resolveCodexHierarchy(sessions []proto.Session) {

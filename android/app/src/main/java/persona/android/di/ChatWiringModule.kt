@@ -54,7 +54,7 @@ object ChatWiringModule {
     }
 
     @Provides @Singleton
-    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks): AssistantAppWiring = object : AssistantAppWiring {
+    fun assistantWiring(owner: ChatDataOwner, services: AppServices, stacks: GroupStacks, conversations: AssistantConversations, managers: HubManagers): AssistantAppWiring = object : AssistantAppWiring {
         @Composable
         override fun Host(navigator: Navigator, content: @Composable () -> Unit) {
             val wiring by owner.wiring.collectAsStateWithLifecycle()
@@ -76,16 +76,17 @@ object ChatWiringModule {
                 allMachines.filter { persona.core.contracts.GroupKeys.namespaceOf(it.id) == selectedNamespace }
             }
             val host = AssistantHostBindings(active.scope.path, active.assistantManagement, active.drafts,
-                active.coroutineScope, available, machines, active.mainSender) { key, options ->
+                active.coroutineScope, available, machines, conversations, active.mainSender, hello = active.connection.currentHello, chatContent = { key, options ->
                 ChatDestination(ChatRoute(key.machineId, key.sessionId,
                     kind = if (options.assistant) ConversationKind.Assistant else ConversationKind.Agent), navigator,
                     renderStyle = if (options.assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
                     embedded = options.embedded, showTopBar = options.showTopBar,
                     // The conversation's manager is offline: history only, its 最后同步于 where the composer was.
                     historyReadOnly = options.readOnlyNote != null,
+                    healthChat = options.healthChat,
                     historyFooter = options.readOnlyNote?.let { note -> { persona.core.designsystem.JNotice(note, status = persona.core.designsystem.Status.Offline) } })
-            }
-            CompositionLocalProvider(LocalAssistantHost provides host) { key(active.scope.path) { content() } }
+            })
+            CompositionLocalProvider(LocalAssistantHost provides host, LocalAssistantManagers provides managers) { key(active.scope.path) { content() } }
         }
     }
 }
@@ -94,17 +95,22 @@ object ChatWiringModule {
 internal suspend fun createChatWiring(
     data: ScopedHubData, repositories: ChatDataRepositories,
     connection: OkHttpHubConnection, group: persona.core.contracts.api.HubConnection, isCurrent: () -> Boolean,
+    /** The phone's own delete for Undo on a calendar quick result (iOS `CalendarTool.remove`); null: no Undo. */
+    quickResults: PhoneQuickResults? = null,
 ): ChatAppBindings {
     fun current() = isCurrent()
     val composer = data.messages.connectComposer { transport ->
         HttpChatComposerService(data.scope, transport, connection, data.credentials.deviceToken,
+            onRetryStart = data.messages::beginComposerRetry,
             onRetryDelivery = data.messages::recordComposerDelivery,
-            onPairingExpired = { if (current()) connection.revoke() }, isCurrent = ::current)
+            onPairingExpired = { if (current()) connection.revoke() }, isCurrent = ::current,
+            onHeld = { session, held -> if (current()) repositories.sessions.showHeld(session, held) })
     }
     return ChatAppBindings(data.scope, data.coroutineScope, data.drafts, group,
         repositories.chats.trackActions(HttpChatActions(connection)), repositories.chats.trackComposer(composer),
         PersistentChatRecoveryService(HttpChatRecoveryService(connection), data.operations, HubChatTransport(connection)),
         RoutedAssistantManagement(data, connection, ::current), data.messages,
+        mainUploadTarget = { data.messages.prepareMainConversation() },
         draftVersions = { key -> combine(repositories.chats.observe(key), repositories.sessions.sessions) { chat, sessions ->
             val session = sessions.firstOrNull { it.key == key }
             DraftSessionVersion(chat.history, session?.let {
@@ -115,11 +121,15 @@ internal suspend fun createChatWiring(
         files = HubSessionFiles(connection),
         ports = HubPortOpener(connection),
         agentShares = ChatWiringModule.agentShares(connection, ::current),
-        worktrees = { connection.route.value?.let { route -> persona.core.hub.HttpAgentCreationService(data.scope.path, route.endpoint.url,
-            connection.token, connection.http.client, isCurrent = { current() && connection.route.value == route }) } },
+        worktrees = cachedAgentCreation({ connection.route.value }) { route ->
+            HttpAgentCreationService(data.scope.path, route.endpoint.url, connection.token, connection.http.client,
+                isCurrent = { current() && connection.route.value == route })
+        },
         usage = { persona.core.hub.HttpMachineManagement(connection).usageWindows() },
+        // Recent targets of Forward live in the pairing's own preferences, erased with it (#3901).
+        forwardMemory = PreferencesForwardMemory(data.listPreferences),
         tasks = persona.core.domain.tasks.TasksStore(persona.core.hub.HttpTasksApi(connection), group, data.coroutineScope,
-            repositories.snapshots.todoCache()))
+            repositories.snapshots.todoCache(), quickResults = quickResults))
 }
 
 /** Resolve each operation against the current route and reject late replies from a previous route. */
@@ -147,14 +157,21 @@ private class RoutedAssistantManagement(
     override suspend fun launchers(machineId: String) = api().launchers(machineId)
     override suspend fun assistantLaunchers(machineId: String) = api().assistantLaunchers(machineId)
     override suspend fun assistantLauncherList(machineId: String) = api().assistantLauncherList(machineId)
+    override suspend fun assistantLauncherList(machineId: String, refresh: Boolean) = api().assistantLauncherList(machineId, refresh)
+    override suspend fun mainAssistantLauncherList(machineId: String, refresh: Boolean) = api().mainAssistantLauncherList(machineId, refresh)
     override suspend fun launcherModels(machineId: String, launcher: String) = api().launcherModels(machineId, launcher)
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = api().setModelPick(session, pick)
     override suspend fun clearModelPick(session: SessionKey) = api().clearModelPick(session)
+    override suspend fun conversationSwitchState(session: SessionKey) = api().conversationSwitchState(session)
+    override suspend fun submitConversationSwitch(session: SessionKey, request: ConversationSwitchRequest) =
+        api().submitConversationSwitch(session, request)
     override suspend fun endConversation(session: SessionKey) = api().endConversation(session)
     override suspend fun compactConversation(session: SessionKey) = api().compactConversation(session)
     override suspend fun archiveConversation(session: SessionKey) = api().archiveConversation(session)
     override suspend fun unarchiveConversation(session: SessionKey) = api().unarchiveConversation(session)
+    override suspend fun setConversationTags(session: SessionKey, tags: List<String>) = api().setConversationTags(session, tags)
     override suspend fun archivedConversations() = api().archivedConversations()
+    override suspend fun searchChats(query: String, limit: Int) = api().searchChats(query, limit)
     override suspend fun renameConversation(session: SessionKey, title: String) = api().renameConversation(session, title)
     override suspend fun makeDirection(session: SessionKey) = api().makeDirection(session)
     override suspend fun endDirection(session: SessionKey) = api().endDirection(session)
@@ -172,7 +189,23 @@ private class RoutedAssistantManagement(
     override suspend fun memory() = api().memory()
     override suspend fun saveMemory(name: String, content: String) = api().saveMemory(name, content)
     override suspend fun deleteMemory(name: String) = api().deleteMemory(name)
+    override suspend fun places() = api().places()
+    override suspend fun savePlace(place: SavedPlace) = api().savePlace(place)
+    override suspend fun deletePlace(id: String) = api().deletePlace(id)
     override suspend fun skills() = api().skills()
     override suspend fun alwaysGrants(session: SessionKey) = api().alwaysGrants(session)
     override suspend fun revokeAlwaysGrant(session: SessionKey, keyHash: String) = api().revokeAlwaysGrant(session, keyHash)
+    override suspend fun standingAuthorizations() = api().standingAuthorizations()
+    override suspend fun revokeStandingAuthorization(id: String) = api().revokeStandingAuthorization(id)
+    override suspend fun tracks() = api().tracks()
+    override suspend fun trackKinds() = api().trackKinds()
+    override suspend fun createTrack(track: TrackCreate) = api().createTrack(track)
+    override suspend fun changeTrack(slug: String, change: TrackChange) = api().changeTrack(slug, change)
+    override suspend fun spaceMd(slug: String) = api().spaceMd(slug)
+    override suspend fun writeSpaceMd(slug: String, content: String, baseDigest: String) = api().writeSpaceMd(slug, content, baseDigest)
+    override suspend fun conversationCategories(session: SessionKey) = api().conversationCategories(session)
+    override suspend fun changeConversationCategories(session: SessionKey, add: List<String>, remove: List<String>) =
+        api().changeConversationCategories(session, add, remove)
+    override suspend fun extensionTrust() = api().extensionTrust()
+    override suspend fun setExtensionTrust(id: String, trust: ExtensionTrust) = api().setExtensionTrust(id, trust)
 }

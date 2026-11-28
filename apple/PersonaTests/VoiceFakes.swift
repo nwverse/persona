@@ -1,5 +1,6 @@
 import Foundation
 @testable import Persona
+import PersonaWire
 
 // Stand-ins for a voice call's socket, audio, permission, screen lock and clock (docs/assistant/voice.md 6.10), so
 // VoiceConversation and VoiceCalls run their real logic with no network, microphone or waiting.
@@ -100,9 +101,9 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
         lock.withLock { handler }?(.data(data))
     }
 
-    /// The extension's `ready`, protocol 2, bound to `key`.
-    @MainActor func ready(_ key: SessionKey, input: Int = 16000, output: Int = 24000, protocolVersion: Int = 2) {
-        deliver(#"{"type":"ready","protocol":\#(protocolVersion),"features":["target","runs","asks","resume","suspend"],"input_rate":\#(input),"output_rate":\#(output),"target":{"machine_id":"\#(key.machineID)","session_id":"\#(key.sessionID)","kind":"agent","title":"web-api","agent_label":"Claude Code","machine_name":"Mac"}}"#)
+    /// The extension's `ready`, protocol 2, bound to `key`; `hold`: it takes a system call's hold frames (#9290).
+    @MainActor func ready(_ key: SessionKey, input: Int = 16000, output: Int = 24000, protocolVersion: Int = 2, hold: Bool = false) {
+        deliver(#"{"type":"ready","protocol":\#(protocolVersion),"features":["target","runs","asks","resume","suspend"\#(hold ? #","hold""# : "")],"input_rate":\#(input),"output_rate":\#(output),"target":{"machine_id":"\#(key.machineID)","session_id":"\#(key.sessionID)","kind":"agent","title":"web-api","agent_label":"Claude Code","machine_name":"Mac"}}"#)
     }
 
     /// The socket goes away from the other side (`status`: the handshake refused with it).
@@ -115,8 +116,8 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     }
 }
 
-/// The call's audio without a microphone or speaker.
-@MainActor final class FakeVoiceAudio: VoiceAudio {
+/// The call's audio without a microphone or speaker; a system call's too (#9290: the system activates it).
+@MainActor final class FakeVoiceAudio: SystemCallAudio {
     var failStart = false
     var cancelsEcho = true
     /// What a failing start throws.
@@ -129,8 +130,35 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     private(set) var stops = 0
     private(set) var uplink: VoiceUplink?
     private var events: (@MainActor (VoiceAudioEvent) -> Void)?
+    /// A system call's: the system activated the session (and has not taken it away).
+    private(set) var active = false
+    private(set) var activations = 0
+    private(set) var deactivations = 0
+    private(set) var heldNow = false
+    /// The phone's voice chat brought back after an interruption (#9887): how many times, and what the next one throws.
+    private(set) var resumes = 0
+    var resumeError: (any Error)?
+    /// What the next reconfigures throw (an engine that would not start under another app's audio).
+    var reconfigureError: (any Error)?
+    /// Reconfigures and resumes, in order (#9887: new rates during an interruption go before the resume).
+    private(set) var steps: [String] = []
+    var onRunning: (@MainActor () -> Void)?
+    var onStarting: (@MainActor () -> Void)?
 
     var running: Bool { uplink != nil }
+
+    func activate() {
+        active = true
+        activations += 1
+        if running { onRunning?() }
+    }
+
+    func deactivate() {
+        active = false
+        deactivations += 1
+    }
+
+    func setHeld(_ held: Bool) { heldNow = held }
 
     func start(_ format: VoiceAudioFormat, uplink: VoiceUplink, events: @escaping @MainActor (VoiceAudioEvent) -> Void) throws {
         if failStart { throw startError }
@@ -140,13 +168,30 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     }
 
     func reconfigure(_ format: VoiceAudioFormat) throws {
+        if let reconfigureError { throw reconfigureError }
         self.format = format
         reconfigured.append(format)
+        steps.append("reconfigure")
+    }
+
+    func resume() throws {
+        resumes += 1
+        steps.append("resume")
+        if let resumeError { throw resumeError }
     }
 
     func play(_ pcm: Data) { played.append(pcm) }
     func cue(_ pcm: Data) { cues.append(pcm) }
     func clear() { clears += 1 }
+
+    /// The extension's reply edges, in order (`true`: began).
+    private(set) var replies: [Bool] = []
+    func reply(_ open: Bool) { replies.append(open) }
+    /// What the call reads as it ends or changes voice.
+    var lead = VoiceLead()
+    /// Where the call started the jitter buffer, each time.
+    private(set) var startedLeads: [Int] = []
+    func startLead(at level: Int) { startedLeads.append(level) }
 
     func stop() {
         stops += 1
@@ -160,6 +205,20 @@ final class FakeVoiceSocket: VoiceSocket, @unchecked Sendable {
     }
 
     func emit(_ event: VoiceAudioEvent) { events?(event) }
+
+    /// The session interrupted, as `PhoneVoiceAudio(session: .system)` hears it: its engine goes and the session is not
+    /// the call's until the next `activate`, whether or not the system also says so (`didDeactivate`).
+    func interruptSystemSession() {
+        active = false
+        events?(.interrupted)
+    }
+
+    /// A route change the engine could not be wired again for: a new engine, voice processing turned on again, as
+    /// `PhoneVoiceAudio.rebuild` tells a system call.
+    func rebuildEngine() {
+        onStarting?()
+        onRunning?()
+    }
 }
 
 struct FakeMicPermission: MicPermission {
@@ -185,11 +244,15 @@ struct FakeMicPermission: MicPermission {
     var session: Session?
     var voice: String? = "marin"
     private(set) var sockets: [FakeVoiceSocket] = []
+    /// What a call told its system call's manager (`VoiceDeps.callEvents`).
+    private(set) var heard: [VoiceCallEvent] = []
 
     var socket: FakeVoiceSocket? { sockets.last }
 
     /// A group of its own per rig: the rates a call learns are remembered per group and extension.
     let key = SessionKey(group: "g-" + UUID().uuidString, machineID: "m1", sessionID: "s1")
+    /// Where the rig's calls remember how far each voice's jitter buffer grew: never the app's own defaults.
+    let leads = VoiceLeadMemory(defaults: UserDefaults(suiteName: "PersonaTests.VoiceRig")!)
 
     var api: APIClient {
         var c = hub.client
@@ -206,7 +269,8 @@ struct FakeMicPermission: MicPermission {
                   },
                   audio: { self.audio },
                   mic: FakeMicPermission(allowed: allowed), microphone: microphone, idleTimer: idleTimer, clock: clock,
-                  session: { _ in self.session }, voice: { _, _ in self.voice })
+                  session: { _ in self.session }, voice: { _, _ in self.voice }, callEvents: { self.heard.append($0) },
+                  leads: leads)
     }
 
     func call(_ key: SessionKey? = nil, surface: VoiceSurface = .phone, recent: [VoiceLine] = []) -> VoiceConversation {

@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // UI version 6's new fields (docs/extensions/extensions.md "UI version 6", #827): a date, a time or both with the
 // system's picker, held to `earliest`…`latest`; several choices in a menu of toggles that stays open while picking.
@@ -82,9 +83,7 @@ struct ExtensionMultiChoiceField: View {
             } label: {
                 Text(summary).lineLimit(1).truncationMode(.tail)
             }
-            #if !os(macOS) // the frozen Mac app's menu closes after each pick: macOS has no `.disabled` here
             .menuActionDismissBehavior(.disabled)
-            #endif
         } label: {
             Text(label).lineLimit(2)
         }

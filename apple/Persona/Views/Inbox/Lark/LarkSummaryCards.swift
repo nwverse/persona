@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Cards the Lark gateway summarises itself (`metadata.variant`): forwarded chats, group / contact cards, meetings,
 /// calendar events, votes, tasks, red packets (port of `SummaryCardView`).
@@ -78,7 +79,7 @@ struct LarkForwardedView: View {
                 LazyVStack(alignment: .leading, spacing: Theme.Space.l) {
                     ForEach(messages) { m in
                         HStack(alignment: .top, spacing: Theme.Space.m) {
-                            LarkAvatarImage(name: m.senderName ?? "?", url: m.senderAvatarUrl.map(Self.hubURL), size: 32)
+                            LarkAvatarImage(name: m.senderName ?? "?", url: m.senderAvatarUrl, size: 32)
                             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                                 HStack(spacing: Theme.Space.sm) {
                                     Text(m.senderName ?? "").font(Theme.Font.labelStrong).foregroundStyle(.secondary)
@@ -106,15 +107,10 @@ struct LarkForwardedView: View {
             }
             .navigationTitle(title.isEmpty ? String(localized: "Chat History [Lark Summary Cards b790c0]") : title)
             .navigationBarTitleDisplayMode(.inline)
-            .pageToolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .pageToolbar { SheetClose { dismiss() } }
         }
     }
 
-    /// Avatars inside forwarded messages are Lark gateway paths; the hub serves them under /api/v1/lark.
-    static func hubURL(_ s: String) -> String {
-        if s.hasPrefix("/api/media/") { return "/api/v1/lark/media/" + s.dropFirst(11) }
-        return s
-    }
 }
 
 /// Group / contact card: picture, name, eyebrow, facts.
@@ -130,7 +126,7 @@ struct LarkShareCard: View {
         }
         VStack(alignment: .leading, spacing: Theme.Space.m) {
             HStack(spacing: Theme.Space.m) {
-                LarkAvatarImage(name: title, url: meta["imageUrl"]?.string, isGroup: isGroup, size: 44)
+                LarkAvatarImage(name: title, url: meta["imageUrl"]?.string, size: 44)
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text(title).font(Theme.Font.secondaryStrong).lineLimit(2)
                     if !fields.isEmpty { Text(fields.joined(separator: " · ")).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1) }

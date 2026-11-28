@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The first heading line of an agent's plan: the first non-empty line without Markdown markers
 /// ("### Plan" -> "Plan"), what every card and the Mac menu bar title shows. An empty plan is Plan.
@@ -44,6 +45,7 @@ nonisolated struct SecretHandoffRequest: Sendable {
         var id: String { name }
     }
     var variables: [Variable]
+    var isStore: Bool
     var agent: String
     var machine: String
     var cwd: String
@@ -51,6 +53,7 @@ nonisolated struct SecretHandoffRequest: Sendable {
 
     init(_ input: JSONValue?) {
         func text(_ v: JSONValue?) -> String { v?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+        isStore = ["create", "edit"].contains(text(input?["store_operation"]))
         variables = (input?["variables"]?.array ?? []).compactMap { v in
             let name = text(v["name"])
             guard !name.isEmpty else { return nil }
@@ -145,14 +148,68 @@ nonisolated extension Interaction {
     }
 }
 
+/// Why the app can't answer a card on a session (`Interaction.answerBlock`, #6868).
+nonisolated enum AnswerBlock: Equatable, Sendable {
+    /// Its session can be attached live (a Codex thread on a shared app-server not joined yet): joined, the app answers it.
+    case attach
+    /// Its session's source doesn't let the app answer at all: only the computer can.
+    case computer
+}
+
 nonisolated extension Interaction {
     /// A card on no session (#4059): `personad ask` run outside herdr, or before the pane's agent hooked in, has no
     /// session the node could tie it to (docs/integrations/script-cli.md「Attribution」).
     var isSessionless: Bool { sessionID.isEmpty }
 
     /// Whether the app may answer it: a sessionless card always (no session source says no); else as its session's source
-    /// allows (`canApprove`; a read-only Codex history does not), and not while that session is unknown.
-    func canAnswer(session: Session?) -> Bool { isSessionless || session?.canApprove == true }
+    /// allows (`canApprove`; a read-only Codex history does not). A folded child's card is not blocked while its row
+    /// is still loading. Any other card whose session is unknown stays blocked.
+    func canAnswer(session: Session?) -> Bool {
+        if let session { return isSessionless || session.canApprove }
+        if requestHomeKey != sessionKey { return true }
+        return isSessionless
+    }
+
+    /// Why the app can't answer it, for the line under its greyed card (#6868; Android `approvalBlockedReason`, the
+    /// watch's `blockedReason`): nil where it can (`canAnswer`), and on a manager work card whose local defer and dismiss
+    /// still work (#6839). An attachable session keeps its live-link line.
+    func answerBlock(session: Session?) -> AnswerBlock? {
+        guard !canAnswer(session: session) else { return nil }
+        if session?.canAttach == true { return .attach }
+        return isManagerWork ? nil : .computer
+    }
+
+    /// The words a list row shows for this card: the question, else the summary, else the tool.
+    var askPreview: String? {
+        if let question = questions?.first?.question.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty {
+            return Fmt.plain(question)
+        }
+        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty { return Fmt.plain(summary) }
+        if let tool = toolName?.trimmingCharacters(in: .whitespacesAndNewlines), !tool.isEmpty { return tool }
+        return nil
+    }
+
+    /// A manager's work card on an Agent (`persona_triage`). Its put-off choices and its dismiss send nothing to the Agent,
+    /// so they stay open once the Agent has stopped and the rest of the card can't be answered (#6839, web #6753).
+    var isManagerWork: Bool { kind == .question && toolName == "persona_triage" }
+
+    /// A choice that only clears the card on the hub: a manager work card's single-choice option marked `defer`.
+    func isLocalChoice(_ option: QuestionOption, in question: Question) -> Bool {
+        isManagerWork && !question.multiSelect && option.action == "defer"
+    }
+
+    /// An answer that sends nothing to the Agent (web `workCardLocalResolution`): on a manager work card, a bare dismiss, or
+    /// only put-off choices. Continue, retry and typed answers still need `canAnswer`.
+    func isLocalResolution(_ r: Resolution) -> Bool {
+        guard isManagerWork else { return false }
+        if r == .dismissed { return true }
+        guard r == Resolution(answers: r.answers), let answers = r.answers?.filter({ !$0.value.trimmingCharacters(in: .whitespaces).isEmpty }),
+              !answers.isEmpty else { return false }
+        return answers.allSatisfy { question, answer in
+            guard let q = questions?.first(where: { $0.question == question }) else { return false }
+            return q.options.contains { $0.label == answer.trimmingCharacters(in: .whitespaces) && isLocalChoice($0, in: q) }
+        }
+    }
 
     /// Where a sessionless card comes from, for its list row: the title the node gave it, else its directory's name.
     var sessionlessPlace: String? {

@@ -17,6 +17,9 @@ import { PendingCards } from "./Interactions";
 import { getState, reset, upsertSession, useStore } from "../../lib/store";
 import { t } from "../../i18n";
 import type { Interaction, Session } from "../../lib/types";
+import { loadPages } from "../../lib/lazy-page";
+
+await loadPages();
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -72,8 +75,6 @@ describe("a stopped Agent's manager work card", () => {
     act(() => button("Handled, continue").click());
     expect(calls).toEqual([]);
     act(() => button("Leave it").click());
-    expect(locked(button(t("chat-interactions.send_answer")))).toBe(false);
-    act(() => button(t("chat-interactions.send_answer")).click());
     await flush();
     expect(calls).toEqual([{ path: "/interactions/work_1/resolve", body: { answers: { [question]: "Leave it" } } }]);
     expect(host.querySelector("[data-card]")).toBeNull();

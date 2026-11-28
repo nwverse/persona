@@ -26,10 +26,11 @@ vi.hoisted(() => {
   })) as typeof window.matchMedia;
 });
 
+const { credentialOwner, getToken } = await import("../lib/api");
 const api = vi.fn(async (_path: string, _init?: unknown): Promise<unknown> => ({}));
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
-  api: (path: string, init?: unknown) => api(path, init),
+  api: (...args: Parameters<typeof import("../lib/api").api>) => api(...args),
 }));
 
 const startPlan = vi.fn(async (..._args: unknown[]) => {});
@@ -90,6 +91,15 @@ afterEach(async () => {
 describe("a routine row's menu", () => {
   const withTasks = (tasks: Task[]) =>
     api.mockImplementation(async (path: string) => (path === "/assistant/tasks" ? { tasks } : path === "/assistant/runs" ? { runs: [] } : { session_id: "run-1" }));
+  const mutation = (path: string, body: { method: string; json?: unknown }) => {
+    const call = api.mock.calls.find(([called]) => called === path);
+    expect(call?.[0]).toBe(path);
+    const init = call?.[1] as Record<string, unknown> | undefined;
+    expect(init && Object.keys(init).sort()).toEqual([...Object.keys(body), "headers", "isAuthContextCurrent", "token", "tokenOwner"].sort());
+    for (const [key, value] of Object.entries(body)) expect(init?.[key]).toEqual(value);
+    expect(init).toMatchObject({ headers: undefined, token: getToken(), tokenOwner: credentialOwner() });
+    expect((init?.isAuthContextCurrent as () => boolean)()).toBe(true);
+  };
 
   it("right click offers 立即运行 / 编辑 / 删除, and 删除 asks once more", async () => {
     withTasks([routine()]);
@@ -105,7 +115,7 @@ describe("a routine row's menu", () => {
     const asking = [...document.querySelectorAll("[role=menuitem]")].find((m) => m.textContent?.startsWith("确认删除"));
     expect(asking).toBeTruthy();
     await click(asking);
-    expect(api).toHaveBeenCalledWith("/assistant/tasks/r1", { method: "DELETE" });
+    mutation("/assistant/tasks/r1", { method: "DELETE" });
   });
 
   it("立即运行 drops a one-off from the list as it runs", async () => {
@@ -116,19 +126,19 @@ describe("a routine row's menu", () => {
     await flush();
     withTasks([]); // the hub has run it
     await click(byText("立即运行"));
-    expect(api).toHaveBeenCalledWith("/assistant/tasks/r1/run", { method: "POST", json: {} });
+    mutation("/assistant/tasks/r1/run", { method: "POST", json: {} });
     expect(document.body.textContent).not.toContain("回头看看 CI");
   });
 
   it("names the right click under 一次性跟进 only where there is one", async () => {
     withTasks([routine()]);
     await render(<Routines onToggleSidebar={() => {}} />);
-    expect(document.body.textContent).toContain("右键可以立即运行或删除");
+    expect(document.body.textContent).toContain("右键点击即可立即运行或删除");
     await act(async () => root.unmount());
     media.noHover = true;
     root = createRoot(host);
     await render(<Routines onToggleSidebar={() => {}} />);
-    expect(document.body.textContent).toContain("Persona 在对话里替自己安排的，到点自己醒来接着做。");
+    expect(document.body.textContent).toContain("这些任务由 Persona 在对话中自行安排，到点后会自动唤醒并继续处理。");
     expect(document.body.textContent).not.toContain("右键");
   });
 });
@@ -155,20 +165,20 @@ describe("全部 opens the task board", () => {
   });
 });
 
-describe("the plan card's 改一下", () => {
+describe("the plan card's 编辑", () => {
   const plan = { id: "p1", conversation: "c1", state: "open" as const, tasks: [{ title: "补测试", prompt: "补", machine: "m1", cwd: "/w", model: "opus" }] };
 
   it("starts with the edits, leaving out a permission the plan never set", async () => {
     seed({ machines: [{ id: "m1", name: "工作机" }] });
     await render(<PlanCard plan={plan} />);
-    await click(byText("改一下"));
+    await click(byText("编辑"));
     const title = document.querySelector<HTMLInputElement>("#plan-p1-0-title")!;
     const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
     await act(async () => {
       set.call(title, "补单元测试");
       title.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    expect(document.querySelector<HTMLInputElement>("#plan-p1-0-model")?.placeholder).toBe("空着用 Persona 选的 opus");
+    expect(document.querySelector<HTMLInputElement>("#plan-p1-0-model")?.placeholder).toBe("留空则保留 Persona 选择的 opus");
     const start = [...document.querySelectorAll<HTMLElement>('[role="dialog"] button')].filter((b) => b.textContent?.trim() === "开始").at(-1);
     await click(start);
     expect(startPlan).toHaveBeenCalledTimes(1);
@@ -183,11 +193,11 @@ describe("the plan card's 改一下", () => {
     seed({ machines: [{ id: "m1", name: "工作机" }] });
     const ask = vi.spyOn(window, "confirm").mockReturnValue(false);
     await render(<PlanCard plan={plan} />);
-    await click(byText("改一下"));
+    await click(byText("编辑"));
     await click(byText("取消")); // nothing changed: closes without asking
     expect(ask).not.toHaveBeenCalled();
     expect(document.querySelector('[data-testid="plan-edit"]')).toBeNull();
-    await click(byText("改一下"));
+    await click(byText("编辑"));
     const prompt = document.querySelector<HTMLTextAreaElement>("#plan-p1-0-prompt")!;
     const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
     await act(async () => {
@@ -216,7 +226,7 @@ describe("待办 back on a narrow screen", () => {
     seed({ todos: [todo()], todosLoaded: true, sessions: {} });
     const back = vi.spyOn(history, "back").mockImplementation(() => {});
     await render(<TodosView />);
-    await click(byText("整理发布清单", "[role=button], button") ?? [...document.querySelectorAll("button, [role=button]")].find((b) => b.textContent?.includes("整理发布清单")));
+    await click(document.querySelector('[data-todo="t1"] [data-testid="todo-row-open"]') ?? document.querySelector('[data-todo="t1"]'));
     await render(<TodosView selectedId="t1" />); // the route now says ?id=t1
     await click(document.querySelector('[data-testid="todos-back"] button'));
     expect(back).toHaveBeenCalledTimes(1);

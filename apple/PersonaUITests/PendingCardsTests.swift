@@ -33,7 +33,8 @@ final class PendingCardsTests: XCTestCase {
         app.launchPinned()
     }
 
-    private func launchMainQuestion(_ scheme: String? = nil, hubKey: String = "PERSONA_MOCK_HUB", largestText: Bool = false) {
+    private func launchMainQuestion(_ scheme: String? = nil, hubKey: String = "PERSONA_MOCK_HUB", largestText: Bool = false,
+                                    extra: [String] = []) {
         let hub = ProcessInfo.processInfo.environment[hubKey]!
         _ = try? Data(contentsOf: URL(string: hub + "/mock/reset")!)
         app = XCUIApplication()
@@ -42,6 +43,7 @@ final class PendingCardsTests: XCTestCase {
                                "-openAssistant", Self.askLong, "-openChatsFresh", "YES"]
         if let scheme { app.launchArguments += ["-ui.scheme", scheme] }
         if largestText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
+        app.launchArguments += extra
         app.launchPinned()
     }
 
@@ -108,6 +110,25 @@ final class PendingCardsTests: XCTestCase {
         XCTAssertTrue(outside.isEmpty, "cut off: \(outside.map { $0.label }) outside \(cards.frame)")
         assertBackInReach()
         shot("one")
+    }
+
+    /// The recorded post-plan mode on the photo Agent's card (MOCK_PLAN_THEN=default), in both schemes and at the
+    /// largest text size. Run with TEST_RUNNER_PERSONA_UI_STYLE=beautiful too for the other card style (#3784).
+    func testRecordedPlanCard() {
+        for look in ["light", "dark", "largest"] {
+            let extra = look == "largest" ? ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+                : ["-ui.scheme", look]
+            launch(chat: Self.photos, extra)
+            XCTAssertTrue(app.scrollViews["pending-cards"].waitForExistence(timeout: 15), "the recorded plan card (\(look))")
+            dismissIconAlert()
+            sleep(2)
+            XCTAssertFalse(app.buttons["批准并自动执行"].exists, "the conflicting legacy approval is absent (\(look))")
+            let mode = app.staticTexts["默认权限"].firstMatch
+            XCTAssertTrue(mode.waitForExistence(timeout: 5), "the recorded mode is in the card (\(look))")
+            for _ in 0..<3 where !mode.isHittable { app.scrollViews["pending-cards"].swipeUp() }
+            XCTAssertTrue(mode.isHittable, "the recorded mode is visible (\(look))")
+            shot("recorded-plan-\(look)")
+        }
     }
 
     /// A lone question card, the keyboard down (#6277): it grows past half the page until the conversation keeps a fixed
@@ -284,7 +305,7 @@ final class PendingCardsTests: XCTestCase {
             XCTAssertTrue(first.waitForExistence(timeout: 5), "no first option")
             first.tap() // Multi-select does not advance: Submit is now enabled on this same long question.
             let before = resolutionCount("ix_ask_long")
-            let cards = app.scrollViews["pending-cards"]
+            let cards = app.otherElements["question-dock"].firstMatch // the assistant's pager (#12831)
             XCTAssertTrue(cards.exists, "the cards' area")
             let action = app.buttons.matching(NSPredicate(format: "label IN %@", ["提交", "Submit"])).firstMatch
             XCTAssertTrue(action.waitForExistence(timeout: 5), "no Submit:\n\(app.debugDescription)")
@@ -384,7 +405,7 @@ final class PendingCardsTests: XCTestCase {
             let submit = app.buttons["screen-review-submit"]
             if !submit.waitForExistence(timeout: 2) { app.buttons["提交"].firstMatch.tap() }
             XCTAssertTrue(submit.waitForExistence(timeout: 5), "no long review:\n\(app.debugDescription)")
-            let cards = app.scrollViews["pending-cards"]
+            let cards = app.otherElements["question-dock"].firstMatch // the assistant's pager (#12831)
             var reachable = false
             let hitDeadline = Date().addingTimeInterval(5)
             while Date() < hitDeadline {
@@ -406,6 +427,64 @@ final class PendingCardsTests: XCTestCase {
             XCTAssertGreaterThan(resolutionCount("ix_ask_long", hub: hub), before, "review Submit did not resolve the card")
             app.terminate()
         }
+    }
+
+    /// Another tap within a single-select pick's pause steps no further (#6549): each pick stepped on its own, so a second
+    /// tap within it (the option again, or Next) skipped a question, and on question 5 went past the last one. A second
+    /// pick starts the pause again, so the card steps a whole pause after it; Previous / Next cancel the step. XCUITest's
+    /// taps each take a second or more, longer than the 250 ms pause, so `-showQuestionStepPause` stretches it to 10 s.
+    /// `MOCK_ASK_LONG=review` (six questions of one option each), as `testLongReviewActionsAreVisibleWithoutScrolling`:
+    ///   PORT=18799 MOCK_AGENTS=1 MOCK_ASK_LONG=review python3 scripts/mock/mock_hub.py &   (PERSONA_REVIEW_HUB)
+    func testAnotherTapWithinThePauseStepsNoFurther() throws {
+        _ = try XCTUnwrap(ProcessInfo.processInfo.environment["PERSONA_REVIEW_HUB"])
+        let pause: TimeInterval = 10
+        launchMainQuestion(hubKey: "PERSONA_REVIEW_HUB", extra: ["-showQuestionStepPause", "\(Int(pause * 1000))"])
+        func option(_ n: Int) -> XCUIElement {
+            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "第 \(n) 个答案")).firstMatch
+        }
+        func wait(until date: Date) { if date.timeIntervalSinceNow > 0 { Thread.sleep(until: date) } }
+        XCTAssertTrue(option(1).waitForExistence(timeout: 10), "no question card")
+        // the option, and again 4 s later: the pause starts again, so the card is still on question 1 when the first
+        // pick's pause is over, and steps once, when the second pick's is
+        option(1).tap()
+        let firstOver = Date().addingTimeInterval(pause)
+        sleep(4)
+        option(1).tap()
+        let secondOver = Date().addingTimeInterval(pause)
+        wait(until: firstOver.addingTimeInterval(1.5)) // past the first pause and a step's animation, 2.5 s before the second's end
+        XCTAssertTrue(option(1).exists && !option(2).exists, "the first pick stepped, though a second came within its pause")
+        wait(until: secondOver.addingTimeInterval(2))
+        shot("pause-same-option-twice")
+        XCTAssertTrue(option(2).exists && !option(3).exists, "a second tap within the pause did not step exactly once")
+        // an option, then Next within its pause: Next's step only
+        option(2).tap()
+        var pickOver = Date().addingTimeInterval(pause)
+        app.buttons["下一题"].firstMatch.tap()
+        XCTAssertTrue(option(3).waitForExistence(timeout: 5), "Next did not step")
+        wait(until: pickOver.addingTimeInterval(2))
+        shot("pause-then-next")
+        XCTAssertTrue(option(3).exists && !option(4).exists, "the pick stepped again after Next and skipped question 3")
+        // an option, then Previous within its pause: the card stays on the question it went back to
+        option(3).tap()
+        pickOver = Date().addingTimeInterval(pause)
+        app.buttons["上一题"].firstMatch.tap()
+        XCTAssertTrue(option(2).waitForExistence(timeout: 5), "Previous did not step back")
+        wait(until: pickOver.addingTimeInterval(2))
+        XCTAssertTrue(option(2).exists && !option(3).exists, "the pick stepped after Previous")
+        // on to question 5: questions 2 and 3 have their answers, and question 4's pick goes on with Next at once
+        for n in 2...4 {
+            if n == 4 { option(4).tap() }
+            app.buttons["下一题"].firstMatch.tap()
+            XCTAssertTrue(option(n + 1).waitForExistence(timeout: 5), "question \(n + 1) did not come")
+        }
+        // the second-to-last question: never past the last one
+        option(5).tap()
+        option(5).tap()
+        XCTAssertTrue(option(6).waitForExistence(timeout: pause + 10), "question 6 did not come")
+        sleep(3)
+        shot("pause-last-question")
+        XCTAssertTrue(option(6).exists, "a second tap within the pause went past the last question")
+        app.terminate()
     }
 
     func testThreeCardsScrollUnderTheHeader() {

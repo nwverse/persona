@@ -6,10 +6,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item, Session } from "../../lib/types";
+import type { NavRail } from "./NavRail";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
-  g.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  g.matchMedia = (q: string) => ({ matches: q.includes("pointer: fine"), addEventListener() {}, removeEventListener() {} });
   g.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
   g.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
 });
@@ -20,14 +21,21 @@ const transcript = vi.hoisted(() => ({
   error: "",
   hasMore: true,
   loadingEarlier: false,
+  earlierPage: undefined as symbol | undefined,
   streaming: "",
-  loadEarlier: (() => Promise.resolve()) as () => Promise<void>,
+  loadEarlier: (() => Promise.resolve(undefined)) as () => Promise<symbol | undefined>,
 }));
 vi.mock("./useTranscript", () => ({ useTranscript: () => transcript }));
+const rail = vi.hoisted(() => ({ props: null as React.ComponentProps<typeof NavRail> | null }));
+vi.mock("./NavRail", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./NavRail")>(),
+  NavRail: (props: React.ComponentProps<typeof NavRail>) => { rail.props = props; return null; },
+}));
 vi.mock("../../lib/panel", async (importOriginal) => ({ ...await importOriginal<typeof import("../../lib/panel")>(), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
 import { applyCompleteSessions, reset } from "../../lib/store";
+import { resetPullGatesForTests } from "../../lib/pull-gate";
 const { ChatView } = await import("./ChatView");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +45,7 @@ let root: Root;
 let size = { scrollHeight: 0, clientHeight: 0 };
 beforeEach(() => {
   vi.useFakeTimers();
+  rail.props = null;
   localStorage.clear();
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("{}", { status: 200 }))));
   vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(() => size.scrollHeight);
@@ -53,6 +62,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  resetPullGatesForTests(); // a case's failed index read must not hold the next case's back
   vi.restoreAllMocks();
   vi.clearAllTimers();
   vi.useRealTimers();
@@ -67,8 +77,8 @@ const background: Item[] = [
 
 async function open(view: { scrollHeight: number; clientHeight: number }, hasMore = true) {
   size = view;
-  const loadEarlier = vi.fn(() => Promise.resolve());
-  Object.assign(transcript, { items: [], hasMore: false, loading: true, loadEarlier });
+  const loadEarlier = vi.fn(() => Promise.resolve(undefined));
+  Object.assign(transcript, { items: [], hasMore: false, loading: true, loadingEarlier: false, earlierPage: undefined, streaming: "", loadEarlier });
   act(() => applyCompleteSessions([row]));
   act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
   // the hub's first page comes in
@@ -92,5 +102,98 @@ describe("ChatView older pages", () => {
   it("asks for nothing once the history is complete", async () => {
     const loadEarlier = await open({ scrollHeight: 400, clientHeight: 800 }, false);
     expect(loadEarlier).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same line at the same offset when a prepend and new activity commit together", async () => {
+    await open({ scrollHeight: 6_000, clientHeight: 800 });
+    let release!: (page: symbol) => void;
+    transcript.loadEarlier = vi.fn(() => new Promise<symbol>((resolve) => { release = resolve; }));
+    const render = () => act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    render();
+    const sc = host.querySelector<HTMLElement>("[data-chat-scroll]")!;
+    const line = sc.querySelector('[data-line="seg:u1#0"]')!.firstElementChild!;
+    let lineTop = 180;
+    vi.spyOn(line, "getBoundingClientRect").mockImplementation(() => new DOMRect(0, lineTop - sc.scrollTop, 600, 300));
+    act(() => sc.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 })));
+    sc.scrollTop = 220;
+    act(() => sc.dispatchEvent(new Event("scroll")));
+    expect(transcript.loadEarlier).toHaveBeenCalledOnce();
+    const offset = line.getBoundingClientRect().top;
+
+    const page = Symbol();
+    await act(async () => release(page));
+    lineTop += 800;
+    size.scrollHeight += 800 + 150;
+    Object.assign(transcript, { earlierPage: page, hasMore: false, items: [
+      { ...background[0], id: "earlier", seq: 1 }, ...background,
+      { id: "compact", seq: 12, role: "system", kind: "notice", compact: { trigger: "manual" } },
+      { ...background[0], id: "supervision", seq: 13, injected: { kind: "system", state: "supervise", line: "Check tasks" } },
+    ] });
+    render();
+    expect(line.isConnected).toBe(true);
+    expect(line.getBoundingClientRect().top).toBe(offset);
+  });
+
+  it("anchors a prepended page when the rail joins a read started elsewhere", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const query = new URL(String(input), "https://example.com").searchParams;
+      if (query.has("around_seq")) return Response.json({ code: "node_outdated" }, { status: 409 });
+      return Response.json(query.has("user_inputs") ? { total: 3, history: "", inputs: [
+        { id: "distant#0", seq: 1, preview: "Compare the earlier drafts", answer: "The second draft is shorter." },
+        { id: "intermediate#0", seq: 5 }, { id: "u1#0", seq: 10 },
+      ] } : {});
+    }));
+    await open({ scrollHeight: 6_000, clientHeight: 800 });
+    // Advancing the viewport timers does not wait for the lazy rail module.
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(rail.props?.ticks).toContainEqual(expect.objectContaining({
+      id: "seg:distant#0", preview: "Compare the earlier drafts", answerExcerpt: "The second draft is shorter.",
+    }));
+    const scroller = host.querySelector<HTMLElement>("[data-chat-scroll]")!;
+    scroller.scrollTop = 3_200;
+    let release!: (page: symbol) => void;
+    const pending = new Promise<symbol>((resolve) => { release = resolve; });
+    const loadEarlier = vi.fn(() => pending);
+    // The underlying read started outside the scroll loader, so it did not take an anchor.
+    Object.assign(transcript, { loadEarlier, loadingEarlier: true });
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    await act(async () => {
+      void rail.props!.onJump("seg:distant#0");
+      await vi.dynamicImportSettled();
+    });
+    expect(loadEarlier).toHaveBeenCalledOnce();
+    expect(scroller.scrollTop).toBe(3_200);
+
+    // New text below the reading position must neither consume the anchor nor count as a prepend.
+    size.scrollHeight = 6_150;
+    transcript.streaming = "A live reply";
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    expect(scroller.scrollTop).toBe(3_200);
+    scroller.scrollTop = 3_250;
+    act(() => scroller.dispatchEvent(new Event("scroll")));
+
+    // Complete the HTTP read in a separate commit while React still shows the old rows.
+    const page = Symbol();
+    await act(async () => { release(page); });
+    expect(scroller.scrollTop).toBe(3_250);
+    await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+
+    // A live render can still arrive between HTTP completion and the older rows' layout commit.
+    size.scrollHeight = 6_300;
+    transcript.streaming = "A live reply that has grown";
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    expect(scroller.scrollTop).toBe(3_250);
+
+    // Only the intermediate page has arrived. Its prepended height must be offset before
+    // navigation is allowed to jump to the (still absent) selected input.
+    size.scrollHeight = 6_850;
+    Object.assign(transcript, {
+      items: [{ ...background[0], id: "intermediate#0", seq: 5 }, ...background],
+      hasMore: false,
+      earlierPage: page,
+      loadingEarlier: false,
+    });
+    act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+    expect(scroller.scrollTop).toBe(3_800);
   });
 });

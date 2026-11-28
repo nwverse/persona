@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// What Share as Image draws for a message with cards (#7261, `ShareCardParts`): the chat's cards as cards, a card the
 /// picture cannot draw as its fallback, and never a card's JSON. Made-up cards, the shared examples every client reads.
@@ -69,6 +70,7 @@ import UIKit
             #"{"type":"field","name":"n","label":"Name","kind":"text"}"#,
             #"{"type":"table","columns":[{"title":"A"}],"rows":[["1"]]}"#,
             #"{"type":"row","title":"Plain","avatar":{"text":"AB"}}"#,
+            #"{"type":"map","alt":"Route map","markers":[{"id":"a","lat":39.9,"lon":116.4,"kind":"origin","label":"Start"},{"id":"b","lat":39.91,"lon":116.41,"kind":"destination","label":"End"}],"routes":[{"id":"r1","mode":"driving","distance_meters":2400,"duration_seconds":480,"points":[{"lat":39.9,"lon":116.4},{"lat":39.91,"lon":116.41}]}]}"#,
         ]
         let fallback = [
             #"{"type":"row","title":"Face","avatar":{"url":"https://example.com/a.png","text":"AB"}}"#,

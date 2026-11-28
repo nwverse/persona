@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // The node menu of the Agents list (docs/integrations/terminal.md「Node menus」, the web's #2329): what changes a computer's terminals from
 // a space's ⋯ and an agent row's long press — split the agent's pane, close its tab, run an agent in a plain shell of the
@@ -174,11 +175,12 @@ nonisolated enum NodeMenu {
     enum GitOp: String, CaseIterable, Identifiable, Sendable {
         case pull, push, fetch
         var id: String { rawValue }
-        var title: String {
+        var title: String { String(localized: titleResource) }
+        var titleResource: LocalizedStringResource {
             switch self {
-            case .pull: String(localized: "git.pull", defaultValue: "Pull")
-            case .push: String(localized: "Push")
-            case .fetch: String(localized: "Fetch")
+            case .pull: LocalizedStringResource("git.pull", defaultValue: "Pull")
+            case .push: "Push"
+            case .fetch: "Fetch"
             }
         }
         var symbol: String {
@@ -222,7 +224,8 @@ nonisolated enum NodeMenu {
     enum Direction: String, CaseIterable, Identifiable, Sendable {
         case right, down
         var id: String { rawValue }
-        var title: String { self == .right ? String(localized: "Split Right") : String(localized: "Split Down") }
+        var title: String { String(localized: titleResource) }
+        var titleResource: LocalizedStringResource { self == .right ? "Split Right" : "Split Down" }
         var symbol: String { self == .right ? Theme.Icon.splitRight : Theme.Icon.splitDown }
     }
 
@@ -425,16 +428,16 @@ private struct NodeActionPrompts: ViewModifier {
                 }
             }
             #endif
-            .confirmationDialog(actions.closingTab.map { $0.name.isEmpty ? String(localized: "Close This Tab?") : String(localized: "Close Tab “\($0.name)”?") } ?? "",
+            .accessibleConfirmationDialog(actions.closingTab.map { $0.name.isEmpty ? String(localized: "Close This Tab?") : String(localized: "Close Tab “\($0.name)”?") } ?? "",
                                 isPresented: Binding(get: { actions.closingTab != nil }, set: { if !$0 { actions.closingTab = nil } }),
-                                titleVisibility: .visible, presenting: actions.closingTab) { c in
+                                titleVisibility: .visible, hasCancel: true, presenting: actions.closingTab) { c in
                 Button("Close Tab", role: .destructive) { actions.closeTab(c) }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
                 Text("Every pane in the tab closes, and the agents running in them end too.")
             }
-            .confirmationDialog("Push to the Remote?", isPresented: Binding(get: { actions.askingPush != nil }, set: { if !$0 { actions.askingPush = nil } }),
-                                titleVisibility: .visible, presenting: actions.askingPush) { a in
+            .accessibleConfirmationDialog("Push to the Remote?", isPresented: Binding(get: { actions.askingPush != nil }, set: { if !$0 { actions.askingPush = nil } }),
+                                titleVisibility: .visible, hasCancel: true, presenting: actions.askingPush) { a in
                 Button("Push") { actions.push(a) }
                 Button("Cancel", role: .cancel) {}
             } message: { a in
@@ -529,9 +532,7 @@ struct RunAgentHereSheet: View {
             .navigationTitle("Run Agent Here")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.lineLimit(1).disabled(busy)
-                }
+                SheetClose(disabled: busy) { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     if busy {
                         ProgressView()
@@ -913,13 +914,10 @@ struct NewWorktreeSheet: View {
                 }
                 .disabled(busy)
                 .themedPage()
-                #if os(macOS)
-                .formStyle(.grouped)
-                #endif
                 .navigationTitle(workspace == nil ? String(localized: "New Worktree") : String(localized: "workspace.newChildTitle", defaultValue: "New Worktree"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.lineLimit(1).disabled(busy) }
+                    SheetClose(disabled: busy) { dismiss() }
                     ToolbarItem(placement: .confirmationAction) {
                         if busy { ProgressView() }
                         else {
@@ -940,9 +938,6 @@ struct NewWorktreeSheet: View {
             .task(id: workspaceID) { await prepare() }
             .presentationDetents(workspace == nil ? [.medium, .large] : [.large])
             .interactiveDismissDisabled(busy)
-            #if os(macOS)
-            .macSheet()
-            #endif
         }
     }
 
@@ -1063,11 +1058,7 @@ struct WorktreeInput: View {
 
     var body: some View {
         Group {
-            #if os(macOS)
-            TextField(title, text: $text).textFieldStyle(.roundedBorder).controlSize(.large)
-            #else
             TextField(title, text: $text, axis: multiline ? .vertical : .horizontal).textInputAutocapitalization(.never)
-            #endif
         }
             .font(Theme.Font.code).autocorrectionDisabled()
             .labelsHidden()

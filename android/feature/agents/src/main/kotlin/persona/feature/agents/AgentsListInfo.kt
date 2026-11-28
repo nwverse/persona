@@ -9,6 +9,7 @@ import android.content.res.Resources
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.resolve
+import persona.feature.chat.isCommandInputPermission
 import kotlinx.coroutines.flow.*
 import java.time.Instant
 import java.time.ZoneId
@@ -78,7 +79,7 @@ internal fun visibleAgentRequests(
     return pending.filter { request ->
         val session = rows[request.sessionKey]
         val row = session?.let { AgentSession(it) }
-        session?.assistant != true && !mutes.mutes(request.sessionKey.path, row?.spacePreferenceKey) &&
+        session?.assistant != true && !request.isDisplayMirror && !mutes.mutes(request.sessionKey.path, row?.spacePreferenceKey) &&
             (settings.machineFilter.isEmpty() || request.machineId == settings.machineFilter) &&
             (settings.quick == AgentQuickFilter.All || (row?.let { settings.quick.matches(it) || it.id in settings.kept }
                 ?: (settings.quick == AgentQuickFilter.NeedsYou))) &&
@@ -87,11 +88,19 @@ internal fun visibleAgentRequests(
     }.sortedWith(compareBy<Interaction> { parseTime(it.expiresAt) ?: Instant.MAX }.thenBy { it.id })
 }
 
-/** Another agent's card (Codex, a compatible CLI, a runtime's) says who asks; Claude's reads as before. */
+/**
+ * Another agent's card (Codex, a compatible CLI, a runtime's) says who asks; Claude's reads as before. One that can't
+ * name its agent (a Paseo card naming only the engine, [Interaction.agentDisplayName]) says only what it wants.
+ */
 internal fun Interaction.cardTitle(res: Resources): String {
+    if (isCommandInputPermission) return res.getString(persona.feature.chat.R.string.chat_command_input_waiting)
     val who = agentDisplayName
     return when (kind) {
-        "question" -> if (who != null) res.getString(R.string.agents_card_question_by, who) else res.getString(R.string.agents_card_question)
+        "question" -> when {
+            who != null -> res.getString(R.string.agents_card_question_by, who)
+            fromOtherAgent -> CoreText.of(CoreText.Key.AskQuestion).resolve(res)
+            else -> res.getString(R.string.agents_card_question)
+        }
         // A password card names the computer it runs on (#1137).
         // One title per kind on every client (#3690); the card's summary line names the tool and what it runs.
         "permission" -> if (isSecretRun) headline.resolve(res) else {

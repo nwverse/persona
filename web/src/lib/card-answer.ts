@@ -9,7 +9,9 @@ import { fields } from "./elicitation";
 import { interactionCanAnswer } from "./format";
 import { apiOp } from "./ops";
 import { endInteraction, getSession, keepDelegated, useStore } from "./store";
-import { isSecretHandoff, isSecretRun } from "./tool-detail";
+import { isSecretHandoff, isSecretRun, secretRunInput } from "./tool-detail";
+import { isSessionReview } from "./types";
+import { supervisorHeld } from "./supervisor-held";
 import type { Interaction } from "./types";
 
 /** Sent (`already`: it had been answered, here or elsewhere), or why not, as a sentence to show. */
@@ -27,6 +29,7 @@ function isSecretRunAnswer(body: Resolution): boolean {
 /** What a hand-off card's own approval says on its request, and only there: the hub lets an approval of a hand-off
  *  card through only from a request that declares it (docs/protocol/protocol.md "Secret hand-off cards"). */
 const HANDOFF_HEADERS = { "X-Persona-Features": "secret_handoff" };
+const ENV_HEADERS = { "X-Persona-Features": "secret_run_env" };
 
 /** Where an answer comes from: the hand-off card's own buttons say so; every other path (Overview, a notification) is
  *  not that card. */
@@ -43,6 +46,17 @@ export function workCardLocalResolution(ix: Interaction, body: Resolution): bool
   return Object.keys(body).length === 1 && entries.length > 0 && entries.every(([question, answer]) => {
     const q = ix.questions?.find((candidate) => candidate.question === question);
     return q && !q.multi_select && q.options?.some((o) => o.label === answer.trim() && o.action === "defer");
+  });
+}
+
+/** A review answer is manager-owned too. In particular, Send may explicitly resume a stopped source on the server;
+ *  the browser still sends only one of the card's existing option labels, never the report or a reviewer message. */
+function sessionReviewResolution(ix: Interaction, body: Resolution): boolean {
+  if (!isSessionReview(ix) || Object.keys(body).length !== 1) return false;
+  const entries = Object.entries(body.answers ?? {});
+  return entries.length === 1 && entries.every(([question, answer]) => {
+    const q = ix.questions?.find((candidate) => candidate.question === question);
+    return Boolean(q && !q.multi_select && q.options?.some((option) => option.label === answer));
   });
 }
 
@@ -70,8 +84,9 @@ interface Pending {
   done: Promise<CardAnswer>;
 }
 
-/** At most one per card, by interaction id: it outlives the card's own state (leaving the chat unmounts it). */
+/** At most one per occurrence, not just per runtime ID: a replacement may be answered while an older request finishes. */
 const pending = new Map<string, Pending>();
+const pendingKey = (ix: Interaction) => ix.created_at ? `${ix.id}\n${ix.created_at}` : ix.id;
 const watchers = new Set<() => void>();
 const changed = () => watchers.forEach((l) => l());
 
@@ -86,31 +101,37 @@ function sameAnswer(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Answers a card, once at a time: while an answer to it is on its way, the same answer again shares that request and
+ * Answers a card occurrence, once at a time: while an answer to it is on its way, the same answer again shares that request and
  * its result, and a different one is refused without a request. It is not swapped in: a retry keeps its op id and
  * body (an op id with another body is 409 op_id_reused, docs/lessons/web.md #2459), and the first one may have reached
  * the hub already. Once it ends (delivered, refused, or out of time) the card can be answered again.
  */
 export function answerCard(ix: Interaction, body: Resolution, from: AnswerFrom = {}): Promise<CardAnswer> {
-  if (!interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)) && !workCardLocalResolution(ix, body)) {
+  // a card a task's supervisor holds is the supervisor's until it passes it up (lib/supervisor-held.ts): no page answers it
+  if (supervisorHeld(ix)) return Promise.resolve({ ok: false, error: t("chat-delegate.supervisor_held_refused") });
+  if (!interactionCanAnswer(ix, getSession(ix.machine_id, ix.session_id)) && !workCardLocalResolution(ix, body) && !sessionReviewResolution(ix, body)) {
     return Promise.resolve({ ok: false, error: t("chat-interactions.approve_not_allowed") });
   }
   if (isSecretRun(ix) && !isSecretRunAnswer(body)) return Promise.resolve({ ok: false, error: t("chat-interactions.secret_run_card_only") });
-  // a hand-off is approved on its card alone; a no goes from anywhere
+  // a hand-off is approved on its card alone; a no goes from anywhere. Explicit env delivery has the same source rule:
+  // older specialized clients show no warning and cannot borrow its feature from a quick path.
   const handoff = isSecretHandoff(ix) && body.allow === true;
   if (handoff && !from.handoffCard) return Promise.resolve({ ok: false, error: t("chat-interactions.secret_handoff_card_only") });
-  const cur = pending.get(ix.id);
+  const env = isSecretRun(ix) && secretRunInput(ix.tool_input).delivery === "env" && body.allow === true;
+  if (env && !from.handoffCard) return Promise.resolve({ ok: false, error: t("chat-interactions.secret_run_card_only") });
+  const key = pendingKey(ix);
+  const cur = pending.get(key);
   if (cur) return sameAnswer(cur.body, body) ? cur.done : Promise.resolve({ ok: false, error: t("chat-interactions.answer_pending") });
   const entry: Pending = {
     body,
     shown: redacted(ix, body),
-    done: send(ix, body, handoff ? HANDOFF_HEADERS : undefined).finally(() => {
-      if (pending.get(ix.id) !== entry) return;
-      pending.delete(ix.id);
+    done: send(ix, body, handoff ? HANDOFF_HEADERS : env ? ENV_HEADERS : undefined).finally(() => {
+      if (pending.get(key) !== entry) return;
+      pending.delete(key);
       changed();
     }),
   };
-  pending.set(ix.id, entry);
+  pending.set(key, entry);
   changed();
   return entry.done;
 }
@@ -123,8 +144,8 @@ const watch = (l: () => void) => {
 };
 
 /** The answer on its way for this card, as its receipt will show it (redacted); undefined when there is none. */
-export function usePendingAnswer(id: string): Resolution | undefined {
-  const read = () => pending.get(id)?.shown;
+export function usePendingAnswer(ix: Interaction): Resolution | undefined {
+  const read = () => pending.get(pendingKey(ix))?.shown;
   return useSyncExternalStore(watch, read, read);
 }
 
@@ -138,7 +159,7 @@ export const PENDING_LINE_MS = 500;
  * Allowed" while the hub is away. `line` is empty when there is none, and for the first PENDING_LINE_MS online.
  */
 export function usePendingLine(ix: Interaction): { pending: boolean; line: string } {
-  const answer = usePendingAnswer(ix.id);
+  const answer = usePendingAnswer(ix);
   const offline = useStore((s) => s.conn !== "online");
   const [late, setLate] = useState(false);
   useEffect(() => {
@@ -155,7 +176,9 @@ export function usePendingLine(ix: Interaction): { pending: boolean; line: strin
 async function send(ix: Interaction, body: Resolution, headers?: Record<string, string>): Promise<CardAnswer> {
   try {
     // one op id for this answer: sent again through a gap (a hub restart), it is taken once
-    const res = await apiOp<ResolveResult>(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: body, headers });
+    const occurrence = ix.created_at ? { "X-Persona-Interaction-Created-At": ix.created_at } : undefined;
+    const res = await apiOp<ResolveResult>(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: body,
+      headers: occurrence || headers ? { ...occurrence, ...headers } : undefined });
     // Answered already (here, its event missed; or elsewhere): the hub says with what, and the card shows that.
     const already = res?.already === true;
     const r: Resolution = already ? (res.resolution ?? {}) : redacted(ix, body);
@@ -172,7 +195,7 @@ async function send(ix: Interaction, body: Resolution, headers?: Record<string, 
     return { ok: true, already };
   } catch (e) {
     if (e instanceof ApiError && e.status === 410) {
-      endInteraction(ix.id); // over (expired, withdrawn, handed back): nothing left to answer
+      endInteraction(ix.id, undefined, ix.created_at); // over (expired, withdrawn, handed back): nothing left to answer
       return { ok: false, error: endedText(e.body.status) };
     }
     if (e instanceof ApiError && e.code === "prompt_changed") return { ok: false, error: t("chat-interactions.prompt_changed") };

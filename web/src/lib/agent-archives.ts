@@ -6,7 +6,7 @@
 // it as "Close…" (#7125, closeOffer), which closes a busy agent too after saying what that interrupts.
 import { useSyncExternalStore } from "react";
 import { api, ApiError, errorText, sessionPath } from "./api";
-import { sessionMenuActions, sessionTitle, stateOf } from "./format";
+import { sessionDeletable, sessionMenuActions, sessionTitle, activityOf, stateOf } from "./format";
 import { dropSession, getState, refresh, upsertSession, useStore } from "./store";
 import { toast } from "../ui/atoms";
 import { t } from "../i18n";
@@ -19,7 +19,7 @@ export const AGENT_ARCHIVE_CLOSE_FEATURE = "agent_session_archive_close";
 /** Busy as the manager counts it for an archive (agent_archives.go agentArchiveBusy): working, starting, waiting for an
  *  answer, background work, running subagents or workflows. Awaiting the user's reply is not busy. */
 export function archiveBusy(s: Session): boolean {
-  const st = stateOf(s);
+  const st = activityOf(s);
   return Boolean(
     s.starting || s.status === "working" || s.status === "blocked" || st === "working" || st === "needs_you" ||
       s.background_working || s.background_waiting || (s.pending_interactions ?? 0) > 0 ||
@@ -51,14 +51,18 @@ export type ArchiveOffer = "ok" | "busy" | "no";
  *  Archive: any agent but the assistant's conversations (those archive in All chats), on a hub that has archives.
  *  Archive and close: an agent running in a terminal tab that the node can bring back after closing it, as session.retire
  *  decides (node retire.go): Claude Code, and Codex or a compatible CLI that Persona started (its launcher is known);
- *  not a runtime's or a desktop app's session (their tool keeps them), and not one already closed. */
+ *  not a runtime's or a desktop app's session (their tool keeps them), and not one already closed. An Antigravity CLI
+ *  conversation is closed so too (#14520), from its pane's row (session.retire) or from its own row, the companion's
+ *  (its close), and a message continues it in the companion after either; Antigravity keeps no archive of its own, so
+ *  Persona's is what takes it out of the list, as Close does for a Claude Code agent. */
 export function archiveOffers(s: Session, features: readonly string[]): { archive: ArchiveOffer; close: ArchiveOffer } {
   if (s.assistant || s.archived || !features.includes(AGENT_ARCHIVES_FEATURE)) return { archive: "no", close: "no" };
   const archive: ArchiveOffer = archiveBusy(s) ? "busy" : "ok";
   const agent = s.agent ?? "";
   const resumable = agent === "" || agent === "claude" || ((agent === "codex" || agent === "traex") && Boolean(s.started_by_persona));
-  const open = stateOf(s) !== "offline" && s.status !== "offline" && !s.start_error;
-  const closable = features.includes(AGENT_ARCHIVE_CLOSE_FEATURE) && !s.source_kind && resumable && open;
+  const agy = agent === "agy" && (!s.source_kind || (s.source_kind === "runtime" && s.capabilities?.close === true));
+  const open = activityOf(s) !== "offline" && s.status !== "offline" && !s.start_error;
+  const closable = features.includes(AGENT_ARCHIVE_CLOSE_FEATURE) && (agy || (!s.source_kind && resumable)) && open;
   return { archive, close: !closable ? "no" : closeBusy(s) ? "busy" : "ok" };
 }
 
@@ -69,15 +73,27 @@ export function archiveOffers(s: Session, features: readonly string[]): { archiv
  *  offered (offline, the assistant's, nothing to close it with). */
 export type CloseOffer = "archive" | "close" | "busy" | "no";
 export function closeOffer(s: Session, features: readonly string[]): CloseOffer {
+  if (isUntouchedStart(s)) return "no";
   const archived = archiveOffers(s, features).close;
   if (archived === "ok") return "archive";
   if (sessionMenuActions(s).includes("close")) return "close";
   return archived === "busy" ? "busy" : "no";
 }
 
-/** Without archives on the hub, the old "Delete chat" stays (an older hub); with them, archive takes its place. */
-export function deleteInsteadOfArchive(features: readonly string[]): boolean {
-  return !features.includes(AGENT_ARCHIVES_FEATURE);
+// An old inventory can retain the original pane after a refused start. A pane ID alone does not establish a running Agent.
+export function isUntouchedStart(s: Session): boolean {
+  return s.started_by_persona === true && s.status === "unknown" && (!s.state || s.state === "unknown") &&
+    (!s.updated_at || s.updated_at === "0001-01-01T00:00:00Z") && !s.capabilities && !s.source_kind &&
+    !s.awaiting_first_message && !s.last_text && !s.rev &&
+    !closeBusy(s) && !s.undelivered?.some((message) => message.computer);
+}
+
+/** Failed starts can be removed by the Hub even with the computer offline. Older Hubs offer Delete for all eligible rows. */
+export function offerSessionDelete(s: Session, features: readonly string[]): boolean {
+  if (s.archived || !sessionDeletable(s)) return false;
+  if (!features.includes(AGENT_ARCHIVES_FEATURE)) return true;
+  if (!s.start_error) return isUntouchedStart(s);
+  return !closeBusy(s) && !s.undelivered?.some((message) => message.computer);
 }
 
 /** What "Archive and close" did beyond the archive (the hub's `close`). */
@@ -134,6 +150,13 @@ export function noteArchived(s: Session, archived: boolean) {
   if (archived) known.set(keyOf(s.machine_id, s.session_id), { ...s, archived: true });
   else known.delete(keyOf(s.machine_id, s.session_id));
   knownChanged();
+}
+
+/** Whether mid/sid is archived as this page last saw it, outside React: the automatic reads of an open chat stop for
+ *  an archived session, which gets no new lines (#13677). Back in the lists, it is not archived any more. */
+export function archivedNow(mid: string, sid: string): boolean {
+  if (!known.has(keyOf(mid, sid))) return false;
+  return !getState().sessions[mid]?.some((x) => x.session_id === sid);
 }
 
 /** The archived session mid/sid as this page last saw it; undefined when it is not known to be archived. */

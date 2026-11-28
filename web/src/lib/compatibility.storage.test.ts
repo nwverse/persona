@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
 import { getToken, setToken } from "./api";
-import { storedCredentials, storedValue, storeValue, removeStoredValue } from "./compatibility";
+import { storeCredentials, storedCredentials, storedValue, storeValue, removeStoredValue } from "./compatibility";
 import bootstrap from "../../public/compatibility-bootstrap.js?raw";
 import appHTML from "../../index.html?raw";
 import adminHTML from "../../admin/index.html?raw";
@@ -67,6 +67,8 @@ describe("baseline browser persistence compatibility", () => {
     localStorage.setItem("jarvis.tokenId", "old-device");
     localStorage.setItem("persona.tokenId", "orphan-device");
     expect(storedCredentials()).toEqual({ token: "", tokenId: "" });
+    expect(storedValue("persona.token")).toBeNull();
+    expect(storedValue("persona.tokenId")).toBe("orphan-device");
     localStorage.setItem("persona.token", "");
     expect(getToken()).toBe("");
     expect(storedCredentials().tokenId).toBe("");
@@ -87,6 +89,54 @@ describe("baseline browser persistence compatibility", () => {
     expect(getToken()).toBe("");
   });
 
+  it("keeps serving a legacy credential pair when its canonical migration cannot be written", () => {
+    for (const failKey of ["persona.token", "persona.tokenId"]) {
+      const values = new Map<string, string>([["jarvis.token", "old-token"], ["jarvis.tokenId", "old-device"]]);
+      const full = {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          if (key === failKey) throw new DOMException("Synthetic storage full", "QuotaExceededError");
+          values.set(key, value);
+        },
+        removeItem: (key: string) => values.delete(key),
+      } as unknown as Storage;
+
+      expect(() => storedCredentials(full)).not.toThrow();
+      expect(storedCredentials(full)).toEqual({ token: "old-token", tokenId: "old-device" });
+      expect(storedValue("persona.token", full)).toBe("old-token");
+      expect(storedValue("persona.tokenId", full)).toBe("old-device");
+      expect(values.get(failKey)).toBeUndefined();
+    }
+
+    const signedOut = {
+      getItem: (key: string) => key === "persona.token" ? "" : key === "jarvis.token" ? "old-token" : null,
+      setItem: () => { throw new DOMException("Synthetic storage full", "QuotaExceededError"); },
+      removeItem() {},
+    } as unknown as Storage;
+    expect(storedCredentials(signedOut)).toEqual({ token: "", tokenId: "" });
+    expect(storedValue("persona.token", signedOut)).toBe("");
+  });
+
+  it("keeps serving the legacy value on read when the alias restore write hits a full quota", () => {
+    const quotaError = () => {
+      const err = new Error("QuotaExceededError");
+      err.name = "QuotaExceededError";
+      throw err;
+    };
+    // storage holds only the legacy key and refuses every write: a read must not throw into the composer's mount
+    const full = {
+      getItem: (k: string) => (k === "draft:jarvis-new" ? "legacy words" : null),
+      setItem: quotaError,
+      removeItem() {},
+    } as unknown as Storage;
+
+    let value: string | null = null;
+    expect(() => {
+      value = storedValue("draft:persona-new", full);
+    }).not.toThrow();
+    expect(value).toBe("legacy words");
+  });
+
   it("migrates the legacy theme before either HTML entry point applies its initial theme", () => {
     for (const html of [appHTML, adminHTML]) {
       expect(html.indexOf('src="compatibility-bootstrap.js"')).toBeLessThan(html.indexOf('localStorage.getItem("persona.theme")'));
@@ -97,5 +147,26 @@ describe("baseline browser persistence compatibility", () => {
     localStorage.setItem("persona.theme", "");
     new Function("localStorage", bootstrap)(localStorage);
     expect(localStorage.getItem("persona.theme")).toBe("");
+  });
+
+  it("clears remaining credential aliases when clearing an empty token encounters a failing key or read", () => {
+    const values = new Map<string, string>([
+      ["persona.token", "tok"],
+      ["jarvis.token", "tok"],
+      ["persona.tokenId", "dev"],
+      ["jarvis.tokenId", "dev"],
+    ]);
+    const flaky = {
+      getItem: () => { throw new DOMException("read blocked", "SecurityError"); },
+      setItem: () => { throw new DOMException("write blocked", "SecurityError"); },
+      removeItem: (key: string) => {
+        if (key === "persona.token") throw new DOMException("key blocked", "SecurityError");
+        values.delete(key);
+      },
+    } as unknown as Storage;
+    expect(() => storeCredentials("", undefined, flaky)).not.toThrow();
+    expect(values.get("jarvis.token")).toBeUndefined();
+    expect(values.get("persona.tokenId")).toBeUndefined();
+    expect(values.get("jarvis.tokenId")).toBeUndefined();
   });
 });

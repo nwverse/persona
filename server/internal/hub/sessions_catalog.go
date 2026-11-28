@@ -19,7 +19,8 @@ import (
 // are in, counted over the same filtered rows as counts=1. A project is a repository wherever it is checked out: the
 // directories whose computers name the same network origin are one project, each listed as a place. A directory
 // without one (no repository, no remote, a computer that does not say) goes by its folder's name. A space is one
-// computer's, named as its rows name it. Reading it changes nothing a page, a count or a push is built from.
+// computer's, named as its rows name it, in the folder most of them are in. Reading it changes nothing a page, a count or
+// a push is built from.
 
 type sessionCatalog struct {
 	Revision string `json:"revision"`
@@ -55,11 +56,13 @@ type catalogPlace struct {
 }
 
 // catalogSpace is one computer's space: ID is the rows' group attribute there (space_id, else workspace_id), which
-// with MachineID is what space= selects by. A computer's rows in no space come last, with an empty ID and name.
+// with MachineID is what space= selects by. Path is the folder its rows are in (workspace_cwd, else cwd), omitted when
+// none says. A computer's rows in no space come last, with an empty ID, name and path.
 type catalogSpace struct {
 	MachineID string `json:"machine_id"`
 	ID        string `json:"id"`
 	Name      string `json:"name"`
+	Path      string `json:"path,omitempty"`
 	Total     int    `json:"total"`
 	NeedsYou  int    `json:"needs_you,omitempty"`
 }
@@ -258,7 +261,7 @@ func (h *Hub) repositoryOrigin(p sessionlist.Place) (string, originAnswer) {
 // (and takes slashes too), any other with slashes only. A path that is only a root is its own name.
 func folderName(path string) string {
 	separators := "/"
-	if windowsPath(path) {
+	if proto.WindowsPath(path) {
 		separators = `/\`
 	}
 	trimmed := strings.TrimRight(path, separators)
@@ -269,18 +272,6 @@ func folderName(path string) string {
 		return path
 	}
 	return trimmed
-}
-
-// windowsPath: a drive letter with a separator, or a UNC share.
-func windowsPath(path string) bool {
-	if strings.HasPrefix(path, `\\`) {
-		return true
-	}
-	if len(path) < 3 || path[1] != ':' || (path[2] != '\\' && path[2] != '/') {
-		return false
-	}
-	c := path[0] | 0x20
-	return c >= 'a' && c <= 'z'
 }
 
 // projectOf is the project a directory belongs to: its repository when its computer named a network origin, else
@@ -367,14 +358,15 @@ func (h *Hub) sessionCatalogOf(ctx context.Context, index *sessionlist.Index, op
 			cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)), cmp.Compare(a.ID, b.ID))
 	})
 
-	names := h.spaceNames(machines, counts.Group)
+	attrs := h.spaceAttrs(machines, counts.Group)
 	for p, n := range counts.Group {
 		if !seen(p.Machine) {
 			continue
 		}
 		space := catalogSpace{MachineID: p.Machine, ID: p.Key, Total: n.Total, NeedsYou: n.NeedsYou}
 		if p.Key != "" {
-			space.Name = cmp.Or(names[p], p.Key)
+			space.Name = cmp.Or(attrs[p].name, p.Key)
+			space.Path = attrs[p].path
 		}
 		out.Spaces = append(out.Spaces, space)
 	}
@@ -396,30 +388,79 @@ func lastIfEmpty(a, b string) int {
 	return 0
 }
 
-// spaceNames is what the kept rows of machines call each counted space: the first named row of a space, in its
-// machine's list order.
-func (h *Hub) spaceNames(machines map[string]bool, counted map[sessionlist.Place]sessionlist.PlaceCount) map[sessionlist.Place]string {
-	names := map[sessionlist.Place]string{}
+// spaceAttr is what a space's kept rows say of it: its name and its folder.
+type spaceAttr struct{ name, path string }
+
+// folderTally counts a space's rows by folder, keeping the folders in the order the rows came.
+type folderTally struct {
+	rows  map[string]int
+	order []string
+}
+
+func (t *folderTally) add(dir string) {
+	if t.rows == nil {
+		t.rows = map[string]int{}
+	}
+	if t.rows[dir] == 0 {
+		t.order = append(t.order, dir)
+	}
+	t.rows[dir]++
+}
+
+// most is the folder most of the rows are in, the first of them among equals; "" for none.
+func (t *folderTally) most() string {
+	best := ""
+	for _, dir := range t.order {
+		if t.rows[dir] > t.rows[best] {
+			best = dir
+		}
+	}
+	return best
+}
+
+// spaceAttrs is what the kept rows of machines say of each counted space. Its name: the first named row of a space,
+// in its machine's list order, then among the archived rows told apart (Machine.archived), which named it in the list
+// too. Its folder (workspace_cwd, else cwd): the one most of its listed rows are in, the first in the list's order
+// among equals; the archived rows' only when no listed row says one.
+func (h *Hub) spaceAttrs(machines map[string]bool, counted map[sessionlist.Place]sessionlist.PlaceCount) map[sessionlist.Place]spaceAttr {
+	attrs := map[sessionlist.Place]spaceAttr{}
+	folders := map[sessionlist.Place]*[2]folderTally{} // the listed rows' folders, then the archived rows'
 	for _, m := range h.machinesNow() {
 		if !machines[m.cfg.ID] {
 			continue
 		}
-		list := m.keptSessions()
-		for i := range list { // by index: a range value copies every (large) session it passes
-			s := &list[i]
-			if s.SpaceName == "" {
-				continue
-			}
-			p := sessionlist.Place{Machine: m.cfg.ID, Key: cmp.Or(s.SpaceID, s.WorkspaceID)}
-			if _, ok := counted[p]; !ok {
-				continue
-			}
-			if _, named := names[p]; !named {
-				names[p] = s.SpaceName
+		list, archived := m.keptWhole()
+		for kept, rows := range [2][]proto.Session{list, archived} {
+			for i := range rows { // by index: a range value copies every (large) session it passes
+				s := &rows[i]
+				p := sessionlist.Place{Machine: m.cfg.ID, Key: cmp.Or(s.SpaceID, s.WorkspaceID)}
+				if p.Key == "" {
+					continue
+				}
+				if _, ok := counted[p]; !ok {
+					continue
+				}
+				if a := attrs[p]; a.name == "" && s.SpaceName != "" {
+					a.name = s.SpaceName
+					attrs[p] = a
+				}
+				if dir := cmp.Or(s.WorkspaceCwd, s.Cwd); dir != "" {
+					tally := folders[p]
+					if tally == nil {
+						tally = &[2]folderTally{}
+						folders[p] = tally
+					}
+					tally[kept].add(dir)
+				}
 			}
 		}
 	}
-	return names
+	for p, tally := range folders {
+		a := attrs[p]
+		a.path = cmp.Or(tally[0].most(), tally[1].most())
+		attrs[p] = a
+	}
+	return attrs
 }
 
 // catalogAsked: the request asks for the catalog (catalog=1 / true), which sessionlist.Parse has validated.

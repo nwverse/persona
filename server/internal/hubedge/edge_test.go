@@ -4,6 +4,7 @@ package hubedge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -56,6 +57,15 @@ func fakeSlot(name string) int {
 	if name == "bad-activate" {
 		s.Failed("cannot migrate")
 		return 1
+	}
+	if name == "slow-activate" {
+		if addr := os.Getenv("HUBEDGE_TEST_ACTIVATED_ADDR"); addr != "" {
+			if c, err := net.DialTimeout("tcp", addr, 2*time.Second); err == nil {
+				_ = c.Close()
+			}
+		}
+		<-s.Released()
+		return 0
 	}
 	ln, err := s.Listen("127.0.0.1:" + os.Getenv(envTestPort))
 	if err != nil {
@@ -336,9 +346,9 @@ func TestUnconfirmedUpdateGoesBack(t *testing.T) {
 	var te *testEdge
 	te = startEdge(t, "v1", func(o *Options) {
 		o.ConfirmWait = time.Second
-		o.RestoreUpdate = func(build int64, cause error) (string, bool) {
+		o.RestoreUpdate = func(build int64, cause error) (string, bool, error) {
 			restored <- build
-			return te.binary("v1"), true
+			return te.binary("v1"), true, nil
 		}
 	})
 	q := url.Values{"to": {te.binary("v2")}, "expect": {"2"}, "kind": {KindUpdate}}
@@ -361,7 +371,7 @@ func TestConfirmedUpdateStays(t *testing.T) {
 	var te *testEdge
 	te = startEdge(t, "v1", func(o *Options) {
 		o.ConfirmWait = 2 * time.Second
-		o.RestoreUpdate = func(int64, error) (string, bool) { calls.Add(1); return te.binary("v1"), true }
+		o.RestoreUpdate = func(int64, error) (string, bool, error) { calls.Add(1); return te.binary("v1"), true, nil }
 	})
 	q := url.Values{"to": {te.binary("v2")}, "expect": {"2"}, "kind": {KindUpdate}}
 	go func() { _, _ = te.get("/switch?" + q.Encode()) }()
@@ -527,4 +537,158 @@ func tcpPair(t *testing.T) (*net.TCPConn, *net.TCPConn) {
 	}
 	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
 	return a.(*net.TCPConn), b.(*net.TCPConn)
+}
+
+// A restoration error is not an absent update: neither failed activation nor
+// confirmation timeout may fall back to a binary whose files can be mixed.
+func TestUpdateRestoreFailureStopsEdge(t *testing.T) {
+	for _, mode := range []string{"activation-slot", "activation-control", "confirmation"} {
+		t.Run(mode, func(t *testing.T) {
+			failure := errors.New("fixture recovery preimage missing")
+			var calls atomic.Int32
+			te := startEdge(t, "v1", func(o *Options) {
+				o.ConfirmWait = time.Second
+				o.RestoreUpdate = func(build int64, cause error) (string, bool, error) {
+					calls.Add(1)
+					expected := int64(0)
+					if mode == "confirmation" {
+						expected = 2
+					}
+					if build != expected || (cause == nil) != (mode == "confirmation") {
+						t.Errorf("wrong recovery identity/cause: build=%d cause=%v", build, cause)
+					}
+					return "/must-not-restart", true, failure
+				}
+			})
+			to := "bad-activate"
+			if mode == "confirmation" {
+				to = "v2"
+			}
+			binary := te.binary(to)
+			triggered := make(chan struct{})
+			go func() {
+				defer close(triggered)
+				if mode == "activation-control" {
+					_, _ = call(te.control, Msg{T: MsgSwitch, Binary: binary, Kind: KindUpdate}, 10*time.Second, nil)
+				} else {
+					q := url.Values{"to": {binary}, "kind": {KindUpdate}, "expect": {}}
+					// bad-activate has no build number, while v2 reports 2.
+					if mode == "confirmation" {
+						q.Set("expect", "2")
+					}
+					_, _ = te.get("/switch?" + q.Encode())
+				}
+			}()
+			select {
+			case err := <-te.done:
+				te.done <- err // retain the terminal receipt for startEdge cleanup
+				if !errors.Is(err, failure) {
+					t.Fatalf("edge continued after failed restore: %v", err)
+				}
+			case <-time.After(8 * time.Second):
+				t.Fatal("edge did not stop after failed restoration")
+			}
+			select {
+			case <-triggered:
+			case <-time.After(time.Second):
+				t.Fatal("switch caller did not finish")
+			}
+			if calls.Load() != 1 {
+				t.Fatal("replayed failed restoration", calls.Load())
+			}
+		})
+	}
+}
+
+// Cancelling the edge context (graceful shutdown) while an update handover is waiting for the
+// new slot to become ready, or when an unconfirmed timer fires alongside shutdown, must not
+// invoke RestoreUpdate or spawn a rollback slot.
+func TestShutdownDuringUpdateHandoverDoesNotRestoreUpdate(t *testing.T) {
+	t.Run("cancel_during_activation_handover", func(t *testing.T) {
+		sigLn, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sigLn.Close() })
+		activated := make(chan struct{})
+		go func() {
+			if c, err := sigLn.Accept(); err == nil {
+				_ = c.Close()
+				close(activated)
+			}
+		}()
+		t.Setenv("HUBEDGE_TEST_ACTIVATED_ADDR", sigLn.Addr().String())
+
+		var restoreCalls atomic.Int32
+		te := startEdge(t, "v1", func(o *Options) {
+			o.RestoreUpdate = func(build int64, cause error) (string, bool, error) {
+				restoreCalls.Add(1)
+				return "", false, fmt.Errorf("unexpected restore during shutdown (build=%d cause=%v)", build, cause)
+			}
+		})
+
+		binary := te.binary("slow-activate")
+		switchDone := make(chan struct{})
+		go func() {
+			defer close(switchDone)
+			_, _ = call(te.control, Msg{T: MsgSwitch, Binary: binary, Kind: KindUpdate, Expect: 0}, 10*time.Second, nil)
+		}()
+
+		select {
+		case <-activated:
+		case <-time.After(10 * time.Second):
+			t.Fatal("slow-activate slot did not enter activation")
+		}
+
+		// Gracefully stop the edge while handover is awaiting MsgReady.
+		te.cancel()
+
+		select {
+		case err := <-te.done:
+			te.done <- err // retain for startEdge cleanup
+			if err != nil {
+				t.Fatalf("edge exited with error on graceful shutdown during handover: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("edge did not exit after cancellation during handover")
+		}
+		select {
+		case <-switchDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("control switch call did not finish")
+		}
+		if got := restoreCalls.Load(); got != 0 {
+			t.Fatalf("RestoreUpdate called %d times during graceful edge shutdown, want 0", got)
+		}
+		te.mu.Lock()
+		logText := te.logs.String()
+		te.mu.Unlock()
+		if strings.Contains(logText, "going back to") {
+			t.Fatalf("edge attempted rollback during graceful shutdown:\n%s", logText)
+		}
+	})
+
+	t.Run("unconfirmed_with_canceled_ctx", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var restoreCalls atomic.Int32
+		e := &edge{
+			ctx:          ctx,
+			confirmBuild: 42,
+			confirmBy:    time.NewTimer(time.Hour),
+			o: Options{
+				Logf: func(string, ...any) {},
+				RestoreUpdate: func(int64, error) (string, bool, error) {
+					restoreCalls.Add(1)
+					return "", false, errors.New("unexpected restore")
+				},
+			},
+		}
+		if err := e.unconfirmed(); err != nil {
+			t.Fatalf("unconfirmed with canceled ctx returned %v, want nil", err)
+		}
+		if got := restoreCalls.Load(); got != 0 {
+			t.Fatalf("RestoreUpdate called %d times when ctx already canceled, want 0", got)
+		}
+	})
 }

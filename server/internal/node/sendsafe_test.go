@@ -37,8 +37,9 @@ type fakePane struct {
 	state   int
 	keys    [][]string
 	// clearAfter: after this many reads the pane moves to the next screen by itself (the TUI catching up).
-	clearAfter int
-	reads      int
+	clearAfter   int
+	reads        int
+	readFailures int
 	// cutOver / plainCutOver: a colored / plain read of more lines than this gets herdr 0.9.4's cut answer (the start
 	// of it, no line end). With either set, a read is the screen's last `lines` rows, as herdr keeps the newest.
 	cutOver, plainCutOver int
@@ -87,6 +88,12 @@ func (f *fakePane) serve(t *testing.T) *herdr.Client {
 			var result any = map[string]any{}
 			switch req.Method {
 			case "pane.read":
+				if f.readFailures > 0 {
+					f.readFailures--
+					f.mu.Unlock()
+					c.Close()
+					continue
+				}
 				lines, _ := req.Params["lines"].(float64)
 				ansi := req.Params["format"] == "ansi"
 				f.readLines = append(f.readLines, map[bool]int{true: -int(lines), false: int(lines)}[ansi])
@@ -504,6 +511,26 @@ func TestStillPromptedIgnoresChips(t *testing.T) {
 	} {
 		if got := stillPrompted(c.box, c.prompted); got != c.want {
 			t.Errorf("stillPrompted(%q, %q) = %v", c.box, c.prompted, got)
+		}
+	}
+}
+
+// A prompt of pictures only has no words to tell it by, but its box shows the path: line of each photo the send just
+// saved (keepImagePaths), which nobody else types: that box is the prompt's. A chip alone, another photo's path, or
+// words in front of the block are not.
+func TestPendingPromptKnowsPicturesOnlyByTheirPaths(t *testing.T) {
+	prompted := keepImagePaths("\n\n<attached_images>\n/u/2026-11-17/ab12cd34.png\n</attached_images>")
+	for _, c := range []struct {
+		box  string
+		want bool
+	}{
+		{"[Image #11]<attached_images>\n  path:/u/2026-11-17/ab12cd34.png\n  </attached_images>", true},
+		{"[Image #1]", false}, // a chip alone: anyone's paste
+		{"[Image #1]<attached_images>\n  path:/u/2026-11-17/ef56ab78.png\n  </attached_images>", false},
+		{"look at this [Image #1]<attached_images>\n  path:/u/2026-11-17/ab12cd34.png\n  </attached_images>", false},
+	} {
+		if got := pendingPrompt(c.box, prompted); got != c.want {
+			t.Errorf("pendingPrompt(%q, %q) = %v", c.box, prompted, got)
 		}
 	}
 }

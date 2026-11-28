@@ -22,6 +22,7 @@ import android.content.res.Resources
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import persona.core.contracts.Item
+import persona.core.contracts.ModelRefusal
 import persona.core.contracts.parseTime
 import persona.core.designsystem.ChatNoteChip
 import persona.core.designsystem.DetailField
@@ -36,6 +37,7 @@ import persona.core.designsystem.JIconButton
 import persona.core.designsystem.JSheet
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ReadingContent
 import persona.core.designsystem.rememberCopy
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.Tokens
@@ -48,7 +50,9 @@ import java.time.ZoneId
 /**
  * A model API error as a card (D6, iOS `APIErrorCard`): the reason in words with its status, "Temporary" or "Needs action" and
  * "N times in a row"; tapped, the request id and session to copy, the time and the raw text. "Retry" (sends "Continue") only on the
- * newest card while the agent is idle and the error may pass by itself ([retryLine]).
+ * newest card while the agent is idle and the error may pass by itself ([retryLine]). When every model of a recovery chain
+ * failed ([exhaustedRecovery], #7824), that card also says why and when the configured model is back, above "Retry", and
+ * folds the models tried with its details.
  */
 @Composable
 internal fun ApiErrorLine(line: ChatLine.ApiError) {
@@ -59,10 +63,21 @@ internal fun ApiErrorLine(line: ChatLine.ApiError) {
     val palette = PersonaTheme.palette
     val resources = LocalResources.current
     val retry = actions?.takeIf { it.retryLineId == line.id }?.onRetry
+    val retryButton: (@Composable () -> Unit)? = if (retry != null) ({ JButton(stringResource(R.string.chat_api_error_retry), retry, kind = JButtonKind.Secondary, size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise) }) else null
+    val exhausted = actions?.exhausted?.takeIf { it.lineId == line.id }?.refusal
+    val exhaustedLines = exhausted?.let { recoveryExhaustedLines(it, resources) }.orEmpty()
     ErrorCard(
         info.reason.text(), apiErrorTags(info, line.count, resources), open, { open = !open },
-        action = if (retry != null) ({ JButton(stringResource(R.string.chat_api_error_retry), retry, kind = JButtonKind.Secondary, size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise) }) else null,
+        action = if (exhaustedLines.isEmpty()) retryButton else ({
+            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+                exhaustedLines.forEach { Text(it, style = PersonaTheme.type.callout, color = palette.ink2) }
+                retryButton?.invoke()
+            }
+        }),
     ) {
+        exhausted?.recoveryTried?.takeIf(String::isNotBlank)?.let {
+            Text(stringResource(R.string.chat_model_fallback_recovery_tried, it), style = PersonaTheme.type.caption, color = palette.ink2)
+        }
         info.requestId?.let { id -> DetailField(stringResource(R.string.chat_api_error_request_id), id) { JIconButton(PhIcons.Copy, stringResource(R.string.chat_api_error_copy_request_id), { copy(id, null) }) } }
         info.session?.let { session -> DetailField(stringResource(R.string.chat_api_error_session), session) { JIconButton(PhIcons.Copy, stringResource(R.string.chat_api_error_copy_session), { copy(session, null) }) } }
         apiErrorTime(line.item.item.ts, resources)?.let { DetailField(stringResource(R.string.chat_api_error_time), it, mono = false) }
@@ -92,11 +107,29 @@ internal fun apiErrorTime(ts: String?, resources: Resources, zone: ZoneId = Zone
 
 /**
  * The card that offers "Retry": the conversation's newest line when it is an API error that may pass by itself, the agent
- * is not working and the page can send. [lines] are in reading order (oldest first).
+ * is not working and the page can send. [exhausted]: every model of the conversation's recovery chain failed (#7824), so
+ * the card keeps "Retry" whatever the error says: the configured model may be back by the time it is tapped. [lines] are
+ * in reading order (oldest first).
  */
-internal fun retryLine(lines: List<ChatLine>, working: Boolean, canSend: Boolean): String? {
+internal fun retryLine(lines: List<ChatLine>, working: Boolean, canSend: Boolean, exhausted: Boolean = false,
+    turnFix: TurnErrorFix? = null): String? {
     val last = lines.lastOrNull() as? ChatLine.ApiError ?: return null
-    return last.id.takeIf { canSend && !working && !last.info.needsAction }
+    val retryable = exhausted || !last.info.needsAction || turnFix == TurnErrorFix.ToolSearchUnsupported
+    return last.id.takeIf { canSend && !working && retryable }
+}
+
+/** An exhausted recovery chain (#7824) on the card of [lineId]: [refusal] is the session's marker, with the cause, the recovery time and the models tried. */
+internal data class ExhaustedRecovery(val lineId: String, val refusal: ModelRefusal)
+
+/**
+ * The exhausted recovery the conversation's newest line explains: the session's marker when every model of its recovery
+ * chain failed (#7824) and that line is an API error, the turn's last failure; null otherwise, and from hubs that send
+ * no such marker. [lines] are in reading order (oldest first).
+ */
+internal fun exhaustedRecovery(lines: List<ChatLine>, fallback: ModelRefusal?): ExhaustedRecovery? {
+    val marker = fallback?.takeIf { it.recoveryExhausted } ?: return null
+    val last = lines.lastOrNull() as? ChatLine.ApiError ?: return null
+    return ExhaustedRecovery(last.id, marker)
 }
 
 /**
@@ -128,7 +161,7 @@ internal fun RecapLine(items: List<Item>) {
                 Text(stringResource(R.string.chat_recap_written, relativeTime(it, now, resources)), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                 Spacer(Modifier.height(Tokens.Space.s))
             }
-            ChatMarkdown(item.text.orEmpty(), "recap/${item.id}")
+            ReadingContent { ChatMarkdown(item.text.orEmpty(), "recap/${item.id}") }
         }
     }
 }

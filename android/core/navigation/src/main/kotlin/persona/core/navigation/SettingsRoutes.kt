@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * One model use of Settings › Model configuration (docs/assistant/model-config.md), by the hub's purpose id: `agent.new`, `task.<id>`,
- * `plugin.<id>` (a voice extension's model, which the voice page also opens).
+ * `plugin.<id>` (an extension's model, which a module's page may also open).
  */
 @Serializable @SerialName("persona.core.navigation.ModelPurposeRoute") data class ModelPurposeRoute(val purposeId: String, val manager: String? = null) : NavKey
 
@@ -29,6 +29,8 @@ data class ExtensionUiRoute(
     val extensionId: String, val uiId: String, val title: String, val state: String? = null, val depth: Int = 0,
     /** Whose extension it is, as on [ExtensionRoute]. */
     val manager: String? = null,
+    /** Process-local notification capability; no action id, input or hub credential is serialized here. */
+    val notificationActionToken: String? = null,
 ) : NavKey
 
 /** Settings › Extensions › Extension market: what the hub's extension markets offer (docs/extensions/extensions.md "Extension market"). */

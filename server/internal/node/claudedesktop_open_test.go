@@ -5,7 +5,6 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -240,18 +239,16 @@ func TestADesktopSessionRefusals(t *testing.T) {
 	}
 }
 
-// The old way still serves what is not the sidebar's (an archived session, an entry whose sessionId is not the app's
-// form) and a link that cannot be opened at all (nothing was started): the session is resumed in herdr as before.
+// The old way still serves entries outside the sidebar that lack a persisted desktop launcher: an archived session,
+// or an entry whose sessionId is not the app's form.
 func TestTheOldWayServesTheRest(t *testing.T) {
 	for _, tc := range []struct {
 		name, extra string
 		archived    bool
-		fail        error
 		links       int
 	}{
-		{"archived", "", true, nil, 0},
-		{"not the app's id", `,"sessionId":"../../etc"`, false, nil, 0},
-		{"no opener", "", false, errors.New("no handler"), 1},
+		{"archived", "", true, 0},
+		{"not the app's id", `,"sessionId":"../../etc"`, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n, f, home := herdrNode(t)
@@ -259,7 +256,7 @@ func TestTheOldWayServesTheRest(t *testing.T) {
 			first, _ := useDesktopDirs(t)
 			bgTranscript(t, home, home, sidA, "plan")
 			writeDesktopEntry(t, first, desktopLocal, sidA, tc.archived, nil, tc.extra)
-			links := recordDesktopLinks(t, tc.fail, nil)
+			links := recordDesktopLinks(t, nil, nil)
 			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
 			f.reset()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second) // the resume itself is not this test's
@@ -272,6 +269,38 @@ func TestTheOldWayServesTheRest(t *testing.T) {
 				t.Fatalf("not resumed the old way: %v", f.trace())
 			}
 		})
+	}
+}
+
+// Where the app does not open its links in the background (Windows: claudeDesktopOpens false), its index is read for
+// the list alone: a send to a session of its sidebar opens nothing and is handled as before the index was read (a
+// stopped agent's refusal), and the app's launcher is not offered.
+func TestWithoutABackgroundOpenTheIndexIsForTheListAlone(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	first, _ := useDesktopDirs(t)
+	claudeDesktopOpens = false
+	fakeClaudeOnPath(t)
+	shellLaunchers(t)
+	bgTranscript(t, home, home, sidA, "plan")
+	writeDesktopEntry(t, first, desktopLocal, sidA, false, nil, "")
+	if readClaudeDesktopIndex(home).about[sidA].local == "" {
+		t.Fatal("the index was not read")
+	}
+	links := recordDesktopLinks(t, nil, nil)
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	f.reset()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := waitSend(t, sendWithin(ctx, n, sidA, "go on"))
+	if len(links) != 0 {
+		t.Fatalf("%d links opened", len(links))
+	}
+	if code, _ := refusalOf(t, err); code != agentStopped {
+		t.Fatalf("send: %v", err)
+	}
+	if _, added := n.withDesktopLauncher(nil); added {
+		t.Fatal("the app's launcher offered")
 	}
 }
 

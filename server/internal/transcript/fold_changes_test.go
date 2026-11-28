@@ -130,7 +130,24 @@ func TestClippedFollowsClipJSON(t *testing.T) {
 	if !clipped(in) {
 		t.Fatal("clipJSON's note not recognized")
 	}
+	if !clipped(map[string]any{"content": "prefix" + ApproximateClipNote(12)}) {
+		t.Fatal("the approximate clip note was not recognized")
+	}
 	if clipped(map[string]any{"content": "said: \n…（已截断，共 12 字节）, then more"}) || clipped(map[string]any{"content": long}) {
 		t.Fatal("an unclipped text read as clipped")
+	}
+}
+
+func TestStructuralClipMakesFoldChangesInexact(t *testing.T) {
+	edits := make([]any, 2000)
+	for i := range edits {
+		edits[i] = map[string]any{"old_string": "a", "new_string": "b"}
+	}
+	raw, _ := json.Marshal(map[string]any{"file_path": "/home/user/project/a.go", "edits": edits})
+	use := proto.Item{ID: "use#0", Kind: proto.KindToolUse, ToolUseID: "call", ToolName: "MultiEdit", ToolInput: clipJSON(raw)}
+	result := proto.Item{ID: "result#0", Kind: proto.KindToolResult, ToolUseID: "call", Text: "ok"}
+	changes := foldChanges([]proto.Item{use, result})
+	if len(changes) != 1 || changes[0].Exact || changes[0].Add == 0 || changes[0].Del == 0 {
+		t.Fatalf("structurally clipped changes = %+v, want nonzero inexact counts", changes)
 	}
 }

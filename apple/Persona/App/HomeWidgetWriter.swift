@@ -11,12 +11,17 @@ import WidgetKit
 /// - Only on change: the bytes are compared without the time; the same content is not written again, except once a
 ///   `heartbeat` so the widgets do not call it stale while the app runs. Then only the kinds whose part changed reload
 ///   (`WidgetCenter` budgets reloads; the heartbeat runs only in the foreground, where reloads are not budgeted).
+/// - Live numbers wait: a change of only what moves while agents work (each working row's activity line, the machines'
+///   load, today's tokens) is written at most once a `livePause`, the latest then; anything else is written at once. A
+///   working fleet changed those every few seconds, a snapshot rewrite and a widget reload each time (#9592).
+/// - Only placed widgets reload (`HomeWidgetData.installed`, every kind while it is not known yet).
 /// - Off the main thread: the file is written on a background task.
 @MainActor
 final class HomeWidgetWriter {
     static let shared = HomeWidgetWriter()
     static let pause: Duration = .seconds(5)
-    static let heartbeat: TimeInterval = 20 * 60
+    nonisolated static let heartbeat: TimeInterval = 20 * 60
+    nonisolated static let livePause: TimeInterval = 60
 
     /// What to write: the app's state (`AppModel.homeSnapshot()`); DEBUG `-showHomeWidgetSample` writes the sample.
     var source: () -> HomeSnapshot? = { nil }
@@ -38,29 +43,33 @@ final class HomeWidgetWriter {
     #endif
 
     private var pending: Task<Void, Never>?
-    private var written: (body: Data, parts: [HomeKind: Data], at: Date)?
-    private let store: HomeSnapshotStore
+    /// The last write handed to `output`: the next one waits for it, so writes land in the order they were made.
+    private var writing: Task<Void, Never>?
+    private let output: Output
 
-    init(store: HomeSnapshotStore = .shared) {
-        self.store = store
+    init(store: HomeSnapshotStore = .shared, livePause: TimeInterval = HomeWidgetWriter.livePause) {
+        output = Output(store: store, livePause: livePause)
     }
 
     /// Whether the hub knows this device has the widgets (nil: not told since launch).
     private var toldHub: Bool?
 
     /// Tells the hub whether any of the widgets is on this device's screens (`widgets` in its prefs), when that changed
-    /// since it last told it: the hub wakes the app for them while it is not open (#5721). From the foreground.
-    func tellHub() {
+    /// since it last told it. A cold background wake also obtains the configurations: its process has no in-memory
+    /// installed list yet (#5721).
+    func tellHub(forceRefresh: Bool = false) {
         guard let api = AppModel.shared.api, !api.config.isDemo else { return }
         let kinds = Set(HomeKind.allCases.map(\.widgetKind))
         let byName = Dictionary(uniqueKeysWithValues: HomeKind.allCases.map { ($0.widgetKind, $0) })
-        WidgetCenter.shared.getCurrentConfigurations { result in
+        WidgetCenter.shared.getCurrentConfigurations { @Sendable result in
             guard case .success(let infos) = result else { return }
             let has = infos.contains { kinds.contains($0.kind) }
             let shown = Set(infos.compactMap { byName[$0.kind] })
             Task { @MainActor in
+                await HomeWidgetData.shared.restore()
+                let placementChanged = HomeWidgetData.shared.installed != shown
                 HomeWidgetData.shared.installed = shown
-                HomeWidgetData.shared.refresh()
+                HomeWidgetData.shared.refresh(forceIntake: forceRefresh || placementChanged)
                 let writer = HomeWidgetWriter.shared
                 guard writer.toldHub != has else { return }
                 do {
@@ -74,10 +83,12 @@ final class HomeWidgetWriter {
     }
 
     /// Asks for a write within `pause`.
-    func schedule() {
+    func schedule() { schedule(after: Self.pause) }
+
+    private func schedule(after delay: Duration) {
         guard pending == nil else { return }
         pending = Task { [weak self] in
-            try? await Task.sleep(for: Self.pause)
+            try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
             self?.pending = nil
             self?.write()
@@ -89,6 +100,12 @@ final class HomeWidgetWriter {
         pending?.cancel()
         pending = nil
         write()
+    }
+
+    /// A background intent waits for its snapshot before handing execution back to the system.
+    func flushAndWait() async {
+        flush()
+        await writing?.value
     }
 
     private func write(now: Date = .now) {
@@ -104,27 +121,87 @@ final class HomeWidgetWriter {
         #endif
         guard var snapshot = made else { return }
         snapshot.recording = recording ?? snapshot.recording
-        snapshot.at = 0
-        guard let body = Self.encode(snapshot) else { return }
-        if let written, written.body == body, now.timeIntervalSince(written.at) < Self.heartbeat { return }
-        let parts = Self.parts(snapshot)
-        let changed = HomeKind.allCases.filter { written?.parts[$0] != parts[$0] }
-        let kinds = written?.body == body ? HomeKind.allCases : changed
-        snapshot.at = now.timeIntervalSince1970
-        guard let data = Self.encode(snapshot) else { return }
-        self.written = (body, parts, now)
-        let store = store
-        Task.detached(priority: .utility) {
+        // Encoding, comparing and writing happen off the main actor: a snapshot of a busy hub took 28 ms of JSON
+        // encoding on the main thread each time, every few seconds while Agents worked (#8412).
+        let output = output, previous = writing
+        writing = Task.detached(priority: .utility) { [weak self] in
+            await previous?.value
+            switch await output.write(snapshot, now: now) {
+            case .unchanged:
+                return
+            case .later(let wait):
+                // Only live numbers moved: the latest of them go once the pause is over, unless something else comes first.
+                await MainActor.run { [weak self] in self?.schedule(after: .seconds(wait)) }
+            case .wrote(let kinds):
+                await MainActor.run {
+                    let placed = HomeWidgetData.shared.installed
+                    for kind in kinds where placed?.contains(kind) ?? true { WidgetCenter.shared.reloadTimelines(ofKind: kind.widgetKind) }
+                }
+            }
+        }
+    }
+
+    /// The snapshot's file, and what was last written to it.
+    private actor Output {
+        private let store: HomeSnapshotStore
+        private let livePause: TimeInterval
+        private var written: (body: Data, settled: Data?, parts: [HomeKind: Data], at: Date)?
+
+        init(store: HomeSnapshotStore, livePause: TimeInterval) {
+            self.store = store
+            self.livePause = livePause
+        }
+
+        enum Outcome: Sendable {
+            /// Nothing to write.
+            case unchanged
+            /// Only live numbers changed and the last write is younger than `livePause`: ask again after this many seconds.
+            case later(TimeInterval)
+            /// Written: the kinds whose widgets should reload.
+            case wrote([HomeKind])
+        }
+
+        /// Writes `snapshot` unless the same content was written within `heartbeat`, or only its live numbers changed
+        /// within `livePause` (`HomeWidgetWriter.settled`).
+        func write(_ snapshot: HomeSnapshot, now: Date) -> Outcome {
+            var snapshot = snapshot
+            snapshot.at = 0
+            guard let body = HomeWidgetWriter.encode(snapshot) else { return .unchanged }
+            if let written, written.body == body, now.timeIntervalSince(written.at) < HomeWidgetWriter.heartbeat { return .unchanged }
+            let settled = HomeWidgetWriter.encode(HomeWidgetWriter.settled(snapshot))
+            if let written, written.body != body, settled != nil, written.settled == settled {
+                let age = now.timeIntervalSince(written.at)
+                if age < livePause { return .later(livePause - age) }
+            }
+            let parts = HomeWidgetWriter.parts(snapshot)
+            let changed = HomeKind.allCases.filter { written?.parts[$0] != parts[$0] }
+            let kinds = written?.body == body ? HomeKind.allCases : changed
+            snapshot.at = now.timeIntervalSince1970
+            guard let data = HomeWidgetWriter.encode(snapshot) else { return .unchanged }
+            written = (body, settled, parts, now)
             do {
                 try store.write(data)
             } catch {
                 HomeSnapshotStore.log.error("widget snapshot not written: \(error.localizedDescription, privacy: .public)")
-                return
+                return .unchanged
             }
-            await MainActor.run {
-                for kind in kinds { WidgetCenter.shared.reloadTimelines(ofKind: kind.widgetKind) }
-            }
+            return .wrote(kinds)
         }
+    }
+
+    /// `s` without its live numbers: each working row's activity line, the machines' load and today's tokens (what
+    /// moves every few seconds while agents work). Two snapshots equal here differ only in those (#9592).
+    nonisolated static func settled(_ s: HomeSnapshot) -> HomeSnapshot {
+        var s = s
+        for i in s.agents.rows.indices { s.agents.rows[i].detail = nil }
+        for i in s.machines.indices { s.machines[i].load = nil }
+        if s.usage != nil {
+            s.usage?.tokensToday = 0
+            s.usage?.tpm = 0
+            s.usage?.hourly = []
+            s.usage?.costToday = nil
+        }
+        return s
     }
 
     nonisolated static func encode(_ s: HomeSnapshot) -> Data? {
@@ -137,6 +214,21 @@ final class HomeWidgetWriter {
     nonisolated static func parts(_ s: HomeSnapshot) -> [HomeKind: Data] {
         func data<T: Encodable>(_ value: T) -> Data { (try? JSONEncoder.sorted.encode(value)) ?? Data() }
         struct Common: Encodable { var paired: Bool; var look: HomeSnapshot.Look }
+        struct IntakePart: Encodable {
+            var supported: Bool
+            var day: String
+            var zone: String
+            var nextDay: Double
+            var portion: HomeSnapshot.Portion
+            var days: [Double]
+        }
+        func intakePart(water: Bool) -> Data {
+            let part = s.intake.map {
+                IntakePart(supported: $0.supported, day: $0.day, zone: $0.zone, nextDay: $0.nextDay,
+                           portion: water ? $0.water : $0.protein, days: $0.days.map { water ? $0.water : $0.protein })
+            }
+            return data(part)
+        }
         let common = data(Common(paired: s.paired, look: s.look))
         let parts: [HomeKind: Data] = [
             .agents: data(s.agents) + data(s.machines.map { [$0.id, $0.name] }),
@@ -144,8 +236,11 @@ final class HomeWidgetWriter {
             .todos: data(s.todos),
             .usage: data(s.usage),
             .computers: data(s.machines),
-            .record: data(s.recording) + data(s.today),
+            .record: data(s.recording) + data(s.today) + data(s.recordingModule),
             .health: data(s.health),
+            .water: intakePart(water: true),
+            .protein: intakePart(water: false),
+            .healthToday: data(s.health) + data(s.activity) + data(s.intake),
             .inbox: data(s.inbox),
         ]
         return parts.mapValues { common + $0 }
@@ -177,11 +272,13 @@ extension AppModel {
     func openWidget(_ kind: HomeKind) {
         switch kind {
         case .agents: selectedTab = .chats
-        case .inbox: selectedTab = .mail
+        case .inbox:
+            openNavigationEntry(.inbox)
         case .record: MeetingRecorder.openRecordings()
-        case .today, .todos: showShellPage(.todos)
+        case .today, .todos:
+            openNavigationEntry(.todos)
         case .usage, .computers: showShellPage(.machines)
-        case .health: showShellPage(.health)
+        case .health, .water, .protein, .healthToday: showShellPage(.health)
         }
     }
 
@@ -220,6 +317,7 @@ extension AppModel {
         let look = fleetLook
         s.look = .init(name: persona.name, package: look.package)
         let sessions = scoped(allSessions)
+        let cardRow = cardSessionResolver()
         let byKey = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         let names = Dictionary(machines.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
         let tasks = TasksStore.shared
@@ -227,7 +325,8 @@ extension AppModel {
             TabBadges.place(key, session: byKey[key], quiet: isQuiet(key), mutes: pinsStore(key.group)?.mutes)
         }
         s.agents = HomeAgents.build(
-            needsYou: AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(sessions)),
+            // waiting sessions through the cards' projection, as the Agents badge counts them (`countBadges`)
+            needsYou: AgentsNeedsYou.rows(cards: scopedInteractions, waiting: AgentsNeedsYou.waiting(waitingRows(sessions, reading: cardRow))),
             sessions: sessions, place: place, session: { byKey[$0] }, machineName: { names[$0] },
             isTask: { tasks.task(of: $0) != nil })
         // Persona answering in one of its own conversations: the face thinks (`FleetPersona`'s `assistant`).
@@ -247,6 +346,10 @@ extension AppModel {
         s.usage = HomeUsage.build(UsageWindows.live(UsageWindowsStore.shared.accounts, now: now), tokens: stats?.tokens ?? 0,
                                   tpm: stats?.tpm ?? 0, hourly: data.hourly, spent: data.spentToday(now))
         s.health = data.health
+        s.intake = data.intake
+        s.activity = data.activity
+        // Only said when off, so the file is what it was with the module on (#15214).
+        if RecordingModule.allowance == .off { s.recordingModule = .off }
         return s
     }
 }
@@ -409,7 +512,9 @@ enum HomeAgents {
     }
 }
 
-/// The Inbox widget's numbers and its newest messages, as the Inbox counts them (`InboxStore.actionCount`, its badge).
+/// The Inbox widget's number and its newest messages, as the Inbox counts them: Need You is `InboxStore.actionCount`
+/// (read ones included). The snapshot also carries `unread` (`InboxStore.unreadCount`, the tab's badge), which no
+/// widget draws.
 enum HomeInbox {
     static let shown = 5
 
@@ -423,3 +528,4 @@ enum HomeInbox {
     }
 }
 #endif
+import PersonaWire

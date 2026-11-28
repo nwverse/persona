@@ -2,10 +2,12 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/chatsearch"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -15,9 +17,11 @@ import (
 // database (db.SearchItemRow). A sweep finds the conversations whose rev moved since they were read (woken by the
 // nodes' session lists, else every searchIdle) and reads them one at a time: a working one at most every
 // searchWorkingEvery, a new one (the backfill) newest first with a pause between pages. A transcript that was
-// rewritten (its history token changed) is read again from the start; a conversation gone from the list for
-// searchGoneAfter leaves the index. An index emptied under it (`assistant search-reindex`, db.ResetSearch) is read
-// again from the start too: each sweep first looks whether the resets' count moved since its cursors were read.
+// rewritten (its history token changed) is read again from the start, as is one whose read failed because its
+// history moved under it; other failures keep the cursor and wait searchRetryAfter. A conversation gone from the
+// list for searchGoneAfter leaves the index. An index emptied under it (`assistant search-reindex`,
+// db.ResetSearch) is read again from the start too: each sweep first looks whether the resets' count moved since
+// its cursors were read.
 
 // searchStore is what the index keeps in the database; a store without it has no index (search answers titles only).
 type searchStore interface {
@@ -163,11 +167,27 @@ func (s *Service) searchLoad(ctx context.Context, st searchStore) bool {
 		s.logf("assistant: search index: read cursors: %v", err)
 		return false
 	}
+	for _, r := range rows {
+		_, deleted, err := s.deletedConversation(ctx, r.MachineID, r.SessionID)
+		if err != nil {
+			return false
+		}
+		if deleted {
+			if err := s.dropSearchIndex(ctx, st, r.MachineID, r.SessionID); err != nil {
+				return false
+			}
+		}
+	}
+	s.conversationWrites.RLock()
+	defer s.conversationWrites.RUnlock()
 	s.search.mu.Lock()
 	defer s.search.mu.Unlock()
 	s.search.cursors, s.search.readRev, s.search.readAt, s.search.retry, s.search.gone = nil, nil, nil, nil, nil
 	s.search.init()
 	for _, r := range rows {
+		if s.conversationAvailable(ctx, r.MachineID, r.SessionID) != nil {
+			continue
+		}
 		s.search.cursors[searchKey{r.MachineID, r.SessionID}] = searchCursor{history: r.History, afterSeq: r.AfterSeq}
 	}
 	s.search.loaded, s.search.reset = true, reset
@@ -212,12 +232,28 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 		}
 		todo = append(todo, due{c: c, cur: cur, backup: !read})
 	}
-	// conversations the list no longer has: gone from the index after a while (never while the list is empty: the
-	// assistant's computer may just be offline)
+	cursorKeys := make([]searchKey, 0, len(s.search.cursors))
+	for k := range s.search.cursors {
+		cursorKeys = append(cursorKeys, k)
+	}
+	s.search.mu.Unlock()
+
+	deletedKeys := s.deletedSearchKeys(ctx, cursorKeys)
+
+	// Permanent deletions leave immediately, even with an empty inventory.
+	// Ordinary missing chats keep the grace period: the computer may be offline.
 	var drop []searchKey
-	if len(list) > 0 {
-		for k := range s.search.cursors {
-			if listed[k] {
+	if len(cursorKeys) > 0 {
+		s.search.mu.Lock()
+		for _, k := range cursorKeys {
+			if _, ok := s.search.cursors[k]; !ok {
+				continue
+			}
+			if deletedKeys[k] {
+				drop = append(drop, k)
+				continue
+			}
+			if len(list) == 0 || listed[k] {
 				continue
 			}
 			since, ok := s.search.gone[k]
@@ -227,20 +263,14 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 				drop = append(drop, k)
 			}
 		}
+		s.search.mu.Unlock()
 	}
-	s.search.mu.Unlock()
 
 	for _, k := range drop {
-		if err := st.DropSearchConversation(ctx, k.machine, k.session); err != nil {
+		if err := s.dropSearchIndex(ctx, st, k.machine, k.session); err != nil {
 			s.logf("assistant: search index: drop a conversation: %v", err)
 			continue
 		}
-		s.search.mu.Lock()
-		delete(s.search.cursors, k)
-		delete(s.search.readRev, k)
-		delete(s.search.readAt, k)
-		delete(s.search.gone, k)
-		s.search.mu.Unlock()
 	}
 	// what changed first (new messages in a chat already read), then the backfill, the latest updated first
 	sort.SliceStable(todo, func(i, j int) bool {
@@ -255,6 +285,11 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 		}
 		k := searchKey{d.c.MachineID, d.c.SessionID}
 		cur, done, err := s.searchRead(ctx, st, d.c, d.cur, d.backup)
+		s.conversationWrites.RLock()
+		if s.conversationAvailable(ctx, k.machine, k.session) != nil {
+			s.conversationWrites.RUnlock()
+			continue
+		}
 		s.search.mu.Lock()
 		if cur != d.cur {
 			s.search.cursors[k] = cur
@@ -270,6 +305,7 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 			}
 		}
 		s.search.mu.Unlock()
+		s.conversationWrites.RUnlock()
 		if err == nil && !done {
 			next = 0 // more to read: come back at once
 		}
@@ -277,12 +313,51 @@ func (s *Service) searchSweep(ctx context.Context) time.Duration {
 	return next
 }
 
+// deletedSearchKeys resolves which snapshot cursor keys appear in the cached
+// deletion ledger without holding s.search.mu or issuing per-cursor DB queries.
+func (s *Service) deletedSearchKeys(ctx context.Context, keys []searchKey) map[searchKey]bool {
+	if len(keys) == 0 {
+		return nil
+	}
+	rows, err := s.deletedConversationsSnapshot(ctx)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	aliasesByMachine := map[string][]string{}
+	var deleted map[searchKey]bool
+	for _, k := range keys {
+		aliases, ok := aliasesByMachine[k.machine]
+		if !ok {
+			aliases = s.physicalAliases(k.machine)
+			aliasesByMachine[k.machine] = aliases
+		}
+		for _, alias := range aliases {
+			if _, found := lookupRuntimeListID(rows, alias, k.session); found {
+				if deleted == nil {
+					deleted = map[searchKey]bool{}
+				}
+				deleted[k] = true
+				break
+			}
+		}
+	}
+	return deleted
+}
+
 // searchRead reads a conversation's messages after its cursor into the index, page by page; done: it reached the end.
 func (s *Service) searchRead(ctx context.Context, st searchStore, c proto.Session, cur searchCursor, backfill bool) (searchCursor, bool, error) {
 	reset := false
 	for range searchPagesPerRun {
+		if err := s.conversationAvailable(ctx, c.MachineID, c.SessionID); err != nil {
+			return cur, false, err
+		}
 		page, err := s.searchFetch(ctx, c.MachineID, c.SessionID, cur.afterSeq)
 		if err != nil {
+			if errors.Is(err, db.ErrConversationHistoryChanged) {
+				// The history moved under every try of the read, so the cursor may be from its earlier numbering.
+				// The next read starts over; the page that brings the new history clears the old one's rows.
+				cur.afterSeq = 0
+			}
 			return cur, false, err
 		}
 		if !reset && cur.history != "" && page.History != "" && page.History != cur.history {
@@ -296,7 +371,15 @@ func (s *Service) searchRead(ctx context.Context, st searchStore, c proto.Sessio
 		if history == "" {
 			history = cur.history
 		}
-		if err := st.PutSearchItems(ctx, c.MachineID, c.SessionID, history, after, rows, reset); err != nil {
+		s.conversationWrites.RLock()
+		err = s.conversationAvailable(ctx, c.MachineID, c.SessionID)
+		if err == nil {
+			writeCtx, cancel := context.WithTimeout(ctx, searchCallTimeout)
+			err = st.PutSearchItems(writeCtx, c.MachineID, c.SessionID, history, after, rows, reset)
+			cancel()
+		}
+		s.conversationWrites.RUnlock()
+		if err != nil {
 			return cur, false, err
 		}
 		cur, reset = searchCursor{history: history, afterSeq: after}, false
@@ -335,17 +418,17 @@ func searchVersion(c proto.Session) int64 {
 	return c.UpdatedAt.UnixNano()
 }
 
-// searchRows is what the index keeps of a page (searchIndexText), and the page's last seq.
+// searchRows is what the index keeps of a page (chatsearch.IndexText), and the page's last seq.
 func searchRows(items []proto.Item) ([]db.SearchItemRow, int) {
 	var rows []db.SearchItemRow
 	last := 0
 	for _, it := range items {
 		last = max(last, it.Seq)
-		text, ok := searchIndexText(it)
+		text, ok := chatsearch.IndexText(it)
 		if !ok {
 			continue
 		}
-		rows = append(rows, db.SearchItemRow{Seq: it.Seq, ItemID: it.ID, Role: it.Role, TS: it.TS, Body: text, Folded: searchFold(text)})
+		rows = append(rows, db.SearchItemRow{Seq: it.Seq, ItemID: it.ID, Role: it.Role, TS: it.TS, Body: text, Folded: chatsearch.Fold(text)})
 	}
 	return rows, last
 }

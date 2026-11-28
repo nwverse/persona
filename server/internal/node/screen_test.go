@@ -40,7 +40,7 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 
 	t.Run("unsigned pair is not_signed_in", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
-		n.screenStart = func(context.Context, string, string, bool, bool, func()) (bool, error) { return false, nil }
+		n.screenStart = func(context.Context, string, string, bool, bool, bool, func()) (bool, error) { return false, nil }
 		// pair K present but login not accepted
 		n.screens.byID["K"] = &screenPair{result: rfbLoginFailed, open: true}
 		_, err := dial(t, n, "K")
@@ -55,7 +55,7 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 
 	t.Run("at the cap it is busy", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
-		n.screenStart = func(context.Context, string, string, bool, bool, func()) (bool, error) { return false, nil }
+		n.screenStart = func(context.Context, string, string, bool, bool, bool, func()) (bool, error) { return false, nil }
 		n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}
 		n.screens.count = maxScreenStreams
 		_, err := dial(t, n, "K")
@@ -67,7 +67,7 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 	t.Run("signed in and free starts the helper", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
 		var gotID, gotPair string
-		n.screenStart = func(_ context.Context, id, pair string, _, _ bool, _ func()) (bool, error) {
+		n.screenStart = func(_ context.Context, id, pair string, _, _, _ bool, _ func()) (bool, error) {
 			gotID, gotPair = id, pair
 			return false, nil
 		}
@@ -85,7 +85,7 @@ func TestScreenDialErrorTaxonomy(t *testing.T) {
 
 	t.Run("a failed start releases the slot", func(t *testing.T) {
 		n := &Node{screens: newScreenLogins()}
-		n.screenStart = func(context.Context, string, string, bool, bool, func()) (bool, error) {
+		n.screenStart = func(context.Context, string, string, bool, bool, bool, func()) (bool, error) {
 			return false, &rpc.Error{Code: "video_unavailable", Message: "no permission"}
 		}
 		n.screens.byID["K"] = &screenPair{result: rfbLoginSignedIn, open: true}

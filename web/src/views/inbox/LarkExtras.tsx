@@ -4,16 +4,19 @@
 // LarkReactionPicker / LarkProfileSheet).
 import { useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
-import { emojiLabel, withToken, type LarkPart } from "../../lib/inbox";
+import { safeWebURL } from "../../lib/format";
+import { withToken, type LarkPart } from "../../lib/inbox";
+import { emojiLabel } from "../../lib/inbox-page";
 import { useItemManager, withManager } from "../../lib/manager-choice";
+import { safeApiPath } from "../../lib/safe-media-url";
 import {
   cardIconName, directChat, duration, emojiCatalog, fileSize, pressCardAction, profile, profileRows, quickBar, quickReactions,
-  type CardButton, type EmojiCatalog, type LarkProfile, type LarkReaction, type ReadMark,
+  type CardButton, type EmojiCatalog, type LarkProfile, type LarkProfileRef, type LarkReaction, type ReadMark,
 } from "../../lib/lark-chat";
 import { t } from "../../i18n";
 import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
-import { Monogram } from "./InboxParts";
+import { LarkAvatar } from "./InboxParts";
 
 // ── files, voice, video ──────────────────────────────────
 
@@ -23,7 +26,8 @@ export function FilePart({ p }: { p: LarkPart }) {
   const meta = p.metadata ?? {};
   const name = p.text || (typeof meta.name === "string" ? meta.name : "") || t("inbox-larkthread.file");
   const ext = String(meta.extension ?? (name.includes(".") ? name.split(".").pop() : "") ?? "").toUpperCase().slice(0, 4);
-  const href = p.url?.startsWith("/api/") ? withToken(withManager(p.url, manager)) : undefined;
+  const safeHrefPath = p.url ? safeApiPath(p.url) : undefined;
+  const href = safeHrefPath ? withToken(withManager(safeHrefPath, manager)) : undefined;
   const size = fileSize(meta.size);
   const gone = meta.destroyed === true;
   const body = (
@@ -48,7 +52,8 @@ export function FilePart({ p }: { p: LarkPart }) {
 /** A voice message: play / pause, a few bars, how long; plays in the page. */
 export function VoicePart({ p }: { p: LarkPart }) {
   const manager = useItemManager();
-  const src = p.url?.startsWith("/api/") ? withToken(withManager(p.url, manager)) : undefined;
+  const safeAudioPath = p.url ? safeApiPath(p.url) : undefined;
+  const src = safeAudioPath ? withToken(withManager(safeAudioPath, manager)) : undefined;
   const ms = Number(p.metadata?.duration ?? 0);
   const audio = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -102,8 +107,10 @@ export function VoicePart({ p }: { p: LarkPart }) {
 export function VideoPart({ p }: { p: LarkPart }) {
   const manager = useItemManager();
   const meta = p.metadata ?? {};
-  const src = p.url?.startsWith("/api/") ? withToken(withManager(p.url, manager)) : undefined;
-  const poster = typeof meta.posterUrl === "string" && meta.posterUrl.startsWith("/api/") ? withToken(withManager(meta.posterUrl, manager)) : undefined;
+  const safeVideoPath = p.url ? safeApiPath(p.url) : undefined;
+  const src = safeVideoPath ? withToken(withManager(safeVideoPath, manager)) : undefined;
+  const safePosterPath = typeof meta.posterUrl === "string" ? safeApiPath(meta.posterUrl) : undefined;
+  const poster = safePosterPath ? withToken(withManager(safePosterPath, manager)) : undefined;
   const [playing, setPlaying] = useState(false);
   const w = Number(meta.posterWidth) || 16;
   const h = Number(meta.posterHeight) || 9;
@@ -166,6 +173,23 @@ function CardButtonIcon({ icon }: { icon: NonNullable<CardButton["icon"]> }) {
   return <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current opacity-60" />;
 }
 
+function safeCardURL(url?: string): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return null;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return null;
+  }
+  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.hostname && !parsed.username && !parsed.password ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A card's buttons under it: a link opens in a tab, a callback is pressed as the user, then the message is read again
  * 1.2 s later with the spinner still on (iOS LarkCardButton). `onDone` gets the pressed message's id. */
 export function CardButtons({ buttons, messageID, account, onDone }: { buttons: CardButton[]; messageID?: string; account?: number; onDone?: (messageID: string) => void | Promise<void> }) {
@@ -182,7 +206,8 @@ export function CardButtons({ buttons, messageID, account, onDone }: { buttons: 
   if (!buttons.length) return null;
   const press = async (b: CardButton, i: number) => {
     if (b.url) {
-      window.open(b.url, "_blank", "noopener,noreferrer");
+      const href = safeCardURL(b.url);
+      if (href) window.open(href, "_blank", "noopener,noreferrer");
       return;
     }
     if (!b.action || !messageID) return;
@@ -202,7 +227,7 @@ export function CardButtons({ buttons, messageID, account, onDone }: { buttons: 
   return (
     <div className="mt-2.5 flex flex-wrap gap-1.5">
       {buttons.map((b, i) => {
-        const usable = !b.disabled && (Boolean(b.url) || (Boolean(b.action) && Boolean(messageID)));
+        const usable = !b.disabled && (b.url ? Boolean(safeCardURL(b.url)) : Boolean(b.action) && Boolean(messageID));
         const name = b.label || b.tooltip || t("inbox-larkthread.card_button");
         return (
           <button
@@ -287,7 +312,8 @@ function useCatalog(): EmojiCatalog | null {
 export function EmojiImage({ name, size, catalog }: { name: string; size: number; catalog: EmojiCatalog | null }) {
   const manager = useItemManager();
   const e = catalog?.emojis[name.toLowerCase()];
-  const src = e?.url?.startsWith("/api/") ? withToken(withManager(e.url, manager)) : e?.url && /^https:/i.test(e.url) ? e.url : undefined;
+  const safeEmojiPath = e?.url ? safeApiPath(e.url) : undefined;
+  const src = safeEmojiPath ? withToken(withManager(safeEmojiPath, manager)) : safeWebURL(e?.url, true);
   if (src) return <img src={src} alt={e?.label || name} width={size} height={size} className="shrink-0 object-contain" style={{ width: size, height: size }} />;
   // The catalogue is still loading (its fetch only starts once reactions draw): reserve a neutral dot instead of
   // flashing the raw "[key]" text, which made the reaction row jump when the picture replaced it.
@@ -296,7 +322,7 @@ export function EmojiImage({ name, size, catalog }: { name: string; size: number
 }
 
 /** The reactions under a message: emoji and count, mine tinted; a click puts mine on or takes it off. */
-export function Reactions({ reactions, onToggle }: { reactions: LarkReaction[]; onToggle?: (key: string) => void }) {
+export function Reactions({ reactions, onToggle, readOnly = false }: { reactions: LarkReaction[]; onToggle?: (key: string) => void; readOnly?: boolean }) {
   const catalog = useCatalog();
   if (!reactions.length) return null;
   return (
@@ -304,21 +330,25 @@ export function Reactions({ reactions, onToggle }: { reactions: LarkReaction[]; 
       {reactions.map((r) => {
         const who = (r.users ?? []).join(t("inbox-larkthread.name_separator"));
         const label = catalog?.emojis[r.key.toLowerCase()]?.label || r.key;
-        return (
+        const title = who ? t("inbox-larkthread.reacted_by", { names: who, emoji: label }) : label;
+        const className = cx(
+          "flex h-6 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium whitespace-nowrap tabular-nums transition-colors",
+          r.mine ? "bg-accent-tint text-accent-ink shadow-[inset_0_0_0_1px_var(--color-accent)]" : "bg-field text-ink-2 enabled:hover:bg-hover",
+        );
+        const content = <><EmojiImage name={r.key} size={16} catalog={catalog} />{r.count}</>;
+        return readOnly ? (
+          <span key={r.key} title={title} className={className}>{content}</span>
+        ) : (
           <button
             key={r.key}
             type="button"
             disabled={!onToggle}
             onClick={() => onToggle?.(r.key)}
-            title={who ? t("inbox-larkthread.reacted_by", { names: who, emoji: label }) : label}
+            title={title}
             aria-pressed={Boolean(r.mine)}
-            className={cx(
-              "flex h-6 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium whitespace-nowrap tabular-nums transition-colors",
-              r.mine ? "bg-accent-tint text-accent-ink shadow-[inset_0_0_0_1px_var(--color-accent)]" : "bg-field text-ink-2 enabled:hover:bg-hover",
-            )}
+            className={className}
           >
-            <EmojiImage name={r.key} size={16} catalog={catalog} />
-            {r.count}
+            {content}
           </button>
         );
       })}
@@ -399,7 +429,7 @@ export function ProfileDialog({
   onClose,
   onChat,
 }: {
-  who: { id: string; name: string; avatar?: string; bot?: boolean };
+  who: LarkProfileRef;
   feed?: string;
   account?: number;
   onClose: () => void;
@@ -445,7 +475,7 @@ export function ProfileDialog({
       ) : undefined}
     >
       <div className="flex items-center gap-3 pt-2">
-        <Monogram name={name} size={56} src={p?.avatarUrl || who.avatar} />
+        <LarkAvatar name={name} size={56} avatarURL={p?.avatar_url || who.avatar_url} avatar={p?.avatarUrl || who.avatar} account={account} />
         <div className="min-w-0 flex-1">
           <p className="flex items-center gap-1.5">
             <span className="truncate text-[16px] font-semibold text-ink">{name}</span>

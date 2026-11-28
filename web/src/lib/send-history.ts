@@ -1,3 +1,4 @@
+import { conversationKeyDeleted } from "./conversation-deleted";
 // What was sent from the composer, per conversation, for ↑/↓ recall and the Ctrl+R search (issue #2434; Moshi keeps the
 // last 100 sent messages of each session and searches the ones of all of them). Stored on this browser only, never
 // sent anywhere. Everything here is pure or takes the storage as an argument, so it is tested without a DOM.
@@ -40,6 +41,7 @@ function parse(raw: string | null): SentEntry[] {
 
 /** The conversation's sent messages, oldest first. */
 export function readHistory(draftKey: string, store: HistoryStore | undefined = browserStore()): SentEntry[] {
+  if (conversationKeyDeleted(draftKey)) return [];
   try {
     return store ? parse(store.getItem(storageKey(draftKey))) : [];
   } catch {
@@ -56,6 +58,7 @@ export function withSent(list: SentEntry[], text: string, at: number): SentEntry
 
 /** Remembers a message that went out. A full or blocked storage loses the entry, never the send. */
 export function recordSent(draftKey: string, text: string, store: HistoryStore | undefined = browserStore(), at: number = Date.now()): SentEntry[] {
+  if (conversationKeyDeleted(draftKey)) return [];
   const next = withSent(readHistory(draftKey, store), text, at);
   try {
     store?.setItem(storageKey(draftKey), JSON.stringify(next));
@@ -112,4 +115,9 @@ export const plainCtrl = (e: KeyLike, k: string) => e.ctrlKey && !e.metaKey && !
 /** Ctrl+R in the box opens the search (⌃ on a Mac too: ⌘R stays the browser's reload). */
 export function opensSearch(e: KeyLike): boolean {
   return !composing(e) && plainCtrl(e, "r");
+}
+
+// Sent-text recall is also a local copy of the deleted conversation, including selected skill references.
+export function forgetSentHistory(draftKey: string) {
+  try { localStorage.removeItem(storageKey(draftKey)); } catch { /* Storage may be unavailable. */ }
 }

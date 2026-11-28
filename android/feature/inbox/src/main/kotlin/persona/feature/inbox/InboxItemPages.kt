@@ -12,6 +12,7 @@ import persona.core.designsystem.JNotice
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
 import persona.core.navigation.InboxItemUiRoute
+import persona.core.inbox.*
 
 // An inbox item's page drawn by an extension (docs/extensions/extensions.md "UI slots" `inbox_item`, #1683): an extension's connector (the
 // Feishu extension's `lark`) may draw items it brings in. Chats keep the native conversation and reply composer by default.
@@ -72,13 +73,14 @@ data class InboxItemPages(
 val LocalInboxItemPages = compositionLocalOf { InboxItemPages() }
 
 /**
- * The item's own page: a Moments post, its Feishu chat at the item's first message, the mail, a hub connector's thread
- * (any connector, #2726), or else its detail page (a Feishu document's notice, and any item of a shape this app does not
+ * The item's own page: a Moments post, its Feishu chat at the item's first message, the mail, the assistant's conversation card,
+ * another hub connector's thread (any connector, #2726), or else its detail page (a Feishu document's notice, and any item of a shape this app does not
  * know: the mail page could only fail for it, #2323).
  */
 fun inboxItemPage(record: InboxRecord): NavKey = record.moment?.let { LarkMomentRoute(it.postId, record.item.id) }
     ?: record.feedId?.let { LarkRoute(it, record.item.id, record.startPosition) }
     ?: MailRoute(record.item.id).takeIf { record.isMail && record.doc == null }
+    ?: InboxItemDetailRoute(record.item.id).takeIf { record.isAssistantRow }
     ?: ConnectorThreadRoute(record.item.id).takeIf { record.isConnector && record.connector?.thread?.isNotBlank() == true && record.doc == null }
     ?: InboxItemDetailRoute(record.item.id)
 

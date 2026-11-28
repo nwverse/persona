@@ -24,6 +24,18 @@ import org.junit.Test
 class ChatDeliveryStateTest {
     private val context get() = ApplicationProvider.getApplicationContext<Context>()
     private val res get() = context.resources
+    @Test fun chatsThatCannotSendOfferCleanupButNeverRetryOrEdit() {
+        for (state in DeliveryState.entries) {
+            for (action in listOf(DeliveryAction.Edit, DeliveryAction.Retry, DeliveryAction.RetryNow))
+                assertFalse("$state $action", state.allows(action, canSend = false))
+        }
+        assertTrue(DeliveryState.Refused.allows(DeliveryAction.Delete, canSend = false))
+        assertTrue(DeliveryState.Queued.allows(DeliveryAction.Cancel, canSend = false))
+        assertTrue(DeliveryState.NeedsConfirmation.allows(DeliveryAction.ConfirmDelivered, canSend = false))
+        assertEquals(listOf(DeliveryAction.Delete), outboxMarkActions(OutboxMark.Failed, canSend = false))
+        assertEquals(listOf(DeliveryAction.Cancel), outboxMarkActions(OutboxMark.Waiting, canSend = false))
+    }
+
     @Test fun deliveryActionsUseOriginalIdsAndPreserveDraftsAcrossRaces() = runTest {
         val sender = FakeSender()
         val actions = ChatDeliveryActions(sender)
@@ -193,6 +205,44 @@ class ChatDeliveryStateTest {
             assertEquals(code, res.getString(expected), text)
             assertFalse(code, text.contains(code))
         }
+    }
+
+    /**
+     * A code the app has no words for says the hub's own sentence when the hub gave one (an agy open in a terminal,
+     * #16531), as iOS and the web do; the app's words still win for the codes it has, and without a sentence or a code
+     * the generic refusal stays.
+     */
+    @Test fun aRefusalWithoutTheAppsWordsSaysTheHubsSentence() {
+        val words = "This Antigravity conversation is open in agy in a terminal on that computer. Nothing was sent."
+        assertEquals(words, refusalText("agy_in_terminal", words).resolve(res))
+        val agy = OutboxMessage("agy", SessionKey("machine", "agy-session"), "to agy", DeliveryState.Refused,
+            error = "agy_in_terminal", reason = words)
+        assertEquals(words, refusalText(agy.error, agy.reason).resolve(res))
+        val cases = listOf(
+            Triple("agy_in_terminal", null, R.string.chat_delivery_refused),
+            Triple("agy_in_terminal", " ", R.string.chat_delivery_refused),
+            Triple(null, words, R.string.chat_delivery_refused),
+            Triple("input_draft", words, R.string.chat_delivery_input_draft),
+            Triple("node_unreachable", words, persona.core.designsystem.R.string.designsystem_feedback_computer_offline),
+        )
+        for ((code, hubWords, expected) in cases) {
+            assertEquals("$code $hubWords", res.getString(expected), refusalText(code, hubWords).resolve(res))
+        }
+    }
+
+    @Test fun staleComposerDeliveryNeverMasksAuthoritativeRefusedOrRejectedState() {
+        for (authoritative in listOf(DeliveryState.Refused, DeliveryState.Rejected)) {
+            for (stale in listOf(null, DeliveryState.Unknown, DeliveryState.WaitingForNetwork,
+                DeliveryState.Queued, DeliveryState.Verifying, DeliveryState.NeedsConfirmation,
+                DeliveryState.Refused, DeliveryState.Rejected)) {
+                assertEquals("$authoritative with $stale", authoritative, effectiveOutboxState(authoritative, stale))
+            }
+            for (advancing in listOf(DeliveryState.Sending, DeliveryState.Sent, DeliveryState.Held)) {
+                assertEquals("$authoritative with $advancing", advancing, effectiveOutboxState(authoritative, advancing))
+            }
+        }
+        assertEquals(DeliveryState.NeedsConfirmation, effectiveOutboxState(DeliveryState.NeedsConfirmation, DeliveryState.Sending))
+        assertEquals(DeliveryState.WaitingForNetwork, effectiveOutboxState(DeliveryState.WaitingForNetwork, DeliveryState.Unknown))
     }
 
     private class FakeSender : MessageSender {

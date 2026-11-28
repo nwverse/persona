@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -45,6 +47,40 @@ func (s *Service) retireTodoWork(keys ...[2]string) {
 		s.publishSoon()
 		s.bindRetiredTurn(k, now)
 	}
+}
+
+// retireDetachedRetry takes down a model retry or a legacy retry decision. The caller holds the todo write lock,
+// so the last open link cannot be replaced between the ownership check and retirement.
+func (s *Service) retireDetachedRetry(k [2]string, now time.Time) (*db.SessionWork, string) {
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	s.work.init()
+	retired := db.SessionWork{MachineID: k[0], SessionID: k[1]}
+	var hiddenCard string
+	if current := s.work.entries[k]; current != nil {
+		retired = *current
+		switch {
+		case current.Work.On == proto.WaitTransient,
+			current.Work.On == proto.WaitUser && current.Retries > 0 && current.Work.ResetsAt == nil:
+			if _, out := s.work.cards[current.InteractionID]; !out {
+				hiddenCard = current.InteractionID // the snapshot ends visible cards; end a still-hidden card in its history
+			}
+			delete(s.work.cards, current.InteractionID)
+			delete(s.work.gone, current.InteractionID)
+			retired.Work = proto.WorkState{TurnAt: current.TurnAt}
+			retired.WakeAt, retired.InteractionID, retired.Retries = nil, "", 0
+		case current.WakeAt != nil || current.InteractionID != "" || current.Work.RetiredAt != nil:
+			return nil, ""
+		}
+	}
+	if s.work.triaging[k] {
+		s.work.generation[k]++
+	}
+	retired.Work.RetiredAt, retired.Work.RetiredTurnAt = &now, nil
+	retired.UpdatedAt = now
+	saved := retired
+	s.work.entries[k] = &saved
+	return &retired, hiddenCard
 }
 
 // bindRetiredTurn attaches the node's own stopped-turn timestamp to a durable
@@ -88,11 +124,11 @@ func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, 
 		s.work.generation[k]++
 	}
 	e, ok := s.work.entries[k]
-	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil {
+	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil || e.Work.RetiredAt != nil && !newTurn {
 		s.work.mu.Unlock()
 		return
 	}
-	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a later turn can work on a reopened task
+	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a confirmed new turn can work again
 	by := "user"
 	if now.Sub(s.work.sent[k]) < workSentWindow {
 		by = "hub"
@@ -222,7 +258,7 @@ func (s *Service) workTurnEnded(ctx context.Context, machine, sid string) {
 	}
 	s.wakeWaitersOn(machine, sid)
 	// On a timer: a goroutine asleep through the window would hold a stack per pending turn end (#2472).
-	time.AfterFunc(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
+	s.afterTurnCompletion(settleOf(s.triageCfg(ctx)), func() { s.workTurnSettled(ctx, machine, sid) })
 }
 
 // workTurnSettled checks the turn after the settle window.
@@ -237,7 +273,8 @@ func (s *Service) workTurnSettled(ctx context.Context, machine, sid string) {
 
 // triageTurn works out where c stands after its turn and acts on it. Once per turn.
 func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c proto.Session) {
-	if c.Assistant || c.Status == proto.StatusOffline || c.Status == proto.StatusWorking || c.Starting {
+	quotaWait := s.protectedQuotaWait(ctx, machine, c)
+	if c.HiddenByDirectory() || c.Assistant && !turnErrorTransient(c) && !quotaWait || c.Status == proto.StatusOffline || c.Status == proto.StatusWorking || c.Starting {
 		return
 	}
 	if s.isReviewer(machine, c.SessionID) {
@@ -250,17 +287,25 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.work.mu.Lock()
 	s.work.init()
 	prev, had := s.work.entries[k]
-	if had && prev.Work.RetiredAt != nil && (prev.Work.RetiredTurnAt == nil || sameTurn(c, *prev.Work.RetiredTurnAt) || !c.UpdatedAt.After(*prev.Work.RetiredTurnAt)) {
+	if had && workRetiredForTurn(prev.Work, c.UpdatedAt) {
 		s.work.mu.Unlock()
-		return // the todo ended before this turn settled, or its identity is unknown
+		return // this turn was retired, or the retired turn's identity is unknown
 	}
 	if s.work.triaging[k] {
 		s.work.mu.Unlock()
 		return
 	}
-	s.work.tried[k] = triedTurn{c.UpdatedAt, time.Now()}
+	tried := triedTurn{turn: c.UpdatedAt, at: time.Now()}
+	if was, ok := s.work.tried[k]; ok && sameTurn(c, was.turn) {
+		tried.read = was.read // the turn as an attempt before read it: not read again (triageRead)
+	}
+	s.work.tried[k] = tried
 	if had && sameTurn(c, prev.TurnAt) && (prev.Work.Phase != "" || prev.Work.By != "") {
+		retired, recovered := retiredRetry(c, *prev)
 		s.work.mu.Unlock()
+		if recovered {
+			s.putWork(ctx, retired)
+		}
 		return
 	}
 	s.work.triaging[k] = true
@@ -274,6 +319,12 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.work.mu.Lock()
 		delete(s.work.triaging, k)
 		delete(s.work.generation, k)
+		// A turn with its work state is not tried again: what was read of it goes (kept for the retries, triageRead).
+		if e, ok := s.work.entries[k]; ok && sameTurn(c, e.TurnAt) && s.work.tried[k].read != nil {
+			t := s.work.tried[k]
+			t.read = nil
+			s.work.tried[k] = t
+		}
 		s.work.mu.Unlock()
 	}()
 
@@ -283,7 +334,7 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if skip {
 		return // the agent asks itself (or its terminal does): the list shows that
 	}
-	if !s.workOn(ctx) && (w == nil || w.On != proto.WaitTransient) {
+	if !s.workOn(ctx) && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
 		// The triage is off and only transient errors are continued (transient_retry): no model call, nothing else
 		// decided. A turn that ended otherwise ends the run of transient errors: the next one counts from 1 again.
 		if had && last.Retries > 0 {
@@ -291,6 +342,29 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 			s.putWork(ctx, last)
 		}
 		return
+	}
+	if c.Assistant && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
+		return // Assistant participates only in mechanical model recovery and quota waits.
+	}
+	personWait := false // its closeout says it stopped on a person, background work or not
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return
+	}
+	task, _ := s.openTodoOfAgent(machine, c.SessionID)
+	runtimeWork := false
+	if task.hasTaskRuntime() && (w == nil || backgroundRule(c) && task.WaitState != nil) {
+		w, by, runtimeWork = taskRuntimeWork(task, s.lang(ctx)), "rule", true
+		personWait = w.Phase == proto.WorkBlocked
+	} else if w != nil && backgroundRule(c) {
+		// A closeout that names a person takes precedence over background work and /loop (#14899). Read it with
+		// triage enabled. triageTurnModel reuses the read so the task can settle on the reported wait.
+		_, reply := s.triageRead(ctx, machine, c)
+		if reply == "" {
+			reply = turnReplyText(c.LastText, false) // as triageTurnModel reads it
+		}
+		if co, _, ok := closeout.Parse(reply); ok && closeoutWaitsOnPerson(co) {
+			w, by, personWait = nil, "", true
+		}
 	}
 	if w == nil {
 		mctx, cancel := context.WithTimeout(ctx, 90*time.Second)
@@ -320,21 +394,31 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		s.workEvent(machine, c.SessionID, "failed", map[string]any{"error": "todo state unavailable"})
 		return // leave the turn retryable when its task state is unknown
 	}
-	if !closed {
+	if !closed && !runtimeWork {
 		s.actOn(ctx, v, machine, c, &e)
 	}
+	if runtimeWork {
+		s.workWould(k, "")
+	}
+	// Validate the stored conclusion even when no action was possible, e.g.
+	// when the only source for a Codex App thread was read-only history.
+	clearUnsupportedUserWait(&e.Work, s.lang(ctx))
 	// The turn after a status question is its answer (agents_closeout_ask.go): never asked again, whatever it says.
 	answersAsk := had && last.Work.CloseoutAsk == closeoutAskSent && !sameTurn(c, last.TurnAt)
 	switch {
 	case answersAsk && continues(e.Work):
 		// Cut off before it answered: the turn that goes on from here is the answer.
 		e.Work.CloseoutAsk, answersAsk = closeoutAskSent, false
-	case !answersAsk && !closed:
+	case !answersAsk && !closed && !task.hasTaskRuntime():
 		s.planCloseoutAsk(ctx, machine, c, &e)
 	}
+	if runtimeWork && !closed && c.ReadOnlyReason == "" && s.triageSwitches(ctx).Wake && e.Wakes < maxWakes(s.triageCfg(ctx)) {
+		now := time.Now()
+		startRuntimeCIWatch(task, &e, now, now.Add(wakeAfter(0, e.Wakes)).UTC())
+	}
 	if e.WakeAt != nil && e.Work.On == proto.WaitExternal && e.Work.ResetsAt == nil {
-		if ciWaitIntent(&e.Work) {
-			ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+		if !task.hasTaskRuntime() && ciWaitIntent(&e.Work) {
+			ask, reply, _ := s.lastTurnOf(ctx, machine, c.SessionID)
 			startCIWatch(c, &e, time.Now(), ask, reply)
 		}
 		if e.Work.CI != nil {
@@ -363,12 +447,37 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	} else {
 		s.putWork(ctx, e)
 	}
+	if personWait && backgroundRunning(c) {
+		// Its turn end was put off for the background work (taskAgentSettled): settle it now that its state says why
+		// it stopped, so its task gets its receipt, judgment and supervision signal.
+		go s.taskTurnSettled(context.WithoutCancel(ctx), machine, c.SessionID)
+	}
+	if e.Work.Phase == proto.WorkDone {
+		s.work.mu.Lock()
+		var items []proto.Item
+		if t, ok := s.work.tried[k]; ok && sameTurn(c, t.turn) && t.read != nil {
+			items = t.read.items
+		}
+		s.work.mu.Unlock()
+		s.goRecordWorkerDone(ctx, e, items)
+	}
 	s.logf("triage %s/%s: %s%s (%s %.1fs): %s", machine, short(c.SessionID), e.Work.Phase, orEmpty("/", e.Work.On), by,
 		time.Since(start).Seconds(), e.Work.Line)
 	s.workEvent(machine, c.SessionID, "triaged", map[string]any{"phase": e.Work.Phase, "on": e.Work.On, "by": by,
 		"line": e.Work.Line, "ms": time.Since(start).Milliseconds()})
 	if answersAsk {
 		s.workEvent(machine, c.SessionID, closeoutAskOutcome(e.Work), map[string]any{"phase": e.Work.Phase})
+	}
+}
+
+func unsupportedUserWait(w *proto.WorkState) bool {
+	return w.Phase == proto.WorkBlocked && w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil
+}
+
+func clearUnsupportedUserWait(w *proto.WorkState, lang i18n.Lang) {
+	if unsupportedUserWait(w) {
+		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts, Closeout: w.Closeout}
+		unfinished(w, lang)
 	}
 }
 
@@ -424,6 +533,15 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 		return nil, "", true
 	}
 	if e := c.TurnError; e != "" {
+		if proto.UnrecoverableTurnErrorCode(e) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser,
+				Line: workT(l, "conversation_invalid")}, "rule", false
+		}
+		if proto.SilentTurnKind(c.TurnErrorKind) {
+			// The hub's word on a task Agent's turn with no output (silent_turns.go): no model error to ask the user about
+			// and none to continue by itself. Its task's receipt has the "Continue"; a turn Persona's Stop ended stays stopped.
+			return nil, "", true
+		}
 		if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
 			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser,
 				Line: i18n.T(l, "assistant-readiness.model_fallback_unavailable_title"),
@@ -434,7 +552,11 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 			return limitWork(c, time.Now(), loc, l), "rule", false
 		}
 		if turnErrorTransient(c) {
-			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: workT(l, "transient_retrying"),
+			line := workT(l, "transient_retrying")
+			if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable {
+				line = clip(oneLine(workT(l, "upstream_unavailable_retrying", i18n.Args{"error": e})), 120)
+			}
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: line,
 				Wait: clip(oneLine(e), 200)}, "rule", false
 		}
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: clip(oneLine(workT(l, "model_error", i18n.Args{"error": e})), 60),
@@ -494,6 +616,12 @@ func limitClock(reset, now time.Time, loc *time.Location) string {
 	return r.Format("01-02 15:04")
 }
 
+// backgroundRule: triageRules' state for c, when it gave one, is its background work's or its /loop's: no turn error
+// came before those (triageRules).
+func backgroundRule(c proto.Session) bool {
+	return c.TurnError == "" && (runningInBackground(c) > 0 || c.Loop != nil)
+}
+
 func runningInBackground(c proto.Session) int {
 	n := len(c.Background)
 	for _, a := range c.Subagents {
@@ -507,13 +635,17 @@ func runningInBackground(c proto.Session) int {
 // turnErrorTransient: c's turn error is worth a "Continue". The agent's record says so when it gives a kind (Codex's error
 // kinds, #2185); otherwise the text does. A usage limit never is: a "Continue" before its reset is refused at once.
 func turnErrorTransient(c proto.Session) bool {
-	if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
+	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
+		return false
+	}
+	if code := sessionTurnErrorCode(c); code == proto.TurnErrorModelFallbackUnavailable || code == proto.TurnErrorImagesTooLarge {
 		return false
 	}
 	switch c.TurnErrorKind {
 	case proto.TurnErrorTransient:
-		return true
-	case proto.TurnErrorUser, proto.TurnErrorUsageLimit:
+		// Structured classification cannot override explicit permanent evidence.
+		return !modelretry.Permanent(c.TurnError)
+	case proto.TurnErrorUser, proto.TurnErrorUsageLimit, proto.TurnErrorNoOutput, proto.TurnErrorStopped:
 		return false
 	}
 	return transientError(c.TurnError)
@@ -523,6 +655,9 @@ func turnErrorTransient(c proto.Session) bool {
 // (sign-in, key, the model picked, a request the service refuses as it is, a context too long, an interrupt). What the
 // user must fix wins when the text says both.
 func transientError(text string) bool {
+	if proto.UnrecoverableTurnErrorCode(text) != "" {
+		return false
+	}
 	t := strings.ToLower(text)
 	if userErrorStatus.MatchString(t) {
 		return false
@@ -532,15 +667,7 @@ func transientError(text string) bool {
 			return false
 		}
 	}
-	if transientStatus.MatchString(t) {
-		return true
-	}
-	for _, w := range transientWords {
-		if strings.Contains(t, w) {
-			return true
-		}
-	}
-	return false
+	return modelretry.Temporary(text)
 }
 
 // rateLimitError: a transient error that is a rate limit (429): its "Continue" waits longer (retryBackoff).
@@ -554,21 +681,14 @@ var (
 	// userErrorStatus: HTTP statuses a "Continue" cannot fix: a bad request (400), sign-in or permission (401, 403),
 	// a request too large (413).
 	userErrorStatus = lazyre.New(`\b(400|401|403|413)\b`)
-	// transientStatus: HTTP statuses of a service failing for a moment: a timeout (408), a rate limit (429), a server
-	// error (500, 502, 503, 504) or overloaded (529).
-	transientStatus = lazyre.New(`\b(408|429|500|502|503|504|529)\b`)
 	rateLimitStatus = lazyre.New(`\b429\b`)
-	// userErrorWords: the auth words shared with the node's failed-turn check (assistantwire.AuthErrorWords, #4669),
-	// then a request the service refuses as it is, a context too long, an interrupt.
-	userErrorWords = append(slices.Clone(assistantwire.AuthErrorWords),
+	// userErrorWords: the auth and image-limit words shared with the node's failed-turn check
+	// (assistantwire.AuthErrorWords, #4669; assistantwire.ImageLimitErrorWords, #13045), then a request the service
+	// refuses as it is, a context too long, an interrupt.
+	userErrorWords = append(append(slices.Clone(assistantwire.AuthErrorWords), assistantwire.ImageLimitErrorWords...),
 		"invalid_request_error", "invalid request", "prompt is too long", "context length", "context window", "context_length_exceeded",
-		"maximum context", "too many tokens", "request too large", "request_too_large",
+		"maximum context", "too many tokens",
 		"interrupted by user", "request was aborted", "aborted by user", "user aborted")
-	transientWords = []string{"overloaded", "rate limit", "rate_limit", "too many requests",
-		"connection", "timed out", "timeout", "socket hang up", "econnreset", "econnrefused", "fetch failed", "no eligible upstream",
-		"internal server error", "service unavailable", "bad gateway", "gateway timeout", "network", "api_error", "upstream",
-		"can't reach the api server", "temporarily unavailable", "no response from api", "unable to connect to api",
-		"enotfound", "eai_again", "failedtoopensocket"}
 )
 
 // riskyWords mark a next step the manager must not set off itself (docs/assistant/agent-work.md "Safety boundary"): it is only ever a

@@ -22,9 +22,11 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -48,6 +50,12 @@ import (
 // extLink is what the hub keeps of the manager's extensions.
 type extLink struct {
 	report atomic.Pointer[extwire.Report] // the assistant's
+	// savePending is the latest assistant report not written yet. One save worker runs at a time, with at most one
+	// trailing report coalesced behind its write; the manager bus loop only replaces savePending.
+	saveMu          sync.Mutex
+	savePending     *extwire.Report
+	saveRunning     bool
+	saveBeforeBegin func() // tests: runs between popping savePending and calling quiesce.beginOrDefer
 	// reports are the other managers' (manager_state.go).
 	reportsMu sync.Mutex
 	reports   map[string]*extwire.Report
@@ -55,6 +63,8 @@ type extLink struct {
 	kept      map[string]keptAnswer // GET path?query → its last answer
 	// calls are the requests being relayed, by caller, so a revoked device's end (extension_calls.go).
 	calls relayedCalls
+	// relays are the relay streams kept open to each manager between requests (extensions_relays.go).
+	relays relayPools
 }
 
 type keptAnswer struct {
@@ -88,11 +98,12 @@ func init() {
 		if old == nil || !slices.Equal(before.Features, after.Features) || !machineExtrasEqual(before.Machines, after.Machines) {
 			h.broadcastMachines()
 		}
-		h.looksReported(before.Looks, after.Looks)               // the extensions' looks (looks.go)
+		h.looksReported(before.Looks, after.Looks) // the extensions' looks (looks.go)
+		if r.PushGradingDeclared {
+			h.reconcilePushGradingLayer(from, r.PushGradingExtensions)
+		}
 		if h.store != nil && from == assistantwire.AssistantID { // kept across a restart: the assistant's
-			if err := h.store.PutSetting(context.Background(), extReportKey, r); err != nil {
-				h.logf("extensions: keep the report: %v", err)
-			}
+			h.queueExtReportSave(r)
 		}
 	})
 }
@@ -108,6 +119,80 @@ func init() {
 
 // extReportKey keeps the manager's last report across a hub restart (the hub's own key).
 const extReportKey = "hub.extensions_report"
+
+// extReportStoreTimeout bounds one report write; the settings pool has no statement_timeout of its own.
+const extReportStoreTimeout = deviceStoreTimeout
+
+// queueExtReportSave persists only the assistant's latest report, after its in-memory changes and broadcasts were
+// made in the bus loop. While a write is out, every report replaces the one pending behind it: N reports make at most
+// that write and one trailing write. A failure is logged and dropped, not retried in a loop; the next report tries.
+func (h *Hub) queueExtReportSave(r extwire.Report) {
+	h.ext.saveMu.Lock()
+	h.ext.savePending = &r
+	if h.ext.saveRunning {
+		h.ext.saveMu.Unlock()
+		return
+	}
+	h.ext.saveRunning = true
+	h.nodeWorkers.Add(1)
+	h.ext.saveMu.Unlock()
+	go h.saveExtReports()
+}
+
+func (h *Hub) saveExtReports() {
+	defer h.nodeWorkers.Done()
+	for {
+		h.ext.saveMu.Lock()
+		r := h.ext.savePending
+		h.ext.savePending = nil
+		h.ext.saveMu.Unlock()
+		if r != nil {
+			if hook := h.ext.saveBeforeBegin; hook != nil {
+				hook()
+			}
+			// A snapshot refuses new writes; publish the deferred report and
+			// clear saveRunning atomically with quiesce.mu so resume cannot
+			// observe saveRunning==true and miss it (quiesce.go).
+			if !h.quiesce.beginOrDefer(func() {
+				h.ext.saveMu.Lock()
+				if h.ext.savePending == nil {
+					h.ext.savePending = r
+				}
+				h.ext.saveRunning = false
+				h.ext.saveMu.Unlock()
+			}) {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), extReportStoreTimeout)
+			err := h.store.PutSetting(ctx, extReportKey, *r)
+			cancel()
+			h.quiesce.end()
+			if err != nil {
+				h.logf("extensions: keep the report: %v", err)
+			}
+		}
+		h.ext.saveMu.Lock()
+		if h.ext.savePending == nil {
+			h.ext.saveRunning = false
+			h.ext.saveMu.Unlock()
+			return
+		}
+		h.ext.saveMu.Unlock()
+	}
+}
+
+// resumeExtReportSave writes a report left pending by a snapshot's pause.
+func (h *Hub) resumeExtReportSave() {
+	h.ext.saveMu.Lock()
+	if h.ext.savePending == nil || h.ext.saveRunning {
+		h.ext.saveMu.Unlock()
+		return
+	}
+	h.ext.saveRunning = true
+	h.nodeWorkers.Add(1)
+	h.ext.saveMu.Unlock()
+	go h.saveExtReports()
+}
 
 // loadExtReport is the report kept before the hub restarted, until the manager reports again.
 func (h *Hub) loadExtReport(ctx context.Context) {
@@ -138,31 +223,120 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
 	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
-		featureAgentsPageCounts, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait)
+		featureSessionsSearch, featureAgentsPageCounts, featureAgentsProviderOR, featureSessionsHierarchy, featureSessionsCrossMachineHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait, "starred_messages")
 	out = append(out, h.agentSessionArchiveFeatures()...)
+	out = append(out, h.agentAutonameFeatures()...)
+	out = append(out, h.sessionsSideFoldFeatures()...)
 	out = append(out, h.meetingAttendanceFeatures()...)
 	out = append(out, h.meetingConversationFeatures()...)
 	out = append(out, h.meetingPhotosFeatures()...)
 	out = append(out, h.meetingLiveViewFeatures()...)
 	out = append(out, h.meetingHighlightsFeatures()...)
+	out = append(out, h.meetingNotesFeatures()...)
 	out = append(out, h.meetingEchoFeatures()...)
 	out = append(out, h.meetingTranscriptionFeatures()...)
+	out = append(out, h.meetingSpeakersFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	out = append(out, h.assistantPagesFeatures()...)
+	for _, f := range h.defaultManagerModuleFeatures() {
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	out = h.reportedModules(out)
+	if h.defaultManagerNames(assistantwire.CapabilityHealthTell) {
+		out = append(out, assistantwire.CapabilityHealthTell)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthStrength) {
+		out = append(out, assistantwire.CapabilityHealthStrength)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthItems) {
+		out = append(out, assistantwire.CapabilityHealthItems)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthIntake) {
+		out = append(out, assistantwire.CapabilityHealthIntake)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityAssistantSegments) {
+		out = append(out, assistantwire.CapabilityAssistantSegments)
+	}
+	out = append(out, h.directionSessionsFeatures()...)
+	if h.defaultManagerNames(assistantwire.CapabilityTaskInput) {
+		out = append(out, assistantwire.CapabilityTaskInput)
+	}
+	out = append(out, h.remoteImagesFeatures()...)
 	out = append(out, h.assistantStartServiceTierFeatures()...)
+	out = append(out, h.todoViewFeatures()...)
+	out = append(out, h.todoRevisionFeatures()...)
+	out = append(out, h.todoAsksFeatures()...)
+	out = append(out, h.todoTimelineFeatures()...)
+	out = append(out, h.todoImageFeatures()...)
 	// The assistant's card interfaces, always on (docs/assistant/assistant-views.md, #5509): assistant_views is declarative
 	// actions (expected_version), live cards and transcript cards; assistant_html_bridge is …/html-actions. Neither says
 	// a client may run HTML: that is each platform's own security sign-off, else fallback.
 	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
+		if f == "modules" || strings.HasPrefix(f, "module.") {
+			continue // only the default manager's hello and its approved providers (reportedModules) publish module presence
+		}
 		switch f {
-		case featureAgentSessionArchives, featureAgentSessionArchiveClose, featureMeetingAttendance, featureMeetingConversation,
-			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			featureAssistantSearch, featureAssistantStartServiceTier:
-			continue // only manager hello can promise fleet archives, meetings, all-day recordings, chat search and start speed
+		case assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentSessionIdleArchive, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
+			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureMeetingSpeakers, featureRecordingDay,
+			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
+			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, dashboards, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
 		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// defaultManagerModuleFeatures are the loaded built-in modules' flags from the default manager's hello. A manager
+// without the field, or one that is offline, announces none; extension reports cannot promise these module-only flags.
+func (h *Hub) defaultManagerModuleFeatures() []string {
+	id := h.defaultOwner(context.Background())
+	if h.busConnOf(id) == nil {
+		return nil
+	}
+	for _, manager := range h.busRoster() {
+		if manager.ID == id {
+			return slices.Clone(manager.Features)
+		}
+	}
+	return nil
+}
+
+// reportedModules is out with the flags of the modules approved installed extensions supply (#16254): from the
+// default manager's report (Report.Modules), only while that manager is connected and its hello carries the modules
+// marker, as for its built-in modules' flags (defaultManagerModuleFeatures). An installed provider decides its module's
+// flag: one that is on adds module.<id>, one that is off removes the built-in module's flag of that id. Only ids of the
+// host's list count (modapi.ExtensionModules); an older manager reports none, and out stays as it was.
+func (h *Hub) reportedModules(out []string) []string {
+	id := h.defaultOwner(context.Background())
+	if h.busConnOf(id) == nil {
+		return out
+	}
+	marker := false
+	for _, manager := range h.busRoster() {
+		if manager.ID == id {
+			marker = slices.Contains(manager.Features, "modules") // the marker (moduleswitch.Marker, not linked into the hub)
+		}
+	}
+	r := h.extReportOf(id)
+	if !marker || r == nil {
+		return out
+	}
+	for _, m := range r.Modules {
+		if !slices.ContainsFunc(modapi.ExtensionModules(), func(x modapi.ExtensionModule) bool { return string(x.ID) == string(m.ID) }) {
+			continue
+		}
+		f := "module." + string(m.ID)
+		switch {
+		case m.On && !slices.Contains(out, f):
+			out = append(out, f)
+		case !m.On:
+			out = slices.DeleteFunc(out, func(g string) bool { return g == f })
 		}
 	}
 	return out
@@ -192,6 +366,20 @@ func decodeExtra[T any](raw json.RawMessage) *T {
 // screenAllowed: the app may open m's screen (cua or ego is on for it).
 func (h *Hub) screenAllowed(m *Machine) bool { return h.extReport().Machines[m.cfg.ID].ScreenPort }
 
+// managerBusCaller binds the manager ID while keeping the hub's bus call policy.
+type managerBusCaller struct {
+	id   string
+	call func(context.Context, string, string, any, any) error
+}
+
+func (c managerBusCaller) Call(ctx context.Context, method string, params, out any) error {
+	return c.call(ctx, c.id, method, params, out)
+}
+
+func (h *Hub) managerCaller(id string) managerBusCaller {
+	return managerBusCaller{id: id, call: h.callBus}
+}
+
 // extCall asks the default manager what the hub's own features need of the extensions (extwire.Hub*).
 func (h *Hub) extCall(ctx context.Context, method string, params, out any) error {
 	return h.extCallTo(ctx, h.defaultOwner(ctx), method, params, out)
@@ -199,11 +387,19 @@ func (h *Hub) extCall(ctx context.Context, method string, params, out any) error
 
 // extCallTo is extCall of manager id's extensions.
 func (h *Hub) extCallTo(ctx context.Context, id, method string, params, out any) error {
+	return callExtensionManager(ctx, h.managerCaller(id), method, params, out)
+}
+
+func callExtensionManager(ctx context.Context, c buswire.Caller, method string, params, out any) error {
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	return h.callBus(ctx, id, extwire.MethodHubCall, extwire.HubCall{Method: method, Params: raw}, out)
+	reply, err := buswire.Call(ctx, c, extwire.HubCallMethod, extwire.HubCall{Method: method, Params: raw})
+	if err != nil || out == nil || len(reply) == 0 {
+		return err
+	}
+	return json.Unmarshal(reply, out)
 }
 
 // emitToExtensions tells manager owner's extensions something the hub saw about one of its sessions (agent.finished,
@@ -222,7 +418,8 @@ func (h *Hub) emitToExtensions(owner, event string, params any) {
 func (h *Hub) extensionRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range extwire.Routes {
 		relay := func(w http.ResponseWriter, r *http.Request) { h.relayToManager(w, r, false) }
-		if pattern == "/api/v1/agents/" { // messages to the personal Agents (terminal_controls.go)
+		if strings.HasPrefix(pattern, "/api/v1/agents/") || strings.Contains(pattern, " /api/v1/agents/") {
+			// Messages to the personal Agents (terminal_controls.go), on both broad and concrete relay patterns.
 			relay = h.withoutTerminalControls(relay)
 		}
 		api.HandleFunc(pattern, relay)
@@ -332,9 +529,10 @@ func (h *Hub) relayToManager(w http.ResponseWriter, r *http.Request, admin bool)
 	}
 }
 
-// relayTo passes r on to manager id over a relay stream and streams its answer back. Who asked goes with it in the
-// hub's headers (any the client sent are dropped); the hub's credentials stay with the hub. While the manager is
-// away: 503 assistant_offline, or the last answer of a kept GET.
+// relayTo passes r on to manager id over one of its relay streams (a warm one when there is one:
+// extensions_relays.go) and streams its answer back. Who asked goes with it in the hub's headers (any the client sent
+// are dropped); the hub's credentials stay with the hub. While the manager is away: 503 assistant_offline, or the
+// last answer of a kept GET.
 func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id string) {
 	guardedApps, guardedRevoke, ok := computerAppsPrecondition(w, r, id)
 	if !ok {
@@ -391,6 +589,8 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 	if changes {
 		h.inboxAnswers.changed(id)
 	}
+	pool := h.relayPool(id)
+	defer pool.settle()
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "manager"
@@ -430,9 +630,7 @@ func (h *Hub) relayTo(w http.ResponseWriter, r *http.Request, admin bool, id str
 			}
 			return nil
 		},
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return h.dialManager(ctx, id)
-		}, DisableKeepAlives: true, ResponseHeaderTimeout: 5 * time.Minute},
+		Transport:     pool,
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			if changes {
@@ -505,29 +703,41 @@ func (k *keptRecorder) Flush() { _ = http.NewResponseController(k.ResponseWriter
 
 func (k *keptRecorder) Unwrap() http.ResponseWriter { return k.ResponseWriter }
 
-// dialManager opens a relay stream manager id serves HTTP on (extwire.MethodAccept).
+// dialManager opens a relay stream manager id serves HTTP on (extwire.AcceptMethod).
 func (h *Hub) dialManager(ctx context.Context, id string) (net.Conn, error) {
 	if h.busConnOf(id) == nil {
 		return nil, errBusOffline
 	}
-	taken, err := h.handToManagerVia(ctx, id, extwire.MethodAccept, nil)
+	taken, err := h.handToManagerVia(ctx, relayFor{manager: id}, func(ctx context.Context, relayID string) error {
+		_, err := buswire.Call(ctx, h.managerCaller(id), extwire.AcceptMethod, extwire.Accept{ID: extwire.RelayID(relayID)})
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
 	cctx, cancel := context.WithCancel(context.Background())
 	nc := websocket.NetConn(cctx, taken.conn, websocket.MessageBinary)
-	return &relayConn{Conn: nc, done: func() {
+	rc := &relayConn{Conn: nc, ws: taken.conn, done: func() {
 		cancel()
 		close(taken.done)
-	}}, nil
+	}}
+	go h.pingRelay(cctx, taken.conn, rc)
+	return rc, nil
 }
 
 // relayConn ends its relay when it is closed.
 type relayConn struct {
 	net.Conn
+	ws   *websocket.Conn
 	once sync.Once
 	done func()
+	// uses counts the requests the transport gave it, idleAt is that count when it last went back to the pool idle
+	// (relayPool.RoundTrip): it waits there while they are equal.
+	uses, idleAt atomic.Uint64
 }
+
+// idle says whether c waits in its pool for a request.
+func (c *relayConn) idle() bool { return c.idleAt.Load() == c.uses.Load() }
 
 func (c *relayConn) Close() error {
 	err := c.Conn.Close()
@@ -592,28 +802,30 @@ func (h *Hub) authorizeExtension(ctx context.Context, tok string, r *http.Reques
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	// The token is one manager's extension's: each is asked, the default first, until one knows it.
-	var a extwire.Authorized
-	manager := ""
 	sure = true
 	asked := time.Now()
+	query := extwire.Authorize{Hash: hashToken(tok), Pattern: pattern, Method: method, Path: path}
 	for _, id := range h.listManagers(ctx) {
-		a = extwire.Authorized{}
-		err := h.callBus(ctx, id, extwire.MethodAuthorize, extwire.Authorize{Hash: hashToken(tok), Pattern: pattern,
-			Method: method, Path: path}, &a)
-		if err == nil && a.Extension != "" {
-			manager = id
-			break
+		c := h.busConnOf(id)
+		if c == nil { // the default manager, listed first, may be off the bus
+			continue
 		}
-		if err != nil && !errors.Is(err, errBusOffline) { // (the default manager, listed first, may be off the bus)
-			sure = false
+		a, err := buswire.Call(ctx, c, extwire.AuthorizeMethod, query)
+		if err != nil {
+			sure = sure && errors.Is(err, errBusOffline)
+			continue
 		}
+		if a.Extension == "" {
+			continue
+		}
+		p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
+			Manager: id, extHash: query.Hash, extAt: asked}
+		if a.OK {
+			p.extAuthConn, p.extOwner = c, a.Owner
+		}
+		return p, true, a.OK, a.Scope, true
 	}
-	if a.Extension == "" {
-		return principal{}, false, false, "", sure
-	}
-	p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
-		Manager: manager, extHash: hashToken(tok), extAt: asked}
-	return p, true, a.OK, a.Scope, true
+	return principal{}, false, false, "", sure
 }
 
 // tokenHash says whether s is a hash as hashToken makes one.
@@ -667,6 +879,7 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		Name          string                    `json:"name"`
 		Machine       string                    `json:"machine"`
 		Sender        string                    `json:"sender"`
+		Extension     string                    `json:"extension"`
 		Request       json.RawMessage           `json:"request"`
 		Hash          string                    `json:"hash"`
 	}
@@ -702,6 +915,10 @@ func (h *Hub) extAppCall(ctx context.Context, from string, p assistantwire.AppCa
 		}
 		h.dropRevokedToken(from, a.Hash)
 		out = map[string]any{}
+	case extwire.HubMachinesPairLink:
+		out, err = h.hubMachinesPairLink(ctx, from, a.Extension, a.Request)
+	case extwire.HubMachinesStatus:
+		out, err = h.hubMachinesStatus(from, a.Request)
 	default:
 		return nil, true, errors.New("hub: no method " + p.Method)
 	}

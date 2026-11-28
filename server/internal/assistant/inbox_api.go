@@ -36,6 +36,7 @@ func (s *Service) inboxRoutes() {
 	s.inboxMergeRoutes()
 	s.inboxTodoRoutes()
 	s.inboxSuggestionRoutes()
+	s.inboxRetryRoutes()
 	s.inboxHandoffRoutes()
 	s.inboxHistoryRoutes()
 	s.inboxTaskLinkRoutes()
@@ -47,10 +48,10 @@ func (s *Service) inboxRoutes() {
 			return
 		}
 		if q := r.URL.Query(); q.Has("since") { // only what changed since a list it had (inbox_delta.go)
-			s.writeInboxSince(w, inboxShape{all: q.Get("sources") == "all", lean: q.Get("chain") == "last"}, q.Get("since"))
+			s.writeInboxSince(r.Context(), w, inboxShape{all: q.Get("sources") == "all", lean: q.Get("chain") == "last"}, q.Get("since"))
 			return
 		}
-		s.writeInboxList(w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
+		s.writeInboxList(r.Context(), w, r.URL.Query().Get("sources") == "all") // from each item's kept bytes (inbox_list_memo.go)
 	})
 	s.handle("GET /api/v1/inbox/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -66,8 +67,11 @@ func (s *Service) inboxRoutes() {
 		}
 		var c InboxItem
 		if ok {
-			c = it.listed()
-			c.Context = it.Context
+			c = it.shown()
+			if it.Source == "larkx" {
+				cutoff := time.Now().Add(-inboxKeepDone)
+				b.larkDuplicates(cutoff, b.listedDoneCut(cutoff, true), true).link(&c)
+			}
 		}
 		b.mu.Unlock()
 		if !ok { // a done item of the history memory no longer holds (inbox_history.go)
@@ -82,10 +86,16 @@ func (s *Service) inboxRoutes() {
 			apierr.Write(w, http.StatusNotFound, errNoInboxItem)
 			return
 		}
+		// Its knowledge base chat (inbox_kb_chat.go), for the user's own apps.
+		var chat *inboxKBChat
+		if fullRole(r) {
+			chat = s.itemKBChat(r.Context(), &c)
+		}
 		apierr.WriteJSON(w, struct {
 			InboxItem
 			ReplyTarget *inboxMailTarget `json:"reply_target,omitempty"`
-		}{c, mailTarget(c)})
+			KBChat      *inboxKBChat     `json:"kb_chat,omitempty"`
+		}{c, mailTarget(c), chat})
 	})
 	s.handle("POST /api/v1/inbox/{id}/done", func(w http.ResponseWriter, r *http.Request) {
 		if !s.inboxUp(w, r) {
@@ -122,12 +132,18 @@ func (s *Service) inboxRoutes() {
 		switch {
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
+		case errors.Is(err, errReplyPolicyDenied):
+			apierr.Write(w, http.StatusForbidden, err)
+		case errors.Is(err, errSuggestionStale), errors.Is(err, errInboxItemDone):
+			apierr.Write(w, http.StatusConflict, err)
 		case modelUnconfigured(err):
 			// Nothing the hub can call is set up for drafting: a coded answer the apps can explain, not a bare 502
 			// (an internal error's text never reaches the screen).
 			apierr.WriteCode(w, http.StatusServiceUnavailable, assistantwire.CodeModelUnavailable, i18n.Err("assistant-inbox.draft_no_model"))
 		case errors.Is(err, errDraftWithheld): // the drafts kept repeating what an extension marked never to quote
 			apierr.WriteCode(w, http.StatusUnprocessableEntity, "draft_withheld", err)
+		case errors.Is(err, errReplyPolicyBlocked):
+			apierr.WriteCode(w, http.StatusUnprocessableEntity, assistantwire.CodeInboxReplyPolicyBlocked, err)
 		case err != nil:
 			apierr.Write(w, http.StatusBadGateway, err)
 		default:
@@ -144,6 +160,7 @@ func (s *Service) inboxRoutes() {
 			ClientID        string      `json:"client_id"`
 			ExpectedUID     *uint32     `json:"expected_uid"`
 			ExpectedVersion *string     `json:"expected_version"`
+			ExpectedSender  string      `json:"expected_sender_identity"`
 			Card            string      `json:"card"` // the message card it is sent from (sendFromCard)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Text) == "" && len(in.Changes) == 0 {
@@ -157,8 +174,16 @@ func (s *Service) inboxRoutes() {
 				return
 			}
 		}
+		ctx := r.Context()
+		if in.ExpectedSender != "" {
+			if !validMessageIdentity(in.ExpectedSender) {
+				apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-outbound.scope_changed"))
+				return
+			}
+			ctx = context.WithValue(ctx, inboxExpectedSenderKey{}, in.ExpectedSender)
+		}
 		send := func() (InboxItem, error) {
-			return s.replyInboxChecked(r.Context(), r.PathValue("id"), strings.TrimSpace(in.Text), in.ClientID, in.Card != "", in.ExpectedUID, in.ExpectedVersion, in.Changes...)
+			return s.replyInboxCheckedRole(ctx, r.PathValue("id"), strings.TrimSpace(in.Text), in.ClientID, in.Card != "", fullRole(r), in.ExpectedUID, in.ExpectedVersion, in.Changes...)
 		}
 		var it InboxItem
 		var err error
@@ -168,6 +193,8 @@ func (s *Service) inboxRoutes() {
 			it, err = send()
 		}
 		switch {
+		case errors.Is(err, errInboxSenderChanged):
+			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "outbound_sender_changed", "error": i18n.T(i18n.OfWriter(w), "assistant-outbound.scope_changed"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errMailReplyTargetChanged):
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "mail_reply_target_changed", "error": i18n.T(i18n.OfWriter(w), "assistant-inbox.mail_target_changed"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errDraftDismissed):
@@ -176,11 +203,10 @@ func (s *Service) inboxRoutes() {
 			apierr.WriteBody(w, http.StatusConflict, map[string]any{"code": "inbox_item_done", "error": i18n.T(i18n.OfWriter(w), "assistant-inbox.item_done"), "retryable": false, "delivered": "none"})
 		case errors.Is(err, errNoInboxItem):
 			apierr.Write(w, http.StatusNotFound, err)
-		case replyInDoubt(err):
-			// It may have gone out: the apps say so (delivered unknown); the same reply again is not sent twice.
-			body := apierr.LocalizedBody(http.StatusBadGateway, assistantwire.CodeAssistantInDoubt, err, i18n.OfWriter(w))
-			body["delivered"], body["retryable"] = "unknown", false
-			apierr.WriteBody(w, http.StatusBadGateway, body)
+		case errors.Is(err, errAnswerOnly):
+			apierr.Write(w, http.StatusForbidden, err)
+		case err != nil && s.writeInboxSendError(w, r, "reply", r.PathValue("id"), err):
+			// in doubt (delivered unknown), or why nothing was sent (#9125)
 		case err != nil:
 			apierr.Write(w, http.StatusBadGateway, err)
 		default:
@@ -222,7 +248,7 @@ func (s *Service) inboxRoutes() {
 				"error": i18n.T(l, "assistant-inbox.refresh_failed"), "detail": i18n.Localize(err, l), "retryable": true})
 			return
 		}
-		s.writeInboxList(w, r.URL.Query().Get("sources") == "all")
+		s.writeInboxList(r.Context(), w, r.URL.Query().Get("sources") == "all")
 	})
 }
 
@@ -246,7 +272,11 @@ func mailTarget(it InboxItem) *inboxMailTarget {
 // replyInboxChecked is the direct /reply route with the mail the app saw (expected_uid / expected_version), if it gave
 // one. Except for an old-App card send, a reply with a processing conversation waits for the other side.
 func (s *Service) replyInboxChecked(ctx context.Context, id, text, clientID string, fromCard bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
-	return s.replyInboxCheckedDoMode(ctx, id, text, clientID, fromCard, true, true, uid, version, changes...)
+	return s.replyInboxCheckedRole(ctx, id, text, clientID, fromCard, true, uid, version, changes...)
+}
+
+func (s *Service) replyInboxCheckedRole(ctx context.Context, id, text, clientID string, fromCard, full bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxCheckedDoModeRole(ctx, id, text, clientID, fromCard, true, true, full, uid, version, changes...)
 }
 
 // replyInboxCheckedDo also serves a confirmed suggestion (file false): the target was bound when the suggestion was
@@ -256,8 +286,17 @@ func (s *Service) replyInboxCheckedDo(ctx context.Context, id, text, clientID st
 }
 
 func (s *Service) replyInboxCheckedDoMode(ctx context.Context, id, text, clientID string, fromCard, file, followDirect bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
+	return s.replyInboxCheckedDoModeRole(ctx, id, text, clientID, fromCard, file, followDirect, true, uid, version, changes...)
+}
+
+func (s *Service) replyInboxCheckedDoModeRole(ctx context.Context, id, text, clientID string, fromCard, file, followDirect, full bool, uid *uint32, version *string, changes ...DocChange) (InboxItem, error) {
+	// Reroute an AI mirror before taking the collection mutex: its durable-attempt send reacquires the same mutex for the
+	// frozen MailTarget. Genuine direct checked sends remain serialized with collection below.
+	if out, rerouted, err := s.routeLegacyReplyConfirmation(ctx, id, text, clientID, fromCard, followDirect, full, uid, version, 0, changes); rerouted {
+		return out, err
+	}
 	if uid == nil && version == nil {
-		return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, followDirect, changes...)
+		return s.replyInboxDoModeDirect(ctx, id, text, clientID, fromCard, file, followDirect, 0, changes...)
 	}
 	// Collection and checked sends must not change the target between validation and sending.
 	b := &s.inbox
@@ -276,7 +315,7 @@ func (s *Service) replyInboxCheckedDoMode(ctx context.Context, id, text, clientI
 	if target == nil || uid != nil && *uid != target.UID || version != nil && *version != target.Version {
 		return InboxItem{}, errMailReplyTargetChanged
 	}
-	return s.replyInboxDoMode(ctx, id, text, clientID, fromCard, file, followDirect, changes...)
+	return s.replyInboxDoModeDirect(ctx, id, text, clientID, fromCard, file, followDirect, 0, changes...)
 }
 
 // inboxList is every open item and the newest of the recently done ones (inbox_list_done.go), newest first;
@@ -297,13 +336,16 @@ func (s *Service) inboxListAt(all bool) ([]InboxItem, time.Time) {
 	now := time.Now()
 	cutoff := now.Add(-inboxKeepDone)
 	cut := b.listedDoneCut(cutoff, all)
+	duplicates := b.larkDuplicates(cutoff, cut, all)
 	out := make([]InboxItem, 0, len(b.items))
 	for _, it := range b.items {
-		if !inboxShows(it, cutoff, cut, all) {
+		if duplicates.hidden[it.ID] || !inboxShows(it, cutoff, cut, all) {
 			continue
 		}
 		it.arrived(now)
-		out = append(out, it.listed())
+		item := it.listed()
+		duplicates.link(&item)
+		out = append(out, item)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return inboxListOrder(out[i].UpdatedAt, out[i].ID, out[j].UpdatedAt, out[j].ID) < 0

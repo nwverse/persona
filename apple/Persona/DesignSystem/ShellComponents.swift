@@ -9,6 +9,11 @@ import SwiftUI
 /// menu: Knowledge, Details, the launcher…), like tapping the title in ChatGPT; tapping Agents while it is selected opens
 /// the list's options (Group By, Display, Machines…).
 ///
+/// Both destinations look tappable at rest (#13450, TestFlight: the one not selected read as dimmed text): the one not
+/// selected is outlined (`SegmentOutline`), the selected one carries the pull-down mark while tapping it again opens its
+/// menu (`MenuMark`), a finger on either fills it (`SegmentPress`), and each is hit the capsule's whole height
+/// (`hitRoom`). iPhone Duo's tab bar is drawn as it was.
+///
 /// In the shell the selection is the shell's (`ShellState.page`, docs/apple/shell.md), not `tab`: a tap selects at once, and a
 /// segment is its page's menu only while the strip rests on that page, so a segment never stands for a page that is
 /// not on screen (a tab that said Agents over Assistant made Agents the menu of an empty list of options, 2026-11-02).
@@ -19,8 +24,7 @@ import SwiftUI
 struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     @Binding var tab: AppTab
     @Environment(AppModel.self) private var model
-    /// Across the top bar, or down the side rail on iPhone Duo (`ShellSideRail`): a segment there is the page's symbol over
-    /// its name, as a tab bar's item on the side.
+    /// Across the top bar, or down the side column on iPhone Duo (`ShellSideRail`): there it is the Duo's tab bar.
     var axis: Axis = .horizontal
     @ViewBuilder var chatMenu: () -> ChatMenu
     @ViewBuilder var workMenu: () -> WorkMenu
@@ -31,27 +35,47 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
     /// it moves, so theirs sits on the page in front and does not read the strip at all (`PagerPill`).
     @Environment(\.shellPillFollowsStrip) private var follows
     @Environment(\.buiTheme) private var theme
-    /// A phone's tabs (iPhone Duo open, #2623): the switch stands in for the tab bar, Persona's badge with it.
-    @Environment(\.pageTabSwitch) private var pageTabSwitch
 
     var body: some View {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("ShellSwitch")
         #endif
-        if AppStyle.current.usesBeautifulUI {
-            // BeautifulUI's pill segmented control: a field-colored track, the chosen segment a raised capsule.
+        if tabBar {
+            // iPhone Duo's tab bar (#4231): one glass capsule with a hairline edge and a faint shadow, as a tab bar down the
+            // side of the outer display looks (the owner's reference), in every style.
             row
-                .padding(Theme.Space.xs)
+                .padding(axis == .vertical ? .vertical : .horizontal, Theme.Space.s)
+                .padding(axis == .vertical ? .horizontal : .vertical, Theme.Space.xs)
+                .surface(interactive: true, in: .capsule)
+                .overlay(Capsule().strokeBorder(Theme.cardStroke, lineWidth: Theme.Size.hairline))
+                .compositingGroup()
+                .shadow(color: StyleSpec.current.softShadow, radius: Theme.Space.s, y: Theme.Space.xxs)
+                .modifier(SwitchMotion(chosen: chosen, upright: true))
+        } else if AppStyle.current.usesBeautifulUI {
+            // BeautifulUI's pill segmented control: a field-colored track, the chosen segment a raised capsule. Its padding
+            // above and below the segments is theirs to be hit in (`hitRoom`).
+            row
+                .padding(.horizontal, Self.hitRoom)
                 .background(theme.colors.field, in: .capsule)
                 .overlay(Capsule().strokeBorder(theme.colors.line, lineWidth: Theme.Size.hairline))
-                .animation(Theme.Motion.state, value: chosen)
+                .modifier(SwitchMotion(chosen: chosen, upright: false))
         } else {
             row
-                .padding(Theme.Space.xs)
+                .padding(.horizontal, Self.hitRoom)
                 .surface(interactive: true, in: .capsule)
-                .animation(Theme.Motion.state, value: chosen)
+                .modifier(SwitchMotion(chosen: chosen, upright: false))
         }
     }
+
+    /// The capsule's padding around the segments across the top. Above and below them it is inside each segment's
+    /// button or menu (`segment`): a menu is hit only in the frame its label lays out, and the padding alone hit nothing,
+    /// so a segment drawn `Theme.Shell.switchHeight` less `Space.s` tall is hit the capsule's whole height, the 44 pt
+    /// of `switchHeight` at the default text size and more above it (#13450, HIG-053). The capsule is as large as it was.
+    private static var hitRoom: CGFloat { Theme.Space.xs }
+
+    /// The switch is iPhone Duo's tab bar on the outer display (#4231), down the side column. Its items are the
+    /// page's symbol over its name; across the top it is the iPhone's switch of names.
+    private var tabBar: Bool { axis == .vertical }
 
     /// The page the switch shows as chosen: the shell's, or `tab` outside it.
     private var chosen: AppTab {
@@ -74,40 +98,57 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         return !pager.moving
     }
 
+    /// Whether the chosen segment across the top carries the menu mark (#13450): while it opens its menu. The moving
+    /// bar's switch has no menus (`ShellMovingBar`); it stands in for the page's own bar while the strip slides, so it
+    /// marks the segment that bar marks at rest, and the name does not move or change size as the bars change places.
+    private func marksMenu(_ value: AppTab) -> Bool {
+        guard !tabBar, chosen == value else { return false }
+        guard follows, let shell else { return opensMenu(value) }
+        return value == .assistant || (value == .chats && shell.workAtRoot)
+    }
+
     private var row: some View {
         stack {
             ZStack(alignment: .topTrailing) {
                 if opensMenu(.assistant) {
                     Menu { chatMenu() } label: { segment(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, selected: true) }
                         .menuStyle(.button)
-                        .buttonStyle(.plain)
+                        .modifier(SegmentPress(upright: tabBar))
                         .accessibilityIdentifier("shell-assistant")
-                        .accessibilityHint("Chat menu")
+                        .modifier(MenuSegmentAccess(hint: "Chat menu", upright: tabBar, title: String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), symbol: Self.symbol(.assistant)))
                 } else {
                     button(String(localized: "shell.assistant", defaultValue: "Assistant", comment: "The chat side of the top switch (72 pt wide)"), .assistant, id: "shell-assistant")
                 }
-                if pageTabSwitch { AssistantWaitingBadge() }
             }
             ZStack(alignment: .topTrailing) {
                 if opensMenu(.chats) {
                     Menu { workMenu() } label: { segment("Agents", .chats, selected: true) }
                         .menuStyle(.button)
-                        .buttonStyle(.plain)
+                        .modifier(SegmentPress(upright: tabBar))
                         .accessibilityIdentifier("shell-agents")
-                        .accessibilityHint("List options")
+                        .modifier(MenuSegmentAccess(hint: "List options", upright: tabBar, title: "Agents", symbol: Self.symbol(.chats)))
                 } else {
                     button("Agents", .chats, id: "shell-agents")
                 }
-                WaitingBadge(axis: axis)
+                // The tab bar's counts are on its items' symbols (`TabBarBadge`). Across the top the count hangs off the
+                // corner of the segment's hit frame, the capsule's top (`hitRoom`, #13450): clear of the menu mark after
+                // the chosen Agents' name.
+                if !tabBar { WaitingBadge() }
             }
-            #if os(iOS) || os(visionOS)
             if LarkHomePreference.shared.shows {
                 button(String(localized: "Messages [Quote Views 4da199]"), .feishu, id: "shell-feishu")
             }
-            #endif
         }
-        .background(alignment: axis == .vertical ? .top : .leading) {
-            if let shell { PagerPill(shell: shell, follows: follows, axis: axis) }
+        .background(alignment: .leading) {
+            // The tab bar marks its chosen item itself (`tabBarSegment`). Across the top the pill is the drawn segments'
+            // height, inside their hit room.
+            if let shell, !tabBar { PagerPill(shell: shell, follows: follows).padding(.vertical, Self.hitRoom) }
+            // Its lens glides to a newly chosen item (#9837): under the items where it does not bend them…
+            if tabBar, !StyleSpec.current.usesGlass { TabBarLens(index: ShellState.index(for: chosen), axis: axis) }
+        }
+        .overlay(alignment: .topLeading) {
+            // …and over them as glass, which does.
+            if tabBar, StyleSpec.current.usesGlass { TabBarLens(index: ShellState.index(for: chosen), axis: axis) }
         }
     }
 
@@ -132,70 +173,192 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
         } label: {
             segment(title, value, selected: chosen == value)
         }
-        .buttonStyle(.plain)
+        .modifier(SegmentPress(upright: tabBar))
         .accessibilityIdentifier(id)
-        .accessibilityAddTraits(chosen == value ? .isSelected : [])
+        .modifier(ButtonSegmentAccess(selected: chosen == value, upright: tabBar, title: title, symbol: Self.symbol(value)))
     }
 
+    /// A segment as its button or menu draws it. Across the top it is hit the capsule's whole height (`hitRoom`), its
+    /// corners too: the room is inside the label, where a menu is hit.
     @ViewBuilder private func segment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
-        if axis == .vertical {
-            railSegment(title, symbol: Self.symbol(value), selected: selected)
-        } else if AppStyle.current.usesBeautifulUI {
-            beautifulSegment(title, selected: selected)
+        if tabBar {
+            tabBarSegment(title, value, selected: selected)
         } else {
-            plainSegment(title, selected: selected)
+            Group {
+                if AppStyle.current.usesBeautifulUI {
+                    beautifulSegment(title, selected: selected, marked: marksMenu(value))
+                } else {
+                    plainSegment(title, selected: selected, marked: marksMenu(value))
+                }
+            }
+            .padding(.vertical, Self.hitRoom)
+            .contentShape(.rect)
         }
     }
 
     /// The page's symbol on the rail, matching its shared tab.
     private static func symbol(_ value: AppTab) -> String {
-        #if os(iOS) || os(visionOS)
-        if value == .feishu { return Theme.Icon.feishuChats } // a phone's tab only (no such tab on the Mac)
-        #endif
+        if value == .feishu { return Theme.Icon.feishuChats }
         return value == .chats ? Theme.Icon.agents : Theme.Icon.ai
     }
 
-    /// A segment of the side rail's switch: the page's symbol over its name, square, the pill (`PagerPill`) under the
-    /// chosen one.
-    private func railSegment(_ title: String, symbol: String, selected: Bool) -> some View {
+    /// An item of iPhone Duo's tab bar (#4231, after a tab bar down the side of the outer display, the owner's reference):
+    /// the page's symbol over its name, the chosen one's symbol white on a round fill of the Theme Color and its name in
+    /// it, the others a line symbol over a plain name; the page's count red at the symbol's top trailing corner
+    /// (`TabBarBadge`). Its name is what VoiceOver reads; a long press shows it large (`ButtonSegmentAccess`).
+    private func tabBarSegment(_ title: String, _ value: AppTab, selected: Bool) -> some View {
         VStack(spacing: Theme.Space.xxs) {
-            ThemedIcon(symbol).font(Theme.Font.heading)
-            Text(title).font(Theme.Font.caption).lineLimit(1).minimumScaleFactor(0.7)
+            Group {
+                // The chosen Assistant shows the persona's own face (#9837), as the owner's reference shows its brand on
+                // its chosen home item.
+                if selected, value == .assistant {
+                    TabBarPersonaFace()
+                } else {
+                    ThemedIcon(Self.symbol(value))
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .frame(width: Theme.Size.well, height: Theme.Size.well)
+                        .background { if selected { Circle().fill(Theme.accent) } }
+                }
+            }
+            .overlay(alignment: .topTrailing) { TabBarBadge(tab: value) }
+            Text(title)
+                .font(selected ? Theme.Font.labelStrong : Theme.Font.label)
+                .foregroundStyle(selected ? Theme.accent : Color.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
-        .foregroundStyle(selected ? Color.primary : Color.secondary)
-        .scaledFrame(width: Theme.Shell.railSegment, height: Theme.Shell.railSegment)
-        .contentShape(.rect(cornerRadius: Theme.Radius.card))
+        .frame(width: Theme.Shell.tabBarItemWidth, height: Theme.Shell.tabBarItemHeight)
+        .contentShape(.rect)
+        .accessibilityLabel(title)
     }
 
-    private func beautifulSegment(_ title: String, selected: Bool) -> some View {
-        Text(title)
-            .buiFont(BUITextStyle(size: 13, weight: selected ? .semibold : .medium, lineHeight: 1.19))
-            .foregroundStyle(selected ? theme.colors.ink : theme.colors.ink3)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .scaledFrame(width: Theme.Shell.segmentWidth, height: Theme.Shell.switchHeight - Theme.Space.s)
-            .background {
-                if selected, shell == nil {
+    /// How far a segment's name may shrink to fit the segment's width: as before, and further with the menu mark after it,
+    /// so "Assistant" stays whole beside the mark in the 72 pt (#13450; about 0.7 of its size at the default text size) and
+    /// the switch is no wider. The name shrinks only as far as it must.
+    private static func nameScale(marked: Bool) -> CGFloat { marked ? 0.6 : 0.8 }
+
+    /// Between a segment's name and the ends of its capsule (#13450): a name that ran the segment's whole width touched
+    /// the outline drawn there now, and the pill's ends.
+    private static var nameInset: CGFloat { Theme.Space.xs }
+
+    /// A segment across the top in the BeautifulUI style (#13450): its name, and while tapping it again opens its menu the
+    /// pull-down mark after it (`marksMenu`, `MenuMark`). The chosen one is the raised capsule, every other one has the
+    /// raised capsule's ring alone (`SegmentOutline`), and a finger on one fills it (`SegmentPressFill`). In the shell
+    /// `PagerPill` draws the capsule and the rings, which follow the strip.
+    private func beautifulSegment(_ title: String, selected: Bool, marked: Bool) -> some View {
+        HStack(spacing: Theme.Space.xxs) {
+            Text(title)
+                .buiFont(BUITextStyle(size: 13, weight: selected ? .semibold : .medium, lineHeight: 1.19))
+                .lineLimit(1)
+                .allowsTightening(true)
+                .minimumScaleFactor(Self.nameScale(marked: marked))
+            if marked { MenuMark(color: theme.colors.ink2) }
+        }
+        .foregroundStyle(selected ? theme.colors.ink : theme.colors.ink3)
+        .padding(.horizontal, Self.nameInset)
+        .scaledFrame(width: Theme.Shell.segmentWidth, height: Theme.Shell.switchHeight - Theme.Space.s)
+        .background {
+            if shell == nil {
+                if selected {
                     Color.clear.buiSurface(Capsule(), fill: theme.colors.surface, elevation: .button)
                         .matchedGeometryEffect(id: "pill", in: pill)
+                } else {
+                    SegmentOutline()
                 }
             }
-            .contentShape(.capsule)
+            SegmentPressFill()
+        }
     }
 
-    private func plainSegment(_ title: String, selected: Bool) -> some View {
-        Text(title)
-            .font(selected ? Theme.Font.bodyStrong : Theme.Font.body)
-            .foregroundStyle(selected ? Color.primary : Color.secondary)
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .scaledFrame(width: Theme.Shell.segmentWidth, height: Theme.Shell.switchHeight - Theme.Space.s)
-            .background {
-                if selected, shell == nil {
+    /// A segment across the top (#13450): its name, and while tapping it again opens its menu the pull-down mark after it
+    /// (`marksMenu`, `MenuMark`); the name gives way to the mark within the segment's width. The chosen one sits on the
+    /// gray pill, every other one is outlined (`SegmentOutline`), and a finger on one fills it (`SegmentPressFill`). In
+    /// the shell `PagerPill` draws the pill and the outlines, which follow the strip.
+    private func plainSegment(_ title: String, selected: Bool, marked: Bool) -> some View {
+        HStack(spacing: Theme.Space.xxs) {
+            Text(title)
+                .font(selected ? Theme.Font.bodyStrong : Theme.Font.body)
+                .lineLimit(1)
+                .allowsTightening(true)
+                .minimumScaleFactor(Self.nameScale(marked: marked))
+            if marked { MenuMark(color: Color.secondary) }
+        }
+        .foregroundStyle(selected ? Color.primary : Color.secondary)
+        .padding(.horizontal, Self.nameInset)
+        .scaledFrame(width: Theme.Shell.segmentWidth, height: Theme.Shell.switchHeight - Theme.Space.s)
+        .background {
+            if shell == nil {
+                if selected {
                     Capsule().fill(Theme.Shell.segment).matchedGeometryEffect(id: "pill", in: pill)
+                } else {
+                    SegmentOutline()
                 }
             }
-            .contentShape(.capsule)
+            SegmentPressFill()
+        }
+    }
+}
+
+/// The pull-down mark after the chosen segment's name while tapping it again opens its menu (#13450): `Icon.pullDown`,
+/// small, in the name's quieter color. VoiceOver does not read it: the menu says what it is ("Chat menu", "List options").
+private struct MenuMark: View {
+    var color: Color
+
+    var body: some View {
+        ThemedIcon(Theme.Icon.pullDown)
+            .font(Theme.Font.labelStrong)
+            .imageScale(.small)
+            .foregroundStyle(color)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A segment across the top that is not chosen (#13450): a hairline capsule where it is, so it reads as a place to tap
+/// and not as a dimmed word, while the chosen one, filled, stays apart. Liquid Glass draws it as the app's other glass
+/// capsules are edged (`Theme.cardStroke`: the Agents filter capsule, iPhone Duo's tab bar); BeautifulUI in its strong
+/// line, lighter than the chosen capsule's ring.
+private struct SegmentOutline: View {
+    @Environment(\.buiTheme) private var theme
+
+    var body: some View {
+        Capsule().strokeBorder(AppStyle.current.usesBeautifulUI ? theme.colors.lineStrong : Theme.cardStroke,
+                               lineWidth: Theme.Size.hairline)
+    }
+}
+
+extension EnvironmentValues {
+    /// A finger is down on a segment of the switch across the top (`SegmentPress`, #13450).
+    @Entry var shellSegmentPressed = false
+}
+
+/// A segment across the top pressed (#13450): its button or menu tells the segment (`SegmentPressFill`), which fills
+/// itself, over the pill too; the name stays as it is (the plain style only dimmed it). iPhone Duo's tab bar keeps the
+/// plain style.
+private struct SegmentPress: ViewModifier {
+    let upright: Bool
+
+    func body(content: Content) -> some View {
+        if upright { content.buttonStyle(.plain) } else { content.buttonStyle(Style()) }
+    }
+
+    private struct Style: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label.environment(\.shellSegmentPressed, configuration.isPressed)
+        }
+    }
+}
+
+/// A pressed segment's fill (`Theme.Fill.pressed`, the system's fill for a pressed control) over its capsule: at once as
+/// the finger lands, fading on the state spring as it lifts.
+private struct SegmentPressFill: View {
+    @Environment(\.shellSegmentPressed) private var pressed
+
+    var body: some View {
+        Capsule().fill(Theme.Fill.pressed)
+            .opacity(pressed ? 1 : 0)
+            .animation(pressed ? nil : Theme.Motion.state, value: pressed)
+            .allowsHitTesting(false)
     }
 }
 
@@ -206,20 +369,27 @@ struct ShellSwitch<ChatMenu: View, WorkMenu: View>: View {
 /// one pushed while the strip still slides), and a view there that took the slide's animation never runs it: the
 /// slide's end waited for it, both pages out of reach and the moving bar's switch over the chat (2026-11-03, opening an
 /// agent from the inbox, `ShellInboxAgentTests`).
+///
+/// Under the pill every segment has its outline (`SegmentOutline`, #13450), faded by how far the pill is from it: none
+/// under the pill at rest, whole a segment's width away, so the pill takes it in as it comes and leaves it behind.
 private struct PagerPill: View {
     let shell: ShellState
     var follows: Bool
-    /// Along the switch: across it, or down it on the side rail.
-    var axis: Axis = .horizontal
     @Environment(\.buiTheme) private var theme
 
     var body: some View {
         GeometryReader { g in
-            let n = CGFloat(shell.pager.pageCount)
+            let count = shell.pager.pageCount
+            let n = CGFloat(count)
             let at = follows ? min(n - 1, max(0, shell.pager.position)) : CGFloat(shell.page)
-            let down = axis == .vertical
-            let size = down ? CGSize(width: g.size.width, height: g.size.height / n) : CGSize(width: g.size.width / n, height: g.size.height)
-            let offset = down ? CGSize(width: 0, height: at * size.height) : CGSize(width: at * size.width, height: 0)
+            let size = CGSize(width: g.size.width / n, height: g.size.height)
+            let offset = CGSize(width: at * size.width, height: 0)
+            ForEach(0..<count, id: \.self) { i in
+                SegmentOutline()
+                    .frame(width: size.width, height: size.height)
+                    .offset(x: CGFloat(i) * size.width)
+                    .opacity(min(1, abs(CGFloat(i) - at)))
+            }
             if AppStyle.current.usesBeautifulUI {
                 // BeautifulUI's segmented control: the chosen segment is a raised capsule.
                 Color.clear.buiSurface(Capsule(), fill: theme.colors.surface, elevation: .button)
@@ -238,13 +408,8 @@ private struct PagerPill: View {
 /// (an agent asks, another is answered), and only this badge is drawn again.
 private struct WaitingBadge: View {
     @Environment(AppModel.self) private var model
-    var axis: Axis = .horizontal
     private var offset: CGSize {
-        // On the side rail, inside the segment's corner: past it is the screen's edge.
-        if axis == .vertical { return CGSize(width: -Theme.Space.xs, height: Theme.Space.xs) }
-        #if os(iOS) || os(visionOS)
         if LarkHomePreference.shared.shows { return CGSize(width: -Theme.Space.s, height: -Theme.Space.l) }
-        #endif
         return CGSize(width: Theme.Space.s, height: -Theme.Space.sm)
     }
 
@@ -263,17 +428,298 @@ private struct WaitingBadge: View {
     }
 }
 
-/// Persona's own badge on the switch where it stands in for the tab bar (iPhone Duo open, #2623): what the Persona tab
-/// counted (`AppModel.badges`), read here as `WaitingBadge` reads the agents, so the switch is not built again for it.
-private struct AssistantWaitingBadge: View {
+/// iPhone Duo's tab bar's lens (#9837, after the system's tab bar there, the owner's reference): when another item is
+/// chosen, a lens leaves the one that was, swelling and stretching along the bar, glides to the new one with a little
+/// bounce and fades as it lands, where that item's own chosen look already is. At rest there is none: the bar looks as it
+/// did. With Reduce Motion it never moves: the items only cross-fade (`SwitchMotion`). The glide is `TabBarGlide`'s, one
+/// for every bar on screen; this view draws it while it runs, its timeline paused otherwise. `index` is the chosen item's
+/// place on the bar (`ShellState.index`).
+private struct TabBarLens: View {
+    let index: Int
+    let axis: Axis
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let glide = TabBarGlide.shared
+        let running = glide.running && glide.to == index
+        Color.clear
+            .overlay(alignment: .topLeading) {
+                if running {
+                    TimelineView(.animation(paused: !running)) { context in
+                        lens(glide.frame(at: context.date))
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onChange(of: index) { old, new in if !reduceMotion { glide.begin(from: old, to: new) } }
+    }
+
+    private func lens(_ f: TabBarGlide.Frame) -> some View {
+        let width = Theme.Shell.tabBarItemWidth, height = Theme.Shell.tabBarItemHeight
+        // Swollen, it is longer along the bar than across it, as a drop pulled along.
+        let pull = Theme.Motion.lensStretch * (f.swell - 1) / (Theme.Motion.lensSwellScale - 1)
+        let along = f.swell + pull, across = f.swell - pull / 2
+        return Color.clear
+            .lensSurface(in: .capsule)
+            .frame(width: width, height: height)
+            .scaleEffect(x: axis == .vertical ? across : along, y: axis == .vertical ? along : across)
+            .offset(x: axis == .horizontal ? f.at * width : 0, y: axis == .vertical ? f.at * height : 0)
+            .opacity(f.opacity)
+    }
+}
+
+/// The tab bar lens's glide (#9837), one for every iPhone Duo tab bar on screen: in the shell each page has its own bar
+/// and the moving bar stands in while the pages change, so a bar that comes in midway draws the glide where it is by
+/// then, on the same clock. Only `begin` starts it, once per choice.
+///
+/// Its clock runs on the frames the lens is drawn in, not on the wall's: the page the choice brings in is swapped in
+/// under the bar in the same frames (the open Duo's tab, its whole split; the shell's pages laid side by side), and a
+/// frame held up by that (85–165 ms on the open Duo on its side, 54–77 ms and then 25–45 ms on the outer display, on the
+/// simulator), and the slow frames after it, made a lens timed by the wall jump on by up to a third of its way at once
+/// (#10270). Each frame now moves it on by the time since the last one drawn, at most `longestStep`, and it sets off from
+/// where it starts only once the frames come on time (`longestWait`).
+@MainActor @Observable final class TabBarGlide {
+    static let shared = TabBarGlide()
+
+    /// Where the lens is, in items from the bar's first; how swollen; how opaque.
+    struct Frame: Equatable {
+        var at: CGFloat
+        var swell: CGFloat
+        var opacity: Double
+    }
+
+    private(set) var from: CGFloat = 0
+    private(set) var to = 0
+    private(set) var running = false
+    /// How far into the glide the lens has been drawn, when the last frame it was drawn in was, and how long it waited on
+    /// its first place (`frame(at:)`).
+    @ObservationIgnored private(set) var elapsed: TimeInterval = 0
+    @ObservationIgnored private var drawnAt: Date?
+    @ObservationIgnored private var waited: TimeInterval = 0
+    @ObservationIgnored private var serial = 0
+
+    /// How long a glide lasts, its fade included.
+    nonisolated static var length: TimeInterval { Theme.Motion.lensGlideTime + Theme.Motion.lensFadeTime }
+
+    /// The most of its way the glide goes on between two frames drawn: a frame and a half at 60 Hz (an iPhone draws an
+    /// app's own animations at 60 Hz), so a frame that is a little late still moves it on by all of its time, and one held
+    /// up for longer only by this.
+    nonisolated static let longestStep: TimeInterval = 0.025
+    /// Before it has set off, the lens waits where it starts through frames held up, this long at most: the first frames
+    /// after the page comes in are slow to draw (the open Duo's tab: two or three of 33–50 ms), and a lens setting off in
+    /// them went in fits and starts. It sets off on the first frame on time.
+    nonisolated static let longestWait: TimeInterval = 0.25
+    /// Frames drawn closer together than this are the same frame: every bar on screen draws the lens and reads the clock,
+    /// and the shell's bars read dates up to 7 ms apart in one frame. Half a 60 Hz frame.
+    nonisolated static let sameFrame: TimeInterval = 0.008
+
+    /// The lens in the frame drawn at `date`: the clock moves on by the time since the last frame drawn, at most
+    /// `longestStep`, or not at all while it waits to set off (`longestWait`); the bars that draw the same frame get the
+    /// same lens.
+    func frame(at date: Date) -> Frame {
+        if let drawnAt {
+            let step = date.timeIntervalSince(drawnAt)
+            if step > Self.sameFrame {
+                if elapsed == 0, step > Self.longestStep, waited < Self.longestWait {
+                    waited += step
+                } else {
+                    elapsed += min(step, Self.longestStep)
+                }
+                self.drawnAt = date
+            }
+        } else {
+            drawnAt = date
+        }
+        #if DEBUG
+        LensCadence.note(date, elapsed)
+        #endif
+        return Self.frame(from: from, to: to, at: elapsed)
+    }
+
+    /// The lens `t` seconds after leaving `from` for `to`: it swells as it goes, glides with a bounce, and once there it
+    /// shrinks back and fades.
+    nonisolated static func frame(from: CGFloat, to: Int, at t: TimeInterval) -> Frame {
+        let m = Theme.Motion.self
+        let along = m.lensGlide.value(target: 1.0, time: max(0, t))
+        let at = t >= length ? CGFloat(to) : from + (CGFloat(to) - from) * CGFloat(along)
+        let landed = max(0, t - m.lensGlideTime) / m.lensFadeTime
+        let rise = min(1, max(0, t) / m.lensSwellTime)
+        let swollen = min(rise * (2 - rise), 1 - min(1, landed)) // ease out up, then down as it fades
+        return Frame(at: at, swell: 1 + (m.lensSwellScale - 1) * CGFloat(swollen), opacity: max(0, 1 - landed))
+    }
+
+    /// A new choice: from where the lens is now (the item that was chosen, or partway on an earlier glide) to `to`. Every
+    /// bar that sees the choice asks; the first one starts it.
+    func begin(from old: Int, to new: Int) {
+        guard old != new, !(running && to == new) else { return }
+        from = running ? Self.frame(from: from, to: to, at: elapsed).at : CGFloat(old)
+        to = new
+        elapsed = 0
+        drawnAt = nil
+        waited = 0
+        running = true
+        serial += 1
+        let mine = serial
+        // It ends once drawn to its end, which held-up frames put off (a tab's first visit holds one up for 0.5 s or more);
+        // should no bar draw it, it still ends.
+        let deadline = Date.now + Self.length + Self.longestWait + 1
+        Task { @MainActor [weak self] in
+            var left = Self.length
+            while left > 0 {
+                try? await Task.sleep(for: .seconds(left))
+                guard let glide = self, glide.serial == mine else { return }
+                left = Date.now < deadline ? Self.length - glide.elapsed : 0
+            }
+            self?.running = false
+        }
+    }
+}
+
+/// The persona's face on the chosen Assistant item of iPhone Duo's tab bar (#9837): still, a `Size.well` circle.
+private struct TabBarPersonaFace: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let waiting = model.badges.assistant
+        let persona = model.persona
+        Group {
+            if !persona.isBuiltin, let frames = model.personas.frames(persona, .idle) {
+                PersonaFramesView(frames: frames, animating: false, eligible: false)
+            } else {
+                AssistantAvatar(size: Theme.Size.well, design: persona.avatarDesign, still: true)
+            }
+        }
+        .frame(width: Theme.Size.well, height: Theme.Size.well)
+        .clipShape(.circle)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A page's count on iPhone Duo's tab bar (#4231): white on red on the rim of its symbol's well, at the top trailing
+/// corner, as the system's tab bar badges its items (the iPad's too). The tabs' numbers: what waits on the user among the
+/// Agents (`agentsWaiting`) and in Persona's own conversations (`TabBadges.assistant`); Messages has none, as its tab had
+/// none. Its own view, as `WaitingBadge`: only it is drawn again when the count changes. `shell-agents-count`,
+/// `shell-assistant-count` for the UI tests.
+private struct TabBarBadge: View {
+    @Environment(AppModel.self) private var model
+    let tab: AppTab
+
+    var body: some View {
+        let waiting = switch tab {
+        case .chats: model.agentsWaiting
+        case .assistant: model.badges.assistant
+        default: 0
+        }
         if waiting > 0 {
-            CountBadge(count: waiting, look: .needs, label: StateName.count(.needsYou, waiting))
-                .offset(x: Theme.Space.s, y: -Theme.Space.sm)
+            TabBarCount(count: waiting, label: StateName.count(.needsYou, waiting))
+                .tabBarBadgeSpot()
                 .allowsHitTesting(false)
+                .accessibilityIdentifier(tab == .assistant ? "shell-assistant-count" : "shell-agents-count")
+        }
+    }
+}
+
+/// The count iPhone Duo's tab bar draws (#4231), the system's tab bar badge: `Theme.Size.badge` (18 pt) tall, round for one
+/// digit and a capsule for more, its number `Theme.Font.labelHeavy` (12 pt) white on the system's red (`Theme.tabBarBadge`),
+/// ringed `Theme.Shell.tabBarBadgeRing` in the page's color so it stands apart from the chosen item's circle and the
+/// symbol under it (`DuoTabBarAlignmentTests`).
+struct TabBarCount: View {
+    let count: Int
+    /// What VoiceOver says for it ("3 need you"); by default the exact number.
+    var label: String? = nil
+
+    var body: some View {
+        if let text = CountBadge.text(count) {
+            Text(text)
+                .font(Theme.Font.labelHeavy.monospacedDigit())
+                .contentTransition(.numericText(value: Double(count)))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+                .padding(.horizontal, Theme.Space.xs)
+                .frame(minWidth: Theme.Size.badge, minHeight: Theme.Size.badge)
+                .background(Theme.tabBarBadge, in: .capsule)
+                .padding(Theme.Shell.tabBarBadgeRing)
+                .background(Theme.pageBackground, in: .capsule)
+                .fixedSize()
+                .accessibilityLabel(label ?? String(count))
+                .accessibilityShowsLargeContentViewer()
+        }
+    }
+}
+
+extension View {
+    /// A tab bar item's count, in an overlay at the top trailing corner of its symbol's well: centred
+    /// `Theme.Shell.tabBarBadgeInset` inside that corner, so it rests on the circle's rim and covers its edge only, not
+    /// the symbol, at any width (a zero-sized anchor at the corner, the count centred on it).
+    func tabBarBadgeSpot() -> some View {
+        frame(width: 0, height: 0).offset(x: -Theme.Shell.tabBarBadgeInset, y: Theme.Shell.tabBarBadgeInset)
+    }
+}
+
+/// The switch's motion, in the one step of its chain where the pill's glide always was (the switch across the top as it
+/// was, #6735's stack). As iPhone Duo's tab bar (`upright`, #4231) also: a bar of fixed items at the default text size
+/// (`Theme.Shell.switchTypeSize`), one container VoiceOver reads as a tab bar, the chosen item cross-fading with
+/// Reduce Motion on, and away while the keyboard is up, as the tab bar it stands for goes under the keyboard: faded and
+/// out of reach, never taken out of the tree (an item's menu may be open as the keyboard goes, docs/lessons/ios.md).
+private struct SwitchMotion: ViewModifier {
+    let chosen: AppTab
+    let upright: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        if upright {
+            let up = KeyboardState.shared.isUp
+            content
+                // With Reduce Motion the chosen item cross-fades and the lens stays still (`TabBarLens`, #9837).
+                .animation(reduceMotion ? Theme.Motion.tabFade : Theme.Motion.state, value: chosen)
+                .dynamicTypeSize(...Theme.Shell.switchTypeSize)
+                .accessibilityElement(children: .contain)
+                .accessibilityAddTraits(.isTabBar)
+                // Only the fade moves with it, not what the segments do as the keyboard comes or goes.
+                .animation(Theme.Motion.standard) {
+                    $0.opacity(up ? 0 : 1).offset(y: up && !reduceMotion ? Theme.Space.l : 0)
+                }
+                .allowsHitTesting(!up)
+                .accessibilityHidden(up)
+        } else {
+            content.animation(Theme.Motion.state, value: chosen)
+        }
+    }
+}
+
+/// A chosen segment that opens its menu: its hint, in the one step where it always was. Upright (#4231) also selected,
+/// and its name and symbol shown large on a long press, as a tab bar's item shows them (DESIGN_SYSTEM.md 6.2): the
+/// segment draws its symbol alone at the default text size.
+private struct MenuSegmentAccess: ViewModifier {
+    let hint: LocalizedStringKey
+    let upright: Bool
+    let title: String
+    let symbol: String
+
+    func body(content: Content) -> some View {
+        if upright {
+            content.accessibilityHint(hint).accessibilityAddTraits(.isSelected)
+                .accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        } else {
+            content.accessibilityHint(hint)
+        }
+    }
+}
+
+/// A segment's button: selected when chosen, in the one step where that always was. Upright (#4231) also its name and
+/// symbol shown large on a long press.
+private struct ButtonSegmentAccess: ViewModifier {
+    let selected: Bool
+    let upright: Bool
+    let title: String
+    let symbol: String
+
+    func body(content: Content) -> some View {
+        if upright {
+            content.accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityShowsLargeContentViewer { ThemedIcon(symbol); Text(title) }
+        } else {
+            content.accessibilityAddTraits(selected ? .isSelected : [])
         }
     }
 }
@@ -433,13 +879,10 @@ struct ShellNavigationClearance: View {
     static let line = " "
 
     var body: some View {
-        #if os(iOS) || os(visionOS)
         PromptLine(active: active)
-        #endif
     }
 }
 
-#if os(iOS) || os(visionOS)
 private struct PromptLine: UIViewControllerRepresentable {
     var active: Bool
 
@@ -467,7 +910,6 @@ private struct PromptLine: UIViewControllerRepresentable {
         }
     }
 }
-#endif
 
 /// The text size the app settled on (the system's, moved by Small / Standard / Large), set once at the root. `shellScaled` goes one
 /// step up from this, not from the environment's own size: that one is not always what the page has. The drawer's

@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // MARK: - API
 
@@ -68,19 +69,17 @@ private struct FeishuLinkHandling: ViewModifier {
     var open: ((FeishuRoute) -> Void)?
     var manager: String?
     @State private var link: LinkTarget?
+    /// A to-do, knowledge entry or computer a link to one of Persona's pages opened (#9926).
+    @State private var hubSheet: HubLinkSheet?
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        content.environment(\.openURL, OpenURLAction { url in
-            if let open, case .route(let route) = FeishuLinks.target(url, lark: model.larkFeatures, manager: manager) {
-                open(route)
-                return .handled
-            }
-            return LinkPolicy.system(url) // NSWorkspace would run any scheme it names
-        })
-        #else
         content
             .environment(\.openURL, OpenURLAction { url in
+                // A page of Persona's own (a link to a paired hub's page, an app link) opens in the app (#9926).
+                if let opened = model.openOwnLink(url) {
+                    if case .sheet(let page) = opened { hubSheet = page }
+                    return .handled
+                }
                 switch FeishuLinks.target(url, lark: model.larkFeatures, manager: manager) {
                 case .route(let route) where open != nil:
                     open?(route)
@@ -104,7 +103,7 @@ private struct FeishuLinkHandling: ViewModifier {
             .sheet(item: $link) { t in
                 if let assistant { LinkSheet(target: t, key: assistant) }
             }
-        #endif
+            .hubLinkSheet($hubSheet)
     }
 
     private var assistant: SessionKey? { model.assistantMain ?? model.assistantCurrent }

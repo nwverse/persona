@@ -10,7 +10,7 @@ describe("quickAnswers (#4090, as iOS's 需要你 cards)", () => {
     const q = quickAnswers(ix({ tool_name: "Bash", tool_input: { command: "swift test" } }))!;
     expect(q.map((c) => c.label)).toEqual(["允许", "拒绝"]);
     expect(q[0].body).toEqual({ allow: true });
-    expect(q[1].body).toEqual({ allow: false, message: "用户拒绝了" });
+    expect(q[1].body).toEqual({ allow: false, message: "用户已拒绝" });
   });
 
   it("leaves a permission with fields to fill in to its chat", () => {
@@ -43,6 +43,21 @@ describe("quickAnswers (#4090, as iOS's 需要你 cards)", () => {
     // a question with several steps read off the terminal, or its review tab, is several questions: the chat
     expect(quickAnswers(ix({ kind: "screen", dialog: { options, steps: [{ label: "a", done: false }, { label: "b", done: false }] } }))).toBeNull();
     expect(quickAnswers(ix({ kind: "screen", dialog: { options, review: true } }))).toBeNull();
+  });
+
+  it("offers Claude Code's Bypass Permissions confirmation as its two choices, each sending its option", () => {
+    // the dialog as the hub reads it off a fresh pane (claude-2.1.322-bypass-confirm-160.txt)
+    const dialog = {
+      question: "WARNING: Claude Code running in Bypass Permissions mode",
+      options: [
+        { key: "1", label: "No, exit" },
+        { key: "2", label: "Yes, I accept" },
+      ],
+    };
+    const q = quickAnswers(ix({ kind: "screen", dialog }))!;
+    expect(q.map((c) => c.label)).toEqual(["No, exit", "Yes, I accept"]);
+    expect(q.map((c) => c.body)).toEqual([{ option: "1" }, { option: "2" }]);
+    expect(q.some((c) => c.primary)).toBe(false); // neither choice is made to look like the default
   });
 
   it("never answers a plan or an MCP form in one tap", () => {

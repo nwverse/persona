@@ -1,0 +1,209 @@
+name: release-schedule
+
+# The scheduler opens or refreshes a release PR; it never creates a tag or publishes a binary itself.
+on:
+  schedule:
+    # Stable at 12:00 in the operator's configured UTC+08:00 zone (04:00 UTC). Beta every two hours,
+    # not every two minutes. Do not duplicate this workflow with a local publisher.
+    - cron: '0 4 * * *'
+    - cron: '0 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Create a stable release PR or an independent beta release PR'
+        type: choice
+        options: [release, beta]
+        default: beta
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-schedule-${{ inputs.channel || 'automatic' }}
+  # A stale scheduled environment wait must not hold the automatic group forever: each later schedule cancels its
+  # predecessor, and the newest run selects current main only after approval. Manual stable/beta dispatches stay
+  # independent and never cancel a different channel. This only replaces unstarted planning, never merge/publication.
+  cancel-in-progress: ${{ github.event_name == 'schedule' }}
+
+jobs:
+  channel:
+    # A re-run of a manual dispatch is a push event, where `inputs` is absent. Resolve the requested channel once
+    # instead of letting a stable dispatch silently become beta on its second attempt.
+    if: github.actor == 'chyroc' && github.triggering_actor == 'chyroc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      name: ${{ steps.select.outputs.name }}
+    steps:
+      - id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          SCHEDULE: ${{ github.event.schedule }}
+          REQUESTED: ${{ inputs.channel }}
+        run: |
+          set -euo pipefail
+          channel="$REQUESTED"
+          if [[ "$EVENT" = schedule ]]; then
+            test "$SCHEDULE" = '0 4 * * *' && channel=release || channel=beta
+          elif [[ "$EVENT" != workflow_dispatch ]]; then
+            channel="${RELEASE_RETRY_CHANNEL:-}"
+          fi
+          test "$channel" = release || test "$channel" = beta || { echo 'A manual release retry needs its original channel' >&2; exit 1; }
+          printf 'name=%s\n' "$channel" >> "$GITHUB_OUTPUT"
+
+  plan:
+    needs: channel
+    if: github.actor == 'chyroc' && github.triggering_actor == 'chyroc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: persona-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Choose only a new green-CI main source and an unused immutable version
+        id: select
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          RELEASE_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          ACTIONS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          CHANNEL: ${{ needs.channel.outputs.name }}
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'persona-release is missing RELEASE_PR_TOKEN; no release PR or branch was created' >&2; exit 1; }
+          test "$CHANNEL" = release || test "$CHANNEL" = beta
+          gh api "repos/$REPOSITORY/pulls?state=open&base=main&per_page=100" --paginate > release-open-prs.json
+          # An active candidate already owns its fixed source and verification. Do not displace it with another -rN
+          # PR merely because main advanced. A real repair explicitly supersedes the old PR before the next selection.
+          python3 scripts/operations/release_candidate.py --repository "$REPOSITORY" --channel "$CHANNEL" --pulls release-open-prs.json > release-active-candidate.txt
+          if [[ -s release-active-candidate.txt ]]; then
+            echo 'An open release PR already owns this channel; inspect its fixed-source verification instead of duplicating it:'
+            cat release-active-candidate.txt
+            exit 0
+          fi
+          # The environment approval may be hours after the scheduled checkout. Select the source only now, rather
+          # than publishing the old main SHA that happened to trigger this run. Walk backward along first-parent main
+          # history to pin the newest commit whose full CI run passed.
+          git fetch --no-tags origin main
+          git switch --detach FETCH_HEAD
+          # Stage the main-HEAD release candidate helper before detaching to an older green commit so --branch and
+          # paginated JSON handling stay available regardless of what the selected green commit contains.
+          mkdir -p "$RUNNER_TEMP/release-ops"
+          cp scripts/operations/release_candidate.py scripts/operations/release_pr.py "$RUNNER_TEMP/release-ops/"
+          head_commit="$(git rev-parse HEAD)"
+          stable="$(gh api "repos/$REPOSITORY/releases/latest" --jq .tag_name)"
+          previous="$(git rev-parse "$stable^{commit}")"
+          # Any orphaned release branch reserves its version, including one whose earlier PR was closed. Never
+          # recreate that branch with a different source before this reservation has been applied.
+          git ls-remote --heads "https://github.com/$REPOSITORY.git" 'refs/heads/release/*' | cut -f2 | sed 's#refs/heads/release/##' > release-reserved.txt
+          if [[ "$CHANNEL" = beta ]]; then
+            current="$(gh release download beta-channel --repo "$REPOSITORY" --pattern latest.json --output - 2>/dev/null || true)"
+            if [[ -n "$current" ]]; then
+              previous="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["commit"])' <<< "$current")"
+            fi
+          fi
+          GH_TOKEN="$ACTIONS_TOKEN" python3 scripts/operations/select_green_commit.py --repository "$REPOSITORY" --head "$head_commit" --previous-commit "$previous" --out release-green.json
+          if [[ ! -s release-green.json ]]; then
+            echo 'No newer full green CI commit found on main; skipping release PR creation.'
+            exit 0
+          fi
+          green_commit="$(python3 -c 'import json; print(json.load(open("release-green.json"))["commit"])')"
+          ci_run_id="$(python3 -c 'import json; print(json.load(open("release-green.json"))["ci_run_id"])')"
+          git switch --detach "$green_commit"
+          commit="$(git rev-parse HEAD)"
+          git log --format=%s "$stable..$commit" --no-merges > release-subjects.txt
+          version_command=(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel "$CHANNEL" schedule-version --stable-tag "$stable" --commit "$commit" --previous-commit "$previous" --subjects release-subjects.txt --reserved)
+          while IFS= read -r reserved_version || [[ -n "$reserved_version" ]]; do
+            version_command+=("$reserved_version")
+          done < release-reserved.txt
+          version="$("${version_command[@]}")"
+          if [[ "$CHANNEL" = beta ]] && gh api "repos/$REPOSITORY/releases/tags/v$version" >/dev/null 2>&1; then
+            version_command=(python3 scripts/operations/release_pr.py --repository "$REPOSITORY" --channel beta next-version --stable-tag "$stable" --reserved)
+            while IFS= read -r reserved_version || [[ -n "$reserved_version" ]]; do
+              version_command+=("$reserved_version")
+            done < release-reserved.txt
+            version="$("${version_command[@]}")"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || exit 0
+          branch="release/$version"
+          title="release: v$version"
+          gh api "repos/$REPOSITORY/pulls?state=open&base=main&per_page=100" --paginate > release-open-prs-current.json
+          python3 "$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --channel "$CHANNEL" --pulls release-open-prs-current.json > release-active-candidate-current.txt
+          if [[ -s release-active-candidate-current.txt ]]; then
+            echo 'An open release PR already owns this channel; inspect its fixed-source verification instead of duplicating it:'
+            cat release-active-candidate-current.txt
+            exit 0
+          fi
+          python3 "$RUNNER_TEMP/release-ops/release_candidate.py" --repository "$REPOSITORY" --branch "$branch" --pulls release-open-prs-current.json > release-branch-candidate.txt
+          if [[ -s release-branch-candidate.txt ]]; then
+            echo "Release PR already exists for $version; inspect its current source and verification instead of duplicating it."
+            cat release-branch-candidate.txt
+            exit 0
+          fi
+          # An earlier unmerged candidate keeps its immutable source. Give the replacement a fresh branch rather than
+          # rewriting that branch; its version is published only after the new candidate passes every platform check.
+          suffix=0
+          candidate="$branch"
+          while git ls-remote --exit-code "https://github.com/$REPOSITORY.git" "refs/heads/$candidate" >/dev/null 2>&1; do
+            suffix=$((suffix + 1))
+            candidate="$branch-r$suffix"
+          done
+          branch="$candidate"
+          if git ls-remote --exit-code "https://github.com/$REPOSITORY.git" "refs/heads/$branch" >/dev/null 2>&1; then
+            echo "Concurrent release branch creation owns $branch; preserve its failed source and retry scheduling later." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code "https://github.com/$REPOSITORY.git" "refs/tags/v$version" >/dev/null 2>&1; then
+            echo "Version tag v$version already exists; do not reuse it." >&2
+            exit 1
+          fi
+          {
+            printf 'version=%s\n' "$version"
+            printf 'branch=%s\n' "$branch"
+            printf 'title=%s\n' "$title"
+            printf 'commit=%s\n' "$commit"
+            printf 'ci_run_id=%s\n' "$ci_run_id"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create the explicit release PR for the fixed green-CI commit
+        if: steps.select.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          RELEASE_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ steps.select.outputs.branch }}
+          TITLE: ${{ steps.select.outputs.title }}
+          VERSION: ${{ steps.select.outputs.version }}
+          COMMIT: ${{ steps.select.outputs.commit }}
+          CI_RUN_ID: ${{ steps.select.outputs.ci_run_id }}
+          CHANNEL: ${{ needs.channel.outputs.name }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          git switch -C "$BRANCH"
+          mkdir -p .github/release-prs
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          data={'version':os.environ['VERSION'],'commit':os.environ['COMMIT'],'ci_run_id':int(os.environ['CI_RUN_ID']),'channel':os.environ['CHANNEL']}
+          Path('.github/release-prs/'+os.environ['VERSION']+'.json').write_text(json.dumps(data,indent=2)+'\n')
+          PY
+          git add ".github/release-prs/$VERSION.json"
+          git diff --cached --quiet || git commit -m "$TITLE"
+          # Reuse the selected candidate branch on a bounded retry. A different main source always gets a new branch.
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" push "https://github.com/$REPOSITORY.git" "refs/heads/$BRANCH"
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          body=(f'Refs #9765.\n\nVerify this exact pinned green-CI source on all available signed platforms before merging. '
+                f'The protected publication workflow consumes the verified artifacts from this release PR; no other commit or unsigned substitute is published.\n\n'
+                f'Source: {os.environ["COMMIT"]}\nCI run: {os.environ["CI_RUN_ID"]}\nChannel: {os.environ["CHANNEL"]}')
+          Path(os.environ['RUNNER_TEMP']+'/release-pr-body.md').write_text(body)
+          PY
+          python3 scripts/operations/create_release_pr.py --repository "$REPOSITORY" --title "$TITLE" --branch "$BRANCH" --body-file "$RUNNER_TEMP/release-pr-body.md"

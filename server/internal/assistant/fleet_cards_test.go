@@ -8,14 +8,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -25,7 +29,8 @@ import (
 // The cards the manager makes itself: a TUI dialog read off the screen (fleet_ix_screen.go), the Codex cards a node
 // lists (fleet_ix_codex.go), a plan answered in the terminal (fleet_ix_terminal.go). Moved from the hub's tests with them.
 
-// Screens with a dialog the manager can read (screen.ParseDialog).
+// Screens with a dialog the manager can read (screen.ParseDialog). Raw node UI
+// questions run before Assistant setup; permission fixtures explicitly require the owner.
 const (
 	pickModel    = "  Pick a model\n\n› 1. gpt-6\n  2. gpt-6-mini\n\n  Press enter to confirm or esc to go back\n"
 	pickEffort   = "  Pick a reasoning level\n\n› 1. low\n  2. high\n\n  Press enter to confirm or esc to go back\n"
@@ -57,6 +62,7 @@ func newCardFleet(t *testing.T, store bool) (*fleetTest, *cardNode) {
 	if store {
 		ft = newFleetTest(t)
 	}
+	setSettings(t, ft.s, func(v *Settings) { v.Main = "" }) // raw node UI protocol, before Assistant setup
 	c := &cardNode{}
 	ft.d.mu.Lock()
 	ft.d.machines["mac"].call = func(method string, params json.RawMessage) (any, error) {
@@ -178,6 +184,63 @@ func TestScreenCardWait(t *testing.T) {
 	}
 }
 
+func TestScreenCardAfterHookExpires(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, tool, status string
+		withoutTerminal          bool
+		wantScreen               bool
+	}{
+		{"blocked permission", proto.IxPermission, "Bash", proto.StatusBlocked, false, true},
+		{"blocked question", proto.IxQuestion, "AskUserQuestion", proto.StatusBlocked, false, true},
+		{"working again", proto.IxPermission, "Bash", proto.StatusWorking, false, false},
+		{"blocked without a terminal", proto.IxQuestion, "AskUserQuestion", proto.StatusBlocked, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ft, node := newCardFleet(t, false)
+				node.setScreen(dialogScreen)
+				ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: tc.kind, ToolName: tc.tool,
+					ExpiresAt: time.Now().Add(time.Minute)}
+				ready := make(chan struct{})
+				done := make(chan proto.Resolution, 1)
+				go func() {
+					res, err := ft.s.waitInteractionReady(t.Context(), ix, nil, ready)
+					if err != nil {
+						t.Errorf("wait for hook: %v", err)
+					}
+					done <- res
+				}()
+				<-ready
+				sess := proto.Session{SessionID: ix.SessionID, Agent: "claude", StartedByPersona: true}
+				if tc.withoutTerminal {
+					sess.SourceKind = proto.SourceRuntime
+					sess.Capabilities = &proto.SessionCapabilities{Approve: true}
+				}
+				blockSession(ft, sess)
+				sess.Status = tc.status
+				ft.d.setSessions(ix.MachineID, []proto.Session{sess})
+
+				elapse(time.Until(ix.ExpiresAt))
+				if res := <-done; !res.Dismiss || res.Reason != proto.DismissedExpired {
+					t.Fatalf("hook result %+v, want expired dismissal", res)
+				}
+				elapse(2 * time.Second)
+
+				cards := pendingIDs(ft.s)
+				reads := ft.d.callsTo(ix.MachineID, "session.screen")
+				if tc.wantScreen {
+					id := "scr_mac_s1_" + screen.ParseDialog(dialogScreen).Rev
+					if len(cards) != 1 || cards[id] != proto.IxScreen || len(reads) != 1 {
+						t.Fatalf("after hook expiry, cards %v and %d screen reads, want %s", cards, len(reads), id)
+					}
+				} else if len(cards) != 0 || len(reads) != 0 {
+					t.Fatalf("after hook expiry, cards %v and %d screen reads, want neither", cards, len(reads))
+				}
+			})
+		})
+	}
+}
+
 // After a screen card's answer the agent asks again while herdr keeps it blocked: no status change comes, so the
 // manager looks at the screen again and the new dialog gets its card. The answered dialog still on screen gets none.
 func TestScreenCardAfterAnAnswerWhileStillBlocked(t *testing.T) {
@@ -274,6 +337,42 @@ func TestScreenCardUpgradeAbortedWhenCardEnded(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if list := s.pendingInteractions(); len(list) != 0 {
 		t.Fatalf("expected no replacement card created after card was ended, got: %+v", list)
+	}
+}
+
+// Cancellation stops future polls, but an accepted upgrade whose notification window already expired still rings its
+// current card once. Earlier cancellation, an earlier ring, or a replaced card stays silent.
+func TestScreenCardUpgradeCancellationRingsOnlyDueCurrentCard(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		window             time.Duration
+		announced, current bool
+		want               int
+	}{
+		{"due current card", -time.Second, false, true, 1},
+		{"already announced", -time.Second, true, true, 0},
+		{"window still open", time.Hour, false, true, 0},
+		{"card replaced", -time.Second, false, false, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ft, _ := newCardFleet(t, false)
+			s := ft.s
+			s.fleet.upgradeEvery, s.fleet.upgradeFor = time.Hour, c.window
+			runCtx, cancel := context.WithCancel(context.Background())
+			s.running.Store(&runCtx)
+			p := &pending{ix: proto.Interaction{ID: "scr_mac_s1", MachineID: "mac", SessionID: "s1", Kind: proto.IxScreen}, announced: c.announced}
+			s.fleet.mu.Lock()
+			s.ixMapLocked()[p.ix.ID] = p
+			if !c.current {
+				s.ixMapLocked()[p.ix.ID] = &pending{}
+			}
+			s.fleet.mu.Unlock()
+			cancel()
+			s.upgradeScreenCard("mac", "s1", p.ix.ID, p)
+			if got := ft.pushesOf(assistantwire.NotifyInput, c.want, 50*time.Millisecond); len(got) != c.want {
+				t.Fatalf("pushes after cancellation = %d, want %d", len(got), c.want)
+			}
+		})
 	}
 }
 
@@ -809,7 +908,7 @@ func TestResolveScreenChanged(t *testing.T) {
 	changed := &rpc.Error{Code: screen.PromptChanged, Message: "变了", Data: json.RawMessage(`{"delivered":"none"}`)}
 	put := func(id string) {
 		s.fleet.mu.Lock()
-		s.ixMapLocked()[id] = &pending{ix: proto.Interaction{ID: id, Kind: proto.IxScreen}, local: func(proto.Resolution) error { return changed }}
+		s.ixMapLocked()[id] = &pending{ix: proto.Interaction{ID: id, Kind: proto.IxScreen}, local: func(context.Context, proto.Resolution) error { return changed }}
 		s.fleet.mu.Unlock()
 	}
 	put("scr_a")
@@ -845,12 +944,12 @@ func TestCodexCardsFollowTheNodesList(t *testing.T) {
 	s := ft.s
 	s.fleet.mu.Lock()
 	s.ixMapLocked()["scr_mac_s1"] = &pending{ix: proto.Interaction{ID: "scr_mac_s1", MachineID: "mac", SessionID: "s1", Kind: proto.IxScreen},
-		local: func(proto.Resolution) error { return nil }}
+		local: func(context.Context, proto.Resolution) error { return nil }}
 	s.fleet.mu.Unlock()
 	ended := endedCards(s)
 	q := proto.Interaction{ID: "cxq_1", SessionID: "s1", Kind: proto.IxQuestion, Agent: "codex", ExpiresAt: time.Now().Add(time.Hour),
 		Questions: []proto.Question{{Question: "Which color?", Options: []proto.QuestionOption{{Label: "Red"}}}}}
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "curl -sI https://example.com",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "curl -sI https://example.com",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	listCodex(s, q, a)
 	if got := pendingIDs(s); len(got) != 2 || got["cxq_1"] != proto.IxQuestion || got["cxa_1"] != proto.IxPermission {
@@ -877,6 +976,41 @@ func TestCodexCardsFollowTheNodesList(t *testing.T) {
 	}
 	if len(pendingIDs(s)) != 0 {
 		t.Fatalf("still pending after the answer: %v", pendingIDs(s))
+	}
+}
+
+type answerProvenanceDevices struct {
+	Devices
+	owners []bool
+}
+
+func (d *answerProvenanceDevices) CallNode(ctx context.Context, id, method string, params json.RawMessage) (json.RawMessage, error) {
+	if method == "codex.answer" {
+		d.owners = append(d.owners, devicewire.IsOwnerAnswer(ctx))
+	}
+	return d.Devices.CallNode(ctx, id, method, params)
+}
+
+func TestCodexCardAnswerCarriesBusProvenance(t *testing.T) {
+	ft, _ := newCardFleet(t, false)
+	d := &answerProvenanceDevices{Devices: ft.s.devs}
+	ft.s.devs = d
+	handler := ft.s.fleetHandler(http.NotFoundHandler())
+	for _, owner := range []bool{true, false} {
+		id := fmt.Sprintf("cxq_%t", owner)
+		listCodex(ft.s, proto.Interaction{ID: id, SessionID: "s1", Kind: proto.IxQuestion, Agent: "codex",
+			ExpiresAt: time.Now().Add(time.Hour)})
+		response, err := serveHTTP(context.Background(), handler, assistantwire.HTTPRequest{
+			Method: http.MethodPost, Path: "/api/v1/interactions/" + id + "/resolve", OwnerAnswer: owner,
+			Header: http.Header{"Owner-Answer": {"true"}},
+			Body:   []byte(`{"answers":{"Color?":"Red"},"owner_input":true,"owner_answer":true}`),
+		}, nil)
+		if err != nil || response.Status != http.StatusOK {
+			t.Fatalf("resolve with owner=%t: response %+v, error %v", owner, response, err)
+		}
+	}
+	if !slices.Equal(d.owners, []bool{true, false}) {
+		t.Errorf("node call provenance: %v", d.owners)
 	}
 }
 
@@ -1089,6 +1223,23 @@ func putPending(s *Service, p *pending) {
 	s.fleet.mu.Unlock()
 }
 
+func TestTerminalDismissalHistoryNamesTerminal(t *testing.T) {
+	ft := newFleetTest(t)
+	at := time.Now()
+	ix := proto.Interaction{ID: "terminal-plan", MachineID: "mac", SessionID: "session", Kind: proto.IxPlan,
+		ToolName: "ExitPlanMode", CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
+	putPending(ft.s, &pending{ix: ix})
+	ft.s.record(ix)
+	ft.event("mac", "interaction.dismiss", map[string]any{"id": ix.ID})
+	status, res, err := ft.st.InteractionOutcome(context.Background(), ix.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "dismissed" || res == nil || res.AnsweredBy != "terminal" {
+		t.Fatalf("terminal dismissal history = %q %+v, want dismissed with answered_by terminal", status, res)
+	}
+}
+
 func TestTerminalPlanResultClearsTheCardWithoutApprovingAnything(t *testing.T) {
 	for _, trigger := range []string{"sessions", "revs"} {
 		t.Run(trigger, func(t *testing.T) {
@@ -1121,8 +1272,8 @@ func TestTerminalPlanResultClearsTheCardWithoutApprovingAnything(t *testing.T) {
 				t.Fatalf("session still asks for approval: %+v", sess)
 			}
 			status, res, _ := ft.st.InteractionOutcome(context.Background(), ix.ID)
-			if status != "dismissed" || res != nil {
-				t.Fatalf("must not record a made-up phone approval: %s %+v", status, res)
+			if status != "dismissed" || res == nil || res.AnsweredBy != "terminal" || res.Approve != nil || res.Mode != "" {
+				t.Fatalf("terminal decision must name its source without a made-up phone approval: %s %+v", status, res)
 			}
 			// finished tells the hub after the hook is released: wait for it rather than look once
 			waitFor(t, "the hub to get interaction_resolved", func() bool { return len(ft.toldOf(assistantwire.EventFleetResolved)) > 0 })
@@ -1166,12 +1317,12 @@ func TestTerminalPermissionResultClearsTheCard(t *testing.T) {
 	}
 	ft := planFleet(t, true, func(int) ([]proto.Item, bool, error) { return items, false, nil })
 	s := ft.s
-	ix := proto.Interaction{ID: "perm", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, ToolName: "Bash",
+	ix := proto.Interaction{ID: "perm", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		ToolUseID: "bash-call", CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
 	p := &pending{ix: ix, done: make(chan proto.Resolution, 1)}
 	putPending(s, p)
 	s.record(ix)
-	noID := &pending{ix: proto.Interaction{ID: "perm-no-id", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+	noID := &pending{ix: proto.Interaction{ID: "perm-no-id", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "Bash", CreatedAt: at}, done: make(chan proto.Resolution, 1)}
 	putPending(s, noID)
 	ft.sessions("mac", proto.Session{SessionID: "session", Status: proto.StatusWorking})
@@ -1184,8 +1335,9 @@ func TestTerminalPermissionResultClearsTheCard(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("the hook stayed blocked")
 	}
-	if status, res, _ := ft.st.InteractionOutcome(context.Background(), ix.ID); status != "dismissed" || res != nil {
-		t.Fatalf("must not record a made-up phone answer: %s %+v", status, res)
+	if status, res, _ := ft.st.InteractionOutcome(context.Background(), ix.ID); status != "dismissed" || res == nil ||
+		res.AnsweredBy != "terminal" || res.Allow != nil || res.Always {
+		t.Fatalf("terminal decision must name its source without a made-up phone answer: %s %+v", status, res)
 	}
 	s.fleet.mu.Lock()
 	kept := s.fleet.interactions["perm-no-id"] == noID
@@ -1198,17 +1350,227 @@ func TestTerminalPermissionResultClearsTheCard(t *testing.T) {
 func TestPermissionCallIsNeverGuessed(t *testing.T) {
 	at := time.Now()
 	// A plan's call and result right before and after the card: a plan without an id takes them, a permission does not.
-	if planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", CreatedAt: at}, planItems(at)) {
+	if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", CreatedAt: at}, planItems(at)) {
 		t.Fatal("a permission card without its tool call's id was ended by another call's result")
 	}
+	withExactInput := &pending{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
+		ToolInput: json.RawMessage(`{"command":"synthetic"}`), Resumable: true}}
+	if !terminalReconciled(withExactInput) {
+		t.Fatal("a Claude Code permission with exact input was not eligible for reconciliation")
+	}
 	for _, p := range []*pending{
-		{ix: proto.Interaction{Kind: proto.IxPermission, ToolUseID: "c", Resumable: true, Agent: "codex"}},
-		{ix: proto.Interaction{Kind: proto.IxPermission, ToolUseID: "c"}},
-		{ix: proto.Interaction{Kind: proto.IxPermission, Resumable: true}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolUseID: "c", Resumable: true, Agent: "codex"}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolUseID: "c"}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, Resumable: true}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolUseID: "c", Resumable: true}, prepared: &preparedApproval{}},
 	} {
 		if terminalReconciled(p) {
-			t.Fatalf("only a Claude Code hook's permission naming its call is reconciled: %+v", p.ix)
+			t.Fatalf("a permission without a safe Claude Code call identity was reconciled: %+v", p.ix)
 		}
+	}
+}
+
+func TestNonFinalApprovalResultsNeverFinishPermissionCall(t *testing.T) {
+	at := time.Now()
+	input := json.RawMessage(`{"command":"printf example"}`)
+	for _, msg := range []string{
+		"PreToolUse:Bash hook error: " + approvalops.WaitingText + " The command was not executed.",
+		"PreToolUse:Bash hook error: " + approvalops.ClarifyingText,
+	} {
+		items := []proto.Item{
+			{ID: "call#0", Seq: 10, TS: at.Add(-time.Millisecond), Role: "assistant", Kind: proto.KindToolUse,
+				ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input},
+			{ID: "result#0", Seq: 11, TS: at.Add(time.Second), Role: "user", Kind: proto.KindToolResult,
+				ToolUseID: "bash-call", IsError: true, Text: msg},
+			{ID: "text#0", Seq: 12, TS: at.Add(2 * time.Second), Role: "assistant", Kind: proto.KindText,
+				Text: "Please confirm the pending card."},
+		}
+		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input, CreatedAt: at}, items) {
+			t.Fatalf("non-final result finished call with ToolUseID: %q", msg)
+		}
+		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}, items) {
+			t.Fatalf("non-final result finished call matched by ToolInput: %q", msg)
+		}
+		// checkPlanInteraction concatenates pages newest first: newer-page assistant text must not win before the older
+		// page's non-final WaitingText / ClarifyingText result is inspected (#12918).
+		newestFirst := []proto.Item{
+			items[2],
+			items[0],
+			items[1],
+		}
+		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}, newestFirst) {
+			t.Fatalf("newest-page-first assistant text bypassed older non-final result: %q", msg)
+		}
+	}
+	// Genuine terminal command output that merely quotes WaitingText (for example grep over approval.go) still reconciles.
+	grepItems := []proto.Item{
+		{ID: "call#0", Seq: 10, TS: at.Add(-time.Millisecond), Role: "assistant", Kind: proto.KindToolUse,
+			ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input},
+		{ID: "result#0", Seq: 11, TS: at.Add(time.Second), Role: "user", Kind: proto.KindToolResult,
+			ToolUseID: "bash-call", Text: `server/internal/approval/approval.go:51:const WaitingText = "` + approvalops.WaitingText + `"`},
+	}
+	if !planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input, CreatedAt: at}, grepItems) {
+		t.Fatal("ordinary stdout quoting WaitingText was misclassified as a non-final hook release")
+	}
+}
+
+func terminalPermissionItems(at time.Time, input json.RawMessage) []proto.Item {
+	return []proto.Item{
+		{ID: "call#0", Seq: 10, TS: at.Add(-time.Millisecond), Role: "assistant", Kind: proto.KindToolUse,
+			ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input},
+		{ID: "result#0", Seq: 11, TS: at.Add(2 * time.Minute), Role: "user", Kind: proto.KindToolResult,
+			ToolUseID: "bash-call", IsError: true, Text: "Permission for this command was denied by a built-in Claude Code safety check, not by the user."},
+	}
+}
+
+func TestTerminalPermissionWithoutIDMatchesExactCall(t *testing.T) {
+	at := time.Now()
+	input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*","description":"Remove synthetic test output"}`)
+	ix := proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}
+	for _, tc := range []struct {
+		name  string
+		input json.RawMessage
+		items func() []proto.Item
+		want  bool
+	}{
+		{"built-in denial", input, func() []proto.Item { return terminalPermissionItems(at, input) }, true},
+		{"equivalent JSON", json.RawMessage(`{ "description": "Remove synthetic test output", "command": "rm -f /tmp/persona-stale-permission-test/*" }`),
+			func() []proto.Item { return terminalPermissionItems(at, input) }, true},
+		{"still waiting", input, func() []proto.Item { return terminalPermissionItems(at, input)[:1] }, false},
+		{"different input", input, func() []proto.Item {
+			return terminalPermissionItems(at, json.RawMessage(`{"command":"rm -f /tmp/another-test-directory/*"}`))
+		}, false},
+		{"two candidate calls", input, func() []proto.Item {
+			items := terminalPermissionItems(at, input)
+			return append(items, proto.Item{ID: "call#1", Seq: 9, TS: at.Add(-2 * time.Millisecond), Role: "assistant", Kind: proto.KindToolUse,
+				ToolName: "Bash", ToolUseID: "other-bash-call", ToolInput: input})
+		}, false},
+		{"old call", input, func() []proto.Item {
+			return terminalPermissionItems(at.Add(-time.Minute), input)
+		}, false},
+		{"different tool", input, func() []proto.Item {
+			items := terminalPermissionItems(at, input)
+			items[0].ToolName = "Write"
+			return items
+		}, false},
+		{"unrelated activity without the call", input, func() []proto.Item {
+			return []proto.Item{{ID: "text#0", Seq: 12, TS: at.Add(time.Second), Role: "assistant", Kind: proto.KindText, Text: "Continuing."}}
+		}, false},
+		{"unrelated parallel result", input, func() []proto.Item {
+			items := terminalPermissionItems(at, input)[:1]
+			return append(items, proto.Item{ID: "result#1", Seq: 11, TS: at.Add(time.Minute), Role: "user", Kind: proto.KindToolResult, ToolUseID: "other-call"})
+		}, false},
+		{"activity in the calling message", input, func() []proto.Item {
+			items := terminalPermissionItems(at, input)[:1]
+			return append(items, proto.Item{ID: "text#0", Seq: 11, TS: at.Add(-time.Millisecond), Role: "assistant", Kind: proto.KindText, Text: "Same message."})
+		}, false},
+		{"missing call timestamp", input, func() []proto.Item {
+			items := terminalPermissionItems(at, input)
+			items[0].TS = time.Time{}
+			return items
+		}, false},
+		{"missing input", nil, func() []proto.Item { return terminalPermissionItems(at, input) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ix.ToolInput = tc.input
+			if got := planCallFinished(ix, tc.items()); got != tc.want {
+				t.Fatalf("finished = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTerminalPermissionWithoutIDClearsBuiltInDenial(t *testing.T) {
+	at := time.Now()
+	input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*"}`)
+	items := terminalPermissionItems(at, input)
+	ft := planFleet(t, false, func(int) ([]proto.Item, bool, error) { return items, false, nil })
+	s := ft.s
+	ix := proto.Interaction{ID: "builtin-denial", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
+		ToolName: "Bash", ToolInput: input, CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
+	p := &pending{ix: ix, done: make(chan proto.Resolution, 1), route: &askRoute{routedAt: at}}
+	putPending(s, p)
+	ft.d.setSessions("mac", []proto.Session{{MachineID: "mac", SessionID: "session", Status: proto.StatusWorking}})
+	s.checkPlanInteraction("mac", p)
+	if got := s.pendingInteractions(); len(got) != 0 {
+		t.Fatalf("built-in denial left the permission card pending: %+v", got)
+	}
+	select {
+	case r := <-p.done:
+		if !r.Dismiss || r.Allow != nil || r.Always {
+			t.Fatalf("runtime denial must only dismiss the obsolete card: %+v", r)
+		}
+	default:
+		t.Fatal("the permission hook stayed blocked")
+	}
+	rows := s.decorated("mac")
+	if len(rows) != 1 || rows[0].PendingInteractions != 0 || rows[0].State == proto.StateNeedsYou {
+		t.Fatalf("the completed session still needs the owner: %+v", rows)
+	}
+	before := len(ft.toldOf(assistantwire.EventFleetInteraction))
+	s.askTick(at.Add(askHoldFor))
+	if got := len(ft.toldOf(assistantwire.EventFleetInteraction)); got != before {
+		t.Fatal("the obsolete card escalated after the runtime denied it")
+	}
+}
+
+func TestPermissionContinuedPastCallClearsCard(t *testing.T) {
+	for _, later := range []proto.Item{
+		{ID: "text#0", Seq: 11, Role: "assistant", Kind: proto.KindText, Text: "Continuing without that removal."},
+		{ID: "thinking#0", Seq: 11, Role: "assistant", Kind: proto.KindThinking, Text: "Trying another read-only approach."},
+		{ID: "call#1", Seq: 11, Role: "assistant", Kind: proto.KindToolUse, ToolName: "Read", ToolUseID: "read-call"},
+	} {
+		t.Run(later.Kind, func(t *testing.T) {
+			at := time.Now()
+			input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*"}`)
+			later.TS = at.Add(2 * time.Minute)
+			items := append(terminalPermissionItems(at, input)[:1], later)
+			if !planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}, items) {
+				t.Fatal("later session activity did not finish the obsolete permission call")
+			}
+			ft := planFleet(t, false, func(int) ([]proto.Item, bool, error) { return items, false, nil })
+			ix := proto.Interaction{ID: "continued-" + later.Kind, MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
+				ToolName: "Bash", ToolInput: input, CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
+			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)}
+			putPending(ft.s, p)
+			ft.s.checkPlanInteraction("mac", p)
+			if got := ft.s.pendingInteractions(); len(got) != 0 {
+				t.Fatalf("continued session left the permission card pending: %+v", got)
+			}
+			select {
+			case r := <-p.done:
+				if !r.Dismiss || r.Allow != nil || r.Always {
+					t.Fatalf("continued activity must not invent an approval: %+v", r)
+				}
+			default:
+				t.Fatal("the permission hook stayed blocked")
+			}
+		})
+	}
+}
+
+func TestTerminalPermissionWithoutIDKeepsWaitingCard(t *testing.T) {
+	at := time.Now()
+	input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*"}`)
+	items := terminalPermissionItems(at, input)[:1]
+	ft := planFleet(t, false, func(int) ([]proto.Item, bool, error) { return items, false, nil })
+	ix := proto.Interaction{ID: "really-waiting", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
+		ToolName: "Bash", ToolInput: input, CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
+	p := &pending{ix: ix, done: make(chan proto.Resolution, 1), route: &askRoute{routedAt: at}}
+	putPending(ft.s, p)
+	ft.s.checkPlanInteraction("mac", p)
+	if _, ok := ft.s.pendingIx(ix.ID); !ok {
+		t.Fatal("a permission call with no result or later activity was dismissed")
+	}
+	select {
+	case r := <-p.done:
+		t.Fatalf("a genuinely pending hook was released: %+v", r)
+	default:
+	}
+	before := len(ft.toldOf(assistantwire.EventFleetInteraction))
+	ft.s.askTick(at.Add(askHoldFor))
+	if got := len(ft.toldOf(assistantwire.EventFleetInteraction)); got <= before {
+		t.Fatal("a genuinely waiting permission card did not escalate at its deadline")
 	}
 }
 
@@ -1333,7 +1695,7 @@ func TestCodexCardAskedAgainIsAnnounced(t *testing.T) {
 	t.Cleanup(func() { codexAskedAgain = old })
 	ft, _ := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 {
@@ -1374,7 +1736,7 @@ func TestCodexCardAnsweredOnThePhoneAskedAgainIsAnnounced(t *testing.T) {
 	t.Cleanup(func() { codexAskedAgain = old })
 	ft, _ := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	yes := true
 	listCodex(s, a)
@@ -1398,7 +1760,7 @@ func TestCodexCardAnsweredOnThePhoneAskedAgainIsAnnounced(t *testing.T) {
 func TestCodexApprovalAskedAgainAtOnceIsAnnounced(t *testing.T) {
 	ft, _ := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	q := proto.Interaction{ID: "cxq_1", SessionID: "s3", Kind: proto.IxQuestion, Agent: "codex", ExpiresAt: time.Now().Add(time.Hour),
 		Questions: []proto.Question{{Question: "Which?", Options: []proto.QuestionOption{{Label: "A"}}}}}
@@ -1629,7 +1991,7 @@ func TestCodexCardPromptChangedAskedAgainIsAnnounced(t *testing.T) {
 	t.Cleanup(func() { codexAskedAgain = old })
 	ft, n := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 {
@@ -1662,5 +2024,33 @@ func TestCodexCardPromptChangedAskedAgainIsAnnounced(t *testing.T) {
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 2, time.Second); len(got) != 2 {
 		t.Fatalf("asked again after prompt_changed: pushed %d times", len(got))
+	}
+}
+
+// Claude Code's Bypass Permissions confirmation on a fresh pane (blank rows under it down to the bottom) is a card
+// with its two choices, answered with the keys that pick each, and nothing is pressed until the user picks one.
+// Before, no dialog was read off that screen, so the card offered nothing to choose.
+func TestScreenCardOffersTheBypassConfirmationsChoices(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "screen", "testdata", "claude-2.1.322-bypass-confirm-160.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft, n := newCardFleet(t, false)
+	n.setScreen(string(b))
+	blockSession(ft, proto.Session{SessionID: "s1"})
+	if got, _ := waitCards(ft.s, 1, 5*time.Second); len(got) != 1 {
+		t.Fatalf("cards %v", got)
+	}
+	ix := ft.s.pendingInteractions()[0]
+	if ix.Kind != proto.IxScreen || ix.Dialog == nil || len(ix.Dialog.Options) != 2 ||
+		ix.Dialog.Options[0].Label != "No, exit" || ix.Dialog.Options[1].Label != "Yes, I accept" {
+		t.Fatalf("card %+v dialog %+v", ix, ix.Dialog)
+	}
+	p, err := screenAnswer("s1", ix.Dialog, proto.Resolution{Option: ix.Dialog.Options[1].Key})
+	if err != nil || !slices.Equal(p["keys"].([]string), []string{"down", "enter"}) {
+		t.Fatalf("answer %v %v", p, err)
+	}
+	if !strings.HasPrefix(ix.ID, "scr_mac_s1_") || ix.Dialog.Rev == "" {
+		t.Errorf("id %s rev %q", ix.ID, ix.Dialog.Rev)
 	}
 }

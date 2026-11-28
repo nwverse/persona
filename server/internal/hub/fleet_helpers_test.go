@@ -43,6 +43,12 @@ func reportResolved(t *testing.T, h *Hub, id, by string) {
 	busEvents[assistantwire.EventFleetResolved](h, nil, b)
 }
 
+func reportResolvedAt(t *testing.T, h *Hub, id string, at time.Time) {
+	t.Helper()
+	b, _ := json.Marshal(assistantwire.FleetResolved{ID: id, CreatedAt: at})
+	busEvents[assistantwire.EventFleetResolved](h, nil, b)
+}
+
 // reportLive is the manager's fleet.live.
 func reportLive(t *testing.T, h *Hub, st FleetState, stats FleetStats) {
 	t.Helper()
@@ -137,7 +143,10 @@ func (h *Hub) mcpTools(assistant bool) []proto.Tool {
 	agents, assistantOnly := fakeExtOf(h).AgentTools(ctx, assistant) // the extensions' (the manager's, faked)
 	tools := append(h.phoneToolList(), agents...)
 	if !assistant {
-		for _, n := range []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread"} { // the agents' own, the manager's (assistant AgentTools)
+		for _, n := range []string{
+			"resource_status", "resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel",
+			"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread",
+		} { // the agent tools the manager lists (assistant mcpTools and AgentTools)
 			t := prompts.Tool(n)
 			tools = append(tools, proto.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 		}

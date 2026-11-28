@@ -1,4 +1,4 @@
-Inspect one model profile by id. See its purpose bindings, launcher model fields and named execution tiers (the Agent presets). Add, change or remove a tier with persona_settings key model_profiles.tiers; other fields are edited through the model-profiles HTTP API. Saving does not apply purpose or launcher settings.
+Inspect a saved profile. Edit its bindings or tiers with persona_settings.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -6,7 +6,7 @@ Inspect one model profile by id. See its purpose bindings, launcher model fields
   "properties": {
     "id": {
       "type": "string",
-      "description": "Profile id from model_profiles_list"
+      "description": "Saved profile ID"
     }
   },
   "additionalProperties": false,

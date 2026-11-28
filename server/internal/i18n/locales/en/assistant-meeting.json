@@ -20,6 +20,7 @@
   "ask_busy": "Two questions are being answered now. Ask again once one is answered.",
   "meeting_ended": "This meeting has ended. Write in its follow-up instead.",
   "bad_private": "private must be true or false.",
+  "bad_title": "A title must be one line of at most 200 characters.",
   "not_meeting": "This recording isn’t a meeting.",
   "text_too_long": "The text is over {max} characters.",
   "too_many_images": "At most {max} images.",
@@ -46,5 +47,10 @@
   "bad_audio": "The audio isn’t valid. Send PCM16 mono audio at 16 kHz with a valid start time.",
   "bad_transcription_mode": "meeting_transcription_default must be device or hub.",
   "bad_glossary": "meeting_glossary must be a list of up to 200 terms, each at most 40 characters.",
-  "bad_transcription_extension": "Choose an installed transcription contribution as extension-id/contribution-id, or leave it empty for the built-in service."
+  "bad_transcription_extension": "Choose an installed transcription contribution as extension-id/contribution-id, or leave it empty for the built-in service.",
+  "speakers_stale": "The speaker list changed. Reload and try again.",
+  "speakers_cleared": "Speakers were cleared for this meeting.",
+  "bad_speakers": "The speaker request isn’t valid.",
+  "speaker_run_reused": "This speaker timeline run id was already used for a different timeline.",
+  "too_many_speaker_turns": "At most {max} speaker turns per import."
 }

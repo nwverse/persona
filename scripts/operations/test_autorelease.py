@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -180,6 +181,14 @@ class AutoreleaseTests(unittest.TestCase):
         return [entry for entry in self.entries(self.action_log)
                 if entry["kind"] == "action" and (target is None or entry["target"] == target)]
 
+    def proc_zombie_or_gone(self, pid):
+        """Read a Linux child's state, accepting a disappearance between the liveness check and open."""
+        try:
+            os.kill(pid, 0)
+            return Path(f"/proc/{pid}/stat").read_text().split()[2] == "Z"
+        except (ProcessLookupError, FileNotFoundError):
+            return True
+
     def wait_for(self, predicate, timeout=5):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -338,12 +347,13 @@ class AutoreleaseTests(unittest.TestCase):
     def test_stale_checkout_defers_without_budget_or_notification_and_uses_next_head(self):
         self.target("web", ["web/"])
         self.modes["hub"].write_text("stale")
-        self.invoke()
-        self.invoke()
-        self.invoke()
+        for _ in range(3):
+            result = self.invoke(code=75)
+            self.assertIn("verdict=lock-busy", result.stdout)
         record = self.state()["targets"]["hub"]
         self.assertEqual(record["failures"], 0)
         self.assertNotIn("last_success", record)
+        self.assertEqual(self.state()["outbox"], [])
         self.assertFalse(self.notify_log.exists())
         self.assertEqual(len(self.actions("hub")), 3)
         self.assertEqual(len(self.actions("web")), 1)
@@ -361,7 +371,8 @@ class AutoreleaseTests(unittest.TestCase):
         newest = self.commit({"server/a.go": "merged during deployment"})
         Path(str(self.modes["hub"]) + ".gate").write_text("release")
         stdout, stderr = process.communicate(timeout=10)
-        self.assertEqual(process.returncode, 0, stdout + stderr)
+        self.assertEqual(process.returncode, 75, stdout + stderr)
+        self.assertIn("verdict=lock-busy", stdout)
         self.assertIn("result=checkout-stale-deferred", stderr)
         self.assertEqual(self.state()["targets"]["hub"]["failures"], 0)
         self.assertFalse(self.notify_log.exists())
@@ -375,7 +386,7 @@ class AutoreleaseTests(unittest.TestCase):
         self.invoke(code=1)
         fingerprint = self.state()["notified_failures"]["hub"]
         self.modes["hub"].write_text("stale")
-        result = self.invoke()
+        result = self.invoke(code=75)
         self.assertIn("result=checkout-stale-deferred", result.stderr)
         self.assertEqual(self.state()["targets"]["hub"]["failures"], 1)
         self.assertEqual(self.state()["notified_failures"]["hub"], fingerprint)
@@ -386,7 +397,7 @@ class AutoreleaseTests(unittest.TestCase):
     def test_retained_logs_inspect_only_current_attempt(self):
         self.config["targets"]["hub"]["log_output"] = True
         self.modes["hub"].write_text("stale")
-        self.invoke()
+        self.invoke(code=75)
         self.modes["hub"].write_text("exit-two")
         self.invoke(code=1)
         self.assertEqual(self.state()["targets"]["hub"]["failures"], 1)
@@ -472,15 +483,22 @@ class AutoreleaseTests(unittest.TestCase):
         self.assertEqual(failure.exception.summary_hash, expected)
         pid = int(pid_file.read_text())
 
-        def gone():
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                return True
-            status = Path(f"/proc/{pid}/stat")
-            return status.exists() and status.read_text().split()[2] == "Z"
+        self.wait_for(lambda: self.proc_zombie_or_gone(pid))
 
-        self.wait_for(gone)
+    @unittest.skipIf(os.name == "nt", "procfs process states are Linux-specific")
+    def test_process_disappears_before_its_proc_stat_is_read(self):
+        status = self.root / "proc-stat"
+        with patch.object(os, "kill", return_value=None), \
+                patch.object(Path, "read_text", side_effect=ProcessLookupError):
+            self.assertTrue(self.proc_zombie_or_gone(12345))
+        status.write_text("12345 (fixture) S 1 1 1\n")
+        with patch.object(os, "kill", return_value=None), \
+                patch.object(Path, "read_text", return_value=status.read_text()):
+            self.assertFalse(self.proc_zombie_or_gone(12345))
+        status.write_text("12345 (fixture) Z 1 1 1\n")
+        with patch.object(os, "kill", return_value=None), \
+                patch.object(Path, "read_text", return_value=status.read_text()):
+            self.assertTrue(self.proc_zombie_or_gone(12345))
 
     def test_worker_recovery_is_durable_before_interrupted_action(self):
         config = autorelease.load_config(self.config_path)
@@ -681,6 +699,20 @@ class AutoreleaseTests(unittest.TestCase):
         self.wait_for(gone)
         self.assertEqual(self.state()["targets"]["hub"]["failures"], 1)
         self.assertIn("result=step-1-timeout", self.entries(self.notify_log)[0]["args"][0])
+
+    def test_kill_group_ignores_a_group_with_only_exited_members(self):
+        leader = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        try:
+            def exited_unreaped():
+                state = subprocess.run(["ps", "-o", "stat=", "-p", str(leader.pid)],
+                                       capture_output=True, text=True).stdout.strip()
+                return state.startswith("Z")
+
+            self.wait_for(exited_unreaped)
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                autorelease.kill_group(leader.pid, sig)
+        finally:
+            leader.wait()
 
     def test_notify_timeout_retains_outbox(self):
         self.config["notify_timeout"] = 0.4

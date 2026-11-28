@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Hand to AI files nothing unless the user asks (docs/assistant/inbox.md "Item actions"): these check that the rule
 /// holds on the bar's queued path as well as on a direct send, and that the box is read when the send goes.
@@ -35,7 +36,7 @@ struct InboxHandOffDoneDefaultTests {
                 if !calls.recordFailures.isEmpty { throw calls.recordFailures.removeFirst() }
             },
             showMain: { _, _, _ in },
-            plainToMain: { _ in SessionKey(machineID: "server", sessionID: "main-1") },
+            plainToMain: { _, _ in SessionKey(machineID: "server", sessionID: "main-1") },
             startNew: { _ in calls.started += 1; return SessionKey(machineID: "server", sessionID: "new-1") },
             sendToAgent: { _, _, file in
                 calls.files.append(file)

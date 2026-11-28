@@ -18,24 +18,36 @@ import (
 )
 
 type pending struct {
-	ID             string    `json:"id"`
-	Exe            string    `json:"exe"`
-	Backup         string    `json:"backup"`
-	Stage          string    `json:"stage"`
-	Version        string    `json:"version"`
-	From           string    `json:"from"`
-	OldHash        string    `json:"old_sha256"`
-	NewHash        string    `json:"new_sha256"`
-	PID            int       `json:"pid"`
-	ProcessStart   string    `json:"process_start"`
-	ProcessPrecise string    `json:"process_start_precise,omitempty"` // exact instance identity; absent in older markers
-	WatchPID       int       `json:"watch_pid"`
-	WatchStart     string    `json:"watch_start"`
-	WatchPrecise   string    `json:"watch_start_precise,omitempty"`
-	Deadline       time.Time `json:"deadline"`
+	ID      string `json:"id"`
+	Exe     string `json:"exe"`
+	Backup  string `json:"backup"`
+	Stage   string `json:"stage"`
+	Version string `json:"version"`
+	From    string `json:"from"`
+	OldHash string `json:"old_sha256"`
+	NewHash string `json:"new_sha256"`
+	Adopted bool   `json:"adopted,omitempty"` // confirmation only; the executable belongs to another deployment
+	// Draining is true after commit reply while the resident process is draining active work before handover/exec.
+	// Watchdogs do not trigger rollback while the draining process is still alive; handover clears Draining and
+	// anchors Deadline to post-exec startup.
+	Draining       bool   `json:"draining,omitempty"`
+	PID            int    `json:"pid"`
+	ProcessStart   string `json:"process_start"`
+	ProcessPrecise string `json:"process_start_precise,omitempty"` // exact instance identity; absent in older markers
+	WatchPID       int    `json:"watch_pid"`
+	WatchStart     string `json:"watch_start"`
+	WatchPrecise   string `json:"watch_start_precise,omitempty"`
+	// SupervisorPID and SupervisorStart identify what started the node, where an update restarts it as a new process
+	// (Windows: persona-link's supervisor), so the watchdog can find that process (stopRestarted).
+	SupervisorPID   int       `json:"supervisor_pid,omitempty"`
+	SupervisorStart string    `json:"supervisor_start,omitempty"`
+	Deadline        time.Time `json:"deadline"`
 }
 
 func markerPath(exe string) string { return exe + ".node-update-pending.json" }
+
+// backupPath is where transaction id keeps the old program, which the watchdog runs from (hence exeSuffix).
+func backupPath(exe, id string) string { return exe + ".node-update-backup-" + id + exeSuffix }
 
 func savePending(p pending) error {
 	b, err := json.Marshal(p)
@@ -88,10 +100,30 @@ func loadPending(path string) (pending, error) {
 		p.WatchPID, p.WatchStart, p.WatchPrecise = ready.PID, ready.Start, ready.Precise
 	}
 	id, idErr := hex.DecodeString(p.ID)
-	if idErr != nil || len(id) != 16 || filepath.Clean(p.Exe) != p.Exe || filepath.IsAbs(p.Exe) == false || markerPath(p.Exe) != path || p.Backup != p.Exe+".node-update-backup-"+p.ID || filepath.Dir(p.Stage) != filepath.Dir(p.Exe) || !strings.HasPrefix(filepath.Base(p.Stage), ".node-update-stage-") || p.PID < 2 || len(p.OldHash) != 64 || len(p.NewHash) != 64 || p.Deadline.IsZero() {
+	if idErr != nil || len(id) != 16 || filepath.Clean(p.Exe) != p.Exe || filepath.IsAbs(p.Exe) == false || markerPath(p.Exe) != path || filepath.Dir(p.Stage) != filepath.Dir(p.Exe) || !strings.HasPrefix(filepath.Base(p.Stage), ".node-update-stage-") || len(p.NewHash) != 64 || p.Deadline.IsZero() {
+		return p, errors.New("invalid node update transaction marker")
+	}
+	if p.Adopted && (p.Backup != "" || p.OldHash != "") ||
+		!p.Adopted && (p.Backup != backupPath(p.Exe, p.ID) || p.PID < 2 || len(p.OldHash) != 64) {
 		return p, errors.New("invalid node update transaction marker")
 	}
 	return p, nil
+}
+
+// A later transaction can replace the confirmation record for an external install.
+// A pending swap still owns rollback and must complete first.
+func checkPendingSwap(exe string) error {
+	p, err := loadPending(markerPath(exe))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if p.Adopted {
+		return nil
+	}
+	return errors.New("a node update is awaiting confirmation")
 }
 
 // Recover startup before opening sockets. A new version that missed its deadline
@@ -109,6 +141,13 @@ func (m *Manager) recover() error {
 		if err != nil {
 			return err
 		}
+		if p.Adopted {
+			if sum != p.NewHash {
+				return cleanup(p)
+			}
+			_ = os.Remove(p.Stage) // also handles an interruption after saving the marker
+			return m.cleanStaleStages("")
+		}
 		if sum == p.OldHash {
 			// A supervisor may have loaded the new inode just before rollback.
 			// Retain the barrier until the restored executable actually starts.
@@ -121,6 +160,12 @@ func (m *Manager) recover() error {
 		if sum != p.NewHash {
 			// An external deploy superseded this update; never undo its file.
 			return cleanup(p)
+		}
+		if p.Draining && m.version == p.Version {
+			// The new executable started before ArmHandover cleared Draining (for example after the
+			// draining process exited unexpectedly). Start the post-exec confirmation window now.
+			p.Draining = false
+			p.Deadline = time.Now().Add(m.confirmTimeout())
 		}
 		if !time.Now().Before(p.Deadline) {
 			if err := restore(p); err != nil {
@@ -162,6 +207,7 @@ func (m *Manager) RestartRequired() bool { return m.needsRestart }
 func (m *Manager) Executable() string    { return m.exe }
 
 func (m *Manager) cleanStaleStages(keep string) error {
+	removeRetired(filepath.Dir(m.exe))
 	paths, err := filepath.Glob(filepath.Join(filepath.Dir(m.exe), ".node-update-stage-*"))
 	if err != nil {
 		return err
@@ -183,6 +229,9 @@ func (m *Manager) cleanStaleStages(keep string) error {
 func startWatchdog(backup, path, id string) error {
 	if runtime.GOOS == "linux" && os.Getenv("INVOCATION_ID") != "" {
 		return startSystemdWatchdog(backup, path, id)
+	}
+	if runtime.GOOS == "windows" {
+		return startDetachedManagedWatchdog(backup, path, id)
 	}
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -239,6 +288,36 @@ func startSystemdWatchdog(backup, path, id string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("start independent systemd watchdog: %w", err)
 	}
+	if err := waitManagedReady(ctx, path, id); err != nil {
+		return fmt.Errorf("systemd watchdog: %w", err)
+	}
+	return nil
+}
+
+// On Windows a child gets no inherited descriptor beyond stdin, stdout and stderr (exec.Cmd.ExtraFiles), so the
+// detached watchdog says it is ready through the transaction marker, as the systemd one does. It is detached from the
+// node's console and outlives the node; it does stay in the supervisor's job, so it ends with the supervisor, and the
+// next node's startup recovery starts another (recover).
+func startDetachedManagedWatchdog(backup, path, id string) error {
+	cmd := exec.Command(backup, "node-update-watch", path, id, "--managed-ready")
+	cmd.SysProcAttr = osproc.DetachedAttr()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := waitManagedReady(ctx, path, id); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("watchdog did not become ready: %w", err)
+	}
+	go func() { _ = cmd.Wait() }() // releases the process handle once it exits
+	return nil
+}
+
+// waitManagedReady waits for the watchdog of transaction id to record itself in the marker (WatchManaged) and to be
+// running as the process it recorded.
+func waitManagedReady(ctx context.Context, path, id string) error {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -254,7 +333,7 @@ func startSystemdWatchdog(backup, path, id string) error {
 		}
 		select {
 		case <-ctx.Done():
-			return errors.New("systemd watchdog did not become ready")
+			return errors.New("not ready in time")
 		case <-ticker.C:
 		}
 	}
@@ -270,6 +349,9 @@ func WatchManaged(ctx context.Context, path, id string) error {
 	}
 	if p.ID != id {
 		return errors.New("node watchdog transaction mismatch")
+	}
+	if p.Adopted {
+		return nil
 	}
 	birth, err := processStart(os.Getpid())
 	if err != nil {
@@ -320,6 +402,9 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 	if p.ID != id {
 		return errors.New("node watchdog transaction mismatch")
 	}
+	if p.Adopted {
+		return nil
+	}
 	if ready != nil {
 		if _, err := ready.Write([]byte{1}); err != nil {
 			return err
@@ -341,11 +426,24 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 			if err != nil {
 				return err
 			}
-			if current.ID != id {
+			if current.ID != id || current.Adopted {
 				done = true
 				return nil
 			}
 			p = current
+			if p.Draining {
+				if aliveIs(p.PID, p.ProcessStart, p.ProcessPrecise) {
+					return nil
+				}
+				// The draining process exited before handover; transition out of draining so the
+				// replacement (or a startup crash loop) is bounded by the confirmation deadline.
+				p.Draining = false
+				if p.Deadline.IsZero() || time.Until(p.Deadline) > ConfirmTimeout {
+					p.Deadline = time.Now().Add(ConfirmTimeout)
+				}
+				_ = savePending(p)
+				return nil
+			}
 			if time.Now().Before(p.Deadline) {
 				return nil
 			}
@@ -357,7 +455,9 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 				done = true
 				return cleanup(p)
 			}
+			restored := time.Time{}
 			if sum == p.NewHash {
+				restored = time.Now()
 				if err := restore(p); err != nil {
 					if errors.Is(err, errSuperseded) {
 						// A deployment we did not stage replaced the file after
@@ -374,6 +474,11 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 			// unrelated reused PID.
 			if err := killRecorded(p.PID, p.ProcessStart, p.ProcessPrecise); err != nil {
 				return err
+			}
+			// Without exec (Windows) the new program is a new process, which records
+			// itself only when it is a build that can take updates there.
+			if !restored.IsZero() {
+				stopRestarted(p, restored)
 			}
 			// Keep the rollback barrier for a supervisor replacement that may
 			// already have loaded the new inode. Old-version startup clears it.
@@ -395,6 +500,9 @@ func Watch(ctx context.Context, path, id string, ready io.Writer) error {
 // transaction's own staged build, rechecked through one descriptor right before
 // the swap; an external deployment racing the rollback keeps its file.
 func restore(p pending) error {
+	if p.Adopted {
+		return errSuperseded
+	}
 	sum, err := fileHash(p.Backup)
 	if err != nil {
 		return fmt.Errorf("node rollback backup: %w", err)
@@ -411,8 +519,11 @@ func cleanup(p pending) error {
 	if err := os.Remove(markerPath(p.Exe)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_ = os.Remove(p.Backup)
+	if !p.Adopted {
+		discard(p.Backup) // the watchdog may still run from it
+	}
 	_ = os.Remove(p.Stage)
+	removeRetired(filepath.Dir(p.Exe))
 	return syncDir(filepath.Dir(p.Exe))
 }
 
@@ -421,16 +532,8 @@ func cleanupPendingOnly(p pending) error {
 	if err := os.Remove(markerPath(p.Exe)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_ = os.Remove(p.Backup)
+	discard(p.Backup)
 	return syncDir(filepath.Dir(p.Exe))
-}
-func processStart(pid int) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ps", "-p", fmt.Sprint(pid), "-o", "lstart=")
-	cmd.Env = append(os.Environ(), "LC_ALL=C", "TZ=UTC")
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
 }
 
 // aliveIs says whether pid is still the exact recorded process instance. The

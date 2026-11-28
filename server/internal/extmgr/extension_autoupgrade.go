@@ -18,8 +18,9 @@ import (
 
 // Plugins upgrade themselves from their markets (docs/extensions/extensions.md "Auto-upgrade"): the hub reads the registered
 // markets every few hours and installs a newer version of a plugin it installed from one, when the version asks for
-// nothing more than the user granted and nothing is using the plugin. One that asks for more waits for the user; one
-// that does not come up is rolled back (watchUpgrade) and not tried again. One switched off waits until it is on again:
+// nothing more than the user granted and nothing is using the plugin, after a snapshot of its data
+// (extension_upgrade_backup.go). One that asks for more waits for the user; one that does not come up is rolled back
+// with its data (watchUpgrade) and not tried again. One switched off waits until it is on again:
 // with no program running, watchUpgrade could not tell whether the new version comes up. Built-in, hub.json's and
 // plugins installed from elsewhere (a directory, a file, a URL, a remote socket) are never upgraded by the hub.
 
@@ -368,17 +369,29 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 		return up, rec, nil, false
 	}
 	rec, e, err := u.h.marketEntry(mid, p.Record.ID)
-	if err != nil || !extension.NewerVersion(e.Parsed.Version, p.Record.Version) {
+	if err != nil {
 		return up, rec, nil, false
 	}
 	m := e.Parsed
+	version, engineProblem := m.Version, e.EngineProblem(u.h.build.Number)
+	if !extension.NewerVersion(version, p.Record.Version) {
+		// The active release is already installed. A later release can still explain how to get an update.
+		version, engineProblem = e.LatestIncompatible()
+		if engineProblem == nil || !extension.NewerVersion(version, p.Record.Version) {
+			return up, rec, nil, false
+		}
+	}
 	if m.ID != p.Record.ID && (e.Replaces != p.Record.ID || p.Record.Origin != "market:"+mid+"/"+p.Record.ID || u.h.extensions.reg.Get(m.ID) != nil) {
 		return up, rec, nil, false
 	}
 	id := p.Record.StorageKey()
-	up = ExtensionUpgrade{ID: p.Record.ID, Name: p.Manifest.Name, Market: mid, From: p.Record.Version, To: m.Version}
+	up = ExtensionUpgrade{ID: p.Record.ID, Name: p.Manifest.Name, Market: mid, From: p.Record.Version, To: version}
 	if m.ID != p.Record.ID {
 		up.RenameFrom, up.RenameTo = p.Record.ID, m.ID
+	}
+	if engineProblem != nil {
+		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engineProblem, l)
+		return up, rec, nil, true
 	}
 	bundleConsent := false
 	if len(m.Depends) > 0 || len(m.ExtensionPack) > 0 {
@@ -390,14 +403,13 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 			}
 		}
 	}
+	saved := u.h.extensions.reg.SavedConfig(p) // kept by the upgrade: the address an added config: entry names (#8570)
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	s := u.settings
-	switch _, engines := extension.CheckEngines(m, u.h.build.Number); {
+	switch {
 	case e.PackageFor(extension.Platform()) == nil:
 		up.State, up.Detail = upgradeIncompatible, i18n.T(l, "hub-extension_autoupgrade.no_package", i18n.Args{"platform": extension.Platform()})
-	case engines != nil:
-		up.State, up.Detail = upgradeIncompatible, i18n.Localize(engines, l)
 	case u.h.cantRunHere(m) != nil:
 		up.State, up.Detail = upgradeIncompatible, i18n.Localize(u.h.cantRunHere(m), l)
 	case s.Skipped[id] == m.Version:
@@ -412,7 +424,7 @@ func (u *extensionUpgrades) candidateIn(p *extension.Extension, l i18n.Lang) (up
 	case up.RenameFrom != "":
 		up.State, up.Detail = upgradeNeedsConsent, i18n.T(l, "extension-identity.confirmation", i18n.Args{"from": up.RenameFrom, "to": up.RenameTo})
 	case extension.MorePermissions(p, m) || extension.Digest(m) != granted(p):
-		up.State, up.AddedPermissions = upgradeNeedsConsent, extension.AddedIn(l, p.Manifest, m)
+		up.State, up.AddedPermissions = upgradeNeedsConsent, extension.AddedWith(l, p.Manifest, m, saved)
 	case bundleConsent:
 		up.State, up.Detail = upgradeNeedsConsent, i18n.T(l, "hub-extension_autoupgrade.bundle_confirmation")
 	case s.autoOff(id):
@@ -536,6 +548,14 @@ func (u *extensionUpgrades) install(ctx context.Context, p *extension.Extension,
 		reg.Discard(pv.ID) // the index said the same as the package, so this does not happen
 		err = i18n.Err("hub-extension_autoupgrade.package_more_permissions")
 	}
+	backedUp := false
+	if err == nil { // its data is kept first (extension_upgrade_backup.go)
+		if err = h.extensions.backupBeforeUpgrade(ctx, p, pv.Manifest, up.To); err != nil {
+			reg.Discard(pv.ID)
+		} else {
+			backedUp = true
+		}
+	}
 	if err == nil {
 		u.mu.Lock()
 		if u.inflight == nil {
@@ -554,6 +574,9 @@ func (u *extensionUpgrades) install(ctx context.Context, p *extension.Extension,
 			u.mu.Lock()
 			delete(u.inflight, key)
 			u.mu.Unlock()
+			if backedUp {
+				h.extensions.restartAfterUpgradeFailed(id) // the old version, stopped for its backup
+			}
 		} else {
 			go h.settle(context.WithoutCancel(ctx), op, np, true)
 		}
@@ -584,11 +607,14 @@ func (u *extensionUpgrades) watched(ctx context.Context, id, from, to string, ro
 	key := u.storageKey(id)
 	u.mu.Lock()
 	auto := u.inflight[key] == to
-	delete(u.inflight, key)
+	if auto {
+		delete(u.inflight, key)
+	}
 	u.mu.Unlock()
+	cur := u.h.extensions.reg.Get(id)
 	name := id
-	if p := u.h.extensions.reg.Get(id); p != nil {
-		name = p.Manifest.Name
+	if cur != nil {
+		name = cur.Manifest.Name
 	}
 	if rolledBack {
 		n := ExtensionUpgradeNote{Kind: "rolled_back", From: from, To: to, Detail: why, At: time.Now()}
@@ -602,6 +628,9 @@ func (u *extensionUpgrades) watched(ctx context.Context, id, from, to string, ro
 		})
 		u.tell(id, n, "rolled_back", func(i18n.Lang) i18n.Args { return i18n.Args{"name": name, "version": to, "from": from} })
 		return
+	}
+	if cur == nil || cur.Record.Version != to {
+		return // superseded by a newer upgrade, manual rollback, or uninstall
 	}
 	if !auto {
 		_ = u.change(ctx, func(s *extensionUpgradeSettings) { delete(s.Last, key) })

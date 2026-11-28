@@ -5,6 +5,7 @@ import persona.core.contracts.api.ChatActions
 import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.SessionFiles
 import persona.core.domain.sort.SessionRenamer
+import persona.core.navigation.DecisionSource
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
@@ -13,6 +14,8 @@ import dagger.hilt.components.SingletonComponent
 data class ChatChromeBindings(
     val covered: Boolean = false,
     val requestId: String? = null,
+    /** A child link opens its parent's work summary and this card. */
+    val childSessionId: String? = null,
     val onFiles: (() -> Unit)? = null,
     val onGit: (() -> Unit)? = null,
     val gitLabel: String = "Git",
@@ -21,6 +24,15 @@ data class ChatChromeBindings(
     /** Worktree status and removal for Close Agent / Delete Chat (#4532), by the group's own machine ids; null: none offered. */
     val worktrees: (() -> persona.core.contracts.api.AgentCreationService?)? = null,
     val onOpenSession: ((SessionKey) -> Unit)? = null,
+    /** Opens a subagent's full detail view without redirecting back to its parent. */
+    val onOpenSubagent: ((SessionKey) -> Unit)? = null,
+    /** Opens Session Overview focused on its Subagents section (e.g. from parent-row rollup tap). */
+    val openSubagents: Boolean = false,
+    /**
+     * Opens a side session's own chat over this one (#7944, `ChatRoute.side`): from the header's Side sessions, and
+     * when a link to a side landed on its parent. Null: sides are not offered.
+     */
+    val onOpenSide: ((SessionKey) -> Unit)? = null,
     /** The waiting pane became a thread: replace this page's route, preserving its Back destination. */
     val onFollowSession: ((SessionKey) -> Unit)? = null,
     /**
@@ -29,12 +41,17 @@ data class ChatChromeBindings(
      */
     val waiting: List<WaitingRequest> = emptyList(),
     val onOpenRequest: ((SessionKey, requestId: String) -> Unit)? = null,
+    val decisionSource: DecisionSource? = null,
+    /** A task's source chat opens over the pager and keeps the Assistant's selection. */
+    val onOpenDecisionSource: ((SessionKey, toolUseId: String?) -> Unit)? = null,
     /** Opens an assistant conversation (a branch of the Persona conversation, web `forkAt`); null: assistant branches are not offered. */
     val onOpenAssistant: ((SessionKey) -> Unit)? = null,
     val onConnectionDetails: (() -> Unit)? = null,
     val renamer: SessionRenamer? = null,
     /** Read-only access to the session's machine: the photos sent with messages (`<attached_images>`) load from it. */
     val files: SessionFiles? = null,
+    /** The hub group identity for scoping local machine-file caches across multi-hub sessions. */
+    val hubScope: String = "",
     /** Opens the session's machine's ports on the phone (docs/operations/ports.md); null: port links open as plain pages. */
     val ports: persona.core.contracts.api.PortOpener? = null,
     /**
@@ -42,8 +59,6 @@ data class ChatChromeBindings(
      * it names one; null: paths are not offered.
      */
     val onOpenPath: ((path: String, line: Int?) -> Unit)? = null,
-    /** "Hand to Persona" on a message: hands the given text to the main Persona conversation; null: not offered. */
-    val onHandToPersona: ((String) -> Unit)? = null,
     /** The assistant conversation's tasks (docs/assistant/unified-entry.md); null for an agent's chat. */
     val tasks: persona.core.domain.tasks.TasksStore? = null,
     val onOpenTodo: ((String) -> Unit)? = null,
@@ -58,11 +73,21 @@ data class ChatChromeBindings(
      * [manager]; null: the recommended-setup rows have no button.
      */
     val onOpenSetup: ((page: persona.core.contracts.BriefSetupPage, manager: String?) -> Unit)? = null,
+    /** The manager's main conversation id, when known before [tasks] or [assistantManagement] resolves. */
+    val mainConversation: String? = null,
     /**
      * The hub's leader (direction) conversations for this manager (#6595): their patrol, supervision and relayed
      * rounds fold like the main conversation's. Empty from an older hub or a non-assistant surface.
      */
     val leaderConversations: Set<String> = emptySet(),
+    /** Parent/child rows resolved for a cold link outside the root page; not list membership. */
+    val lookupRows: List<persona.core.contracts.Session> = emptyList(),
+    /** Fork copies into a new session without mutating the source, so a stopped history preview may still provide it. */
+    val forkActions: ChatActions? = actions,
+    /** Explicit Codex takeover / continuation actions, also available when previewing an offline codex_history session. */
+    val takeoverActions: ChatActions? = actions,
+    /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and uses the unified Rename dialog (#13899). */
+    val preferHerdrTabName: Boolean = false,
 )
 
 /** Where a branch made by "Branch to new chat" opens: an assistant's branch is an assistant conversation, an agent's an agent chat. */

@@ -2,6 +2,7 @@ package proto
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -12,6 +13,12 @@ type Launcher struct {
 	// Source: "zshrc" (a function in the machine's ~/.zshrc), "path" (a wrapper script on its PATH, node/pathlaunchers.go), "persona" (managed in Settings › Models, the manager's assistant/models_launchers.go) "claude_desktop" (claude-desktop, a new session in Claude's desktop app, node/claudedesktop_new.go) or "codex_app" (codex-app, a new chat in the Codex App, node/codexapp_new.go). Empty
 	// from an older node: zshrc.
 	Source string `json:"source,omitempty"`
+	// RuntimeFallback is node-local discovery provenance: an ordinary CLI command yields to a connected runtime
+	// offering the same launcher. Explicit shell definitions never do. This flag is not part of the wire protocol.
+	RuntimeFallback bool `json:"-"`
+	// ConfigDir is the launcher's literal CLAUDE_CONFIG_DIR (when known), kept node-local for matching terminal
+	// sessions whose ANTHROPIC_BASE_URL is empty or ambiguous. Not part of the wire protocol.
+	ConfigDir string `json:"-"`
 	// Agent is what it starts when not Claude Code: "codex" (plain codex, or an alias running it; docs/integrations/codex.md
 	// "Starting from the phone").
 	Agent string `json:"agent,omitempty"`
@@ -22,9 +29,55 @@ type Launcher struct {
 	// queues that pane for cleanup when the start fails (#5504; docs/integrations/terminal.md, section 21). Older
 	// nodes leave it out: Run Agent Here offers them Claude Code only.
 	RunHere bool `json:"run_here,omitempty"`
+	// PermissionModes are the permission modes a start on a runtime's launcher takes when its agent is not Claude Code
+	// (whose five the apps know), Persona's ids (#8261): default, the agent's own approval, which the apps send as no
+	// mode, and bypassPermissions where it has an Allow all (Paseo's Auto Accept and Codex's full-access). A list
+	// tells the apps the start takes what the runtime says: the modes listed (a choice only with two or more) and the
+	// efforts its models list. Older nodes and runtimes leave it out; the apps then keep their own rule.
+	PermissionModes PermissionModeSet `json:"permission_modes,omitempty"`
 	// Assistant: a runtime's launcher that may run the Persona assistant (docs/integrations/runtimes.md "Assistant"), whatever its agent.
 	Assistant bool `json:"assistant,omitempty"`
+	// SupervisionPolicy is an explicitly verified runtime instruction channel, independent of Assistant.
+	SupervisionPolicy bool `json:"supervision_policy,omitempty"`
+	// External is a sanitized, machine-local adapter advertisement. It grants no execution authority.
+	External *ExternalLauncher `json:"external,omitempty"`
+	// AssistantFor: on an Assistant launcher, the Agent launcher of this computer it runs the assistant for, as the
+	// runtime declares it (the person who set it up says it is the same agent and account): integrations/grok's
+	// grok-chat for the Paseo provider grok, which only starts Agents. The main chat's picker points that one at it
+	// (docs/integrations/runtimes.md "Assistant"); nothing is ever run on one in place of the other. Older runtimes
+	// leave it out. A string, so Launcher stays comparable.
+	AssistantFor string `json:"assistant_for,omitempty"`
+	// AutoAccept: a runtime's launcher whose agents ask for approval unless a switch is on, which a start in
+	// bypassPermissions turns on (Paseo's Auto Accept: its ACP providers such as Grok, and OpenCode;
+	// docs/integrations/paseo.md). The Agents Persona itself starts on it run with the switch on, as Claude Code's run in
+	// bypassPermissions (#8141). Older nodes and runtimes leave it out.
+	AutoAccept bool `json:"auto_accept,omitempty"`
+	// DisplayName is what the apps call it: a Persona-managed provider's own name (the manager sets it,
+	// launcher_auto_name), or a runtime's name for a provider it runs (Paseo's label, "Grok"; #8261). Empty: Name.
+	DisplayName string `json:"display_name,omitempty"`
+	// Pi: a Persona-managed provider pi can use on this computer too (ManagedLauncher.PiAPI, docs/integrations/pi.md
+	// "Persona's model providers").
+	Pi bool `json:"pi,omitempty"`
+	// BuiltinCompanion: this runtime launcher is backed by the node's own built-in Antigravity companion (wrapping the
+	// local `agy` CLI), not an external runtime. Set only by the node when the verified built-in companion registers.
+	BuiltinCompanion bool `json:"builtin_companion,omitempty"`
 }
+
+// StartInstead is what a new session's start asked for and does not run with, as an engine runtime that runs only its
+// own launchers answers session.start (caps.same_kind, Paseo; docs/integrations/paseo.md "A launcher Paseo does not
+// have"): the launcher it has no usable provider of (one of the same kind of agent runs instead: the session's
+// launcher), the model that one does not offer (it runs its own default), the effort the model does not offer (the
+// session's effort is the one it runs at; none: the model's default). Each empty field ran as asked. The node passes it
+// on with the session (session.start's instead); the hub and the manager say it where the start was asked for.
+type StartInstead struct {
+	Launcher string `json:"launcher,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Effort   string `json:"effort,omitempty"`
+}
+
+// CodeLauncherKindMissing: such an engine has no usable provider of the kind of agent a start's launcher starts, so
+// nothing was started and no other kind of agent runs in its place (#8140).
+const CodeLauncherKindMissing = "launcher_kind_missing"
 
 // LauncherDetail is what a ~/.zshrc launcher really sets (the node runs it with the agent stubbed out,
 // node/launcherprobe.go): every field the page shows; secrets are never in it.
@@ -50,6 +103,9 @@ type LauncherCheck struct {
 	Answer string `json:"answer,omitempty"`
 	Millis int    `json:"millis"`
 	Error  string `json:"error,omitempty"`
+	// AssistantTurn: the check ran as the assistant runs a turn of conversation (launchers.check assistant_turn, a node
+	// with launcher_check_assistant_turn, Claude Code launchers only); absent, it was the plain check.
+	AssistantTurn bool `json:"assistant_turn,omitempty"`
 }
 
 // ClaudeAuthStatus is what a node's claude.auth_status found: `claude auth status --json` run as the launcher runs
@@ -96,6 +152,10 @@ type LauncherModels struct {
 	Models []AgentModel `json:"models"`
 	// Locked: why a model picked here would not reach the agent (the launcher fixes its own --model); empty: it would.
 	Locked string `json:"locked,omitempty"`
+	// SupportsStartModel: the node verified a new native omp session can take a model in this host.
+	SupportsStartModel bool `json:"supports_start_model,omitempty"`
+	// SupportsStartServiceTier means this launcher and host accept a native Codex tier on session.start.
+	SupportsStartServiceTier bool `json:"supports_start_service_tier,omitempty"`
 }
 
 // ModelPrice is the catalog's reference price in USD per one million tokens. It is display metadata, not a gateway quote.
@@ -115,6 +175,9 @@ type AgentModel struct {
 	Description string `json:"description,omitempty"`
 	// Resolved: the model an alias stands for with this launcher's settings (opus → its model id).
 	Resolved string `json:"resolved,omitempty"`
+	// ResolvedOffered: the gateway's own catalog also lists Resolved verbatim as a selectable ID.
+	// Absent when unknown. The node preserves this evidence on the alias row without adding a picker row.
+	ResolvedOffered bool `json:"resolved_offered,omitempty"`
 	// Default: what the agent runs when no model is given; picking it is the same as picking none.
 	Default bool `json:"default,omitempty"`
 	// Efforts: the thinking efforts it takes, weakest first; none: no effort setting.
@@ -128,6 +191,10 @@ type AgentModel struct {
 	Custom bool `json:"custom,omitempty"`
 	// Price is the built-in catalog's exact-entry reference price; nil when unknown or inherited from another model.
 	Price *ModelPrice `json:"price,omitempty"`
+	// Aliases: the other spellings the manager folded into this row because they run the same model with the same
+	// context window on this launcher (Claude Code's tier aliases on a gateway whose tiers name one model, #10365,
+	// assistant/models_launchers_fold.go). Each still picks this row: a saved pick of one keeps working.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 type LauncherEnv struct {
@@ -172,7 +239,7 @@ type ManagedLauncher struct {
 	// SubagentForce: CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 (the subagent model wins over an agent's own model:).
 	SubagentForce bool `json:"subagent_force,omitempty"`
 	// Headers: ANTHROPIC_CUSTOM_HEADERS, one "Name: value" a line. A secret like the key: sealed at rest, never sent
-	// back to clients (they see HasHeaders).
+	// back to clients (they see HasHeaders and, in the manager's LauncherView, only the configured names).
 	Headers    string `json:"headers,omitempty"`
 	HasHeaders bool   `json:"has_headers,omitempty"`
 	// Proxy / NoProxy: HTTP_PROXY and HTTPS_PROXY / NO_PROXY for the gateway.
@@ -186,7 +253,8 @@ type ManagedLauncher struct {
 	// TimeoutMS: API_TIMEOUT_MS; 0 is 3000000 for a gateway (BaseURL set), Claude Code's own default otherwise.
 	TimeoutMS int `json:"timeout_ms,omitempty"`
 	// CompactWindow: CLAUDE_CODE_AUTO_COMPACT_WINDOW; 0 is the default model's context window (none when unknown).
-	// Assistant conversations, the main one included, follow it like agents do (#3066).
+	// Assistant conversations follow it like agents do (#3066); the main one and the leader conversations are held to
+	// assistant.main_compact_window when that is smaller (#7314, #15318).
 	CompactWindow int `json:"compact_window,omitempty"`
 	// MaxContext: CLAUDE_CODE_MAX_CONTEXT_TOKENS; 0 is the default model's context window when it is over 200K.
 	MaxContext int `json:"max_context,omitempty"`
@@ -205,6 +273,10 @@ type ManagedLauncher struct {
 	Withheld bool `json:"withheld,omitempty"`
 	// Rev changes whenever the provider is saved: a node drops what it pulled of an older one.
 	Rev string `json:"rev,omitempty"`
+	// Channel is the managed channel this launcher is a read-only alias of (docs/assistant/execution-spec.md): its key,
+	// Base URL, headers, proxy and scope are the channel's, shared by every runtime the channel runs. "" is a launcher
+	// of its own, as before channels.
+	Channel string `json:"channel,omitempty"`
 }
 
 // The values of ManagedLauncher.Delivery and OwnService.
@@ -252,36 +324,28 @@ type ProviderModel struct {
 	Name string `json:"name,omitempty"`
 	// ContextWindow in tokens; 0 is unknown (Claude Code then assumes 200K).
 	ContextWindow int `json:"context_window,omitempty"`
-	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered).
-	Efforts       []string `json:"efforts,omitempty"`
+	// MaxOutputTokens: the longest reply the gateway says the model writes; 0 is unknown.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Efforts: the thinking levels it takes (low, medium, high, xhigh, max); empty is unknown (all are offered),
+	// unless NoEffort says it takes none.
+	Efforts []string `json:"efforts,omitempty"`
+	// AllEfforts: every level the gateway reported, present only when some fall outside EffortLevels: in discovery's
+	// answer the gateway's own words (EffortWords), once saved those the provider's agent or API takes (Codex's
+	// minimal and ultra, a direct API's none). Efforts is always these as Claude Code takes them
+	// (ProjectEfforts(AllEfforts, EffortLevels)), so a reader that knows only Efforts never gets a level it can't use.
+	AllEfforts    []string `json:"all_efforts,omitempty"`
 	DefaultEffort string   `json:"default_effort,omitempty"`
+	// NoEffort: the gateway said the model takes no thinking level (Efforts is then empty, which alone is unknown).
+	NoEffort bool `json:"no_effort,omitempty"`
+	// ImageInput and ToolCalls: whether the gateway says the model takes images and tools; nil is unknown.
+	ImageInput *bool `json:"image_input,omitempty"`
+	ToolCalls  *bool `json:"tool_calls,omitempty"`
 	// InheritedFrom is the catalog id an unlisted newer generation took a missing context window or thinking
 	// level from. Empty for an exact catalog entry, and when the gateway already reported every one of those.
 	InheritedFrom string `json:"inherited_from,omitempty"`
 	// Price is the exact catalog entry's reference price. It is never inherited from an earlier generation.
 	Price *ModelPrice `json:"price,omitempty"`
 }
-
-// The assistant's runtimes for a Claude launcher (model_config.assistant's "runtime", the assistant.send / .start /
-// .warm params' "runtime"): the Claude Code CLI in stream-json mode (the default), or the Claude Agent SDK through the
-// node's Node bridge (integrations/agent-sdk, #2455), which falls back to the CLI where no Node 22+ is found.
-const (
-	AssistantRuntimeCLI      = "cli"
-	AssistantRuntimeAgentSDK = "agentsdk"
-)
-
-// Why an assistant conversation that asked for the Agent SDK runs on the CLI (Session.RuntimeFallback), as the node
-// writes it: in Chinese, the ones ending in a full-width colon followed by the cause, FallbackShellLauncher with the launcher's name.
-// The hub rewrites them in the app's language (hub/transcript_text.go runtimeFallbackText).
-const (
-	FallbackShellLauncher  = "启动器 %s 是这台电脑上的 shell 命令，Agent SDK 用不了它的设置"
-	FallbackReadBridge     = "读不到 Agent SDK 桥："
-	FallbackNoBridge       = "这个 personad 没有带 Agent SDK 桥"
-	FallbackWriteBridge    = "写不出 Agent SDK 桥："
-	FallbackNoBridgeScript = "Agent SDK 桥的包里没有 bridge.mjs"
-	FallbackNoNode         = "没有 Node.js 22 及以上："
-	FallbackNoClaude       = "找不到 claude："
-)
 
 // BearerAuth: the launcher's key goes as Authorization: Bearer (ANTHROPIC_AUTH_TOKEN) rather than x-api-key.
 func (l ManagedLauncher) BearerAuth() bool { return l.Auth == "bearer" }
@@ -294,6 +358,45 @@ func (l ManagedLauncher) AgentType() string {
 	return "claude"
 }
 
+// CustomHeadersSupported reports whether this managed runtime has a real launch-time channel for every configured
+// header. A probe may send a header over HTTP even when the runtime cannot; those combinations must be refused instead
+// of presenting the probe as proof of a working launch.
+func (l ManagedLauncher) CustomHeadersSupported() bool {
+	switch l.AgentType() {
+	case "claude", "codex":
+		return true
+	case "omp":
+		// omp documents ANTHROPIC_CUSTOM_HEADERS for its Anthropic provider behind a non-Anthropic base URL.
+		return (l.API == "" || l.API == "messages") && !AnthropicAPI(l.LaunchBaseURL())
+	default:
+		return false
+	}
+}
+
+// PiAPI is the pi API (pi's registerProvider "api") a provider speaks when pi can use it too (docs/integrations/pi.md
+// "Persona's model providers"): "anthropic-messages" for a Messages provider that runs Claude Code (or Oh My Pi, which
+// takes the same gateway), "openai-responses" for a Codex one; "" for the rest (Antigravity, a direct API connection
+// that speaks Responses or Chat Completions, which the node is never sent), and for a provider with a proxy of its
+// own: pi sends straight to the gateway, and one reachable only through that proxy would fail every turn.
+func (l ManagedLauncher) PiAPI() string {
+	if l.Proxy != "" {
+		return ""
+	}
+	if l.Kind == "api" {
+		if l.API == "" || l.API == "messages" {
+			return "anthropic-messages"
+		}
+		return ""
+	}
+	switch l.AgentType() {
+	case "claude", "omp":
+		return "anthropic-messages"
+	case "codex":
+		return "openai-responses"
+	}
+	return ""
+}
+
 // MessagesBase: the provider's Base URL reaches its agent as ANTHROPIC_BASE_URL (node managedEnv), which gets
 // /v1/messages added to it: a Messages provider whose agent is not Codex or agy (they take OPENAI_BASE_URL /
 // GOOGLE_GEMINI_BASE_URL). Responses and Chat Completions bases keep their /v1.
@@ -304,39 +407,133 @@ func (l ManagedLauncher) MessagesBase() bool {
 	return l.API == "" || l.API == "messages"
 }
 
-// LaunchBaseURL is the Base URL as the provider's agent takes it: a Messages base through MessagesBaseURL, any other as
-// stored. The hub stores and delivers it, and the node launches with it, so a provider saved before the hub dropped a
-// trailing /v1 still reaches what Test connection called.
+// LaunchBaseURL is the Base URL as the provider's agent or direct API takes it: a Messages base through
+// MessagesBaseURL, a Chat Completions or Responses base through APIBaseURL, and any other as stored. The hub stores
+// and delivers it, and the node launches with it, so a provider saved before the hub dropped a trailing /v1 or pasted
+// endpoint path still reaches what Test connection called.
 func (l ManagedLauncher) LaunchBaseURL() string {
 	if l.MessagesBase() {
 		return MessagesBaseURL(l.BaseURL)
 	}
+	if l.AgentType() == "codex" {
+		return APIBaseURL(l.BaseURL, "responses")
+	}
+	if l.API == "chat" || l.API == "responses" {
+		return APIBaseURL(l.BaseURL, l.API)
+	}
 	return l.BaseURL
 }
 
-// MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Claude Code and the Anthropic SDKs add
-// /v1/messages themselves, so the /v1 many gateways put at the end of their documented address would make
-// /v1/v1/messages: the /v1 ending the path goes with any trailing slashes, a deployment prefix before it stays
-// ("https://gw/prefix/v1/" → "https://gw/prefix"). It is idempotent (a run of /v1 goes whole): the hub stores its
-// result and the node applies it again at launch, and both must reach what Test connection called. Anything else (no
-// host, a query) is only trimmed.
+// AnthropicAPIHost is the host of Anthropic's own API: where Claude Code goes with no Base URL.
+const AnthropicAPIHost = "api.anthropic.com"
+
+// AnthropicAPI: base (a Base URL) is Anthropic's own API, not a relay, a gateway or another vendor. The probe's
+// error reading (the manager's models_probe.go) and the node's provider environment (launcherenv.go) both ask.
+func AnthropicAPI(base string) bool {
+	u, err := url.Parse(strings.TrimSpace(base))
+	return err == nil && strings.EqualFold(u.Hostname(), AnthropicAPIHost)
+}
+
+// APIBaseURL normalizes a gateway Base URL for api ("messages"/empty, "responses", or "chat"), stripping a pasted
+// trailing endpoint path while keeping /v1 on OpenAI-compatible bases ("https://host/v1/v1/chat/completions" →
+// "https://host/v1/v1") and preserving bare /responses deployment prefixes ("https://gw/responses" stays unchanged;
+// "https://gw/v1/responses" → "https://gw/v1").
+func APIBaseURL(base, api string) string {
+	switch api {
+	case "", "messages":
+		return MessagesBaseURL(base)
+	case "chat":
+		return trimSinglePathSuffix(base, "/chat/completions")
+	case "responses":
+		return trimVersionedEndpointSuffix(base, "/responses")
+	default:
+		return strings.TrimRight(strings.TrimSpace(base), "/")
+	}
+}
+
+// MessagesBaseURL is a gateway address as ANTHROPIC_BASE_URL takes it. Unlike APIBaseURL for "chat" and "responses",
+// MessagesBaseURL produces an ANTHROPIC_BASE_URL without a trailing /v1: Claude Code (node/launcherenv.go) and
+// connection probes (assistant/models_probe.go) unconditionally append /v1/messages themselves, and saving plus
+// launch-time re-application require strict idempotence (MessagesBaseURL(got) == got; a run of /v1 goes whole).
+//
+// Normalization runs in two ordered phases: first strip a pasted /v1/messages endpoint suffix (only /messages
+// preceded by /v1, never a /messages deployment prefix), then strip any trailing /v1 segments so
+// "https://gw/prefix/v1/" → "https://gw/prefix" and both "https://gw/messages/v1" and
+// "https://gw/messages/v1/messages" → "https://gw/messages". Anything else (no host, a query) is only trimmed.
 func MessagesBaseURL(base string) string {
+	return trimBasePathSuffix(trimVersionedEndpointSuffix(base, "/messages"), "/v1")
+}
+
+func splitBaseURLPath(base string) (root, path string, ok bool) {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	u, err := url.Parse(base)
 	if err != nil || u.Host == "" || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
-		return base
+		return base, "", false
 	}
 	authority := strings.Index(base, "//") + len("//")
 	slash := strings.IndexByte(base[authority:], '/')
 	if slash < 0 {
-		return base // no path
+		return base, "", false // no path
 	}
-	root, path := base[:authority+slash], base[authority+slash:]
+	return base[:authority+slash], base[authority+slash:], true
+}
+
+// trimVersionedEndpointSuffix drops a single pasted /v1<suffix> endpoint (e.g. /v1/messages or /v1/responses) while
+// keeping the preceding /v1 and leaving bare deployment prefixes ("https://gw/messages", "https://gw/responses") intact.
+func trimVersionedEndpointSuffix(base, suffix string) string {
+	root, path, ok := splitBaseURLPath(base)
+	if !ok {
+		return root
+	}
+	rest, found := strings.CutSuffix(path, suffix)
+	if !found {
+		return root + path
+	}
+	rest = strings.TrimRight(rest, "/")
+	if !strings.HasSuffix(rest, "/v1") {
+		return root + path
+	}
+	return root + rest
+}
+
+func trimSinglePathSuffix(base, suffix string) string {
+	root, path, ok := splitBaseURLPath(base)
+	if !ok {
+		return root
+	}
+	if rest, found := strings.CutSuffix(path, suffix); found {
+		return root + strings.TrimRight(rest, "/")
+	}
+	return root + path
+}
+
+func trimBasePathSuffix(base, suffix string) string {
+	root, path, ok := splitBaseURLPath(base)
+	if !ok {
+		return root
+	}
 	for {
-		rest, ok := strings.CutSuffix(path, "/v1")
-		if !ok {
+		rest, found := strings.CutSuffix(path, suffix)
+		if !found {
 			return root + path
 		}
 		path = strings.TrimRight(rest, "/")
 	}
 }
+
+// The agents the node starts without Claude Code's permission mode and effort (Codex takes its own sandbox and
+// effort): the hub matches what the node does with one a start names (assistant/launcher_modes.go), and node
+// TestStartModeAgentTypesMatchTheNode keeps these lists and the node's together.
+//
+// WorkAgentTypes are the work agents (docs/integrations/launchers.md "Work agents"): pi, the Cursor CLI and the
+// Antigravity CLI. The node starts them with the two ignored rather than refusing the start (node/control.go, #8151).
+var WorkAgentTypes = []string{"pi", "cursor", "agy"}
+
+// NoModeAgentTypes are the other terminal agents whose starts refuse Persona permission modes, TRAE CLI and Oh My Pi.
+var NoModeAgentTypes = []string{"traex", "omp"}
+
+// IsWorkAgentType: agent is one of WorkAgentTypes.
+func IsWorkAgentType(agent string) bool { return slices.Contains(WorkAgentTypes, agent) }
+
+// IsNoModeAgentType: agent is one of NoModeAgentTypes.
+func IsNoModeAgentType(agent string) bool { return slices.Contains(NoModeAgentTypes, agent) }

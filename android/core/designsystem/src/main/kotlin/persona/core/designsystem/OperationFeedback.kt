@@ -41,6 +41,8 @@ fun operationFeedback(error: Throwable): OperationFeedback {
         return operationFeedback(mapOperationFailure("already_handled", "none", false))
     if (error is persona.core.contracts.api.InteractionPromptChangedException)
         return operationFeedback(mapOperationFailure("prompt_changed", "none", false))
+    if (error is persona.core.contracts.api.LauncherRetryUnsupportedException)
+        return OperationFeedback(UiText.Res(R.string.designsystem_retry_launcher_unsupported), FailureAction.None)
     val failure = HubFailure.from(error)
     // Cloudflare Access in front of the hub, not the hub: what to fix is the service token in Settings › hub.
     when (failure.kind) {
@@ -110,6 +112,7 @@ private val HubWordedCodes = setOf("no_machine", "machine_pending", "claude_miss
 
 /** The words of the main conversation's coded refusals. */
 private fun codedFeedback(reason: FailureReason): Int? = when (reason) {
+    FailureReason.AgentStopped -> R.string.designsystem_agent_stopped
     FailureReason.KnowledgeDisabled -> R.string.designsystem_knowledge_disabled
     FailureReason.KnowledgeUnavailable -> R.string.designsystem_knowledge_unavailable
     FailureReason.KnowledgeReadOnly -> R.string.designsystem_knowledge_read_only

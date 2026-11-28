@@ -1,17 +1,18 @@
 // What can be done with one item besides reading it (docs/assistant/inbox.md "Item actions"): "AI draft reply" (a reply in the
 // user's voice, edited and sent from here) and "Hand to AI" (the item as <persona-context> to Persona or a running agent;
 // Persona's main conversation may then write back to the item).
-import { ownerHeaders } from "../../lib/manager-choice";
+import { defaultManager, ownerHeaders } from "../../lib/manager-choice";
+import { BindingDialog } from "../../features/external-sources/BindingDialog";
+import type { ExternalSourceBindingEditorProps } from "../../features/external-sources/ExternalSourceBindingEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
-import {
-  agentDraft, connectorReference, conversationRoute, docChangeKey, docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, recordHandOff, sendReply, useDroppedChanges,
-  setDone, unsentReplies, type InboxItem,
-} from "../../lib/inbox";
+import { agentDraft, connectorReference, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, openInboxConversation, recordHandOff } from "../../lib/inbox-page";
 import { isTransient } from "../../lib/ops";
+import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate } from "../../lib/router";
@@ -24,11 +25,19 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
-import { byTime } from "../../lib/times";
+import { useItemReadOnly } from "./item-write-gate";
+import { handOffAgents, Target, TARGET_SUB } from "./HandOffTargets";
 
-// A dialog's error under its controls, and a hand-off target's line under its title, as each one writes them.
+export function InboxExternalSourceDialog({ item, source, onClose }: {
+  item: InboxItem;
+  source: NonNullable<ExternalSourceBindingEditorProps["source"]>;
+  onClose: () => void;
+}) {
+  return <BindingDialog manager={item.manager ?? defaultManager()} source={source} onClose={onClose} />;
+}
+
+// A dialog's error under its controls.
 const ERROR = "mt-2 text-[12px] text-red";
-const TARGET_SUB = "block truncate text-[11.5px] text-ink-3";
 
 export function draftTitle(it: InboxItem): string {
   if (it.moment) return t("inbox-inboxdialogs.title_moment");
@@ -47,20 +56,27 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 }
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
-  const sessions = useStore((s) => s.sessions);
-  const assistant = useStore((s) => s.assistant);
+  const readOnly = useItemReadOnly(item);
   const key = itemKey(item);
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
   const [instruction, setInstruction] = useState("");
-  const [loading, setLoading] = useState(false);
+  // with nothing to show yet it drafts as it opens (below): busy from the first frame, so the text is not offered before it
+  const [loading, setLoading] = useState(() => !unsentReplies.has(key) && !agentText);
   const [error, setError] = useState("");
+  const larkCLI = item.source === "larkcli" && !!item.connector?.can_reply;
+  const [sender, setSender] = useState<"bot" | "user">();
+  const [checkingSender, setCheckingSender] = useState(larkCLI);
   // unticked proposed changes are kept with the text: the item's draft card shows and sends the same
   const dropped = useDroppedChanges(key);
   const proposed = agentText ? item.agent?.changes ?? [] : [];
   const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
+  const mid = agent?.machine_id;
+  const sid = agent?.session_id;
+  const box = useRef<HTMLTextAreaElement>(null);
+  const focused = useRef(false);
 
   // Save as text changes (the draft card shows it): navigation can unmount without onClose, and sendReply owns
   // clearing/restoring on send.
@@ -93,6 +109,43 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  useEffect(() => {
+    if (!larkCLI) return;
+    let request: AbortController | undefined;
+    const refresh = async () => {
+      request?.abort();
+      const controller = request = new AbortController();
+      setCheckingSender(true);
+      try {
+        const { identity } = await api<{ identity?: string }>("/assistant/outbound-messages", { headers: itemRequest({ manager: item.manager }), signal: controller.signal });
+        if (!controller.signal.aborted) setSender(identity === "bot" || identity === "user" ? identity : undefined);
+      } catch {
+        if (!controller.signal.aborted) setSender(undefined);
+      } finally {
+        if (!controller.signal.aborted) setCheckingSender(false);
+      }
+    };
+    void refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      request?.abort();
+      window.removeEventListener("focus", refresh);
+    };
+  }, [item.manager, larkCLI]);
+
+  // "Edit" is for changing the words: once they are in, the caret waits at their end (audit item 16). The dialog itself
+  // takes the focus first (ui/atoms Dialog), which keeps a phone's keyboard down: a touch screen alone still taps in.
+  useEffect(() => {
+    if (loading || focused.current) return;
+    focused.current = true;
+    const el = box.current;
+    // not over a field taken meanwhile (the instruction, typed while it drafted)
+    const at = document.activeElement;
+    if (!el || !hasFinePointer() || (at && at !== document.body && at !== el.closest("[role=dialog]"))) return;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [loading]);
+
   const cancel = () => {
     // Like manual mail, Cancel discards; incidental dismissal keeps the reply and the unticked changes.
     unsentReplies.delete(key);
@@ -101,10 +154,14 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   };
 
   const send = () => {
-    void sendReply(item, text.trim(), kept);
+    if (readOnly) return;
+    void sendReply(item, text.trim(), kept, sender);
     onClose();
   };
-  const canSend = !loading && (text.trim().length > 0 || kept.length > 0);
+  const canSend = !readOnly && !loading && !checkingSender && (text.trim().length > 0 || kept.length > 0);
+  const replyNote = larkCLI
+    ? t(sender === "bot" ? "inbox-inboxdialogs.lark_sender_bot" : sender === "user" ? "inbox-inboxdialogs.lark_sender_user" : "inbox-inboxdialogs.lark_sender_default", { chat: item.title })
+    : item.connector?.reply_to ? t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to }) : "";
 
   return (
     <Dialog
@@ -115,20 +172,19 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       footer={
         <>
           <Button tone="quiet" onClick={cancel}>{t("common.cancel")}</Button>
-          <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>
+          {!readOnly && <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>}
         </>
       }
     >
       {agentText && agent && (agent.note || agent.session_id) && (
         <div className="mb-3 rounded-[10px] bg-accent-tint px-3 py-2.5">
           {agent.note && <p className="text-[12px] leading-relaxed text-ink-2"><Spark />{agent.note}</p>}
-          {agent.machine_id && agent.session_id && (
+          {mid && sid && (
             <button
               type="button"
               onClick={() => {
                 onClose();
-                // The AI twin runs as the assistant (docs/assistant/inbox.md): its conversation is one of Persona's.
-                navigate(agent.machine_id === assistant?.machine_id ? conversationPage(agent.session_id!, agent.machine_id, item.manager) : conversationRoute(agent.machine_id!, agent.session_id!, sessions, assistant, item.manager));
+                openInboxConversation(mid, sid, item.manager);
               }}
               className="mt-1.5 flex items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline"
             >
@@ -157,9 +213,10 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
           })}
         </div>
       )}
-      {item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
+      {replyNote && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{replyNote}</p>}
       <div className="relative">
         <textarea
+          ref={box}
           value={text}
           onChange={(e) => keepText(e.target.value)}
           disabled={loading}
@@ -195,17 +252,14 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   );
 }
 
+/** "Last time" beside the target this item's source went to last time (#2121). */
+function LastTime() {
+  return <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10.5px] leading-[16px] font-medium whitespace-nowrap text-white">{t("inbox-inboxdialogs.last_time")}</span>;
+}
+
 /** The hub may have taken a hand-off it gave no answer for: the same one asked again is sent once. Any other answer is
  *  kept under its client_id, so a retry after it needs a new one. */
 const mayHaveGone = (e: unknown) => isTransient(e) || (e instanceof ApiError && (e.code === "assistant_in_doubt" || e.code === "assistant_offline"));
-
-/** The agents Hand to AI offers, latest first: not Persona's own, on computers online now, not offline. */
-function handOffAgents(sessions: Record<string, Session[]>, machines: Machine[]): Session[] {
-  const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
-  return Object.values(sessions).flat()
-    .filter((s) => !s.assistant && online.has(s.machine_id) && stateOf(s) !== "offline")
-    .sort((a, b) => byTime(b.updated_at, a.updated_at));
-}
 
 /** The offered agent at "<machine>/<session>", if it is still offered. */
 function listedAgent(sessions: Record<string, Session[]>, machines: Machine[], path: string): Session | undefined {
@@ -392,8 +446,8 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
 
       <p className="mt-4 mb-1.5 text-[12px] font-medium text-ink-2">{t("inbox-inboxdialogs.target_label")}</p>
       <div role="radiogroup" aria-label={t("inbox-inboxdialogs.target_label")} className="max-h-[300px] divide-y divide-line overflow-y-auto rounded-card bg-surface shadow-card">
-        <Target on={target === "main"} last={isLast("main")} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
-        <Target on={target === "new"} last={isLast("new")} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
+        <Target on={target === "main"} badge={isLast("main") && <LastTime />} onPick={() => setTarget("main")} title={t("inbox-inboxdialogs.target_main")} sub={t("inbox-inboxdialogs.target_main_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-accent-tint text-accent-ink"><Icon name="spark" size={12} /></span>} />
+        <Target on={target === "new"} badge={isLast("new") && <LastTime />} onPick={() => setTarget("new")} title={t("inbox-inboxdialogs.target_persona")} sub={t("inbox-inboxdialogs.target_persona_sub")} icon={<span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="compose" size={12} /></span>} />
         <button type="button" onClick={() => void startNewAgent()} disabled={busy || opening} data-testid="handoff-new-agent" className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover disabled:opacity-60">
           <span className="flex size-6 items-center justify-center rounded-[7px] bg-field text-ink-2"><Icon name="plus" size={12} /></span>
           <span className="min-w-0 flex-1">
@@ -406,7 +460,7 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
           <Target
             key={`${s.machine_id}/${s.session_id}`}
             on={typeof target === "object" && sameSession(target, s)}
-            last={isLast(s)}
+            badge={isLast(s) && <LastTime />}
             onPick={() => setTarget(s)}
             title={sessionTitle(s)}
             sub={[machineWithHub(s.machine_id, machines), s.space_name].filter(Boolean).join(" › ")}
@@ -417,21 +471,5 @@ export function HandOffDialog({ item, onClose }: { item: InboxItem; onClose: () 
       {last?.gone && <p className="mt-2 text-[12px] text-orange" data-testid="handoff-last-gone">{t("inbox-inboxdialogs.last_gone")}</p>}
       {error && <p className={ERROR}>{error}</p>}
     </Dialog>
-  );
-}
-
-function Target({ on, last, onPick, title, sub, icon }: { on: boolean; last?: boolean; onPick: () => void; title: string; sub?: string; icon: React.ReactNode }) {
-  return (
-    <button type="button" role="radio" aria-checked={on} onClick={onPick} className={cx("flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors", on ? "bg-accent-tint" : "hover:bg-hover")}>
-      {icon}
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[13px] text-ink">{title}</span>
-          {last && <span className="shrink-0 rounded-full bg-accent px-1.5 text-[10.5px] leading-[16px] font-medium whitespace-nowrap text-white">{t("inbox-inboxdialogs.last_time")}</span>}
-        </span>
-        {sub && <span className={TARGET_SUB}>{sub}</span>}
-      </span>
-      <Icon name="check" size={13} stroke={2.6} className={cx("shrink-0 text-accent-ink", !on && "invisible")} />
-    </button>
   );
 }

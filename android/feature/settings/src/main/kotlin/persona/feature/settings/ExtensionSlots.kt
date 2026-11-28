@@ -36,16 +36,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-// Extensions' UI slots (docs/extensions/extensions.md "UI slots") on Android: the "Extensions" section at the top of the settings home (the
-// cards first, then a row per nav page with its icon and badge), the settings tab's badge (the nav pages' badges added
-// up), the sections extensions draw on a machine's page, and the pages they draw for their connectors' inbox items
-// (ExtensionInboxItem.kt). A hub without extension_ui_slots has none of them.
+// Extensions' UI slots (docs/extensions/extensions.md "UI slots") on Android: the "Extensions" section at the top of
+// Settings › Extensions (the cards first, then a row per nav page with its icon and badge), the settings tab's badge
+// (the nav pages' badges added up), the sections extensions draw on a machine's page, and the pages they draw for their
+// connectors' inbox items (ExtensionInboxItem.kt). A hub without extension_ui_slots has none of them.
 
 /** The slots this app draws; a placement it does not know is ignored. */
 internal object ExtensionSlotText {
@@ -55,26 +57,16 @@ internal object ExtensionSlotText {
     const val InboxItem = "inbox_item"
     private val known = setOf(NavPage, Card, MachineSection)
 
-    fun known(place: ExtensionUiPlace): Boolean = place.placement in known && place.extension.isNotEmpty() && place.id.isNotEmpty()
+    fun known(place: ExtensionUiPlace): Boolean =
+        place.placement in known && place.extension.isNotEmpty() && place.id.isNotEmpty() &&
+            !(place.placement == Card && DashboardPages.httpOnly(place.extension))
 
     /** An inbox item's page: for the items of one connector; one that names none draws for nobody's. */
     fun inboxItem(place: ExtensionUiPlace): Boolean =
         place.placement == InboxItem && place.extension.isNotEmpty() && place.id.isNotEmpty() && !place.connector.isNullOrBlank()
 
-    /** A nav page's icon from the few an extension may name; anything else is the extension's puzzle piece. */
-    fun icon(name: String?): PhIcon = when (name) {
-        "chart" -> PhIcons.ChartBar
-        "gauge" -> PhIcons.Gauge
-        "list" -> PhIcons.ListChecks
-        "bell" -> PhIcons.BellSimple
-        "doc" -> PhIcons.FileText
-        "calendar" -> PhIcons.CalendarBlank
-        "money" -> PhIcons.Coins
-        "branch", "merge" -> PhIcons.GitBranch
-        "code" -> PhIcons.Code
-        "pull_request" -> PhIcons.GitDiff
-        else -> PhIcons.PuzzlePiece
-    }
+    /** A nav page's icon from the shared extension/page icon list; anything else is the extension's puzzle piece. */
+    fun icon(name: String?): PhIcon = ExtensionIcons.of(name)
 
     /**
      * The settings tab's badge from the nav pages': the numbers added up; when there are only words ("New"), a dot.
@@ -110,22 +102,24 @@ data class ExtensionSlotsState(
     val inboxItemsKnown: Boolean = false,
 ) {
     val navPages: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.NavPage }
-    val cards: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.Card }
+    val cards: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.Card && !DashboardPages.httpOnly(it.extension) }
     val machineSections: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.MachineSection }
     val tabBadge: SlotBadge get() = ExtensionSlotText.tabBadge(places)
 }
 
 /**
  * Where the selected hub's extensions draw in this app, kept for the whole shell: read when the hub (with
- * `extension_ui_slots`) is online and when the settings list shows, and the nav pages' badges changed by the hub's
- * `extension_ui` events without reading the list again.
+ * `extension_ui_slots`) is online, when the settings list shows and when the hub says the assistant's Dashboards places
+ * changed (`assistant_pages`, [placesChanged]), and the nav pages' badges changed by the hub's `extension_ui` events
+ * without reading the list again.
  */
 class ExtensionSlots internal constructor(
     internal val api: ExtensionUi,
     private val slotsAvailable: Flow<Boolean>,
     private val events: Flow<ExtensionUiEvent>,
+    private val placesChanged: Flow<Unit> = emptyFlow(),
 ) {
-    constructor(extensions: ExtensionManagement) : this(extensions, extensions.slotsAvailable, extensions.uiEvents)
+    constructor(extensions: ExtensionManagement) : this(extensions, extensions.slotsAvailable, extensions.uiEvents, extensions.placesChanged)
 
     private val mutable = MutableStateFlow(ExtensionSlotsState())
     val state: StateFlow<ExtensionSlotsState> = mutable.asStateFlow()
@@ -134,6 +128,9 @@ class ExtensionSlots internal constructor(
     /** Runs while the shell does: reads the slots whenever the hub says it has them and is online, applies badges. */
     suspend fun run(online: Flow<Boolean>) = coroutineScope {
         launch { events.collect(::badge) }
+        // Dashboards (#15017): a page kept, pinned or removed adds or takes away rows, so the list is read again; a
+        // burst of these reads it once more after the read under way, not once per event.
+        launch { placesChanged.conflate().collect { load() } }
         combine(slotsAvailable, online) { slots, up -> slots to up }.distinctUntilChanged().collectLatest { (slots, up) ->
             supported = slots
             if (!slots) mutable.value = ExtensionSlotsState()
@@ -208,8 +205,8 @@ internal fun KeepFresh(model: ExtensionViewModel, events: Flow<ExtensionUiEvent>
 }
 
 /**
- * The "Extensions" section at the top of the settings home: each card an extension draws (`overview_card`, compact; tapping it
- * opens the page it names), then a row per nav page with its icon and badge. Nothing when no extension draws there.
+ * The "Extensions" section at the top of Settings › Extensions: each card an extension draws (`overview_card`, compact;
+ * tapping it opens the page it names), then a row per nav page with its icon and badge. Nothing when no extension draws there.
  */
 internal fun LazyListScope.extensionSlotItems(
     state: ExtensionSlotsState,
@@ -218,7 +215,7 @@ internal fun LazyListScope.extensionSlotItems(
     onOpen: (ExtensionUiPlace) -> Unit,
 ) {
     val pages = state.navPages
-    val shown = cards.filter { !it.state.unsupported }
+    val shown = cards.filter { !it.state.unsupported && !DashboardPages.httpOnly(it.place.extension) }
     if (pages.isEmpty() && shown.isEmpty()) return
     item("slots-title") { JSectionHeader(stringResource(R.string.settings_ext_title)) }
     shown.forEach { card ->
@@ -269,12 +266,16 @@ private fun ExtensionCard(place: ExtensionUiPlace, state: ExtensionViewState, ha
     }
 }
 
-/** A card of the settings home as drawn now: where it is, its view, its buttons, and reading it again ("Retry"). */
+/** A card of Settings › Extensions as drawn now: where it is, its view, its buttons, and reading it again ("Retry"). */
 internal class ExtensionCardSlot(val place: ExtensionUiPlace, val state: ExtensionViewState, val handle: ExtensionViewHandle, val reload: () -> Unit)
 
-/** The cards of the settings home, each drawn compact and kept fresh while settings is on screen. */
+/** The cards of Settings › Extensions, each drawn compact and kept fresh while that page is on screen. */
 @Composable
-internal fun rememberExtensionCards(slots: ExtensionSlots?, onOpen: (persona.core.navigation.ExtensionUiRoute) -> Unit = {}): List<ExtensionCardSlot> {
+internal fun rememberExtensionCards(
+    slots: ExtensionSlots?,
+    onOpen: (persona.core.navigation.ExtensionUiRoute) -> Unit = {},
+    onSettings: ((String) -> Unit)? = null,
+): List<ExtensionCardSlot> {
     slots ?: return emptyList()
     val state by slots.state.collectAsState()
     val cards = state.cards
@@ -287,7 +288,15 @@ internal fun rememberExtensionCards(slots: ExtensionSlots?, onOpen: (persona.cor
             LaunchedEffect(model) { model.load() }
             KeepFresh(model, slots.invalidations)
             ExtensionCardSlot(place, model.state.collectAsState().value,
-                rememberExtensionView(model, onPush = { onOpen(ExtensionViewText.opened(place, it)) })) { scope.launch { model.load() } }
+                rememberExtensionView(model,
+                    appLink = { url ->
+                        val id = ExtensionViewText.settings(place.extension, url)
+                        if (id != null && onSettings != null) {
+                            onSettings(id)
+                            true
+                        } else false
+                    },
+                    onPush = { onOpen(ExtensionViewText.opened(place, it)) })) { scope.launch { model.load() } }
         }
     }
 }
@@ -330,7 +339,7 @@ fun rememberMachineExtensionSections(slots: ExtensionSlots?, machineId: String,
                 JInlineStatus(view.error.text(), Modifier.padding(vertical = Tokens.Space.xs), tone = InlineTone.Failed)
 
             }
-            extensionViewItems(key, view, handle, showTitles = true)
+            extensionViewItems(key, view, handle, showTitles = true, compactPreview = true)
         }
     }
 }

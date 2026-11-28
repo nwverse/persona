@@ -37,7 +37,8 @@ func TestBuildFleet(t *testing.T) {
 	muted := agent("muted", proto.StateWorking, nil)
 	muted.Muted = true
 	agents = append(agents, muted)
-	ixs := []proto.Interaction{{ID: "ix1", MachineID: "m", SessionID: "p", Kind: proto.IxPermission, Summary: "Bash: go test ./...", CreatedAt: t0}}
+	occurrence := t0.Add(123456789 * time.Nanosecond)
+	ixs := []proto.Interaction{{ID: "ix1", MachineID: "m", SessionID: "p", Kind: proto.IxPermission, Summary: "Bash: go test ./...", CreatedAt: occurrence}}
 
 	st := buildFleet(agents, ixs)
 	if st.Phase != "needsYou" || st.NeedsYou != 1 || st.Working != 2 || st.Unread != 1 {
@@ -52,6 +53,14 @@ func TestBuildFleet(t *testing.T) {
 	}
 	if first.Place != "box · web" { // slot "2" is just the index: not repeated
 		t.Fatalf("place %q", first.Place)
+	}
+	raw, err := json.Marshal(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]any
+	if json.Unmarshal(raw, &wire) != nil || wire["interactionCreatedAt"] != occurrence.Format(time.RFC3339Nano) {
+		t.Fatalf("Live Activity occurrence = %v, want %s (item %s)", wire["interactionCreatedAt"], occurrence.Format(time.RFC3339Nano), raw)
 	}
 	if st.Items[1].ID != "m/w1" || st.Items[2].ID != "m/w2" {
 		t.Fatalf("working order %+v", st.Items)
@@ -83,6 +92,16 @@ func TestRound2(t *testing.T) {
 	for in, want := range map[int64]int64{7: 7, 99: 99, 987: 990, 12345: 12000, 41614712: 42000000} {
 		if got := round2(in); got != want {
 			t.Errorf("round2(%d) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// The island's load is rounded to the tenth of a core the apps print (#12519): 1.46 per core is 150 ("1.5", as the
+// card shows it), not 145.
+func TestLoadPercent(t *testing.T) {
+	for in, want := range map[float64]int{0: 0, 0.04: 0, 0.06: 10, 1.44: 140, 1.46: 150, 2.01: 200, 6.53: 650} {
+		if got := loadPercent(in); got != want {
+			t.Errorf("loadPercent(%v) = %d, want %d", in, got, want)
 		}
 	}
 }
@@ -260,7 +279,7 @@ func TestBuildFleetOneItemPerAgent(t *testing.T) {
 	// An elicitation is left out before the dedup: the agent's next card still stands for it.
 	st = buildFleet(agents[:1], []proto.Interaction{
 		{ID: "e1", MachineID: "m", SessionID: "a", Kind: proto.IxElicitation, CreatedAt: t0},
-		{ID: "a1", MachineID: "m", SessionID: "a", Kind: proto.IxPermission, CreatedAt: t0.Add(time.Second)},
+		{ID: "a1", MachineID: "m", SessionID: "a", Kind: proto.IxPermission, Summary: "run it", CreatedAt: t0.Add(time.Second)},
 	})
 	if st.NeedsYou != 1 || len(st.Items) != 1 || st.Items[0].Interaction != "a1" {
 		t.Fatalf("after an elicitation %+v", st.Items)
@@ -343,5 +362,25 @@ func TestBuildFleetOffersNoAllowForACardWithFields(t *testing.T) {
 	}
 	if b := byID["m/q"]; b.Interaction != "ix_bash" {
 		t.Fatalf("an ordinary permission: %+v, want its interaction for Allow / Deny", b)
+	}
+}
+
+// #12982: Allow / Deny only for a card that says what approving does.
+func TestFleetButtonsOnlyForDecidableCards(t *testing.T) {
+	now := time.Now()
+	agents := []fleetInput{
+		{Machine: "M", Session: &proto.Session{MachineID: "m", SessionID: "a", Title: "With summary", State: proto.StateNeedsYou}},
+		{Machine: "M", Session: &proto.Session{MachineID: "m", SessionID: "b", Title: "Tool only", State: proto.StateNeedsYou}},
+	}
+	ixs := []proto.Interaction{
+		{ID: "ix_a", MachineID: "m", SessionID: "a", Kind: proto.IxPermission, ToolName: "todo_complete", Summary: "Mark the to-do done", CreatedAt: now},
+		{ID: "ix_b", MachineID: "m", SessionID: "b", Kind: proto.IxPermission, ToolName: "Bash", CreatedAt: now.Add(time.Second)},
+	}
+	st := buildFleet(agents, ixs)
+	if st.NeedsYou != 2 || len(st.Items) != 2 {
+		t.Fatalf("%+v", st)
+	}
+	if st.Items[0].Interaction != "ix_a" || st.Items[1].Interaction != "" {
+		t.Fatalf("buttons: %+v", st.Items)
 	}
 }

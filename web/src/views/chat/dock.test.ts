@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Interaction } from "../../lib/types";
-import { AWAIT_MS, awaitingTurn, cardFold, cardLine, DOCK_MAX, INPUT_MAX, nextWaiting, PLAN_MAX, turnStart, visibleShare, showsAnswered } from "./dock";
+import { AWAIT_MS, awaitingTurn, cardFold, cardLine, DOCK_MAX, INPUT_MAX, nextWaiting, pickupStateForWait, PLAN_MAX, turnStart, visibleShare, showsAnswered } from "./dock";
 
 describe("visibleShare", () => {
   it("is a share of the visible height, capped when asked", () => {
@@ -19,18 +19,19 @@ describe("cardFold", () => {
   const wide = { narrow: false, keyboard: false, open: false };
   const narrow = { narrow: true, keyboard: false, open: false };
 
-  it("shows every card on a wide screen, the keyboard or not", () => {
-    expect(cardFold(3, wide)).toEqual({ full: 3, summary: null });
-    expect(cardFold(3, { ...wide, keyboard: true })).toEqual({ full: 3, summary: null });
+  it("shows only the first card on a wide screen, the keyboard or not", () => {
+    expect(cardFold(3, wide)).toEqual({ full: 1, summary: null });
+    expect(cardFold(3, { ...wide, keyboard: true })).toEqual({ full: 1, summary: null });
+    expect(cardFold(3, { ...wide, open: true })).toEqual({ full: 3, summary: null });
   });
 
-  it("shows the first in full and 还有 N 件 for the rest on a narrow one", () => {
-    expect(cardFold(3, narrow)).toEqual({ full: 1, summary: { kind: "more", count: 2 } });
+  it("shows only the first in full, with no summary line, on a narrow one", () => {
+    expect(cardFold(3, narrow)).toEqual({ full: 1, summary: null });
     expect(cardFold(1, narrow)).toEqual({ full: 1, summary: null });
     expect(cardFold(0, narrow)).toEqual({ full: 0, summary: null });
   });
 
-  it("shows them all once 还有 N 件 is tapped", () => {
+  it("shows them all once the position chip is tapped", () => {
     expect(cardFold(3, { ...narrow, open: true })).toEqual({ full: 3, summary: null });
   });
 
@@ -53,8 +54,8 @@ describe("cardLine", () => {
   it("says what each card asks, else what it waits for", () => {
     expect(cardLine(ix({ questions: [{ question: "用哪个框架？", options: [] }] as Interaction["questions"] }))).toBe("用哪个框架？");
     expect(cardLine(ix({ kind: "permission", tool_name: "Bash", tool_input: { description: "跑测试" } }))).toBe("跑测试");
-    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等你审批");
-    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等你处理");
+    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等待你审批");
+    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等待你处理");
   });
 });
 
@@ -66,6 +67,12 @@ describe("nextWaiting (#4091)", () => {
   });
   it("tells the same session id on another computer apart", () => {
     expect(nextWaiting([ix("a", "n", "s")], "m", "s")?.ix.id).toBe("a");
+  });
+  it("counts and opens only the authoritative request when a display copy exists", () => {
+    const original = ix("original", "m", "side");
+    const mirror = { ...ix("display", "m", "main"), mirror_of: original.id };
+    expect(nextWaiting([original, mirror], "m", "third")).toEqual({ ix: original, count: 1 });
+    expect(nextWaiting([original, mirror], "m", "side")).toBeNull();
   });
   it("is nothing when only this chat has cards, or none does", () => {
     expect(nextWaiting([ix("a", "m", "s")], "m", "s")).toBeNull();
@@ -107,6 +114,14 @@ describe("awaitingTurn (#3654)", () => {
     expect(awaitingTurn({ steps: [] } as never, "idle", at)).toBe(false);
     expect(awaitingTurn(undefined, "idle", at)).toBe(false);
   });
+  it("holds working across early thought/tool pushes until the hub catches up or the same turn finishes", () => {
+    for (const step of [{ kind: "thinking" }, { kind: "tool" }]) {
+      const turn = seg({ steps: [step] });
+      expect(awaitingTurn(turn, "idle", at + 500)).toBe(true);
+      expect(awaitingTurn(turn, "idle", at + 500, undefined, true)).toBe(false);
+      expect(awaitingTurn(turn, "offline", at + 500)).toBe(false);
+    }
+  });
   it("is off when the turn failed after the message, before writing anything (#3935)", () => {
     expect(awaitingTurn(seg(), "idle", at + 2_000, { since: "2026-11-05T10:00:01Z" })).toBe(false);
     expect(awaitingTurn(seg(), "idle", at + 2_000, { since: "2026-11-05T10:00:00Z" })).toBe(false);
@@ -117,5 +132,27 @@ describe("awaitingTurn (#3654)", () => {
   });
   it("leaves the hub's own states alone", () => {
     for (const st of ["working", "needs_you", "offline"] as const) expect(awaitingTurn(seg(), st, at)).toBe(false);
+  });
+});
+
+describe("pickupStateForWait (#14941 review P1)", () => {
+  it("demotes working to idle only while the work is background-only and the foreground has not started", () => {
+    expect(pickupStateForWait("working", true, false)).toBe("idle");
+  });
+
+  it("keeps working once the echoed turn already shows foreground activity", () => {
+    for (const foregroundActive of [true]) {
+      expect(pickupStateForWait("working", true, foregroundActive)).toBe("working");
+    }
+  });
+
+  it("never invents a background demotion without the explicit flag", () => {
+    expect(pickupStateForWait("working", false, false)).toBe("working");
+    expect(pickupStateForWait("working", undefined, false)).toBe("working");
+  });
+
+  it("passes non-working states through unchanged", () => {
+    expect(pickupStateForWait("idle", true, false)).toBe("idle");
+    expect(pickupStateForWait("unread", true, true)).toBe("unread");
   });
 });

@@ -2,6 +2,7 @@
 import Foundation
 #if canImport(WidgetKit)
 import WidgetKit
+import PersonaWire
 #endif
 
 /// The containing app owns credential changes; refresh only updates directories and reports actual configurations.
@@ -21,31 +22,33 @@ nonisolated enum ExtensionSurfaceSync {
         let credentials = export(configs, names: names, devices: devices, answerOnly: answerOnly, capabilities: capabilities)
         guard store.read().groups.mapValues(\.credential) != credentials else { return }
         try store.replaceCredentials(credentials)
-        #if os(iOS) || os(watchOS) || os(visionOS)
         WidgetCenter.shared.reloadTimelines(ofKind: ExtensionSystemWidget.kind)
-        #endif
     }
 
-    static func refresh(store: ExtensionSurfaceStore = .shared) async {
-        #if os(iOS) || os(watchOS) || os(visionOS)
+    /// Off the main thread: every step reads or rewrites the shared snapshot. A cancelled refresh (the app went to the
+    /// background, #11360) stops before its next store write; a write already under way finishes inside its lease.
+    static func refresh() async { await refresh(store: .shared) }
+
+    @concurrent static func refresh(store: ExtensionSurfaceStore) async {
         // Failure to enumerate means unknown, not empty: do not clear the hub's previous full report.
         let configurations = try? await ExtensionWidgetReconciliation.configurations()
-        #endif
         for (group, state) in store.read().groups {
+            if Task.isCancelled { return }
             let api = APIClient(config: ServerConfig(url: state.credential.url, token: state.credential.token, access: state.credential.access), group: group)
             do {
                 let features = try await ExtensionSurfaceClient(credential: state.credential)
                     .refreshCatalog(group: group, expected: state, store: store)
                 guard let catalog = store.read().groups[group], catalog.generation == state.generation else { continue }
                 let w = catalog.widgets
-                #if os(iOS) || os(watchOS) || os(visionOS)
                 guard features.contains("extension_widgets") else { continue }
                 if let configurations, let current = store.read().groups[group], current.generation == state.generation {
                     for (key, family) in configurations where key.group == group {
+                        if Task.isCancelled { return }
                         guard let place = w.first(where: { $0.extension == key.owner && $0.id == key.contribution && $0.families.contains(family) }),
                               store.read().cache(key, family: family)?.fresh(at: .now) != true else { continue }
                         do {
                             let answer = try await api.extensionWidget(place, family: family)
+                            try Task.checkCancellation()
                             try store.save(ExtensionSurfaceCache(key: key, family: family, locale: ExtensionUIContext.appLocale,
                                                                 timeZone: TimeZone.current.identifier, answer: answer), expected: current)
                         } catch {
@@ -58,21 +61,20 @@ nonisolated enum ExtensionSurfaceSync {
                 }
                 // The phone migrates legacy watch tokens. An answer-only wrist cannot list /auth/tokens.
                 let deviceID = state.credential.deviceID
+                if Task.isCancelled { return }
                 if let configurations, let device = deviceID,
                    store.read().groups[group]?.generation == state.generation {
                     let report = store.read().reports(configurations)[group] ?? []
                     try await api.reportExtensionWidgets(device: device, widgets: report)
                 }
-                #endif
             } catch {
+                if Task.isCancelled { return }
                 if let error = error as? APIError, [401, 403].contains(error.status) {
                     try? store.revoke(group, generation: state.generation)
                 }
             }
         }
-        #if os(iOS) || os(watchOS) || os(visionOS)
         WidgetCenter.shared.reloadTimelines(ofKind: ExtensionSystemWidget.kind)
-        #endif
     }
 }
 #endif

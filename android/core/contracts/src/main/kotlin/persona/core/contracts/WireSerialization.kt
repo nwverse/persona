@@ -6,8 +6,10 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialInfo
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.*
+import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.encoding.decodeStructure
 import kotlinx.serialization.json.*
 
 @SerialInfo
@@ -18,13 +20,45 @@ annotation class WireEnum(vararg val values: String)
 @Target(AnnotationTarget.PROPERTY)
 annotation class WireTime(val unixSeconds: Boolean = false)
 
+/** An optional field whose malformed value is safety-critical and must not be replaced by its default. */
+@SerialInfo
+@Target(AnnotationTarget.PROPERTY)
+annotation class WireStrict
+
 /** Apply D5 at field boundaries; a malformed optional field must not discard its siblings. */
 abstract class WireSerializer<T>(private val generated: KSerializer<T>) : KSerializer<T> {
     override val descriptor: SerialDescriptor get() = generated.descriptor
 
+    private val streamKnownFieldsOnly: Boolean by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        descriptor.kind == StructureKind.CLASS && (0 until descriptor.elementsCount).all { index ->
+            alternatives(descriptor, index).isEmpty()
+        }
+    }
+
     override fun deserialize(decoder: Decoder): T {
         val input = decoder as? JsonDecoder ?: throw SerializationException("Wire models require JSON")
+        if (streamKnownFieldsOnly && input.json.configuration.ignoreUnknownKeys) {
+            return deserializeKnownFieldsStreaming(input)
+        }
         return input.json.decodeFromJsonElement(generated, clean(input.decodeJsonElement(), descriptor))
+    }
+
+    /**
+     * When decoding a class from a stream with `ignoreUnknownKeys`, skip unknown keys directly in the
+     * JSON lexer instead of materializing large server-only subtrees (e.g. `brief.log`, `view`, `board`)
+     * into a transient `JsonObject` / `HashMap`, while still running D5 [clean] on every known field.
+     */
+    private fun deserializeKnownFieldsStreaming(input: JsonDecoder): T {
+        val fields = LinkedHashMap<String, JsonElement>()
+        input.decodeStructure(descriptor) {
+            while (true) {
+                val index = decodeElementIndex(descriptor)
+                if (index == CompositeDecoder.DECODE_DONE) break
+                fields[descriptor.getElementName(index)] =
+                    decodeSerializableElement(descriptor, index, JsonElement.serializer())
+            }
+        }
+        return input.json.decodeFromJsonElement(generated, clean(JsonObject(fields), descriptor))
     }
 
     override fun serialize(encoder: Encoder, value: T) = generated.serialize(encoder, value)
@@ -67,7 +101,8 @@ private fun clean(value: JsonElement, descriptor: SerialDescriptor): JsonElement
                         if (cleaned == JsonNull && !child.isNullable && descriptor.isElementOptional(index)) continue
                         put(name, cleaned)
                     } catch (error: SerializationException) {
-                        if (!descriptor.isElementOptional(index)) throw error
+                        val strict = descriptor.getElementAnnotations(index).any { it is WireStrict }
+                        if (!descriptor.isElementOptional(index) || strict) throw error
                     }
                 }
                 for (index in 0 until descriptor.elementsCount) {

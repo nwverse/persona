@@ -90,9 +90,15 @@
     <string name="settings_devices_empty_detail">After pairing, you can see and revoke devices here.</string>
     <string name="settings_devices_unnamed">Unnamed device</string>
     <string name="settings_devices_this">This device</string>
+    <string name="settings_devices_online">Online</string>
+    <string name="settings_devices_group_devices">Devices</string>
+    <string name="settings_devices_group_browsers">Browsers</string>
+    <string name="settings_devices_group_links">Computers</string>
+    <string name="settings_devices_group_integrations">Integrations</string>
     <string name="settings_devices_platform_role">%1$s, %2$s</string>
     <string name="settings_devices_role_full">full access</string>
     <string name="settings_devices_role_answer">answer only</string>
+    <string name="settings_devices_role_scoped">scoped access</string>
     <string name="settings_devices_role_unknown">role not provided</string>
     <string name="settings_devices_added">Added: %1$s</string>
     <string name="settings_devices_last_used">Last used: %1$s</string>
@@ -125,6 +131,10 @@
     <string name="settings_notify_quiet_end">Until</string>
     <string name="settings_notify_quiet_footer">During these hours you\'re not told when an agent finishes (the morning\'s Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot\'s nudges about unanswered cards also wait while any of your devices is in its quiet hours. In this phone\'s time zone.</string>
     <string name="settings_notify_quiet_footer_zone">During these hours you\'re not told when an agent finishes (the morning\'s Today card sums it up), and things that need you arrive without a sound. Reminders you asked the assistant for still come as usual. A chat bot\'s nudges about unanswered cards also wait while any of your devices is in its quiet hours. They\'re in %1$s, where they were set; changing them here puts them in this phone\'s time zone.</string>
+    <string name="settings_notify_low_distraction">Push grading</string>
+    <string name="settings_notify_low_distraction_subtitle">Only what needs you notifies you; the rest waits for the briefing</string>
+    <string name="settings_notify_low_distraction_footer">For all your devices. When on, questions, approvals, decisions only you can make, your reminders and the main conversation\'s notices still notify you; task results, “Please verify” requests and other conversations\' notices wait for the briefing and Held pushes, and finished agents stay silent.</string>
+    <string name="settings_notify_low_distraction_save_failed">Couldn\'t save; push grading is back as it was.</string>
     <string name="settings_reading">Reading</string>
     <string name="settings_retry_read">Try again</string>
     <string name="settings_saving">Saving…</string>
@@ -132,6 +142,8 @@
     <string name="settings_not_provided">Not provided</string>
     <string name="settings_about_build">Build</string>
     <string name="settings_devices_watch">Watch</string>
+    <string name="settings_devices_web">Web</string>
+    <string name="settings_devices_link">Persona Link</string>
     <string name="settings_devices_phone_unknown">Phone (platform not provided)</string>
     <string name="settings_devices_platform_unknown">Platform not provided</string>
     <string name="settings_devices_no_record">No record yet</string>
@@ -283,7 +295,7 @@
     <string name="settings_off">Off</string>
     <string name="settings_retry_cleanup">Retry cleanup</string>
     <string name="settings_try_demo">No hub? Try the demo</string>
-    <string name="settings_style_title">Interface style</string>
+    <string name="settings_style_title">Appearance</string>
     <string name="settings_avatar_title">Avatar</string>
     <string name="settings_about_persona">About Persona</string>
     <string name="settings_phone_data_title">Phone data</string>
@@ -320,6 +332,8 @@
     <string name="settings_row_claude_subtitle">Common options on your computers, changed together</string>
     <string name="settings_row_codex">Codex settings</string>
     <string name="settings_row_codex_subtitle">Codex options on your computers, changed together</string>
+    <string name="settings_row_agy">Antigravity settings</string>
+    <string name="settings_row_agy_subtitle">Antigravity options on your computers, changed together</string>
     <string name="settings_section_connectors">Connectors</string>
     <string name="settings_row_phone_subtitle">Contacts, calendar, photos, location and clipboard</string>
     <string name="settings_row_mail">Mail</string>
@@ -355,6 +369,7 @@
     <string name="settings_ready_needs_confirm">Needs your confirmation</string>
     <string name="settings_ready_skipped_note">Skipped; come back to set it anytime</string>
     <string name="settings_ready_open">Open settings</string>
+    <string name="settings_ready_allow_notifications">Allow</string>
     <string name="settings_ready_open_failed">Couldn\'t open system settings. Open Persona\'s app info from the phone\'s Settings.</string>
     <string name="settings_ready_undo_confirm">Undo</string>
     <string name="settings_ready_mark_done">Mark done</string>
@@ -422,6 +437,8 @@
     <string name="settings_triage_actions_about">After a temporary model service error (503 and the like), it sends “continue” up to 3 times; an agent waiting on a deploy, CI or another agent is woken on time to check for itself. Both run another turn of the agent on its own model. Pushing code, deploying or messaging others: the hub only asks you, it never does these on its own.</string>
     <string name="settings_triage_closeout">Ask for a closeout</string>
     <string name="settings_triage_closeout_about">When an agent stops after doing work without saying whether it\'s done, merged and deployed, and what\'s missing, its stop is held once to ask for that record. Costs one short extra turn on the agent\'s model</string>
+    <string name="settings_triage_closeout_ask">Ask for the status afterwards</string>
+    <string name="settings_triage_closeout_ask_about">When an agent that nobody supervises stops after doing work, without a closeout and without being clearly finished, Persona asks it once for a status report on the work already done. Costs one turn on the agent\'s model</string>
     <string name="settings_triage_reply_reminder">Remind when seen but unanswered</string>
     <string name="settings_triage_reply_reminder_about">When an agent asked you something and you looked but haven\'t replied for 30 minutes, you\'re reminded once. Rules only, no tokens spent.</string>
     <plurals name="settings_notify_long_turn">

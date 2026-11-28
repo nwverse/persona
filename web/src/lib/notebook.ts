@@ -1,6 +1,9 @@
 // Jupyter notebooks for the web's file viewer (docs/web/web.md "Jupyter", #1407; iOS / Mac: #1296): nbformat 4 (and 3's
 // worksheets) into cells, each output reduced to the one representation the viewer shows. Pure; notebook.test.ts.
 import { t } from "../i18n";
+import { stripAnsi } from "./ansi";
+
+export { stripAnsi };
 
 export type Output =
   | { kind: "stream"; name: "stdout" | "stderr"; text: string }
@@ -32,12 +35,6 @@ export const MAX_OUTPUT_LINES = 2000;
 
 type Json = Record<string, unknown>;
 const str = (v: unknown): string => (Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : "")).join("") : typeof v === "string" ? v : "");
-
-/** Removes terminal color codes (tracebacks are full of them). */
-export function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\u001b\][^\u0007]*\u0007/g, "");
-}
 
 /** Text cut to MAX_OUTPUT_LINES, saying how many lines were left out. */
 export function capLines(s: string, max = MAX_OUTPUT_LINES): string {
@@ -75,7 +72,7 @@ function richOutput(data: Json): Output | null {
 function readOutput(o: Json): Output | null {
   switch (o.output_type) {
     case "stream":
-      return { kind: "stream", name: o.name === "stderr" ? "stderr" : "stdout", text: capLines(stripAnsi(str(o.text))) };
+      return { kind: "stream", name: o.name === "stderr" ? "stderr" : "stdout", text: str(o.text) };
     case "execute_result":
     case "display_data":
       return richOutput((o.data as Json) ?? {});
@@ -103,7 +100,7 @@ function mergeStreams(out: Output[]): Output[] {
     if (o.kind === "stream" && last?.kind === "stream" && last.name === o.name) merged[merged.length - 1] = { ...last, text: last.text + o.text };
     else merged.push(o);
   }
-  return merged;
+  return merged.map((o) => (o.kind === "stream" ? { ...o, text: capLines(stripAnsi(o.text)) } : o));
 }
 
 /** A notebook's JSON into cells; throws with a readable reason for what is not one. */

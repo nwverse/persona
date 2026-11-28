@@ -30,6 +30,13 @@ func TestAgentGone(t *testing.T) {
 	}{
 		{"closed", func(*orphanAgent) {}, orphanClosed},
 		{"closed after a model error", func(a *orphanAgent) { a.c.TurnError = "API Error: 400 invalid request" }, orphanError},
+		// The hub's own word on a turn with no output is no error that ended it (#10187).
+		{"closed after a turn with no output", func(a *orphanAgent) {
+			a.c.TurnError, a.c.TurnErrorKind = "This turn had no output", proto.TurnErrorNoOutput
+		}, orphanClosed},
+		{"closed after Persona's Stop", func(a *orphanAgent) {
+			a.c.TurnError, a.c.TurnErrorKind = "Stopped with its conversation", proto.TurnErrorStopped
+		}, orphanClosed},
 		{"computer offline", func(a *orphanAgent) { a.reachable = false }, orphanOffline},
 		{"no longer listed", func(a *orphanAgent) { a.listed = false }, orphanClosed},
 		{"open in a tab, stopped", func(a *orphanAgent) { a.c.Status, a.c.PaneID = proto.StatusIdle, "w1:p1" }, ""},
@@ -68,6 +75,13 @@ func TestAgentGone(t *testing.T) {
 			a.c.TurnError, a.c.TurnErrorKind, a.c.TurnErrorResetsAt = "usage limit", proto.TurnErrorUsageLimit, &reset
 		}, ""},
 		{"work done, nothing pending", func(a *orphanAgent) { a.c.Work = &proto.WorkState{Phase: proto.WorkDone} }, orphanClosed},
+		// A node that connected again a moment ago may not list the agent yet, or list it as it is.
+		{"not listed, its node just connected again", func(a *orphanAgent) { a.listed, a.connected = false, now.Add(-30*time.Second) }, ""},
+		{"closed, its node just connected again", func(a *orphanAgent) { a.connected = now.Add(-30 * time.Second) }, ""},
+		{"not listed, its node connected a while ago", func(a *orphanAgent) {
+			a.listed, a.connected = false, now.Add(-orphanReconnectWait-time.Minute)
+		}, orphanClosed},
+		{"offline, its node connected a moment before", func(a *orphanAgent) { a.reachable, a.connected = false, now.Add(-30*time.Second) }, orphanOffline},
 	}
 	for _, c := range cases {
 		a := orphanAgent{machine: "box", session: "s1", reachable: true, listed: true, c: closedAgent(now.Add(-time.Hour))}
@@ -375,5 +389,173 @@ func TestWorkOfInterrupted(t *testing.T) {
 		if got := workOf(i18n.En, alive, &c.w, nil); got == nil {
 			t.Errorf("%s: dropped for a live agent", c.name)
 		}
+	}
+}
+
+// An ssh node whose link dropped starts over, and its first lists do not have the task's agent yet: the supervisor is
+// not told nobody works on the task until the node has had a reconnect window to list it.
+func TestOrphanWaitsForAReconnectedNodeToListItsAgents(t *testing.T) {
+	ctx := context.Background()
+	ft := newFleetTest(t)
+	s := ft.s
+	ft.f.devices = []Device{{ID: "mac", Name: "Mac", Online: true, Reachable: true}}
+	todo, err := s.createTodo(ctx, "Example task", "Collect task evidence.", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.superviseTodo(ctx, todo.ID, "conv1", []string{"Tests pass"}, 30)
+	if err := s.linkTodoAgent(ctx, todo.ID, "mac", "s1", "Example task", "/code/app", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	ft.d.mu.Lock()
+	ft.d.machines["mac"].connected = now.Add(-20 * time.Second) // the node is back after a dropped link
+	ft.d.mu.Unlock()
+	ft.sessions("mac", proto.Session{SessionID: "other", Status: proto.StatusIdle, PaneID: "w1:p1"})
+
+	s.orphanWatch(ctx, now)
+	if g, ok := s.orphanSignal(todoNow(s, todo.ID)); ok {
+		t.Fatalf("orphaned the moment its node connected again: %+v", g)
+	}
+	later := now.Add(orphanReconnectWait)
+	s.orphanWatch(ctx, later)
+	if g, ok := s.orphanSignal(todoNow(s, todo.ID)); !ok || g.Orphan != orphanClosed {
+		t.Fatalf("still not listed a reconnect window later: %+v %v", g, ok)
+	}
+}
+
+func TestAcceptedWorkersRearmOrphanedLeader(t *testing.T) {
+	now := time.Now().UTC()
+	root := &Todo{ID: "root"}
+	a := &Todo{ID: "a", PartOf: "root", DoneAt: &now, Supervision: &Supervision{State: reviewAccepted}}
+	b := &Todo{ID: "b", Agents: []TodoAgent{{Source: sourceWorker, Via: "root"}}, Supervision: &Supervision{State: reviewAccepted}}
+	todos := map[string]*Todo{"root": root, "a": a, "b": b}
+	key := func() string { return completedWorkerSets(todos)["root"].key() }
+	if key() != "" {
+		t.Fatal("woke before last worker finished")
+	}
+	b.DoneAt = &now
+	first := key()
+	if first == "" || first != key() {
+		t.Fatal("accepted worker generation was not stable")
+	}
+	b.Supervision.State = reviewCancelled
+	if key() != "" {
+		t.Fatal("cancellation counted as acceptance")
+	}
+	b.Supervision.State = reviewAccepted
+	later := now.Add(time.Minute)
+	b.DoneAt = &later
+	if key() == first {
+		t.Fatal("new acceptance did not rearm the wake")
+	}
+	root.DoneAt = &now
+	if key() != "" {
+		t.Fatal("completed parent generated a wake")
+	}
+}
+
+func TestOrphanedLeaderReceivesAcceptedWorkerGeneration(t *testing.T) {
+	s, f := newQuietService(t)
+	root := startTaskLeader(t, s, f)
+	child := planWorker(t, s, f, nil)
+	ctx := t.Context()
+	now := time.Now().UTC()
+	leader := proto.Session{SessionID: root.Agents[0].SessionID, MachineID: "box", Host: "herdr", Agent: "claude",
+		Status: proto.StatusInterrupted, UpdatedAt: now.Add(-time.Hour),
+		Capabilities: &proto.SessionCapabilities{Read: true, Terminal: true}}
+	f.setSessions("box", leader)
+	s.orphanWatch(ctx, now)
+	before, ok := s.orphanSignal(root)
+	if !ok || before.WorkerSet != "" {
+		t.Fatalf("open worker: %+v", before)
+	}
+	if _, _, err := s.updateSupervision(ctx, child.ID, func(v *Supervision) bool { v.State = reviewAccepted; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.reviewDoneTodo(ctx, child.ID, "accepted", true); err != nil {
+		t.Fatal(err)
+	}
+	s.orphanWatch(ctx, now.Add(time.Minute))
+	after, ok := s.orphanSignal(root)
+	if !ok || after.WorkerSet == "" || after.Key == before.Key {
+		t.Fatalf("last worker did not rearm supervision: %+v", after)
+	}
+	if _, ok := s.digestEntry(ctx, after, ""); !ok {
+		t.Fatal("completed generation cannot reach the supervisor")
+	}
+	if _, _, err := s.updateSupervision(ctx, root.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.digestEntry(ctx, after, ""); ok {
+		t.Fatal("wake overrode an owner decision")
+	}
+}
+
+func TestOrphanWatchCoversStalledStartupQueues(t *testing.T) {
+	for _, kind := range []string{workspaceQueueKey, pendingPlacementQueueKey} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			s, f := newQuietService(t)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			now := time.Now()
+			todo, err := s.createTodo(ctx, "Queued task", "Carry out the decision", "conv1", "plan_q")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.superviseTodo(ctx, todo.ID, "conv1", []string{"Finish the task"}, 30)
+			at := now.Add(-orphanQueuedAfter)
+			queue := &TaskQueue{Key: kind, Reason: "Waiting for the project", QueuedAt: at, NextAt: now.Add(time.Minute)}
+			p := &TaskPlan{ID: "plan_q", Conversation: "conv1", State: planStarted, CreatedAt: at, UpdatedAt: now,
+				Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Queue: queue}}}
+			if err := s.savePlan(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			s.orphanWatch(ctx, now.Add(-time.Second))
+			if o := listedOrphan(t, s, todo.ID); o != nil {
+				t.Fatalf("a fresh queue was flagged: %+v", o)
+			}
+			s.orphanWatch(ctx, now)
+			o := listedOrphan(t, s, todo.ID)
+			if o == nil || o.Reason != orphanQueued || !o.Since.Equal(at) {
+				t.Fatalf("stalled queue missing from to-do: %+v", o)
+			}
+			s.superviseWatch(ctx, now)
+			s.supervise.mu.Lock()
+			g := s.supervise.pending[todo.ID+"|"+sigOrphaned]
+			s.supervise.mu.Unlock()
+			if g.Orphan != orphanQueued || g.Detail != queue.Reason {
+				t.Fatalf("stalled queue not escalated: %+v", g)
+			}
+			e, ok := s.digestEntry(ctx, g, "")
+			if !ok || e.Orphan != orphanQueued {
+				t.Fatalf("stalled queue dropped from digest: %+v", e)
+			}
+			if err := s.patchPlanTask(ctx, p.ID, 0, func(task *PlanTask) {
+				next := *queue
+				next.Attempt++
+				task.Queue = &next
+			}); err != nil {
+				t.Fatal(err)
+			}
+			s.orphanWatch(ctx, now.Add(time.Minute))
+			if again, ok := s.orphanSignal(todoNow(s, todo.ID)); !ok || again.Key != g.Key {
+				t.Fatalf("queue retry changed the escalation generation: %+v", again)
+			}
+			if err := s.patchPlanTask(ctx, p.ID, 0, func(task *PlanTask) { task.Queue = nil }); err != nil {
+				t.Fatal(err)
+			}
+			if e, ok := s.digestEntry(ctx, g, ""); ok {
+				t.Fatalf("an old queue signal survived the plan starting: %+v", e)
+			}
+			f.setSessions("box", proto.Session{SessionID: "s1", Status: proto.StatusWorking})
+			if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", "Working", "/code/app", "claude"); err != nil {
+				t.Fatal(err)
+			}
+			s.orphanWatch(ctx, now.Add(2*time.Minute))
+			if o := listedOrphan(t, s, todo.ID); o != nil {
+				t.Fatalf("queue remained orphaned after start: %+v", o)
+			}
+		})
 	}
 }

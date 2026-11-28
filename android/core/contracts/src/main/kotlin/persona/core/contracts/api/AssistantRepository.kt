@@ -1,6 +1,7 @@
 package persona.core.contracts.api
 
 import persona.core.contracts.DirectionTree
+import persona.core.contracts.ExternalDirection
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import kotlinx.coroutines.flow.StateFlow
@@ -25,7 +26,7 @@ data class AssistantSnapshot(
     /** Stable owner identity, including when this manager becomes or ceases to be the default. */
     val managerId: String = manager ?: ManagerRoster.ASSISTANT_MANAGER,
     /**
-     * The leader conversations (`assistant.leaders`, docs/assistant/unified-entry.md "Leader conversations"), in the hub's
+     * The direction ids (`assistant.leaders`, including explicitly outside directions, docs/assistant/unified-entry.md), in the hub's
      * order: the drawer's 常驻 group. Empty when there are none or from an older hub.
      */
     val leaders: List<String> = emptyList(),
@@ -46,6 +47,14 @@ data class AssistantSnapshot(
      * the app. Null until the hub has made it and from an older hub.
      */
     val backgroundSupervisor: String? = null,
+    /** Whether scheduled task and background-supervisor chats belong in Recent; null from an older hub. */
+    val recentTaskChats: Boolean? = null,
+    /** Outside-direction targets from the leaders fallback. A present tree is authoritative for its own directions. */
+    val externalDirections: Map<String, ExternalDirection> = emptyMap(),
+    /** Saved ordinary-conversation order; null or empty means activity time. Unknown ids are preserved on writes. */
+    val conversationOrder: List<String>? = null,
+    /** Exact tag-filter entries/order; unsupported on a hub that omitted the field, automatic when its entries are null. */
+    val conversationTagFilters: ConversationTagFilters = ConversationTagFilters.Unsupported,
 ) {
     /**
      * What each current leader's row shows (the tree's `running` and `counts.needs_you`, #4352, #6626), by conversation
@@ -53,6 +62,10 @@ data class AssistantSnapshot(
      */
     val leaderCounts: Map<String, LeaderCounts>
         get() = directionTree?.leaders.orEmpty().associate { it.id to LeaderCounts(it.running, it.counts.needsYou) }
+
+    /** Explicit outside metadata only; target fields without `external: true` never make a direction visible. */
+    fun externalDirection(id: String): ExternalDirection? =
+        if (directionTree != null) directionTree.direction(id)?.external else externalDirections[id]
 }
 
 /** The assistant's spaces besides its own (docs/assistant/health.md): their names on the wire (`space`). */
@@ -63,4 +76,15 @@ object AssistantSpace {
 interface AssistantRepository {
     val assistant: StateFlow<AssistantSnapshot>
     suspend fun refresh()
+    /** Apply the setting's optimistic value or rollback to the selected snapshot, when the implementation supports it. */
+    suspend fun updateRecentTaskChats(value: Boolean?) {}
+    /** Capture the selected assistant for one optimistic write and its later outcome. */
+    suspend fun recentTaskChatsUpdater(): suspend (Boolean?) -> Unit = { updateRecentTaskChats(it) }
+    suspend fun updateConversationOrder(value: List<String>?) {}
+    suspend fun conversationOrderUpdater(): suspend (List<String>?) -> Unit = { updateConversationOrder(it) }
+    /** Apply the exact filter preference or its rollback without retargeting a manager switch. */
+    suspend fun updateConversationTagFilters(value: ConversationTagFilters) {}
+    suspend fun conversationTagFiltersUpdater(): suspend (ConversationTagFilters) -> Unit = {
+        updateConversationTagFilters(it)
+    }
 }

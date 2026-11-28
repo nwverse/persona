@@ -3,15 +3,17 @@ package persona.feature.agents
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import persona.core.contracts.SessionKey
-import persona.core.contracts.api.HubPreferences
-import persona.core.contracts.api.HubPreferencesSnapshot
+import persona.core.contracts.Hello
+import persona.core.contracts.api.*
 import persona.core.domain.sort.AgentGrouping
 import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentRowStyle
 import persona.core.domain.sort.AgentSort
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -31,23 +33,112 @@ class AgentsPreferencesTest {
         }
         val preferences = AgentsPreferences(store, hub)
         assertEquals("a phone that never chose a grouping gets 按仓库", AgentGrouping.Repo, preferences.snapshots.first().grouping)
-        for (value in listOf("Space", "Machine", "removed-value")) {
+        for (value in listOf("Space", "removed-value")) {
             store.data.value = preferencesOf(stringPreferencesKey("grouping") to value)
             assertEquals(AgentGrouping.MachineSpace, preferences.snapshots.first().grouping)
         }
+        store.data.value = preferencesOf(stringPreferencesKey("grouping") to "Machine")
+        assertEquals(AgentGrouping.Machine, preferences.snapshots.first().grouping)
         preferences.grouping(AgentGrouping.State)
         assertEquals(AgentGrouping.State, preferences.snapshots.first().grouping)
         preferences.grouping(AgentGrouping.MachineSpace)
         assertEquals("MachineSpace", store.data.value[stringPreferencesKey("grouping")])
         assertEquals(AgentGrouping.MachineSpace, preferences.snapshots.first().grouping)
-        // "Status first" until "Recently updated" is chosen (iOS dev.sort); botmux shown until hidden (#2786)
+        // "Status first" until "Recently updated" is chosen.
         assertEquals(AgentSort.State, preferences.snapshots.first().sort)
-        assertEquals(false, preferences.snapshots.first().hideBotmux)
-        preferences.sort(AgentSort.Updated); preferences.hideBotmux(true)
+        assertEquals(emptySet<String?>(), preferences.snapshots.first().hiddenBotmuxHubs)
+        preferences.sort(AgentSort.Updated)
         assertEquals(AgentSort.Updated, preferences.snapshots.first().sort)
-        assertEquals(true, preferences.snapshots.first().hideBotmux)
         store.data.value = preferencesOf(stringPreferencesKey("sort") to "removed-value")
         assertEquals(AgentSort.State, preferences.snapshots.first().sort)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun pairedValuesWinAndFailedLegacyMigrationsStayWithTheirOriginalPairing() = runTest {
+        val legacy = booleanPreferencesKey("hide-botmux")
+        val values = MutableStateFlow<Preferences>(preferencesOf(legacy to true))
+        val store = object : DataStore<Preferences> {
+            override val data = values
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences) =
+                transform(values.value).also { values.value = it }
+        }
+        val pins = object : HubPreferences {
+            override val preferences = MutableStateFlow(HubPreferencesSnapshot())
+            override suspend fun refresh() = Unit
+            override suspend fun togglePin(path: String, space: Boolean) = Unit
+            override suspend fun toggleMute(path: String, space: Boolean) = Unit
+            override suspend fun markSeen(session: SessionKey, version: String) = Unit
+        }
+        class Api(var setting: AgentsDisplaySettings) : AgentDisplayApi {
+            var reads = 0
+            var writes = 0
+            var readFails = false
+            var writeFails = false
+            var concurrentValue: Boolean? = null
+            override suspend fun read(): AgentsDisplaySettings {
+                reads++
+                if (readFails) error("Endpoint unavailable")
+                return setting
+            }
+            override suspend fun migrateHidden(): AgentsDisplaySettings {
+                writes++
+                if (writeFails) error("Write unavailable")
+                setting = AgentsDisplaySettings(concurrentValue ?: false, true)
+                return setting
+            }
+        }
+        val socket = MutableStateFlow<SocketHello?>(SocketHello(1, Hello(protocol = 1, serverVersion = "fixture")))
+        val first = Api(AgentsDisplaySettings(true, false)).apply { readFails = true }
+        val second = Api(AgentsDisplaySettings(false, true))
+        val firstPair = AgentsDisplayHub("scope-a", null, true, socket, first)
+        val secondPair = AgentsDisplayHub("scope-b", "g11111111", false, socket, second)
+        val pairs = MutableStateFlow(listOf(firstPair, secondPair))
+        val reload = MutableStateFlow(0)
+        val prefs = AgentsPreferences(store, pins, AgentsDisplayHubs { pairs })
+        backgroundScope.launch { prefs.watchDisplaySettings(reload) }
+        runCurrent()
+        assertEquals(true, values.value[legacy])
+        assertEquals(setOf(null, secondPair.namespace), prefs.snapshots.first().hiddenBotmuxHubs)
+
+        // The old Hub does not implement GET. Switching the selected pairing must not redirect the pending migration.
+        pairs.value = listOf(firstPair.copy(selected = false), secondPair.copy(selected = true))
+        runCurrent()
+        assertEquals(true, values.value[legacy])
+        assertEquals(0, second.writes)
+        first.readFails = false
+        first.writeFails = true
+        reload.value++
+        runCurrent()
+        assertEquals(1, first.writes)
+        assertEquals(true, values.value[legacy])
+
+        // The server's atomic PUT returns the other client's explicit true.
+        first.writeFails = false
+        first.concurrentValue = true
+        socket.value = SocketHello(2, socket.value!!.hello)
+        runCurrent()
+        assertEquals(2, first.writes)
+        assertEquals(null, values.value[legacy])
+        assertEquals(setOf(secondPair.namespace), prefs.snapshots.first().hiddenBotmuxHubs)
+
+        // An explicit response to GET needs no migration, including after the app restores a pending legacy key.
+        values.value = values.value.toMutablePreferences().apply { this[legacy] = true }
+        reload.value++
+        runCurrent()
+        assertEquals(0, second.writes)
+        assertEquals(null, values.value[legacy])
+        second.setting = AgentsDisplaySettings(true, true)
+        reload.value++
+        runCurrent()
+        assertEquals(emptySet<String?>(), prefs.snapshots.first().hiddenBotmuxHubs)
+        assertEquals(2, first.writes)
+
+        // Re-pairing under the same plain row namespace does not reuse the previous pairing's cached decision.
+        val unsupported = Api(AgentsDisplaySettings(false, true)).apply { readFails = true }
+        pairs.value = listOf(firstPair.copy(scope = "fresh", api = unsupported, selected = true))
+        runCurrent()
+        assertEquals(emptySet<String?>(), prefs.snapshots.first().hiddenBotmuxHubs)
+        assertEquals(0, unsupported.writes)
     }
 
     /**
@@ -95,5 +186,65 @@ class AgentsPreferencesTest {
         // A style this version doesn't know reads as Avatar.
         store.data.value = preferencesOf(stringPreferencesKey("row-style") to "removed-value")
         assertEquals(AgentListDisplay.Avatar, shown())
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun herdrTabNameSettingSyncsCachesPerHubAndUpdatesOnlyAfterHubAcknowledges() = runTest {
+        val values = MutableStateFlow<Preferences>(emptyPreferences())
+        val store = object : DataStore<Preferences> {
+            override val data = values
+            override suspend fun updateData(transform: suspend (Preferences) -> Preferences) =
+                transform(values.value).also { values.value = it }
+        }
+        val hubPrefs = object : HubPreferences {
+            override val preferences = MutableStateFlow(HubPreferencesSnapshot())
+            override suspend fun refresh() = Unit
+            override suspend fun togglePin(path: String, space: Boolean) = Unit
+            override suspend fun toggleMute(path: String, space: Boolean) = Unit
+            override suspend fun markSeen(session: SessionKey, version: String) = Unit
+        }
+        class Api(var setting: AgentsDisplaySettings) : AgentDisplayApi {
+            var writeFails = false
+            override suspend fun read() = setting
+            override suspend fun migrateHidden() = setting
+            override suspend fun setUseHerdrTabName(enabled: Boolean): AgentsDisplaySettings {
+                if (writeFails) error("Hub offline")
+                setting = setting.copy(useHerdrTabName = enabled)
+                return setting
+            }
+        }
+        val socket = MutableStateFlow<SocketHello?>(SocketHello(1, Hello(protocol = 1, serverVersion = "fixture")))
+        val primary = Api(AgentsDisplaySettings(showBotmux = true, configured = true, useHerdrTabName = true))
+        val secondary = Api(AgentsDisplaySettings(showBotmux = true, configured = true, useHerdrTabName = false))
+        val legacy = Api(AgentsDisplaySettings(showBotmux = true, configured = true, useHerdrTabName = null))
+        val pairs = MutableStateFlow(listOf(
+            AgentsDisplayHub("scope-a", null, selected = true, socket, primary),
+            AgentsDisplayHub("scope-b", "g11111111", selected = false, socket, secondary),
+        ))
+        val reload = MutableStateFlow(0)
+        val prefs = AgentsPreferences(store, hubPrefs, AgentsDisplayHubs { pairs })
+        backgroundScope.launch { prefs.watchDisplaySettings(reload) }
+        runCurrent()
+
+        assertEquals(setOf<String?>(null), prefs.snapshots.first().herdrTabNameHubs)
+        assertEquals(true, prefs.useHerdrTabName.first())
+
+        // Failed writes keep the last acknowledged hub value.
+        primary.writeFails = true
+        val _ = runCatching { prefs.setUseHerdrTabName(false) }
+        assertEquals(true, prefs.useHerdrTabName.first())
+        assertEquals(setOf<String?>(null), prefs.snapshots.first().herdrTabNameHubs)
+
+        // Confirmed writes update both the setting flow and the per-hub namespace set.
+        primary.writeFails = false
+        prefs.setUseHerdrTabName(false)
+        assertEquals(false, prefs.useHerdrTabName.first())
+        assertEquals(emptySet<String?>(), prefs.snapshots.first().herdrTabNameHubs)
+
+        // Older hubs that omit use_herdr_tab_name stay null (switch hidden) and off.
+        pairs.value = listOf(AgentsDisplayHub("scope-old", null, selected = true, socket, legacy))
+        runCurrent()
+        assertEquals(null, prefs.useHerdrTabName.first())
+        assertEquals(emptySet<String?>(), prefs.snapshots.first().herdrTabNameHubs)
     }
 }

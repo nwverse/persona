@@ -20,8 +20,12 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	var init struct {
 		CodexHome string `json:"codexHome"`
 	}
+	clientName := "persona"
+	if c.p.agent == traexAgent {
+		clientName = "traex-persona"
+	}
 	if err := c.call(ctx, "initialize", map[string]any{
-		"clientInfo":   map[string]any{"name": "persona", "title": "Persona", "version": "1"},
+		"clientInfo":   map[string]any{"name": clientName, "title": "Persona", "version": "1"},
 		"capabilities": map[string]any{"experimentalApi": true, "requestAttestation": false},
 	}, &init); err != nil {
 		return err
@@ -38,6 +42,12 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 		mode = startupMode[0]
 	}
 	params := map[string]any{"cwd": cwd}
+	if c.p.agent == traexAgent {
+		mode = inboxPermissionMode(mode, "", false)
+		if mode != proto.ModeBypass {
+			params["approvalsReviewer"] = "user"
+		}
+	}
 	if mode != "" {
 		approval, sandbox := codexPolicy(mode)
 		params["approvalPolicy"], params["sandbox"] = approval, sandbox
@@ -45,12 +55,22 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	if c.p.model.Model != "" {
 		params["model"] = c.p.model.Model
 	}
-	// The same on every start of the thread, apart from the memory index: the live snapshot goes with each message.
-	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir))
+	// AGENTS.md supplies the bounded entry. Codex has no native .agents/rules loader, so the exact remainder
+	// travels on both start and resume through its authoritative developer-instruction channel.
+	remainder, err := assistantInstructionRemainder(cwd)
+	if err != nil {
+		return err
+	}
+	params["developerInstructions"] = prompts.RenderCodexInstructions(codexMemoryPrompt(c.memDir),
+		joinInstructionRemainderAndPolicy(remainder, c.p.model.SupervisionInstructions))
 	var res struct {
-		Model       string          `json:"model"`
-		ServiceTier json.RawMessage `json:"serviceTier"`
-		Thread      struct {
+		Model          string          `json:"model"`
+		ServiceTier    json.RawMessage `json:"serviceTier"`
+		ApprovalPolicy json.RawMessage `json:"approvalPolicy"`
+		Sandbox        struct {
+			Type string `json:"type"`
+		} `json:"sandbox"`
+		Thread struct {
 			ID   string `json:"id"`
 			Path string `json:"path"`
 		} `json:"thread"`
@@ -67,13 +87,26 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 	if res.Thread.ID == "" {
 		return errors.New("no thread id")
 	}
+	if c.p.agent == traexAgent {
+		if resume && res.Thread.ID != id {
+			return errors.New("TRAE CLI returned a different thread on resume")
+		}
+		wantApproval, _ := codexPolicy(mode)
+		wantSandbox := codexSandboxPolicy(mode, "")["type"]
+		var approval string
+		if err := json.Unmarshal(res.ApprovalPolicy, &approval); err != nil || approval != wantApproval || res.Sandbox.Type != wantSandbox {
+			return errors.New("TRAE CLI did not attest the Inbox approval and sandbox policy")
+		}
+	}
 	c.mu.Lock()
 	c.threadID = res.Thread.ID
 	c.speedModel = res.Model
 	c.serviceTier = codexServiceTier(res.ServiceTier)
 	c.mu.Unlock()
 	n.mu.Lock()
+	c.p.mu.Lock()
 	c.p.id = res.Thread.ID
+	c.p.mu.Unlock()
 	if res.Thread.Path != "" {
 		n.paths[res.Thread.ID] = res.Thread.Path // Codex said so (CODEX_HOME may not be ~/.codex)
 		if n.pathsAt == nil {
@@ -82,7 +115,9 @@ func (c *codexConn) start(ctx context.Context, id, cwd string, resume bool, star
 		n.pathsAt[res.Thread.ID] = time.Now()
 	}
 	n.mu.Unlock()
-	c.loadSpeedModels(ctx)
+	if c.p.agent == "codex" {
+		c.loadSpeedModels(ctx)
+	}
 	if c.nameGates != nil { // larkCheck records what it confirmed under this id (p.id): the addresses stand for it from now on
 		c.nameGates(res.Thread.ID)
 	}
@@ -179,6 +214,13 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 	}
 	c.p.mu.Unlock()
 	params := map[string]any{"threadId": thread, "input": input}
+	if c.p.agent == traexAgent {
+		mode = inboxPermissionMode(mode, "", false)
+		if mode != proto.ModeBypass {
+			params["approvalsReviewer"] = "user"
+		}
+		params["capabilities"] = map[string]any{"mcpServers": c.traexMCPNames(), "skills": nil}
+	}
 	if mode != "" {
 		approval, _ := codexPolicy(mode)
 		params["approvalPolicy"], params["sandboxPolicy"] = approval, codexSandboxPolicy(mode, c.memDir)
@@ -194,11 +236,13 @@ func (c *codexConn) deliver(ctx context.Context, live, text string, images []pro
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
+	sentAt := time.Now()
 	if err := c.call(ctx, "turn/start", params, &res); err != nil {
 		return err
 	}
+	n.ttft.arm(c.p.id, sentAt, res.Turn.ID)
 	c.mu.Lock()
-	if res.Turn.ID != "" {
+	if res.Turn.ID != "" && c.endedTurnID != res.Turn.ID {
 		c.turnID = res.Turn.ID
 	}
 	c.mu.Unlock()
@@ -242,6 +286,7 @@ func (c *codexConn) compacted() {
 	manual := c.p.manual
 	c.p.manual, c.p.compacting = false, false
 	c.p.mu.Unlock()
+	c.compactedInTurn(manual) // whether it made room, the next request says (assistant_codex_compaction_loop.go)
 	if manual {
 		c.p.ownerOr(c.n).compactionEnded(c.p.id, "")
 	}

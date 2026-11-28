@@ -25,6 +25,7 @@ const (
 	OrcaPaneEnv       = "ORCA_PANE_KEY"     // Orca
 	OrcaLegacyPaneEnv = "ORCA_AGENT_PANE"   // older Orca
 	TernPaneEnv       = "TERN_PANE"         // Tern
+	RexPaneEnv        = "REX_BLOCK"         // Rex
 )
 
 // GlobalHookFlag marks the report-only entries the node puts in the user's own Claude Code settings
@@ -32,7 +33,7 @@ const (
 const GlobalHookFlag = "--persona-global"
 
 // HomeFlag names the data directory, and so the node, of a hook in exec form (`<binary> hook --persona-home <dir>`,
-// the live replies plugin's: node/doctor.go displayHooks). Claude Code starts that one without a shell, so it cannot
+// the live replies plugin's: node/generated.go displayHooks). Claude Code starts that one without a shell, so it cannot
 // have PERSONA_HOME in front as the shell-form hooks do.
 const HomeFlag = "--persona-home"
 
@@ -56,18 +57,25 @@ func HookPane(getenv func(string) string) string {
 	if b := getenv(TernPaneEnv); b != "" {
 		return host.PaneRef{Kind: host.Tern, ID: b}.String()
 	}
+	if b := getenv(RexPaneEnv); b != "" {
+		return host.PaneRef{Kind: host.Rex, ID: b}.String()
+	}
 	return ""
 }
 
 // RunHook is `<binary> hook [--persona-home <dir>] [--persona-global]`: a Claude Code hook's input on stdin, what the
 // hook prints on stdout (nothing: let the TUI decide). The node writes that command into the settings of the Agents it
-// starts and, with GlobalHookFlag, into the user's own (node/doctor.go, node/globalhooks.go).
+// starts and, with GlobalHookFlag, into the user's own (node/generated.go, node/globalhooks.go).
 func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) {
 	if len(args) >= 2 && args[0] == HomeFlag {
 		if args[1] != "" {
 			_ = os.Setenv("PERSONA_HOME", args[1]) // read by SocketPath, as from a shell-form hook's environment
 		}
 		args = args[2:]
+	}
+	if len(args) > 0 && args[0] == AgyFlag { // an entry in the Antigravity CLI's hooks: report only, prints {}
+		RunAgyHook(ctx, args[1:], stdin, stdout, os.Getenv)
+		return
 	}
 	input, err := io.ReadAll(stdin)
 	if err != nil || !json.Valid(input) {
@@ -91,7 +99,7 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	_, _ = stdout.Write(append(out, '\n'))
 }
 
-// CuaOnlyFlag marks the Bash hook of the Agents Persona starts on a Mac (node/doctor.go): only a command that
+// CuaOnlyFlag marks the Bash hook of the Agents Persona starts on a Mac (node/generated.go): only a command that
 // mentions cua-driver goes to the node's gate (node/cua_gate.go, #4349); any other returns at once, so the Agent's
 // Bash never waits on the node, not even while it restarts.
 const CuaOnlyFlag = "--cua-only"

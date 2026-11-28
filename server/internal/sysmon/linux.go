@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +62,11 @@ type linuxCollector struct {
 	nicsAt time.Time
 	lookup func(name string) bool // physical, or a stand-in in tests; nil is physical
 	mounts mountCache
+
+	// Termux battery fallback cache (when /sys/class/power_supply is blocked by SELinux).
+	termuxBattAt       time.Time
+	termuxBattPct      *float64
+	termuxBattCharging *bool
 }
 
 // NewCollector starts sampling (nothing runs between samples on Linux).
@@ -97,25 +104,48 @@ func (c *linuxCollector) Sample(now time.Time) proto.MetricSample {
 	if b, err := c.read("/proc/net/dev"); err == nil {
 		s.NetRx, s.NetTx = c.netSample(parseNetDev(b), now)
 	}
-	mounts := []string{"/"}
-	if b, err := c.read("/proc/self/mountinfo"); err == nil {
-		if m := c.mounts.of(b); len(m) > 0 {
-			mounts = m
+	for _, v := range volumesOf(localMounts(c.read, &c.mounts)) {
+		s.DiskUsed += v.Used
+		s.DiskTotal += v.Total
+	}
+	s.BatteryPercent, s.BatteryCharging = c.readBattery(now)
+	s.TempC = readLinuxTemp()
+	return s
+}
+
+// localMounts is one mount point per local block device (diskMountinfo, or diskMounts without mountinfo), "/" when
+// neither can be read.
+func localMounts(read func(string) ([]byte, error), cache *mountCache) []string {
+	if b, err := read("/proc/self/mountinfo"); err == nil {
+		if m := cache.of(b); len(m) > 0 {
+			return m
 		}
-	} else if b, err := c.read("/proc/self/mounts"); err == nil {
+	} else if b, err := read("/proc/self/mounts"); err == nil {
 		if m := diskMounts(b); len(m) > 0 {
-			mounts = m
+			return m
 		}
 	}
+	return []string{"/"}
+}
+
+// volumesOf is each mount's use, like df; a mount statfs cannot read is left out.
+func volumesOf(mounts []string) []proto.DiskVolume {
+	var out []proto.DiskVolume
 	for _, m := range mounts {
 		var st syscall.Statfs_t
 		if syscall.Statfs(m, &st) == nil {
 			used, total := diskUsage(st.Blocks, st.Bfree, st.Bavail, uint64(st.Bsize))
-			s.DiskUsed += used
-			s.DiskTotal += total
+			out = append(out, proto.DiskVolume{Mount: m, Used: used, Total: total})
 		}
 	}
-	return s
+	return out
+}
+
+// Volumes are the local filesystems a sample adds up, one by one (a computer's diagnosis, docs/server/machines.md
+// "Diagnosis and cleanup").
+func Volumes() []proto.DiskVolume {
+	var cache mountCache
+	return volumesOf(localMounts(os.ReadFile, &cache))
 }
 
 // netSample is the network rates since the last call, from each interface's counters (parseNetDev): the physical
@@ -221,4 +251,109 @@ func loadAverageOS() *float64 {
 		return nil
 	}
 	return parseLoadavg(b)
+}
+
+const termuxBatteryEvery = time.Minute
+
+func readTrimmedFile(path string) string {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func (c *linuxCollector) readBattery(now time.Time) (*float64, *bool) {
+	if pct, chg := readSysPowerSupply("/sys/class/power_supply"); pct != nil {
+		return pct, chg
+	}
+	if os.Getenv("TERMUX_VERSION") == "" {
+		return nil, nil
+	}
+	if c.termuxBattAt.IsZero() || now.Sub(c.termuxBattAt) >= termuxBatteryEvery || now.Before(c.termuxBattAt) {
+		c.termuxBattAt = now
+		c.termuxBattPct, c.termuxBattCharging = readTermuxBattery()
+	}
+	return c.termuxBattPct, c.termuxBattCharging
+}
+
+func readSysPowerSupply(root string) (*float64, *bool) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, nil
+	}
+	var supplies []powerSupply
+	for _, e := range entries {
+		dir := filepath.Join(root, e.Name())
+		supplies = append(supplies, powerSupply{
+			Type:       readTrimmedFile(filepath.Join(dir, "type")),
+			Scope:      readTrimmedFile(filepath.Join(dir, "scope")),
+			Present:    readTrimmedFile(filepath.Join(dir, "present")),
+			Status:     readTrimmedFile(filepath.Join(dir, "status")),
+			Capacity:   readTrimmedFile(filepath.Join(dir, "capacity")),
+			EnergyNow:  readTrimmedFile(filepath.Join(dir, "energy_now")),
+			EnergyFull: readTrimmedFile(filepath.Join(dir, "energy_full")),
+			ChargeNow:  readTrimmedFile(filepath.Join(dir, "charge_now")),
+			ChargeFull: readTrimmedFile(filepath.Join(dir, "charge_full")),
+		})
+	}
+	return parsePowerSupplies(supplies)
+}
+
+func readTermuxBattery() (*float64, *bool) {
+	path, err := exec.LookPath("termux-battery-status")
+	if err != nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path).Output()
+	if err != nil {
+		return nil, nil
+	}
+	return parseTermuxBatteryStatus(out)
+}
+
+func readLinuxTemp() *float64 {
+	var readings []thermalReading
+	if entries, err := os.ReadDir("/sys/class/hwmon"); err == nil {
+		for _, e := range entries {
+			dir := filepath.Join("/sys/class/hwmon", e.Name())
+			name := readTrimmedFile(filepath.Join(dir, "name"))
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, f := range files {
+				fn := f.Name()
+				if !strings.HasPrefix(fn, "temp") || !strings.HasSuffix(fn, "_input") {
+					continue
+				}
+				raw := readTrimmedFile(filepath.Join(dir, fn))
+				milli, err := strconv.ParseInt(raw, 10, 64)
+				if err != nil {
+					continue
+				}
+				labelFile := strings.TrimSuffix(fn, "_input") + "_label"
+				label := readTrimmedFile(filepath.Join(dir, labelFile))
+				readings = append(readings, thermalReading{Name: name, Label: label, MilliC: milli})
+			}
+		}
+	}
+	if entries, err := os.ReadDir("/sys/class/thermal"); err == nil {
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), "thermal_zone") {
+				continue
+			}
+			dir := filepath.Join("/sys/class/thermal", e.Name())
+			typ := readTrimmedFile(filepath.Join(dir, "type"))
+			raw := readTrimmedFile(filepath.Join(dir, "temp"))
+			milli, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				continue
+			}
+			readings = append(readings, thermalReading{Name: typ, MilliC: milli})
+		}
+	}
+	return selectTempC(readings)
 }

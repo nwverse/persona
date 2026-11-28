@@ -174,6 +174,31 @@ class HubDataStore(
         }
     } }
 
+    /** The unrevoked device credential ID kept for [hubId] after an offline sign-out, if any. */
+    suspend fun unrevokedDeviceId(hubId: String): String? = withContext(Dispatchers.IO) { lock.withLock {
+        check(job.isActive) { "Hub data store is closed" }
+        if (hubId.isBlank()) return@withLock null
+        temporary(encrypted::unrevokedTokens) { store -> store.data.first().byHub[hubId]?.takeIf(String::isNotBlank) }
+    } }
+
+    /** Remembers [deviceId] for [hubId] so the next pairing to that hub sends it in `replaces`. Survives [eraseAll]. */
+    suspend fun rememberUnrevokedDeviceId(hubId: String, deviceId: String) = withContext(Dispatchers.IO) { lock.withLock {
+        check(job.isActive) { "Hub data store is closed" }
+        if (hubId.isBlank() || deviceId.isBlank()) return@withLock
+        temporary(encrypted::unrevokedTokens) { store ->
+            store.updateData { it.copy(byHub = it.byHub + (hubId to deviceId)) }
+        }
+    } }
+
+    /** Clears any remembered unrevoked device credential ID for [hubId]. */
+    suspend fun forgetUnrevokedDeviceId(hubId: String) = withContext(Dispatchers.IO) { lock.withLock {
+        check(job.isActive) { "Hub data store is closed" }
+        if (hubId.isBlank()) return@withLock
+        temporary(encrypted::unrevokedTokens) { store ->
+            store.updateData { if (hubId in it.byHub) it.copy(byHub = it.byHub - hubId) else it }
+        }
+    } }
+
     /** Opens a store for one read or write; DataStore refuses a second live instance of a file. Callers hold [lock]. */
     private suspend fun <T, R> temporary(open: (CoroutineScope) -> DataStore<T>, use: suspend (DataStore<T>) -> R): R {
         val storeJob = SupervisorJob(job)
@@ -280,11 +305,14 @@ class HubDataStore(
         check(job.isActive) { "Hub data store is closed" }
         check(!opened.containsKey(storage.path) && current?.scope != storage) { "Close the group before moving its data" }
         val file = File(context.filesDir, "hub-data/${storage.path}/data.db")
-        if (!file.exists()) return@withLock UnsentData(emptyList(), emptyList())
+        val replies = InboxReplyJournal(
+            File(context.noBackupFilesDir, "hub-data/${storage.path}/inbox-replies"), storage.path)
+        val handOffs = replies.read(storage.path).agentHandOffs
+        if (!file.exists()) return@withLock UnsentData(emptyList(), emptyList(), handOffs, storage.path)
         val database = Room.databaseBuilder(context, PersistentDatabase::class.java, file.absolutePath).build()
         try {
             val dao = database.records()
-            unsentOf(dao.outbox(storage.path), dao.drafts(storage.path))
+            unsentOf(dao.outbox(storage.path), dao.drafts(storage.path), handOffs, storage.path)
         } finally { database.close() }
     } }
 
@@ -381,16 +409,17 @@ class HubDataStore(
             val persistentPath = File(context.filesDir, "hub-data/${storage.path}/data.db").apply { parentFile!!.mkdirs() }
             val cachePath = File(context.cacheDir, "hub-data/${storage.path}/items.db").apply { parentFile!!.mkdirs() }
             persistent = Room.databaseBuilder(context, PersistentDatabase::class.java, persistentPath.absolutePath).build()
-            cache = Room.databaseBuilder(context, ItemsDatabase::class.java, cachePath.absolutePath).addMigrations(ItemsDatabase.MIGRATION_1_2, ItemsDatabase.MIGRATION_3_4, ItemsDatabase.MIGRATION_4_5).build()
+            cache = Room.databaseBuilder(context, ItemsDatabase::class.java, cachePath.absolutePath).addMigrations(ItemsDatabase.MIGRATION_1_2, ItemsDatabase.MIGRATION_3_4, ItemsDatabase.MIGRATION_4_5, ItemsDatabase.MIGRATION_5_6, ItemsDatabase.MIGRATION_6_7).build()
             // Force schema validation before returning a writable scope. Never destructively migrate.
             persistent.openHelper.writableDatabase
             cache.openHelper.writableDatabase
-            val sender = OutboxMessageSender(storage, RoomOutboxStore(persistent, storage), transport(storage, credentials), coroutineScope)
+            val replies = InboxReplyJournal(File(context.noBackupFilesDir, "hub-data/${storage.path}/inbox-replies"), storage.path)
+            val sender = OutboxMessageSender(storage, RoomOutboxStore(persistent, storage, replies), transport(storage, credentials), coroutineScope)
             ScopedHubData(storage, credentials, sender, DraftStore(persistent, storage), SessionItemsCache(cache, storage, cacheBudgets.items),
                 coroutineScope, persistent, cache,
                 File(context.filesDir, "hub-data/${storage.path}"),
                 File(context.cacheDir, "hub-data/${storage.path}"),
-                File(context.noBackupFilesDir, "hub-data/${storage.path}"), endpoints, cacheBudgets)
+                File(context.noBackupFilesDir, "hub-data/${storage.path}"), endpoints, cacheBudgets, inboxReplies = replies)
         } catch (failure: Exception) {
             withContext(NonCancellable) {
                 scopeJob.cancelAndJoin()
@@ -466,6 +495,7 @@ class ScopedHubData internal constructor(
     /** Manual candidates, disabled ones and the order to try; erased with the pairing. */
     val endpoints: EndpointOverridesStore,
     val cacheBudgets: CacheBudgets = CacheBudgets(),
+    val inboxReplies: InboxReplyJournal = InboxReplyJournal(File(noBackupDirectory, "inbox-replies"), scope.path),
 ) {
     val openWindowReconciliation = OpenWindowReconciliation()
     private val fileLock = Mutex()
@@ -484,9 +514,9 @@ class ScopedHubData internal constructor(
     val imageCacheDirectory: File get() = directory(cacheDirectory, "images")
     val inboxMediaDirectory: File get() = directory(cacheDirectory, "inbox-media")
     val listPreferences: DataStore<Preferences> by lazy { preferences("lists") }
+    val heldRetryPreferences: DataStore<Preferences> by lazy { preferences("held-retries") }
     val readingPositions: DataStore<Preferences> by lazy { preferences("reading") }
     val backgroundChecks: DataStore<Preferences> by lazy { preferences("background-checks") }
-    val inboxReplies = InboxReplyJournal(File(noBackupDirectory, "inbox-replies"), scope.path)
     val operations = OneShotOperationJournal(File(noBackupDirectory, "operations"), scope)
 
     internal fun checkActive() { check(coroutineScope.coroutineContext[Job]!!.isActive) { "Pairing scope is closed" } }

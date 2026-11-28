@@ -14,6 +14,9 @@ import SwiftUI
 struct RecordingLiveBar: View {
     var entry: RecordingEntry
     var paused: Bool
+    /// The hub's recording module (#15214), handed down by the sheet: off, the bar keeps Pause and Stop (a recording that
+    /// runs must be stoppable) and offers no question and no bookmark.
+    var recording = RecordingAllowance.on
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var capture = RecordingCapture.shared
@@ -24,7 +27,7 @@ struct RecordingLiveBar: View {
     @State private var question = ""
     @FocusState private var questionFocused: Bool
 
-    private var attends: Bool { entry.attended }
+    private var attends: Bool { entry.attended && recording.offersWrites }
     /// The question row has the keyboard: the controls it does not need make room for the timeline.
     private var writing: Bool { attends && typing && questionFocused }
     /// Send needs words, and one question at a time (as Ask Persona).
@@ -41,10 +44,16 @@ struct RecordingLiveBar: View {
         .padding(.vertical, Theme.Space.s)
         .frame(maxWidth: .infinity)
         .background { Theme.groupedPage.ignoresSafeArea(edges: .bottom) }
-        .confirmationDialog("Stop Recording?", isPresented: $confirmingStop, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Stop Recording?", isPresented: $confirmingStop, titleVisibility: .visible) {
             Button("Stop Recording", role: .destructive) { MeetingRecorder.shared.stop(recordingID: nil) }
         } message: {
             Text("The audio is saved on this device and its text goes to Knowledge. A stopped recording can't be continued.")
+        }
+        // A meeting's End on the Lock Screen or in the Dynamic Island (#8731 V4) asks here, never ends it at once.
+        .onChange(of: RecordingLivePresenter.shared.endAsking, initial: true) { _, asked in
+            guard asked == entry.id.uuidString.lowercased() else { return }
+            RecordingLivePresenter.shared.endAsked()
+            confirmingStop = true
         }
         .animation(reduceMotion ? nil : Theme.Motion.state, value: typing)
         .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
@@ -72,7 +81,7 @@ struct RecordingLiveBar: View {
             HStack(spacing: Theme.Space.m) {
                 pauseButton
                 stopButton
-                bookmarkButton
+                if recording.offersWrites { bookmarkButton }
             }
             .transition(.opacity)
         }

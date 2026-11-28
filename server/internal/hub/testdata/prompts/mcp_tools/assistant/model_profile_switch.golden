@@ -1,0 +1,17 @@
+{
+  "name": "model_profile_switch",
+  "description": "Inspect first. Apply a profile to future model calls and Agent starts. Saves a rollback point.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Saved profile ID"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id"
+    ]
+  }
+}

@@ -2,7 +2,7 @@
 // (docs/protocol/protocol.md `/mutes`, `/modes`, `/rename`; iOS Pins.togglingMute, SessionModes).
 import { t } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
-import { sessionCan } from "./format";
+import { herdrTabName, sessionCan } from "./format";
 import type { Session } from "./types";
 
 export interface ModeOption {
@@ -19,24 +19,21 @@ export const PERMISSION_MODES: ModeOption[] = [
   { id: "bypassPermissions", title: t("lib-session-actions.mode_bypass_permissions"), detail: t("lib-session-actions.mode_bypass_permissions_detail") },
 ];
 
-export const EFFORTS: ModeOption[] = [
-  { id: "low", title: t("lib-session-actions.effort_low"), detail: t("lib-session-actions.effort_low_detail") },
-  { id: "medium", title: t("lib-session-actions.effort_medium"), detail: t("lib-session-actions.effort_medium_detail") },
-  { id: "high", title: t("lib-session-actions.effort_high"), detail: t("lib-session-actions.effort_high_detail") },
-  { id: "xhigh", title: t("lib-session-actions.effort_xhigh"), detail: t("lib-session-actions.effort_xhigh_detail") },
-  { id: "max", title: t("lib-session-actions.effort_max"), detail: t("lib-session-actions.effort_max_detail") },
-];
+const commonEfforts = ["low", "medium", "high", "xhigh", "max"];
 
-/** Codex's reasoning efforts (node/codex_effort.go); a thread offers those of its model, in `Session.efforts`. */
-export const CODEX_EFFORTS: ModeOption[] = [
-  { id: "minimal", title: t("lib-session-actions.codex_effort_minimal"), detail: t("lib-session-actions.codex_effort_minimal_detail") },
-  { id: "low", title: t("lib-session-actions.codex_effort_low"), detail: t("lib-session-actions.codex_effort_low_detail") },
-  { id: "medium", title: t("lib-session-actions.codex_effort_medium"), detail: t("lib-session-actions.codex_effort_medium_detail") },
-  { id: "high", title: t("lib-session-actions.codex_effort_high"), detail: t("lib-session-actions.codex_effort_high_detail") },
-  { id: "xhigh", title: t("lib-session-actions.codex_effort_xhigh"), detail: t("lib-session-actions.codex_effort_xhigh_detail") },
-  { id: "max", title: t("lib-session-actions.codex_effort_max"), detail: t("lib-session-actions.codex_effort_max_detail") },
-  { id: "ultra", title: t("lib-session-actions.codex_effort_ultra"), detail: t("lib-session-actions.codex_effort_ultra_detail") },
-];
+// The tier names are shared. Each engine keeps its own descriptions.
+function effortOptionsFor(ids: string[], detailPrefix: string): ModeOption[] {
+  return ids.map((id) => ({
+    id,
+    title: t(`lib-session-actions.effort_${id}`),
+    detail: t(`lib-session-actions.${detailPrefix}_${id}_detail`),
+  }));
+}
+
+export const EFFORTS = effortOptionsFor(commonEfforts, "effort");
+
+/** Codex's reasoning efforts (node/codex_effort.go). A thread offers those of its model in `Session.efforts`. */
+export const CODEX_EFFORTS = effortOptionsFor(["minimal", ...commonEfforts, "ultra"], "codex_effort");
 
 /** Modes a running session can switch to: "Allow all" is chosen only when it starts. */
 export const SWITCHABLE_MODES = PERMISSION_MODES.filter((m) => m.id !== "bypassPermissions");
@@ -66,23 +63,50 @@ export function modeTitle(id?: string): string {
 }
 
 export function effortTitle(id?: string): string {
-  return id ? (EFFORTS.find((m) => m.id === id)?.title ?? CODEX_EFFORTS.find((m) => m.id === id)?.title ?? id) : "";
+  return id ? (CODEX_EFFORTS.find((m) => m.id === id)?.title ?? id) : "";
 }
 
 /** The two chips (Claude Code's TUI bottom bar). The node says where they work (`capabilities.modes`, #1843): a runtime
- *  that applies them (Orca, Antigravity), never a Claude outside Persona's terminals. An older node does not say, and the
- *  chips follow the agent: Claude Code in Persona's terminals, Antigravity; Codex, a compatible CLI and other sources not. */
+ *  that applies them (Orca, Antigravity), never a Claude outside Persona's terminals nor an agent in a terminal whose mode
+ *  is its start's (cursor, agy: the node refuses the switch). An older node does not say, and the chips follow the agent:
+ *  Claude Code in Persona's terminals, Antigravity's runtime; Codex, agy in a terminal pane and other sources not, as on
+ *  iOS and Android (`canChangeModes`). */
 export function hasModes(s: Session | undefined): boolean {
   if (!s || s.assistant) return false;
   if (typeof s.capabilities?.modes === "boolean") return s.capabilities.modes;
-  if (s.agent === "agy") return true;
-  if (s.source_kind) return false;
+  if (s.source_kind) return s.agent === "agy";
   return !s.agent || s.agent === "claude";
 }
 
-/** The effort chip and its speed submenu for protocol-driven Codex threads with advertised choices. */
+/** A session's own approval, the first of the modes a session lists (`listedModesOf`): "Launcher default", not "Ask",
+ *  since the agent's own settings may already approve everything (#8261). */
+export const LAUNCHER_DEFAULT: ModeOption = { id: "default", title: t("lib-session-actions.mode_launcher_default"), detail: t("lib-session-actions.mode_launcher_default_detail") };
+
+/** The permission modes the composer switches a session of an agent that is not Claude Code between (#8261, the node's
+ *  `capabilities.permission_modes`): its own approval and Full access, on Paseo's Grok, OpenCode or Codex. Undefined with
+ *  fewer than two, for a Persona conversation, and where Claude Code's chips stand (`hasModes`). */
+export function listedModesOf(s: Session | undefined): string[] | undefined {
+  const modes = s?.capabilities?.permission_modes;
+  if (!s || s.assistant || hasModes(s) || !modes || modes.length < 2) return undefined;
+  return modes;
+}
+
+/** The listed mode `s` runs in: the one it reports when listed, else its own (`default`): no mode reported is its own. */
+export function listedModeNow(s: Session, listed: string[]): string {
+  return s.permission_mode && listed.includes(s.permission_mode) ? s.permission_mode : "default";
+}
+
+/** A listed mode's name and description: its own approval is "Launcher default", Full access says it can be switched
+ *  back (a switch, unlike Claude Code's start-only Full access), the rest as Claude Code names them. */
+export function listedModeOption(id: string): ModeOption {
+  if (id === "default") return LAUNCHER_DEFAULT;
+  if (id === BYPASS_MODE) return { id, title: t("lib-session-actions.mode_bypass_permissions"), detail: t("lib-session-actions.mode_bypass_listed_detail") };
+  return PERMISSION_MODES.find((m) => m.id === id) ?? { id, title: id, detail: "" };
+}
+
+/** Thinking effort for sessions with advertised levels and no permission menu. */
 export function hasEffortOnly(s: Session | undefined): boolean {
-  return Boolean(s && !s.assistant && !hasModes(s) && (s.efforts?.length || s.service_tiers?.length) && sessionCan(s, "send"));
+  return Boolean(s && !s.assistant && !hasModes(s) && s.efforts?.length && sessionCan(s, "send"));
 }
 
 /** The effort menu's choices: the session's own levels when the node lists them, Claude Code's otherwise. */
@@ -112,8 +136,15 @@ export function toggleMute(s: Pick<Session, "machine_id" | "session_id" | "space
 
 /** The rename request (iOS RenameSessionAlert): only what changed; the herdr tab only for an agent in a herdr pane.
  * Returns null when nothing changed. */
-export function renameBody(s: Session, tab: string, title: string): { tab_name?: string; title?: string } | null {
+export function renameBody(s: Session, tab: string, title: string, unified = false): { tab_name?: string; title?: string } | null {
   const t = tab.trim(), n = title.trim();
+  if (unified) {
+    if (!t) return null;
+    const cli = s.agent ?? "claude";
+    const syncTitle = cli === "claude" || cli === "codex";
+    if (t === herdrTabName(s) && (!syncTitle || t === s.title)) return null;
+    return syncTitle ? { tab_name: t, title: t } : { tab_name: t };
+  }
   const body: { tab_name?: string; title?: string } = {};
   if (!s.assistant && s.slot_id && t && t !== (s.slot_name ?? "")) body.tab_name = t;
   if (n && n !== s.title) body.title = n;

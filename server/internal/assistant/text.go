@@ -3,17 +3,18 @@ package assistant
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/deeplink"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Formatting for tool results and the hub's logs, the same the hub writes with (one copy, internal/textfmt).
 var (
+	clipMarkdown  = textfmt.ClipMarkdown
 	clip          = textfmt.Clip
 	oneLine       = textfmt.OneLine
 	firstLine     = textfmt.FirstLine
@@ -23,6 +24,10 @@ var (
 	short         = textfmt.Short
 	agentLabel    = textfmt.AgentLabel
 	stateNames    = textfmt.StateNames
+	// ixToolName and toolDisplayName name a card's tool for a sentence; the fleet's rows name it the same way
+	// (fleetview.InteractionDetail).
+	ixToolName      = textfmt.ToolName
+	toolDisplayName = textfmt.ToolDisplayName
 )
 
 // transcriptText is a conversation's recent items for a model to read (agent_read, conversation_read): the
@@ -52,7 +57,7 @@ func transcriptText(head, link string, items []proto.Item) string {
 			fmt.Fprintf(&b, "%s: %s\n\n", who, clip(text, 4000))
 		case proto.KindThinking:
 			if t := strings.TrimSpace(it.Text); t != "" {
-				fmt.Fprintf(&b, "(agent, between tools) %s\n", clip(oneLine(t), 400))
+				fmt.Fprintf(&b, "(agent, progress summary) %s\n", clip(oneLine(t), 400))
 			}
 		case proto.KindToolUse:
 			fmt.Fprintf(&b, "→ %s %s\n", it.ToolName, clip(oneLine(toolSummary(it.ToolName, it.ToolInput)), 200))
@@ -97,5 +102,12 @@ func itemLink(link, id string) string {
 	if link == "" || id == "" {
 		return ""
 	}
-	return link + "?at=" + url.QueryEscape(id)
+	return deeplink.At(link, id)
+}
+
+func clipRunesTo(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }

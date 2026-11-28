@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The "Fleet" Live Activity's content (hub/liveactivity.go FleetState, field for field): every agent that needs you,
 /// is working, or finished unseen, summed up for the lock screen and the Dynamic Island. The hub computes it and
@@ -37,6 +38,8 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
         nonisolated struct Load: Codable, Hashable, Sendable {
             var id: String
             var name = ""
+            /// The 1-minute load average over the cores × 100, rounded to 10, the tenth of a core the apps print
+            /// (hub fleetStats; an older hub rounds to 5); shown per core (`FleetText.perCore`), never as a percentage.
             var percent = 0
         }
 
@@ -73,6 +76,8 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
         var detail = ""
         /// The interaction Allow / Deny / Approve resolve.
         var interaction: String?
+        /// The exact interaction occurrence those buttons drew; absent from an older hub.
+        var interactionCreatedAt: String?
         var since: Double?
         /// A working item whose turn ended while its background work runs (#2935): `detail` says what runs
         /// ("parity-audit · Verify · 169/185"), and `since` is when its workflow started (#3433). Absent from older hubs.
@@ -111,14 +116,15 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
             }
         }
 
-        init(id: String, title: String, place: String = "", kind: Kind, detail: String = "", interaction: String? = nil, since: Double? = nil,
-             background: Bool = false, progress: Progress? = nil) {
+        init(id: String, title: String, place: String = "", kind: Kind, detail: String = "", interaction: String? = nil,
+             interactionCreatedAt: String? = nil, since: Double? = nil, background: Bool = false, progress: Progress? = nil) {
             self.id = id
             self.title = title
             self.place = place
             self.kind = kind
             self.detail = detail
             self.interaction = interaction
+            self.interactionCreatedAt = interactionCreatedAt
             self.since = since
             self.background = background
             self.progress = progress
@@ -132,6 +138,7 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
             kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .screen
             detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
             interaction = try c.decodeIfPresent(String.self, forKey: .interaction)
+            interactionCreatedAt = try c.decodeIfPresent(String.self, forKey: .interactionCreatedAt)
             since = try c.decodeIfPresent(Double.self, forKey: .since)
             background = (try? c.decodeIfPresent(Bool.self, forKey: .background)) ?? false
             // A bar this app cannot read (a newer hub's shape) drops only the bar.
@@ -191,6 +198,14 @@ nonisolated struct FleetState: Codable, Hashable, Sendable {
     func tailored(island: IslandPrefs, details: Bool, look: FleetLook? = nil) -> FleetState {
         var s = self
         s.details = details
+        if !details {
+            // Without names a request reads "A permission request is waiting": no Allow / Deny for something nobody can
+            // tell apart, only a tap into the app (#12982, as the hub's forDevice).
+            for i in s.items.indices where s.items[i].kind == .permission || s.items[i].kind == .plan {
+                s.items[i].interaction = nil
+                s.items[i].interactionCreatedAt = nil
+            }
+        }
         if let look { s.look = look }
         (s.left, s.right) = island.sides
         if var stats = s.stats, !stats.loads.isEmpty {
@@ -303,9 +318,19 @@ nonisolated enum FleetText {
         case let .tokens(n): interfaceText(LocalizedStringResource("\(short(n)) today", comment: "Tokens today"))
         case let .requests(n): interfaceText(LocalizedStringResource("\(short(n)) reqs today", comment: "Requests today"))
         case let .assistant(on): on ? interfaceText("Assistant replying") : interfaceText("Assistant idle")
-        case let .load(name, p): name.isEmpty ? interfaceText("Load \(p)%") : "\(name) \(p)%"
+        // Load per core, as Machines writes it ("Load 1.4 per core"); a chosen machine's name stands for "Load".
+        case let .load(name, p): interfaceText(name.isEmpty ? "Load \(perCore(percent: p)) per core" : "\(name) \(perCore(percent: p)) per core")
         default: nil
         }
+    }
+
+    /// A machine's load per core from the island's percent (load ÷ cores × 100, the hub's fleetStats), one decimal as
+    /// on Machines and the web (`MetricFormat.perCore`): 110 is "1.1". In whole numbers, so an older hub's steps of 5
+    /// round one way (145 is "1.5"), not by how a Double stores 1.45. Not a CPU percentage, and not capped: past 1,
+    /// threads wait for a core.
+    static func perCore(percent: Int) -> String {
+        let tenths = (max(percent, 0) + 5) / 10
+        return "\(tenths / 10).\(tenths % 10)"
     }
 }
 

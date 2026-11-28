@@ -3,15 +3,17 @@
 // a double click / tap zooms in there and back, + / - / 0 from the keyboard; "Edit" (box + pen, then into the composer
 // for the next message), "Copy" where the browser allows it, "Download", "Open in new tab". Esc or a click beside the picture
 // closes it (not while zoomed).
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { imageURL } from "../../lib/api";
 import { useCloseOnBack } from "../../lib/back-close";
 import { sendDraft, type DraftImage } from "../../lib/drafts";
+import { safeWebURL } from "../../lib/format";
+import { isSameOriginBlobURL, MEDIA_CTRL_CHARS, safeApiPath } from "../../lib/safe-media-url";
 import type { EditedImage } from "../../lib/image-edit";
 import { clampView, doubleTapView, fingers, fitRect, IDENTITY, isZoomed, panView, wheelFactor, zoomAt, type Point, type Rect, type Size, type View } from "../../lib/image-zoom";
 import type { Item } from "../../lib/types";
-import { cx, EASE, toast } from "../../ui/atoms";
+import { cx, EASE, Spinner, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { NARROW, useMedia } from "../../ui/media-query";
 import { useModalFocus } from "../../ui/overlay";
@@ -40,8 +42,25 @@ export interface ViewerAction {
   run: () => void;
 }
 
+// Only non-scriptable raster image MIME types may become top-level same-origin blob: documents.
+const SAFE_RASTER_IMAGE_MIME = /^image\/(?:png|jpeg|jpg|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)$/i;
+const SAFE_DATA_IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+
+function normalizeRasterMime(raw: string): string | undefined {
+  const mime = raw.split(";", 1)[0].trim().toLowerCase();
+  if (!SAFE_RASTER_IMAGE_MIME.test(mime)) return undefined;
+  return mime === "image/jpg" ? "image/jpeg" : mime;
+}
+
+function safeDataImageMime(raw: string): string | undefined {
+  if (!raw || MEDIA_CTRL_CHARS.test(raw)) return undefined;
+  const m = /^data:([^,]+),/i.exec(raw);
+  return m ? normalizeRasterMime(m[1]) : undefined;
+}
+
 function viewerImage(item: Item, mid: string, sid: string): ViewerImage {
-  const src = item.image?.data ? `data:${item.image.mime};base64,${item.image.data}` : imageURL(mid, sid, item.id);
+  const mime = item.image?.mime?.split(";", 1)[0].trim() ?? "";
+  const src = item.image?.data && SAFE_DATA_IMAGE_MIME.test(mime) ? `data:${mime};base64,${item.image.data}` : imageURL(mid, sid, item.id);
   return { id: item.id, src, mime: item.image?.mime };
 }
 
@@ -97,21 +116,37 @@ export function ImageViewer({
   // fitted like the app's viewer (scaled to fit, small pictures too): the picture's own size and the room it has
   const area = useRef<HTMLDivElement>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
-  // room: the content box the picture fits in, where it starts (the padding) and the whole area a zoomed one may fill
-  const [room, setRoom] = useState<{ width: number; height: number; left: number; top: number; outerWidth: number; outerHeight: number } | null>(null);
-  useEffect(() => {
+  const picture = useRef<HTMLImageElement>(null);
+  // another picture starts with no size known, at 1×, in the render that shows it: an effect would come after a frame
+  // drawn at the last picture's size, or after this one's load and wipe it (a first open, from the lazy chunk, #11511)
+  const [shownId, setShownId] = useState(cur.id);
+  if (shownId !== cur.id) {
+    setShownId(cur.id);
     setNatural(null);
     setView(IDENTITY);
+  }
+  // one the browser already has (cached, a data: address) is complete before its load event: sized before it is drawn.
+  // Any other is still coming: a spinner says so until its size is known, from the first frame (never for one complete).
+  const [coming, setComing] = useState<string | null>(null);
+  useLayoutEffect(() => {
+    const el = picture.current;
+    if (el?.complete && el.naturalWidth) setNatural({ width: el.naturalWidth, height: el.naturalHeight });
+    else setComing(cur.id);
   }, [cur.id]);
-  useEffect(() => {
+  // room: the content box the picture fits in, where it starts (the padding) and the whole area a zoomed one may fill
+  const [room, setRoom] = useState<{ width: number; height: number; left: number; top: number; outerWidth: number; outerHeight: number } | null>(null);
+  useLayoutEffect(() => {
     const el = area.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
+    const measure = () => {
       const cs = getComputedStyle(el);
-      const left = parseFloat(cs.paddingLeft),
-        top = parseFloat(cs.paddingTop);
-      setRoom({ width: el.clientWidth - left - parseFloat(cs.paddingRight), height: el.clientHeight - top - parseFloat(cs.paddingBottom), left, top, outerWidth: el.clientWidth, outerHeight: el.clientHeight });
-    });
+      const left = parseFloat(cs.paddingLeft) || 0,
+        top = parseFloat(cs.paddingTop) || 0;
+      setRoom({ width: el.clientWidth - left - (parseFloat(cs.paddingRight) || 0), height: el.clientHeight - top - (parseFloat(cs.paddingBottom) || 0), left, top, outerWidth: el.clientWidth, outerHeight: el.clientHeight });
+    };
+    // once before the first paint (the observer's first call comes after it), then on every resize
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -219,15 +254,47 @@ export function ImageViewer({
     }
   };
 
-  // the original in a new tab; browsers refuse to open a data: address at the top level, so that goes as a blob
+  // the original in a new tab; browsers refuse to open a data: address at the top level, so safe raster data:
+  // images go as a blob with a validated non-scriptable MIME (never SVG/HTML as a same-origin blob: document).
   const openOriginal = async () => {
-    if (!cur.src.startsWith("data:")) {
-      window.open(cur.src, "_blank", "noopener");
+    const raw = cur.src.trim();
+    if (!raw || MEDIA_CTRL_CHARS.test(raw)) return;
+    if (/^data:/i.test(raw)) {
+      const mime = safeDataImageMime(raw);
+      if (!mime) return;
+      try {
+        const res = await fetch(raw);
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const safeType = blob.type.trim() ? normalizeRasterMime(blob.type) : mime;
+        if (!safeType) return;
+        const url = URL.createObjectURL(new Blob([blob], { type: safeType }));
+        window.open(url, "_blank", "noopener,noreferrer");
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        // Ignore unreadable embedded image sources.
+      }
       return;
     }
-    const url = URL.createObjectURL(await (await fetch(cur.src)).blob());
-    window.open(url, "_blank", "noopener");
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    if (/^blob:/i.test(raw)) {
+      if (!isSameOriginBlobURL(raw)) return;
+      try {
+        const res = await fetch(raw);
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const safeType = normalizeRasterMime(blob.type);
+        if (!safeType) return;
+        const url = URL.createObjectURL(new Blob([blob], { type: safeType }));
+        window.open(url, "_blank", "noopener,noreferrer");
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } catch {
+        // Ignore unreadable blob image sources.
+      }
+      return;
+    }
+    const target = safeWebURL(raw) ?? safeApiPath(raw);
+    if (!target) return;
+    window.open(target, "_blank", "noopener,noreferrer");
   };
 
   // the bottom bar; more than three don't fit a phone with their words, so there they are icons
@@ -358,6 +425,7 @@ export function ImageViewer({
         ) : (
           <img
             key={cur.id}
+            ref={picture}
             src={cur.src}
             alt=""
             draggable={false}
@@ -365,14 +433,21 @@ export function ImageViewer({
             onError={() => setFailed((f) => ({ ...f, [cur.id]: true }))}
             title={zoomed ? t("chat-imageviewer.zoomed_hint") : t("chat-imageviewer.zoom_hint")}
             className={cx("select-none rounded-[8px] object-contain", fit ? "absolute max-w-none" : "max-h-full max-w-full", !zoomed && "shadow-overlay", zoomed ? (dragging ? "cursor-grabbing" : "cursor-grab") : "cursor-zoom-in")}
-            // fitted at rest; zoomed with translate / scale (not transform, which the pop-in animation owns)
+            // fitted at rest; zoomed with translate / scale (not transform, which the pop-in animation owns). Hidden until
+            // its size is known (the spinner below meanwhile), so it is never drawn at its own size first: it pops in fitted.
             style={{
-              animation: `pop-in 220ms ${EASE} both`,
+              ...(natural ? { animation: `pop-in 220ms ${EASE} both` } : { visibility: "hidden" }),
               ...(fit
                 ? { left: fit.x, top: fit.y, width: fit.width, height: fit.height, transformOrigin: "0 0", translate: `${shown.x}px ${shown.y}px`, scale: `${shown.scale}` }
                 : {}),
             }}
           />
+        )}
+        {coming === cur.id && !natural && !failed[cur.id] && (
+          <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <Spinner size={20} />
+            <span className="sr-only">{t("common.loading")}</span>
+          </div>
         )}
         {many && !zoomed && (
           <>
@@ -417,7 +492,7 @@ async function toPNG(blob: Blob): Promise<Blob> {
 
 function RoundButton({ icon, label, onClick }: { icon: IconName; label: string; onClick: () => void }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} className="flex size-9 items-center justify-center rounded-full bg-white/15 transition-colors hover:bg-white/25">
+    <button type="button" aria-label={label} title={label} onClick={onClick} className="touch-hit flex size-9 shrink-0 items-center justify-center rounded-full bg-white/15 transition-colors hover:bg-white/25">
       <Icon name={icon} size={15} />
     </button>
   );
@@ -450,7 +525,7 @@ function BarButton({ icon, label, onClick, disabled, compact }: { icon: IconName
       disabled={disabled}
       title={compact ? label : undefined}
       className={cx(
-        "flex h-9 items-center gap-1.5 rounded-full bg-white/15 px-4 text-[13px] font-medium whitespace-nowrap transition-[background-color,transform] hover:bg-white/25 active:scale-[0.97] disabled:opacity-40",
+        "touch-hit flex h-9 items-center gap-1.5 rounded-full bg-white/15 px-4 text-[13px] font-medium whitespace-nowrap transition-[background-color,transform] hover:bg-white/25 active:scale-[0.97] disabled:opacity-40",
         compact && "max-sm:size-11 max-sm:justify-center max-sm:px-0",
       )}
     >

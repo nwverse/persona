@@ -1,6 +1,8 @@
 {
   "assistant": "Assistant",
-  "agents": "Agents",
+  "external": "External",
+  "settings": "Settings",
+  "tab_bar": "Main places",
   "sidebar": "Sidebar",
   "switch_page": "Switch page",
   "waiting_label_one": "{label}, {count} needs you",

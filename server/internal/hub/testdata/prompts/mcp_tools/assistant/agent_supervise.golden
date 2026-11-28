@@ -1,0 +1,62 @@
+{
+  "name": "agent_supervise",
+  "description": "主对话或方向主管可收编无进行中任务的 Agent。leader 需 done_when 和非工作信任电脑。改范围用 task_scope，移交用 agent_transfer。",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "machine",
+      "session_id"
+    ],
+    "properties": {
+      "machine": {
+        "type": "string",
+        "description": "agents_list machine id or name"
+      },
+      "session_id": {
+        "type": "string",
+        "description": "Agent session id or first 8 characters"
+      },
+      "title": {
+        "type": "string",
+        "description": "Chinese title under 20 chars. Defaults to Agent title."
+      },
+      "role": {
+        "type": "string",
+        "enum": [
+          "leader"
+        ]
+      },
+      "work_mode": {
+        "type": "string",
+        "enum": [
+          "execute",
+          "research",
+          "coordinate"
+        ],
+        "description": "Default execute."
+      },
+      "completion_mode": {
+        "type": "string",
+        "enum": [
+          "inherit",
+          "draft",
+          "ready",
+          "landed",
+          "verified"
+        ]
+      },
+      "done_when": {
+        "type": "array",
+        "maxItems": 6,
+        "items": {
+          "type": "string"
+        },
+        "description": "checkable completion criteria"
+      },
+      "expect_minutes": {
+        "type": "integer",
+        "description": "estimated minutes from now"
+      }
+    }
+  }
+}

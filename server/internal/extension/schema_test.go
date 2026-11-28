@@ -1,11 +1,104 @@
 package extension
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+func TestSchemaStep(t *testing.T) {
+	for _, step := range []int64{1, 250, 9007199254740991} {
+		t.Run(strconv.FormatInt(step, 10), func(t *testing.T) {
+			s, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"goal":{"type":"integer","x-step":` + strconv.FormatInt(step, 10) + `}}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Fields[0].Step == nil || *s.Fields[0].Step != step {
+				t.Fatalf("step: %+v", s.Fields[0])
+			}
+			raw, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `{"fields":[{"name":"goal","type":"integer","step":` + strconv.FormatInt(step, 10) + `}]}`
+			if string(raw) != want {
+				t.Fatalf("form: %s, want %s", raw, want)
+			}
+		})
+	}
+	s, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"goal":{"type":"integer"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(s)
+	if err != nil || s.Fields[0].Step != nil || strings.Contains(string(raw), `"step"`) {
+		t.Fatalf("absent step: %s, %v", raw, err)
+	}
+}
+
+func TestSchemaStepRefusesInvalidHints(t *testing.T) {
+	for _, value := range []string{`0`, `-1`, `1.5`, `1.0`, `1e2`, `"250"`, `true`, `false`, `null`, `[]`, `{}`, `9007199254740992`, `9223372036854775808`} {
+		t.Run(value, func(t *testing.T) {
+			_, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"goal":{"type":"integer","x-step":` + value + `}}}`))
+			if err == nil || !strings.Contains(err.Error(), "goal: x-step: a whole number from 1 to 9007199254740991") {
+				t.Fatalf("invalid x-step %s: %v", value, err)
+			}
+		})
+	}
+	for _, kind := range []string{"number", "string", "boolean", "array", "object"} {
+		t.Run(kind, func(t *testing.T) {
+			_, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"goal":{"type":"` + kind + `","x-step":250}}}`))
+			if err == nil || !strings.Contains(err.Error(), `"x-step" is not in the subset the forms draw for a `+kind) {
+				t.Fatalf("x-step on %s: %v", kind, err)
+			}
+		})
+	}
+}
+
+func TestSchemaStepDoesNotConstrainSavedValues(t *testing.T) {
+	ctx := context.Background()
+	r, store, _ := newTestRegistry(t)
+	pkg := t.TempDir()
+	writePackage(t, pkg, func(m map[string]any) {
+		m["configuration"] = json.RawMessage(`{"type":"object","properties":{
+			"goal":{"type":"integer","minimum":1000,"maximum":3000,"default":2100,"x-step":250},
+			"group":{"type":"object","properties":{"count":{"type":"integer","x-step":250,"enum":[2100,2350]}}}
+		}}`)
+	})
+	preview, err := r.Preview(ctx, pkg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Install(ctx, preview.ID, preview.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	const config = `{"goal":2100,"group":{"count":2350}}`
+	if err := r.SetConfig(ctx, "example-notes", json.RawMessage(config), "test"); err != nil {
+		t.Fatal(err)
+	}
+	p := r.Get("example-notes")
+	if !sameJSON(p.Record.Config, json.RawMessage(config)) || !sameJSON(r.Config(p), json.RawMessage(config)) {
+		t.Fatalf("off-grid values changed: saved %s, effective %s", p.Record.Config, r.Config(p))
+	}
+	reloaded := NewRegistry(r.dir, store, rot13{}, 202611100000)
+	if err := reloaded.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Get("example-notes"); got == nil || got.Problem != "" || !sameJSON(got.Record.Config, json.RawMessage(config)) {
+		t.Fatalf("saved off-grid configuration did not reload: %+v", got)
+	}
+	if p.Schema.Fields[1].Fields[0].Step == nil || *p.Schema.Fields[1].Fields[0].Step != 250 {
+		t.Fatal("nested integer lost its step")
+	}
+	for _, bad := range []string{`{"goal":999}`, `{"goal":3001}`, `{"goal":2100.5}`, `{"group":{"count":2101}}`} {
+		if err := r.SetConfig(ctx, "example-notes", json.RawMessage(bad), "test"); err == nil {
+			t.Errorf("existing constraint ignored: %s", bad)
+		}
+	}
+}
 
 const formSchema = `{"type": "object", "properties": {
   "url": {"type": "string", "title": "地址", "format": "uri"},
@@ -217,5 +310,140 @@ func TestSchemaMachineAndLauncherPickers(t *testing.T) {
 		if _, err := ParseSchema(json.RawMessage(bad)); err == nil {
 			t.Errorf("%s parsed", bad)
 		}
+	}
+}
+
+func TestSchemaSection(t *testing.T) {
+	for _, section := range []string{SectionConnection, SectionChannel, SectionInbox, SectionAdvanced} {
+		t.Run(section, func(t *testing.T) {
+			s, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"setting":{"type":"string","section":"` + section + `"}}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Fields[0].Section != section {
+				t.Fatalf("section = %q, want %q", s.Fields[0].Section, section)
+			}
+			raw, err := json.Marshal(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := `{"fields":[{"name":"setting","type":"string","section":"` + section + `"}]}`
+			if string(raw) != want {
+				t.Fatalf("form: %s, want %s", raw, want)
+			}
+		})
+	}
+
+	// All property types and nested object fields accept valid sections; omitted and empty sections stay valid and omitempty.
+	s, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{
+		"url":{"type":"string","format":"uri","section":"connection"},
+		"retries":{"type":"integer","section":"advanced"},
+		"ratio":{"type":"number","section":"advanced"},
+		"enabled_sync":{"type":"boolean","section":"inbox"},
+		"channels":{"type":"array","items":{"type":"string"},"section":"channel"},
+		"group":{"type":"object","section":"advanced","properties":{
+			"timeout":{"type":"integer","section":"connection"},
+			"plain":{"type":"string"}
+		}},
+		"legacy":{"type":"string"},
+		"empty_section":{"type":"string","section":""}
+	}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Fields[0].Section != SectionConnection ||
+		s.Fields[1].Section != SectionAdvanced ||
+		s.Fields[2].Section != SectionAdvanced ||
+		s.Fields[3].Section != SectionInbox ||
+		s.Fields[4].Section != SectionChannel ||
+		s.Fields[5].Section != SectionAdvanced ||
+		s.Fields[5].Fields[0].Section != SectionConnection ||
+		s.Fields[5].Fields[1].Section != "" ||
+		s.Fields[6].Section != "" ||
+		s.Fields[7].Section != "" {
+		t.Fatalf("unexpected sections: %+v", s.Fields)
+	}
+	for _, idx := range []int{6, 7} {
+		raw, err := json.Marshal(s.Fields[idx])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"section"`) {
+			t.Fatalf("unset/empty section should be omitted from JSON: %s", raw)
+		}
+	}
+	nestedPlain, err := json.Marshal(s.Fields[5].Fields[1])
+	if err != nil || strings.Contains(string(nestedPlain), `"section"`) {
+		t.Fatalf("unset nested section should be omitted: %s, %v", nestedPlain, err)
+	}
+}
+
+func TestSchemaSectionRefusesInvalidValues(t *testing.T) {
+	for _, bad := range []string{"general", "unknown", "Connection", "ADVANCED", " connection", "inbox "} {
+		t.Run("enum/"+bad, func(t *testing.T) {
+			raw := json.RawMessage(`{"type":"object","properties":{"setting":{"type":"string","section":` + strconv.Quote(bad) + `}}}`)
+			_, err := ParseSchema(raw)
+			if err == nil || !strings.Contains(err.Error(), `setting: section `+strconv.Quote(bad)+`: connection, channel, inbox or advanced`) {
+				t.Fatalf("invalid section %q: %v", bad, err)
+			}
+			manifest := `{"manifest_version":1,"id":"example-sec","name":"Example","version":"1.0.0","configuration":` + string(raw) + `,"contributes":{"prompts":[{"id":"p","kind":"quick","title":"P","text":"Hi"}]}}`
+			if _, err := Parse([]byte(manifest)); err == nil || !strings.Contains(err.Error(), "configuration:") || !strings.Contains(err.Error(), "section") {
+				t.Fatalf("manifest Parse did not reject invalid section %q: %v", bad, err)
+			}
+		})
+	}
+	for _, bad := range []string{`null`, `123`, `true`, `false`, `[]`, `{}`} {
+		t.Run("type/"+bad, func(t *testing.T) {
+			_, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"setting":{"type":"string","section":` + bad + `}}}`))
+			if err == nil || !strings.Contains(err.Error(), "setting: section: a string") {
+				t.Fatalf("non-string section %s: %v", bad, err)
+			}
+		})
+	}
+	_, err := ParseSchema(json.RawMessage(`{"type":"object","properties":{"group":{"type":"object","properties":{"nested":{"type":"string","section":"bogus"}}}}}`))
+	if err == nil || !strings.Contains(err.Error(), `group.nested: section "bogus": connection, channel, inbox or advanced`) {
+		t.Fatalf("invalid nested section: %v", err)
+	}
+}
+
+func TestSchemaSectionDoesNotConstrainSavedValues(t *testing.T) {
+	ctx := context.Background()
+	r, store, _ := newTestRegistry(t)
+	pkg := t.TempDir()
+	writePackage(t, pkg, func(m map[string]any) {
+		m["configuration"] = json.RawMessage(`{"type":"object","properties":{
+			"endpoint":{"type":"string","format":"uri","section":"connection"},
+			"triage_rules":{"type":"string","section":"inbox","default":"default rules"},
+			"debug":{"type":"boolean","section":"advanced","default":false},
+			"legacy":{"type":"string","default":"keep"}
+		},"required":["endpoint"]}`)
+	})
+	preview, err := r.Preview(ctx, pkg, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Install(ctx, preview.ID, preview.Digest, "test"); err != nil {
+		t.Fatal(err)
+	}
+	const config = `{"endpoint":"https://example.com","debug":true}`
+	if err := r.SetConfig(ctx, "example-notes", json.RawMessage(config), "test"); err != nil {
+		t.Fatal(err)
+	}
+	p := r.Get("example-notes")
+	if p.Schema.Fields[0].Section != SectionConnection || p.Schema.Fields[1].Section != SectionInbox ||
+		p.Schema.Fields[2].Section != SectionAdvanced || p.Schema.Fields[3].Section != "" {
+		t.Fatalf("unexpected sections after install: %+v", p.Schema.Fields)
+	}
+	const wantEffective = `{"endpoint":"https://example.com","triage_rules":"default rules","debug":true,"legacy":"keep"}`
+	if !sameJSON(r.Config(p), json.RawMessage(wantEffective)) {
+		t.Fatalf("effective config = %s, want %s", r.Config(p), wantEffective)
+	}
+	reloaded := NewRegistry(r.dir, store, rot13{}, 202611100000)
+	if err := reloaded.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Get("example-notes"); got == nil || got.Problem != "" ||
+		got.Schema.Fields[0].Section != SectionConnection || !sameJSON(got.Record.Config, json.RawMessage(config)) {
+		t.Fatalf("section schema or config did not survive reload: %+v", got)
 	}
 }

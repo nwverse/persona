@@ -88,6 +88,14 @@ type TranscriptionItem struct {
 	Name string `json:"name,omitempty"`
 }
 
+// SpeechItem is a contribution to speech: reading a text aloud for the apps (docs/extensions/extensions.md "Speech"), over
+// the extension's own socket under /speech/<id>/ with the voice extension's read-aloud contract (a meeting answer the
+// iPhone says aloud).
+type SpeechItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // ComputerItem is a contribution to computer: operating the user's computers for the assistant (the built-in plugin
 // cua, docs/extensions/computer-use.md).
 type ComputerItem struct {
@@ -139,6 +147,24 @@ type QuotaItem struct {
 	// Hosts are the gateways' host names it reads ("*.example.com" allowed); empty: it is asked about any gateway and
 	// answers unsupported for one that is not its.
 	Hosts []string `json:"hosts,omitempty"`
+}
+
+// MethodUsageQuery is the RPC method an extension contributing usage answers (docs/extensions/extensions.md "Usage").
+const MethodUsageQuery = "usage.query"
+
+// UsageItem is a contribution to usage: a gateway whose accounts' subscription usage the plugin turns into the usage
+// bars' accounts and windows (docs/extensions/extensions.md "Usage").
+type UsageItem struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Hosts are the gateways' host names it reads ("*.example.com" allowed); empty: it may be pointed at any launcher's
+	// gateway and answers unsupported for one that is not its.
+	Hosts []string `json:"hosts,omitempty"`
+	// Direct is polled automatically. The extension uses its own settings and network grant.
+	Direct bool `json:"direct,omitempty"`
+	// RemoteAddress and RemoteKey name the extension setting and secret bound to that HTTPS origin.
+	RemoteAddress string `json:"remote_address,omitempty"`
+	RemoteKey     string `json:"remote_key,omitempty"`
 }
 
 // AgentSourceItem is a contribution to agent_sources: a source of personal agents' sessions in the Agents tab, next
@@ -195,7 +221,8 @@ type APIItem struct {
 // AssistantItem is a contribution to assistant: skills and a part of the assistant's instructions, in the package
 // (docs/extensions/extensions.md "Assistant").
 type AssistantItem struct {
-	ID string `json:"id"`
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"` // display-only, for the contribution switch
 	// Skills are directories in the package, each a skill (SKILL.md first), put in with the assistant's.
 	Skills []string `json:"skills,omitempty"`
 	// Instructions is a markdown file in the package, added to the assistant's CLAUDE.md.
@@ -212,7 +239,8 @@ type AssistantItem struct {
 // nothing is added. Installing the extension trusts it to run that command on the assistant's machine, as its
 // skills' scripts do; a shell or an interpreter, which would run whatever Args say, is refused.
 type MCPServerItem struct {
-	ID string `json:"id"` // the server's name for the assistant
+	ID    string `json:"id"`              // the server's name for the assistant
+	Title string `json:"title,omitempty"` // display-only, for the contribution switch
 	// Command is looked up on PATH, then in ~/bin; Env names a PERSONA_ variable that, when set,
 	// replaces the lookup: a path, or "" / 0 / off / false to leave the server out on that machine.
 	Command  string   `json:"command"`
@@ -254,6 +282,25 @@ type GateFile struct {
 	Tool       *proto.GateTool    `json:"tool,omitempty"`
 	// Auth is how the node's proxy puts the credentials on a request (#1317); without it ProxyAuth decides.
 	Auth *GateFileAuth `json:"auth,omitempty"`
+	// SocketEnv names the one of env holding the extension's unix socket on the manager's machine: the gate is
+	// relayed (proto.CommandGate.Relay, #12904), its calls going node → manager → socket, so that it works from an
+	// assistant on another computer too. It needs base_env (the address the script calls when it is given one) and
+	// one secret (the token, put on the request as Auth, or Authorization: Bearer, says).
+	SocketEnv string `json:"socket_env,omitempty"`
+}
+
+// RelayAuth is how the manager puts a relayed gate's credentials on a call to its socket: the declared auth, or
+// Authorization: Bearer ${<the one secret>}. Nil for a gate that is not relayed.
+func (g *GateFile) RelayAuth() *proto.GateAuth {
+	switch {
+	case g.SocketEnv == "":
+		return nil
+	case g.Auth != nil && !g.Auth.Env:
+		return &proto.GateAuth{Header: g.Auth.Header, Value: g.Auth.Value}
+	case len(g.Secret) == 1:
+		return &proto.GateAuth{Header: "Authorization", Value: "Bearer ${" + g.Secret[0] + "}"}
+	}
+	return nil
 }
 
 // GateFileAuth is a gate file's auth: the header and its value (${NAME} for one of env), or env: the script needs its
@@ -312,6 +359,20 @@ func ParseGate(raw []byte) (*GateFile, error) {
 	}
 	if g.BaseEnv != "" && !slices.Contains(g.Env, g.BaseEnv) {
 		return nil, errors.New("gate base_env is not one of env")
+	}
+	if g.SocketEnv != "" {
+		switch {
+		case !slices.Contains(g.Env, g.SocketEnv):
+			return nil, errors.New("gate socket_env is not one of env")
+		case g.BaseEnv == "" || g.SocketEnv == g.BaseEnv:
+			return nil, errors.New("gate socket_env: needs base_env, the address the script calls instead")
+		case slices.Contains(g.Secret, g.SocketEnv):
+			return nil, errors.New("gate socket_env is a secret")
+		case g.Auth != nil && g.Auth.Env:
+			return nil, errors.New("gate socket_env: the credentials go on the call, not into the environment")
+		case g.Auth == nil && (len(g.Secret) != 1 || !slices.Contains(g.Env, g.Secret[0])):
+			return nil, errors.New("gate socket_env: one secret among env, or an auth saying how they go")
+		}
 	}
 	if a := g.Auth; a != nil {
 		switch {
@@ -433,6 +494,32 @@ var Points = map[string]Point{
 		}
 		return q.ID, nil
 	}},
+	"usage": {Name: "usage", Namespace: "usage", Version: 2, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var u UsageItem
+		if err := strict(raw, &u); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(u.ID) {
+			return u.ID, fmt.Errorf("usage id %q: a-z0-9_-", u.ID)
+		}
+		if u.Name == "" {
+			return u.ID, errors.New("usage " + u.ID + ": no name")
+		}
+		if u.Direct && len(u.Hosts) != 0 {
+			return u.ID, errors.New("direct usage does not match launcher hosts")
+		}
+		if u.RemoteAddress != "" || u.RemoteKey != "" {
+			if !u.Direct || !idPattern.MatchString(u.RemoteAddress) || !idPattern.MatchString(u.RemoteKey) {
+				return u.ID, errors.New("remote usage address and key must name a setting and a secret of a direct source")
+			}
+		}
+		for _, h := range u.Hosts {
+			if !hostPattern.MatchString(h) {
+				return u.ID, fmt.Errorf("usage %s: %q is not a host name", u.ID, h)
+			}
+		}
+		return u.ID, nil
+	}},
 	"agent_sources": {Name: "agent_sources", Namespace: "agentsrc", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
 		var a AgentSourceItem
 		if err := strict(raw, &a); err != nil {
@@ -512,6 +599,9 @@ var Points = map[string]Point{
 		if !idPattern.MatchString(a.ID) {
 			return a.ID, fmt.Errorf("assistant id %q: a-z0-9_-", a.ID)
 		}
+		if utf8.RuneCountInString(a.Title) > 40 {
+			return a.ID, fmt.Errorf("assistant %s: title: at most 40 characters", a.ID)
+		}
 		if a.Gate != "" {
 			if err := checkPackagePath(a.Gate); err != nil || !strings.HasSuffix(a.Gate, ".json") {
 				return a.ID, fmt.Errorf("assistant %s: gate is a .json file inside the package", a.ID)
@@ -543,6 +633,9 @@ var Points = map[string]Point{
 		}
 		if !idPattern.MatchString(m.ID) || compat.IsMCPServer(m.ID) {
 			return m.ID, fmt.Errorf("mcp_servers id %q: a-z0-9_-, not persona or persona", m.ID)
+		}
+		if utf8.RuneCountInString(m.Title) > 40 {
+			return m.ID, fmt.Errorf("mcp_servers %s: title: at most 40 characters", m.ID)
 		}
 		if !cliName.MatchString(m.Command) || slices.Contains(reservedCommands, m.Command) || slices.Contains(mcpRunners, m.Command) {
 			return m.ID, fmt.Errorf("mcp_servers %s: command %q: a lowercase command name (letters, digits, -), not one the assistant has already nor a shell or interpreter", m.ID, m.Command)
@@ -602,6 +695,12 @@ var Points = map[string]Point{
 		}
 		if u.Icon != "" && (u.Placement != "nav_page" || !slices.Contains(UIIcons, u.Icon)) {
 			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon, one of %s", u.ID, strings.Join(UIIcons, ", "))
+		}
+		if u.IconColor != "" && (u.Placement != "nav_page" || !slices.Contains(wire.Colors, u.IconColor)) {
+			return u.ID, fmt.Errorf("ui %s: only a nav_page has an icon_color, one of %s", u.ID, strings.Join(wire.Colors, ", "))
+		}
+		if g := u.Group; g != nil && (u.Placement != "nav_page" || !uiGroupID.MatchString(g.ID) || g.Title == "" || utf8.RuneCountInString(g.Title) > 40) {
+			return u.ID, fmt.Errorf("ui %s: only a nav_page names a group, its id a-z0-9- (at most 32) and its title 1 to 40 characters", u.ID)
 		}
 		if u.Opens != "" && u.Placement != "overview_card" && u.Placement != "capsule_card" && u.Placement != "widget" {
 			return u.ID, fmt.Errorf("ui %s: only an overview_card, capsule_card or widget opens a page", u.ID)
@@ -721,6 +820,48 @@ var Points = map[string]Point{
 		}
 		return p.ID, nil
 	}},
+	// repository_providers: a code-hosting source for the repository catalog and a to-do's repositories and links on the
+	// exact hosts it names (repo.parse / repo.check / repo.link / repo.describe, docs/extensions/repository-providers.md).
+	// disk_offload: a provider that moves items from a computer to storage elsewhere and back (DiskOffloadItem,
+	// disk_offload.go; the calls are offload.schema.json's).
+	"disk_offload": {Name: "disk_offload", Namespace: "offload", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var it DiskOffloadItem
+		if err := strict(raw, &it); err != nil {
+			return "", err
+		}
+		return it.ID, checkDiskOffload(it)
+	}},
+	"repository_providers": {Name: "repository_providers", Namespace: "repo", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var p RepositoryProviderItem
+		if err := strict(raw, &p); err != nil {
+			return "", err
+		}
+		return p.ID, checkRepositoryProvider(p)
+	}},
+	// text_lookup: a dictionary the apps ask for the meaning of a word the user taps (text_lookup.state / lookup / save /
+	// remove, docs/extensions/extensions.md "Looking up a word"). Only English for now.
+	"text_lookup": {Name: "text_lookup", Namespace: "text_lookup", Version: 1, NeedsRPC: true, Item: func(raw json.RawMessage) (string, error) {
+		var a TextLookupItem
+		if err := strict(raw, &a); err != nil {
+			return "", err
+		}
+		id := a.ID.String()
+		if !textLookupID.MatchString(id) {
+			return id, fmt.Errorf("text_lookup id %q: a-z0-9_- up to 64", id)
+		}
+		if a.Name != "" && (strings.TrimSpace(a.Name) == "" || utf8.RuneCountInString(a.Name) > 80) {
+			return id, fmt.Errorf("text_lookup %s: a name of 1 to 80 characters", id)
+		}
+		// Omitted means ["en"]. An explicit list must be exactly ["en"].
+		langs := a.Languages
+		if langs == nil {
+			langs = []string{"en"}
+		}
+		if len(langs) != 1 || langs[0] != "en" {
+			return id, fmt.Errorf("text_lookup %s: languages only \"en\" for now", id)
+		}
+		return id, nil
+	}},
 	"voice": {Name: "voice", Namespace: "voice", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
 		var v VoiceItem
 		if err := strict(raw, &v); err != nil {
@@ -740,6 +881,18 @@ var Points = map[string]Point{
 		}
 		if !idPattern.MatchString(v.ID) {
 			return v.ID, fmt.Errorf("transcription id %q: a-z0-9_-", v.ID)
+		}
+		return v.ID, nil
+	}},
+	// speech: a text read aloud for the apps (SpeechItem); served over the program's HTTP socket, reached through the
+	// apps' forward to the extension.
+	"speech": {Name: "speech", Namespace: "speech", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
+		var v SpeechItem
+		if err := strict(raw, &v); err != nil {
+			return "", err
+		}
+		if !idPattern.MatchString(v.ID) {
+			return v.ID, fmt.Errorf("speech id %q: a-z0-9_-", v.ID)
 		}
 		return v.ID, nil
 	}},

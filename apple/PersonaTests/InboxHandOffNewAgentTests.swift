@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Hand to AI › New Agent… (#5933; docs/assistant/inbox.md "Item actions"): New Agent's page gets the item as the same
 /// `<persona-context>` an Agent target gets, the ask as the first message, the item's title and its hub; nothing is sent
@@ -33,9 +34,10 @@ struct InboxHandOffNewAgentTests {
             handOff: { _, _, _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
             record: { _, _, _, _, _ in },
             showMain: { _, _, _ in },
-            plainToMain: { _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
+            plainToMain: { _, _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "main") },
             startNew: { _ in calls.sent += 1; return SessionKey(machineID: "server", sessionID: "new") },
             sendToAgent: { _, _, _ in calls.sent += 1; return .sent },
+            waitForNewAgent: { _, _ in .sent },
             open: { calls.went.append(($0, $1)) },
             markDone: { calls.done += 1 }))
     }

@@ -61,6 +61,21 @@ class AlwaysOfferTest {
         assertTrue(AnswerBuilder.build(labelled, AnswerAction.Always).allowed)
     }
 
+    /**
+     * #8143: a Paseo card naming only the engine (an older node's) can't name its agent, yet it stays another agent's card:
+     * no "Always allow in this session", Claude's alone, and "Always allow" only with what its TUI says it allows.
+     */
+    @Test fun aPaseoCardThatCantNameItsAgentIsStillAnotherAgentsCard() {
+        for (paseo in listOf(card.copy(agent = "paseo", agentLabelHint = "Paseo"), card.copy(agent = "paseo", agentLabelHint = "Grok"))) {
+            assertFalse(paseo.offersAlways)
+            assertFalse(AnswerBuilder.build(paseo, AnswerAction.Always).allowed)
+            assertEquals(null, paseo.alwaysScopeDetail)
+            val labelled = paseo.copy(alwaysLabel = "Only this command")
+            assertTrue(labelled.offersAlways)
+            assertEquals("总是同意", (labelled.alwaysActionLabel).zhAny())
+        }
+    }
+
     /** #3590 / #3941: where the manager says whether it keeps an "always allow", that decides, over the card's own rule. */
     @Test fun theManagersAlwaysHonoredDecides() {
         val own = card.copy(toolName = "iphone_do", alwaysHonored = false)
@@ -73,5 +88,20 @@ class AlwaysOfferTest {
         assertFalse(card.copy(agent = "codex", alwaysLabel = "Only this command", alwaysHonored = false).offersAlways)
         assertTrue(card.copy(alwaysHonored = null).offersAlways)
         assertFalse(card.copy(agent = "codex", alwaysHonored = null).offersAlways)
+    }
+
+    @Test fun runtimeAlwaysKeysExplainScopeWhenManagerHonorsAlways() {
+        val agyWrite = card.copy(
+            agent = "antigravity", agentLabelHint = "Antigravity", toolName = "Write",
+            alwaysHonored = true, alwaysKeys = listOf("tool:Edit(//workspace/docs/**)"),
+        )
+        assertTrue(agyWrite.offersAlways)
+        assertEquals("这段对话中，这个目录里的所有文件编辑", agyWrite.alwaysScopeDetail.zhAny())
+        val agyRead = agyWrite.copy(toolName = "Read", alwaysKeys = listOf("tool:Read(//workspace/docs/**)"))
+        assertEquals("这段对话中，这个目录里的所有读取操作", agyRead.alwaysScopeDetail.zhAny())
+        val agyBash = agyWrite.copy(toolName = "Bash", alwaysKeys = listOf("tool:Bash"))
+        assertEquals("这段对话里的所有命令", agyBash.alwaysScopeDetail.zhAny())
+        // Without always_keys or always_label, non-Claude cards do not invent a whole-tool scope.
+        assertEquals(null, card.copy(agent = "antigravity", alwaysHonored = true).alwaysScopeDetail)
     }
 }

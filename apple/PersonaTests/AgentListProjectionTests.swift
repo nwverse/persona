@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct AgentListProjectionTests {
     private func session(_ id: String, state: String = "idle", group: String = "", cwd: String = "/code/project") throws -> Session {
@@ -13,6 +14,24 @@ import Testing
 
     private func input(_ sessions: [Session], settings: AgentListProjection.Settings = .init()) -> AgentListProjection.Input {
         .init(sessions: sessions, machines: [], settings: settings)
+    }
+
+    @Test func directoryHiddenSessionsLeaveEveryGroupingAndCanBeRevealed() throws {
+        let visible = try session("visible", state: "working")
+        var hidden = try session("hidden", state: "needs_you")
+        hidden.hiddenByDirectory = true
+        for grouping in ["repo", "space", "state", "recent", "app", "machine"] {
+            var settings = AgentListProjection.Settings()
+            settings.grouping = grouping
+            let normal = AgentListProjection.build(input([visible, hidden], settings: settings))
+            #expect(normal.base.map(\.key) == [visible.key])
+            #expect(normal.filterCounts[.needsYou] == 0)
+            settings.listQuery.includeHidden = true
+            let revealed = AgentListProjection.build(input([visible, hidden], settings: settings))
+            #expect(Set(revealed.base.map(\.key)) == [visible.key, hidden.key])
+        }
+        #expect(AgentsNeedsYou.waiting([visible, hidden]).isEmpty)
+        #expect(NextNeedsYou.next(after: nil, in: [hidden], muted: { _ in false }) == nil)
     }
 
     @Test func theRepositoryTreeKeepsEveryRowAtLargeInventorySize() throws {
@@ -99,6 +118,54 @@ import Testing
         #expect(!repos.tree.isEmpty && repos.active.isEmpty && repos.quiet.isEmpty)
     }
 
+    @Test func openAgentSelectsOnlyItsFoldedQuietRepository() throws {
+        let open = try session("open")
+        let unrelated = try session("unrelated", cwd: "/code/unrelated")
+        let wrong = SpaceGroup(id: "repo/wrong", machineID: "fixture-box", spaceID: "-", name: "wrong", index: 0, sessions: [unrelated])
+        let matching = SpaceGroup(id: "repo/matching", machineID: "fixture-box", spaceID: "-", name: "matching", index: 1, sessions: [open])
+        let membership = AgentListProjection.quietRepositoryMembership(groups: [wrong, matching], tasks: [:])
+        // The unrelated repository comes first in the same quiet section: membership, not position or name, selects.
+        #expect(AgentListProjection.selectedQuietRepositoryID(open: open.key, membership: membership, expandedQuiet: [],
+                                                              forceExpanded: false) == matching.id)
+    }
+
+    @Test func aNestedAgentSelectsItsFoldedQuietRepository() throws {
+        let parent = try session("parent")
+        var child = try session("child")
+        child.sourceKind = "runtime"
+        child.isSubagent = true
+        child.parentSessionID = parent.sessionID
+        var folded = try session("folded")
+        folded.foldedUnder = parent.sessionID
+        let result = AgentListProjection.build(input([parent, child, folded]))
+        let group = try #require(result.quietRepositories.values.first?.first)
+        #expect(result.tasks[parent.key]?.map(\.id) == [child.key])
+        #expect(result.quietRepositoryBySession[parent.key] == group.id)
+        #expect(result.quietRepositoryBySession[child.key] == group.id)
+        #expect(result.quietRepositoryBySession[folded.key] == group.id)
+        #expect(AgentListProjection.selectedQuietRepositoryID(open: child.key, membership: result.quietRepositoryBySession,
+                                                              expandedQuiet: [], forceExpanded: false) == group.id)
+    }
+
+    @Test func builtAgentRowsSuppressFoldedQuietRepositorySelection() throws {
+        let open = try session("open")
+        let group = SpaceGroup(id: "repo/matching", machineID: "fixture-box", spaceID: "-", name: "matching", index: 0, sessions: [open])
+        #expect(AgentListProjection.selectedQuietRepositoryID(open: open.key, membership: [open.key: group.id],
+                                                              expandedQuiet: [group.id], forceExpanded: false) == nil)
+        #expect(AgentListProjection.selectedQuietRepositoryID(open: open.key, membership: [open.key: group.id],
+                                                              expandedQuiet: [], forceExpanded: true) == nil, "search builds every agent row")
+    }
+
+    @Test func noOpenAgentOrNoMatchingQuietRepositorySelectsNothing() throws {
+        let listed = try session("listed")
+        let unlisted = try session("unlisted")
+        let group = SpaceGroup(id: "repo/matching", machineID: "fixture-box", spaceID: "-", name: "matching", index: 0, sessions: [listed])
+        #expect(AgentListProjection.selectedQuietRepositoryID(open: nil, membership: [listed.key: group.id],
+                                                              expandedQuiet: [], forceExpanded: false) == nil)
+        #expect(AgentListProjection.selectedQuietRepositoryID(open: unlisted.key, membership: [listed.key: group.id],
+                                                              expandedQuiet: [], forceExpanded: false) == nil)
+    }
+
     @Test func anUnchangedWarmKeyDoesNotCaptureOrRebuildTheInventory() throws {
         let captured = input([try session("one", state: "working")])
         let key = AgentListProjectionCache.Key(revision: 1, partitions: [], settings: captured.settings)
@@ -118,7 +185,9 @@ import Testing
                                  projectID: "project", projectName: "Project")
         let child = HostWorkspace(machineID: machine.id, source: "orca", sourceID: "child", title: "Child", cwd: "/code/child",
                                   parentSourceID: root.sourceID, projectID: "project", projectName: "Project")
-        var captured = AgentListProjection.Input(sessions: [], machines: [machine], settings: .init(), workspaces: [root])
+        var settings = AgentListProjection.Settings()
+        settings.showEmptyWorkspaces = true
+        var captured = AgentListProjection.Input(sessions: [], machines: [machine], settings: settings, workspaces: [root])
         var key = AgentListProjectionCache.Key(revision: 1, partitions: [], settings: captured.settings, workspaceRevision: 1)
         let cache = AgentListProjectionCache()
         func resolve() -> AgentListProjection {
@@ -137,7 +206,58 @@ import Testing
         #expect(resolve().identity == updated.identity, "a warm catalog snapshot is reused")
     }
 
-    @Test func workspaceCatalogHonorsHubAndQuickFilters() throws {
+    @Test func nativeWorkspacePinsLeadUpdatedSortingWithoutBecomingPersonaSessionPins() throws {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
+        let pinned = HostWorkspace(machineID: machine.id, source: "paseo", sourceID: "pin", title: "Pinned task", cwd: "/code/pin",
+                                   projectID: "zeta", projectName: "Zeta", pinnedAt: Date(timeIntervalSince1970: 10))
+        let plain = HostWorkspace(machineID: machine.id, source: "paseo", sourceID: "plain", title: "Plain task", cwd: "/code/plain",
+                                  projectID: "alpha", projectName: "Alpha")
+        var native = try session("native"), recent = try session("recent"), personal = try session("personal")
+        native.spaceKind = "paseo"; native.workspaceID = pinned.sourceID
+        recent.spaceKind = "paseo"; recent.workspaceID = plain.sourceID
+        native.updatedAt = Date(timeIntervalSince1970: 10); recent.updatedAt = Date(timeIntervalSince1970: 100)
+        personal.spaceKind = "paseo"; personal.workspaceID = pinned.sourceID
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"; settings.sort = "updated"
+        settings.preferences[""] = .init(pins: Pins(), mutes: Pins())
+        settings.preferences[""]!.pins.sessions = [personal.key.path]
+        let captured = AgentListProjection.Input(sessions: [recent, personal, native], machines: [machine], settings: settings,
+                                                workspaces: [plain, pinned])
+        let result = AgentListProjection.build(captured)
+        #expect(result.tree[0].repos.map(\.name) == ["Zeta", "Alpha"])
+        #expect(result.tree[0].repos[0].sessions.map(\.key) == [native.key])
+        #expect(result.pinnedAgents.map(\.key) == [personal.key], "native workspace pins never rewrite Persona's independent pins")
+    }
+
+    @Test func aNativePinnedWorkspaceKeepsItsUnloadedChatsButNotArchivedOrFilteredChats() throws {
+        let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
+        var workspace = HostWorkspace(machineID: machine.id, source: "paseo", sourceID: "task", title: "Task", cwd: "/code/project",
+                                      projectID: "app", projectName: "App", pinnedAt: Date(timeIntervalSince1970: 10))
+        var stopped = try session("stopped", state: "offline"), sibling = try session("sibling", state: "offline")
+        var archived = try session("archived", state: "offline"), otherSource = try session("other-source", state: "offline")
+        stopped.spaceKind = "paseo"; stopped.workspaceID = workspace.sourceID
+        sibling.spaceKind = "paseo"; sibling.workspaceID = "other-task"
+        archived.spaceKind = "paseo"; archived.workspaceID = workspace.sourceID; archived.archived = true
+        otherSource.spaceKind = "orca"; otherSource.workspaceID = workspace.sourceID
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        var captured = AgentListProjection.Input(sessions: [stopped, sibling, archived, otherSource], machines: [machine], settings: settings,
+                                                workspaces: [workspace])
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).map(\.key) == [stopped.key])
+        captured.settings.query = "sibling"
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).isEmpty)
+        captured.settings.query = "state:working"
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).isEmpty)
+        captured.settings.query = ""
+        captured.settings.filter = .unread
+        #expect(AgentListProjection.build(captured).tree.isEmpty)
+        captured.settings.filter = .all
+        workspace.pinnedAt = nil
+        captured.workspaces = [workspace]
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.sessions).isEmpty, "unpin restores the normal offline-session visibility rule")
+    }
+
+    @Test func workspaceCatalogHonorsHubQuickFiltersAndShowEmptyWorkspacesToggle() throws {
         var machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
         machine.group = "hub-a"
         let root = HostWorkspace(machineID: machine.id, source: "orca", sourceID: "root", title: "Root", cwd: "/code/project", group: "hub-a")
@@ -146,9 +266,23 @@ import Testing
         settings.multiHub = true
         settings.hub = HubFilter.value("hub-a")
         var captured = AgentListProjection.Input(sessions: [], machines: [machine], settings: settings, workspaces: [root, other])
+        #expect(AgentListProjection.build(captured).tree.isEmpty, "unpinned empty workspaces stay hidden by default")
+        captured.settings.showEmptyWorkspaces = true
         #expect(AgentListProjection.build(captured).tree.flatMap(\.repos).flatMap(\.worktrees).map(\.workspace?.key) == [root.key])
         captured.settings.filter = .unread
         #expect(AgentListProjection.build(captured).tree.isEmpty, "empty worktrees do not populate a quick filter")
+        // Offline computers drop unpinned empty snapshots even when opted in, while preserving host-pinned non-hidden empties.
+        var offline = machine
+        offline.online = false
+        var pinned = root
+        pinned.sourceID = "pinned-root"
+        pinned.title = "Pinned"
+        pinned.pinnedAt = Date(timeIntervalSince1970: 10)
+        captured.settings.filter = .all
+        captured.machines = [offline]
+        captured.workspaces = [root, pinned]
+        #expect(AgentListProjection.build(captured).tree.flatMap(\.repos).flatMap(\.worktrees).map(\.workspace?.key) == [pinned.key],
+                "offline machine drops unpinned empties while retaining host-pinned empties")
     }
 
     @Test func emptyWorktreesOnAnotherMachineStillRequireHostHeadings() throws {
@@ -160,7 +294,9 @@ import Testing
         remoteRoot.group = remote.group
         var live = try session("one")
         live.spaceKind = "orca"; live.spaceID = root.sourceID
-        var captured = AgentListProjection.Input(sessions: [live], machines: [local, remote], settings: .init(),
+        var settings = AgentListProjection.Settings()
+        settings.showEmptyWorkspaces = true
+        var captured = AgentListProjection.Input(sessions: [live], machines: [local, remote], settings: settings,
                                                  workspaces: [root, remoteRoot])
         let shown = AgentListProjection.build(captured)
         #expect(Set(shown.tree.map(\.ref)) == [local.ref, remote.ref])
@@ -171,13 +307,14 @@ import Testing
         #expect(!scoped.byHost)
     }
 
-    @Test func matchingAnEmptyNestedWorktreeCountsAsASearchResult() throws {
+    @Test func matchingAnEmptyNestedWorktreeCountsAsASearchResultWhenOptedIn() throws {
         let machine = try JSON.decoder.decode(Machine.self, from: Data(#"{"id":"fixture-box","name":"Fixture","kind":"local","online":true}"#.utf8))
         let root = HostWorkspace(machineID: machine.id, source: "orca", sourceID: "root", title: "Root", cwd: "/code/project")
         let child = HostWorkspace(machineID: machine.id, source: "orca", sourceID: "child", title: "Release planning", cwd: "/code/child",
                                   parentSourceID: root.sourceID)
         var settings = AgentListProjection.Settings()
         settings.query = "Release planning"
+        settings.showEmptyWorkspaces = true
         var captured = AgentListProjection.Input(sessions: [], machines: [machine], settings: settings, workspaces: [root, child])
         let matched = AgentListProjection.build(captured)
         #expect(matched.base.isEmpty)
@@ -231,7 +368,7 @@ import Testing
 
     @Test func revisionsFasterThanOneDerivationCoalesceAndStillConverge() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), first = input([try session("first")])
         let skipped = input([try session("skipped")]), latest = input([try session("latest")])
@@ -256,7 +393,7 @@ import Testing
 
     @Test func completionUsesTheLiveHoldAndNotifiesTheReaderBeforeLanding() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), next = input([try session("next")])
         _ = resolve(cache, seed, revision: 1, state: state)
@@ -276,7 +413,7 @@ import Testing
 
     @Test func aLiveFenceRejectsCompletionEvenWithoutAnotherBodyEvaluation() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), next = input([try session("next")])
         _ = resolve(cache, seed, revision: 1, state: state)
@@ -294,7 +431,7 @@ import Testing
 
     @Test func urgentChangesBypassAHoldAndCancelOrdinaryPreparation() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), ordinary = input([try session("ordinary")])
         let urgent = input([try session("urgent", state: "needs_you")])
@@ -319,7 +456,7 @@ import Testing
         replaced.owner = ObjectIdentifier(replacement)
         for partitions in [[token], [url], [replaced], []] {
             let gate = Gate()
-            let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+            let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
             let state = State()
             let seed = input([try session("seed", group: "hub-a")]), old = input([try session("old", group: "hub-a")])
             let next = input(partitions.isEmpty ? [] : [try session("new", group: "hub-a")])
@@ -337,7 +474,7 @@ import Testing
 
     @Test func anUrgentFeedRevisionRejectsCompletionBeforeTheNextBodyEvaluation() async throws {
         let gate = Gate()
-        let cache = AgentListProjectionCache(compute: { await gate.build($0) })
+        let cache = AgentListProjectionCache(compute: { input, _ in await gate.build(input) })
         let state = State()
         let seed = input([try session("seed")]), ordinary = input([try session("ordinary")])
         let urgent = input([try session("urgent", state: "needs_you")])
@@ -383,7 +520,7 @@ import Testing
 
     @Test func aFailedWorkerRecoversFromImmutableInputBehindTheSameFences() async throws {
         struct Failure: Error {}
-        let cache = AgentListProjectionCache(compute: { _ in throw Failure() })
+        let cache = AgentListProjectionCache(compute: { _, _ in throw Failure() })
         let state = State()
         let seed = input([try session("seed")]), next = input([try session("next")])
         _ = resolve(cache, seed, revision: 1, state: state)
@@ -450,5 +587,99 @@ import Testing
         #expect(AgentListProjection.build(input([tree, other], settings: settings)).base.map(\.sessionID) == ["login-form"])
         settings.searchScope = .title
         #expect(AgentListProjection.build(input([tree, other], settings: settings)).base.isEmpty)
+    }
+
+    /// Search In › Title (#7443): an Agent is found by its title (and its space's or tab's name, as the web reads it),
+    /// not by its last reply or its folder; Full Text still finds all three.
+    @Test func titleScopeFindsByTitleOnly() throws {
+        var byTitle = try session("Fix the login form", cwd: "/code/web")
+        byTitle.lastText = "Done."
+        var byReply = try session("Release notes", cwd: "/code/docs")
+        byReply.lastText = "The login form now keeps what was typed."
+        var byPath = try session("Clean up styles", cwd: "/code/login-form")
+        byPath.lastText = "Removed two unused rules."
+        let all = [byTitle, byReply, byPath]
+        var settings = AgentListProjection.Settings()
+        settings.query = "login form"
+        #expect(Set(AgentListProjection.build(input(all, settings: settings)).base.map(\.sessionID))
+                == ["Fix the login form", "Release notes", "Clean up styles"])
+        settings.searchScope = .title
+        #expect(AgentListProjection.build(input(all, settings: settings)).base.map(\.sessionID) == ["Fix the login form"])
+        settings.query = "keeps"
+        #expect(AgentListProjection.build(input(all, settings: settings)).base.isEmpty)
+        settings.query = "styles"
+        #expect(AgentListProjection.build(input(all, settings: settings)).base.map(\.sessionID) == ["Clean up styles"])
+    }
+
+    /// Untouched, the search is Full Text, as before #7443: the list's result does not change with the stored default.
+    @Test func fullTextIsTheDefaultAndUnchanged() throws {
+        var a = try session("alpha", cwd: "/code/alpha")
+        a.lastText = "Wrote the parser."
+        var b = try session("beta", cwd: "/code/parser")
+        b.branch = "main"
+        #expect(AgentListProjection.Settings().searchScope == .all)
+        var settings = AgentListProjection.Settings()
+        settings.query = "parser"
+        let before = AgentListProjection.build(input([a, b], settings: settings)).base.map(\.sessionID)
+        settings.searchScope = AgentSearchScope.all.applied(query: settings.query, searching: true)
+        #expect(AgentListProjection.build(input([a, b], settings: settings)).base.map(\.sessionID) == before)
+        #expect(Set(before) == ["alpha", "beta"])
+    }
+
+    /// The scopes are the web's (`SEARCH_SCOPES` in web/src/lib/agent-chatlist-filter.ts), in its order, Full Text first.
+    @Test func scopesFollowTheWebsOrder() {
+        #expect(AgentSearchScope.allCases.map(\.rawValue) == ["all", "title", "conversation", "user", "assistant", "errors"])
+        #expect(AgentSearchScope.key == "agents.searchScope")
+    }
+
+    /// A scope narrows only what is searched: nothing typed and the search closed, the whole list shows (Errors too);
+    /// an open search under Errors shows the Agents with an error before anything is typed, as the web's does.
+    @Test func aScopeAppliesOnlyWhileSearching() throws {
+        var failed = try session("failed")
+        failed.turnError = "Upstream gateway timeout"
+        let fine = try session("fine")
+        for scope in AgentSearchScope.allCases {
+            #expect(scope.applied(query: "", searching: false) == .all)
+            #expect(scope.applied(query: "x", searching: false) == scope)
+        }
+        #expect(AgentSearchScope.title.applied(query: "", searching: true) == .all)
+        #expect(AgentSearchScope.errors.applied(query: "", searching: true) == .errors)
+        var settings = AgentListProjection.Settings()
+        settings.searchScope = AgentSearchScope.errors.applied(query: "", searching: false)
+        #expect(AgentListProjection.build(input([failed, fine], settings: settings)).base.count == 2)
+        settings.searchScope = AgentSearchScope.errors.applied(query: "", searching: true)
+        #expect(AgentListProjection.build(input([failed, fine], settings: settings)).base.map(\.sessionID) == ["failed"])
+    }
+
+    /// An open Errors search with nothing typed and only healthy Agents lists nothing, and it is a search: the list
+    /// says No Agents with Errors, not Start Your First Session.
+    @Test func anOpenErrorsSearchWithNoErrorsIsASearchNotTheFirstRun() throws {
+        let fine = try session("fine")
+        let applied = AgentSearchScope.errors.applied(query: "", searching: true)
+        var settings = AgentListProjection.Settings()
+        settings.searchScope = applied
+        #expect(!AgentListProjection.build(input([fine], settings: settings)).hasSearchResults)
+        #expect(applied.isSearch(query: ""))
+        #expect(!AgentSearchScope.errors.applied(query: "", searching: false).isSearch(query: ""))
+        #expect(!AgentSearchScope.title.applied(query: "", searching: true).isSearch(query: ""))
+        #expect(AgentSearchScope.all.isSearch(query: "x"))
+    }
+
+    /// By Repository: a worktree with no Agent is found by its name or path under Full Text only; under Title it is
+    /// not a result (it has no title), and with nothing searched the list is as before.
+    @Test func aWorktreeWithoutAnAgentIsAFullTextResultOnly() {
+        let machine = Machine(id: "fixture-box", name: "Box", kind: "ssh", online: true)
+        let empty = HostWorkspace(machineID: "fixture-box", source: "orca", sourceID: "ws-login", title: "login-page",
+                                  cwd: "/code/login-page", group: "")
+        var settings = AgentListProjection.Settings()
+        settings.grouping = "repo"
+        let rest = AgentListProjection.build(.init(sessions: [], machines: [machine], settings: settings, workspaces: [empty]))
+        #expect(!rest.tree.isEmpty)
+        settings.query = "login"
+        let fullText = AgentListProjection.build(.init(sessions: [], machines: [machine], settings: settings, workspaces: [empty]))
+        #expect(!fullText.tree.isEmpty)
+        settings.searchScope = .title
+        let title = AgentListProjection.build(.init(sessions: [], machines: [machine], settings: settings, workspaces: [empty]))
+        #expect(title.tree.isEmpty)
     }
 }

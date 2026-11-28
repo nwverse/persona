@@ -1,6 +1,9 @@
 package assistantwire
 
 import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -14,6 +17,11 @@ import (
 const (
 	// EventFleetSessions is a machine's session list as the apps get it (FleetSessions): after every change.
 	EventFleetSessions = "fleet.sessions"
+	// EventFleetArchived is a machine's archived rows (FleetArchived), to a hub whose hello says Hello.ArchivedApart:
+	// the rows of the machine's list that are archived (proto.Session.Archived, not the assistant's), which the apps
+	// never see. EventFleetSessions then leaves them out. Told when they change, and once per machine after each
+	// handshake; the hub reads them wherever it read the manager's list, except what the apps get (#6836).
+	EventFleetArchived = "fleet.archived"
 	// EventFleetInteraction is a pending interaction that is new or shown again (FleetInteraction).
 	EventFleetInteraction = "fleet.interaction"
 	// EventFleetResolved is an interaction that is over (FleetResolved).
@@ -34,6 +42,8 @@ const (
 	EventMutes = "fleet.mutes"
 	// EventSeen: an app looked at a session (its WebSocket's seen) (FleetSeen).
 	EventSeen = "fleet.seen"
+	// EventInteractionSeen: an app displayed a pending interaction card to the user (FleetInteractionSeen).
+	EventInteractionSeen = "fleet.interaction_seen"
 )
 
 // The hub's apps the manager calls for what is still the hub's to run (app.call).
@@ -54,6 +64,49 @@ const InteractionsOwnerAction = "interactions.owner_action"
 // {interaction} → proto.Resolution, when it is answered, expires or the call ends.
 const MethodFleetAsk = "fleet.ask"
 
+// FleetAskMethod waits for the owner to answer the hub's interaction.
+var FleetAskMethod = buswire.Method[FleetAskParams, proto.Resolution]{Name: MethodFleetAsk}
+
+// FleetAskParams carries the interaction to show to the owner.
+type FleetAskParams struct {
+	Interaction proto.Interaction `json:"interaction"`
+}
+
+// MethodFleetAskPrepared is the hub's retained settings operation:
+// {interaction, replacement} → approval.Outcome. The executable handle stays in
+// the hub; only its random interaction ID crosses the bus.
+const MethodFleetAskPrepared = "fleet.ask_prepared"
+
+// MethodFleetApprovalApply consumes that hub handle once after a fresh owner
+// Allow. Resolution.Values travels only on this trusted manager/hub call.
+const MethodFleetApprovalApply = "fleet.approval_apply"
+
+// MethodFleetApprovalDiscard releases a handle without applying it.
+const MethodFleetApprovalDiscard = "fleet.approval_discard"
+
+var (
+	FleetApprovalApplyMethod   = buswire.Method[FleetApprovalApply, FleetApprovalApplyResult]{Name: MethodFleetApprovalApply}
+	FleetApprovalDiscardMethod = buswire.Method[FleetApprovalDiscard, FleetApprovalDiscardResult]{Name: MethodFleetApprovalDiscard}
+)
+
+type FleetApprovalApply struct {
+	InteractionID string           `json:"interaction_id"`
+	Resolution    proto.Resolution `json:"resolution"`
+}
+
+type FleetApprovalApplyResult struct {
+	Text  string `json:"text"`
+	Stale bool   `json:"stale,omitempty"`
+}
+
+type FleetApprovalDiscard struct {
+	InteractionID string `json:"interaction_id"`
+	Status        string `json:"status"`
+}
+type FleetApprovalDiscardResult struct {
+	OK bool `json:"ok"`
+}
+
 // ElicitationHeader marks an app's request the hub relays to the manager as coming from an app that takes MCP
 // elicitations ("1"): the interaction history keeps them out otherwise.
 const ElicitationHeader = "X-Persona-Elicitation"
@@ -65,15 +118,28 @@ type FleetSessions struct {
 	Muted     []string        `json:"muted,omitempty"`
 }
 
+// FleetArchived is EventFleetArchived's params: all of the machine's archived rows, replacing the ones told before.
+type FleetArchived struct {
+	MachineID string          `json:"machine_id"`
+	Sessions  []proto.Session `json:"sessions"`
+}
+
 // FleetInteraction is EventFleetInteraction's params.
 type FleetInteraction struct {
 	Interaction proto.Interaction `json:"interaction"`
 }
 
+// InteractionCreatedAtHeader carries the exact displayed occurrence on an
+// interaction action. Current clients supply it on the initial request; the hub
+// preserves that fence and the manager rechecks it under the answer claim lock.
+// It is occurrence metadata, never authorization; older peers omit or ignore it.
+const InteractionCreatedAtHeader = "X-Persona-Interaction-Created-At"
+
 // FleetResolved is EventFleetResolved's params; AnsweredBy says the assistant answered it, Reason why and Answers
 // with what (docs/assistant/assistant.md "Assistant answers questions first").
 type FleetResolved struct {
 	ID         string            `json:"id"`
+	CreatedAt  time.Time         `json:"created_at,omitempty"`
 	AnsweredBy string            `json:"answered_by,omitempty"`
 	Reason     string            `json:"reason,omitempty"`
 	Answers    map[string]string `json:"answers,omitempty"`
@@ -92,6 +158,9 @@ type FleetLive struct {
 
 // Clients is EventClients' params.
 type Clients struct {
+	// Viewing is the deduplicated set of chat and terminal views from apps with full credentials.
+	// An open page remains a view during a quiet turn.
+	Viewing []SessionRef `json:"viewing,omitempty"`
 	// Elicitation: an app that takes MCP elicitations is connected (without one, or ElicitationPush, an elicitation is
 	// handed back to the terminal at once).
 	Elicitation bool `json:"elicitation"`
@@ -99,12 +168,19 @@ type Clients struct {
 	// be pushed a card now (#2433): an elicitation waits for it as other cards do. Only Elicitation keeps meaning a
 	// connected app, so a manager from before this field hands such a request back as it did; an older hub sends none.
 	ElicitationPush bool `json:"elicitation_push"`
+	// AppOnline: at least one full user app (iOS, macOS, Android, web) is connected to the hub.
+	AppOnline bool `json:"app_online,omitempty"`
 }
 
 // FleetSeen is EventSeen's params.
 type FleetSeen struct {
 	MachineID string `json:"machine_id"`
 	SessionID string `json:"session_id"`
+}
+
+// FleetInteractionSeen is EventInteractionSeen's params.
+type FleetInteractionSeen struct {
+	InteractionID string `json:"interaction_id"`
 }
 
 // The kinds of push the manager asks the hub for (Notification.Kind besides NotifyPush).
@@ -165,7 +241,8 @@ type FleetStats struct {
 	Loads    []FleetLoad `json:"loads,omitempty"`
 }
 
-// FleetLoad is a machine's 1-minute load average over its cores, in percent (rounded to 5).
+// FleetLoad is a machine's 1-minute load average over its cores, in percent (rounded to 10: the tenth of a core the
+// apps print, so 150 is "1.5 per core").
 type FleetLoad struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
@@ -184,9 +261,10 @@ type FleetItem struct {
 	Background bool `json:"background,omitempty"`
 	// Progress: the counts of the workflow Detail names, for the expanded island's bar (#3437). Nil when the item is not
 	// a background workflow or its workflow has started no agent yet. It moves only when Detail does, so it costs no push.
-	Progress    *FleetProgress `json:"progress,omitempty"`
-	Interaction string         `json:"interaction,omitempty"` // what "Allow" / "Deny" / "Approve" resolve
-	Since       float64        `json:"since,omitempty"`
+	Progress             *FleetProgress `json:"progress,omitempty"`
+	Interaction          string         `json:"interaction,omitempty"`          // what "Allow" / "Deny" / "Approve" resolve
+	InteractionCreatedAt string         `json:"interactionCreatedAt,omitempty"` // exact occurrence those buttons displayed
+	Since                float64        `json:"since,omitempty"`
 }
 
 // FleetProgress is a background workflow's agents done of those it started so far, as Detail prints them ("169/185"):

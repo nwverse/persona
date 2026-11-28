@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { bypassNote, bypassRestarts, modeConfirmation, modeMenuItems, pickerIcon } from "./header-mode";
+import { bypassNote, bypassRestarts, leavePlanTo, modeConfirmation, modeMenuItems, pickerIcon } from "./header-mode";
+import { listedModeNow, listedModesOf } from "./session-actions";
 import { t } from "../i18n";
 import type { Session } from "./types";
 
@@ -50,6 +51,37 @@ describe("header mode", () => {
   });
 });
 
+// A session of an agent that is not Claude Code lists the modes it takes (#8261, Paseo's Grok, OpenCode, Codex): its own
+// approval ("Launcher default": no mode reported is it) and Full access, a switch both ways; only going into Full access asks.
+describe("the modes a session lists", () => {
+  const grok = (permission_mode?: string, extra: Partial<Session> = {}): Session => claude(permission_mode, {
+    agent: "paseo", agent_label: "Grok", source_kind: "runtime", capabilities: { read: true, send: true, modes: false, permission_modes: ["default", "bypassPermissions"] }, ...extra });
+
+  it("are offered alone, by these names, the one it runs in checked", () => {
+    expect(listedModesOf(grok())).toEqual(["default", "bypassPermissions"]);
+    const rows = modeMenuItems(grok(), () => {});
+    expect(rows.map((r) => [r.key, r.label, r.checked])).toEqual([["default", "跟随启动器", true], ["bypassPermissions", "完全访问", false]]);
+    expect(modeMenuItems(grok("bypassPermissions"), () => {}).map((r) => r.checked)).toEqual([false, true]);
+    expect(listedModeNow(grok("plan"), ["default", "bypassPermissions"])).toBe("default");
+  });
+
+  it("ask first only into Full access, and leave it freely", () => {
+    const into = modeMenuItems(grok(), () => {}).find((r) => r.key === "bypassPermissions")!;
+    expect(into.danger && into.confirm).toBeTruthy();
+    const out = modeMenuItems(grok("bypassPermissions"), () => {}).find((r) => r.key === "default")!;
+    expect(out.confirm).toBeUndefined();
+    expect(modeConfirmation(grok("bypassPermissions"), "default")).toBeNull();
+    expect(modeMenuItems(grok(), () => {}, { locked: true }).every((r) => r.disabled)).toBe(true);
+  });
+
+  it("are none where Claude Code's chips stand, for a Persona conversation, or with fewer than two", () => {
+    expect(listedModesOf(claude("default", { capabilities: { modes: true, permission_modes: ["default", "bypassPermissions"] } }))).toBeUndefined();
+    expect(listedModesOf(grok(undefined, { assistant: true }))).toBeUndefined();
+    expect(listedModesOf(grok(undefined, { capabilities: { read: true, modes: false, permission_modes: ["default"] } }))).toBeUndefined();
+    expect(listedModesOf(grok(undefined, { capabilities: { read: true, modes: false } }))).toBeUndefined();
+  });
+});
+
 // Full access for a terminal Claude Code started without a bypass flag (#6476): the node restarts the session in it once
 // its turn is over, so the row is offered, says so under its name, and still asks first.
 describe("Full access by a restart", () => {
@@ -90,5 +122,24 @@ describe("Full access by a restart", () => {
     expect(bypassNote(claude("default", { assistant: true }), true)).toBe(t("chat-sessiondialogs.bypass_next_message"));
     expect(bypassRow(claude("default", { assistant: true }), true).detail).toBe(t("chat-sessiondialogs.bypass_next_message"));
     expect(bypassNote(claude("bypassPermissions", { assistant: true }), true)).toBe("");
+  });
+
+  it("omits unavailable Auto for an Antigravity session whose capabilities restrict permission_modes (#17239)", () => {
+    const noAuto = ["default", "acceptEdits", "plan", "bypassPermissions"];
+    const agyAssistant = claude("bypassPermissions", {
+      agent: "agy",
+      assistant: true,
+      source_kind: "runtime",
+      capabilities: { read: true, send: true, modes: true, permission_modes: noAuto },
+    });
+    const agyAgent = claude("acceptEdits", {
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { read: true, send: true, modes: true, permission_modes: noAuto },
+    });
+    expect(modeMenuItems(agyAssistant, () => {}, { assistant: true }).map((r) => r.key)).toEqual(noAuto);
+    expect(modeMenuItems(agyAgent, () => {}).map((r) => r.key)).toEqual(noAuto);
+    expect(modeMenuItems(agyAgent, () => {})[0].label).toBe(t("lib-session-actions.mode_default"));
+    expect(leavePlanTo(agyAgent, "auto")).toBe("default");
   });
 });

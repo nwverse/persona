@@ -1,50 +1,55 @@
 package assistant
 
 import (
+	"cmp"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // inboxBook is the inbox's state.
 type inboxBook struct {
-	lang        func() i18n.Lang // the user's language, for the reasons it writes on items (nil: the default)
-	larkAccount int              // lark.account (InboxConfig.LarkAccount); zero is primary account 1
-	mu          sync.Mutex
-	items       map[string]*InboxItem
-	once        sync.Once
-	loadMu      sync.Mutex              // one load at a time
-	loaded      atomic.Bool             // what the database keeps was read: until then nothing is taken or written
-	running     sync.Mutex              // one collection applied at a time
-	saving      sync.Mutex              // snapshots and writes in the same order
-	needsYouMu  sync.Mutex              // guards needsYou
-	needsYou    inboxTeller             // the "Needs you" count's teller (tellInboxNeedsYou)
-	mark        map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
-	filing      map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
-	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
-	seq         uint64
-	triaging    sync.Mutex     // one triage pass at a time (inbox_triage.go)
-	titling     sync.WaitGroup // merged rows' titles being written (inbox_merge_title.go; tests wait for it)
-	handing     sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
-	handAgain   atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
-	passHook    func()         // tests: runs as each pass starts
-	translating sync.Mutex     // one translation pass at a time (inbox_translate.go)
-	replies     sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
-	handingOff  sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
-	telling     sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
-	snapshots   inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
-	mutes       []InboxMute
-	mutesMu     sync.Mutex // one read-change-save of the kept mutes at a time
-	policies    []InboxPolicy
-	policiesMu  sync.Mutex // one read-change-save of the kept policies at a time (inbox_policies.go)
-	folderCfg   InboxFolderConfig
-	folderCfgMu sync.Mutex // one read-change-save of the folder settings at a time (inbox_folders.go)
-	foldering   sync.Mutex // one folder pass at a time
-	cardSends   cardLocks  // a message card's id → the lock its "Send" holds (sendFromCard)
+	lang                  func() i18n.Lang // the user's language, for the reasons it writes on items (nil: the default)
+	larkAccount           int              // lark.account (InboxConfig.LarkAccount); zero is primary account 1
+	mu                    sync.Mutex
+	items                 map[string]*InboxItem
+	once                  sync.Once
+	loadMu                sync.Mutex              // one load at a time
+	loaded                atomic.Bool             // what the database keeps was read: until then nothing is taken or written
+	running               sync.Mutex              // one collection applied at a time
+	saving                sync.Mutex              // snapshots and writes in the same order
+	needsYouMu            sync.Mutex              // guards needsYou
+	needsYou              inboxTeller             // the "Needs you" count's teller (tellInboxNeedsYou)
+	mark                  map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
+	filing                map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
+	epoch                 string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
+	seq                   uint64
+	triaging              sync.Mutex     // one triage pass at a time (inbox_triage.go)
+	titling               sync.WaitGroup // merged rows' titles being written (inbox_merge_title.go; tests wait for it)
+	handing               sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
+	handAgain             atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
+	passHook              func()         // tests: runs as each pass starts
+	waitHook              func()         // tests: replaces the poll sleep while suggestFrom waits for startup
+	workbenchDraftHook    func()         // tests: runs after Workbench generation and before its card item is reloaded
+	onDemandDraftSaveHook func()         // tests: runs after an on-demand draft save attempt, before its failure tombstone
+	translating           sync.Mutex     // one translation pass at a time (inbox_translate.go)
+	replies               sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
+	handingOff            sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
+	telling               sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
+	snapshots             inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
+	mutes                 []InboxMute
+	mutesMu               sync.Mutex // one read-change-save of the kept mutes at a time
+	policies              []InboxPolicy
+	policiesMu            sync.Mutex // one read-change-save of the kept policies at a time (inbox_policies.go)
+	folderCfg             InboxFolderConfig
+	folderCfgMu           sync.Mutex // one read-change-save of the folder settings at a time (inbox_folders.go)
+	foldering             sync.Mutex // one folder pass at a time
+	cardSends             cardLocks  // a message card's id → the lock its "Send" holds (sendFromCard)
 	// translations are the translations made, by model, text or mail and language (inbox_translate.go).
 	translations translateCache
 
@@ -65,13 +70,30 @@ type inboxBook struct {
 	held      map[string]inboxHeld // by source: the new items its last collection held back (inbox_admit.go)
 	// readErrs: the sources the last round could not read, by id, as a short code (assistantwire.ReadFailed…): the
 	// apps say which one is behind (InboxTriage.Sources). mailReadErrs: the same of the mail accounts the last mail
-	// round could not read, by account id. Memory only.
-	readErrs     map[string]string
-	mailReadErrs map[string]assistantwire.InboxMailFailed
-	grouping     inboxGrouping // the batches being related to events (inbox_group.go)
+	// round could not read, by account id, after the transient-failure grace rounds. Memory only.
+	readErrs         map[string]string
+	mailReadErrs     map[string]assistantwire.InboxMailFailed
+	mailReadFailures map[string]int // consecutive failed mail rounds, capped at mailNoticeFailures
+	grouping         inboxGrouping  // the batches being related to events (inbox_group.go)
 	// mailAsked: when the mail of an open mail item off its account's page was last looked up (inbox_mail_off_page.go),
 	// by item id, under mu: the lookups take the longest unasked first. Memory only.
 	mailAsked map[string]time.Time
+	// retriaged: the stale "Needs you" items sorted again this run (retriageStale), tried once each. settling: one
+	// handled-elsewhere pass at a time; settleAsked: when each item was last looked at by one (inbox_settle.go). Memory
+	// only, under mu.
+	retriaged   map[string]bool
+	settling    sync.Mutex
+	settleAsked map[string]time.Time
+	settleSeen  map[string]string // the newest later position the settle model said "open" to, by item
+	settlePass  time.Time         // when the last handled-elsewhere pass started
+	// ruledFails / ruledRetryAt: the passes in a row whose retries of rule-tiered items (RuleOf) went out with no model
+	// answer since, and when the next may go out (retryRuled). Memory only, under mu.
+	ruledFails   int
+	ruledRetryAt time.Time
+	// mailBaselines: by mail folder key, the baseline, UIDVALIDITY and generation (inbox_mail.go mailBaseline),
+	// stored (inboxMailBaselinesKey) when dirty. Under mu.
+	mailBaselines      map[string]uint32
+	mailBaselinesDirty bool
 
 	cfgMu sync.Mutex
 	cfg   assistantwire.InboxConfig // the hub's (InboxConfigMethod), as last read
@@ -80,6 +102,22 @@ type inboxBook struct {
 	purgedAt time.Time // the last purge of the done items past inboxKeepHistory (purgeInboxHistory), under mu
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
+
+	// Scoped routing receives source arrivals under mu and wakes the outbox worker after persistence.
+	externalCapture bool
+	externalTriage  externalInboxTriager
+	externalWake    chan struct{}
+
+	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
+	forwarding      sync.Mutex
+	forwardAgain    atomic.Bool
+	forwardStoreMu  sync.Mutex // serializes ledger DB load and save (lock order: forwardStoreMu -> forwardMu)
+	forwardMu       sync.Mutex
+	forwardLoaded   bool
+	forwardGen      uint64
+	forwardLedger   map[string]inboxTodoForwardRecord
+	forwardPending  map[string]inboxTodoForwardRecord
+	forwardInFlight map[string]bool
 }
 
 // inboxVia is what the last round said a subscription reads (the connector's id and the source's name), for the AI
@@ -93,8 +131,10 @@ type inboxVia struct {
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
+		b.externalWake = make(chan struct{}, 1)
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
 		b.vias = map[string]inboxVia{}
+		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}
 	})
 }
 
@@ -290,4 +330,34 @@ func (b *inboxBook) readSource(id, name string) {
 	if b.batch != nil {
 		b.batch.read[id] = name
 	}
+}
+
+// inboxChatTitle returns the best known display title for a Lark chat feed from Inbox items, or "".
+func (s *Service) inboxChatTitle(feed string) string {
+	if feed == "" {
+		return ""
+	}
+	ib := &s.inbox
+	ib.mu.Lock()
+	defer ib.mu.Unlock()
+	for _, it := range ib.items {
+		if it == nil {
+			continue
+		}
+		if it.Lark != nil && it.Lark.FeedID == feed {
+			if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+				return title
+			}
+		}
+		if it.Connector != nil {
+			for _, tag := range it.Connector.Tags {
+				if tag.Key == connector.TagChat && tag.Value == feed {
+					if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+						return title
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

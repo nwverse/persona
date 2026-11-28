@@ -3,7 +3,6 @@ package agents
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"time"
 
@@ -37,7 +36,7 @@ func (s *Service) indexSessions(source string, list []Session) {
 		items = append(items, sessionlist.Item{
 			ID: row.ID, Source: source, Provider: row.Provider, Group: row.AccountID,
 			State: state, UpdatedAt: time.UnixMilli(row.RankTimeMs),
-			SearchText: strings.Join([]string{row.Title, row.Provider, row.AccountID}, "\n"),
+			SearchText: strings.Join([]string{row.Title, row.Provider, row.AccountID, row.PreviewText}, "\n"),
 			Summary:    json.RawMessage(raw), Full: json.RawMessage(raw),
 		})
 	}
@@ -50,10 +49,10 @@ func (s *Service) refreshListIndex(ctx context.Context, opts sessionlist.Options
 			continue
 		}
 		_, err := s.sessionsOf(ctx, src, false)
-		if errors.Is(err, context.Canceled) {
-			return err
-		}
 		if err != nil {
+			if callerEnded(ctx, err) {
+				return err
+			}
 			s.logf("agents: %s: paginated sessions: %v", src.Name(), err)
 			if opts.Source == "" && s.skipsFailed(src.Name()) {
 				s.listIndex.RemoveSource(src.Name()) // match legacy aggregate behavior: unavailable sources are omitted
@@ -66,7 +65,7 @@ func (s *Service) refreshListIndex(ctx context.Context, opts sessionlist.Options
 }
 
 func (s *Service) ListPage(ctx context.Context, opts sessionlist.Options) (sessionlist.Page, error) {
-	if opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
+	if opts.Search != "" || opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
 		return sessionlist.Page{}, &sessionlist.Error{Code: "invalid_query"}
 	}
 	if opts.Cursor == "" {
@@ -80,7 +79,7 @@ func (s *Service) ListPage(ctx context.Context, opts sessionlist.Options) (sessi
 // ListPageWithCounts is a page and its view's current counts (with_counts=1) from one refresh of the sources: what
 // ListPage and a separate ListCounts with the same filters return, since and cursor left out of the counts (#6496).
 func (s *Service) ListPageWithCounts(ctx context.Context, opts sessionlist.Options) (sessionlist.PageWithCounts, error) {
-	if opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
+	if opts.Search != "" || opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
 		return sessionlist.PageWithCounts{}, &sessionlist.Error{Code: "invalid_query"}
 	}
 	if err := s.refreshListIndex(ctx, opts); err != nil {
@@ -100,7 +99,7 @@ func (s *Service) ListPageWithCounts(ctx context.Context, opts sessionlist.Optio
 }
 
 func (s *Service) ListCounts(ctx context.Context, opts sessionlist.Options) (sessionlist.Counts, error) {
-	if opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
+	if opts.Search != "" || opts.PaneSource != "" || opts.ExcludePaneSource != "" || opts.Todo != "" { // runtime only: personal agents have no origin or to-do
 		return sessionlist.Counts{}, &sessionlist.Error{Code: "invalid_query"}
 	}
 	if err := s.refreshListIndex(ctx, opts); err != nil {

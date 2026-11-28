@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -78,16 +79,16 @@ func (h *Hub) forgetManagerState(id string) {
 	f := &h.reported
 	f.mu.Lock()
 	delete(f.lives, id)
-	var gone []string
+	var gone []proto.Interaction
 	for ixID, ix := range f.interactions {
 		if ix.Manager == id {
-			gone = append(gone, ixID)
+			gone = append(gone, ix)
 			delete(f.interactions, ixID)
 		}
 	}
 	f.mu.Unlock()
-	for _, ixID := range gone {
-		h.broadcast(map[string]any{"type": "interaction_resolved", "id": ixID})
+	for _, ix := range gone {
+		h.broadcastInteractionResolved(ix, interactionResolvedEvent(ix))
 	}
 	h.forgetMachineEntries(id) // what it reported of its machines (machine_entries.go)
 }
@@ -138,6 +139,26 @@ func (h *Hub) mainOf(machine, session string) bool {
 	return false
 }
 
+// isMainForManager reports whether session on machine is manager's own main conversation
+// on a machine owned by manager.
+func (h *Hub) isMainForManager(manager, machine, session string) bool {
+	if session == "" || machine == "" {
+		return false
+	}
+	mgr := normalizeGradingManager(manager)
+	var p *assistantwire.Profile
+	if mgr == assistantwire.AssistantID {
+		prof := h.assistantProfile()
+		p = &prof
+	} else {
+		a := h.assistantOf(mgr)
+		a.mu.RLock()
+		p = a.profile
+		a.mu.RUnlock()
+	}
+	return p != nil && p.Main != "" && p.Main == session && p.MainRouteMachine() == machine && h.mayClaim(mgr, machine)
+}
+
 // managerTools are manager id's tools (not the assistant's: assistantToolsNow), asked for the first time they are
 // needed after it connected and kept while it is away.
 func (h *Hub) managerTools(ctx context.Context, id string) []proto.Tool {
@@ -148,10 +169,8 @@ func (h *Hub) managerTools(ctx context.Context, id string) []proto.Tool {
 	if fresh || h.busConnOf(id) == nil {
 		return tools
 	}
-	var res struct {
-		Tools []proto.Tool `json:"tools"`
-	}
-	if err := h.callBus(ctx, id, assistantwire.MethodTools, nil, &res); err != nil {
+	res, err := buswire.Call(ctx, h.managerCaller(id), assistantwire.ToolsMethod, assistantwire.SessionRef{})
+	if err != nil {
 		h.logf("assistant: [%s] tools: %v", id, err)
 		return tools
 	}

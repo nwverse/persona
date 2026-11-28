@@ -176,12 +176,27 @@ test('device-wide avatar and accent preferences restore independently from Hub o
   const record = JSON.parse(deviceLookBoundary.saved.get('device-look'));
   assert.equal(record.avatarId, 'nwverse');
   assert.equal(record.accentId, 'avatar');
+  assert.equal(record.density, 'standard');
   assert.equal(record.infoJSON.length < 128 * 1024, true);
 
   const restored = new DeviceLook();
   await restored.initialize({ filesDir: '/private/app' });
   assert.equal(restored.avatarId, 'nwverse');
   assert.equal(restored.accentId, 'avatar');
+  assert.equal(restored.density, 'standard');
+});
+
+test('legacy records without row density restore to the reversible standard default', async () => {
+  deviceLookBoundary.reset();
+  deviceLookBoundary.saved.set('device-look', JSON.stringify({ version: 1, avatarId: 'persona', accentId: 'coral' }));
+  const model = new DeviceLook();
+  await model.initialize({ filesDir: '/private/app' });
+  assert.equal(model.density, 'standard');
+  assert.equal(model.accentId, 'coral');
+  assert.equal(await model.setDensity('compact'), true);
+  assert.equal(await model.setDensity('standard'), true);
+  assert.equal(model.density, 'standard');
+  assert.equal(JSON.parse(deviceLookBoundary.saved.get('device-look')).density, 'standard');
 });
 
 test('an older Hub uses only the documented personas fallback and stores the real image privately', async () => {
@@ -231,13 +246,29 @@ test('failed preference storage preserves the visible avatar and accent and repo
  assert.equal(await model.setAccent('coral'),false);assert.equal(model.accentId,'style');assert.equal(deviceLookBoundary.saved.size,0);
 });
 
-test('rapid independent selections serialize before publication and survive reopening',async()=>{
+test('failed density writes keep the prior density and serialized Avatar and Accent', async () => {
+  deviceLookBoundary.reset();
+  const model = await openModel(makeClient());
+  assert.equal(await model.setAccent('coral'), true);
+  const before = deviceLookBoundary.saved.get('device-look');
+  deviceLookBoundary.putError = true;
+  assert.equal(await model.setDensity('compact'), false);
+  assert.equal(model.density, 'standard');
+  assert.equal(model.accentId, 'coral');
+  assert.equal(deviceLookBoundary.saved.get('device-look'), before);
+  assert.equal(model.error, 'device_look_storage_failed');
+  assert.equal(await model.setDensity('dense'), false);
+  assert.equal(model.density, 'standard');
+});
+
+test('rapid independent Avatar, Accent, and density selections serialize before publication and survive reopening',async()=>{
  deviceLookBoundary.reset();const model=await openModel(makeClient()),gate=deferred(),entered=deferred();let writes=0;
  deviceLookBoundary.putGate=async()=>{if(++writes===1){entered.resolve();await gate.promise;}};
- const choice=model.avatars.find(item=>item.id==='nwverse'),avatar=model.setAvatar(choice.optionKey());await entered.promise;const accent=model.setAccent('coral');
- assert.equal(model.avatarId,'persona');gate.resolve();assert.deepEqual(await Promise.all([avatar,accent]),[true,true]);assert.equal(writes,2);
- const restored=new DeviceLook();await restored.initialize({filesDir:'/private/app'});assert.equal(restored.avatarKey,choice.optionKey());assert.equal(restored.accentId,'coral');
- await model.setAvatar(choice.optionKey());assert.equal(writes,2,'a duplicate Radio/row action must not write twice');
+ const choice=model.avatars.find(item=>item.id==='nwverse'),avatar=model.setAvatar(choice.optionKey());await entered.promise;const accent=model.setAccent('coral'),density=model.setDensity('compact');
+ assert.equal(model.avatarId,'persona');assert.equal(model.accentId,'style');assert.equal(model.density,'standard');gate.resolve();assert.deepEqual(await Promise.all([avatar,accent,density]),[true,true,true]);assert.equal(writes,3);
+ const saved=JSON.parse(deviceLookBoundary.saved.get('device-look'));assert.equal(saved.avatarId,'nwverse');assert.equal(saved.accentId,'coral');assert.equal(saved.density,'compact');
+ const restored=new DeviceLook();await restored.initialize({filesDir:'/private/app'});assert.equal(restored.avatarKey,choice.optionKey());assert.equal(restored.accentId,'coral');assert.equal(restored.density,'compact');
+ await model.setAvatar(choice.optionKey());assert.equal(writes,3,'a duplicate Radio/row action must not write twice');
 });
 
 test('identical package IDs and revisions from different Hubs remain independently selectable',async()=>{
@@ -286,4 +317,62 @@ test('a failed initialization keeps selection closed throughout a gated retry',a
  assert.equal(restored.ready,false);assert.equal(await restored.setAvatar('builtin:persona'),false);assert.equal(await restored.setAccent('blue'),false);
  gate.resolve();await retry;deviceLookBoundary.getGate=undefined;assert.equal(restored.ready,true);assert.equal(restored.avatarKey,choice.optionKey());assert.equal(restored.accentId,'avatar');
  const reopened=new DeviceLook();await reopened.initialize({filesDir:'/private/app'});assert.equal(reopened.avatarKey,choice.optionKey());assert.equal(reopened.accentId,'avatar');
+});
+
+test('compact navigation layout survives relaunch and composes with simultaneous density changes',async()=>{
+ const look=await openModel(makeClient());
+ assert.equal(look.phoneNavigation,'separate');
+ const [mode,density]=await Promise.all([look.setPhoneNavigation('merged'),look.setDensity('compact')]);
+ assert.equal(mode,true);assert.equal(density,true);
+ const restored=new DeviceLook();await restored.initialize({filesDir:'/private/app'});
+ assert.equal(restored.phoneNavigation,'merged');assert.equal(restored.density,'compact');
+ assert.equal(await restored.setPhoneNavigation('removed-option'),false);
+ await restored.setPhoneNavigation('separate');
+ const again=new DeviceLook();await again.initialize({filesDir:'/private/app'});assert.equal(again.phoneNavigation,'separate');
+});
+
+test('Agents row style and Compact List survive relaunch alongside existing density, accent, and navigation',async()=>{
+  deviceLookBoundary.reset();
+  deviceLookBoundary.saved.set('device-look',JSON.stringify({version:1,avatarId:'builtin',accentId:'coral',density:'compact',phoneNavigation:'merged'}));
+  const client=makeClient(),look=await openModel(client);
+  assert.equal(look.agentDisplay,'avatar');assert.equal(look.density,'compact');
+  assert.equal(await look.setAgentDisplay('compact'),true);assert.equal(look.agentDisplay,'compact');
+  assert.equal(await look.setAgentDisplay('list'),true);
+  const value=JSON.parse(deviceLookBoundary.saved.get('device-look'));
+  assert.equal(value['agents.rowStyle'],'compact');assert.equal(value['dev.compact'],true);
+  assert.equal(value.density,'compact');assert.equal(value.accentId,'coral');assert.equal(value.phoneNavigation,'merged');
+  const next=await openModel(client);assert.equal(next.agentDisplay,'list');
+  assert.equal(await next.setAgentDisplay('cards'),true);
+  assert.equal((await openModel(client)).agentDisplay,'cards');
+  assert.equal(await next.setAgentDisplay('unknown'),false);assert.equal(next.agentDisplay,'cards');
+  deviceLookBoundary.putError=true;
+  assert.equal(await next.setAgentDisplay('avatar'),false);assert.equal(next.agentDisplay,'cards');
+});
+
+test('concurrent Agents layout and other device settings commit without overwriting each other',async()=>{
+  deviceLookBoundary.reset();const look=await openModel(makeClient());
+  await Promise.all([look.setAgentDisplay('cards'),look.setDensity('compact'),look.setPhoneNavigation('merged'),look.setAgentDisplay('list')]);
+  const record=JSON.parse(deviceLookBoundary.saved.get('device-look'));
+  assert.equal(record['agents.rowStyle'],'cards');assert.equal(record['dev.compact'],true);
+  assert.equal(record.density,'compact');assert.equal(record.phoneNavigation,'merged');
+});
+
+test('chat appearance options default off, persist apart from the Hub, and restore the visible choice if storage rejects a change', async () => {
+  deviceLookBoundary.reset();
+  const first = await openModel();
+  assert.equal(first.composerGlow, false);
+  assert.equal(first.returnSends, false);
+  const writes = await Promise.all([first.setChatInteraction('ui.composerGlow', true), first.setChatInteraction('ui.returnSends', true)]);
+  assert.deepEqual(writes, [true, true]);
+  const next = await openModel();
+  assert.equal(next.composerGlow, true);
+  assert.equal(next.returnSends, true);
+  deviceLookBoundary.putError = true;
+  assert.equal(await next.setChatInteraction('ui.composerGlow', false), false);
+  assert.equal(next.composerGlow, true);
+  assert.equal(await next.setChatInteraction('unsupported', false), false);
+  deviceLookBoundary.putError = false;
+  assert.equal(await next.setChatInteraction('ui.returnSends', false), true);
+  assert.equal((await openModel()).returnSends, false);
+  assert.deepEqual(deviceLookBoundary.calls, []);
 });

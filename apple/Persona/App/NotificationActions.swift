@@ -63,7 +63,12 @@ nonisolated enum NotificationActions {
             ],
             intentIdentifiers: [], options: [])
         // Pairing receipts (#4199): Not you? Revoke, It's Mine / Not Mine (PairReceiptActions).
-        return Set([permission, plan, question, screen, elicitation, done, decide] + PairReceiptActions.categories)
+        var all = Set([permission, plan, question, screen, elicitation, done, decide, WaterReminderActions.notificationCategory] + PairReceiptActions.categories)
+        #if os(iOS)
+        // A calendar meeting's reminder (#8731 G2): Start (MeetingReminders).
+        all.insert(MeetingReminders.notificationCategory)
+        #endif
+        return all
     }
 
     /// What a button sends to the hub, or nil for a plain tap (and anything we don't know).
@@ -77,6 +82,16 @@ nonisolated enum NotificationActions {
         case rejectPlan: Resolution(approve: false, feedback: text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         default: nil
         }
+    }
+
+    /// Whether a button may settle the displayed occurrence: not one its task's supervisor holds, and not a same-ID
+    /// replacement the app already knows about. An unknown card is left to the hub, with the occurrence header when present.
+    static func answerable(_ id: String, occurrence: String? = nil, among cards: some Sequence<Interaction>) -> Bool {
+        for card in cards where card.id == id {
+            if let occurrence, card.createdAtWire != occurrence { return false }
+            if !card.answerableHere { return false }
+        }
+        return true
     }
 
     /// What Take Recommendation on a decision's push answers: the to-do, the round it was asked in (sent back exactly as
@@ -105,6 +120,7 @@ nonisolated enum NotificationActions {
             var client = try HubStore.client(group: group)
             if let manager = decision.manager { client.managerID = manager }
             try await AppModel.shared.outside(client) { try await $0.acceptTodo(decision.todoID, askedAt: decision.askedAt) }
+            await AppModel.shared.withdrawResolved([NotificationWithdrawal.todoAskPrefix + decision.todoID], group: group) {}
         } catch {
             await reportFailure(id: decision.todoID, title: failureTitle(action: takeRecommendation), error: error)
         }

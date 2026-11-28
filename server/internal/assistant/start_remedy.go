@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,12 +20,13 @@ import (
 // A supervised task whose agent did not start because the new tab's shell stopped on a question (shell_waiting) or
 // the agent's own screen stopped before it was ready (agent_start_stalled) keeps that tab on its computer for a while
 // (node/shellsettle.go, #2570). Its start is not failed yet: the task is "remedying" (PlanTask.Start), the
-// supervising main conversation hears of it with the tab's screen, and it may read the tab (task_start_screen), type
-// into it (task_start_keys) and start again in it (task_retry), up to startRemedyRetries times. Only the hub retries
-// nothing by itself. The start fails for good, with its start_error and failed receipt, when the supervision turn
-// that saw it ends with no retry going, when the tab is no longer kept, or when a retry fails in a way that keeps no
-// tab. A turn that never told the user gets the hub's own notice and push (remedyTurnEnded). Every remedy step is a
-// start_remedy feed item, the data the live task cards (#2365) will show; the screen itself never goes in the feed.
+// supervising conversation hears of it with the tab's screen, and it or the main conversation (startRemedyAllowed)
+// may read the tab (task_start_screen), type into it (task_start_keys) and start again in it (task_retry), up to
+// startRemedyRetries times. The hub never retries by itself. The start fails for good, with its start_error and
+// failed receipt, when the supervision turn that saw it ends with no retry going, when the tab is no longer kept,
+// or when a retry fails without a kept tab. A turn that never told the user gets the hub's own notice and push
+// (remedyTurnEnded). Every remedy step is a start_remedy feed item for the live task cards (#2365). The screen
+// itself stays out of the feed.
 
 // startRemedyRetries is how many times the assistant may start a task again after its agent did not start.
 const startRemedyRetries = 3
@@ -62,6 +64,13 @@ type startRemedyBody struct {
 	Text       string   `json:"text,omitempty"`
 	Reason     string   `json:"reason,omitempty"`
 	Suggestion string   `json:"suggestion,omitempty"`
+	// LauncherFrom, LauncherTo: a retry on another launcher of the same computer (start_retry_launcher.go, #10365).
+	LauncherFrom string `json:"launcher_from,omitempty"`
+	LauncherTo   string `json:"launcher_to,omitempty"`
+	// Choice: the id of the answer the owner gave the tab's startup question from the app (start_answer.go, #10365):
+	// typed into the tab (action answer), or not, the question having left the tab's last line before it came
+	// (answer_not_typed: answered at the computer, or gone by itself).
+	Choice string `json:"choice,omitempty"`
 }
 
 // remedyReasonMax bounds a reason the assistant gives, as an answered card's text is bounded.
@@ -70,6 +79,21 @@ const remedyReasonMax = 300
 // keptTabCode: a start refusal whose tab the computer keeps for someone to look at or answer.
 func keptTabCode(code string) bool {
 	return code == proto.CodeShellWaiting || code == proto.CodeAgentStartStalled
+}
+
+// keptTabOf is the tab task t's last start stopped in (keptTabCode) while its computer still keeps it (kept_until
+// ahead of now), "" when there is none: a retry starts there (the node claims it, node/startremedy.go) rather than in a
+// new tab that would stop on the same shell question (#10365). Its question still there, the node refuses at once and
+// keeps the tab.
+func keptTabOf(t PlanTask, now time.Time) string {
+	if !keptTabCode(t.ErrorCode) || t.ErrorArgs["pane"] == "" {
+		return ""
+	}
+	until, err := time.Parse(time.RFC3339, t.ErrorArgs["kept_until"])
+	if err != nil || !now.Before(until) {
+		return ""
+	}
+	return t.ErrorArgs["pane"]
 }
 
 // beginRemedy makes task t's failed start one being remedied instead of failing it, when it can be: a supervised
@@ -84,7 +108,7 @@ func (s *Service) beginRemedy(ctx context.Context, planID string, i int, t PlanT
 		return false
 	}
 	todo, ok := s.todoNow(t.TodoID)
-	if !ok || todo.Supervision == nil || todo.DoneAt != nil || s.agentSupervised(todo) { // a leader has no start remedies
+	if !ok || todo.Supervision == nil || todo.DoneAt != nil || s.agentSupervised(todo) { // a task leader's agent has no start remedies
 		return false
 	}
 	attempt := 0
@@ -109,37 +133,59 @@ func (s *Service) beginRemedy(ctx context.Context, planID string, i int, t PlanT
 		return false
 	}
 	s.logf("task %s: did not start (%s); its tab %s is kept until %s for the supervisor", t.TodoID, code, r.Pane, until.Format(time.RFC3339))
-	s.taskNotice(ctx, todo, t.Machine, "failed", "", reason)
+	s.taskStartFailed(ctx, todo, t.Machine, r, reason)
 	return true
 }
 
-// remedyOf is the plan task of todo id whose start is being remedied, with its plan and index.
+// remedyOf is the plan task of todo id whose start is being remedied, with its plan and index: the plan that binds it
+// now (currentPlanAssignment), also for a to-do a plan took over through todo_id, which has no plan id of its own (#8770).
 func (s *Service) remedyOf(ctx context.Context, id string) (Todo, *TaskPlan, int, error) {
 	todo, ok := s.todoNow(id)
 	if !ok {
 		return Todo{}, nil, 0, db.ErrTodoNotFound
 	}
-	if todo.PlanID == "" {
-		return todo, nil, 0, errTaskNotInPlan
-	}
-	p, err := s.loadPlan(ctx, todo.PlanID)
+	p, i, err := s.currentPlanAssignment(ctx, todo)
 	if err != nil {
 		return todo, nil, 0, err
 	}
-	for i, pt := range p.Tasks {
-		if pt.TodoID == id {
-			return todo, p, i, nil
-		}
-	}
-	return todo, nil, 0, errTaskNotInPlan
+	return todo, p, i, nil
 }
 
-// remedyTool is the task a remedy tool names, checked: the main conversation's own, and its start being remedied.
-func (s *Service) remedyTool(ctx context.Context, self, id string) (Todo, *TaskPlan, int, *StartRemedy, error) {
-	if !s.isMain(ctx, self) {
-		return Todo{}, nil, 0, nil, errors.New("only the main conversation remedies a task's start")
+// startRemedyAllowed gives main the override and uses the task's recorded owner for other conversations (#17273).
+// Archive and former-main checks also deny old side conversations while a handover is pending.
+func (s *Service) startRemedyAllowed(ctx context.Context, self string, todo Todo) bool {
+	if s.isMain(ctx, self) {
+		return true
 	}
+	if self == "" || supervisorOf(todo) != self || s.isBackground(ctx, self) {
+		return false
+	}
+	_, _, agent := parseLeaderRef(self)
+	return !agent && (s.isLeader(ctx, self) || !isFormerMain(s.settings(ctx), self) && !s.isArchived(self))
+}
+
+// remedyForTool checks the current supervisor after looking up the plan, which can overlap a handover.
+func (s *Service) remedyForTool(ctx context.Context, self, id string) (Todo, *TaskPlan, int, error) {
 	todo, p, i, err := s.remedyOf(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return todo, nil, 0, err
+	}
+	current, ok := s.todoNow(todo.ID)
+	if !ok {
+		return Todo{}, nil, 0, db.ErrTodoNotFound
+	}
+	if s.startRemedyAllowed(ctx, self, current) {
+		return current, p, i, nil
+	}
+	if supervisor := supervisorOf(current); s.startRemedyAllowed(ctx, supervisor, current) && !s.isMain(ctx, supervisor) {
+		return current, nil, 0, errors.New("only the main conversation or the task's current supervising conversation can act on this failed start. Ask either conversation to do it")
+	}
+	return current, nil, 0, errors.New("only the main conversation can act on this failed start. Ask the main conversation to do it")
+}
+
+// remedyTool also checks that the task is in the state for kept-tab tools.
+func (s *Service) remedyTool(ctx context.Context, self, id string) (Todo, *TaskPlan, int, *StartRemedy, error) {
+	todo, p, i, err := s.remedyForTool(ctx, self, id)
 	if err != nil {
 		return todo, nil, 0, nil, err
 	}
@@ -223,12 +269,15 @@ func (s *Service) toolTaskStartKeys(ctx context.Context, self string, args json.
 }
 
 // toolTaskRetry is task_retry: task todo_id's agent started again, with why: in the tab it did not start in while
-// its computer keeps it, else in a new one (a start that failed for good is reopened first). At most
-// startRemedyRetries times per task. The start runs on; how it ends comes as a supervision message.
+// its computer keeps it, else in a new one (a start that failed for good is reopened first). With launcher (and
+// model), on that launcher of the same computer instead (retryOn, #10365), in a new tab. At most startRemedyRetries
+// times per task. The start runs on; how it ends comes as a supervision message.
 func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		TodoID string `json:"todo_id"`
-		Reason string `json:"reason"`
+		TodoID   string `json:"todo_id"`
+		Reason   string `json:"reason"`
+		Launcher string `json:"launcher"`
+		Model    string `json:"model"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -237,14 +286,14 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 	if err != nil {
 		return "", err
 	}
-	if !s.isMain(ctx, self) {
-		return "", errors.New("only the main conversation retries a task's start")
-	}
-	todo, p, i, err := s.remedyOf(ctx, strings.TrimSpace(a.TodoID))
+	todo, p, i, err := s.remedyForTool(ctx, self, a.TodoID)
 	if err != nil {
 		return "", err
 	}
 	pt := p.Tasks[i]
+	if pt.RequestGate != "" || s.planRequestGate(pt) != "" {
+		return "", i18n.Err("assistant-tasks.request_new_plan")
+	}
 	pt.Permission = strings.TrimSpace(pt.Permission)
 	attempt := 1
 	if pt.Start != nil {
@@ -253,56 +302,137 @@ func (s *Service) toolTaskRetry(ctx context.Context, self string, args json.RawM
 	if attempt > startRemedyRetries {
 		return "", fmt.Errorf("already started again %d times: tell the user why it does not start and what to check", startRemedyRetries)
 	}
+	with := retryWith{launcher: strings.TrimSpace(a.Launcher), model: strings.TrimSpace(a.Model)}
+	from := s.ranLauncher(ctx, pt) // what the failed start ran, which a tier or a policy may have chosen
+	step := startRemedyBody{Action: "retry", By: "assistant", Attempt: attempt, Reason: reason}
 	switch {
 	case pt.Start != nil && pt.Start.State == remedying:
-	case todo.DoneAt != nil && todo.StartError != "": // failed for good: reopened, in a new tab
+		if pt.Queue != nil {
+			return "", fmt.Errorf("it is already queued to start (%s): wait for that attempt to finish or fail before retrying", cmp.Or(pt.Queue.Key, "admission"))
+		}
+		if pt.Machine == "" {
+			if with.launcher == "" && with.model != "" {
+				return "", i18n.Err("assistant-tasks.retry_model_without_launcher")
+			}
+			if err := checkModelID(with.model); err != nil {
+				return "", err
+			}
+			q := s.pendingPlacementQueueEntry(ctx, p.ID, 1, 0, s.placementNow())
+			q.Retry = true
+			var savedPlacement *placement
+			if err := s.patchPlanTask(ctx, p.ID, i, func(t *PlanTask) {
+				if with.launcher != "" {
+					t.Launcher, t.Model, t.Tier = with.launcher, with.model, ""
+					t.LauncherDefaultModel = with.model == ""
+				}
+				t.Queue = &q
+				t.Placement = nil
+				t.Placement = queuedPlacement(*t, &q)
+				savedPlacement = t.Placement
+				if t.Start != nil {
+					t.Start.Attempt, t.Start.By, t.Start.At = attempt, "assistant", time.Now().UTC()
+				}
+				t.WorkspaceError = nil
+				t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", nil, nil
+			}); err != nil {
+				return "", err
+			}
+			if savedPlacement != nil {
+				s.savePlacement(ctx, savedPlacement)
+			}
+			on := ""
+			if with.launcher != "" && with.launcher != from {
+				step.LauncherFrom, step.LauncherTo = from, with.launcher
+				on = " with launcher " + with.launcher
+			}
+			s.remedyStep(ctx, p.Conversation, todo.ID, step)
+			s.logf("task %s: retrying its start via placement queue (plan %s)", todo.ID, p.ID)
+			s.onPendingPlacementEnqueued(ctx, p.ID, todo.ID, 1)
+			return fmt.Sprintf("starting again in a new tab%s (retry %d of %d); how it ends comes as a supervision message", on, attempt, startRemedyRetries), nil
+		}
+	case todo.failedStart(): // failed for good: reopened, in a new tab
 		// Marked first: the start retryTask runs reads its task as the plan has it, and tells the supervisor how it ends.
 		prev := pt.Start
-		if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
-			pt.Start = &StartRemedy{State: remedying, Attempt: attempt, By: "assistant", Reason: todo.StartError, At: time.Now().UTC()}
-		}); err != nil {
+		mark := &StartRemedy{State: remedying, Attempt: attempt, By: "assistant", Reason: todo.StartError, At: time.Now().UTC()}
+		if err := s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) { pt.Start = mark }); err != nil {
 			return "", err
 		}
-		if _, err := s.retryTask(ctx, todo.ID); err != nil {
-			_ = s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) { pt.Start = prev })
+		// Nothing started (another start is on its way, the owner's Retry say, or it started since): the mark goes
+		// again, while it is still this call's, so no remedy is left waiting for a start that is not this one, and
+		// nothing says it moved launcher.
+		_, started, err := s.retryTaskStart(ctx, todo.ID, with)
+		if err != nil || !started {
+			_ = s.patchPlanTask(ctx, p.ID, i, func(pt *PlanTask) {
+				if r := pt.Start; r != nil && r.State == mark.State && r.Attempt == mark.Attempt && r.At.Equal(mark.At) {
+					pt.Start = prev
+				}
+			})
+			if err == nil {
+				err = errors.New("it is starting again already, or it started since: nothing was started (nor moved to another launcher); how that start ends comes as a supervision message")
+			}
 			return "", err
 		}
-		s.remedyStep(ctx, p.Conversation, todo.ID, startRemedyBody{Action: "retry", By: "assistant", Attempt: attempt, Reason: reason})
-		return fmt.Sprintf("starting again in a new tab (retry %d of %d); how it ends comes as a supervision message", attempt, startRemedyRetries), nil
+		on := ""
+		if with.launcher != "" && with.launcher != from {
+			step.LauncherFrom, step.LauncherTo = from, with.launcher
+			on = " with launcher " + with.launcher
+		}
+		s.remedyStep(ctx, p.Conversation, todo.ID, step)
+		return fmt.Sprintf("starting again in a new tab%s (retry %d of %d); how it ends comes as a supervision message", on, attempt, startRemedyRetries), nil
 	default:
 		return "", fmt.Errorf("task %s did not fail to start", todo.ID)
 	}
-	s.tasks.mu.Lock()
-	busy := s.tasks.retrying[todo.ID]
-	s.tasks.retrying[todo.ID] = true
-	s.tasks.mu.Unlock()
-	if busy {
+	if with.launcher != "" {
+		m, ok := s.machineByName(ctx, pt.Machine)
+		if !ok {
+			return "", i18n.Err("assistant-tasks.no_machine", i18n.Args{"machine": strconv.Quote(pt.Machine)})
+		}
+		if err := s.retryOn(ctx, &pt, m, with); err != nil {
+			return "", err
+		}
+	} else {
+		pt.RetryFromAgent, pt.RetryFromAllowAll = "", false
+		if m, ok := s.machineByName(ctx, pt.Machine); ok {
+			s.rememberRetryFrom(ctx, &pt, m, from)
+		}
+	}
+	st, claimed := s.claimTaskStart(todo.ID)
+	if !claimed {
 		return "", errors.New("it is starting again already")
 	}
+	moved := pt.Launcher != p.Tasks[i].Launcher || pt.Model != p.Tasks[i].Model || pt.Tier != p.Tasks[i].Tier // retryOn pinned another launch or cleared its tier
+	switched := pt.Launcher != p.Tasks[i].Launcher && pt.Launcher != from                                     // not the launcher that failed
 	inPane := ""
-	if time.Now().Before(pt.Start.Until) {
-		inPane = pt.Start.Pane
+	if time.Now().Before(pt.Start.Until) && !switched && pt.Model == p.Tasks[i].Model {
+		inPane = pt.Start.Pane // another launcher starts in a new tab: an agent of the old one may hold the kept tab
 	}
 	if err := s.patchPlanTask(ctx, p.ID, i, func(t *PlanTask) {
+		if moved {
+			t.Launcher, t.Model, t.Tier, t.Effort, t.Permission, t.Why = pt.Launcher, pt.Model, pt.Tier, pt.Effort, pt.Permission, pt.Why
+		}
+		if with.launcher != "" {
+			t.LauncherDefaultModel = pt.LauncherDefaultModel
+		}
+		t.RetryFromAgent, t.RetryFromAllowAll = pt.RetryFromAgent, pt.RetryFromAllowAll
 		t.Start.Attempt, t.Start.By, t.Start.At = attempt, "assistant", time.Now().UTC()
-		t.Error, t.ErrorCode, t.ErrorArgs = "", "", nil
+		t.Error, t.ErrorCode, t.ErrorArgs, t.RetryWith = "", "", nil, nil
 	}); err != nil {
-		s.tasks.mu.Lock()
-		delete(s.tasks.retrying, todo.ID)
-		s.tasks.mu.Unlock()
+		s.endTaskStart(todo.ID, st, proto.Session{})
 		return "", err
 	}
-	s.remedyStep(ctx, p.Conversation, todo.ID, startRemedyBody{Action: "retry", By: "assistant", Attempt: attempt, Reason: reason})
+	if switched {
+		step.LauncherFrom, step.LauncherTo = from, pt.Launcher
+	}
+	s.remedyStep(ctx, p.Conversation, todo.ID, step)
 	pt.Start.Attempt, pt.Start.By = attempt, "assistant"
 	pt.inPane = inPane
-	s.startPlanTaskAsync(p.ID, p.Conversation, i, pt, true, func() {
-		s.tasks.mu.Lock()
-		delete(s.tasks.retrying, todo.ID)
-		s.tasks.mu.Unlock()
-	})
+	s.startPlanTaskAsync(p.ID, p.Conversation, i, pt, true, func() { s.endTaskStart(todo.ID, st, proto.Session{}) })
 	where := "a new tab"
 	if inPane != "" {
 		where = "the same tab"
+	}
+	if step.LauncherTo != "" {
+		where += " with launcher " + step.LauncherTo
 	}
 	return fmt.Sprintf("starting again in %s (retry %d of %d); how it ends comes as a supervision message", where, attempt, startRemedyRetries), nil
 }
@@ -342,10 +472,7 @@ func (s *Service) giveUpStart(ctx context.Context, id, by string, told bool) {
 	if pt.Start == nil || pt.Start.State != remedying {
 		return
 	}
-	s.tasks.mu.Lock()
-	busy := s.tasks.retrying[id]
-	s.tasks.mu.Unlock()
-	if busy {
+	if s.taskStartOnWay(id) || pt.Queue != nil {
 		return
 	}
 	reason := cmp.Or(pt.Start.Reason, pt.Error)
@@ -375,27 +502,31 @@ func (s *Service) giveUpStart(ctx context.Context, id, by string, told bool) {
 	}
 }
 
-// failedStartNotice tells the user in conversation that task t did not start, and why, and pushes it: what the hub
-// says itself when the supervision turn that saw the failure did not (#2570).
+// failedStartNotice tells the user in conversation that task t did not start, and why, and pushes it when no
+// conversation supervises t: what the hub says itself when the supervision turn that saw the failure did not (#2570).
 func (s *Service) failedStartNotice(ctx context.Context, conversation string, t Todo, machine, reason string) {
 	text := i18n.T(s.lang(ctx), "assistant-tasks.start_remedy_notice", i18n.Args{"title": t.Title, "reason": reason})
 	if _, err := s.appendFeed(ctx, conversation, feedNotice, "", noticeBody{Text: text}); err != nil {
 		s.logf("task %s: notice: %v", t.ID, err)
 	}
+	if t.Supervision != nil && t.Supervision.Supervisor != "" {
+		return // its supervisor gave up on the start (or had no remedy left): the owner hears only what it passes up
+	}
 	s.notifyTaskFailed(ctx, t, machine, reason)
 }
 
 // remedyWatch fails for good the starts being remedied whose tab is no longer kept and that are not starting again:
-// on the supervisor's tick, so a hub restarted meanwhile catches up.
-func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time) {
-	if t.PlanID == "" || len(t.Agents) > 0 || t.DoneAt != nil {
+// on the supervisor's tick, so a hub restarted meanwhile catches up. history is the sweep's one read of the plans
+// (planHistoryOnce): it only picks the starts to give up, and giveUpStart reads the one it gives up again.
+func (s *Service) remedyWatch(ctx context.Context, t Todo, now time.Time, history func(context.Context) ([]*TaskPlan, error)) {
+	if len(t.Agents) > 0 || t.DoneAt != nil {
 		return
 	}
-	_, p, i, err := s.remedyOf(ctx, t.ID)
+	p, i, err := s.currentPlanAssignmentIn(ctx, t, history)
 	if err != nil {
 		return
 	}
-	if r := p.Tasks[i].Start; r != nil && r.State == remedying && !r.Until.IsZero() && now.After(r.Until) {
+	if r := p.Tasks[i].Start; r != nil && r.State == remedying && p.Tasks[i].Queue == nil && !r.Until.IsZero() && now.After(r.Until) {
 		s.giveUpStart(ctx, t.ID, "hub", false)
 	}
 }
@@ -438,21 +569,26 @@ func (s *Service) remedyGoesTo(to string, list []superviseSignal) {
 // remedyTurnEnded: conversation id's turn ended. A supervision turn that carried a failed start (remedySeen, by its
 // hold, in the conversation the message was for) ends what it left: a start still being remedied and not starting
 // again fails for good; a failure the turn did not tell the user about gets the hub's notice.
-func (s *Service) remedyTurnEnded(ctx context.Context, id string) {
+func (s *Service) remedyTurnEnded(ctx context.Context, id string) supervisionEnd {
+	end := s.endSupervisionTurn(ctx, id, time.Now(), false)
+	s.remedyFinishedStarts(ctx, end)
+	return end
+}
+
+func (s *Service) remedyFinishedStarts(ctx context.Context, end supervisionEnd) {
+	if end.hold.At.IsZero() {
+		return
+	}
 	b := &s.supervise
 	b.mu.Lock()
-	held, ok := b.hold[id]
-	told := b.visible[id]
 	var due []string
-	if ok {
-		for todo, seen := range b.failSeen {
-			if seen.to != "" && seen.to != id {
-				continue // another conversation's message carried it
-			}
-			if !held.Before(seen.at) {
-				due = append(due, todo)
-				delete(b.failSeen, todo)
-			}
+	for todo, seen := range b.failSeen {
+		if seen.to != "" && seen.to != end.key {
+			continue // another conversation's message carried it
+		}
+		if !end.hold.At.Before(seen.at) {
+			due = append(due, todo)
+			delete(b.failSeen, todo)
 		}
 	}
 	b.mu.Unlock()
@@ -462,10 +598,10 @@ func (s *Service) remedyTurnEnded(ctx context.Context, id string) {
 			continue
 		}
 		if t.DoneAt == nil {
-			s.giveUpStart(ctx, todo, "assistant", told)
+			s.giveUpStart(ctx, todo, "assistant", end.hold.Visible)
 			continue
 		}
-		if t.StartError != "" && !told && !t.Cancelled() {
+		if t.StartError != "" && !end.hold.Visible && !t.Cancelled() {
 			s.failedStartNotice(ctx, t.Origin, t, "", t.StartError)
 		}
 	}
@@ -481,6 +617,12 @@ func (s *Service) remedyEntry(ctx context.Context, t Todo, e *prompts.SuperviseE
 		return
 	}
 	pt := p.Tasks[i]
+	e.RetryWith = pt.RetryWith
+	if pt.ErrorCode == proto.CodeAgentStartStalled {
+		// What the agent's screen showed when it stopped (a dialog the computer does not know, every choice of it), as
+		// its rows: the failure's reason is one clipped line. Also for a start that failed for good, whose tab is gone.
+		e.Screen = strings.TrimRight(pt.ErrorArgs["screen"], "\n")
+	}
 	r := pt.Start
 	if r == nil || r.State != remedying || !time.Now().Before(r.Until) {
 		return

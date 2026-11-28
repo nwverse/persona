@@ -26,7 +26,7 @@ type memoryBoardStore struct {
 }
 
 func newMemoryBoardStore() *memoryBoardStore {
-	return &memoryBoardStore{state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
+	return &memoryBoardStore{Store: &memStore{}, state: workspaceboard.Default(), snapshots: map[string]db.WorkspaceSnapshotRow{}}
 }
 func (s *memoryBoardStore) WorkspaceBoard(context.Context) (workspaceboard.State, error) {
 	s.mu.Lock()
@@ -76,6 +76,8 @@ type boardDevs struct {
 type boardDev struct {
 	id       string
 	online   bool
+	home     string
+	homeReal string
 	sessions []proto.Session
 	fn       func(ctx context.Context, method string, raw json.RawMessage) (any, error)
 }
@@ -109,7 +111,7 @@ func (d *boardDevs) List() []devices.Summary {
 	out := []devices.Summary{}
 	for _, id := range d.order {
 		if m := d.machines[id]; m != nil {
-			out = append(out, devices.Summary{ID: id, Name: id, Online: m.online})
+			out = append(out, devices.Summary{ID: id, Name: id, Online: m.online, Home: m.home, HomeReal: m.homeReal})
 		}
 	}
 	return out
@@ -120,7 +122,12 @@ func (d *boardDevs) Summary(id string) (devices.Summary, bool) {
 func (d *boardDevs) MachineResources(string) (*proto.Machine, *proto.MetricSample, *bool) {
 	return nil, nil, nil
 }
+func (d *boardDevs) ConnectedAt(string) time.Time { return time.Time{} }
 
+func (d *boardDevs) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	list, ok := d.Sessions(id)
+	return append(dst, list...), ok
+}
 func (d *boardDevs) Sessions(id string) ([]proto.Session, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -229,9 +236,6 @@ func directoryNode(_ context.Context, method string, raw json.RawMessage) (any, 
 		return nil, errors.New("unexpected operation: " + method)
 	}
 }
-
-// roleAnswer is an answer-only device (a watch): it may read the board, not change it.
-const roleAnswer = "answer"
 
 func TestWorkspaceBoardMetadataNeverExecutesSession(t *testing.T) {
 	store := newMemoryBoardStore()
@@ -635,5 +639,132 @@ func TestWorkspaceBoardSettingsBodyLimit(t *testing.T) {
 	w := boardCall(s, "PUT", "/api/v1/workspace-board/settings", body, roleFull)
 	if w.Code != 413 || !strings.Contains(w.Body.String(), proto.CodeTooLarge) {
 		t.Fatalf("oversized settings body: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestPaseoWorkspacePinsSurviveSnapshotsAndClearOnRefresh(t *testing.T) {
+	store := newMemoryBoardStore()
+	d := newBoardDevs()
+	pin := "2026-11-16T13:00:00Z"
+	d.add("laptop", func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method != "workspaces.list" {
+			return nil, errors.New("unexpected workspace mutation")
+		}
+		return proto.WorkspacesResponse{Workspaces: []proto.Workspace{
+			{ID: "pinned", Source: "paseo", SourceID: "pinned", ProjectID: "project", Cwd: "/w/app", PinnedAt: pin, Available: true},
+			{ID: "sibling", Source: "paseo", SourceID: "sibling", ProjectID: "project", Cwd: "/w/app", Available: true},
+		}}, nil
+	})
+	s, _ := newBoardService(t, store, d)
+	read := func(service *Service) []proto.Workspace {
+		t.Helper()
+		w := boardCall(service, "GET", "/api/v1/workspaces", "", roleFull)
+		var result proto.WorkspacesResponse
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &result) != nil || len(result.Workspaces) != 2 {
+			t.Fatalf("workspace catalog: %d %s", w.Code, w.Body)
+		}
+		return result.Workspaces
+	}
+	assertPin := func(rows []proto.Workspace, expected string) {
+		t.Helper()
+		for _, w := range rows {
+			want := ""
+			if w.SourceID == "pinned" {
+				want = expected
+			}
+			if w.PinnedAt != want || w.MachineID != "laptop" || w.Source != "paseo" {
+				t.Fatalf("native pin lost or assigned to its sibling: %+v", w)
+			}
+		}
+	}
+	assertPin(read(s), pin)
+	d.setOnline("laptop", false)
+	restarted, _ := newBoardService(t, store, d)
+	assertPin(read(restarted), pin)
+	pin = ""
+	d.setOnline("laptop", true)
+	assertPin(read(restarted), "")
+	d.setOnline("laptop", false)
+	assertPin(read(restarted), "")
+}
+
+func TestWorkspacesHiddenByDirectoryFlagPreservesBoardCardsAndAvoidsStaleSnapshots(t *testing.T) {
+	store := newMemoryBoardStore()
+	d := newBoardDevs()
+	dev := d.add("laptop", func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+		switch method {
+		case "workspaces.list":
+			return proto.WorkspacesResponse{Workspaces: []proto.Workspace{
+				{ID: "hidden-hide", Source: "codex_app", SourceID: "p-hide", Title: "Hidden", Cwd: "/work/secret/app", Available: true},
+				{ID: "hidden-home", Source: "claude_desktop", SourceID: "p-home", Title: "HomeSecret", Cwd: "/data/home/u/.private/proj", Available: true},
+				{ID: "hidden-block", Source: "herdr", SourceID: "w-block", Title: "Blocked", Cwd: "/work/blocked/job", Available: true},
+				{ID: "visible", Source: "herdr", SourceID: "w-visible", Title: "Visible", Cwd: "/work/visible", Available: true},
+				{ID: "disabled", Source: "herdr", SourceID: "w-disabled", Title: "Disabled", Cwd: "/work/disabled", Available: true},
+				{ID: "spoofed", Source: "herdr", SourceID: "w-spoofed", Title: "Spoofed", Cwd: "/work/open", Available: true, HiddenByDirectory: true},
+			}}, nil
+		case "workspace.resolve":
+			return proto.Workspace{ID: "/work/secret/app", Source: "directory", SourceID: "/work/secret/app", Title: "Hidden", Cwd: "/work/secret/app", Available: true}, nil
+		case "fs.stat":
+			return map[string]any{"stats": []map[string]string{{"path": "/work/secret/app", "kind": "dir"}}}, nil
+		default:
+			return nil, errors.New("unexpected method: " + method)
+		}
+	})
+	dev.home, dev.homeReal = "/home/u", "/data/home/u"
+	s, _ := newBoardService(t, store, d)
+	dirs := &memAgentDirs{rules: map[string][]proto.HiddenAgentDir{}}
+	s.agentDirs = dirs
+	dirs.set(t, "laptop",
+		proto.HiddenAgentDir{Pattern: "/work/secret", Enabled: true, Action: proto.AgentDirHide},
+		proto.HiddenAgentDir{Pattern: "~/.private", Enabled: true, Action: proto.AgentDirHide},
+		proto.HiddenAgentDir{Pattern: "/work/blocked/*", Enabled: true, Action: proto.AgentDirBlock},
+		proto.HiddenAgentDir{Pattern: "/work/disabled", Enabled: false, Action: proto.AgentDirHide},
+	)
+	// Explicit Workspace Board card bound to a hidden folder still binds and reports availability.
+	st := boardState(t, boardCall(s, "POST", "/api/v1/workspace-board", `{"revision":0,"action":"add_card","machine_id":"laptop","cwd":"/work/secret/app","column_id":"todo"}`, roleFull))
+	if len(st.Cards) != 1 || st.Cards[0].Cwd != "/work/secret/app" {
+		t.Fatalf("board card binding broke: %+v", st)
+	}
+	readFlags := func() map[string]proto.Workspace {
+		t.Helper()
+		w := boardCall(s, "GET", "/api/v1/workspaces", "", roleFull)
+		if w.Code != 200 {
+			t.Fatalf("HTTP %d: %s", w.Code, w.Body)
+		}
+		var resp proto.WorkspacesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		bySourceID := map[string]proto.Workspace{}
+		for _, item := range resp.Workspaces {
+			bySourceID[item.SourceID] = item
+		}
+		return bySourceID
+	}
+	got := readFlags()
+	if !got["p-hide"].HiddenByDirectory || !got["p-hide"].Available {
+		t.Fatalf("hide rule should tag workspace without dropping board availability: %+v", got["p-hide"])
+	}
+	if !got["p-home"].HiddenByDirectory {
+		t.Fatalf("~ rule through symlinked homeReal should tag workspace: %+v", got["p-home"])
+	}
+	if !got["w-block"].HiddenByDirectory {
+		t.Fatalf("block rule should also tag workspace: %+v", got["w-block"])
+	}
+	for _, id := range []string{"w-visible", "w-disabled", "w-spoofed"} {
+		if got[id].HiddenByDirectory {
+			t.Fatalf("%s must not be marked hidden: %+v", id, got[id])
+		}
+	}
+	// Stored snapshots must not bake in hidden_by_directory.
+	if strings.Contains(string(store.snapshots["laptop"].Data), `"hidden_by_directory":true`) {
+		t.Fatalf("snapshot persisted hidden_by_directory: %s", store.snapshots["laptop"].Data)
+	}
+	// Turning the rule off clears the flag immediately, even while the machine is offline.
+	d.setOnline("laptop", false)
+	dirs.set(t, "laptop", proto.HiddenAgentDir{Pattern: "/work/secret", Enabled: false, Action: proto.AgentDirHide})
+	got = readFlags()
+	if got["p-hide"].HiddenByDirectory || got["p-home"].HiddenByDirectory || got["w-block"].HiddenByDirectory {
+		t.Fatalf("disabling/removing rules left stale hidden flags while offline: %+v", got)
 	}
 }

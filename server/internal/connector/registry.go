@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -30,12 +32,17 @@ type Registry struct {
 	// from the ledger (SetUserRules), which can change while it runs and come after them.
 	rules []Rule
 	user  []Rule
-	off   map[string]bool // switched off by the user (SetEnabled)
+	// autoConfirm are the hub-side guarded conditional auto-confirm policies (manager.json connector_auto_confirm).
+	autoConfirm []AutoConfirmPolicy
+	off         map[string]bool // switched off by the user (SetEnabled)
 	// feedsOff are the feeds the user turned off, by connector (SetFeed).
 	feedsOff map[string]map[Feed]bool
 	// run is what Start was given, to start a connector switched on later; stop cancels a running one's Run / Watch.
 	run  *starter
 	stop map[string]context.CancelFunc
+	// lifecycle orders whole-registry starts and stops. workers includes a removed connector until it returns.
+	lifecycle sync.Mutex
+	workers   sync.WaitGroup
 	// sent is told of every gated write that went out (SetSent).
 	sent func(ctx context.Context, s Sent)
 }
@@ -88,26 +95,55 @@ func (r *Registry) gateRules() []Rule {
 	return slices.Concat(r.rules, r.user)
 }
 
+// SetAutoConfirmPolicies sets the hub-side guarded conditional auto-confirm policies (manager.json
+// connector_auto_confirm). Policies are validated before replacing; an invalid list leaves existing policies untouched
+// (fail closed). nil or empty disables guarded auto-confirm for all connectors.
+func (r *Registry) SetAutoConfirmPolicies(policies []AutoConfirmPolicy) error {
+	if err := ValidateAutoConfirmPolicies(policies); err != nil {
+		return err
+	}
+	cloned := cloneAutoConfirmPolicies(policies)
+	r.mu.Lock()
+	r.autoConfirm = cloned
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Registry) autoConfirmPolicies() []AutoConfirmPolicy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.autoConfirm
+}
+
 // switchedOff are the connectors switched off, by instance: StatusOf answers StateDisabled for them, so every pipe
 // that goes by the status (tools, the inbox, the archive) leaves them alone without knowing about the switch.
 var switchedOff sync.Map
+
+// comparableConnector reports whether c can safely be used as a map key or compared with == without panicking.
+// reflect.Value.Comparable inspects dynamic interface fields as well as static types.
+func comparableConnector(c Connector) bool {
+	return c != nil && reflect.ValueOf(c).Comparable()
+}
 
 // SetEnabled switches a connector on or off. Off, it does not run (its Run and Watch are cancelled), offers no tools
 // and brings nothing into the inbox or the knowledge base, and its status is StateDisabled; on, it starts again.
 // Signing in and out (Login) still work while it is off. The hub keeps the choice (it calls this before Start).
 func (r *Registry) SetEnabled(id string, on bool) error {
-	c := r.Get(id)
+	r.mu.Lock()
+	c := r.currentLocked(id)
 	if c == nil {
+		r.mu.Unlock()
 		return fmt.Errorf("no connector %q", id)
 	}
-	if !reflect.TypeOf(c).Comparable() {
+	if !comparableConnector(c) {
+		r.mu.Unlock()
 		return fmt.Errorf("connector %q cannot be switched off (not comparable)", id)
 	}
-	r.mu.Lock()
 	var cancel context.CancelFunc
 	if on {
 		delete(r.off, id)
 		switchedOff.Delete(c)
+		r.startOneLocked(c)
 	} else {
 		r.off[id] = true
 		switchedOff.Store(c, true)
@@ -118,9 +154,6 @@ func (r *Registry) SetEnabled(id string, on bool) error {
 	if cancel != nil {
 		cancel()
 	}
-	if on {
-		r.startOne(c)
-	}
 	return nil
 }
 
@@ -128,7 +161,15 @@ func (r *Registry) SetEnabled(id string, on bool) error {
 func (r *Registry) StartOff(id string) {
 	r.mu.Lock()
 	r.off[id] = true
+	if c := r.currentLocked(id); comparableConnector(c) {
+		switchedOff.Store(c, true)
+	}
+	cancel := r.stop[id]
+	delete(r.stop, id)
 	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // Enabled says whether a connector is switched on (every one is, until SetEnabled says otherwise).
@@ -152,19 +193,20 @@ var feedCaps = map[Feed]Capability{FeedArchive: CapArchive, FeedInbox: CapInbox}
 
 // SetFeed turns one of a connector's feeds on or off. The hub keeps the choice (it calls this before Start).
 func (r *Registry) SetFeed(id string, f Feed, on bool) error {
-	c := r.Get(id)
+	cp, ok := feedCaps[f]
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	c := r.currentLocked(id)
 	if c == nil {
 		return fmt.Errorf("no connector %q", id)
 	}
-	cp, ok := feedCaps[f]
 	if !ok {
 		return fmt.Errorf("no feed %q", f)
 	}
-	if !c.Manifest().Has(cp) && !(f == FeedInbox && c.Manifest().InboxSwitch) {
+	m := c.Manifest()
+	if !m.Has(cp) && !(f == FeedInbox && m.InboxSwitch) {
 		return fmt.Errorf("%s has no %s", c.Name(), cp)
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	if on {
 		delete(r.feedsOff[id], f)
 	} else {
@@ -183,6 +225,16 @@ func (r *Registry) Feeds(id string, f Feed) bool {
 	return !r.feedsOff[id][f]
 }
 
+// currentLocked is the connector currently registered under id, or nil. Callers hold r.mu.
+func (r *Registry) currentLocked(id string) Connector {
+	for _, c := range r.list {
+		if c.ID() == id {
+			return c
+		}
+	}
+	return nil
+}
+
 // Add registers a connector; its ID must be new and look like one, its manifest pass Check.
 func (r *Registry) Add(c Connector) error {
 	id := c.ID()
@@ -193,13 +245,16 @@ func (r *Registry) Add(c Connector) error {
 		return err
 	}
 	r.mu.Lock()
-	if slices.ContainsFunc(r.list, func(o Connector) bool { return o.ID() == id }) {
+	if r.currentLocked(id) != nil {
 		r.mu.Unlock()
 		return fmt.Errorf("connector %q is registered twice", id)
 	}
 	r.list = append(r.list, c)
+	if r.off[id] && comparableConnector(c) {
+		switchedOff.Store(c, true)
+	}
+	r.startOneLocked(c) // added after Start (a plugin installed or switched on): it runs at once, unless switched off
 	r.mu.Unlock()
-	r.startOne(c) // added after Start (a plugin installed or switched on): it runs at once, unless switched off
 	return nil
 }
 
@@ -214,12 +269,12 @@ func (r *Registry) Remove(id string) {
 	}
 	c := r.list[i]
 	r.list = slices.Delete(r.list, i, i+1)
+	if comparableConnector(c) {
+		switchedOff.Delete(c)
+	}
 	cancel := r.stop[id]
 	delete(r.stop, id)
 	r.mu.Unlock()
-	if reflect.TypeOf(c).Comparable() {
-		switchedOff.Delete(c)
-	}
 	if cancel != nil {
 		cancel()
 	}
@@ -282,6 +337,21 @@ func (r *Registry) Offers(name string) bool {
 	return c != nil && slices.Contains(ToolNames(c), name)
 }
 
+// ReadOnly says whether name is one of its connector's declared ReadTools. Actions are never read-only, including
+// actions added after a caller's policy was written.
+func (r *Registry) ReadOnly(name string) bool {
+	c := r.Owner(name)
+	t, ok := As[ReadTools](c)
+	return ok && has(t.Tools(), name)
+}
+
+// InboxVisibilityPreflight says whether the tool's provider positively declares the manager's source-visibility
+// enforcement. Absence is not evidence of enforcement: the assistant's fallback must fail closed for unverifiable reads.
+func (r *Registry) InboxVisibilityPreflight(name string) bool {
+	c := r.Owner(name)
+	return c != nil && c.Manifest().Has(CapInboxVisibility)
+}
+
 // ForAgents says whether the tool name is a connector's that the coding agents get too (Manifest.AgentTools).
 func (r *Registry) ForAgents(name string) bool {
 	c := r.Owner(name)
@@ -290,7 +360,7 @@ func (r *Registry) ForAgents(name string) bool {
 
 // StatusOf is a connector's status: StateDisabled when the user switched it off; one without a status is always ok.
 func StatusOf(ctx context.Context, c Connector) Status {
-	if c != nil && reflect.TypeOf(c).Comparable() {
+	if comparableConnector(c) {
 		if _, off := switchedOff.Load(c); off {
 			return Status{State: StateDisabled}
 		}
@@ -318,6 +388,8 @@ func (r *Registry) ToolsFor(ctx context.Context, agents bool) []proto.Tool {
 		m := c.Manifest()
 		for _, t := range owned(c, allTools(c)) {
 			if m.ForAgents(t.Name) == agents && m.Listed(t.Name) {
+				localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, string(i18n.From(ctx)))
+				t.Description, t.InputSchema = localized.Description, localized.InputSchema
 				out = append(out, t)
 			}
 		}
@@ -366,6 +438,13 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 		return proto.ErrorResult(kind, fmt.Sprintf("%s is not available: %s", c.Name(), why), 0)
 	}
 	if t, ok := As[ReadTools](c); ok && has(t.Tools(), name) {
+		if it, ok := t.(ImageTools); ok { // its answer may carry pictures for the model (#8484)
+			a, err := it.CallImages(ctx, name, args)
+			if err != nil {
+				return result(a.Text, err)
+			}
+			return ToolResult(a)
+		}
 		return result(t.Call(ctx, name, args))
 	}
 	a, ok := As[Actions](c)
@@ -373,14 +452,24 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 		return proto.TextResult("unknown tool "+name, true)
 	}
 	var through LetThrough
+	var approval *AutoConfirmApproval
 	if gated {
-		res, how := gate(ctx, r.gateRules(), c, a, name, args, ask)
+		res, how, appr := gate(ctx, r.gateRules(), r.autoConfirmPolicies(), c, a, name, args, ask)
 		if res != nil {
 			return *res
 		}
-		through = how
+		through, approval = how, appr
 	}
-	done, err := Write(ctx, a, name, args)
+	var done DoResult
+	var err error
+	if approval != nil {
+		if !approval.ExpiresAt.After(autoConfirmNow()) {
+			return proto.TextResult("guarded auto-confirm credential expired before execution", true)
+		}
+		done, err = WriteWithApproval(ctx, a, name, args, *approval)
+	} else {
+		done, err = Write(ctx, a, name, args)
+	}
 	if gated && err == nil {
 		r.mu.RLock()
 		sent := r.sent

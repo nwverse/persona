@@ -19,8 +19,8 @@ func TestTaskDoneSourceSurvivesTranscriptParsing(t *testing.T) {
 			todo := startedTask(t, s, f)
 			ctx := context.Background()
 			s.superviseTodo(ctx, todo.ID, "conv1", []string{"Login test passes"}, 0)
-			s.taskWorking(ctx, "box", "s1")
-			text := prompts.RenderSideConversation(prompts.SideConversation{From: "peer-agent", Text: "Did you handle a separate parser problem?"})
+			s.taskWorking(ctx, "box", "s1", startRow{})
+			text := prompts.RenderSideConversation("Did you handle a separate parser problem?")
 			if !wrapped {
 				text = "<persona-context>Source: another conversation.</persona-context>\n<persona-side-conversation />\nDid you handle a separate parser problem?"
 			}
@@ -47,7 +47,7 @@ func TestTaskDonePreservesTurnSourceBeforeClipping(t *testing.T) {
 	ask := strings.Repeat("a", 1200) + `<persona-context kind="side-conversation">Another task's question</persona-context>` + strings.Repeat("b", 1200)
 	f.setItems(proto.Item{Kind: proto.KindText, Role: "user", From: "peer-agent", Text: ask},
 		proto.Item{Kind: proto.KindText, Role: "assistant", Text: "Another session was informed; the task was not handled here."})
-	replies, blocked := s.taskReplies(context.Background(), todo)
+	replies, blocked, _ := s.taskReplies(context.Background(), todo)
 	if !blocked || len(replies) != 1 || replies[0].From != "peer-agent" || replies[0].Source != "peer" {
 		t.Fatalf("source lost: blocked=%v replies=%+v", blocked, replies)
 	}
@@ -67,6 +67,7 @@ func TestTaskDoneSourceAllowsBackgroundWorkButKeepsQueuedPeer(t *testing.T) {
 		{items: []proto.Item{{Kind: proto.KindNotice, Role: "system", Injected: &proto.Injected{Kind: proto.InjectedSystem, State: "supervise"}}}, wantBlocked: true},
 		{items: []proto.Item{{Kind: proto.KindText, Role: "user", Injected: &proto.Injected{Kind: proto.InjectedSystem, State: "inbox"}}}, wantBlocked: true},
 		{items: []proto.Item{{Kind: proto.KindText, Role: "user", Injected: &proto.Injected{Kind: proto.InjectedFollowup, State: "wake"}}}},
+		{items: []proto.Item{{Kind: proto.KindText, Role: "user", Text: prompts.RenderLimitFallbackContinue("English")}}},
 		{items: []proto.Item{{Kind: proto.KindText, Role: "user", Injected: &proto.Injected{Kind: proto.InjectedFollowup, State: "limit_continue"}}, {Kind: proto.KindText, Role: "user", From: "peer-agent", Queued: true}}, wantBlocked: true},
 		{items: []proto.Item{{Kind: proto.KindText, Role: "user", Text: "Continue the login fix"}, {Kind: proto.KindText, Role: "user", From: "peer-agent", Text: "Unrelated question", Queued: true}}, wantBlocked: true},
 		{items: []proto.Item{{Kind: proto.KindNotice, Role: "system", Task: &proto.TaskNote{}}, {Kind: proto.KindText, Role: "user", From: "peer-agent", Text: "Unrelated question", Queued: true}}, wantBlocked: true},
@@ -138,13 +139,84 @@ func TestDoneSignals(t *testing.T) {
 		{"发了 TestFlight，构建号 1234", false, true},
 		{"没有全改完", false, false},
 	} {
-		got := doneSignals([]prompts.TaskDoneReply{{Text: tc.text}})
+		reply := doneReply(tc.text)
+		reply.pr = "https://github.com/o/r/pull/12"
+		got := doneSignals([]taskDoneReply{reply})
 		if got.MergedPR != tc.pr || got.Build != tc.build {
 			t.Errorf("doneSignals(%q) = %+v", tc.text, got)
 		}
 	}
 	if s := clipMiddle(strings.Repeat("a", 10)+strings.Repeat("b", 10), 4); s != "aaaa\n…\nbbbb" {
 		t.Fatalf("clipMiddle = %q", s)
+	}
+}
+
+// A legacy task joins main supervision before its judgment is marked complete. If that ledger write fails, leaving the
+// turn unjudged lets the same completed work retry and reach review after the store recovers instead of stranding it.
+func TestLegacyDoneRetriesSupervisionAttachAfterStoreRecovery(t *testing.T) {
+	st := &ledgerDown{DB: todoTestDB(t)}
+	st.down.Store(true)
+	s, _ := newQuietServiceOn(t, st)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Legacy delivery", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := time.Now().UTC()
+	if _, again := s.takeTurn(ctx, todo, turnRow(proto.StatusDone, 1, "delivered"), nil,
+		turnClose{Key: "legacy-turn"}, true, work, turnDone); again {
+		t.Fatal("the terminated test turn was already taken")
+	}
+	check := taskDoneCheck{Verdict: verdictDone, Reason: "delivered"}
+	s.applyTaskDone(ctx, todo, work, true, check, nil)
+	if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Judged != nil {
+		t.Fatalf("the turn was marked judged without its supervision ledger: %+v, %v", e, ok)
+	}
+	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision != nil {
+		t.Fatalf("the failed attach changed the legacy task: %+v", cur)
+	}
+
+	st.down.Store(false)
+	s.applyTaskDone(ctx, todo, work, true, check, nil)
+	cur := todoNow(s, todo.ID)
+	if cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.Supervisor != "conv1" || cur.Supervision.State != reviewPending {
+		t.Fatalf("the recovered attach did not reach main review: %+v", cur)
+	}
+	if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Judged == nil {
+		t.Fatalf("the successful retry did not record its judgment: %+v, %v", e, ok)
+	}
+}
+
+func TestLegacyDoneWaitsForMainBeforeJudgment(t *testing.T) {
+	s, _ := newQuietService(t)
+	ctx := context.Background()
+	todo, err := s.createTodo(ctx, "Legacy delivery before main", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := time.Now().UTC()
+	if _, again := s.takeTurn(ctx, todo, turnRow(proto.StatusDone, 1, "delivered"), nil,
+		turnClose{Key: "legacy-turn-before-main"}, true, work, turnDone); again {
+		t.Fatal("the terminated test turn was already taken")
+	}
+	setSettings(t, s, func(v *Settings) { v.Main = "" })
+	check := taskDoneCheck{Verdict: verdictDone, Reason: "delivered"}
+	s.applyTaskDone(ctx, todo, work, true, check, nil)
+	if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Judged != nil {
+		t.Fatalf("the turn was marked judged without a main reviewer: %+v, %v", e, ok)
+	}
+	if cur := todoNow(s, todo.ID); cur.DoneAt != nil || cur.Supervision != nil {
+		t.Fatalf("the missing main changed the legacy task: %+v", cur)
+	}
+
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	s.applyTaskDone(ctx, todo, work, true, check, nil)
+	cur := todoNow(s, todo.ID)
+	if cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.Supervisor != "conv1" || cur.Supervision.State != reviewPending {
+		t.Fatalf("the configured main did not receive the legacy review: %+v", cur)
+	}
+	if e, ok := s.turnOf(ctx, todo.ID); !ok || e.Judged == nil {
+		t.Fatalf("the main-supervised retry did not record its judgment: %+v, %v", e, ok)
 	}
 }
 

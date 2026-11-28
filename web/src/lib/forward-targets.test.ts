@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FORWARD_MEMORY_LIMIT, forgetForwards, forwardSessions, forwardTargets, PERSONA_TARGET, rememberForward, sessionTarget } from "./forward-memory";
-import { forwardSections, takesForward, targetDetail } from "./forward-targets";
+import { forwardSections, takesForward, targetDetail, targetTitle } from "./forward-targets";
 import type { Session } from "./types";
 
 // Forward to's lists (#3899, iOS ForwardTests' targets): the same sessions give the same lists as on iOS.
@@ -70,6 +70,13 @@ describe("Forward to's lists", () => {
     expect(targetDetail(all[4])).toBe("Persona");
     expect(takesForward(all[0], "macbook/here", true, () => true)).toBe(false);
   });
+
+  it("name a Windows computer's folder by its own separator (#9901)", () => {
+    const win = session("pc", "w", 10, { title: "", cwd: "C:\\Users\\me\\code\\app" });
+    expect(targetDetail(win, "Work PC")).toBe("Claude · app · Work PC");
+    expect(targetTitle(win, (s) => s.title)).toBe("app");
+    expect(targetDetail(session("pc", "u", 10, { cwd: "\\\\server\\share\\notes\\" }))).toBe("Claude · notes");
+  });
 });
 
 class MemoryStorage {
@@ -100,5 +107,32 @@ describe("the recent targets", () => {
     expect(forwardTargets(store)).toEqual(["persona", "session:m/a"]);
     store.setItem("forward.recentTargets", "{not json");
     expect(forwardTargets(store)).toEqual([]);
+  });
+
+  it("does not throw when storage operations or localStorage access are blocked", () => {
+    const blocked = {
+      getItem() { throw new DOMException("blocked", "SecurityError"); },
+      setItem() { throw new DOMException("blocked", "SecurityError"); },
+      removeItem() { throw new DOMException("blocked", "SecurityError"); },
+    } as unknown as Storage;
+    expect(forwardTargets(blocked)).toEqual([]);
+    expect(forwardSessions(blocked)).toEqual([]);
+    expect(() => rememberForward(PERSONA_TARGET, blocked)).not.toThrow();
+    expect(() => forgetForwards(blocked)).not.toThrow();
+
+    const prevDesc = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() { throw new DOMException("Storage disabled", "SecurityError"); },
+    });
+    try {
+      expect(forwardTargets()).toEqual([]);
+      expect(forwardSessions()).toEqual([]);
+      expect(() => rememberForward(PERSONA_TARGET)).not.toThrow();
+      expect(() => forgetForwards()).not.toThrow();
+    } finally {
+      if (prevDesc) Object.defineProperty(globalThis, "localStorage", prevDesc);
+      else delete (globalThis as Record<string, unknown>).localStorage;
+    }
   });
 });

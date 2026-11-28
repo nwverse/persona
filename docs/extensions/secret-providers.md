@@ -2,7 +2,7 @@
 
 An extension can supply the values of secret **references** such as `op://vault/item/field`, so a secret Persona needs comes from the user's password manager when it is used instead of being pasted into Settings. The first provider is the 1Password extension in the public extensions repository. Design and decisions: #3962.
 
-This page describes what is built so far: the extension point, the manager's calls to the provider, the record of each use, and references in an extension's secrets. Launcher and model provider keys and the phone-approved hand-off of a value to one Agent run follow in their own steps of #3962.
+This page describes the extension point, the manager's calls to the provider, the record of each use, references in extension and model-provider settings, and the phone-approved hand-off of a value to one Agent run.
 
 ## The contribution
 
@@ -22,8 +22,8 @@ Namespace `secrets.`, types in `schema/extension/protocol.schema.json`. Only the
 
 | Method | Parameters → answer | Notes |
 | --- | --- | --- |
-| `secrets.describe` | `{contribution, reference}` → `{title, detail?}` | Words for people (the item and field, its vault), never a value. The manager keeps each on one line, its words joined by single spaces, and cuts a longer one with "…": the title at 200 characters, the detail at 40 (what fits after the item in a card's line on a phone; `secretDetailMost`), whatever the provider sent. Kept by the manager for 10 minutes per reference, so settings pages and cards do not ask each time. |
-| `secrets.resolve` | `{contribution, reference, purpose}` → `{value}` | `purpose` is `{kind, id, machine?, session?}`: `extension` (an extension's secret; `id` its id), `launcher` (a launcher's or model provider's key; `id` its name, `machine` where it goes) or `agent_run` (handed to one Agent run after the user approved it; `id` the variable, `machine` and `session` the Agent's). The value is 1 byte to 16 KB. |
+| `secrets.describe` | `{contribution, reference}` → `{title, detail?}` | Words for people (the item and field, its vault), never a value. The manager keeps each on one line, its words joined by single spaces, and cuts a longer one with "…": the title at 200 characters, the detail at 40 (what fits after the item in a card's line on a phone; `secretDetailMost`), whatever the provider sent. Kept by the manager per reference with no end, in memory and sealed in its database (setting `secrets.described`, `[{provider, at, stale?, words_sealed}]`, the reference and its words sealed together and re-sealed by the key rotation; at most 500, the oldest go), so settings pages, cards and a restart of the manager never ask again (a provider such as 1Password's op on a computer would have the user authorize it each time its authorization lapsed). An error is not kept: the next describe asks again. Dropped when the provider is removed, switched off or no longer claims the scheme; an upgrade, a restart or a new configuration keeps them; a secret the provider stores marks them stale (asked again at the next describe, answered from what was kept while it cannot). |
+| `secrets.resolve` | `{contribution, reference, purpose, quiet?}` → `{value}` | `quiet` (optional, #17636): the manager still holds an earlier value it uses if this fails, so the provider must not ask the user (no authorization prompt) and answers `not_signed_in` at once when it cannot answer without them. `purpose` is `{kind, id, machine?, session?}`: `extension` (an extension's secret; `id` its id), `launcher` (a launcher's or model provider's key; `id` its name, `machine` where it goes) or `agent_run` (handed to one Agent run after the user approved it; `id` the variable, `machine` and `session` the Agent's). The value is 1 byte to 16 KB. |
 | `secrets.used` (event) | `{contribution, reference, purpose, at, approved_by}` | Sent after each successful resolution, so the provider can keep the usage record its own page shows. `approved_by`: `settings` (a reference saved in Settings), `rule` (an Always rule) or the approving device's id. Never a value. |
 
 Errors a provider answers with a code: `not_found`, `not_signed_in`, `rate_limited` (with `data.retry_after` in seconds) and `refused` (its words are shown). Anything else is a failure with its words. An older provider that does not know the method (`unknown_method`, `no_contribution`) is a failure that says so.
@@ -44,18 +44,21 @@ Code: `server/internal/extension/secret_refs.go`, `server/internal/extmgr/secret
 - **Saving**: `PUT /api/v1/extensions/{id}/-/secrets/{name}` with `{"reference": "op://…"}` instead of `{"value": …}` (both at once: 400). Never guessed from a value's prefix: a value that starts with `op://` is a value. Refused (400 `invalid_secret`): text that is not a reference, a scheme no enabled extension supplies, and the extension's own scheme (a provider cannot supply its own secrets).
 - **Stored** in the same sealed `plugin_secrets` row a value would be, behind an internal marker no typed value can carry (a NUL), so no table changes and a secret's history stays one row. The audit's `secret_set` says `reference` (the reference only, as always never a value).
 - **Approval**: saving it is the owner's standing approval to hand this extension that secret's value whenever it starts, with no card per use. It ends when the reference is deleted or replaced, or the provider is switched off or removed.
-- **Resolved** each time the manager hands the extension its secrets: just before `initialize` (or into `PERSONA_EXTENSION_SECRETS` for a program without the protocol), for its programs on computers (the names `node.secrets` sends), and for a settings check, which checks the value the reference stands for. The extension gets the value as if it had been typed in; nothing changes for it. A reference that does not resolve fails the whole hand-over: the program does not start with a secret missing or a reference in its place, and its error says why in the provider's words.
+- **Resolved** the first time the manager hands the extension its secrets, and **kept** from then on like a launcher key (below, the same setting `secrets.launcher_kept` with `extension` in place of `launcher`): a later start (a restart of the manager or of the extension, an upgrade, a new setting) is handed the kept value and asks the provider nothing, so it never has the user authorize it again. It goes when the extension is removed, when its secret no longer is that reference (dropped at its next start), and as a launcher key's does (the provider removed or switched off, `not_found`, `refused`). Resolved just before `initialize` (or into `PERSONA_EXTENSION_SECRETS` for a program without the protocol), for its programs on computers (the names `node.secrets` sends), and for a settings check, which checks the value the reference stands for. The extension gets the value as if it had been typed in; nothing changes for it. A reference that does not resolve fails the whole hand-over: the program does not start with a secret missing or a reference in its place, and its error says why in the provider's words.
 - **Its provider off**: the extension is `needs_setup` ("Secret “Key”: no extension that is on supplies op:// references"). Switching a provider on, off, upgrading or removing it applies again every extension that holds one of its references (not a dependency: the provider can still be switched off without a cascade).
 - **Details**: the secret answers `set: true`, no `hint`, and `reference: {provider, provider_name, reference, title}`, where `title` is what `secrets.describe` says the reference names (waited for at most 2 seconds; the reference itself otherwise). The apps show **From 1Password: op://…** with the title under it. A provider's details answer `secret_users: [{kind: "extension", extension, extension_name, secret, secret_title, reference}]`: every installed extension's secret that holds one of its references, so the user sees what each standing approval covers.
+- **Entry-list secrets** (#9504): a saved entry's reserved `_id` is the flat secret name in these same routes and sealed rows. Value and reference writes follow the same rules, and provider “used by” rows add a nonempty `entry_title`: the live entry's display title, or its localized numbered fallback when every text field is empty. Web includes that title in both the label and a wrapping hint so large text does not hide which standing approval it is. Opted-in details add `list` and `entry_title` to the secret view. Removing the entry, or changing its configured network target, deletes the value or reference and its standing approval atomically with configuration; an orphaned dynamic row is never resolved or delivered. These secrets stay in their entry editor rather than appearing again as fixed secrets, and cannot be named by `node.secrets`.
 
 ## Launcher keys
 
 Code: `server/internal/assistant/launcher_secrets.go`, `server/internal/extmgr/secret_kept.go`. Feature `launcher_secret_references` in hello.
 
-- **Saving**: a Persona-managed model provider's key (`api_key_reference`) and a computer's own key for it (`machine_key_references: {"<machine id>": "<reference>" or ""}`) on `POST` / `PUT /api/v1/launchers` ([launchers.md](../integrations/launchers.md) "API"). A key and a reference for the same key at once: 400. Refused (400) like an extension secret's: text that is not a reference, and a scheme no enabled extension supplies; the reference must also resolve now, so a typo fails the save with the provider's words. A key given later replaces it.
-- **Stored** sealed in the same field a key would be (`key_sealed`), behind the same marker, so no setting changes shape. Saving it is the owner's standing approval to use the value for that provider; it ends when the key is replaced or the provider is deleted, switched off or removed.
+- **Saving**: a Persona-managed model provider's key (`api_key_reference`) and a computer's own key for it (`machine_key_references: {"<machine id>": "<reference>" or ""}`) on `POST` / `PUT /api/v1/launchers` ([launchers.md](../integrations/launchers.md) "API"). A key and a reference for the same key at once: 400. Refused (400) like an extension secret's: text that is not a reference, and a scheme no enabled extension supplies; a reference new to that key must also resolve now, so a typo fails the save with the provider's words (one the key already is answers from what is kept, below). A key given later replaces it.
+- **Stored** sealed in the same field a key would be (`key_sealed`), behind the same marker, so no setting changes shape. Saving it is the owner's standing approval to use the value for that provider; it ends when the key is replaced or the provider is deleted, or the secret provider extension is switched off or removed.
 - **Resolved** in the manager wherever the key goes out, with purpose `{kind: "launcher", id: <provider name>, machine?}`: a computer's `launchers.pull` (for that computer, its own key when it has one) and the manager's own calls (main chat and other API purposes, quota, the connection test). A pull whose key does not resolve is refused with `launcher_key_unresolved` and the provider's words in the user's language, so the start says why. A node from before the catalog (`launchers.managed`) is not sent such a provider: it would be handed the value at every connection, used or not.
-- **Kept** for 10 minutes in the manager's memory (never on disk), per reference, model provider (its launcher name) and computer, so a busy model provider does not ask the secret provider extension at each pull. The extension that gave the value is noted beside it, only to drop it when that extension goes. Dropped when that model provider is saved or deleted, when the secret provider extension is switched off, upgraded or removed, and when any resolution of the reference fails. A use answered from what was kept is not another audit row.
+- **Kept** once resolved, with no end, per reference, model provider (its launcher name) and computer: in the manager's memory and sealed in its database (setting `secrets.launcher_kept`, `[{launcher, machine?, provider, at, stale?, value_sealed}]`; the reference and the value are sealed together with the manager's `secret.key`, AES-GCM like every sealed key, and the key rotation re-seals it: `db.SealedSettings`). Every later use (a pull, the main chat, the quota, model listing, the connection test, a scope check) is answered from it, so a restart of the manager or a deployment, a secret provider that is locked or not signed in, restarting, offline or rate limited asks nobody and shows no prompt on the desktop. The value is never in a log, an error, an event or an audit row; a use answered from what was kept is not another audit row. Launcher keys and extensions' secrets (above, `extension` in place of `launcher`); an Agent's hand-off resolves after each card and is never kept or written (below).
+- **Revoked** (dropped from memory and the database at once) only by what says the value is no longer the owner's to use: the model provider is deleted, or a key of it is changed to another reference, to a plain key or removed (kept per computer: changing only one computer's key drops only that one's); the secret provider extension is removed or switched off, or its manifest no longer claims the reference's scheme; a resolution of the reference answers `not_found` or `refused` (or no enabled extension claims its scheme: `no_provider`). Not by a failure that may pass: `not_signed_in`, `provider_off`, `rate_limited`, a timeout or another `failed` leave it as it is. Not by an edit of anything else of the model provider (its scope and `scope_machines`, model, proxy, display name, the same reference sent back): that save neither drops it nor asks the provider. Not by an upgrade, a rollback, a new configuration or a restart of the secret provider extension that still claims the scheme, nor by a restart of the manager or the computers. When the extension stores a secret (`secrets.store`), its kept values are marked stale: the next use asks it quietly (`quiet: true`: it must not ask the user), takes the new value, and keeps answering with the old one while it cannot be asked.
+- **Refresh** after a secret is rotated in the provider: `POST /api/v1/launchers/{name}/refresh-key` (full credentials only) asks the provider again for each of the provider's keys that is a reference (its own first, then each computer's own), whatever is kept. All answered: `{launcher, refreshed: [{machine?}]}`, the new values kept (for every computer's use of each reference) and the computers told to pull again; never a value in the answer. The first that is not answers `code: "launcher_key_unresolved"` with the provider's words, `secret_code` (the provider's code), `machine` (for a computer's own key) and `kept`: `409` with `kept: false` for `not_found` / `refused` (what was kept of the reference is dropped), `503` with `kept: true` for a failure that may pass (what was kept still answers). A provider with no key that is a reference: 400; no such provider: 404. Saving a new reference is the other way to replace a value: it is checked against the provider then.
 - **Details**: a provider's view answers `key_reference` and `machine_key_references: {"<machine id>": …}` (`{provider, provider_name, reference, title}`, as for an extension secret) and never the key; `has_key` and `key_machines` stay as they were. A provider extension's `secret_users` lists them as `{kind: "launcher", launcher, launcher_name, machine?, reference}` next to the extensions' secrets (`kind: "extension"`).
 
 ## The hand-off to one Agent run
@@ -153,9 +156,9 @@ an existing chat, a page's selection used as context or for an AI edit, another 
 decisions. Only a workspace mention the manager resolves is theirs: at the start of the message, every `kind` it names is
 `workspace` and its computer and folder are known, so the manager writes the block anew and the app's words in it never reach
 the model. What Siri, Shortcuts
-or another App Intent ("Ask Persona", which runs on a locked phone too), the iPhone's share sheet or a card's button (the Today
+or another App Intent ("Ask Persona", which runs on a locked phone too), the iPhone's or Android's share sheet or a card's button (the Today
 card's Prep, with a calendar event's title in it) sends is marked `via` and never counts either; a notification's reply, which
-needs the phone unlocked, does. Android does not mark its share sheet yet, so what it shares counts as typed. A line counts only when it holds those words (the node ties an id to a line by its first words), and the
+needs the phone unlocked, does. A line counts only when it holds those words (the node ties an id to a line by its first words), and the
 transcript's window must open with the turn's prompt. An id counts once: for the first line it is read on, never for another
 line that carries it; a send the hub did not vouch for that carries it, or a second vouched send of it with other words, voids
 it. A `client_msg_id` alone proves nothing (channels, the inbox, extensions and Persona's own sends carry one too, and the hub
@@ -222,15 +225,80 @@ holds every answer to it before it reaches the manager:
   settings that hold its references) and **Always for Agents** (its rules, each removed after a confirm).
 - **iPhone** (`apple/Persona/Views/Interactions/SecretHandoffForm.swift`, `apple/Persona/Views/Settings/ExtensionsViews.swift`):
   the same card, extension secrets and provider page, an Always rule removed after a confirm.
-- **Model provider keys**, in both apps (`web/src/views/settings/ProviderFields.tsx` `KeyField`,
-  `apple/Persona/Views/Settings/ProviderKeyField.swift`): where the hub has
+- **Model provider keys**, in every app (`web/src/views/settings/ProviderFields.tsx` `KeyField`,
+  `apple/Persona/Views/Settings/ProviderKeyField.swift`, Android `feature/settings/ProviderKeyField.kt`): where the hub has
   `launcher_secret_references`, a provider's key, a preset's key and each computer's own key offer **Use a reference**; a
   stored reference opens with it on and says **From <provider>** with its item, as the provider's page does. A reference
   is never sent to the connection test or the model list, which would hand its value to the address in the request: while
   one is typed, both wait for the save (a stored one is probed by the provider's name, as a stored key is), and a preset's
   key given as a reference skips its key test and is checked when it is saved.
+- **Android** (`feature/chat/SecretHandoffSummary.kt`, `feature/settings/ExtensionsScreen.kt`): the same full hand-off card
+  in a conversation and the Agents request sheet, with no approval action on its notification or ongoing status. Any
+  unreadable variable invalidates the whole approval instead of being hidden while the remaining variables stay
+  approvable. The two settings gates also require an enabled, compatible extension whose `secret_providers`
+  contribution is enabled, checked for the assistant whose page is open; a stopped provider still counts, while
+  unreadable provider metadata fails closed. A saved reference stays readable when that gate later closes. Editors are
+  locked during the fresh save-time capability check so a newer draft cannot be mistaken for the request that was sent. Provider details list **Used by** and **Always for Agents**, with rule removal behind a confirmation.
+  `ShareQueue` marks new and existing-chat sends `via: "share"`, and the Today-card message uses `via: "card"`; both the
+  first conversation creation and its session-message POST carry the mark through the durable outbox and retries. Ordinary
+  typed messages and notification replies carry none. Android currently has no direct voice-assistant, App Action or
+  shortcut caller that submits text without opening the composer; such a caller must use `via: "intent"`, while merely
+  opening the composer leaves the eventual typed message unmarked.
 
-## What comes next (#3962)
 
-Android's part is #3986, which lists the interfaces it needs; until then an Android phone shows the card as the hub sends
-it and cannot approve it.
+## Phone-approved storage
+
+`personad tool secret_store --from-file <private-manifest.json>` creates an item or updates fields through the configured
+resident 1Password node. The manifest and each field file must be private regular files (0600, no symlinks). A manifest
+can instead be supplied on stdin with `--from-file -`, or as a JSON argument containing **paths only**. Values are UTF-8
+text, 1–16384 bytes per field, up to 16 fields. The caller deletes all source files after the command returns; Persona
+never deletes a user's files automatically.
+
+```json
+{"operation":"create","vault":"Dev","title":"New credential","category":"API_CREDENTIAL",
+ "fields":[{"name":"credential","type":"CONCEALED","file":"/private/path/credential"}]}
+```
+
+For an update, use `operation: "edit"`, the vault and item IDs, and the fields; omit category and title. Field types are
+`STRING`, `CONCEALED` (default in the file manifest) or `OTP` (one-time password: accepts a raw base32 secret, wrapped
+into an `otpauth://totp/...` URI, or an `otpauth://` URI, and stores it as a native 1Password one-time password field).
+On `edit`, a field may also set `"delete": true` (without `type` or `file`) to remove an existing field, or omit `file`
+with an explicit `type` (such as `"OTP"`) to convert an existing field's type in place inside the resident node without
+exporting its value. Creation categories are `LOGIN`, `PASSWORD`, `SECURE_NOTE`, `API_CREDENTIAL`, `SERVER` and
+`DATABASE`. On `LOGIN` items, `username` and `password` write to 1Password's built-in `USERNAME`/`PASSWORD` fields
+instead of creating duplicate custom fields. Sectioned/ambiguous fields and items with passkeys or attachments are
+refused; passkey-free `LOGIN` items may be edited. No automatic retry follows an uncertain write result: inspect
+metadata before asking for a new approval.
+
+The manager-only `secrets.store` protocol has three phases (types `SecretStore*` in the protocol schema):
+
+1. `describe`: canonical vault/item IDs and public labels, no values; edits require a stable item ID.
+2. A manager `secret_handoff` card with `store_operation` names create/edit, vault, item, every field, Agent and source
+   machine. It uses the existing explicit phone/web approval gate, without Always rules. No value or source path is in it.
+3. `prepare`: after the approving device is vouched for, the resident provider node generates a one-use P-256 key,
+   bound to the exact target, fields and source machine/session, valid for at most two minutes. The manager also
+   bounds that exact approval to two minutes. Expired records are rejected immediately and removed on subsequent
+   preparation/commit attempts; memory cleanup is lazy. Neither survives restart; both pending maps are bounded.
+4. The CLI reads field files **after approval**, seals a JSON array of `{name,value}` (value is base64 bytes) with HPKE
+   DHKEM(P-256, HKDF-SHA256), HKDF-SHA256, AES-256-GCM and info `persona secret store v1\0<key_id>`, then sends `commit`.
+   Only the resident node has the private key. Hub, manager and hub extension carry ciphertext only.
+5. Commit consumes both records, checks actor/target/field equality, decrypts in the resident node, and writes a JSON
+   template to `op item create`/`op item edit` on stdin. No value enters argv or a Persona-created disk file. Existing
+   item JSON stays inside that node. Answers contain only `{references:{field:"op://vault-id/item-id/field-id"}}` (plus
+   `deleted:[...]` when an edit removes fields).
+
+Source calls require a process identity the resident node can verify (currently macOS/Linux); otherwise they fail
+closed. An attempted commit invalidates the provider's cached launcher values, including references spelled by names,
+so a changed credential is asked for again (quietly) at its next use.
+
+Raw provider/op error text is withheld on the write path. Audit rows (`secret_stored`, `secret_store_failed`) contain
+only target metadata, requesting machine/session and approving device, never ciphertext, plaintext, paths or templates.
+Owned byte buffers are cleared when possible; Go and JSON encoders can retain other memory copies until GC.
+
+Desktop authorization remains subject to 1Password's policy: **10 minutes idle, a hard 12-hour limit, and revocation
+when the App locks** (the App also locks itself after its own idle time). That is why a value, a reference's words and
+an extension's secret are kept sealed by the manager once given (above): an everyday use never runs op, so the user
+authorizes it only for something new (a first reference, a rotated secret, a refresh). The resident node refreshes an active foreground-authorized session with `op whoami` after five
+minutes without use, discards its output, stops after a failed refresh, and stops before its locally observed 12-hour
+window. A lock or a session authorized earlier than the node observed can still require authorization. Keepalive never
+changes lock settings or approves a prompt. See [1Password's authorization model](https://developer.1password.com/docs/cli/app-integration-security/).

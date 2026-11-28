@@ -39,7 +39,7 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 			}
 		}
 	}
-	out.AutoUpdateNodes = h.upd.nodesEnabled()
+	out.AutoUpdateNodes = h.upd.nodesEnabled() && h.upd.isConfirmed()
 	for _, mc := range h.cfgEntries() {
 		if h.entryOwner(mc.ID) != id {
 			continue
@@ -50,9 +50,28 @@ func (h *Hub) devicesConfigFor(id string) devicewire.Config {
 	}
 	if h.cfg != nil {
 		out.TailcatDERPMapURL = h.cfg.Tailcat.DERPMapURL
+		out.PrivateNetwork = h.cfg.Security.PrivateNetworkOnly
 		out.WebURL = h.webURL()
+		out.LinkSwitch = h.linkPairable() // and it answers devices.link_switch.* (link_switch.go)
 	}
 	out.NodePackagesURL, out.NodePackagesProxy = h.nodePackages()
+	if h.upd != nil {
+		target, hold := h.upd.confirmedDevelopment()
+		if h.managerCan(id, devicewire.PublishedPackagesCapability) {
+			out.PublishedTarget = h.upd.publishedBuild()
+		}
+		if target != nil && id != devicesOwner {
+			if h.managerCan(id, devicewire.DevelopmentPackagesCapability) {
+				out.DevelopmentTarget = target
+			} else {
+				hold = true
+			}
+		}
+		if hold {
+			out.DevelopmentHold = true
+			out.AutoUpdateNodes, out.HubVersion, out.NodePackagesURL = false, "", ""
+		}
+	}
 	if every, timeout, set := h.linkPingTimes(); set {
 		out.LinkPingMS, out.LinkPingTimeoutMS = int(every.Milliseconds()), int(timeout.Milliseconds())
 	}
@@ -200,13 +219,9 @@ func (h *Hub) queueDevicesConfig(checkNodes bool) {
 				d.sent[p.ID] = b
 				d.mu.Unlock()
 			}
-			if checkNodes && cfg.AutoUpdateNodes {
-				ctx, cancel := context.WithTimeout(context.Background(), updateRequestLimit)
-				if err := h.callBus(ctx, p.ID, devicewire.MethodUpdateNodes, map[string]any{}, nil); err != nil {
-					h.logf("update: [%s] checks its node packages: %v", p.ID, err)
-				}
-				cancel()
-			}
+		}
+		if checkNodes && h.upd.nodesEnabled() && h.upd.isConfirmed() {
+			h.updateNodes(context.Background())
 		}
 	})
 }
@@ -312,11 +327,14 @@ func (h *Hub) addedLive() []MachineConfig {
 	return out
 }
 
-func kindOf(c MachineConfig) string {
-	if c.Kind == "" {
+func kindOf(c MachineConfig) string { return kindName(c.Kind) }
+
+// kindName is an entry's kind as kindOf says it: "" is ssh.
+func kindName(kind string) string {
+	if kind == "" {
 		return "ssh"
 	}
-	return c.Kind
+	return kind
 }
 
 // withoutName is the entry but for its name, which the running hub takes as it is (machine_rename.go).

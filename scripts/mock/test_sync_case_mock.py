@@ -154,11 +154,14 @@ class Device:
 
 def transcript_view(truth):
     """Each turn's user message and its answer (the agent's last words in it), as the hub's state has them (the Go
-    self-check's truthMessages, without the device's own failed and pending sends)."""
+    self-check's truthMessages, without the device's own failed and pending sends). A notice that woke the idle agent
+    starts a turn as a message does: the turn before it keeps its answer (#9140)."""
     out, answer = [], -1
     for it in truth.lines:
         if it.get("role") == "user" and it.get("kind") == "text" and not it.get("injected") and not it.get("from"):
             out.append({"from": "user", "text": it["text"], "state": "shown"})
+            answer = -1
+        elif it.get("wake"):
             answer = -1
         elif it.get("role") == "assistant" and it.get("kind") == "text":
             if answer >= 0:
@@ -187,6 +190,19 @@ class MovedCaseTests(unittest.TestCase):
         hub = sync_case.CaseHub(sync_case.load("sends.json#send_tied_by_words_without_echo"), shift=86400)
         self.assertEqual(hub.truth.lines[0]["ts"], "2026-01-03T03:04:05Z")
         self.assertEqual(hub.rows()[0]["updated_at"], "2026-01-03T03:04:05Z")
+
+    def test_new_chat_append_uses_the_live_clock_in_reads_and_pushes(self):
+        case = sync_case.load("sends.json#start_answer_cut_then_receipt")
+        # Run its append and push after a simulator start that took three minutes.
+        case["steps"] = case["steps"][3:5]
+        hub = sync_case.CaseHub(case, shift=86400, live_time=lambda: 1767323100 + 86400 + 180)
+        frames = []
+        hub.devices["a"].socket = sync_case.Conn(frames.append, lambda: None)
+        hub.step()
+        _, read = hub.handle("a", "GET", hub.base + "/items", {}, {}, {})
+        hub.step()
+        self.assertEqual(read["items"][0]["ts"], "2026-01-03T03:08:00Z")
+        self.assertEqual(frames[0]["items"], read["items"])
 
 
 class SyncCaseMockTests(unittest.TestCase):

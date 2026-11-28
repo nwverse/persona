@@ -1,4 +1,28 @@
 import Foundation
+import PersonaWire
+
+/// Whether the text the hub stored for a mail's Inbox item is all of the newest mail (#15995): the hub keeps at most
+/// 3,000 characters and says on the item's own page whether it cut the text (`mail_body_truncated`). Anything but a
+/// boolean is `unknown`, never `whole`.
+nonisolated enum MailStoredClipping: Hashable, Sendable, Codable {
+    case clipped
+    case whole
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let value = try? decoder.singleValueContainer().decode(Bool.self)
+        self = value.map { $0 ? .clipped : .whole } ?? .unknown
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .clipped: try c.encode(true)
+        case .whole: try c.encode(false)
+        case .unknown: try c.encodeNil()
+        }
+    }
+}
 
 /// One "thing" in the unified inbox (docs/assistant/inbox.md): the new messages in a Feishu chat or a mail thread, with the
 /// hub's AI triage and whether it has been dealt with. Mirrors hub/inbox.go `InboxItem`.
@@ -13,12 +37,16 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var `where`: String? = nil
     var sender: String?
     var avatar: String?
+    var avatarURL: String?
     var preview: String
     var count: Int
     var startedAt: Date?
     var updatedAt: Date?
     var tier: String?
     var summary: String?
+    /// An assistant row's text as Markdown, its line breaks kept (#9041): the detail draws it. Its `summary` and
+    /// `preview` are the same words without the marks; older hubs leave it out.
+    var body: String? = nil
     var reason: String?
     var read: Bool?
     /// Navigation counts only unread Needs you items; reading never files them.
@@ -36,6 +64,12 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     var moment: Moment?
     /// Only in GET /api/v1/inbox/{id}: the conversation as text.
     var context: String?
+    /// Only in GET /api/v1/inbox/{id}, for a mail (`mail_body_truncated`): whether the hub clipped the newest mail's
+    /// text when it stored `context`. Read it through `storedClipping`.
+    var mailBodyClipping: MailStoredClipping?
+    /// Whether the stored text of a mail is all of it: unknown when the hub does not say (an older hub, an item stored
+    /// before the hub recorded it, a mail whose text it never read, or the list's copy, which never carries it).
+    var storedClipping: MailStoredClipping { mailBodyClipping ?? .unknown }
     /// The AI twin's work on it: judged, handled by an agent, a reply drafted (docs/assistant/inbox.md).
     var agent: Agent?
     /// A thread of one of the hub's connectors (GitHub…): drawn the same for every source (docs/plans/plan-connectors.md).
@@ -161,10 +195,14 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         /// Where a reply goes and who sees it (「评论到 example-org/example-repo#12（仓库可见的人都能看到）」).
         var replyTo: String?
         var canReply: Bool?
+        /// The thread's picture as the hub's avatars route serves it (`ChatAvatar`, docs/protocol/protocol.md "Avatars"):
+        /// the other person of a private chat, a group's own. Apart from the item's `avatar` (Feishu's URL); nil draws the
+        /// initial (an older hub, a connector that sends none).
+        var avatarURL: String?
 
         enum CodingKeys: String, CodingKey {
             case thread, label, url
-            case openURL = "open_url", replyTo = "reply_to", canReply = "can_reply"
+            case openURL = "open_url", replyTo = "reply_to", canReply = "can_reply", avatarURL = "avatar_url"
         }
 
         /// The thread as people write it (example-org/example-repo#12), nil when it is only an id.
@@ -312,12 +350,18 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
 
     nonisolated struct Mail: Codable, Hashable, Sendable {
         var accountID: String
-        var mailbox: String
+        var mailbox: String?
         var uids: [UInt32]
         var messageID: String?
         var from: MailAddress?
         var direct: Bool?
         var thread: String?
+
+        /// INBOX is the implicit source on older hubs. Preserve every other folder's spelling and hierarchy.
+        var sourceMailbox: String? {
+            guard let mailbox, !mailbox.isEmpty, mailbox.lowercased() != "inbox" else { return nil }
+            return mailbox
+        }
 
         enum CodingKeys: String, CodingKey {
             case mailbox, uids, from, direct, thread
@@ -326,9 +370,11 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
+        case avatarURL = "avatar_url"
+        case id, source, kind, account, title, `where`, sender, avatar, preview, count, tier, summary, body, reason, read, lark, mail, doc, moment, context, agent, translations, connector, mutes, version, parent
         case status, urgent, recap, handling, suggestion, follow, now, chain, related, manager, handoffs
         case mergedFrom = "merged_from"
+        case mailBodyClipping = "mail_body_truncated"
         case accountName = "account_name", startedAt = "started_at", updatedAt = "updated_at", doneAt = "done_at", doneBy = "done_by"
         case chainCount = "chain_count"
         case folder, folderBy = "folder_by"
@@ -346,7 +392,7 @@ nonisolated struct InboxItem: Codable, Identifiable, Hashable, Sendable {
         var title: String {
             switch self {
             case .action: StateName.needsYou.text
-            case .working: String(localized: "Active")
+            case .working: String(localized: "In Progress")
             case .fyi: String(localized: "FYI")
             case .noise: String(localized: "Collapsed [Readiness Card ee6046]")
             }
@@ -459,10 +505,19 @@ nonisolated struct InboxTriageStatus: Codable, Hashable, Sendable {
     }
 }
 
+/// Core-computed retained source presence (#17399). It covers every retained open and completed item, not only this page.
+/// Absence or explicit null is unknown, never an empty archive, and keeps the previous source entries and wording.
+nonisolated struct InboxStoredSources: Decodable, Hashable, Sendable {
+    var lark: Bool
+    var mail: Bool
+}
+
 /// One answer of GET /api/v1/inbox (and of a refresh): the items, and how triage stands (nil from an older hub).
 nonisolated struct InboxListing: Decodable, Sendable {
     var items: [InboxItem]
     var triage: InboxTriageStatus?
+    /// Retained Lark/mail facts, including history outside the bounded list; nil from an old or mixed-version hub.
+    var storedSources: InboxStoredSources? = nil
     /// Asked with `since` (docs/protocol/protocol.md "Inbox delta", #4740): what names this list for the next one; nil
     /// from a hub without deltas.
     var cursor: String?
@@ -477,6 +532,11 @@ nonisolated struct InboxListing: Decodable, Sendable {
         var id: String
         var manager: String?
         var key: String { InboxItem.key(id: id, manager: manager) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case items, triage, cursor, delta, removed
+        case storedSources = "stored_sources"
     }
 
     /// `held` with this delta applied: changed items in place, new ones in, removed ones out, then in the hub's order

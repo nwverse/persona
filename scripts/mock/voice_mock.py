@@ -28,7 +28,14 @@ What it adds, under /api/v1/extensions and the old /api/v1/plugins alike:
                                                the script's steps, how many protocol 2 sockets closed, the script's
                                                pace, and the speak mode and length; ?unprompted=1 has every call going
                                                on hand over something nobody was heard asking for (#5904: run refused,
-                                               unprompted; resend, the app's Send Anyway, sends it)
+                                               unprompted; resend, the app's Send Anyway, sends it); the starts keep
+                                               `surface` ("call" for a system call, #9290), and `holds` the app's hold
+                                               frames, oldest first (true on, false off)
+  {"type":"hold","on":true|false}              #9290, feature `hold`: the call goes on hold and comes back. On answers
+                                               link paused at once, off link waking then link live, as the extension
+                                               does; a repeated value is kept in `holds` and answered by nothing. While
+                                               held the script's own pause and wake send no link frame (the call stays
+                                               paused till the off). A meeting call ignores it
 The model configuration's use plugin.voice comes from mock_hub.py's own MOCK_VOICE code.
 
 The script (seconds after ready): the user's words come in as captions (partial, then final) and the voice hands them
@@ -52,10 +59,11 @@ from datetime import datetime, timedelta, timezone
 EXTENSION = "voice"
 # MOCK_VOICE_PACE=0.1: the script ten times as fast (test_voice_mock.py); 1 for the app, at a pace a screen can follow.
 PACE = float(os.environ.get("MOCK_VOICE_PACE") or "1")
-# speech_gate (#5904): a run refused unprompted can be sent again (resend), and start takes speech_gate.
-FEATURES = ["target", "runs", "asks", "resume", "suspend", "speech_gate"]
+# speech_gate (#5904): a run refused unprompted can be sent again (resend), and start takes speech_gate. hold (#9290):
+# the app's hold frame pauses the upstream until its off.
+FEATURES = ["target", "runs", "asks", "resume", "suspend", "speech_gate", "hold"]
 LOG = {"starts": [], "texts": [], "interrupts": 0, "resends": [], "audio": 0, "audio_bytes": 0, "audio_sizes": {}, "audio_silent": 0, "steps": [], "closes": 0, "voices": 0,
-       "speaks": [], "talks_ignored": 0}
+       "speaks": [], "talks_ignored": 0, "holds": []}
 # voice_meeting_mock.py once install loaded it: the meeting calls (#3862 phase 4).
 MEETING = None
 # How POST …/speak answers (#5004): ok the tone, fail a 502 upstream_failed, slow the tone after SPEAK_SLOW seconds,
@@ -238,7 +246,7 @@ def tone(seconds):
 
 
 def speak(h, body):
-    """POST …/speak as the built-in extension answers it (server/internal/voice/speak.go): the text logged, then the
+    """POST …/speak as the built-in extension answers it (server/internal/modules/voice/speak.go): the text logged, then the
     voice as it comes (chunked, 100 ms at a time), or an error before any audio."""
     try:
         req = json.loads(body or b"{}")
@@ -398,8 +406,10 @@ class Call:
         self.ask = None
         # this call made the conversation work and its script has not reached done yet
         self.left_working = False
+        # the app put the call on hold (#9290): its upstream stays paused till the off
+        self.held = False
         LOG["starts"].append({k: start.get(k) for k in ("model", "voice", "protocol", "target", "recent", "history", "resume",
-                                                        "echo_cancellation", "speech_gate")})
+                                                        "echo_cancellation", "speech_gate", "surface")})
 
     # frames out
 
@@ -428,6 +438,18 @@ class Call:
 
     def link(self, state):
         self.say({"type": "link", "state": state})
+
+    def hold(self, on):
+        """The app's hold frame (#9290): paused at once on, waking then live off; a repeated value changes nothing."""
+        LOG["holds"].append(on)
+        if on == self.held:
+            return
+        self.held = on
+        if on:
+            self.link("paused")
+        else:
+            self.link("waking")
+            self.link("live")
 
     def speak(self, on):
         if on and not self.speaking:
@@ -523,10 +545,9 @@ class Call:
             self.run_frame(first, "working")
         elif name == "quiet":
             self.speak(False)
-        elif name == "paused":
-            self.link("paused")
-        elif name == "live":
-            self.link("live")
+        elif name in ("paused", "live"):
+            if not self.held:  # on hold it stays paused till the off (hold)
+                self.link(name)
         elif name == "ask":
             self.ask = self._card()
             self.run_frame(first, "needs_you")
@@ -589,6 +610,11 @@ class Call:
 
     def run(self):
         target = self.start.get("target") or {}
+        # Register before ready: a client may request ?unprompted=1 immediately
+        # after receiving it. Appending afterward left an empty-call window in
+        # which the request was acknowledged but no run was ever emitted.
+        with CALLS_LOCK:
+            CALLS.append(self)
         self.say({"type": "ready", "protocol": 2, "features": features(), "input_rate": 16000, "output_rate": 24000,
                   "model": self.start.get("model") or self.hub.VOICE_MODELS["default"], "voice": self.start.get("voice"),
                   "target": {"machine_id": target.get("machine_id"), "session_id": target.get("session_id"),
@@ -596,8 +622,6 @@ class Call:
                              "title": (self.session or {}).get("title", ""),
                              "agent_label": "" if self.label == "Persona" else "Claude Code", "machine_name": self.mid}})
         threading.Thread(target=self.script, args=(time.monotonic(),), daemon=True).start()
-        with CALLS_LOCK:
-            CALLS.append(self)
         r = self.h.rfile
         try:
             while True:
@@ -636,6 +660,8 @@ class Call:
                     self.resend(msg)
                 elif kind == "talk":  # a meeting call's frame (voice_meeting_mock.py): an ordinary call ignores it
                     LOG["talks_ignored"] += 1
+                elif kind == "hold":
+                    self.hold(msg.get("on") is True)
         except OSError:
             pass
         finally:

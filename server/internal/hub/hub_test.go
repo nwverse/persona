@@ -214,6 +214,7 @@ func TestPairURLRoundTrips(t *testing.T) {
 
 // The Mac has no camera to scan with: `personad hub pair` prints the link too, to paste into "Connect hub".
 func TestPairPrintsTheLinkForTheMac(t *testing.T) {
+	setPairLanguage(t, "en")
 	cfg := &Config{PublicURL: "http://hub.example.com:18660", Token: "tok"}
 	var b strings.Builder
 	writePair(&b, cfg)
@@ -241,14 +242,28 @@ func removeTestClient(h *Hub, c *client) {
 	delete(h.clients, c)
 }
 
+// addCfgMachines adds hub.json entries to a test hub whose managers are already connected. Until startDevices, which
+// most test hubs never call, entryOwner and cfgEntries read h.cfg.Machines under h.devices.mu from the hub's goroutines
+// (a manager's bus event, an HTTP handler), so the write takes the same lock (#8639).
+func addCfgMachines(h *Hub, machines ...MachineConfig) {
+	h.devices.mu.Lock()
+	defer h.devices.mu.Unlock()
+	h.cfg.Machines = append(h.cfg.Machines, machines...)
+}
+
 // newTestHub builds a Hub with no machines, no clients and push disabled, so interaction logic can be exercised offline.
 func newTestHub(t *testing.T) *Hub {
+	t.Helper()
+	return newTestHubWithDeployCtx(t, context.Background())
+}
+
+func newTestHubWithDeployCtx(t *testing.T, deployCtx context.Context) *Hub {
 	t.Helper()
 	cfg := defaultConfig()
 	cfg.Machines = nil
 	cfg.dir = shortTempDir(t)
 	h := &Hub{
-		cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
+		deployCtx: deployCtx, cfg: cfg, version: "test", logger: log.New(io.Discard, "", 0),
 		byID: map[string]*Machine{}, clients: map[*client]struct{}{},
 		calls: map[string]chan proto.ToolResult{},
 		push:  newPusher(cfg.dir, nil, func(string, ...any) {}),
@@ -257,11 +272,17 @@ func newTestHub(t *testing.T) *Hub {
 	}
 	h.live = newLiveActivities(h)
 	playManagerAsks(h) // its own cards wait for h.resolve (fleet_helpers_test.go)
+	h.push.quiesce = &h.quiesce
+	h.push.revoked = h.isDeviceRevoked
+	h.push.web.quiesce = &h.quiesce
+	h.push.web.revoked = h.isDeviceRevoked
 	h.push.hubID = h.hubID
 	h.upd = newUpdater(h)
 	h.upd.dir = filepath.Join(cfg.dir, "update")
 	h.upd.exec = func(string) error { return errors.New("exec is not run in tests") }
 	h.upd.startWatch = func(string, string) error { return nil }
+	h.startHelloWriters()
+	t.Cleanup(h.stopHelloWriters)
 	return h
 }
 
@@ -322,6 +343,7 @@ func TestPhoneToolsPersist(t *testing.T) {
 	h.store = database
 	tools := []proto.Tool{{Name: "phone_device_info", Description: "info", InputSchema: json.RawMessage(`{"type":"object"}`)}}
 	h.setPhoneTools(db.PhoneToolRegistration{DeviceID: "legacy", Tools: tools})
+	waitHelloWrites(t, h)
 	if got := h.phoneToolList(); len(got) != 3 || got[0].Name != "phone_device_info" {
 		t.Fatalf("tools = %+v", got)
 	}
@@ -423,6 +445,128 @@ func TestPhoneToolsDeviceRouting(t *testing.T) {
 	h.revoked(iphone.device)
 	if len(h.phoneToolList()) != 0 {
 		t.Fatal("revoked credential retained tools")
+	}
+}
+
+// phone.call attests the phone that actually executed the write, not another connected phone or an assumed iPhone.
+func TestPhoneCallResultAttribution(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool               string
+		deviceName, platform     string
+		otherName, otherPlatform string
+	}{
+		{"Android calendar", "phone_calendar_create_event", "Pixel 9", "android", "Work iPhone", "ios"},
+		{"iOS reminder", "phone_reminders_create", "Work iPhone", "ios", "Pixel 9", "android"},
+		{"unknown identity", "phone_calendar_create_event", "", "", "Work iPhone", "ios"},
+		{"missing device name", "phone_calendar_create_event", "", "android", "Work iPhone", "ios"},
+		{"missing platform", "phone_reminders_create", "Pixel 9", "", "Work iPhone", "ios"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			selected := &client{hub: h, device: "credential-selected", role: roleFull, out: make(chan []byte, 8)}
+			other := &client{hub: h, device: "credential-other", role: roleFull, out: make(chan []byte, 8)}
+			addTestClient(h, selected, other)
+
+			hello := map[string]any{"type": "client_hello"}
+			if tc.platform != "" {
+				hello["platform"] = tc.platform
+			}
+			data, _ := json.Marshal(hello)
+			h.onClientMessage(ctx, selected, data)
+			data, _ = json.Marshal(map[string]any{"type": "client_hello", "platform": tc.otherPlatform})
+			h.onClientMessage(ctx, other, data)
+
+			registration := map[string]any{
+				"type": "register_phone", "device_id": "selected-device",
+				"tools": []proto.Tool{{Name: tc.tool}},
+			}
+			if tc.deviceName != "" {
+				registration["device_name"] = tc.deviceName
+			}
+			data, _ = json.Marshal(registration)
+			h.onClientMessage(ctx, selected, data)
+			data, _ = json.Marshal(map[string]any{
+				"type": "register_phone", "device_id": "other-device", "device_name": tc.otherName,
+				"tools": []proto.Tool{{Name: "phone_device_info"}},
+			})
+			h.onClientMessage(ctx, other, data)
+
+			// Hellos acknowledge synchronously; discard those messages so the next outbound frame is the tool call.
+			drain := func(c *client) {
+				for {
+					select {
+					case <-c.out:
+					default:
+						return
+					}
+				}
+			}
+			drain(selected)
+			drain(other)
+
+			done := make(chan proto.ToolResult, 1)
+			go func() { done <- h.callPhone(ctx, tc.tool, json.RawMessage(`{}`)) }()
+			var call struct {
+				Type   string `json:"type"`
+				Name   string `json:"name"`
+				CallID string `json:"call_id"`
+			}
+			select {
+			case data = <-selected.out:
+				if err := json.Unmarshal(data, &call); err != nil || call.Type != "tool_call" || call.Name != tc.tool {
+					t.Fatalf("selected phone's tool call = %s, %v", data, err)
+				}
+			case <-ctx.Done():
+				t.Fatal("tool call was not routed to the selected phone")
+			}
+			select {
+			case data = <-other.out:
+				t.Fatalf("tool call also went to the other phone: %s", data)
+			default:
+			}
+
+			const payload = `{"id":"created-1","title":"Lunch"}`
+			data, _ = json.Marshal(map[string]any{
+				"type": "tool_result", "call_id": call.CallID,
+				"content": []proto.Content{{Type: "text", Text: payload}},
+			})
+			h.onClientMessage(ctx, selected, data)
+			var result proto.ToolResult
+			select {
+			case result = <-done:
+			case <-ctx.Done():
+				t.Fatal("tool result was not delivered")
+			}
+			if result.IsError || textOf(result) != payload {
+				t.Fatalf("existing result payload changed: %+v", result)
+			}
+			raw, err := json.Marshal(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			for _, source := range []struct{ key, want string }{
+				{"source_device_name", tc.deviceName},
+				{"source_device_platform", tc.platform},
+			} {
+				value, present := envelope[source.key]
+				if source.want == "" {
+					if present {
+						t.Fatalf("%s = %s, want absent; result = %s", source.key, value, raw)
+					}
+					continue
+				}
+				var got string
+				if !present || json.Unmarshal(value, &got) != nil || got != source.want {
+					t.Fatalf("%s = %q (present %t), want %q; result = %s", source.key, got, present, source.want, raw)
+				}
+			}
+		})
 	}
 }
 

@@ -46,10 +46,88 @@ struct LiveActivityStepTests {
         #expect(LiveActivityController.step(s, running: c.running, active: c.active) == c.expected, "\(c.label)")
     }
 
+    /// The last request answered elsewhere while the app is in front: off its activity at once, with the buttons, not
+    /// at the end a minute later (#8636). Anything else that empties the fleet waits for the end, as on the hub.
+    @Test func theLastRequestGoingClearsAtOnce() {
+        let ask = FleetState.Item(id: "m/s", title: "api", place: "", kind: .permission, detail: "Bash: go test", interaction: "ix1", since: 0)
+        var asking = state(phase: .needsYou)
+        (asking.needsYou, asking.items) = (1, [ask])
+        let work = FleetState.Item(id: "m/w", title: "api", place: "", kind: .working, since: 0)
+        var working = state(phase: .working)
+        (working.working, working.items) = (1, [work])
+        #expect(LiveActivityController.step(state(), running: true, active: true) == .endSoon)
+        #expect(LiveActivityController.clearsNow(asking, to: state()))
+        // The assistant answering on a tokens island: nothing to show there either.
+        #expect(LiveActivityController.clearsNow(asking, to: state(assistant: true, island: .tokens)))
+        // Shown on its island, the assistant is something to show: an ordinary update, not this.
+        #expect(!LiveActivityController.clearsNow(asking, to: state(assistant: true)))
+        #expect(!LiveActivityController.clearsNow(working, to: state()))
+        #expect(!LiveActivityController.clearsNow(state(phase: .done), to: state()))
+    }
+
     @Test func showsNothingFollowsTheIslandsSides() {
         #expect(state().showsNothing)
         #expect(!state(assistant: true).showsNothing)
         #expect(state(assistant: true, island: .none).showsNothing)
         #expect(!state(phase: .done).showsNothing)
+    }
+
+    /// #12982: one Fleet card. The running activity updated last stays (its stale date is the latest); an ended one
+    /// (iOS's eight hours, still on the Lock Screen) never does; none running keeps none.
+    @Test func keepsOneActivity() {
+        typealias C = LiveActivityController.Candidate
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ended = C(id: "ended", running: false, staleDate: now.addingTimeInterval(3600))
+        let older = C(id: "older", running: true, staleDate: now)
+        let newer = C(id: "newer", running: true, staleDate: now.addingTimeInterval(600))
+        #expect(LiveActivityController.kept([ended, older, newer]) == "newer")
+        #expect(LiveActivityController.kept([newer, older]) == "newer")
+        #expect(LiveActivityController.kept([ended]) == nil)
+        #expect(LiveActivityController.kept([]) == nil)
+    }
+
+    /// #16756: the hub confirming it has no push route for this phone (its token list names none for this credential)
+    /// is an outage like a `none` route: nothing could update or end the activity, so it ends as the app goes to the
+    /// background (#12982) and starts again in front.
+    @Test func leavingEndsTheActivityWhenTheHubConfirmsNoRoute() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        h.read(nil, group: "g")
+        #expect(LiveActivityController.endsOnLeaving(h, group: "g"))
+        // A read that fails afterwards keeps the last answer, as it does for a `none` route.
+        h.readFailed("The request timed out.", group: "g")
+        #expect(LiveActivityController.endsOnLeaving(h, group: "g"))
+        // Only that hub's group: another hub's outage says nothing about the one the activity follows.
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "other"))
+
+        var none = PushHealth(notificationsAllowed: true)
+        none.read(APIClient.PushRoute(route: "none", reason: "no_token"), group: "g")
+        #expect(LiveActivityController.endsOnLeaving(none, group: "g"))
+    }
+
+    /// A route that reaches the phone keeps the activity: the hub's pushes update and end it. A registration that
+    /// brings a route back after a confirmed missing one does too.
+    @Test func leavingKeepsTheActivityWhenTheHubPushesHere() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        h.read(APIClient.PushRoute(route: "relay"), group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.read(APIClient.PushRoute(route: "direct", reason: "push_failed", detail: "503"), group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+
+        h.read(nil, group: "g")
+        h.readRegistration(APIClient.PushRoute(route: "direct"), group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+    }
+
+    /// An unknown route keeps the activity: an older hub reports no routes, a registration's missing route says nothing
+    /// (#9612), and a hub not read yet or no paired hub may well push.
+    @Test func leavingKeepsTheActivityWhenTheRouteIsUnknown() {
+        var h = PushHealth(notificationsAllowed: true, relay: .registered)
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.readRegistration(nil, group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.readFailed("offline", group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: "g"))
+        h.read(nil, group: "g")
+        #expect(!LiveActivityController.endsOnLeaving(h, group: nil))
     }
 }

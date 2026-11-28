@@ -1,6 +1,5 @@
 import SwiftUI
 
-#if os(iOS) || os(visionOS)
 /// Keeps what you tapped under your finger while it opens or closes. The chat's list is flipped (the newest end is
 /// its origin), so a row that grows pushes everything above it up, the tapped header included: a thought jumped
 /// 40 pt on opening, and a work line, whose steps load after the tap, went 440 pt up and its header out of reach
@@ -554,6 +553,9 @@ import SwiftUI
 
             override func didMoveToWindow() {
                 super.didMoveToWindow()
+                // Only on the way in: a list built again (`ChatView.listBuild`) takes the old one out after the new one is
+                // in, and the old one's probe, leaving, handed the pin the list on its way out (nil a moment later).
+                guard window != nil else { return }
                 var v = superview
                 while let s = v, !(s is UIScrollView) { v = s.superview }
                 if let list = v as? UIScrollView { pin?.list = list }
@@ -631,8 +633,6 @@ private final class FrameTicker: NSObject {
         link = nil
     }
 }
-
-#endif
 
 extension EnvironmentValues {
     /// The chat list's pin; nil outside the chat (sheets, other pages), where rows animate as before.

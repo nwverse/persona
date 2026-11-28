@@ -1,8 +1,13 @@
+import com.android.build.api.variant.HasUnitTestBuilder
+import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
+
 plugins {
     id("persona.android.application")
     id("persona.compose")
     id("persona.hilt")
     id("org.jetbrains.kotlin.plugin.serialization")
+    // :app:moduleGuard (docs/android/android.md "Modules"): no core project depends on a module.
+    id("persona.module.guard")
 }
 
 // The application id is personal (docs/operations/config.md): scripts/android.sh passes it from ~/.config/persona/config.json.
@@ -16,6 +21,24 @@ val googleOAuthScheme = providers.gradleProperty("personaGoogleOAuthScheme")
     .orNull?.takeIf { it.isNotBlank() }
     ?: System.getenv("PERSONA_GOOGLE_OAUTH_SCHEME")?.takeIf { it.isNotBlank() }
     ?: "persona.oauth.unset"
+
+// "No hub yet?" on the welcome page opens this public page (publish.getting_started_url in the build config, passed by
+// scripts/app/android.sh). https only: anything else leaves the link out, and "unset" is the manifest's no-value marker.
+val gettingStartedUrl = (providers.gradleProperty("personaGettingStartedUrl").orNull?.takeIf { it.isNotBlank() }
+    ?: System.getenv("PERSONA_GETTING_STARTED_URL")?.takeIf { it.isNotBlank() })
+    ?.trim()?.takeIf { it.startsWith("https://") && it.none(Char::isWhitespace) }
+    ?: "unset"
+
+// The commit the About page shows. Only an explicit, public input counts (docs/android/android.md "Build commit"):
+// -PpersonaBuildCommit, then PERSONA_BUILD_COMMIT; with neither, the build says "unknown". It never asks git, and a value
+// that is not a commit fails the build rather than put a branch name or a path in the APK.
+val buildCommit = (providers.gradleProperty("personaBuildCommit").orNull?.takeIf { it.isNotEmpty() }
+    ?: providers.environmentVariable("PERSONA_BUILD_COMMIT").orNull?.takeIf { it.isNotEmpty() }
+    ?: "unknown").also {
+    require(it == "unknown" || Regex("[0-9a-fA-F]{7,64}").matches(it)) {
+        "Invalid build commit: use 7 to 64 hex digits, or unknown"
+    }
+}.lowercase()
 
 // The same language resources drive the contracts, packaged translations, and Android 13's per-app picker.
 val languageFiles = rootProject.fileTree("i18n") { include("*.properties") }
@@ -39,13 +62,31 @@ val generateLocaleConfig by tasks.registering(GenerateLocaleConfig::class) {
     languages.from(languageFiles)
     outputDirectory.set(layout.buildDirectory.dir("generated/languages/res"))
 }
-androidComponents.onVariants { variant ->
-    variant.sources.res?.addGeneratedSourceDirectory(generateLocaleConfig, GenerateLocaleConfig::outputDirectory)
+// Release unit tests (src/testRelease: Release has no answer observer) rerun the whole suite against the release variant,
+// so they are off by default; -Ppersona.releaseUnitTests=true turns them on, and scripts/ci/android.sh does.
+val releaseUnitTests = providers.gradleProperty("persona.releaseUnitTests").map(String::toBoolean).getOrElse(false)
+androidComponents {
+    beforeVariants { variant ->
+        if (releaseUnitTests && variant is HasUnitTestBuilder && variant.name == "release") {
+            variant.javaClass.getMethod("setEnableUnitTest", Boolean::class.javaPrimitiveType).invoke(variant, true)
+        }
+    }
+    onVariants { variant ->
+        variant.sources.res?.addGeneratedSourceDirectory(generateLocaleConfig, GenerateLocaleConfig::outputDirectory)
+    }
 }
 
 android {
     namespace = "persona.android"
+    buildFeatures { buildConfig = true }
     testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions.unitTests.all { test ->
+        // Robolectric under JDK 21 needs the same raw FileDescriptor access as the library modules.
+        test.jvmArgs(
+            "--add-opens=java.base/java.io=ALL-UNNAMED",
+            "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+        )
+    }
     lint {
         baseline = file("lint-baseline.xml")
     }
@@ -53,6 +94,8 @@ android {
     androidResources {
         localeFilters += languageTags.map { it.substringBefore('-') }
     }
+    // Generated resources (the build commit below) need resValues on; the default is not the same in every AGP version.
+    buildFeatures { resValues = true }
     defaultConfig {
         applicationId = appId
         versionCode = providers.gradleProperty("personaVersionCode").orElse("1").get().toInt().also {
@@ -61,6 +104,8 @@ android {
         versionName = providers.gradleProperty("personaVersionName").orElse("0.1").get()
         manifestPlaceholders["appLabel"] = appLabel
         manifestPlaceholders["googleOAuthScheme"] = googleOAuthScheme
+        manifestPlaceholders["gettingStartedUrl"] = gettingStartedUrl
+        resValue("string", "persona_build_commit", buildCommit)
     }
     buildTypes {
         release {
@@ -71,6 +116,29 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+}
+
+// The modules this build carries (docs/android/android.md "Modules"): every :module:* project, unless
+// -Ppersona.modules=<id,id…> names fewer; -Ppersona.modules= (empty) builds Persona Core alone. A module left out stays on
+// the compile classpath only, so Modules.kt still compiles, but none of its code, resources or manifest entries ship and
+// Modules.kt never loads it (BuildConfig.PERSONA_MODULES).
+val knownModules = rootProject.subprojects.filter { it.path.startsWith(":module:") && it.path.count { c -> c == ':' } == 2 }
+    .map { it.name }.sorted()
+val carriedModules = providers.gradleProperty("persona.modules").orNull
+    ?.split(',')?.map(String::trim)?.filter(String::isNotEmpty) ?: knownModules
+require(carriedModules.all { it in knownModules }) {
+    "-Ppersona.modules names unknown modules ${carriedModules - knownModules.toSet()}; known: $knownModules"
+}
+android.defaultConfig.buildConfigField("String[]", "PERSONA_MODULES",
+    carriedModules.joinToString(", ", "{", "}") { "\"$it\"" })
+// A left-out module's class is still named by Modules.kt (in an entry that never runs). R8 needs no rule for it: AGP
+// hands R8 the compile classpath, compileOnly jars included, as library classes, so the class is known but not packaged
+// (checked with -Ppersona.modules= :app:assembleRelease, #13433).
+dependencies {
+    knownModules.forEach { id ->
+        if (id in carriedModules) implementation(project(":module:$id")) else compileOnly(project(":module:$id"))
+    }
+    implementation(project(":core:moduleapi"))
 }
 
 dependencies {
@@ -95,8 +163,6 @@ dependencies {
     implementation(project(":feature:terminal"))
     implementation(project(":feature:machines"))
     implementation(project(":feature:files"))
-    implementation(project(":feature:knowledge"))
-    implementation(project(":feature:voice"))
     implementation(project(":platform:phonetools"))
     implementation(project(":core:demo"))
     implementation(libs.room.runtime)
@@ -108,6 +174,9 @@ dependencies {
     implementation(libs.compose.preview)
     implementation(libs.coil.compose)
     debugImplementation(libs.compose.tooling)
+    debugImplementation(project(":core:rustcore"))
+    debugImplementation(project(path = ":core:rustcore", configuration = "shadowRuntimeElements"))
+    debugImplementation(project(path = ":core:domain", configuration = "shadowRuntimeElements"))
 
     implementation(libs.androidx.work)
     implementation(libs.androidx.core)
@@ -116,6 +185,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.navigation3)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${libs.versions.lifecycle.get()}")
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
     implementation(libs.okhttp)
@@ -128,4 +198,21 @@ dependencies {
     testImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test.ext:junit:1.3.0")
+}
+
+// Only DEBUG can link the separately compiled answer observer. Release never evaluates a shadow/native dependency.
+// Only these modules' own jars: Kotlin fingerprints friend paths relative to this build directory, so a transitive jar
+// from the Gradle cache would put the checkout's depth in the cache key (#10712).
+val answerFriend = configurations.create("answerFriend") { isTransitive = false }
+dependencies {
+    add("answerFriend", project(":core:domain"))
+    add("answerFriend", project(path = ":core:domain", configuration = "shadowRuntimeElements"))
+    add("answerFriend", project(":core:rustcore"))
+    add("answerFriend", project(path = ":core:rustcore", configuration = "shadowRuntimeElements"))
+}
+// friendPaths, not an -Xfriend-paths= argument: the argument's absolute paths would be part of the cache key (#10712).
+tasks.matching { it.name == "compileDebugKotlin" || it.name == "compileDebugUnitTestKotlin" }.configureEach {
+    val compile = this as KotlinJvmCompile
+    compile.dependsOn(":core:domain:domainShadowJar")
+    compile.friendPaths.from(answerFriend)
 }

@@ -13,7 +13,7 @@
 | hub 遇到待处理交互或 blocked 优先产生 needs_you，其余按宿主状态派生。 | `server/internal/assistant/fleet.go` 的 `agentState`；`docs/protocol/agent-states.md`「Unified states」 | `hub_blocked`、`hub_pending_offline`、`hub_working_seen`、`hub_idle`、`hub_offline`、`hub_unknown` |
 | hub 对 done 使用 `seen_at >= updated_at - 2 秒` 的已看容差，未看过则 unread。 | `agentState`；`docs/protocol/agent-states.md`「Seen」 | `hub_done_unseen`、`hub_done_seen_before_tolerance`、`hub_done_seen_at_tolerance`、`hub_done_seen_equal`、`hub_done_seen_after` |
 | idle 或 unknown 才算空闲，空闲会话有循环、后台任务或运行中的子代理时算待唤醒。 | Models 的 `isQuiet`；ChatsView 的 `Session.isWaiting` | `waiting_requires_quiet_state` |
-| 行优先级是需要你、完成未看、待你回复、工作中、后台等待中、待唤醒、已屏蔽、已看（按状态的八个分段），屏蔽不降低需要你的优先级。 | ChatsView 的 `rank` | `rank_all_states_and_mutes` |
+| 行优先级是需要你、完成未看、待你回复、工作中、后台等待中、刚做完待看、待唤醒、已屏蔽、已看（按状态的九个分段），屏蔽不降低需要你的优先级；待唤醒优先于刚做完待看，屏蔽的刚做完待看只是普通已看。 | ChatsView 的 `rank`；`web/src/lib/agent-groups.ts` 的 `justFinished` | `rank_all_states_and_mutes`、`just_finished_rank_and_precedence` |
 | 工作中用 `state_since`，缺失时用 `updated_at`，其余状态用 `updated_at`，时间缺失排最后，同时间按 `session_id` 升序。 | Models 的 `sortDate`；ChatsView 的 `ordered`；`CLAUDE.md`「Most common pitfalls」 | `working_since_then_id`、`working_since_then_id_reversed` |
 | 本任务在排序键和 session_id 都相等时追加完整 id 比较，确保跨机器次序确定。 | `CLAUDE.md`；ChatsView 的 `ordered` | `cross_machine_same_session_id`、`cross_machine_same_session_id_reversed` |
 | 快速筛选中的组内排序跳过 rank，只比较排序时间和 session_id。 | ChatsView 的 `ordered` | `quick_filter_ignores_rank` |
@@ -28,12 +28,15 @@
 | 空间标题按需要你、工作中、完成未看、空闲的顺序朗读数量，unknown 合并到空闲。 | `StateCounts.spoken`；`AgentFilterTests.foldedHeaderSpeaksItsCounts` | `space_header_counts`、`spaces_pin_busy_muted_quiet` |
 | 助手、机器条件和搜索先决定 base，快速筛选计数取 base 中当前状态，全部标签不显示数字。 | ChatsView 的 `base`、`counts`、`QuickFilterBar` | `machine_search_before_counts`、`empty_list`、`filter_all` |
 | 搜索不区分大小写，按空白分词，每个词都要出现在 title、cwd、repo_root、branch、last_text、asks、space_name、slot_name、Agent 名、model、launcher、start_error、turn_error 之一；`machine:`、`project:`、`agent:`、`model:`、`state:`、`is:pinned`、`is:error`、`since:` 是条件，不是词（`AgentParsedQuery`）。 | ChatsView 的 `base` | `machine_search_before_counts`、`search_expands_idle` |
+| Scoped search follows `Session.matchesScope`: Title uses title/space/slot; Conversation uses title/asks/goal/prose/work; User uses asks/goal/todo/title; Assistant uses prose/work; Errors requires an error or block and searches all four error reasons, work and title. Dedicated dimension settings compose with inline qualifiers. Search as Code adds iOS's error, pin and 48-hour/168-hour raw-query heuristics without replacing parsed terms. Prepared `search_subtasks` can admit their root without becoming rows or counts. | `AgentSearchPlan.compile`; `AgentListProjection.build`; `Session.matchesScope`; `CodexTasks.flattened` | `search_scope_*`, `machine_qualifier_*`, `composable_qualifiers_*`, `dimension_settings_*`, `search_as_code_*`, `session_summary_*`, `subtask_*` |
 | 需要你、未读、工作中分别匹配对应 state。 | `AgentFilter.matches`；`AgentFilterTests.eachFilterKeepsItsState` | `filter_needsyou`、`filter_unread`、`filter_working` |
 | 后台等待中（`backgroundWaiting`）只算 state 为 working 且 `background_waiting` 为真的会话，工作中不再算它们（#6045）。 | `AgentFilter.matches`、`Session.countedState` | 各用例的 `counts` |
 | kept 保留已经匹配过的会话，但不能绕过 base；重新选择筛选会重建 kept。 | ChatsView 的 `body`、`choose`、`onChange(of: matching)` | `unread_keeps_seen_rows`、`unread_reselected_drops_seen_rows`、`kept_cannot_escape_base` |
 | 批量标已读只取筛选结果中当前 unread 的会话，不包含 kept 中已经看过的会话。 | ChatsView 的 `unreadShown` | `unread_keeps_seen_rows` |
 | 折叠只改变可见行，保留分组成员及计数；按状态的「已看」默认折叠，打开后 folded 里记 `!state/idle`。 | ChatsView 的 `spaceSection`、`stateSections`、`machineSections` | `folded_space_keeps_counts`、`folded_state_and_expanded_idle`、`folded_machine_hides_rows` |
 | 细列表不改变排序和计数，搜索会展开空闲行，显式折叠仍优先。 | ChatsView 的 `slotRow`、`foldedRows`、`spaceSection` | `compact_expands_idle_without_reordering`、`search_expands_idle`、`folded_state_and_expanded_idle` |
+| 打开时为完成未看的会话在离开前保持 held：安静后仍归完成未看分段，不进入行级空闲折叠；所在空间不收进空闲空间。 | `AgentListOrder` 的 `held`、`stays(_:)`、`rank(_:)`、`isQuiet(_:)`；`AppModel.visibleSession`、`markSeen` | `held_quiet_row_keeps_unread_state_section`、`held_quiet_space_stays_active`、`held_row_stays_out_of_quiet_idle_fold` |
+| Rows seen during a visit (#12514; web #12585): every row the list showed as Unread or Just finished during this visit keeps that place once seen (opened, marked, or seen elsewhere), in every grouping and under a quick filter, until the list is refreshed; the open row's `held` is the one-row case. A held row that is seen now is drawn as Seen and left out of its section's count (`held_seen` in the expected group). A row that is working, needs you or is unseen again goes where its state puts it; a muted one held in Just finished is plain Seen. iOS and web for now ("Cases iOS follows first" below). | `AgentListOrder` 的 `heldSeen`、`heldPlace(_:)`、`isHeldSeen(_:)`；`AppModel.seenThisVisit`、`noteShownUnseen`、`releaseSeen`；ChatsView 的 `stateSections`；`web/src/lib/agent-groups.ts`、`web/src/lib/seen-rows.ts` | `next/held_set.json`: `held_set_rows_keep_unread_section_by_status`、`held_set_just_finished_keeps_its_section`、`held_set_quiet_space_stays_active`、`held_set_unread_filter_by_status`、`held_set_rows_that_move_on`、`held_set_machine_section_shows_read_rows` |
 
 ## JSON 结构
 
@@ -43,21 +46,26 @@
 | --- | --- | --- |
 | `session_state` | `session_state.json` | 输入 `sessions` 是 iOS Session 的 JSON；输出每条的完整 id、state、is_live、is_quiet、is_waiting、sort_date。 |
 | `hub_state` | `hub_state.json` | 输入 `session` 是 Go proto.Session，`seen_at` 是 hub 的独立已看记录；输出统一 state。 |
-| `agents_list` | `filters.json`、`ordering.json`、`grouping.json`、`folding.json` | 输入会话及列表设置；输出筛选标签计数、有序分组、当前未读集合。 |
+| `agents_list` | `filters.json`、`ordering.json`、`grouping.json`、`folding.json`、`held.json` | 输入会话及列表设置；输出筛选标签计数、有序分组、当前未读集合。 |
 
 时间统一为 UTC RFC 3339 字符串。缺失可选字段或 null 表示没有值，`sort_date: null` 表示 iOS 的 distantPast，不要求 Kotlin 模拟 Apple 的具体远古时间。字段的数值类型和必填项沿用对应 iOS 解码器。
 
 `agents_list.input`：
 
-- `sessions` 使用 wire 字段，如 `machine_id`、`session_id`、`status`、`state`、`space_id`、`slot_index`、`updated_at`、`seen_at`。
+- `sessions` 使用 wire 字段，如 `machine_id`、`session_id`、`status`、`state`、`space_id`、`slot_index`、`updated_at`、`seen_at`。A prepared root may also carry `search_subtasks`: flattened CodexTasks descendants used only for search admission. Scoped fixtures can carry `goal.objective`, `todo.title` and `work.line`; those fields are not added to `.all` search.
+- `native_sessions` is a test-only Swift oracle input for the three subtask cases. It holds the raw root/descendant sessions while `sessions` holds the prepared core input; Rust and the other bindings ignore it.
 - `machines` 只投影分组需要的 `id` 和 `name`，顺序就是 iOS 的机器登记顺序。
 - `pins` 含 `spaces`、`sessions`；`mutes` 另含 `allowed`；空间偏好键是 `machine_id/空间名称`，会话偏好键是 `machine_id/session_id`。
 - `settings.grouping` 为 `state`、`space` 或 `machine`，其中 space 对应界面的「按项目」，并非按 cwd 汇总。
 - `settings.quick` 为 `all`、`needsYou`、`unread`、`working` 或 `backgroundWaiting`；`machine_filter` 和 `query` 为空字符串时不限。
+- `search_scope` is `all`, `title`, `conversation`, `user`, `assistant` or `errors`; `search_as_code` enables the raw-query heuristics. `machine_title_filter`, `harness_filter`, `project_filter`, `model_filter` and `pinned_only` are the dedicated settings appended to the parsed inline query, exactly as on iOS.
+- Android's Kotlin list has none of those settings: its `AgentListFixtureTest` skips a case that sets a scope other than `all`, `search_as_code`, or a dedicated setting, and reads `native_sessions` where a case has them (it builds the subtask forest itself, as the Swift oracle does).
 - `kept` 是这一帧已经保留的完整会话 id；用例成对给出看过后和重新选择筛选后的快照，不要求测试驱动模拟 SwiftUI 回调。
 - `folded` 使用 `state/needs` 等状态段 id（`!state/idle` 表示默认折叠的「已看」已打开）、`machine/机器标识` 或 `机器标识/空间标识`。
 - `expanded_idle` 使用活跃空间 id 或 `machine-机器标识`；`expanded_quiet` 使用空闲空间 id；二者和显式 folded 分开。
 - `compact` 只表示行样式，不参与行为输出。
+- `settings.held` 是打开时为完成未看、尚未离开的完整会话 id；离开后的下一帧应省略它，而非保留一个已失效的持有状态。
+- `settings.held_seen` (cases under `next/` only, #12514) maps a full session id to the place this visit showed it in, `unread` or `just_finished`. It may name rows that are still unseen; only the quiet, seen ones change anything. Without it nothing is held but `held`.
 
 `agents_list.expected`：
 
@@ -66,6 +74,11 @@
 - `folded` 记录标题或空闲空间整体是否折叠；普通组内的空闲行也可能单独隐藏，此时整体 `folded` 仍是 false。
 - 项目分组另有 `state_counts`、`spoken`；空闲空间带 `parent: "quiet"`，对应共同标题 `quiet_title: "空闲的空间"`，没有空闲空间时为 null。
 - `unread_shown` 是传给批量已读的集合，数组保留 filtered 的遍历顺序，不能将它当作展示排序。
+- `held_seen` (cases under `next/` only) lists, in the group's row order, the rows drawn as Seen in a place they are held in: what the section's count leaves out and its Clear Seen counts.
+
+### Cases iOS follows first (`next/`)
+
+`next/` holds cases for a rule iOS has and the other clients take up in their own issues: today the rows seen during a visit (#12514). Its files have the same structure as the files above, and their case names are unique across the domain. iOS (`apple/PersonaTests/SeenThisVisitTests.swift`, `swiftReplaysTheVisitCases`) and the web (`web/src/lib/seen-rows.test.ts`) replay them. The readers of the files above (the Rust core and its C ABI, JNI and ArkTS host replays, Android's Kotlin list, iOS's DEBUG shadow) read only this directory's own `*.json` and pin their case lists, so they do not see `next/` yet. The issue that brings a rule to the core (#12583 here) moves its cases into the file above that fits (`held.json` here) and adds them to those exact lists in the same change. Until then iOS's DEBUG shadow reports a list holding more than one seen Unread row as `held-set-scope` instead of comparing it.
 
 `session_state` 和 `hub_state` 是两个独立阶段。消费端不能把 hub 的状态推导再套到已经携带 `state` 的客户端输入上。
 
@@ -77,13 +90,13 @@
 - 文档写有「最近（未运行）」；当前 ChatsView 普通分组过滤 offline，没有最近段，置顶 offline 则仍显示。
 - 已看文档按严格时间比较，hub 实现带 2 秒容差；这是状态规则常量，不是性能实测值。
 - 快速筛选保留的是成员资格，没有冻结原位置；状态分组仍按当前 rank 分段，状态或时间变化仍可能移动行；这里不补造冻结位置功能。
-- 当前 ordered 的最后一项比较是 session_id；跨机器复用相同 session_id 且前面的排序键全相等时，iOS 没有完整 id 比较；`cross_machine_same_session_id` 及其反向输入用例因此标记 `compatibility: "id_tiebreak_extension"`，expected 在原排序键之后追加完整 id 比较，ios_expected 保留当前实现对给定输入的结果；这项补充需要以后 iOS 跟进。
+- ordered 在 session_id 之后再比完整 id（hub 分组、机器、会话）：跨机器复用相同 session_id 且前面的排序键全相等时，次序由完整 id 决定，与输入次序无关。`cross_machine_same_session_id` 及其反向输入用例按这条规则写 expected；iOS（`AgentListOrder.ordered`）与 Rust core 都已这样比较，原先的 `compatibility: "id_tiebreak_extension"` 和 ios_expected 已随 iOS 跟进删除（#9064）。
 
 以上冲突集中记录在本领域 README，未改设计总纲或 iOS。
 
 ## 对照验证
 
-本目录有 43 个用例，其中客户端 32 个、hub 11 个；连同收件箱共 71 个用例。没有仅依赖人工阅读单测断言而未执行对照的客户端用例，但 `from_test` 只标明迁移的原始断言，扩展的分组输出仍通过下面的实现对照。
+本目录有 74 个用例，其中客户端 63 个、hub 11 个；连同收件箱共 102 个用例。The `agents_list` corpus has 61 cases: the 27 scoped-search/filter cases added for #9110 were hand-derived from current `AgentSearchPlan`, `AgentListProjection` and `CodexTasks`, and every older expected object is unchanged. The just-finished ordering case is included once alongside them. `held.json` 的 3 个 held 用例按当前 `apple/Persona/Views/Chats/AgentListOrder.swift` 与 `AppModel.swift` 手工推导，不是由 Rust 或 Kotlin 生成。没有仅依赖人工阅读单测断言而未执行对照的客户端用例，但 `from_test` 只标明迁移的原始断言，扩展的分组输出仍通过下面的实现对照。
 
 Swift 验证没有启动 App，也没有执行 SwiftUI 布局。`JSONValue.swift` 作为原文件传给 swiftc；其余需要的声明与方法按平衡花括号从只读源码原文提取到 `/tmp`，不改方法体。探针把 SwiftUI 的分段条件翻成数组输出，测试的是列表数据投影。原始源文件没有任何修改。
 
@@ -100,7 +113,7 @@ SPEC_SORT_FIXTURES="$PWD/spec/fixtures" go -C server test \
 
 | 探针组成 | 从哪里提取，如何调用 |
 | --- | --- |
-| Swift 解码与状态 | 从 Models 提取 SessionStatus、Session、Subagent、LoopInfo、BackgroundTask、AgentState、SessionKey、MailAddress，以及含 isQuiet 的 Session 扩展；编译时直接加上 `apple/Shared/JSONValue.swift`；用 `JSON.decoder` 解 input.sessions。 |
+| Swift 解码与状态 | 从 Models 提取 SessionStatus、Session、Subagent、LoopInfo、BackgroundTask、AgentState、SessionKey、MailAddress，以及含 isQuiet 的 Session 扩展；编译时直接加上 `apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift`；用 `JSON.decoder` 解 input.sessions。 |
 | Swift 空间和筛选 | 从 ChatsView 提取 SpaceGroup、AgentFilter、isWaiting 扩展、`StateCounts.spoken`；从 Theme 的 AgentState 扩展提取 label。 |
 | Swift 偏好 | 从 APIClient 提取 Pins；以输入数组充当 AppModel 的数据，原文提取 pinKey、isPinned、isMuted、spaceKey 方法。 |
 | Swift 列表 | 原文提取 ChatsView 的 base、counts、stays、rank、ordered，以及 body 中从 `let base = base` 到 `SplitNavigation` 之前的数据计算块；用 settings 填充同名属性。 |
@@ -108,7 +121,7 @@ SPEC_SORT_FIXTURES="$PWD/spec/fixtures" go -C server test \
 | Go 状态 | 在 `/tmp` 建 `package hub` 的 `TestSpecSortFixtures`，循环读取 hub_state.json，把 session 解码为 proto.Session，seen_at 缺失时使用 time.Time 零值，直接断言 `agentState(session, seen) == expected.state`。 |
 | Go 虚拟测试文件 | overlay.json 的 Replace 将仓库中不存在的 `server/internal/hub/spec_sort_fixture_test.go` 绝对路径映射到 `/tmp` 的测试源码，真实目录不写文件。 |
 
-编译形式为 `swiftc -parse-as-library -module-cache-path /tmp/spec-sort-check/module-cache apple/Shared/JSONValue.swift /tmp/spec-sort-check/Reference.swift -o /tmp/spec-sort-check/check`。驱动遍历 JSON 的 cases，只比较结构化输出，不生成 expected；两个跨机器同标识用例对照 ios_expected，并另外核对 expected 的完整 id 排序和反向输入不变性；编译用 Python `subprocess.run(timeout=120)`，运行用 `timeout=60`，Go 自带 `-timeout 120s`。收件箱适配契约见[收件箱 README](../inbox/README.md)。这些时间是验证脚本的超时设置，不是性能结果。
+编译形式为 `swiftc -parse-as-library -module-cache-path /tmp/spec-sort-check/module-cache apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift /tmp/spec-sort-check/Reference.swift -o /tmp/spec-sort-check/check`。驱动遍历 JSON 的 cases，只比较结构化输出，不生成 expected；两个跨机器同标识用例与其他用例一样对照 expected，并另外核对反向输入不变性；编译用 Python `subprocess.run(timeout=120)`，运行用 `timeout=60`，Go 自带 `-timeout 120s`。收件箱适配契约见[收件箱 README](../inbox/README.md)。这些时间是验证脚本的超时设置，不是性能结果。
 
 本次 Swift 编译和客户端对照通过；Go overlay 直接调用真实 hub 实现，全部通过。仓库服务端的 build、vet、全量 test 也通过；沙箱中默认 build 无法读取 VCS 状态，因此复跑使用 `GOFLAGS=-buildvcs=false`，未改仓库构建设置。
 

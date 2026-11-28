@@ -3,7 +3,8 @@
 // events can be another later (an entry with an end), and nothing here needs to change for it. iOS / Mac:
 // apple/Shared/TodoCalendar.swift, the same rules.
 import { formatDate } from "../i18n";
-import { isOverdue, todoDueDay, todoStatus, todoStatusLabel, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { isOverdue, todoDueDay, todoStatus, type SessionLookup, type Todo, type TodoRepoGateLook, type TodoStatus, type TodoTone } from "./todos";
+import { todoLook, waitOf } from "./todo-wait-reason";
 
 export type CalendarMode = "day" | "week" | "month";
 
@@ -14,14 +15,21 @@ export interface CalendarEntry {
   /** What tapping it opens. */
   todoId: string;
   title: string;
+  manager?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** The original date-only wire value, including leading zeros in the year. */
+  dueDate?: string;
   /** When it is, in ms: a to-do's due moment, or the local midnight of its due day when allDay. */
   start: number;
   /** When it ends: none for a to-do, which is due at a moment; an event's end. */
   end?: number;
   allDay: boolean;
-  /** Its state, colored and named as in the list. */
+  /** Its state, colored and named as in the list: a waiting one's word and tone say what it waits on (#11090, todoLook);
+   *  without `tone`, its status's. */
   status: TodoStatus;
   statusLabel: string;
+  tone?: TodoTone;
   done: boolean;
   overdue: boolean;
   high: boolean;
@@ -30,22 +38,28 @@ export interface CalendarEntry {
 }
 
 /** A to-do on the calendar: at its due moment, or all day on its due day; undefined without either. */
-export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()): CalendarEntry | undefined {
+export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now(), repoGateLook?: TodoRepoGateLook): CalendarEntry | undefined {
   const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
   const day = todoDueDay(todo);
   const allDay = Number.isNaN(at);
   const start = allDay ? day : at;
   if (start === undefined) return undefined;
   const status = todoStatus(todo, lookup);
+  const look = todoLook(todo, status, waitOf(todo, status, lookup), status, now, repoGateLook);
   const done = Boolean(todo.done_at);
   return {
     id: `todo:${todo.id}`,
     todoId: todo.id,
     title: todo.title,
+    manager: todo.manager,
+    createdAt: todo.created_at,
+    updatedAt: todo.updated_at || todo.created_at,
+    dueDate: allDay ? todo.due_date ?? undefined : undefined,
     start,
     allDay,
     status,
-    statusLabel: todoStatusLabel(todo, status),
+    statusLabel: look.label,
+    tone: look.tone,
     done,
     overdue: isOverdue(todo, now),
     high: todo.priority === "high" && !done,
@@ -57,12 +71,12 @@ export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()):
  * pages its to-dos) would be asked for the same range. */
 export function calendarEntries(
   todos: readonly Todo[],
-  opts: { lookup?: SessionLookup; showDone: boolean; from: number; to: number; now?: number },
+  opts: { lookup?: SessionLookup; showDone: boolean; from: number; to: number; now?: number; repoGateLook?: TodoRepoGateLook },
 ): CalendarEntry[] {
   const out: CalendarEntry[] = [];
   for (const t of todos) {
     if (!opts.showDone && t.done_at) continue;
-    const e = todoEntry(t, opts.lookup, opts.now);
+    const e = todoEntry(t, opts.lookup, opts.now, opts.repoGateLook);
     if (e && e.start >= opts.from && e.start < opts.to) out.push(e);
   }
   return out;
@@ -140,7 +154,8 @@ export function calendarDays(mode: CalendarMode, anchor: number, first: number):
 /** From the start of the first day shown to the end of the last, in ms. */
 export function calendarRange(mode: CalendarMode, anchor: number, first: number): [number, number] {
   const days = calendarDays(mode, anchor, first);
-  return [days[0], addDays(days[days.length - 1], 1)];
+  // A day that starts at 01:00 after a DST jump must not carry that hour to either boundary.
+  return [startOfDay(days[0]), startOfDay(addDays(days[days.length - 1], 1))];
 }
 
 /** The anchor a page later (n 1) or earlier (-1); a month later keeps the day where the month has it (Jan 31 → Feb 28). */
@@ -167,9 +182,12 @@ export function entriesOn(day: number, entries: readonly CalendarEntry[]): Calen
 
 // ---- the time axis ----
 
-/** Minutes from the start of day to ms. */
+/** Minutes from the start of day to ms on the clock, as the axis's hour lines, slotAt and dropOnAxis count them: on a day
+ * the clocks change, 10:00 is still 600 minutes in, not the 540 or 660 that have passed since midnight (#9851). */
 export function minutesInto(ms: number, day: number): number {
-  return (ms - startOfDay(day)) / 60_000;
+  const d = new Date(ms);
+  const days = Math.round((startOfDay(ms) - startOfDay(day)) / 86_400_000);
+  return days * 24 * 60 + d.getHours() * 60 + d.getMinutes() + (d.getSeconds() * 1000 + d.getMilliseconds()) / 60_000;
 }
 
 function blockEnd(e: CalendarEntry, minutes: number): number {
@@ -314,7 +332,7 @@ export function weekdayNames(first: number, narrow: boolean): string[] {
 /** A day as the address and the hub write it: "YYYY-MM-DD", local. */
 export function dayKey(ms: number): string {
   const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return `${String(d.getFullYear()).padStart(4, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /** A "YYYY-MM-DD" day's local midnight; undefined for anything else. */

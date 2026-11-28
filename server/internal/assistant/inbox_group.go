@@ -28,10 +28,10 @@ import (
 // event it touches. The connector writes each event (group.append: one event a call, its meta in and out; the hub never
 // reads meta) and the hub stores what comes back with the model's words, triaged_by "model". When the model can't (not
 // set up, held, failing, too slow, or an answer that does not hold up) the connector groups the batch by structure
-// itself (group.fallback). Its title, rule tier, "By rule" and triaged_by "rules" describe only events it opens; an
-// existing event takes the new messages but keeps its title, summary, tier, reason, urgency and triager. The one exception is
-// a rewritten direct-chat join: its tier may rise to the rewritten entries' rule floor, but never out of noise or while a
-// processing conversation is handling the event. That version is final.
+// itself (group.fallback). Its title, rule tier, "By rule" and triaged_by "rules" describe only events it opens. An
+// existing event takes the new messages but keeps its title, summary, urgency and triager. Its tier never falls: it may
+// rise to this batch's rule floor (the aggregated assignment and rewritten-entry floors for a direct-chat join), except
+// out of noise or while a processing conversation is handling the event. Only an actual rise replaces the reason with "By rule".
 
 const (
 	groupCalls        = 4                  // call allowances per batch (tools and a possible correction)
@@ -149,6 +149,7 @@ type plannedEvent struct {
 	reopen       *bool // nil means true for a done event; ignored for open and new events
 	twinDisabled bool  // writeGroup snapshots the AI-twin switch before taking b.mu
 	dmJoined     bool  // at least one fallback-new entry was rewritten into this existing event
+	dmAssigned   bool  // an ordinary assignment to the same target also contributes the appended thing's rule floor
 	// The highest explicit rule tier among those rewritten entries. ruleFloorDefault records that at least one had no
 	// explicit tier and still needs putEvent's fallback-new default; dmJoined distinguishes them from an ordinary append.
 	ruleFloor        string
@@ -156,15 +157,34 @@ type plannedEvent struct {
 	// The model's words for it; under the fallback only a new one's title and rule tier (the connector's).
 	title, summary, tier, reason string
 	urgent                       bool
+	// settled: the model says this batch closed the open event (SettledReplied, SettledOver; inbox_settle.go).
+	settled string
 }
 
 // relateBatch relates one batch: by the model, else by the connector's fallback; then has each event written.
 func (s *Service) relateBatch(ctx context.Context, c assistantwire.InboxSource, t connector.InboxThing) {
-	events := s.groupEvents(c.ID, t.Thread, "")
-	plan, why := s.askGroup(ctx, c, t, events)
+	fullCfg, allowed := s.inboxVisibilityBatchAllowed(ctx, c.ID, t)
+	if !allowed {
+		s.noteGroupWhy(c.ID, "chat visibility or its configuration withheld this batch before any model or connector read")
+		return
+	}
+	events := s.groupEventsWithVisibility(c.ID, t.Thread, "", fullCfg.Visibility)
+	var plan *groupPlan
+	var why string
+	scoped := s.externalGroupingConfigured(ctx, c, t)
+	if scoped {
+		why = "scoped external routing uses structural grouping"
+	} else {
+		plan, why = s.askGroup(ctx, c, t, events)
+	}
 	if plan == nil {
 		var err error
-		if plan, err = s.fallbackGroup(ctx, c, t, events); err != nil {
+		plan, err = s.fallbackGroup(ctx, c, t, events)
+		if scoped && errors.Is(err, errNoFallback) {
+			plan = &groupPlan{events: []plannedEvent{{messages: t.Group.New, title: t.Title}}}
+			err = nil
+		}
+		if err != nil {
 			if errors.Is(err, errNoFallback) { // the batch waits for the model, as an inbox item without a fallback does
 				s.noteGroupWhy(c.ID, why+"; no fallback: waiting for the model")
 				return
@@ -216,6 +236,12 @@ func (s *Service) noteGroupWhy(id, why string) {
 // own quota; query keeps those whose title, summary or meta has it before either cap. Hidden members of merged rows are
 // never candidates.
 func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
+	return s.groupEventsWithVisibility(connectorID, thread, query, nil)
+}
+
+// groupEventsWithVisibility keeps persistently quarantined rows out of every caller, and also applies the fresh
+// configuration snapshot used to authorize a pre-admission batch. The old wrapper retains the legacy signature.
+func (s *Service) groupEventsWithVisibility(connectorID, thread, query string, visibility *assistantwire.InboxVisibilityConfig) []groupEvent {
 	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -223,7 +249,8 @@ func (s *Service) groupEvents(connectorID, thread, query string) []groupEvent {
 	q := strings.ToLower(strings.TrimSpace(query))
 	var open, done []*InboxItem
 	for _, it := range b.items {
-		if it.Group == nil || it.Group.Connector != connectorID || !sameConversation(it.Group.Thread, thread) || it.MergedInto != "" {
+		if it.Group == nil || it.Group.Connector != connectorID || !sameConversation(it.Group.Thread, thread) || it.MergedInto != "" ||
+			inboxVisibilityWithMembersExcludedLocked(b, it, visibility) {
 			continue
 		}
 		isOpen := it.DoneAt == nil // merged members, the other way open() is false, are skipped above
@@ -286,6 +313,7 @@ type groupAnswer struct {
 		Urgent    bool   `json:"urgent"`
 		Reopen    *bool  `json:"reopen"`
 		Continues string `json:"continues"`
+		Settled   any    `json:"settled"` // "replied" | "over"; anything else (false, null…) is ignored
 	} `json:"events"`
 }
 
@@ -307,8 +335,12 @@ func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t c
 	for _, e := range events {
 		seen[e.ID] = e
 	}
-	in := prompts.InboxGroupInput{Thread: t.Thread, New: t.Group.New, Context: t.Context, Events: jsonText(events)}
+	in := prompts.InboxGroupInput{Language: answerLanguage(hello.Locale), Thread: t.Thread, New: t.Group.New, Context: t.Context, Events: jsonText(events)}
+	if t.Kind == KindDM || t.Kind == KindBot { // a person or a bot on the other side: the batch's lines don't say which
+		in.Kind = s.inbox.kindWords(c.ID, t.Kind)
+	}
 	budget := groupOutputBudget(len(t.Group.New), len(events))
+	model := s.purposeModelFor(purposeTriage, "inbox_group")
 	retried := false
 	for {
 		in.Left = groupCalls - len(in.Calls)
@@ -319,7 +351,7 @@ func (s *Service) askGroup(ctx context.Context, c assistantwire.InboxSource, t c
 		sctx, scancel := context.WithTimeout(ctx, groupStepTimeout)
 		input := prompts.RenderInboxGroupInput(in)
 		in.Problem = "" // a correction is shown on the immediately following request only
-		err := s.inboxModelJSON(sctx, purposeTriage, system, input, budget, &out)
+		err := model.JSONMax(sctx, system, input, budget, &out)
 		scancel()
 		paused, _ := modelPaused(err)
 		var problem error
@@ -377,18 +409,25 @@ func groupJSONProblem(err error) bool {
 // groupTool runs one tool for the model: events here, the conversation's through the connector (at the hub). A
 // failure is the tool's answer ({"error": …}), the call counted.
 func (s *Service) groupTool(ctx context.Context, connectorID, thread, name string, args json.RawMessage, seen map[string]groupEvent) string {
+	fullCfg, configErr := s.inboxConfigFresh(ctx)
+	if configErr != nil {
+		return jsonText(map[string]string{"error": "Inbox visibility configuration is unavailable; no conversation read was performed"})
+	}
 	switch name {
 	case "events":
 		var a struct {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(args, &a)
-		events := s.groupEvents(connectorID, thread, a.Query)
+		events := s.groupEventsWithVisibility(connectorID, thread, a.Query, fullCfg.Visibility)
 		for _, e := range events {
 			seen[e.ID] = e
 		}
 		return jsonText(events)
 	case connector.GroupMessagesBefore, connector.GroupMessagesAround, connector.GroupSearch:
+		if inboxVisibilityExcluded(inboxVisibilityThingItem(connectorID, connector.InboxThing{Thread: thread}), fullCfg.Visibility) {
+			return jsonText(map[string]string{"error": "This chat is excluded from AI conversation reads"})
+		}
 		if len(args) == 0 || string(args) == "null" {
 			args = json.RawMessage(`{}`)
 		}
@@ -478,6 +517,12 @@ func checkGroupAnswer(out groupAnswer, fresh []string, seen map[string]groupEven
 				pe.reopen = d.Reopen
 			}
 			pe.existing = ev
+		}
+		// Settled only means something for an existing event left open and not in "Needs you" (a new one the owner never
+		// saw is not filed unseen; its tier says what it is); any other value is ignored.
+		if how, _ := d.Settled.(string); (how == SettledReplied || how == SettledOver) && d.Tier != TierAction && pe.existing != "" &&
+			!seen[ev].Done {
+			pe.settled = how
 		}
 		plan.events = append(plan.events, pe)
 	}
@@ -612,6 +657,7 @@ func (s *Service) writeGroup(ctx context.Context, c assistantwire.InboxSource, t
 	b.mu.Lock()
 	saved = b.followMerged(saved, time.Now())
 	b.mu.Unlock()
+	s.prepareExternalInbox(ctx, saved)
 	for id := range s.saveInbox(ctx, saved) {
 		s.logf("inbox: %s: event %s could not be saved; it stays in memory until its next save", c.ID, id)
 	}
@@ -684,10 +730,10 @@ func fallbackEventTitle(title, where string) string {
 }
 
 // putEvent keeps an event the connector wrote (or the hub composed), under the item's id: the model's title, summary
-// and tier, or under the fallback a new event's title and rule tier with "By rule". Ordinary fallback messages joining an
-// existing event leave its title, summary, tier, reason, urgency and triager unchanged; a rewritten direct-chat join may
-// only raise the tier, except that noise stays noise and a processing conversation keeps deciding its event's tier.
-// Titles, summaries, urgency and triager still stay unchanged.
+// and tier, or under the fallback a new event's title and rule tier with "By rule". Fallback messages joining an
+// existing event leave its title, summary, urgency and triager unchanged and never lower its tier. The batch's rule
+// floor may raise it, except that noise stays noise and a processing conversation keeps deciding its event's tier;
+// only an actual rise replaces the reason with "By rule".
 // A done existing event reopens by default; reopen:false or a matching mute keeps it done while its messages advance.
 // It is triaged at this version either way. Its count is the hub's (the messages it put in it; extra.count is not read
 // for an event) and its start is set when it is made. An answer at the version the item has already is a repeat:
@@ -726,6 +772,10 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		thing.Tier = connector.Tier(eventRuleTier(thing)) // the rule tier, not a decision: set below
 		fillConnectorItem(it, thing)
 	}
+	// The event id belongs to the grouping. The original thread names its source.
+	sourceThing := thing
+	sourceThing.Thread = thread
+	b.setConnectorExternalPath(it, sourceThing)
 	// The hub assigns the messages, so it keeps the count (the connector's meta may hold only the newest ones): the
 	// event had count, it takes these. Its start is set once, when it is made.
 	it.Count, it.StartedAt = count+len(e.messages), started
@@ -736,38 +786,59 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	if !keepDone {
 		it.Read = false
 	}
-	b.noteReceived(it, prev, nil)
+	// A composed event can share its batch cursor with another event. Use
+	// its own most recent message as the receipt's source identity.
+	b.noteReceived(it, prev, nil, e.messages[max(0, len(e.messages)-1):]...)
 	if reopened {
 		it.DoneAt, it.DoneBy = nil, ""
 		b.chainAdd(it, InboxChainEntry{Kind: ChainReopened, Via: it.Source,
 			Text: i18n.T(b.userLang(), "assistant-inbox_chain.reopened")})
 	}
 	tierBefore := it.Tier
-	raiseDMFloor := func() {
-		if !e.dmJoined || tier == TierNoise {
+	fallbackFloorRaised := false
+	raiseFallbackFloor := func() {
+		if tier == TierNoise || it.handled() {
 			return
 		}
-		floor := e.ruleFloor
-		if e.ruleFloorDefault || floor == "" {
-			floor = higherTier(floor, b.fallbackEventTier(thing, it))
+		floor := eventRuleTier(thing)
+		if e.dmJoined {
+			joinedFloor := e.ruleFloor
+			if e.ruleFloorDefault || joinedFloor == "" {
+				joinedFloor = higherTier(joinedFloor, b.fallbackEventTier(thing, it))
+			}
+			if e.dmAssigned {
+				// An ordinary assignment merged into the rewrite contributes the returned thing's floor too.
+				if floor == "" {
+					floor = b.fallbackEventTier(thing, it)
+				}
+				floor = higherTier(floor, joinedFloor)
+			} else {
+				floor = joinedFloor
+			}
+		} else if floor == "" {
+			floor = b.fallbackEventTier(thing, it)
 		}
 		if higherTier(tier, floor) != tier {
-			// Only the rewrite may raise the tier; the existing triager and urgency deliberately stay unchanged.
+			// The existing triager and urgency deliberately stay unchanged.
 			it.Tier, it.Reason = floor, b.byRules()
+			fallbackFloorRaised = true
 		}
 	}
 	switch {
 	case keepDone:
-		// A wrap-up-only update advances the messages without retriaging or reopening the event. A rewritten direct-chat
-		// join still takes its rule floor, including when a mute keeps the target done.
+		// A wrap-up-only update advances the messages without retriaging or reopening the event. A fallback append still
+		// takes its rule floor, including when a mute keeps the target done; a model closeout has no rule floor.
 		it.Title, it.Summary, it.Tier, it.Reason, it.TriagedBy = title, summary, tier, reason, triagedBy
 		it.Urgent = urgent
 		it.DoneAt, it.DoneBy = doneAt, doneBy
 		tierBefore = tier
-		raiseDMFloor()
+		if !byModel && !it.handled() {
+			raiseFallbackFloor()
+		}
 	case prev.last != "" && it.handled() && !reopened:
 		// Messages that join an event being handled follow it: its tier, words and urgency stay, even for a rewritten
-		// direct-chat join; its processing conversation decides (inbox_handle.go).
+		// direct-chat join; its processing conversation decides (inbox_handle.go). A reopen bypasses this branch so a
+		// model reopen takes the model's triage; raiseFallbackFloor keeps a fallback reopen's handled triage unchanged.
 		it.Title, it.Summary, it.Tier, it.Reason = title, summary, tier, reason
 		it.TriagedBy = cmp.Or(it.TriagedBy, "model")
 		it.Urgent = urgent
@@ -780,12 +851,14 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 		}
 		it.Tier, it.Reason, it.TriagedBy = e.tier, clip(oneLine(e.reason), 30), "model"
 		it.Urgent = e.urgent && e.tier == TierAction
+		it.TriageRev = inboxTriageRev // decided now; a fallback append keeps the tier it had, and that tier's criteria
 	case prev.last != "":
-		// The fallback adds messages to an existing event; its structural title and rule tier are only for new events.
+		// The fallback adds messages to an existing event; its structural title is only for new events. The saved tier,
+		// not the fill's provisional rule tier, is the original against which this batch's floor may raise it.
 		it.Title, it.Summary, it.Tier, it.Reason, it.TriagedBy = title, summary, tier, reason, triagedBy
 		it.Urgent = urgent
-		tierBefore = tier // The fill's provisional rule tier is not a triage change.
-		raiseDMFloor()
+		tierBefore = tier
+		raiseFallbackFloor()
 	default:
 		tier := e.tier
 		if tier == "" {
@@ -795,12 +868,19 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 			it.Title = t
 		}
 		it.Summary, it.Tier, it.Reason, it.TriagedBy, it.TitleBy = "", tier, b.byRules(), "rules", TitleByRules
+		it.TriageRev = inboxTriageRev
 	}
+	policyChanged := false
 	if !keepDone && !it.handled() { // what an event's conversation handles keeps its tier
-		b.applyPolicyTier(it)
+		policyChanged = b.applyPolicyTier(it)
 	}
 	it.TriagedAt = it.Last
-	if !keepDone && (tierBefore != it.Tier || prev.last == "") {
+	switch {
+	case fallbackFloorRaised && !policyChanged && higherTier(tierBefore, it.Tier) != tierBefore:
+		// Only an actual final rise from this batch's fallback rule floor bypasses noteTriaged's same-text dedup: a
+		// conversation may since have concluded at a lower tier, making this a new decision despite the earlier text.
+		b.chainAdd(it, triagedEntry(b.userLang(), it))
+	case !keepDone && (tierBefore != it.Tier || prev.last == ""):
 		b.noteTriaged(it)
 	}
 	if e.continues != "" && e.continues != it.ID {
@@ -818,6 +898,9 @@ func (s *Service) putEvent(c assistantwire.InboxSource, thread string, e planned
 	}
 	if m != nil && it.open() {
 		b.fileMuted(it, now, m.Name)
+	}
+	if byModel && e.settled != "" && !keepDone && it.open() && it.Tier != TierAction && !it.handled() && currentSuggestion(it) == nil {
+		b.settleItem(it, e.settled, clip(oneLine(e.reason), 30), "", "", now)
 	}
 	b.items[it.ID] = it
 	delete(b.listMemo.kept, it.ID) // saved after the batch's other appends (writeGroup): listed as it is meanwhile
@@ -862,8 +945,8 @@ func (b *inboxBook) joinDMFallback(connectorID string, t connector.InboxThing, p
 		return
 	}
 
-	// Keep the first participating entry's place in the plan and append later messages in plan order. A direct
-	// assignment to the target joins the same append but contributes no rule floor of its own.
+	// Keep the first participating entry's place in the plan and append later messages in plan order. An ordinary
+	// assignment to the target joins the same append and contributes the returned thing's rule floor in putEvent.
 	out := plan.events[:0]
 	joined := -1
 	for _, e := range plan.events {
@@ -885,6 +968,8 @@ func (b *inboxBook) joinDMFallback(connectorID string, t connector.InboxThing, p
 			} else {
 				out[joined].ruleFloor = higherTier(out[joined].ruleFloor, e.tier)
 			}
+		} else {
+			out[joined].dmAssigned = true
 		}
 	}
 	joinedEvent := &out[joined]
@@ -914,7 +999,7 @@ func (b *inboxBook) foldNoise(connectorID, thread string, plan *groupPlan) {
 		cur := ""
 		if e.existing != "" {
 			if it := b.items[e.existing]; it != nil {
-				if e.dmJoined || !it.open() {
+				if e.dmJoined || !it.open() || e.settled != "" { // a settled event is filed as itself (putEvent)
 					out = append(out, e)
 					continue
 				}

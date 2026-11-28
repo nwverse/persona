@@ -3,7 +3,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,20 +19,36 @@ import (
 var shortSuperviseTimings = superviseTimings{gather: 20 * time.Millisecond, every: 150 * time.Millisecond, urgent: 60 * time.Millisecond}
 
 // shortSupervise makes s's supervision messages come at once and often, for a test. The timings are s's own, not the
-// package's: a digest timer still running after the test ends reads only them, never another test's. The timer is
-// stopped when the test ends.
-func shortSupervise(t *testing.T, s *Service) {
+// package's: a digest timer still running after the test ends reads only them, never another test's. Pending and
+// in-flight digest timers are stopped and drained when the test ends.
+func shortSupervise(t testing.TB, s *Service) {
 	t.Helper()
-	s.superviseTimes = shortSuperviseTimings
-	t.Cleanup(func() {
-		b := &s.supervise
-		b.mu.Lock()
-		defer b.mu.Unlock()
-		if b.timer != nil {
-			b.timer.Stop()
-			b.timer, b.timerAt = nil, time.Time{}
-		}
-	})
+	superviseTimed(t, s, shortSuperviseTimings)
+}
+
+// heldSuperviseTimings are shortSuperviseTimings with an hour's gather: no digest goes out during the test.
+func heldSuperviseTimings() superviseTimings {
+	times := shortSuperviseTimings
+	times.gather = time.Hour
+	return times
+}
+
+// superviseTimed is shortSupervise with times as s's timings. Call it before anything of s can set a digest timer:
+// the timer reads the timings with no lock of their own.
+func superviseTimed(t testing.TB, s *Service, times superviseTimings) {
+	t.Helper()
+	s.superviseTimes = times
+	t.Cleanup(s.stopSuperviseTimers)
+}
+
+// stopSupervisionTimers lets a test drive watch and delivery explicitly. Once
+// stopped, neither scheduling path can arm another digest and any in-flight
+// timer callback finishes before this returns.
+func stopSupervisionTimers(s *Service) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.running.Store(&ctx)
+	s.stopSuperviseTimers()
 }
 
 // The first signal waits superviseGather; after a message, a signal waits superviseEvery (an urgent one
@@ -49,8 +68,8 @@ func TestDigestWait(t *testing.T) {
 		{"first", time.Time{}, []superviseSignal{review}, superviseGather, true},
 		{"gathered", time.Time{}, []superviseSignal{{Kind: sigReview, At: now.Add(-time.Minute)}}, 0, true},
 		{"review after a message", now.Add(-time.Minute), []superviseSignal{review}, superviseEvery - time.Minute, true},
-		{"urgent after a message", now.Add(-time.Minute), []superviseSignal{needs}, superviseUrgentEvery - time.Minute, true},
-		{"the soonest of them", now.Add(-time.Minute), []superviseSignal{review, needs}, superviseUrgentEvery - time.Minute, true},
+		{"decision after a message", now.Add(-time.Minute), []superviseSignal{needs}, superviseGather, true},
+		{"the soonest of them", now.Add(-time.Minute), []superviseSignal{review, needs}, superviseGather, true},
 		{"long after", now.Add(-time.Hour), []superviseSignal{review}, superviseGather, true},
 	} {
 		got, ok := digestWait(now, c.last, c.pending, (&Service{}).superviseTimings())
@@ -74,8 +93,8 @@ func TestSuperviseTimingsOnService(t *testing.T) {
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	short := &Service{superviseTimes: shortSuperviseTimings}
 	got, ok := digestWait(now, now, []superviseSignal{{Kind: sigNeedsYou, At: now}}, short.superviseTimings())
-	if !ok || got != shortSuperviseTimings.urgent {
-		t.Fatalf("digestWait with short timings = %v, %v; want %v, true", got, ok, shortSuperviseTimings.urgent)
+	if !ok || got != shortSuperviseTimings.gather {
+		t.Fatalf("digestWait with short timings = %v, %v; want %v, true", got, ok, shortSuperviseTimings.gather)
 	}
 }
 
@@ -140,6 +159,60 @@ func TestWatchSignals(t *testing.T) {
 	}
 }
 
+func TestWatchSignalsIgnoresAliveBackgroundWork(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-2 * time.Hour)
+	fresh := now.Add(-2 * time.Minute)
+	future := now.Add(10 * time.Minute)
+	todo := Todo{ID: "t", Supervision: &Supervision{Supervisor: "main"}}
+	base := proto.Session{
+		MachineID: "box", SessionID: "s1", Status: proto.StatusDone, State: proto.StateWorking,
+		BackgroundWorking: true, UpdatedAt: old,
+	}
+	for _, tc := range []struct {
+		name      string
+		edit      func(*proto.Session)
+		wantStall bool
+	}{
+		{"running workflow", func(c *proto.Session) {
+			c.Workflows = []proto.Workflow{{RunID: "wf_1", TaskID: "w1", Status: proto.WorkflowRunning, Running: true, Phase: "Verify", AgentsDone: 4, StartedAt: old, UpdatedAt: fresh}}
+		}, false},
+		{"running subagent", func(c *proto.Session) {
+			c.Subagents = []proto.Subagent{{ID: "sub1", Running: true, StartedAt: old, UpdatedAt: fresh}}
+		}, false},
+		{"active background shell", func(c *proto.Session) {
+			c.Status = proto.StatusWorking
+			c.Background = []proto.BackgroundTask{{ID: "sh1", Kind: "shell", StartedAt: old}}
+		}, false},
+		{"unexpired monitor", func(c *proto.Session) {
+			c.Background = []proto.BackgroundTask{{ID: "m1", Kind: "monitor", StartedAt: old, ExpiresAt: &future}}
+		}, false},
+		{"stalled workflow", func(c *proto.Session) {
+			c.Status = proto.StatusWorking
+			c.Workflows = []proto.Workflow{{RunID: "wf_dead", TaskID: "w2", Status: proto.WorkflowStalled, Running: false, StartedAt: old, UpdatedAt: old}}
+		}, true},
+		{"waiting background shell", func(c *proto.Session) {
+			c.Status = proto.StatusWorking
+			c.BackgroundWaiting = true
+			c.Background = []proto.BackgroundTask{{ID: "sh2", Kind: "shell", StartedAt: old}}
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base
+			tc.edit(&c)
+			sigs := watchSignals(todo, []proto.Session{c}, now)
+			gotStall := slices.ContainsFunc(sigs, func(g superviseSignal) bool { return g.Kind == sigStalled })
+			if gotStall != tc.wantStall {
+				t.Fatalf("watchSignals = %+v, stalled=%v want %v", sigs, gotStall, tc.wantStall)
+			}
+			label, _ := taskHealth(todo, []proto.Session{c}, now)
+			if !tc.wantStall && strings.HasPrefix(label, "卡住") {
+				t.Fatalf("taskHealth flagged alive background work as stuck: %q", label)
+			}
+		})
+	}
+}
+
 // newSupervisedService is newQuietService with a task handed out from the main conversation, its agent s1 on box
 // at work, and the criteria given.
 func newSupervisedService(t *testing.T) (*Service, *fakeHub, Todo) {
@@ -200,8 +273,8 @@ func TestSupervisedTaskRound(t *testing.T) {
 	agentTurn(s, f, proto.StatusDone, "两种走法：A 先灰度，B 直接全量。你选一个？", 0)
 	waitFor(t, "the message", func() bool { return len(f.notices()) == 1 })
 	n := f.notices()[0]
-	for _, want := range []string{"📋 督办", "Agent 停下了，但没做完（要用户决定：问用两种部署走法里的哪一种）", "验收标准：PR 合并到 master；浅色 / 深色截图贴进 PR",
-		"A 先灰度，B 直接全量", "能自己拍板的就自己拍"} {
+	for _, want := range []string{"📋 督办", "Agent 停下了，但没做完（要用户决定：问用两种部署走法里的哪一种；用户还没收到", "task_review needs_user", "验收标准用 todo_get 取原文",
+		"A 先灰度，B 直接全量", "signal=idle"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -233,7 +306,7 @@ func TestSupervisedTaskRound(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "按 A 做完了，PR https://github.com/o/r/pull/901 已合并", 0)
 	waitFor(t, "the review message", func() bool { return len(f.notices()) == 2 })
-	if n := f.notices()[1]; !strings.Contains(n, "hub 判断做完了，等你验收（PR 已合并）") || !strings.Contains(n, "pull/901") {
+	if n := f.notices()[1]; !strings.Contains(n, "待逐项复核，不代表完成（PR 已合并）") || !strings.Contains(n, "pull/901") {
 		t.Fatalf("message:\n%s", n)
 	}
 	if now := todoNow(s, todo.ID); now.DoneAt != nil || now.Supervision.State != reviewPending {
@@ -284,7 +357,7 @@ func TestSupervisedTaskRound(t *testing.T) {
 	if v := todoNow(s, todo.ID).Supervision; v.State != reviewNeedsUser || v.Round != maxReworkRounds || len(sentToAgent(f)) != maxReworkRounds {
 		t.Fatalf("after the third: %+v, sent %d", v, len(sentToAgent(f)))
 	}
-	if res := review("accepted", "用户看过截图，可以"); !strings.Contains(res, "accepted and closed") {
+	if res := review("accepted", "用户看过截图，可以", completeReviewChecks(todoNow(s, todo.ID))...); !strings.Contains(res, "accepted and closed") {
 		t.Fatalf("accepted: %s", res)
 	}
 	done := todoNow(s, todo.ID)
@@ -363,12 +436,12 @@ func TestTaskHealth(t *testing.T) {
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now}}, "正常"},
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now.Add(-25 * time.Minute)}}, "卡住 25 分钟"},
 		{Todo{Supervision: &Supervision{}}, []proto.Session{{State: proto.StateNeedsYou, StateSince: now.Add(-5 * time.Minute)}}, "等回答 5 分钟"},
-		{Todo{Supervision: &Supervision{State: reviewPending}}, nil, "待验收"},
+		{Todo{Supervision: &Supervision{State: reviewPending}}, nil, "已交付·待看"},
 		{Todo{Supervision: &Supervision{State: reviewRework, Round: 2}}, []proto.Session{{State: proto.StateWorking, UpdatedAt: now}}, "返工第 2 轮"},
-		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你决定"},
+		{Todo{Supervision: &Supervision{State: reviewNeedsUser}}, nil, "等你处理"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}, DoneAt: &done}, nil, "已验收"},
 		{Todo{Supervision: &Supervision{State: reviewAccepted}}, nil, "正常"}, // reopened by the user
-		{Todo{Supervision: &Supervision{Waits: &OwnerWait{At: now}}}, nil, "停下等用户拍板，别直接验收"},
+		{Todo{Supervision: &Supervision{Waits: &OwnerWait{At: now}}}, nil, "Agent 停下说要用户拍板：先判断是不是用户的事，别直接验收"},
 	} {
 		if got, _ := taskHealth(c.todo, c.agents, now); got != c.want {
 			t.Errorf("%+v: %q, want %q", c.todo.Supervision, got, c.want)
@@ -420,6 +493,65 @@ func TestTaskPlanSaysDuplicates(t *testing.T) {
 	waitFor(t, "the task", func() bool { return todoCount(s) == 1 })
 }
 
+func TestTaskPlanSuggestsIdleAgentAfterPreviousTodoClosed(t *testing.T) {
+	ctx := context.Background()
+	agent := proto.Session{MachineID: "box", SessionID: "idle-session-full-id", Cwd: "/code/app",
+		Status: proto.StatusIdle, State: proto.StateIdle}
+	s, f := leadTakeEnv(t, agent)
+	if _, err := runJSON(t, s, "lead0001", "agent_send", map[string]any{
+		"machine": "box", "session_id": agent.SessionID, "text": "Inspect yesterday's logs",
+		"task": map[string]any{"title": "Inspect logs"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previous := onlyTodo(s)
+	if _, err := runJSON(t, s, "lead0001", "task_review", map[string]any{"todo_id": previous.ID, "verdict": "accepted"}); err != nil {
+		t.Fatal(err)
+	}
+	if todoNow(s, previous.ID).DoneAt == nil {
+		t.Fatal("prior to-do is still open")
+	}
+	f.setSessions("box", agent,
+		proto.Session{SessionID: "busy-session", Cwd: agent.Cwd, Status: proto.StatusWorking, State: proto.StateWorking},
+		proto.Session{SessionID: "assigned-session", Cwd: agent.Cwd, Status: proto.StatusIdle},
+		proto.Session{SessionID: "waiting-session", Cwd: agent.Cwd, Status: proto.StatusIdle, PendingInteractions: 1},
+		proto.Session{SessionID: "readonly-session", Cwd: agent.Cwd, Status: proto.StatusIdle, SourceKind: "external"},
+		proto.Session{SessionID: "other-checkout", Cwd: "/code/app-feature", Worktree: "/code/app-feature", Status: proto.StatusIdle},
+		proto.Session{SessionID: "same-worktree", Cwd: "/code/app/test", Worktree: "/code/app", Status: proto.StatusIdle})
+	onBoxTask(t, s, "assigned-session", "conv1", false)
+	f.setSessions("server",
+		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "lead0001", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "other-machine", MachineID: "server", Cwd: agent.Cwd, Status: proto.StatusIdle})
+	// Direction leads can start writable plans directly. Main exercises the approval receipt.
+	for _, tc := range []struct {
+		caller   string
+		readonly bool
+		receipt  string
+	}{
+		{"conv1", false, "nothing has started"},
+		{"lead0001", true, "Queued 1 task"},
+	} {
+		res, err := s.toolTaskPlan(ctx, tc.caller, planArgs(tc.readonly))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`agent_send`, `machine="box" session_id="idle-session-full-id"`, `machine="box" session_id="same-worktree"`} {
+			if !strings.Contains(res, want) {
+				t.Errorf("missing %q in receipt %q", want, res)
+			}
+		}
+		for _, id := range []string{"busy-session", "assigned-session", "waiting-session", "readonly-session", "other-checkout", "other-machine"} {
+			if strings.Contains(res, id) {
+				t.Errorf("unexpected %q in receipt %q", id, res)
+			}
+		}
+		if !strings.Contains(res, tc.receipt) {
+			t.Errorf("expected receipt %q, got %q", tc.receipt, res)
+		}
+	}
+}
+
 // When the main conversation changes, the new main conversation can review older supervised tasks (#4262).
 func TestSupervisedTaskNewMainConversationCanReview(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
@@ -440,7 +572,7 @@ func TestSupervisedTaskNewMainConversationCanReview(t *testing.T) {
 	setSettings(t, s, func(v *Settings) { v.Main = "conv2" })
 
 	// conv3 is neither origin, nor supervisor, nor main -> refused.
-	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过"})
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "验收通过", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 	if _, err := s.runTool(ctx, "server", "conv3", "task_review", raw); err == nil {
 		t.Fatal("conv3 should not be allowed to review")
 	}
@@ -472,10 +604,11 @@ func TestGoldenSupervise(t *testing.T) {
 		{ID: "todo_5", Title: "迁移数据库", Kind: sigReport, Report: upReportQuestion, Said: "要不要先停写？\n停写约 2 分钟", Step: 2, Steps: 4,
 			Evidence: []string{"https://github.com/o/r/pull/902"}, Machine: "box", Session: "e5f6a7b8"},
 		{ID: "todo_6", Title: "整理文档", Kind: sigReport, Report: upReportProgress, Said: "写完了一半"},
-		// #2570: a start whose tab the computer keeps, one that failed for good, one that started after a retry
+		// #2570: a start whose tab the computer keeps, one that failed for good (its launcher could not start there, with
+		// the others it may retry with, #10365), one that started after a retry
 		{ID: "todo_7", Title: "修崩溃", Kind: sigFailed, Machine: "box", KeptUntil: "10:12", Question: "[oh-my-zsh] Would you like to update? [Y/n]",
 			Screen: "Last login: Mon Nov  9 22:01:13 on ttys004\n[oh-my-zsh] Would you like to update? [Y/n]", RetriesLeft: 3},
-		{ID: "todo_8", Title: "跑基准", Kind: sigFailed, Detail: "新开的终端标签两次都没接住启动命令", Machine: "box"},
+		{ID: "todo_8", Title: "跑基准", Kind: sigFailed, Detail: "终端运行不了「work」", RetryWith: []string{"claude"}, Machine: "box"},
 		{ID: "todo_9", Title: "整理日志", Kind: sigStarted, Detail: "新标签里的 shell 停在一个提问上", Machine: "box"},
 		// #3618: nobody works on it any more: closed after a model error, closed, its computer away
 		{ID: "todo_10", Title: "升级依赖", Kind: sigOrphaned, Orphan: orphanError, Detail: "API Error: 400 prompt is too long", Machine: "box", Session: "c3d4e5f6",
@@ -486,10 +619,11 @@ func TestGoldenSupervise(t *testing.T) {
 	golden(t, "supervise.rework", prompts.RenderSuperviseRework(prompts.SuperviseRework{Round: 1, Max: 2, Note: "补深色截图",
 		Checks: []prompts.SuperviseCheck{{Criterion: "PR 合并到 master", Met: true, Evidence: "pull/901 merged"}, {Criterion: "浅色 / 深色截图贴进 PR", Evidence: "只有浅色"}}}))
 	golden(t, "supervise.done_when", prompts.RenderTaskDoneWhen([]string{"PR 合并到 master", "线上 hub 已部署并验证"}))
+	golden(t, "supervise.task_goal", prompts.RenderTaskGoal([]string{"CI is green", "the fix is merged"}))
 	now := time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)
 	golden(t, "assistant_snapshot.supervised", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC", Tasks: []prompts.SnapshotTask{
 		{ID: "todo_2", Title: "部署 hub", State: "停着", Health: "等你决定", DoneWhen: 1},
-		{ID: "todo_1", Title: "修登录崩溃", State: "做完了（用户还没看）", Health: "待验收", DoneWhen: 2},
+		{ID: "todo_1", Title: "修登录崩溃", State: "已交付·待看", Health: "已交付·待看", DoneWhen: 2},
 		{ID: "todo_3", Title: "跑 UI 测试", State: "在做", Health: "卡住 35 分钟"},
 		{ID: "todo_4", Title: "迁移数据库", State: "在做", Health: "正常", DoneWhen: 1,
 			Reported: &prompts.SnapshotReport{Kind: "progress", Step: 3, Steps: 5, Text: "在跑迁移脚本", Minutes: 4}},
@@ -498,4 +632,165 @@ func TestGoldenSupervise(t *testing.T) {
 		{ID: "todo_7", Title: "清理旧分支", State: "停着", Orphan: orphanClosed},
 		{ID: "todo_8", Title: "跑回归", State: "停着", Orphan: orphanOffline},
 	}}))
+}
+
+func TestStalledTimeExcludesParkedIntervals(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	firstPark := now.Add(-10 * time.Hour)
+	secondPark := now.Add(-5 * time.Hour)
+	_, _, err := s.updateSupervision(ctx, task.ID, func(v *Supervision) bool {
+		v.State, v.ExpectMinutes = reviewParked, 0
+		v.Reviews = []TaskReview{
+			{At: firstPark, Verdict: reviewParked, ParkEndedAt: secondPark.Add(-3 * time.Minute)},
+			{At: secondPark, Verdict: reviewParked},
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ = s.todoNow(task.ID)
+	s.supervisedWorking(ctx, task)
+	task, _ = s.todoNow(task.ID)
+	v := task.Supervision
+	resumed := v.Reviews[1].ParkEndedAt
+	if resumed.IsZero() || v.parking() != nil {
+		t.Fatalf("did not track the end of the park: %+v", v)
+	}
+	// A later ledger edit must not move the recorded resume time.
+	v.UpdatedAt = resumed.Add(time.Hour)
+	c := proto.Session{MachineID: "box", SessionID: "s1", State: proto.StateWorking, UpdatedAt: firstPark.Add(-2 * time.Minute)}
+	if got := watchSignals(task, []proto.Session{c}, resumed.Add(5*time.Minute)); len(got) != 0 {
+		t.Fatalf("stalled after ten active minutes: %+v", got)
+	}
+	if got := watchSignals(task, []proto.Session{c}, resumed.Add(17*time.Minute)); len(got) != 1 || got[0].Kind != sigStalled || got[0].Minutes != 22 {
+		t.Fatalf("want 22 active minutes, got %+v", got)
+	}
+}
+
+type blockingRelayStore struct {
+	*memStore
+	block   bool
+	mu      sync.Mutex
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+	onDone  func()
+}
+
+func (b *blockingRelayStore) Setting(ctx context.Context, key string, out any) (bool, error) {
+	if key == relayKey {
+		b.mu.Lock()
+		block := b.block
+		b.mu.Unlock()
+		if block {
+			b.once.Do(func() { close(b.started) })
+			<-b.release
+			if b.onDone != nil {
+				b.onDone()
+			}
+			return false, errors.New("injected relay read failure")
+		}
+	}
+	return b.memStore.Setting(ctx, key, out)
+}
+
+func TestStopSuperviseTimersDrainsInFlightRetryAndPreventsRearm(t *testing.T) {
+	t.Run("in_flight_retry_finishes_and_cannot_rearm", func(t *testing.T) {
+		var finished bool
+		st := &blockingRelayStore{
+			memStore: &memStore{},
+			started:  make(chan struct{}),
+			release:  make(chan struct{}),
+			onDone:   func() { finished = true },
+		}
+		s := newServiceOn(t, newFakeHub(), st)
+		s.superviseTimes = shortSuperviseTimings
+		s.relays.mu.Lock()
+		s.relays.loaded = false
+		s.relays.mu.Unlock()
+		st.mu.Lock()
+		st.block = true
+		st.mu.Unlock()
+
+		b := &s.supervise
+		b.mu.Lock()
+		b.init()
+		s.retryDigestLocked(time.Nanosecond)
+		b.mu.Unlock()
+
+		select {
+		case <-st.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("retry digest timer did not start")
+		}
+
+		drained := make(chan struct{})
+		go func() {
+			defer close(drained)
+			s.stopSuperviseTimers()
+		}()
+		waitFor(t, "stopSuperviseTimers to mark stopped", func() bool {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			return b.stopped
+		})
+		select {
+		case <-drained:
+			t.Fatal("stopSuperviseTimers returned while retry digest callback was still in flight")
+		default:
+		}
+
+		close(st.release)
+		select {
+		case <-drained:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stopSuperviseTimers did not finish after callback was released")
+		}
+		if !finished {
+			t.Fatal("callback did not complete before stopSuperviseTimers returned")
+		}
+		b.mu.Lock()
+		timer := b.timer
+		b.mu.Unlock()
+		if timer != nil {
+			t.Fatal("in-flight retry callback re-armed supervise timer after stop")
+		}
+	})
+
+	t.Run("late_timer_callback_noops_after_stop", func(t *testing.T) {
+		called := false
+		st := &blockingRelayStore{
+			memStore: &memStore{},
+			block:    true,
+			started:  make(chan struct{}),
+			release:  make(chan struct{}),
+			onDone:   func() { called = true },
+		}
+		close(st.release)
+		s := newServiceOn(t, newFakeHub(), st)
+		s.relays.mu.Lock()
+		s.relays.loaded = false
+		s.relays.mu.Unlock()
+		s.stopSuperviseTimers()
+		s.runDigestTimer()
+		if called {
+			t.Fatal("late digest timer callback ran after stopSuperviseTimers")
+		}
+	})
+
+	t.Run("stop_quiet_timers_blocks_late_callback_and_rearm", func(t *testing.T) {
+		s, f := newQuietService(t)
+		s.stopQuietTimers()
+		s.quietNotify(context.Background(), Todo{ID: "t1", Title: "甲", Origin: "conv1", Quiet: true}, "box", "done", "", "修好了", nil)
+		s.runQuietNoticeTimer("t1")
+		s.quiet.mu.Lock()
+		nTimers := len(s.quiet.timers)
+		s.quiet.mu.Unlock()
+		if nTimers != 0 || len(f.notices()) != 0 {
+			t.Fatalf("stopped quiet book armed %d timer(s) and sent %d notice(s)", nTimers, len(f.notices()))
+		}
+	})
 }

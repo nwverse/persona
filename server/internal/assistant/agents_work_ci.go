@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/connector/github"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/githubwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -86,6 +87,37 @@ func startCIWatch(c proto.Session, e *db.SessionWork, now time.Time, ask, reply 
 	if number == 0 || repo == "" && c.Cwd == "" {
 		return
 	}
+	keepCIWatch(e, now, repo, number)
+}
+
+// startRuntimeCIWatch uses a reported external wait for an exact, tracked PR
+// and fresh pending checks on its current head.
+func startRuntimeCIWatch(t Todo, e *db.SessionWork, now, fallback time.Time) {
+	w := t.WaitState
+	if t.Phase != assistantwire.TaskPhaseWaiting || w == nil || w.WaitingOn != assistantwire.WaitExternal ||
+		w.Target.Kind != assistantwire.WaitTargetPR {
+		return
+	}
+	for _, u := range polledPRs(t) {
+		p := prFacts(t, u)
+		if !sameReplyPR(u, w.Target.Ref) || p == nil || p.State != "open" || p.HeadOID == "" ||
+			p.Checks != "pending" || prNeedsWork(*p) || p.CheckedAt.After(now) || now.Sub(p.CheckedAt) > triagePRStatusFreshFor {
+			continue
+		}
+		match := ciPRURL.FindStringSubmatch(u)
+		if len(match) != 3 || match[0] != u {
+			return
+		}
+		if number, err := strconv.Atoi(match[2]); err == nil {
+			e.WakeAt = &fallback
+			keepCIWatch(e, now, match[1], number)
+		}
+		return
+	}
+}
+
+func keepCIWatch(e *db.SessionWork, now time.Time, repo string, number int) {
+	w := &e.Work
 	w.CI = &proto.WorkCI{Repo: repo, Number: number, FallbackAt: *e.WakeAt}
 	at := now.Add(time.Minute).UTC()
 	if at.After(*e.WakeAt) {
@@ -135,7 +167,7 @@ func (s *Service) ciChecks(ctx context.Context, e db.SessionWork, c proto.Sessio
 		return ciResult{}, time.Time{}, false
 	}
 	checks, hasChecks := s.ext.(interface {
-		PRChecks(context.Context, string, int) (github.PRCheckSnapshot, time.Time, bool, error)
+		PRChecks(context.Context, string, int) (githubwire.PRCheckSnapshot, time.Time, bool, error)
 	})
 	retryable := false
 	fromConnector := func(repo string) (ciResult, time.Time, bool) {
@@ -353,9 +385,11 @@ func (s *Service) ciClosedTodo(ctx context.Context, machine, sid, existingProof 
 	started := s.work.started[key]
 	s.work.mu.Unlock()
 	s.todos.mu.RLock()
-	if _, open := s.todos.activeBySession[key]; open {
+	if id, open := s.todos.activeBySession[key]; open {
+		t := s.todos.todos[id]
+		held := t != nil && (t.Supervision.state(*t) == reviewTimedOut || t.Supervision.state(*t) == reviewClosing)
 		s.todos.mu.RUnlock()
-		return false, "", nil
+		return held, "", nil
 	}
 	var identities []string
 	var latest time.Time

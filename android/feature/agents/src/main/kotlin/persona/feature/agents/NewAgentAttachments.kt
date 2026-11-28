@@ -30,6 +30,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreTextFailure
+import persona.core.contracts.ImageLimits
+import persona.core.contracts.ImageLimitsTable
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatComposerService
 import persona.core.contracts.api.DraftUploadState
@@ -38,14 +40,19 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.ComposerMessage
 import persona.feature.chat.ChatWiringSource
 import persona.feature.chat.ComposerAttachment
+import persona.feature.chat.DynamicPickVisualMedia
+import persona.feature.chat.MAX_COMPOSER_FILES
+import persona.feature.chat.PhotoCandidate
 import persona.feature.chat.cameraAllowed
 import persona.feature.chat.chatWiringSource
 import persona.feature.chat.decodeThumbnail
 import persona.feature.chat.deleteCapture
+import persona.feature.chat.measurePhotoBytes
 import persona.feature.chat.openAppSettings
 import persona.feature.chat.appLabel
 import persona.feature.chat.selectAttachment
 import persona.feature.chat.uploadAttachment
+import persona.feature.chat.attachedFile
 import java.io.File
 import persona.feature.chat.R as ChatR
 
@@ -57,13 +64,13 @@ import persona.feature.chat.R as ChatR
  * send the photos as image data with the message instead; Android's composer has always sent them this way.
  */
 internal object NewAgentAttachments {
-    /** Photos at most, as the composer and iOS (`MessagePhotos.limit`). Files have no count limit, 200 MB each. */
-    const val MAX_PHOTOS = 4
+    const val MAX_FILES = MAX_COMPOSER_FILES
 
-    /** The first message: what was typed, the files' paths and the photos' block, as the composer's `message()` writes it. */
-    fun firstMessage(typed: String, attachments: List<ComposerAttachment>, photosOnly: String): String =
+    /** The first message: exact words, video and file tags, then the photos' block, as the composer writes it. */
+    fun firstMessage(typed: String, attachments: List<ComposerAttachment>, photosOnly: String, filesOnly: String = ""): String =
         ComposerMessage.text(typed, attachments.filter { it.image }.mapNotNull { it.path },
-            attachments.filterNot { it.media }.mapNotNull { it.path }, photosOnly = photosOnly)
+            attachments.filterNot { it.media }.mapNotNull { it.attachedFile() },
+            attachments.filter { it.video }.mapNotNull { it.attachedFile() }, photosOnly = photosOnly, filesOnly = filesOnly)
 }
 
 /** How New Agent's attachments reach a computer (#2321). */
@@ -71,11 +78,19 @@ internal class NewAgentUploads(
     /** The upload service of the hub group [machineId] belongs to; null where there is none (offline, the demo). */
     val service: (machineId: String) -> ChatComposerService?,
     /** Puts an attachment on the computer and returns its path there (the composer's `uploadAttachment`). */
-    val upload: suspend (ChatComposerService, SessionKey, ComposerAttachment) -> String,
+    val upload: suspend (ChatComposerService, SessionKey, ComposerAttachment, suspend (Long) -> Unit) -> String,
     /** What the first message says for photos sent without words ("Please look at the photos", the composer's). */
     val photosOnly: () -> String = { "" },
+    /** What it says for ordinary files sent without words or photos ("Please look at the attached files"). */
+    val filesOnly: () -> String = { "" },
+    /** A retained failed row's reason, resolved in the current language. */
+    val errorText: (name: String, error: Exception) -> String,
     /** An attachment left the form (removed, moved off, or sent): a photo this app took goes from the cache. */
     val discard: (ComposerAttachment) -> Unit = {},
+    /** The hub's image limits for [machineId]'s hub group and [agent]; defaults to [ImageLimits.Standard]. */
+    val imageLimits: (machineId: String, agent: String?) -> ImageLimits = { _, _ -> ImageLimits.Standard },
+    /** Optional limits-aware upload hook used in production so photos scale to `limits.maxSide`. */
+    val uploadWithLimits: (suspend (ChatComposerService, SessionKey, ComposerAttachment, ImageLimits, suspend (Long) -> Unit) -> String)? = null,
 )
 
 /**
@@ -85,12 +100,25 @@ internal class NewAgentUploads(
 internal fun ChatWiringSource.composerFor(machineId: String): ChatComposerService? =
     bindingsFor(SessionKey(machineId, "")).value?.composer
 
+internal fun ChatWiringSource.imageLimitsFor(machineId: String, agent: String?): ImageLimits =
+    bindingsFor(SessionKey(machineId, "")).value?.connection?.let { connection ->
+        connection.currentHello.value?.hello?.imageLimits ?: connection.lastHello?.imageLimits
+    }.let { it ?: ImageLimitsTable.Standard }.forAgent(agent)
+
 internal fun newAgentUploads(context: Context, source: ChatWiringSource) = NewAgentUploads(
     service = { source.composerFor(it) },
-    upload = { service, session, attachment -> uploadAttachment(context, service, session, attachment) },
+    upload = { service, session, attachment, onStaged ->
+        uploadAttachment(context, service, session, attachment, onStaged = onStaged)
+    },
     photosOnly = { context.getString(ChatR.string.chat_composer_photos_only) },
+    filesOnly = { context.getString(ChatR.string.chat_composer_files_only) },
+    errorText = { name, error -> uploadFailureRow(name, error).resolve(context.resources) },
     discard = { attachment ->
         if (attachment.uri.isNotEmpty()) CoroutineScope(Dispatchers.IO).launch { deleteCapture(context, attachment.uri) }
+    },
+    imageLimits = { machineId, agent -> source.imageLimitsFor(machineId, agent) },
+    uploadWithLimits = { service, session, attachment, limits, onStaged ->
+        uploadAttachment(context, service, session, attachment, limits = limits, onStaged = onStaged)
     },
 )
 
@@ -126,22 +154,44 @@ internal fun rememberNewAgentPickers(model: NewAgentViewModel): NewAgentPickers?
         if (uris.isEmpty()) return
         scope.launch {
             var note: AgentText? = null
-            val allowed = if (image) model.photoRoom() else uris.size
-            if (uris.size > allowed) note = AgentText(R.string.agents_attach_photo_limit)
-            if (capture) withContext(Dispatchers.IO) { uris.drop(allowed).forEach { deleteCapture(context, it.toString()) } }
+            if (image) {
+                val limits = model.imageLimits()
+                val candidates = mutableListOf<PhotoCandidate>()
+                for (uri in uris) {
+                    try {
+                        val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = true) }
+                        if (attachment.uploadState != DraftUploadState.Invalid) {
+                            val scaled = withContext(Dispatchers.IO) { measurePhotoBytes(context, uri, limits) }
+                            candidates += PhotoCandidate(attachment, scaled)
+                        } else {
+                            if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
+                            note = AgentText.raw(attachment.error ?: resources.getString(ChatR.string.chat_composer_attachment_unreadable))
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
+                        note = AgentText(ChatR.string.chat_composer_attachment_unreadable)
+                    }
+                }
+                if (candidates.isNotEmpty()) model.attachPhotos(candidates)
+                note?.let(model::notice)
+                return@launch
+            }
             val picked = mutableListOf<ComposerAttachment>()
-            for (uri in uris.take(allowed)) {
+            for (uri in uris) {
+                // Invalid picks take no place: keep looking until ten valid files are retained.
+                val room = model.fileRoom() - picked.size
+                if (room <= 0) {
+                    note = AgentText(ChatR.string.chat_composer_file_limit)
+                    continue
+                }
                 try {
-                    val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = image) }
+                    val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = false) }
                     // Over 200 MB, or unreadable: refused at once with the reason, never listed (iOS `FileUploads.start`).
                     if (attachment.uploadState != DraftUploadState.Invalid) picked += attachment
-                    else {
-                        if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
-                        note = AgentText.raw(attachment.error ?: resources.getString(ChatR.string.chat_composer_attachment_unreadable))
-                    }
+                    else note = AgentText.raw(attachment.error ?: resources.getString(ChatR.string.chat_composer_attachment_unreadable))
                 } catch (e: CancellationException) { throw e }
                 catch (_: Exception) {
-                    if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
                     note = AgentText(ChatR.string.chat_composer_attachment_unreadable)
                 }
             }
@@ -149,7 +199,7 @@ internal fun rememberNewAgentPickers(model: NewAgentViewModel): NewAgentPickers?
             note?.let(model::notice)
         }
     }
-    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(NewAgentAttachments.MAX_PHOTOS)) { select(it, true) }
+    val photos = rememberLauncherForActivityResult(DynamicPickVisualMedia()) { select(it, true) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { select(it, false) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         cameraUri?.let { value ->
@@ -177,9 +227,12 @@ internal fun rememberNewAgentPickers(model: NewAgentViewModel): NewAgentPickers?
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) openCamera() else holder[0]?.cameraDenied = true
     }
-    val pickers = remember(photos, files, camera, permission) {
+    val pickers = remember(photos, files, camera, permission, model) {
         NewAgentPickers(
-            photos = { launch { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) } },
+            photos = {
+                val room = model.photoPickerRoom()
+                if (room > 0) launch { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly) to room) }
+            },
             camera = {
                 if (cameraAllowed(context)) openCamera()
                 else try { permission.launch(Manifest.permission.CAMERA) } catch (_: Exception) { holder[0]?.cameraDenied = true }
@@ -235,9 +288,11 @@ internal fun NewAgentAttachmentRows(state: NewAgentState, model: NewAgentViewMod
         val rows = files.size + if (adds) 1 else 0
         files.forEachIndexed { index, file ->
             key(file.id) {
-                val uploading = file.path == null
+                val uploading = file.uploadState == DraftUploadState.Uploading
                 val status = when {
-                    uploading -> stringResource(ChatR.string.chat_attach_uploading)
+                    file.error != null -> file.error!!
+                    file.path == null && file.uploadState == DraftUploadState.Pending -> stringResource(ChatR.string.chat_attach_waiting)
+                    file.path == null -> stringResource(ChatR.string.chat_attach_uploading)
                     file.size != null && file.size!! > 0 -> Formatter.formatShortFileSize(context, file.size!!)
                     else -> ""
                 }
@@ -246,6 +301,8 @@ internal fun NewAgentAttachmentRows(state: NewAgentState, model: NewAgentViewMod
                         leading = { if (uploading) JSpinner(Modifier.size(Tokens.Size.iconXS)) else JIcon(PersonaIcons.file, null, tint = PersonaTheme.palette.ink2) },
                         trailing = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (file.error != null && file.uploadState != DraftUploadState.Invalid)
+                                    JTextButton(stringResource(ChatR.string.chat_attach_retry), { model.retryAttachment(file.id) }, enabled = editable)
                                 JIconButton(PersonaIcons.close, stringResource(R.string.agents_attach_remove, file.name), { model.removeAttachment(file.id) }, enabled = editable)
                             }
                     })
@@ -263,7 +320,7 @@ internal fun NewAgentAttachmentRows(state: NewAgentState, model: NewAgentViewMod
         note?.let { Text(it.resolve(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2) }
     }
     if (menu && pickers != null) {
-        val room = model.photoRoom() > 0
+        val room = model.photoPickerRoom() > 0
         JActionSheet(listOf(
             JAction(stringResource(ChatR.string.chat_composer_photos), PersonaIcons.photo, enabled = room) { menu = false; pickers.photos() },
             JAction(stringResource(ChatR.string.chat_composer_take_photo), PersonaIcons.camera, enabled = room) { menu = false; pickers.camera() },
@@ -281,6 +338,17 @@ internal fun uploadFailure(name: String, error: Exception): AgentText =
         CoreText.Key.UploadTooLarge, CoreText.Key.ComposerFileTooLarge -> AgentText(ChatR.string.chat_attach_too_large, name)
         CoreText.Key.UploadNodeOutdated, CoreText.Key.UploadHubUnsupported -> AgentText(R.string.agents_text_raw, failureReasonText(error))
         else -> AgentText(R.string.agents_attach_upload_failed, name, failureReasonText(error))
+    }
+
+/**
+ * A retained row's title is already the file's name and the notice says the whole failure once; the row says only why.
+ * Size and version refusals keep their complete sentences from [uploadFailure] because those sentences are the reason.
+ */
+internal fun uploadFailureRow(name: String, error: Exception): AgentText =
+    when ((error as? CoreTextFailure)?.text?.key) {
+        CoreText.Key.UploadTooLarge, CoreText.Key.ComposerFileTooLarge,
+        CoreText.Key.UploadNodeOutdated, CoreText.Key.UploadHubUnsupported -> uploadFailure(name, error)
+        else -> AgentText(R.string.agents_text_raw, failureReasonText(error))
     }
 
 /**

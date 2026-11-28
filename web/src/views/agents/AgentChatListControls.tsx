@@ -5,7 +5,6 @@ import {
   buildEvidenceSnippet,
   DEFAULT_DIMENSION_FILTERS,
   SEARCH_SCOPES,
-  sessionHarnessLabel,
   sessionHasError,
   sessionModelId,
   sessionProjectName,
@@ -16,9 +15,9 @@ import {
   type SearchPlan,
   type SearchScope,
 } from "../../lib/agent-chatlist-filter";
-import { awaitsReply, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
-import { ago, backgroundWaiting, sessionPreview, sessionTitle, stateOf } from "../../lib/format";
-import { sessionCard } from "../../lib/folded-rows";
+import { awaitsReply, justFinished, sessionSource, sourceName, type AgentMutes } from "../../lib/agent-groups";
+import { activityOf, backgroundWaiting, sessionPreview, sessionTitle, stateOf, tabLabel } from "../../lib/format";
+import { rowCards } from "../../lib/supervisor-held";
 import { machineWithHub } from "../../lib/mesh";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { openPaletteWith } from "../../lib/palette";
@@ -29,12 +28,14 @@ import { rememberSessionRow, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { ultracodeMarkShown } from "../../lib/ultracode";
 import { SessionMark } from "../../ui/AgentMark";
-import { cx, Menu, useMenu, useNow, type MenuItem } from "../../ui/atoms";
+import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
+import { cx, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { UltraMark } from "../chat/Ultracode";
 import { CURRENT_ROW, type GoFn, type RegFn, type RowMenuFn } from "../SidebarParts";
+import { sidebarRowHover } from "../SidebarRowHover";
 
 type FilterPage = "root" | "scope" | "harnesses" | "projects" | "models" | "machines";
 type FacetKey = Exclude<FilterPage, "root" | "scope">;
@@ -145,7 +146,8 @@ export function AgentFilterButton({
   };
 
   const filterLabel = count > 0 ? `${t("lib-agent-filter.filter")} (${count})` : t("lib-agent-filter.filter");
-  // the title row's other icon buttons' size and colors (⋯, fold all); lit like ⋯ under a sort while something is on
+  // the title row's other icon buttons' size and colors (⋯, fold all), and their 44 px box on a touch screen (they sit
+  // 4 px apart: centred touch-hit squares would overlap); lit like ⋯ under a sort while something is on
   const lit = count > 0 || filters.searchAsCode || chatList;
   return (
     <>
@@ -161,7 +163,7 @@ export function AgentFilterButton({
         title={filterLabel}
         data-testid="agent-filter-button"
         className={cx(
-          "touch-hit relative z-10 flex h-5 min-w-5 shrink-0 items-center justify-center gap-0.5 rounded-[5px] px-0.5 text-[11px] hover:bg-hover hover:text-ink-2",
+          "touch-hit relative z-10 flex h-5 min-w-5 shrink-0 items-center justify-center gap-0.5 rounded-[5px] px-0.5 text-[11px] hover:bg-hover hover:text-ink-2 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11",
           lit ? "font-semibold text-accent" : "text-ink-3",
           filterMenu.anchor && "bg-hover",
         )}
@@ -312,9 +314,9 @@ export function AgentFilterChips({
 
 /** IM Chat-List style Agent Session Row:
  *  - Left: Harness avatar tile + live status dot badge on the bottom-right corner
- *  - Top line: Bold session title (+ Ultracode / Pinned indicator) + relative timestamp on the right
+ *  - Top line: Bold session title (+ Ultracode / Pinned indicator)
  *  - Second line: Role-attributed search evidence snippet (with highlighted match) OR live last message / tool summary
- *  - Bottom compact chips: `Machine · Project · Harness · Model`
+ *  - Bottom compact chips: `Machine · Project · Tab · Model`
  *  - Right action: One-click Pin / Unpin button + `⋯` actions menu
  */
 export const AgentChatListRow = memo(function AgentChatListRow({
@@ -344,14 +346,15 @@ export const AgentChatListRow = memo(function AgentChatListRow({
   ctx: EvalContext;
   onMenu?: RowMenuFn;
 }) {
-  const st = stateOf(s);
-  const awaiting = awaitsReply(s, mutes);
-  const ix = useStore((state) => sessionCard(state.interactions, s.machine_id, s.session_id));
+  const { ix, heldOnly } = useStore((state) => rowCards(state.interactions, s.machine_id, s.session_id));
+  const row = !s.view && heldOnly && stateOf(s) === "needs_you" ? { ...s, state: "working" as const, pending_interactions: 0 } : s;
+  const st = activityOf(row);
+  const title = sessionTitle(s);
+  const awaiting = awaitsReply(row, mutes);
+  const finished = justFinished(row, mutes);
   const draft = draftLine(useLeftDraft(`${s.machine_id}/${s.session_id}`));
-  const line: { lead?: string; text: string; tone?: "needs" | "reply" } | undefined = draft ?? rowLine(s, ix, awaiting);
+  const line: { lead?: string; text: string; tone?: "needs" | "reply" } | undefined = draft ?? rowLine(row, ix, awaiting, finished);
   const previewText = line?.text || plainMarkdown(sessionPreview(s)) || s.activity || "";
-  const now = useNow(60_000, Boolean(s.updated_at));
-  const timeLabel = s.updated_at ? ago(s.updated_at, now) : "";
   const ultra = ultracodeMarkShown(s);
   const hasErr = sessionHasError(s, ctx.interactions);
 
@@ -362,7 +365,9 @@ export const AgentChatListRow = memo(function AgentChatListRow({
 
   const machineLabel = machineWithHub(s.machine_id, ctx.machines) || s.machine_id;
   const projectLabel = sessionProjectName(s);
-  const harnessLabel = sessionHarnessLabel(s);
+  const hasTabAssociation = !!(s.slot_id?.trim() || s.tab_id?.trim());
+  const associatedTab = hasTabAssociation ? tabLabel(s) : "";
+  const tabIdentity = associatedTab ? t("sidebar.tab_named", { label: associatedTab }) : "";
   const modelLabel = sessionModelId(s);
   const source = sessionSource(s);
   const regRow = useMemo(() => reg(k), [reg, k]);
@@ -385,6 +390,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
           go(to)(e);
         }}
         {...(onMenu ? contextMenuProps((at, el) => onMenu(s, el, at)) : {})}
+        {...sidebarRowHover(() => ({ title, session: row, draft, tab: associatedTab }))}
         onMouseEnter={() => hover(k)}
         onFocus={() => hover(k)}
         onBlur={() => hover(null)}
@@ -398,13 +404,13 @@ export const AgentChatListRow = memo(function AgentChatListRow({
         <span className="relative mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-inset shadow-hairline">
           <SessionMark s={s} size={17} />
           <span className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-canvas ring-1 ring-canvas">
-            <StatusMark state={st} size="sm" awaiting={awaiting} waiting={backgroundWaiting(s)} />
+            <StatusMark state={stateOf(row)} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(row)} />
           </span>
         </span>
 
-        {/* Center column: Title + Time, Second line (Evidence snippet or Last message), Metadata chips */}
+        {/* Center column: Title, evidence snippet or latest message, and metadata chips */}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          {/* Line 1: Session Title + Ultracode + Pinned badge + Relative Activity Time */}
+          {/* Line 1: Session title + Ultracode + pinned badge */}
           <span className="flex min-w-0 items-center gap-1.5">
             {pinned && (
               <span className="shrink-0 text-accent" title={t("sidebar.pinned")}>
@@ -417,14 +423,9 @@ export const AgentChatListRow = memo(function AgentChatListRow({
                 active || st === "unread" || st === "needs_you" ? "font-semibold text-ink" : st === "offline" ? "text-ink-3" : "font-medium text-ink-2",
               )}
             >
-              {sessionTitle(s)}
+              {title}
             </span>
             {ultra && <UltraMark size={10} />}
-            {timeLabel && (
-              <span className="shrink-0 text-[11px] text-ink-3 tabular-nums group-hover/row:invisible">
-                {timeLabel}
-              </span>
-            )}
           </span>
 
           {/* Line 2: Role-attributed Evidence Snippet when searching, else Last message / status line */}
@@ -448,7 +449,7 @@ export const AgentChatListRow = memo(function AgentChatListRow({
             </span>
           ) : (
             (line?.lead || previewText) && (
-              <span className="truncate text-[11.5px] leading-4 text-ink-3">
+              <span className="truncate text-submeta leading-4 text-ink-3">
                 {line?.lead && (
                   <span className={cx("mr-1 font-medium", line.tone === "reply" ? "text-green" : "text-attention")}>
                     {line.lead}
@@ -459,7 +460,9 @@ export const AgentChatListRow = memo(function AgentChatListRow({
             )
           )}
 
-          {/* Line 3: Compact metadata capsules (Machine · Project · Harness · Model) */}
+          <BackgroundStallHint session={s} className="text-submeta leading-4" />
+
+          {/* Line 3: Compact metadata capsules (Machine · Project · Tab · Model) */}
           <span className="mt-0.5 flex flex-wrap items-center gap-1 text-[10.5px] leading-4 text-ink-3" data-testid="agent-chatlist-chips">
             {machineLabel && (
               <span className="inline-flex max-w-[96px] items-center gap-0.5 truncate rounded bg-inset px-1.5 py-px">
@@ -473,9 +476,9 @@ export const AgentChatListRow = memo(function AgentChatListRow({
                 <span className="truncate">{projectLabel}</span>
               </span>
             )}
-            {harnessLabel && (
-              <span className="inline-flex max-w-[96px] items-center gap-0.5 truncate rounded bg-inset px-1.5 py-px">
-                <span className="truncate">{harnessLabel}</span>
+            {tabIdentity && (
+              <span className="inline-flex max-w-[96px] items-center gap-0.5 truncate rounded bg-inset px-1.5 py-px" title={tabIdentity}>
+                <span className="truncate">{tabIdentity}</span>
               </span>
             )}
             {modelLabel && (

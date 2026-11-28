@@ -20,13 +20,18 @@ import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantConfig
 import persona.core.contracts.api.AssistantManagement
+import persona.core.contracts.api.AssistantPagesFeature
+import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.BackgroundSupervisor
+import persona.core.contracts.api.HubManagers
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.feature.assistant.LocalAssistantHost
+import persona.feature.assistant.LocalAssistantManagers
 import persona.feature.assistant.R
+import persona.feature.assistant.assistantAttempt
 import persona.feature.assistant.conversationTime
 import persona.feature.assistant.proactive.AssistantProactiveScreen
 import kotlinx.coroutines.launch
@@ -36,7 +41,7 @@ object AssistantSettingsPreview {
     @Volatile var open: String? = null
 }
 
-private enum class SettingsPart { Home, Notes, Memory, MemoryFile, Proactive, Skills }
+private enum class SettingsPart { Home, Notes, Memory, MemoryFile, Places, PlaceEditor, Proactive, Skills, Prompts }
 private enum class SettingsSheet { Machine, Zone }
 
 /**
@@ -49,19 +54,26 @@ internal fun AssistantSettingsScreen(
     machines: List<Machine>,
     onBack: () -> Unit,
     onMoved: suspend () -> Unit = {},
+    /** The shared conversation snapshot, when this page can update Recent directly and refresh it on resume. */
+    conversations: AssistantRepository? = null,
     /** Shown in place of another page (the Persona tab) rather than as a navigation destination: back closes it here. */
     inPlace: Boolean = false,
     /** Opens an assistant conversation (one a run of "Proactive" started, or a follow-up continues). */
     onOpenConversation: (SessionKey) -> Unit = {},
     /** Opens Settings › Models for a purpose (a task's model); null leaves those rows out. */
     onModelConfiguration: ((String, String) -> Unit)? = null,
+    /** Opens Settings › Standing Authorizations; null leaves the row out (shots of this page stay as they were). */
+    onStandingAuthorizations: (() -> Unit)? = null,
     initialManager: String? = null,
+    /** Existing manager API shared by Settings; test hosts may provide it through [management] or the composition local. */
+    managers: HubManagers? = management as? HubManagers ?: LocalAssistantManagers.current,
 ) {
     // The current assistant's profile (docs/assistant/managers.md "Clients"); another one current, the page reads that one's.
     val owner = initialManager?.takeIf(String::isNotBlank) ?: persona.core.designsystem.currentAssistant().id
     key(management, owner) {
         val scoped = remember(management, owner) { management.forManager(owner) }
-        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration, owner)
+        AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration,
+            onStandingAuthorizations, owner, conversations, managers)
     }
 }
 
@@ -69,44 +81,58 @@ internal fun AssistantSettingsScreen(
 private fun AssistantSettingsDetails(
     management: AssistantManagement, machines: List<Machine>, onBack: () -> Unit, onMoved: suspend () -> Unit,
     inPlace: Boolean, onOpenConversation: (SessionKey) -> Unit, onModelConfiguration: ((String, String) -> Unit)?,
-    owner: String,
+    onStandingAuthorizations: (() -> Unit)?,
+    owner: String, conversations: AssistantRepository?, managers: HubManagers?,
 ) {
     val context = LocalContext.current
     val moved by rememberUpdatedState(onMoved)
     // The outbox that binds the main conversation: told when a move clears it.
     val sender by rememberUpdatedState(LocalAssistantHost.current?.mainSender)
-    val controller = remember(management) {
-        AssistantSettingsState(management.settingsApi(), StoredTimezoneChoice(context), mainChanged = { sender?.mainChanged() }) { moved() }
+    val controller = remember(management, conversations) {
+        AssistantSettingsState(management.settingsApi(), StoredTimezoneChoice(context), mainChanged = { sender?.mainChanged() },
+            recentTaskChatsChanged = { conversations?.recentTaskChatsUpdater() ?: { _ -> } }) { moved() }
     }
     val state by controller.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val feedback = LocalAppFeedback.current
+    val savedPrompts = LocalSavedPromptsStore.current
     val preview = remember { AssistantSettingsPreview.open.also { AssistantSettingsPreview.open = null } }
     var part by rememberSaveable { mutableStateOf(when (preview) {
         "notes" -> SettingsPart.Notes
         "memory", "memory-file", "memory-edit", "memory-delete" -> SettingsPart.Memory
+        "places", "places-empty", "places-delete", "place" -> SettingsPart.Places
+        "new-place" -> SettingsPart.PlaceEditor
         "proactive" -> SettingsPart.Proactive
         "skills" -> SettingsPart.Skills
+        "prompts" -> SettingsPart.Prompts
         else -> SettingsPart.Home
     }) }
     var memoryName by rememberSaveable { mutableStateOf<String?>(null) }
+    var placeId by rememberSaveable { mutableStateOf<String?>(null) }
     var sheet by remember { mutableStateOf(when (preview) {
         "machine" -> SettingsSheet.Machine
         "timezone" -> SettingsSheet.Zone
         else -> null
     }) }
     LaunchedEffect(controller) {
-        controller.load()
         controller.loadMemory()
+        controller.loadPlaces()
+    }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        scope.launch { controller.load() }
+        scope.launch { conversations?.let { assistantAttempt { it.refresh() } } }
     }
     // Read each time the page opens, like iOS: a skill put on the machine shows up without a refresh.
     LaunchedEffect(part == SettingsPart.Skills) {
         if (part == SettingsPart.Skills) controller.loadSkills()
     }
     // Captures of a memory file and of the move warning wait for the data they show.
-    LaunchedEffect(state.memory.entries, state.config, machines) {
+    LaunchedEffect(state.memory.entries, state.places.entries, state.config, machines) {
         if (preview in setOf("memory-file", "memory-edit", "memory-delete") && memoryName == null) state.memory.entries?.firstOrNull()?.let {
             memoryName = it.file.name; part = SettingsPart.MemoryFile
+        }
+        if (preview == "place" && placeId == null) state.places.entries?.firstOrNull()?.let {
+            placeId = it.id; part = SettingsPart.PlaceEditor
         }
         if (preview == "move" && state.move == null && state.config != null) {
             machines.firstOrNull { it.id != state.config?.machineId }?.let { controller.requestMove(it, machines) }
@@ -122,6 +148,7 @@ private fun AssistantSettingsDetails(
         when (part) {
             SettingsPart.Home -> onBack()
             SettingsPart.MemoryFile -> part = SettingsPart.Memory
+            SettingsPart.PlaceEditor -> part = SettingsPart.Places
             else -> part = SettingsPart.Home
         }
     }
@@ -133,6 +160,18 @@ private fun AssistantSettingsDetails(
         scope.launch {
             controller.load()
             controller.loadMemory()
+            controller.loadPlaces()
+        }
+    }
+    var standingCount by remember { mutableIntStateOf(0) }
+    val showStanding = onStandingAuthorizations != null
+    LaunchedEffect(management, showStanding) {
+        standingCount = if (!showStanding) 0 else try {
+            management.standingAuthorizations().authorizations.size
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            0
         }
     }
     when (part) {
@@ -140,9 +179,25 @@ private fun AssistantSettingsDetails(
             open = { part = it }, sheet = { sheet = it }, follow = { scope.launch { controller.setFollowPhone(it) } },
             quietTasks = { scope.launch { controller.setMainTasksQuiet(it) } },
             foldBackground = { scope.launch { controller.setMainBackgroundFolded(it) } },
+            recentTaskChats = { scope.launch { controller.setRecentTaskChats(it) } },
+            nextSuggestions = { scope.launch { controller.setNextSuggestions(it) } },
+            dashboards = { scope.launch { controller.setDashboards(it) } },
+            showDashboards = dashboardsShown(LocalHubFeatures.current, owner, LocalManagerRoster.current?.defaultManagerId),
             superviseOwn = { scope.launch { controller.setMainSupervisesOwnTasks(it) } },
+            closeEndedTerminals = { scope.launch { controller.setCloseEndedTerminals(it) } },
+            ownerApproval = { scope.launch { controller.setOwnerReplyApproval(it) } },
+            persistentOwnerCards = { scope.launch { controller.setPersistentOwnerActionCards(it) } },
+            ownerApprovalPhrases = { scope.launch { controller.setOwnerApprovalPhrases(it) } },
             supervisorModel = onModelConfiguration?.let { open -> { open(BackgroundSupervisor.PURPOSE, owner) } },
-            owner = owner, permission = { scope.launch { controller.setDefaultPermission(it) } })
+            onStandingAuthorizations = onStandingAuthorizations, standingCount = standingCount,
+            owner = owner, permission = { scope.launch { controller.setDefaultPermission(it) } },
+            showSavedPrompts = savedPrompts != null, managers = managers, preview = preview)
+        SettingsPart.Prompts -> {
+            if (savedPrompts != null) key(savedPrompts) { SavedPromptsPage(savedPrompts) { part = SettingsPart.Home } }
+            else JListPage(title = stringResource(R.string.assistant_saved_prompts_title), onBack = { part = SettingsPart.Home }) {
+                item { JLoading(text = stringResource(R.string.assistant_settings_loading)) }
+            }
+        }
         SettingsPart.Notes -> NotesPart(shown, onBack = { part = SettingsPart.Home }) { text -> controller.saveNotes(text) }
         SettingsPart.Memory -> MemoryPart(shown, machine, machineName, onBack = { part = SettingsPart.Home },
             onRefresh = { scope.launch { controller.loadMemory() } },
@@ -150,6 +205,20 @@ private fun AssistantSettingsDetails(
         SettingsPart.MemoryFile -> MemoryFilePart(shown, memoryName, preview, onBack = { part = SettingsPart.Memory },
             onSave = { name, content -> controller.saveMemory(name, content) },
             onDelete = { name -> if (controller.deleteMemory(name)) part = SettingsPart.Memory })
+        SettingsPart.Places -> PlacesPart(
+            if (preview == "places-empty") shown.copy(places = PlacesState(entries = emptyList())) else shown,
+            onBack = { part = SettingsPart.Home },
+            onRefresh = { scope.launch { controller.loadPlaces() } },
+            onOpen = { id -> placeId = id; part = SettingsPart.PlaceEditor },
+            onDelete = { place -> controller.deletePlace(place) },
+            previewDelete = preview == "places-delete",
+        )
+        SettingsPart.PlaceEditor -> SavedPlaceEditorPart(
+            shown, placeId,
+            onBack = { part = SettingsPart.Places },
+            onSave = { place -> controller.savePlace(place) },
+            onDelete = { place -> controller.deletePlace(place) },
+        )
         SettingsPart.Skills -> SkillsPart(shown.skills, machineName, onBack = { part = SettingsPart.Home },
             onRefresh = { scope.launch { controller.loadSkills() } })
         // Keeps its own sub-pages and back; back on its first page returns here (the handler above).
@@ -173,6 +242,13 @@ private fun AssistantSettingsDetails(
             dismiss = stringResource(R.string.assistant_settings_cancel) to controller::cancelMove)
     }
 }
+
+/**
+ * Whether Settings › Assistant shows the Dashboards switch (#15017): the hub says `assistant_pages`, which only its default
+ * manager announces, and the page is that assistant's ([defaultManager]; a hub without a roster has only the one).
+ */
+internal fun dashboardsShown(features: Set<String>, owner: String, defaultManager: String?): Boolean =
+    AssistantPagesFeature in features && owner == (defaultManager ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
 
 @Composable
 internal fun Caption(text: String) {
@@ -213,12 +289,36 @@ private fun SettingsHome(
     follow: (Boolean) -> Unit,
     quietTasks: (Boolean) -> Unit = {},
     foldBackground: (Boolean) -> Unit = {},
+    recentTaskChats: (Boolean) -> Unit = {},
+    nextSuggestions: (Boolean) -> Unit = {},
+    dashboards: (Boolean) -> Unit = {},
+    /** The hub says `assistant_pages` and this page is the default assistant's (#15017): the Dashboards switch shows. */
+    showDashboards: Boolean = false,
     superviseOwn: (Boolean) -> Unit = {},
+    closeEndedTerminals: (Boolean) -> Unit = {},
+    ownerApproval: (Boolean) -> Unit = {},
+    persistentOwnerCards: (Boolean) -> Unit = {},
+    ownerApprovalPhrases: (List<String>) -> Unit = {},
     /** Opens the background supervisor's model (Settings › Models); null leaves the row out. */
     supervisorModel: (() -> Unit)? = null,
+    /** Opens Standing Authorizations; null leaves the row out. [standingCount] is shown when it is at least one. */
+    onStandingAuthorizations: (() -> Unit)? = null,
+    standingCount: Int = 0,
     owner: String = persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER,
     permission: (String) -> Unit = {},
+    showSavedPrompts: Boolean = false,
+    managers: HubManagers? = null,
+    preview: String? = null,
 ) {
+    val roster = LocalManagerRoster.current
+    val manager = roster?.manager(owner)?.takeUnless { it.isInstalling }
+    var confirmedName by remember(owner) { mutableStateOf<Pair<String, String>?>(null) }
+    val identityName = confirmedName?.takeIf { manager != null && it.first == manager.shownName }?.second
+        ?: manager?.shownName ?: LocalPersonaName.current
+    var renaming by remember(owner) { mutableStateOf(preview == "rename") }
+    var renameBusy by remember(owner) { mutableStateOf(false) }
+    var renameFailed by remember(owner) { mutableStateOf(false) }
+    val renameScope = rememberCoroutineScope()
     val config = state.config
     val ready = config != null && !state.busy
     val resources = LocalResources.current
@@ -226,12 +326,31 @@ private fun SettingsHome(
         title = stringResource(R.string.assistant_settings_title), onBack = onBack, refreshing = state.loading && config != null, onRefresh = onRefresh,
         summary = config?.let { stringResource(R.string.assistant_settings_summary, machineName) },
     ) {
+        item("identity") {
+            JGroupItem(GroupPosition.Single) {
+                if (manager == null) {
+                    JRow(stringResource(R.string.assistant_settings_name), value = identityName,
+                        leadingIcon = PersonaIcons.person)
+                } else {
+                    JRow(stringResource(R.string.assistant_settings_rename), value = identityName,
+                        leadingIcon = PersonaIcons.edit, enabled = !renameBusy, chevron = false,
+                        onClick = { renameFailed = false; renaming = true })
+                }
+            }
+        }
         if (state.loadFailed) item("load-failed") {
             JNotice(stringResource(R.string.assistant_settings_load_failed), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.assistant_settings_retry), onAction = onRefresh)
         }
         if (config == null && state.loading) item("loading") { JLoading(text = stringResource(R.string.assistant_settings_loading)) }
         state.notice?.let { notice -> item("notice") { JNotice(notice.text.resolve(resources), status = if (notice.error) Status.NeedsYou else Status.Unknown) } }
+        if (showSavedPrompts) {
+            item("in-chats") { JSectionHeader(stringResource(R.string.assistant_saved_prompts_in_chats)) }
+            rows("in-chats", listOf({
+                JRow(stringResource(R.string.assistant_saved_prompts_title), subtitle = stringResource(R.string.assistant_saved_prompts_entry),
+                    leadingIcon = PersonaIcons.document, onClick = { open(SettingsPart.Prompts) })
+            }))
+        }
         if (config != null) {
             item("default-permission") {
                 AssistantDefaultPermission(config.defaultPermissionMode ?: "default", ready,
@@ -255,10 +374,18 @@ private fun SettingsHome(
             }
 
             item("proactive") { JSectionHeader(stringResource(R.string.assistant_settings_proactive_header)) }
-            rows("proactive", listOf(
-                { JRow(stringResource(R.string.assistant_settings_proactive), subtitle = stringResource(R.string.assistant_settings_proactive_subtitle),
-                    leadingIcon = PhIcons.Clock, onClick = { open(SettingsPart.Proactive) }) },
-            ))
+            val proactive: @Composable () -> Unit = {
+                JRow(stringResource(R.string.assistant_settings_proactive), subtitle = stringResource(R.string.assistant_settings_proactive_subtitle),
+                    leadingIcon = PhIcons.Clock, onClick = { open(SettingsPart.Proactive) })
+            }
+            val standing: (@Composable () -> Unit)? = onStandingAuthorizations?.let { open ->
+                val row: @Composable () -> Unit = {
+                    JRow(stringResource(R.string.assistant_standing_title), value = standingCount.takeIf { it > 0 }?.toString(),
+                        leadingIcon = PersonaIcons.privacy, onClick = open)
+                }
+                row
+            }
+            rows("proactive", if (standing == null) listOf(proactive) else listOf(proactive, standing))
             item("proactive-caption") { Caption(stringResource(R.string.assistant_settings_proactive_caption)) }
 
             item("data") { JSectionHeader(stringResource(R.string.assistant_settings_data_header)) }
@@ -271,6 +398,7 @@ private fun SettingsHome(
 
             item("you") { JSectionHeader(stringResource(R.string.assistant_settings_you_header)) }
             val memoryCount = state.memory.entries?.size
+            val placesCount = state.places.entries?.size
             rows("you", listOf(
                 { JRow(stringResource(R.string.assistant_settings_notes), value = stringResource(when {
                     !config.notes.isNullOrBlank() -> R.string.assistant_settings_notes_filled
@@ -283,6 +411,13 @@ private fun SettingsHome(
                     state.memory.failed -> stringResource(R.string.assistant_settings_memory_unreadable)
                     else -> null
                 }, leadingIcon = PhIcons.Brain, onClick = { open(SettingsPart.Memory) }) },
+                { JRow(stringResource(R.string.assistant_settings_places), value = when {
+                    placesCount != null && placesCount > 0 ->
+                        pluralStringResource(R.plurals.assistant_settings_places_count, placesCount, placesCount)
+                    placesCount == 0 -> null
+                    state.places.failed -> stringResource(R.string.assistant_settings_places_unreadable)
+                    else -> null
+                }, leadingIcon = PersonaIcons.place, enabled = ready, onClick = { open(SettingsPart.Places) }) },
             ))
             item("you-caption") {
                 Caption(stringResource(R.string.assistant_settings_you_caption, machineName))
@@ -306,6 +441,33 @@ private fun SettingsHome(
                 item("background-caption") { Caption(stringResource(R.string.assistant_settings_background_folded_caption)) }
             }
 
+            config.recentTaskChats?.let { recent ->
+                item("recent-chats-header") { JSectionHeader(stringResource(R.string.assistant_settings_recent_task_chats_title)) }
+                rows("recent-chats", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_recent_task_chats), recent, recentTaskChats,
+                        leadingIcon = PersonaIcons.message, enabled = !state.busy) },
+                ))
+                item("recent-chats-caption") { Caption(stringResource(R.string.assistant_settings_recent_task_chats_caption)) }
+            }
+
+            config.nextSuggestions?.let { suggestions ->
+                rows("next-suggestions", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_next_suggestions), suggestions, nextSuggestions,
+                        leadingIcon = PersonaIcons.ai, enabled = !state.busy) },
+                ))
+                item("next-suggestions-caption") { Caption(stringResource(R.string.assistant_settings_next_suggestions_caption)) }
+            }
+
+            // #15017: Dashboards, off by default (absent is off); only on a hub that says assistant_pages, for its default assistant.
+            if (showDashboards) {
+                item("dashboards") { JSectionHeader(stringResource(R.string.assistant_settings_dashboards_header)) }
+                rows("dashboards", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_dashboards), config.dashboards ?: false, dashboards,
+                        leadingIcon = PersonaIcons.pluginChart, enabled = !state.busy) },
+                ))
+                item("dashboards-caption") { Caption(stringResource(R.string.assistant_settings_dashboards_caption)) }
+            }
+
             // #4927 / #5084: the background supervisor's off switch and its model, shown only by a hub that has it.
             // The model row is there whichever way the switch is, as Settings › Model configuration lists the use: one
             // rule for both pages. Its current value is on the page it opens.
@@ -321,6 +483,32 @@ private fun SettingsHome(
                 }
                 rows("supervise", superviseRows)
                 item("supervise-caption") { Caption(stringResource(R.string.assistant_settings_supervise_caption)) }
+            }
+
+            // #10355: closing an Agent's terminal when its session ends, off by default; only from a hub that has it.
+            config.closeEndedTerminals?.let { closing ->
+                item("terminals") { JSectionHeader(stringResource(R.string.assistant_settings_terminals_header)) }
+                rows("terminals", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_close_ended_terminals), closing, closeEndedTerminals,
+                        leadingIcon = PersonaIcons.terminal, enabled = !state.busy) },
+                ))
+                item("terminals-caption") { Caption(stringResource(R.string.assistant_settings_close_ended_terminals_caption)) }
+            }
+
+            val ownerReply = config.ownerReplyApproval
+            val persistentOwner = config.persistentOwnerActionCards
+            if (ownerReply != null && persistentOwner != null && config.ownerReplyApprovalPhrases != null) {
+                item("owner-approval") { JSectionHeader(stringResource(R.string.assistant_settings_owner_approval_header)) }
+                rows("owner-approval", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_owner_approval), ownerReply, ownerApproval,
+                        leadingIcon = PersonaIcons.message, enabled = !state.busy) },
+                    { JSwitchRow(stringResource(R.string.assistant_settings_owner_approval_persistent), persistentOwner,
+                        persistentOwnerCards, leadingIcon = PersonaIcons.schedule, enabled = !state.busy) },
+                ))
+                item("owner-approval-caption") { Caption(stringResource(R.string.assistant_settings_owner_approval_caption)) }
+                item("owner-approval-phrases") {
+                    OwnerApprovalPhrasesEditor(config, state.busy, ownerApprovalPhrases)
+                }
             }
 
             item("zone") { JSectionHeader(stringResource(R.string.assistant_settings_zone)) }
@@ -350,6 +538,59 @@ private fun SettingsHome(
             ))
             item("reach-caption") { Caption(stringResource(R.string.assistant_settings_reach_caption)) }
         }
+    }
+    if (renaming) {
+        JManagerNameDialog(
+            title = stringResource(R.string.assistant_settings_rename),
+            confirm = stringResource(R.string.assistant_settings_save),
+            initial = identityName,
+            busy = renameBusy,
+            failure = stringResource(R.string.assistant_settings_save_failed).takeIf { renameFailed },
+            placeholder = stringResource(R.string.assistant_settings_name_placeholder),
+            invalidName = stringResource(R.string.assistant_settings_name_invalid),
+            onDismiss = { if (!renameBusy) renaming = false },
+            onConfirm = { typed ->
+                val api = managers
+                val current = manager
+                if (api == null || current == null || renameBusy) {
+                    if (!renameBusy) renameFailed = true
+                } else {
+                    renameScope.launch {
+                        renameBusy = true
+                        renameFailed = false
+                        try {
+                            val renamed = api.rename(current.id, typed.trim())
+                            // Show the confirmed value at once; the next roster value then owns every surface.
+                            confirmedName = current.shownName to renamed.shownName
+                            renaming = false
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            renameFailed = true
+                        } finally {
+                            renameBusy = false
+                        }
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun OwnerApprovalPhrasesEditor(config: AssistantConfig, busy: Boolean, save: (List<String>) -> Unit) {
+    val confirmed = config.ownerReplyApprovalPhrases.orEmpty()
+    var text by rememberSaveable(config.manager) { mutableStateOf(confirmed.joinToString("\n")) }
+    LaunchedEffect(confirmed) { text = confirmed.joinToString("\n") }
+    val phrases = text.lines().map(String::trim).filter(String::isNotEmpty)
+    Column(Modifier.fillMaxWidth().padding(top = Tokens.Space.s)) {
+        JTextField(text, { text = it }, Modifier.fillMaxWidth(),
+            label = stringResource(R.string.assistant_settings_owner_approval_phrases),
+            placeholder = stringResource(R.string.assistant_settings_owner_approval_phrases_placeholder),
+            enabled = !busy, minLines = 2, maxLines = 6)
+        Caption(stringResource(R.string.assistant_settings_owner_approval_phrases_caption))
+        JButton(stringResource(R.string.assistant_settings_owner_approval_save_phrases), { save(phrases) },
+            Modifier.fillMaxWidth().padding(top = Tokens.Space.s), enabled = !busy && phrases != confirmed)
     }
 }
 

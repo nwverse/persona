@@ -27,54 +27,17 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.InboxItemUiRoute
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 // A Feishu document's notice in the inbox (docs/assistant/inbox.md "Docs: mentions in sheets, bases, and documents", #2323): a sheet / Base / docx that @'d the user or
 // commented to them. It has no chat behind it, so it opens its own page: what happened, the rows about the user, and
 // "Open document" in the app's Feishu document reader. The same page is where an item of a shape this app does not know opens,
 // instead of the mail page (which can only fail for it).
-
-/** An item's `doc` block; [reply] is where a reply goes (`reply.label`: "Comment on this row"…), [error] why the hub could not read it. */
-@Serializable
-data class InboxDocRef(
-    val url: String,
-    val type: String = "",
-    val notice: String = "",
-    val rows: List<InboxDocRow> = emptyList(),
-    val reply: String? = null,
-    val error: String? = null,
-)
-
-/** A row about the user: its title, its other fields, and its status columns (as name / value). */
-@Serializable
-data class InboxDocRow(
-    val title: String,
-    val table: String? = null,
-    val fields: List<InboxDocField> = emptyList(),
-    val status: List<InboxDocField> = emptyList(),
-)
-
-@Serializable
-data class InboxDocField(val name: String, val value: String)
-
-/** The hub's `doc` block; null without one or without a link to open. Unknown fields are ignored. */
-fun inboxDocRef(doc: JsonObject?): InboxDocRef? {
-    doc ?: return null
-    val url = doc.text("url").ifBlank { doc.text("link") }.ifBlank { return null }
-    fun JsonObject.list(key: String) = (get(key) as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-    fun JsonObject.pairs(key: String) = list(key).map { InboxDocField(it.text("name"), it.text("value")) }.filter { it.name.isNotBlank() }
-    return InboxDocRef(
-        url = url,
-        type = doc.text("type"),
-        notice = doc.text("notice"),
-        rows = doc.list("rows").map { InboxDocRow(it.text("title"), it.cursor("table"), it.pairs("fields"), it.pairs("status")) },
-        reply = (doc["reply"] as? JsonObject)?.cursor("label"),
-        error = doc.cursor("error"),
-    )
-}
 
 /** What kind of document, as Feishu names it. */
 internal fun docTypeName(res: Resources, type: String?): String = res.getString(when (type) {
@@ -107,7 +70,22 @@ internal fun docKindLabel(res: Resources, doc: InboxDocRef?): String =
 @Composable
 fun InboxItemDetailScreen(repository: InboxRepository, route: InboxItemDetailRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
-    val record = inbox.records.inboxRecord(route.itemId)
+    val listedRecord = inbox.records.inboxRecord(route.itemId)
+    var lookup by remember(route.itemId) { mutableStateOf<InboxItemLookupResult?>(null) }
+    var lookupAttempt by remember(route.itemId) { mutableIntStateOf(0) }
+    LaunchedEffect(repository, route.itemId, listedRecord, lookupAttempt) {
+        if (listedRecord == null) {
+            lookup = null
+            lookup = readInboxItem(repository, route.itemId)
+        } else lookup = null
+    }
+    val record = listedRecord ?: (lookup as? InboxItemLookupResult.Found)?.record
+    var contextRevision by remember { mutableIntStateOf(0) }
+    var assistantContext by remember(record?.item, contextRevision) { mutableStateOf<String?>(null) }
+    LaunchedEffect(repository, record?.item, contextRevision) {
+        val current = record ?: return@LaunchedEffect
+        assistantContext = if (current.isAssistantRow) repository.personaContext(current.item.id)?.text else null
+    }
     val open = LocalLarkLinkOpener.current
     val scope = rememberCoroutineScope()
     var refreshing by remember { mutableStateOf(false) }
@@ -116,20 +94,69 @@ fun InboxItemDetailScreen(repository: InboxRepository, route: InboxItemDetailRou
         onRefresh = {
             scope.launch {
                 refreshing = true
-                try { repository.refreshNow() } catch (e: CancellationException) { throw e } catch (_: Exception) { } finally { refreshing = false }
+                try {
+                    repository.refreshNow()
+                    if (record == null) lookupAttempt++
+                } catch (e: CancellationException) { throw e } catch (_: Exception) { } finally {
+                    refreshing = false
+                    contextRevision++
+                }
             }
         }) {
         item("item-extension-notice") { InboxExtensionNotice(route.itemId, route) }
-        if (record == null) item("item-missing") { StatusText(stringResource(R.string.inbox_item_missing)) }
-        else inboxItemBody(record) { url -> open?.invoke(url, inbox.contentSource) }
+        if (record == null) {
+            when (val result = lookup) {
+                null -> item("item-loading") { JLoading(text = stringResource(R.string.inbox_loading)) }
+                is InboxItemLookupResult.Failed -> item("item-failed") {
+                    JNotice(stringResource(R.string.inbox_refresh_failed), actionLabel = stringResource(R.string.inbox_retry),
+                        onAction = { lookupAttempt++ })
+                }
+                InboxItemLookupResult.Missing -> item("item-missing") { StatusText(stringResource(R.string.inbox_item_missing)) }
+                is InboxItemLookupResult.Found -> Unit
+            }
+        } else inboxItemBody(record, assistantContext, inbox.contentSource?.transport?.replyImages) { url -> open?.invoke(url, inbox.contentSource) }
     }
 }
 
-internal fun LazyListScope.inboxItemBody(record: InboxRecord, onOpen: (String) -> Unit) {
+private fun InboxRecord.additionalAssistantText(text: String, loadedContext: Boolean): String {
+    val summary = item.summary?.trim()?.takeIf { it.isNotEmpty() } ?: return text
+    val trimmed = text.trim()
+    fun String.afterSummary() = if (startsWith(summary) && getOrNull(summary.length)?.isWhitespace() != false)
+        substring(summary.length).trimStart() else null
+    val title = item.title.trim()
+    if (loadedContext && title.isNotEmpty() && trimmed.startsWith(title) && trimmed.getOrNull(title.length)?.isWhitespace() != false) {
+        val content = trimmed.substring(title.length).trimStart().afterSummary()
+        if (content != null) return content
+        if (title != summary) return text
+    }
+    return trimmed.afterSummary() ?: text
+}
+
+internal fun LazyListScope.inboxItemBody(record: InboxRecord, context: String? = null,
+    images: persona.core.contracts.api.ReplyImageSource? = null, onOpen: (String) -> Unit) {
     val doc = record.doc
     if (doc == null) {
+        if (record.isAssistantRow) {
+            record.connector?.url?.takeIf { it.isNotBlank() }?.let { url ->
+                item("assistant-open-chat") {
+                    JButton(stringResource(R.string.inbox_open_chat), { onOpen(url) }, kind = JButtonKind.Secondary,
+                        size = JButtonSize.Medium, icon = PersonaIcons.openExternal)
+                }
+            }
+            if (!record.onlyTitleAndSummary(context)) {
+                val loadedContext = context?.takeIf { it.isNotBlank() }
+                (loadedContext ?: record.item.preview).takeIf { it.isNotBlank() }?.let { text ->
+                    val content = record.additionalAssistantText(text, loadedContext != null)
+                    if (content.isNotBlank()) {
+                        item("assistant-content-header") { JSectionHeader(stringResource(R.string.inbox_content)) }
+                        item("item-preview") { InboxPictureText(content, images) }
+                    }
+                }
+            }
+            return
+        }
         record.item.preview.takeIf { it.isNotBlank() }?.let { text ->
-            item("item-preview") { Text(text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+            item("item-preview") { InboxPictureText(text, images) }
         }
         return
     }

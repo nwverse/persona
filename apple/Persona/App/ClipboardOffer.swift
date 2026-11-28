@@ -1,7 +1,6 @@
 import Foundation
-#if canImport(UIKit)
+import PersonaWire
 import UIKit
-#endif
 
 /// "Send what you just copied to MacBook?" (#3064): back in the app after copying something elsewhere, a toast offers to
 /// send it to a computer that shares its clipboard. Opt-in (Settings › Phone Data), off by default. Only the pasteboard's

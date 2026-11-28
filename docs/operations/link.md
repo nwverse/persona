@@ -10,28 +10,38 @@ instead, the client on the computer connects to the hub and reconnects on its ow
 The user decided again on 2026-11-02 ([plan-hub-center.md](../archive/operations/plan-hub-center.md), sections 0 and 4): hubs and computers always connect through a preinstalled service on the computer, not SSH (too much permission);
 the computer can connect to the hub or accept a connection from it. The recommendation is one hub for the whole household, with a **node service** on every other computer: resident node plus persona-link, installed by one command or one App.
 
-## On computers: the web app and Persona Link
+## On computers: Persona Link and its tray
 
-On a computer, Persona has an Electron desktop app and an independently installable Persona Link ([desktop.md](../desktop/desktop.md)).
-
-- **The desktop app** wraps the hub-hosted web UI and adds native notifications, presence and desktop integration. A computer you only chat from, or use another computer's Agents from, does not need a local node or Link.
-- **Persona Link** runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen helper. Its CLI/service works without the desktop app, including on Linux and headless computers.
-- The local setup window offers fixed status/pairing/reconnect/node-service operations for a separately installed Link. It does not silently install a service. The Mac launchd agent and Windows scheduled task run independently of the desktop app. The former menu bar and Windows tray implementations are archived in [link-menu-tray.md](../archive/operations/link-menu-tray.md).
-
-A desktop need goes into the shared web UI first, and into Persona Link only when the browser cannot meet it (for example local node connectivity, pairing or a recording helper). The desktop app and Link are not a bundled installation.
+Persona Link runs on a computer whose Agents the hub should reach, and does what a browser cannot: it connects the hub to the resident node service and owns the Persona Screen and Persona Input helpers.
+It is complete on its own: its CLI and service, and on Mac and Windows its menu bar App or tray icon, need no other Persona program on the computer, and nothing else installs, starts, stops or manages it.
+A computer you only chat from, or use another computer's Agents from, needs no Link: the web app in a browser is enough.
 
 ### Independent Link service
 
 | | Mac | Linux | Windows |
 | --- | --- | --- | --- |
-| Install | `scripts/app/mac-link.sh install` builds the independent helpers and registers both services | `persona-link install` or the release install command | `persona-link install --personad <personad.exe>` |
+| Install | `scripts/app/mac-link.sh install` builds the App with its helpers and registers both services | `persona-link install` or the release install command | `persona-link install --personad <personad.exe>` |
 | Connector | launchd `com.persona.link`, running `~/.persona/bin/persona-link` | systemd user `persona-link.service` | Scheduled task `Persona Link` and its supervisor |
 | Resident node | launchd `com.persona.node`, a separate service | systemd user `personad-node` | The same scheduled task |
-| Management | Fixed desktop setup actions or the same CLI; neither needs a menu bar app | CLI or the desktop setup window | CLI or the desktop setup window; no tray required |
+| Management | The menu bar App "Persona Link", or the CLI | The CLI | The tray icon, or the CLI |
 
-The connector always reads `PERSONA_HOME` in its service environment, otherwise its default data directory. The Electron setup window invokes only the fixed `~/.persona/bin/persona-link` (`.exe` on Windows) and does not pass arbitrary paths or credentials. Closing or uninstalling the desktop app does not stop an independently installed Link service.
+The connector always reads `PERSONA_HOME` in its service environment, otherwise its default data directory. Quitting the menu bar App or the tray does not stop the connector: the service keeps the computer reachable either way.
 
-The former menu bar and tray are in [the archive](../archive/operations/link-menu-tray.md), including the historical migration procedure. Stop the old parent UI before installing the new service so two connector instances do not fight over the run lock; keep the existing `link.json` and resident-node service. `persona-link install` refuses to take over an unmanaged running connector and explains this.
+### Tray and menu bar App
+
+The Mac menu bar App (`apple/PersonaLink/App`) and the Windows tray (`server/internal/linktray`, [windows.md](windows.md), "Tray") are the same thing on two systems, item for item. They only pair the computer and keep its connection:
+no notifications, no "Needs you" list, no presence, and nothing that opens or drives a session; those belong to the Persona apps and the web app.
+
+- **They read, never host**: the service runs the connector. The App and the tray read `link.json` and `link.status.json` (and whether the pid in it is a live persona-link), and every action runs the same CLI a person would (`persona-link reconnect`, `pair`, `mode`, `address`, `name`, `ssh`, `install`), so the result is the same either way.
+- **Icon**: the Persona helper, the same art as the app icon (`scripts/assets/make_icon.py link`): a template image in the Mac menu bar, in color in the Windows notification area. It is faded while the link is not up (connecting, offline, not paired),
+  and a dot in its corner marks the states that need you (waiting for your OK on the phone, background service not running, offline).
+- **Status**: mode (active or passive), the address in use and for how long, or why it is down; the hub's name and linked group; whether this computer's node is online; the name the hub gives this computer.
+- **Actions**: **Reconnect now** (active mode), **Pair / Change connection…** (the pairing window, active and passive, with the SSH tunnel), **Rename this computer…** (connected and confirmed), installing or restarting the background service when it is missing or stopped,
+  **Launch at login** for the App or tray itself (the service starts at login either way), opening the log folder, and **Quit**.
+- **Pairing links**: `persona://link?…` opens the pairing window with the link filled in; it never pairs on its own. Pairing runs only after **Pair**, once the window has shown which hub and which name.
+
+The archived [link-menu-tray.md](../archive/operations/link-menu-tray.md) records the earlier menu bar App, which hosted the connector itself and also showed "Needs you" and notifications; neither returns.
+
 ## Two modes
 
 The same persona-link supports both, selected during pairing and changeable anytime (`persona-link mode active|passive` or the desktop setup window). Each mode stores its pairing separately, so switching back doesn't require pairing again.
@@ -62,18 +72,18 @@ curl -fsSL <site>/install.sh | sh -s -- --node --listen [:18663] [--addr <addres
 - `--pair` / `--listen` imply `--node`; so do `PERSONA_ROLE=node`, `PERSONA_PAIR`, `PERSONA_LISTEN`. With no options and a terminal, it asks;
   if a hub is already detected on the LAN (mDNS `_persona-hub._tcp`, `persona-link discover`), it first says "One hub is enough for the whole household; install the node service on this computer."
 - Without systemd, it still installs the binaries and prints alternative instructions (see "Linux (headless)").
-- On Mac, `--node` installs the connector and resident-node launchd agents and pairs; the Electron desktop is not required.
-- Publishing: `scripts/publish.sh` builds four extra `persona-link-<os>-<arch>.gz` and `persona-node-<os>-<arch>.gz` files alongside personad and adds them to the same `SHA256SUMS`.
+- On Mac, `--node` installs the connector and resident-node launchd agents and pairs; the menu bar App is optional.
+- Publishing: `scripts/release/publish.sh` builds four extra `persona-link-<os>-<arch>.gz` and `persona-node-<os>-<arch>.gz` files alongside personad and adds them to the same `SHA256SUMS`. Persona Link also has Windows amd64 and arm64 downloads named `persona-link-windows-<arch>.exe.gz`; `latest.json` indexes every connector under `links`.
 
 **Mac**: install the independent **Persona Link** helpers (`./scripts/app/mac-link.sh install`; a step-by-step guide is in [persona-link-install.md](persona-link-install.md)). The installer places persona-node in `Contents/Helpers/persona-node` and invokes
 `persona-link install --node-bin <bundled persona-node>`, which installs the connector LaunchAgent `com.persona.link` and the resident-node LaunchAgent `com.persona.node`.
-The connector is copied to `~/.persona/bin/persona-link`, the fixed path the Electron setup window uses. An existing node agent is left unchanged (for example one from `scripts/deploy/node-launchd.sh install`); one that runs personad moves over with `persona-link node switch`. A deleted node service is not silently reinstalled.
+The connector is copied to `~/.persona/bin/persona-link`, the fixed path the menu bar App runs. An existing node agent is left unchanged (for example one from `scripts/deploy/node-launchd.sh install`); one that runs personad moves over with `persona-link node switch`. A deleted node service is not silently reinstalled.
 The agent it writes has `ProcessType=Interactive` (the same as `node-launchd.sh`), so launchd doesn't throttle the node like a background job. Since an existing installation is left unchanged, one written before #5944 lacks it: `personad node doctor` reports it and `personad node doctor --fix` adds it (docs/server/server.md "Scheduling and privacy on the Mac").
 App updates don't replace the installed resident node. Nodes supporting the update protocol can be remotely updated by the hub over the existing connection, with backup, rollback and online confirmation; first-time local upgrades for old nodes, progress and installation boundaries are in [node-update.md](node-update.md) (#1158).
 
-**Windows** (Orca engine, [windows.md](windows.md) ("Install and start at logon")): `persona-link install --personad <personad.exe> [--pair '<link>']`, without admin privileges.
+**Windows** (Orca engine, [windows.md](windows.md) ("Install and start at logon")): download `persona-link-windows-amd64.exe.gz` or `persona-link-windows-arm64.exe.gz` from the GitHub release, verify and unpack it using the PowerShell commands there, then run `persona-link install [--personad <personad.exe>] [--pair '<link>']`, without admin privileges.
 Registers the current user's scheduled task **Persona Link**, starting at sign-in and checked every 5 minutes; it runs a windowless supervisor (`persona-link supervise`), which starts
-persona-link and the resident node and restarts them on exit. Both are in one task (no separate `node install`). The retired tray is not installed. There is no one-command installer script or installation package (#1179).
+persona-link and the resident node and restarts them on exit. Both are in one task (no separate `node install`). `install` also adds the tray icon, started at sign-in (`--no-tray` leaves it out). There is no one-command installer script or installation package; the release provides the connector executable.
 
 ### The device's program
 
@@ -95,6 +105,46 @@ A device runs persona-node (`server/cmd/persona-node`), the node and the command
 - Windows has no persona-node build yet: its node runs personad.
 
 **On the hub side**: active-mode computers are kind `link` in hub.json; passive-mode ones are kind `service` (the hub side implemented in #435; paste the link in admin **Computers › Add Computer › Hub connects**).
+
+## Claude Code plugin
+
+The Persona plugin for Claude Code (`integrations/claude-code-plugin`) lets the owner's own messages reach a Claude Code session Persona has no terminal for, such as a Code session in Claude's desktop app, the way typed input does. The resident node carries the plugin of its own build and keeps it installed; Persona Link shows it and switches it. Implementation: `server/internal/claudeplugin`, wired into the node in `server/internal/node/claudeplugin.go`.
+
+**Where it comes from.** The plugin's files are packed into personad and persona-node at build time (`go generate ./internal/runtimepkg`, which `scripts/deploy/deploy.sh`, `scripts/release/publish.sh`, the `Dockerfile` and `scripts/app/mac-link.sh` run; `runtimepkg.Assets`), so the installed plugin is always the node's own version. A node built without that step (a plain `go build`) reports `unavailable`. Updating the node, by Redeploy ([node-update.md](node-update.md)) or a new Link install, brings a new plugin, which the node puts in place at its next check.
+
+**How it is installed.** Only with Claude Code's own CLI, never by editing Claude Code's files, and every command names this plugin or its marketplace alone:
+
+```sh
+claude plugin marketplace add ~/.persona/claude-code-plugin      # the folder is the plugin's own marketplace, "persona"
+claude plugin install persona@persona --scope user                # an update: claude plugin update persona@persona --scope user
+```
+
+The node writes the plugin to `~/.persona/claude-code-plugin` (under `PERSONA_HOME` when that is set): a stable folder that Link and node updates keep. A plugin from a folder marketplace is read from that folder, so an update is new files there plus `claude plugin update`. The commands run with `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1`, in the data directory (never a project), and with `--json`; their results, not their wording, are read.
+
+**Which Claude Code.** The newest of the CLI the node finds (`PATH`, `~/.local/bin` and the other places it looks for `claude`) and the desktop app's own copy (`<app data>/Claude*/claude-code/<version>/…`). Without either, or without a config directory, nothing is installed: the state is `claude_missing`.
+
+**Which config directories.** The user's `~/.claude`, which the desktop app's Code sessions use whatever the environment says, and the directory the node's own `CLAUDE_CONFIG_DIR` names when that is another one outside the data directory. Commands for `~/.claude` run with `CLAUDE_CONFIG_DIR` unset, never set to `~/.claude` ([lessons/agents.md](../lessons/agents.md) "Claude Code plugins from a folder marketplace"). Persona's own profiles and the throwaway directories other claudes were seen with are left alone, and a directory that does not exist yet is never created.
+
+**When.** The resident node checks about 20 seconds after it starts, then every hour; a check that failed is tried again after 1, 5 and 15 minutes, then hourly. A check runs `claude --version` and `claude plugin list --json` for each directory (a few seconds) and installs or updates only when something differs. Checks never overlap: the node and the commands below take `~/.persona/claude-plugin.lock`.
+
+**Your choices win.**
+
+- The automatic install is on by default on macOS and Windows, where the desktop app runs, and off on Linux until `persona-link plugin on`. The choice is the computer's, kept in `~/.persona/claude-plugin.json` (`"auto": false` turns it off).
+- A plugin turned off in Claude Code (`claude plugin disable`, or **+ › Plugins** in the desktop app) stays off and is not updated; the state is `disabled`. Turned on again there, it is kept up to date again.
+- A plugin removed in Claude Code after the node installed it is not put back (`opted_out: uninstalled`). `persona-link plugin install`, `persona-link plugin on` or the desktop toggle undo either choice.
+
+**Running sessions.** Claude Code loads plugins when a session starts. After an install or update, new sessions (terminal and desktop app alike) have it, and sessions already open keep what they loaded until they restart or run `/reload-plugins`. Nothing is restarted for it; `changed: true` in the status says a check installed or updated it.
+
+| Command | What it does |
+| --- | --- |
+| `persona-link plugin status [--json]` | Checks now and says how it stands in each config directory |
+| `persona-link plugin install` | Installs or updates it now, turns it back on where it was turned off in Claude Code, forgets earlier opt-outs and turns the automatic install on |
+| `persona-link plugin uninstall` | Removes it and its marketplace from every config directory, deletes `~/.persona/claude-code-plugin` and turns the automatic install off |
+| `persona-link plugin on` / `off` | Turns only the automatic install on (and checks now) or off (what is installed stays, without updates) |
+
+`persona-link plugin` runs the resident node's program (`personad claude-plugin <op>` or `persona-node claude-plugin <op>`, which print the status as JSON) and needs a node on the computer; a node from before this says to update it. `persona-link status` shows the last check without running anything (`claude-plugin.status.json`). The Electron setup window's **Run Agents on this computer** section shows the state and a **Keep the Persona plugin for Claude Code installed** toggle, which calls `plugin install` / `plugin uninstall`; it receives the state words only, never paths. `persona-link uninstall --purge` removes the connector, not the node or its plugin: run `persona-link plugin uninstall` first to take the plugin out of Claude Code too.
+
+**Status to the hub.** `node.info` carries `claude_plugin` and the node sends a `claude.plugin` notification when it changes ([protocol.md](../protocol/protocol.md) "Node handshake"); the manager puts it on the machine as `claude_plugin` (`proto.ClaudePlugin`): `state` (`installed`, `outdated`, `disabled`, `not_installed`, `error`, `claude_missing`, `unavailable`), `auto`, `version`, `bundled`, `claude_version`, `config_dirs` (`path`, `state`, `version`, `opted_out`, `error`), `changed`, `error`, `checked_at`, `next_check`. The hub forwards it; no client shows it yet, and there is no per-machine switch in the apps.
 
 ## Responsibilities
 
@@ -132,7 +182,8 @@ persona-link ── WSS /api/v1/link ──▶ hub TLS port (public.tls_listen)
   ← open {id}                                  hub wants to connect to node
       persona-link connects ~/.persona/node-attach.sock first, then opens WSS /api/v1/link/stream?id=<id>, forwarding bytes unchanged both ways
   → open_failed {id, error}                    Can't open (resident node not running, etc.); hub records the reason as this computer's error
-  ← node {online, error}                       Whether hub connected to node, reported by `persona-link status`
+  ← node {online, error}                       Whether hub connected to node, reported by `persona-link status`: sent when the
+                                               node's connection changes or is resumed, and on connect when it is already up (#11262)
   → rename {id, machine_name}                  Asks the hub to call this computer machine_name ("": its id again); see "The computer's name"
   ← renamed {id, machine_name | code, error}   The hub's answer to that rename: the name it has now, or why not
   ← attention {attention}                      The "Needs you" summary, to a link whose hello asked for it: right after endpoints, then on every change
@@ -145,6 +196,7 @@ Both sides ignore a message type they don't know.
 - Starts trying the next candidate every 300 ms, several concurrently; the first connection wins and late successes are closed. Each candidate has an 8-second timeout.
 - Away from home, even if LAN addresses fail or hang, it waits only another 300 ms before trying the next. These are configured values, not measured results.
 - With an optional SSH tunnel (`ssh` in `link.json`, see "[SSH tunnel](#ssh-tunnel)" below): **Always use SSH** dials only the tunnel; otherwise direct candidates are raced first and the tunnel is used if all fail (and tried first on the next reconnect when the tunnel was the last working route, while probing direct candidates every 2 minutes to switch back).
+- With an outbound HTTP(S) proxy (`proxy` in `link.json`, or `HTTPS_PROXY` / `ALL_PROXY`, see "[Outbound proxy](#outbound-proxy)" below): when every direct candidate fails, the candidates are raced through the proxy, before the SSH tunnel; it is sticky and switches back to direct the same way. With **Always use the proxy** (`proxy_always`), only the proxy route is dialed.
 
 **Hub name and linked group**
 - The hub includes `hub_name` in `endpoints`: `name` from hub.json, otherwise the short hostname of the hub machine; in Docker (where the hostname is a container id), `hub-<first 6 characters of hub_id>`
@@ -201,6 +253,7 @@ Both sides ignore a message type they don't know.
 
 **Reconnect**
 - Exponential backoff: starts at 1 second, doubles up to 1 minute; randomized between half and full delay each time. After a link connected for a full minute disconnects, it starts over.
+- When a normal wait exceeds 3 seconds, Link races eligible direct addresses and outbound proxy targets with an unauthenticated `GET /api/v1/health`, using the same TLS verification as the link. If none returns a 2xx response with `"ok": true` at the start, Link probes every 2 seconds and retries as soon as one does. SSH logins happen only on full connection attempts. SSH-only configurations, including **Always use SSH**, skip these probes, as do credential, replacement and rate-limit waits. With **Always use the proxy**, Link probes only the proxy targets, never a direct address, and skips the probes when no proxy applies.
 - Special cases:
 
   | Case | Wait |
@@ -278,6 +331,21 @@ location /<prefix>/ {
 obtain this computer's link credentials and connect hub streams to its resident node. This is the same as accessing the web app in a browser: better than plaintext, weaker than pinning. The proxy-to-hub hop is plaintext and must be on a trusted network (same machine or LAN).
 Prefer the hub's own TLS and fingerprint when possible; when hub TLS is enabled, pairing links always carry `fp` and won't use system trust.
 
+## Outbound proxy
+
+A computer that reaches the internet only through an HTTP(S) proxy (common on company networks) can still use active mode: persona-link reaches the hub with an HTTP `CONNECT` through that proxy (#10659). Passive mode, the hub and the manager are unchanged.
+
+- **Which proxy**: `proxy` in `link.json` when it is set (`persona-link proxy <url>`, or `--proxy <url>` on `pair` and `install`, which saves it before pairing so the pairing goes through it too), else `HTTPS_PROXY`, then `ALL_PROXY` (each in lower case before upper case, as Go's `net/http` reads them) from persona-link's own environment. A launchd agent, systemd user service or scheduled task rarely has those variables, so on a service set the proxy with `persona-link proxy`. `persona-link proxy --off` (`"proxy": "off"`) uses no proxy, not even the environment's; `persona-link proxy --env` removes the setting again; `persona-link proxy` shows it. The URL is `http://` or `https://` with `[user:password@]host[:port]`; a bare `host:port` means `http://`, as for `HTTPS_PROXY`. SOCKS proxies are not supported: one in the environment is left to the programs it is for, and `persona-link proxy` refuses one (a hand-edited unusable `proxy` shows as invalid in `status` and fails only the proxy route). `NO_PROXY` / `no_proxy` exempts hub addresses, with Go's rules: `localhost` and loopback addresses never go through a proxy.
+- **Always use the proxy** (#12299): for a network where direct connections are slow to fail or not allowed at all, `persona-link proxy --always` (`"proxy_always": true`) makes the link and every stream go only through the proxy: no direct tries, no direct probes, no switching back. `persona-link proxy <url> --always` sets both at once, `persona-link proxy --no-always` turns it off, and `--proxy-always` / `--no-proxy-always` do the same on `pair` and `install` (saved before pairing, so the pairing goes only through the proxy too). It needs a proxy URL saved in `link.json`; the environment's alone is not enough, as a service rarely has it. `persona-link proxy --off` and `persona-link proxy --env` turn it off with the URL. It cannot be on together with **Always use SSH**: each refuses while the other is set, and says which command turns the other off. When no proxy applies to the hub's addresses at run time (a hand-edited setting, `NO_PROXY`, or only loopback addresses), Link makes no direct attempt and waits with a sentence saying so.
+- **Routing order**: direct candidates are raced first by default. If they all fail, Link races the same candidates through the proxy (LAN addresses last), then tries the SSH tunnel if configured. **Always use SSH** dials only the tunnel; **Always use the proxy** dials only the proxy. A pinned hub that refuses the credential ends the attempt on any route. An unusable proxy setting affects only the proxy route. Pairing follows the default order, or only the proxy with **Always use the proxy**.
+- **Reconnects and restarts**: Link tries the last working proxy or SSH route first while the pairing, route settings (including environment proxy and `NO_PROXY`), and local network still match. It keeps this hint in the disposable `link.route.json` file beside `link.json`. Link compares usable IPv4 addresses and IPv6 `/64` prefixes, so IPv6 privacy address rotation on the same prefix does not clear the hint. A new pairing, changed settings, a detected network change, or a missing or unreadable hint restores the default order. If no usable address is known yet, Link skips the saved hint without deleting it and checks again on the next dial. While connected through a fallback, Link probes direct candidates every 2 minutes (`link.DirectRetryEvery`) and on network changes. When one connects, it takes over and Link forgets the saved fallback. With **Always use the proxy** the proxy is not a fallback: Link never probes direct candidates, and the hint's settings include the switch.
+- **Why the proxy comes before the tunnel**: the proxy is what the network itself asks for and needs nothing on the hub machine, no `ssh` process, keys or hardware-key touches; the tunnel stays the explicit fallback for a hub that is reachable only over SSH.
+- **One route for the link and its streams**: the link WebSocket and every Agent stream opened on it go through the same proxy, each with a `CONNECT` of its own.
+- **End-to-end TLS unchanged**: the hub's TLS handshake runs inside the tunnel with the check a direct connection uses, pinned to `fp` or checked against system CAs and the hub's host name when `trust` is `system`, so a wrong hub key is refused through the proxy with the same words as directly. The check is the HTTP transport's `tls.Config` (the pin in `VerifyConnection`) on every route. An `https://` proxy is checked first and separately, against system CAs and its own name; it can never stand in for the hub.
+- **Credentials**: proxy credentials stay in `link.json` (0600) and are sent only in each `CONNECT`'s `Proxy-Authorization` header (Basic), which an `http://` proxy receives in plain text, as with any HTTP proxy; prefer `https://` when the proxy offers it. `persona-link proxy`, `persona-link status` (text and `--json`) and errors show the proxy without its user name and password; the log says only `(proxy)`, never the proxy's address. A failing proxy has its own sentence (cannot reach it, its certificate is not trusted, it did not complete TLS, it refused with HTTP `<status>`, it did not open the connection, the setting is not a usable URL), shown as **Proxy** `<hub address>`: `<sentence>`; a tunnel that breaks later fails as the hub's handshake does, without the proxy's address.
+- **Status**: connected through the proxy, the status line has `"kind": "proxy"`, `address` the hub URL reached through it and `proxy` the proxy without credentials. `persona-link status` shows **Connected · Proxy** `<hub>` and lists the proxy after the direct addresses (marked **In use**); `status --json` also has `proxy`, the `link.json` setting without credentials, `off`, or `invalid`, and `proxy_always: true` with **Always use the proxy**. Then `persona-link status` lists the proxy first, marked **always uses the proxy**, and marks the direct addresses and the tunnel as skipped.
+- **Changing it while connected**: `persona-link proxy` does not interrupt the running link; the link reads `link.json` itself, and a new proxy setting reconnects a link on a fallback route (the proxy, or an SSH tunnel without **Always use SSH**, as the proxy comes before the tunnel). A direct link stays as it is. With **Always use the proxy**, a new proxy URL also reconnects the link, through the new proxy. Turning **Always use the proxy** on moves a direct or tunnel link to the proxy; turning it off moves a proxy link back to direct when a direct candidate answers.
+
 ## SSH tunnel
 
 When a hub machine exposes only SSH (port 22) — its HTTP and TLS ports listen on `127.0.0.1` only, with no open public port or reverse proxy — active-mode Persona Link can reach the hub's TLS port through an SSH tunnel (#3775), matching the apps' SSH tunnel ([network.md](network.md), "Connecting to hub through SSH").
@@ -300,7 +368,7 @@ When a hub machine exposes only SSH (port 22) — its HTTP and TLS ports listen 
 
 ### Pairing window and CLI
 
-- **Desktop setup**: active/passive pairing, status and reconnect use the fixed Link command bridge. SSH tunnel configuration remains available through the CLI below; the retired tray-specific tunnel editor is not part of the desktop shell:
+- **Pairing window** (the Mac menu bar App's and the Windows tray's): the **SSH tunnel** section below the pairing link, closed by default, sets the tunnel before or after pairing; the CLI below does the same:
   - **SSH server**: `[user@]host[:port]`, or a host alias from `~/.ssh/config`.
   - **Hub address as that server sees it**: defaults to `127.0.0.1:<TLS port in the pairing link>`; with no link and no saved address yet, to `127.0.0.1:18662`, the TLS port `personad hub setup` uses.
   - **Always use SSH**: uses only the tunnel. Enabled automatically when the pairing link names only loopback addresses; otherwise off so direct addresses are tried first.
@@ -315,6 +383,7 @@ When a hub machine exposes only SSH (port 22) — its HTTP and TLS ports listen 
   persona-link ssh --off                                # Remove tunnel without unpairing
   ```
   `persona-link install --pair '<link>' --ssh user@example.com …` accepts the same `--ssh*` flags during installation.
+  **Always use SSH** cannot be on together with **Always use the proxy** (see "Outbound proxy"): `ssh --always` and `--ssh-always` are refused while it is on.
 - **`link.json`**: stored alongside `endpoints` as `"ssh": {"server": "user@example.com", "target": "127.0.0.1:18662", "always": true}` (`always` omitted when false).
 
 ### Transport, TLS, routing and errors
@@ -324,7 +393,7 @@ When a hub machine exposes only SSH (port 22) — its HTTP and TLS ports listen 
 - **End-to-end TLS unchanged**: the TLS handshake (pinned to `fp`, or checked against system CAs and hostname when `trust` is `system`) still runs end to end through the tunnel to the hub's TLS port; a wrong hub key is refused identically to a direct connection. Over the tunnel, `hello.address` is left empty so the hub does not record the SSH server string as one of its own HTTPS URLs.
 - **Routing order**:
   - **Always use SSH** on: only the tunnel is dialed; direct hub candidates are skipped.
-  - **Always use SSH** off: direct candidates are raced first, and the tunnel is dialed when all of them fail. When the last working connection used the tunnel, the next reconnect dials the tunnel immediately instead of waiting for direct candidates to fail again, while probing direct candidates every 2 minutes (`link.DirectRetryEvery`) and on network changes to switch back and close the tunnel once a direct address answers.
+  - **Always use SSH** off: the default order is direct, outbound proxy if configured, then SSH; with **Always use the proxy**, only the proxy, and never the tunnel, even when there are no direct candidates to reach through the proxy. Otherwise, if there are no direct candidates, Link dials only the tunnel. If SSH was the last working route, Link tries it first on reconnect and after a restart while the pairing, route settings and local network still match (see "Outbound proxy"). Link probes direct candidates every 2 minutes (`link.DirectRetryEvery`) and on network changes. When one connects, it takes over, the tunnel closes and Link forgets the saved fallback.
 - **Status and plain-word errors**: when connected through the tunnel, status reports `"kind": "ssh"` and `"address": "<server>"`, labelled **SSH** in `en`, `zh-Hans` and `ja` across `persona-link status` and the desktop setup status (and marked **In use** in the address list). Five failure modes each produce a distinct single-sentence explanation (`ssh_error` in the status line): no `ssh` command installed, authentication refused, server host key not trusted yet (with `ssh [-p <port>] <server>` to accept it once in a terminal), port forwarding refused by the server (`AllowTcpForwarding` / `permitopen`), and the hub not answering at `<target>`.
 
 ## Passive mode (the hub connects)
@@ -557,12 +626,12 @@ for Windows see [windows.md](windows.md). Instructions for people who don't use 
 1. Install Persona Link on the Mac: `./scripts/app/mac-link.sh install` ([persona-link-install.md](persona-link-install.md)). It builds persona-node and Persona Screen, copies the helpers to `/Applications`, and registers both launchd services. Existing node installations are left untouched.
 2. In the signed-in web app, open **Machines › Add Computer**, select Mac and enter a name (Chinese is allowed; the hub generates the id from the name). The hub adds `kind: link`, **pending confirmation**, and provides its pairing link
    (`POST /api/v1/auth/pair-codes` with `add`, [protocol.md](../protocol/protocol.md), "Computer pairing codes"). iOS and Android entry points are in progress.
-3. Send the link to this Mac (**Copy pairing link** or **Share…**) and paste it into the Electron desktop's **Persona Link** setup section, or use `~/.persona/bin/persona-link pair -` with the link on stdin.
+3. Send the link to this Mac (**Copy pairing link** or **Share…**) and open it there: it opens the menu bar App's pairing window with the link filled in. Or paste it into **Pair / Change connection…**, or use `~/.persona/bin/persona-link pair -` with the link on stdin.
 4. Once it connects, the same web screen asks "A computer wants to join: <name>. Is it yours?"; tap **This is my computer** (`POST /api/v1/machines/{id}/confirm`).
    Before confirmation it receives no Persona-managed keys, isn't considered for assistant-machine selection, and doesn't appear in the computer list for creating Agents; unconfirmed computers are removed after 24 hours ([protocol.md](../protocol/protocol.md), "Computer trust").
    If you closed that screen, its card in the machine list also lets you confirm or delete it.
 5. Verify: `persona-link status` shows the connector running and connected, and the computer is online in App **Settings › Machines**.
-6. `com.persona.link` starts at login and restarts the connector independently of Electron. No login-item setting in the desktop app controls it.
+6. `com.persona.link` starts at login and restarts the connector whether or not the menu bar App runs; the App's **Launch at login** only shows the App.
 
 Links expire after 10 minutes and are single-use; if expired, tap **Regenerate** on the web screen (`{"machine": <id>}` issues a new code and also revokes old Persona Link credentials).
 Without hub TLS, the web reports "The hub hasn't enabled a secure connection yet" (409 `tls_required`); see "Advanced" below.
@@ -582,8 +651,146 @@ Without hub TLS, the web reports "The hub hasn't enabled a secure connection yet
 
 For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link install --pair -` pairs, installs and waits for connection in one command.
 
+## Switching from SSH
+
+A Linux computer the hub already reaches over SSH (`kind: ssh`) can move to Persona Link with one confirmed click (#10662), under
+**Switch to Persona Link** on its machine detail in the signed-in web app, on the iPhone / iPad app's advanced computer detail
+page (#10671), and on its row in the admin **Computers** page. The computer keeps its id and name, and so its pins, mutes, trust,
+settings and history, which are all stored by id. Afterwards it connects to the hub by itself, also from other networks. It is for
+people who manage their computers, so it sits with the machine's details, not in the Assistant.
+
+**What it needs**: the hub takes Persona Link (`public.tls_listen` or an `https://` `public_url`, as for pairing). The computer
+must also meet all of these:
+
+- It runs Linux on amd64 or arm64.
+- It is online over SSH and confirmed as the user's.
+- It has a running systemd user manager with linger on (`/var/lib/systemd/linger/<user>`). Without linger the user's services stop
+  when the last session ends, and that would be the switch's own SSH session.
+- It has no Persona Link yet: no connector, no `link.json`, no `persona-link.service`, and none under the old names.
+- It has a node program (`~/.persona/bin/personad` or `persona-node`) or already a node service.
+- Its node uses the default `remote_bin` and data directory: no `PERSONA_HOME` in its ssh environment, and no separate
+  `~/.jarvis`.
+
+A Mac or Windows computer is not switched from here, because launchd over SSH is unreliable (see "The device's program", step 3)
+and Windows has no service install over SSH. Install Persona Link on such a computer itself. Each condition the computer does not
+meet shows as a plain reason instead of the button.
+
+**What happens** (the manager that carries the computer runs it, `server/internal/devices/link_switch.go`; the hub only does two
+steps, `devices.link_switch.begin` / `end`). The computer disconnects and reconnects once. Agents running in a terminal (herdr and
+the other engines) keep running, and their hooks reach the new node. A reply the assistant is writing on that computer at that
+moment is cut off, as when a node restarts.
+
+1. **Checking** (30 s): one read-only SSH command looks at the system, systemd and linger, the files above, and which node service
+   exists. Nothing changes, and a refusal ends here.
+2. **Installing**:
+   1. The manager sends the Persona Link build of the hub's version for that platform (from the hub's node builds or its release,
+      [node-update.md](node-update.md) "Node packages") over the same SSH access, so the computer downloads nothing. It is staged
+      as `~/.persona/bin/.persona-link-switch-<op>`, and its SHA-256 and `version` are checked (10 min).
+   2. The hub then checks that the machine's entry is still what the manager saw. It sets `kind: link` and leaves every other field,
+      `ssh_host` included. It makes one pairing code for this machine, ten minutes and single-use, which only the manager gets.
+   3. From here the manager no longer runs the node over SSH. One more SSH command (3 min) puts the staged file in place as
+      `~/.persona/bin/persona-link` (never over an existing one) and runs `persona-link install --pair -`, with the pairing link on
+      its stdin. The link never goes on a command line, into a log, an API answer or the manager's store. The installer redeems
+      the code, adds the node service `personad-node` only when the computer has none (an existing one is left unchanged), starts
+      `persona-link.service`, and waits for the connection.
+      Just before the installer runs, the same command checks again for a node service, or the backup of one
+      (`node-switch.backup`) that the installer may put back. If it finds one, it leaves a marker so a rollback never removes
+      that service. Where `timeout` exists, the installer gets 150 s, so it cannot outlive the SSH command and race a rollback.
+3. **Connecting** (90 s): done when the computer's node answers through Persona Link. If the installer failed before it
+   paired (no `link.json`), nothing can connect, and the switch fails at once.
+
+**When something fails**, the computer goes back to SSH:
+
+- **Before the hub step**, the manager removes the staged file.
+- **After the hub step**, the manager asks the hub to end the switch (`devices.link_switch.end`). The hub revokes this switch's
+  code and the credential it was traded for (the link closes with 4002) and puts the kind back to `ssh`.
+  - **Until the hub answers**, the manager touches nothing on the computer. Persona Link stays installed, so the computer
+    is not left with neither a link nor SSH. The switch shows as rolling back while the manager asks again: after 1 s, then
+    twice as long each time, up to every minute, and again after a restart. The asking is bounded to one hour from the
+    first try, a limit a restart does not reset. After that the manager stops and leaves the computer as it is. The
+    switch ends failed with `hub_unanswered`, saying it could not be undone, and **Redeploy** and automatic updates are
+    no longer held. A hub that does not know the call (`unknown_method`, an older build) ends it the same way at once.
+  - **When the hub has confirmed**, the manager removes over SSH only what this switch installed: the connector with its
+    `link.json` and unit (`persona-link uninstall --purge`), and the node service only if the computer had none before
+    (`persona-link node uninstall`). Both run only through the program this switch sent, recognized by its SHA-256, never
+    through a `persona-link` found there. Then it waits up to 2 minutes for the computer to answer over SSH again.
+- **If the hub refuses to undo it** (it cannot tie the request to this switch), the manager stops asking and leaves Persona
+  Link on the computer. If the hub has undone the switch but the computer is another manager's by now, or has been
+  removed, it answers `rolled_back_gone`. The manager then removes what this switch installed, as for any confirmed
+  rollback, but does not wait for the computer over SSH, since the computer is no longer its own.
+- **If any step cannot be confirmed**, the result says the switch could not be undone for sure, rather than that it was.
+
+The reason the switch failed is shown in plain words either way.
+
+**What the hub keeps** (`machine_audit`, action `link_switch`): one row per step of an operation, written before the step
+takes effect.
+
+- `begin`: before the kind changes.
+- `begun`: once the code exists, with its hash.
+- One final row: `succeeded`, `rolled_back` or `begin_failed`.
+
+How the hub uses these rows:
+
+- **Undoing**: an end is accepted only for the computer's latest operation, and its hash must be the one recorded for it.
+  A final row is final: a repeated rollback changes nothing, a rollback of a switch that succeeded answers
+  `already_succeeded`, and an operation id cannot begin twice.
+- **Survives a hub restart**: the rows stand in for the hub's memory. A hub that stops between changing the kind and making
+  the code can still be undone from the `begin` row.
+- **Bounded**: a switch counts as running for at most 30 minutes after its `begin` row.
+
+**Restarts and repeats**: only one switch per computer runs at a time. While one runs, the hub refuses these with 409, and the
+checks hold across a hub restart:
+
+- a second start (`in_progress`);
+- **Redeploy** of its node;
+- moving the computer to another manager, removing it, or removing its manager (`link_switch_in_progress`). A move or removal
+  that is already under way holds the computer, and a new switch is refused until it finishes.
+
+A device signed in with a pairing code it has not traded yet cannot start a switch (403).
+
+The manager writes down each step before it takes it (setting `link_switch.<machine id>`; the pairing link is never kept). A
+manager that restarts during a switch carries on as follows:
+
+- it finishes the switch if the computer connects through Persona Link before the deadline;
+- it rolls the switch back at once if the installer never ran;
+- it goes on asking the hub to end one it was rolling back;
+- it goes on telling the hub of a success the hub has not acknowledged yet.
+
+If the manager stops waiting for the hub's `begin`, the hub gives up the begin when it has not taken the computer yet.
+
+**The computer's own files**: the check, the transfer and the install refuse (`unsafe_permissions`) unless the home folder,
+`~/.persona` and its `bin` belong to the user, and none of them can be written by other users. A group-writable one is
+accepted only when the group is the user's own private group. The message says how to fix it, for example
+`chmod go-w ~ ~/.persona ~/.persona/bin`.
+After the build is put in place, its SHA-256 is checked once more before it runs.
+
+| Route | Who | Answer |
+| --- | --- | --- |
+| `POST /api/v1/machines/{mid}/link-switch` | a signed-in full device | 202 `{link_switch}`; 409 `{code}` (a reason above, or `in_progress`); 403 otherwise |
+| `POST /api/v1/admin/machines/{mid}/link-switch` | the admin page (session and CSRF) | the same, relayed to the machine's manager |
+
+Progress and the result come with the machine itself (`link_switch` in the machine list, [protocol.md](../protocol/protocol.md)),
+so every open client sees each step at once. A finished switch stays shown for an hour.
+
+On iPhone and iPad, the optional field is also the compatibility gate: an older hub or manager sends no field and the page does not
+change, and a computer owned by a linked hub is switched there. The confirmation uses the large-text-safe system dialog. One
+confirmation creates one app-lifetime attempt per computer, shared across detail-page remounts. **Starting…** is local feedback;
+the accepted 202 is held only until the machine list catches up by the hub's `at` clock (or changes when timestamps are absent).
+While a phase is running, its expected disconnect does not also show the ordinary offline error or **Reconnect**.
+
+A definite refusal other than 403 reads the machine list once and keeps its localized reason recoverable; 403 explains the full-access requirement without another read. A lost, unreadable, cancelled, 408, 429
+or 5xx answer is uncertain: the app reads the list once and never retries automatically. If the unchanged hub state still offers
+**Switch to Persona Link**, the owner may tap it and confirm again; a duplicate already running is the hub's ordinary 409 refusal.
+**Check Status** only reads the list again. A changed authoritative list clears the notice, and every settled attempt expires after
+two minutes as on web. A failed result with `rollback_unconfirmed` never claims the SSH fallback was restored and offers the same
+status check.
+
 
 ## Status line
+
+The status line is a machine contract and is not translated. The same applies to `status --json`, `node status --json`, `ssh --test --json`, the saved `link.status.json`, passive HTTP `message` fields, and the pairing URL written by `pair --listen` on stdout. Candidate errors retain the full-width-semicolon delimiter (`；`) that current and older clients split. Human `status` and `install` output may translate a copy of a recognized saved error, but unknown hub, peer, OS and parser details pass through unchanged.
+
+Plain terminal output uses `i18n.Terminal()`: `PERSONA_LANG`, then `LC_ALL`, `LC_MESSAGES` and `LANG`, with English for C, POSIX, an unset locale or an unknown language. The `link-cli` catalogs ship `en`, `zh-Hans` and `ja`; Chinese terminal output retains its previous wording. Maintainer logs are English. An early `persona-link run` failure follows the terminal language when stderr is a terminal, but is English when a service redirects stderr into a log. One pre-existing exception to locale-independent JSON is `service.missing`: the unavailable-systemd reason was already locale-coupled and keeps that behavior for compatibility.
 
 ```json
 {"state":"connected","machine":"macbook","hub_name":"Home","mesh_hubs":1,"address":"https://192.0.2.10:18662","kind":"lan",
@@ -595,10 +802,14 @@ For Linux see "Linux (headless)" below: build `persona-link`, then `persona-link
   `connected` (hub has a stream open; `address` is the hub's address and `since` the stream start time), `waiting` (unable to listen).
 - Passive mode also includes `listen` (listen address), `addrs` (local addresses usable by the hub, `host:port`, best first), `last_seen` and `from` (time and address of the hub's last visit),
   `code_expires` (expiration of the `pair --listen` code).
-- `node`: `online` / `offline` / `unknown`, reason in `node_error`.
+- `node`: `online` / `offline` / `unknown`, reason in `node_error`. Each link connection starts at `unknown` ("the hub is connecting")
+  until the hub's `node` message; a connection to the node resumed over the new link ([machines.md](../server/machines.md)
+  "A dropped connection that resumes") is `online` once resumed.
 - `pending` (planned, #4655): `true` means the hub is waiting for the user to confirm this computer in the App; absent means confirmed.
 - `waiting` / `refused` include `error` (candidate failures separated by "；", a full-width semicolon) and `retry` (next attempt time); when an SSH tunnel attempt failed, `ssh_error` carries `{code, server, target}` so localized surfaces render the sentence in `en`, `zh-Hans` or `ja`.
 - `ssh`: the active-mode SSH tunnel from `link.json` (`{server, target, always?}`), when configured; while connected through the tunnel, `kind` is `ssh` and `address` is `<server>`.
+- `proxy`: while connected through an outbound proxy (`kind` is `proxy`, `address` the hub URL reached through it), the proxy's URL without its user name and password (see "Outbound proxy").
+  With **Always use the proxy** the status line is the same as for any link through the proxy (`kind` `proxy` while connected; when no proxy applies to the hub's addresses, `waiting` with an `error` saying so); the switch itself is not in the status line but in `persona-link status --json` (`"proxy_always": true`).
 - `hub_name`, `mesh_hubs`: see "Hub name and linked group"; absent with old hubs.
 - `machine_name`: what the hub calls this computer (see "The computer's name"); absent with old hubs. `rename`: how the last rename asked of this persona-link went: `{id, name}` or `{id, code, error}`.
 - `pending`: meaningful only when `connected`; `true` means the hub is waiting for the user to confirm this computer (see "Pending confirmation"); absent or `false` means confirmed.
@@ -621,7 +832,7 @@ On servers, NAS boxes and Raspberry Pis without a GUI, `persona-link` alone is e
 
 **Build**
 - Pure Go, no cgo: `cd server && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o persona-link ./cmd/persona-link`.
-  Builds for `amd64`, `arm64` and 32-bit Raspberry Pi (`GOARCH=arm GOARM=7`); Windows also builds (file locks and signals in platform-specific files); the scheduled task works without a tray ([windows.md](windows.md), "Install and start at logon").
+  Builds for `amd64`, `arm64` and 32-bit Raspberry Pi (`GOARCH=arm GOARM=7`); Windows also builds (file locks and signals in platform-specific files); the scheduled task works with or without the tray ([windows.md](windows.md), "Install and start at logon").
 - `personad` also builds for Windows (`GOOS=windows go build ./...`; process groups, signals, file locks and CPU time are platform-specific in `internal/osproc` and each package's `_windows.go`),
   and the Windows resident node works with Orca; `persona-link install` installs a sign-in scheduled task on Windows (the Windows paragraph under "Install the node service"), see [windows.md](windows.md).
 - The resident node runs the device's program, persona-node, built from the same commit (`~/.persona/bin/persona-node`; personad where the computer has no persona-node or runs a hub or a manager, "The device's program"); `scripts/deploy/node-launchd.sh install` installs a personad node on Linux as systemd user service `personad-node`.
@@ -719,7 +930,7 @@ Two things to know about a node without systemd:
 | Command | Action |
 | --- | --- |
 | `persona-link status` | Mode, link (address, duration; candidate failure reasons when disconnected), hub name and group size, local node, this computer's name on the hub (its id in parentheses when they differ), candidate addresses, systemd service (active / enabled / linger), pid and version, log location. Passive mode instead shows: listen address, listening or hub connected, paired hub and pairing time, hub's last visit time and address, helper fingerprint, local addresses usable by hub. Exit 0 when connected (also listening in passive mode), otherwise 1 |
-| `persona-link status --json` | Same for scripts: `running`, `mode`, `paired`, `machine`, `machine_name`, `hub_id`, `hub_name`, `endpoints`, `ssh`, `trust` (`pin` / `system`), `link` (last reported status), `passive` (`listen`, `paired`, `hub_id`, `hub_name`, `machine`, `machine_name`, `paired_at`, `code_expires`, `fp`), `service`, `config`, `log`; `error` if link.json can't be read; no credential or hash |
+| `persona-link status --json` | Same for scripts: `running`, `mode`, `paired`, `machine`, `machine_name`, `hub_id`, `hub_name`, `endpoints`, `ssh`, `proxy` (the `link.json` proxy setting without credentials, `off`, or `invalid`), `proxy_always` (`true` with **Always use the proxy**), `trust` (`pin` / `system`), `link` (last reported status), `passive` (`listen`, `paired`, `hub_id`, `hub_name`, `machine`, `machine_name`, `paired_at`, `code_expires`, `fp`), `service`, `config`, `log`; `error` if link.json can't be read; no credential or hash |
 | `persona-link logs [-f] [-n lines]` | Last 100 lines of `~/.persona/link.log` (change with `-n` / `--lines`); `-f` / `--follow` keeps following, including rotation; without a log file but with an installed service, reads journal. `log` is the same command |
 | `persona-link uninstall` | Stop, disable and delete systemd user service (Windows: scheduled task), preserving credentials. Linux / Mac resident-node service remains (`node uninstall` removes it); on Windows the node shares the task and stops too, but `personad.exe` remains |
 | `persona-link uninstall --purge` | Also remove credentials (link.json and `.lock` / `.run`), status, logs (including `link.log.1`), passive TLS identity `link-tls/`, `~/.persona/bin/persona-link`, and install-script `persona-link` alias (only if truly an alias); refuses while another persona-link is running (a legacy parent, manually started). Revoke hub-side credentials in App **Settings › Devices** |
@@ -740,7 +951,7 @@ Two things to know about a node without systemd:
   a persona-link starting at that exact moment exits as "already running", then systemd starts it again after 5 seconds.
 - Link state: `~/.persona/link.status.json` (see "Status line"); when not running, shows the last report and time.
 - **Does not connect to the resident node socket** to check liveness: every connection is a new attach and would replace the hub's current connection. Local-node status comes only from the hub.
-- On Mac the launchd agent writes the same status file, and `status` also reports whether `com.persona.link` is installed and loaded. The Electron setup reads only the allowlisted status fields, never the credential file.
+- On Mac the launchd agent writes the same status file, and `status` also reports whether `com.persona.link` is installed and loaded. The menu bar App and the tray read the same file.
 
 `scripts/deploy/link-systemd.sh` remains a thin wrapper: `install` / `uninstall` / `status` delegate to `~/.persona/bin/persona-link`; `restart` runs `systemctl --user restart`.
 
@@ -786,3 +997,39 @@ IPv4-only networks can't reach a home IPv6 address, just as with the phone.
 Logs:
 - Helper / Linux service: `~/.persona/link.log` (`persona-link logs -f`); passive mode uses `passive: …` (listener start, pairing, stream start / end, rejected requests);
 - Hub: `[<machine>] link up …` / `link down …`.
+
+
+### Redacted connection diagnostics
+
+The existing Link logger emits one `link: dial` record per attempted WebSocket handshake,
+including active control candidates, SSH tunnel handshakes, direct recovery probes and node
+streams. `attempt` is a process-local sequence, not a persistent identifier. `role` distinguishes
+`control` from `stream`; `candidate` is the one-based position in the ranked, deduplicated
+control candidates, the tunnel bind attempt, or 1 for the selected stream route. `kind` is
+`lan`, `ipv6`, `ipv4`, `name`, `ssh`, `proxy` or `other`; unrecognized input is never echoed.
+
+`phase` is the last observed boundary (`dial`, `dns`, `tcp`, `tls`, `upgrade`). `outcome` is
+`success`, `error`, `timeout`, `canceled` or `http_refused`. The phase distinguishes a TLS
+stall from an Upgrade stall; an RPC pong fix does not explain either automatically.
+`dns_us`, `tcp_us`, `tls_us`, `upgrade_us` and `total_us` are monotonic elapsed microseconds.
+Zero means no observed work, reuse, or less than a microsecond; a literal IP needs no DNS.
+On a proxy route, TCP time measures the connection to the proxy. TLS time measures the Hub handshake inside CONNECT.
+For SSH, TCP time measures connecting to the local forwarding listener, not a public TCP
+connection or the SSH authentication duration. TCP time sums observed address attempts,
+including overlapping address-family attempts,
+so phase totals need not equal wall-clock total. Upgrade time starts when the checked
+connection is handed to HTTP and includes writing the request and validating the response.
+Canceled phases include their observed elapsed time. A losing raced candidate can emit its
+cancellation after the winning candidate succeeds; attempt numbers need not appear in order.
+
+Each existing retry wait emits `link: retry_wait` with `planned_us`, `actual_us`, and `wake`:
+`timer`, `canceled`, `network_check`, `redial` or `config_changed`. The actual duration includes
+scheduling delay; a configuration change is observed by the existing poll interval. These
+records do not change candidate racing, TLS verification, timeouts, backoff, heartbeat,
+queues or offline detection, and introduce no new setting.
+
+These new records contain no endpoint addresses, stream IDs, credentials, certificates,
+HTTP headers, response bodies or raw errors. Existing status and legacy error logs keep
+their established behavior; this does not make an entire historical log safe to share.
+The diagnostics cover outbound Link WebSocket handshakes; pairing, passive listener
+acceptance and SSH process startup failures retain their existing diagnostics.

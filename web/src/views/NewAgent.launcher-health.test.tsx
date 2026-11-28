@@ -8,6 +8,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UnavailableLauncher } from "../lib/launcher-models";
 import type { Launcher, Machine } from "../lib/types";
 
 const state = vi.hoisted(() => ({ loaded: true, features: [] as string[], machines: [] as Machine[] }));
@@ -36,6 +37,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const BLOCKED: Launcher = { name: "work_gw", health: { state: "blocked", kind: "not_in_terminal", error: "bash: work_gw: command not found", checked_at: "2026-11-09T08:00:00Z" } };
 const OK: Launcher = { name: "claude", agent: "claude", health: { state: "ok", checked_at: "2026-11-09T08:00:00Z" } };
 let launchers: Launcher[] = [];
+let unavailable: UnavailableLauncher[] = [];
 let purpose: unknown = null;
 let host: HTMLDivElement;
 let root: Root;
@@ -49,7 +51,7 @@ const rows = () => [...document.body.querySelectorAll<HTMLElement>("[data-panel-
 const row = (key: string) => rows().find((r) => r.dataset.panelRow === key)!;
 /** A launcher's group in the panel (its aria-label is the launcher's title). */
 const group = (name: string) => [...document.body.querySelectorAll<HTMLElement>("[data-panel-section]")].find((g) => g.getAttribute("aria-label") === name);
-const fix = (name: string) => [...group(name)!.querySelectorAll("button")].find((b) => b.textContent === "怎么修好")!;
+const fix = (name: string) => [...group(name)!.querySelectorAll("button")].find((b) => b.textContent === "如何修复")!;
 const note = () => q('[data-testid="new-agent-blocked"]');
 
 async function open(key: string) {
@@ -59,6 +61,10 @@ async function open(key: string) {
 
 async function openPanel() {
   act(() => pill().click());
+  await act(async () => vi.dynamicImportSettled());
+  await flush();
+  // These caller tests inspect model actions; disclose the catalog first.
+  for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
 
@@ -66,6 +72,7 @@ beforeEach(() => {
   resetModelListsForTests();
   state.machines = [{ id: "mac", name: "Mac", online: true }];
   launchers = [BLOCKED, OK];
+  unavailable = [];
   purpose = null;
   launched.length = 0;
   navigated.length = 0;
@@ -77,7 +84,7 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return purpose ? json(purpose) : json({ error: "not found" }, 404);
     if (url.includes("/launchers/") && url.includes("/models")) return json({ models: [] });
-    if (url.includes("/launchers")) return json({ launchers });
+    if (url.includes("/launchers")) return json(unavailable.length ? { launchers, unavailable } : { launchers });
     return json({ path: "/code", entries: [] });
   }));
   host = document.createElement("div");
@@ -97,17 +104,17 @@ describe("New agent's launcher health", () => {
   it("lists the launcher the terminal can't run with its rows off and why, and picks one that can start", async () => {
     localStorage.setItem("new.launcher.mac", "work_gw"); // the last one used is blocked here now
     await open("a");
-    expect(pill().title).toContain("claude");
+    expect(pill().title).toContain("Claude Code");
     expect(note()).toBeNull();
     await openPanel();
     const blocked = group("work_gw")!;
-    expect(blocked.textContent).toContain("这台电脑的终端里用不了");
+    expect(blocked.textContent).toContain("无法在该电脑的终端中使用");
     expect(fix("work_gw")).toBeDefined();
     const off = row("model:work_gw\ndefault");
     expect(off.getAttribute("aria-disabled")).toBe("true");
-    expect(off.getAttribute("aria-selected")).toBe("false");
-    expect(off.title).toBe("这台电脑的终端里用不了");
-    expect(row("model:claude\ndefault").getAttribute("aria-selected")).toBe("true");
+    expect(off.getAttribute("aria-pressed")).toBe("false");
+    expect(off.title).toBe("无法在该电脑的终端中使用");
+    expect(row("model:claude\ndefault").getAttribute("aria-pressed")).toBe("true");
     expect(row("model:claude\ndefault").getAttribute("aria-disabled")).toBeNull();
     expect(q('[data-testid="launcher-blocked-help"]')).toBeNull();
   });
@@ -120,9 +127,9 @@ describe("New agent's launcher health", () => {
     expect(panel()).not.toBeNull(); // not picked: the panel stays as it was
     act(() => fix("work_gw").click());
     expect(panel()).toBeNull();
-    expect(pill().title).toContain("claude");
+    expect(pill().title).toContain("Claude Code");
     const help = q('[data-testid="launcher-blocked-help"]')!;
-    expect(help.textContent).toContain("终端里用不了");
+    expect(help.textContent).toContain("终端中不可用");
     expect(help.textContent).toContain("「work_gw」");
     expect(help.textContent).toContain("~/.bashrc");
     expect(q('[data-testid="launcher-blocked-detail"]')!.textContent).toContain("bash: work_gw: command not found");
@@ -132,9 +139,27 @@ describe("New agent's launcher health", () => {
     expect(q('[data-testid="launcher-blocked-help"]')).toBeNull();
     // the reason stays said while it is the one that will run
     expect(note()!.textContent).toContain("本次使用");
-    expect(note()!.textContent).toContain("这台电脑的终端里用不了");
+    expect(note()!.textContent).toContain("无法在该电脑的终端中使用");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "work_gw" });
+  });
+
+  // A Persona-managed provider its own-service rule leaves out here (#8109: own_service skip on a computer where Claude
+  // Code is signed in) is not just missing: its group says why, and How to fix opens its page, where Computers has the
+  // switch.
+  it("lists a provider left out here for its own-service rule with why, and How to fix opens its page", async () => {
+    unavailable = [{ name: "deepseek", display_name: "DeepSeek", kind: "launcher", code: "launcher_own_service", reason: "Mac 已经有自己的 Claude Code 服务，而 DeepSeek 设置为跳过这样的电脑。请在它的“电脑”里打开“已有登录的电脑也用”，或换一个供应商" }];
+    await open("o");
+    expect(pill().title).toContain("Claude Code");
+    await openPanel();
+    const skipped = group("DeepSeek")!;
+    expect(skipped.textContent).toContain("已有登录的电脑也用");
+    expect(skipped.querySelector("[data-panel-row]")).toBeNull(); // nothing of it to pick
+    act(() => fix("DeepSeek").click());
+    expect(panel()).toBeNull();
+    expect(closed).toBe(1);
+    expect(navigated).toEqual(["/settings?tab=models&launcher=deepseek"]);
+    expect(q('[data-testid="launcher-blocked-help"]')).toBeNull();
   });
 
   it("Add model provider opens Settings › Model providers with the wizard", async () => {
@@ -165,8 +190,8 @@ describe("New agent's launcher health", () => {
     await openPanel();
     // the row that runs, lit with why (it stays reachable for its flyout, as the panel's running row always is)
     const runs = row("model:work_gw\ndefault");
-    expect(runs.getAttribute("aria-selected")).toBe("true");
-    expect(runs.title).toBe("这台电脑的终端里用不了");
+    expect(runs.getAttribute("aria-pressed")).toBe("true");
+    expect(runs.title).toBe("无法在该电脑的终端中使用");
     expect(fix("work_gw")).toBeDefined();
     act(() => pill().click());
     act(() => button("启动").click());
@@ -179,10 +204,10 @@ describe("New agent's launcher health", () => {
     await openPanel();
     expect(row("model:team_gw\ndefault").getAttribute("aria-disabled")).toBe("true");
     expect(row("model:slow\ndefault").getAttribute("aria-disabled")).toBeNull(); // still the hub's to retry
-    expect(group("slow")!.textContent).not.toContain("怎么修好");
+    expect(group("slow")!.textContent).not.toContain("如何修复");
     act(() => fix("team_gw").click());
     const help = q('[data-testid="launcher-blocked-help"]')!;
-    expect(help.textContent).toContain("这台电脑上用不了");
+    expect(help.textContent).toContain("该电脑上不可用");
     expect(help.textContent).not.toContain("添加模型供应商");
   });
 
@@ -193,13 +218,13 @@ describe("New agent's launcher health", () => {
     // the launcher this start runs is said under the box
     expect(note()!.textContent).toContain("本次使用");
     expect(note()!.textContent).toContain("work_gw");
-    expect(note()!.textContent).toContain("这台电脑的终端里用不了");
+    expect(note()!.textContent).toContain("无法在该电脑的终端中使用");
     await openPanel();
     // still the choice, with the warning: it is Model settings' to change
     const follow = q("[data-follow-row]")!;
-    expect(follow.getAttribute("aria-selected")).toBe("true");
+    expect(follow.getAttribute("aria-pressed")).toBe("true");
     expect(follow.getAttribute("aria-disabled")).toBeNull();
-    expect(follow.querySelector("[title]")!.getAttribute("title")).toContain("这台电脑的终端里用不了");
+    expect(follow.querySelector("[title]")!.getAttribute("title")).toContain("无法在该电脑的终端中使用");
     act(() => pill().click());
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "" });
@@ -210,8 +235,8 @@ describe("New agent's launcher health", () => {
     await open("h");
     expect(note()).toBeNull();
     await openPanel();
-    expect(q("[data-follow-row]")!.textContent).not.toContain("这台电脑的终端里用不了");
-    expect(group("work_gw")!.textContent).toContain("这台电脑的终端里用不了");
+    expect(q("[data-follow-row]")!.textContent).not.toContain("无法在该电脑的终端中使用");
+    expect(group("work_gw")!.textContent).toContain("无法在该电脑的终端中使用");
   });
 
   it("names the launcher on How to fix for a screen reader, and points at the help it opens", async () => {
@@ -219,14 +244,14 @@ describe("New agent's launcher health", () => {
     launchers = [OK, BLOCKED, { name: "team_gw", health: { state: "blocked", kind: "auth" } }];
     await open("i");
     const how = note()!.querySelector("button")!;
-    expect(how.getAttribute("aria-label")).toBe("怎么修好 team_gw");
+    expect(how.getAttribute("aria-label")).toBe("如何修复 team_gw");
     expect(how.getAttribute("aria-expanded")).toBe("false");
     act(() => how.click());
     expect(how.getAttribute("aria-expanded")).toBe("true");
     const help = q('[data-testid="launcher-blocked-help"]')!;
     expect(how.getAttribute("aria-controls")).toBe(help.id);
     // the cause itself is in the help, whole, not only in the line that can be narrow
-    expect(q('[data-testid="launcher-blocked-reason"]')!.textContent).toBe("Key 或登录被拒绝了");
+    expect(q('[data-testid="launcher-blocked-reason"]')!.textContent).toBe("Key 或登录凭证已被拒绝");
     // in the panel, each How to fix sits in its launcher's named group
     await openPanel();
     expect(fix("work_gw").closest('[role="group"]')!.getAttribute("aria-label")).toBe("work_gw");

@@ -4,12 +4,13 @@
 // picture arriving while the agent works appends without moving anything above it.
 import { useMemo, useRef, useState } from "react";
 import { fileDownloadURL, fileThumbURL } from "../../lib/api";
-import { openPanel } from "../../lib/panel";
+import { openPanel, useReadOnlyFile } from "../../lib/panel";
 import type { TurnImage } from "../../lib/turn-images";
 import { copyText } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { edgeMask, useEdgeFade } from "./edge-fade";
-import { ImageViewer, type ViewerAction, type ViewerImage } from "./ImageViewer";
+import type { ViewerAction, ViewerImage } from "./ImageViewer";
+import { ImageViewer } from "./LazyImageViewer";
 import { imageSrc } from "./Steps";
 import { t } from "../../i18n";
 
@@ -106,6 +107,7 @@ function Tile({ img, mid, sid, cwd, h, onOpen }: { img: TurnImage; mid: string; 
 /** The turn's pictures in the chat's image viewer (pinch, double tap, swipe; ← / →, Esc), with the file's own
  *  buttons for a picture read from disk: copy its path, open it in the file panel. */
 function Gallery({ images, start, mid, sid, cwd, onClose }: { images: TurnImage[]; start: number; mid: string; sid: string; cwd?: string; onClose: () => void }) {
+  const readOnly = useReadOnlyFile();
   const shown = useMemo(
     () => images.map<ViewerImage>((img) => ({ id: img.key, src: sources(img, mid, sid, cwd).full, label: [img.label, meta(img)].filter(Boolean).join(" · "), name: img.path?.split("/").pop() })),
     [images, mid, sid, cwd],
@@ -121,7 +123,7 @@ function Gallery({ images, start, mid, sid, cwd, onClose }: { images: TurnImage[
         label: t("chat-turnimages.open_in_files"),
         run: () => {
           onClose();
-          openPanel({ kind: "file", mid, path, cwd });
+          openPanel({ kind: "file", mid, path, cwd, ...(readOnly ? { readOnly: true } : {}) });
         },
       },
     ];

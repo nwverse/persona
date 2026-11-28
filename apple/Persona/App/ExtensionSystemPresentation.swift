@@ -1,6 +1,7 @@
 import Observation
 import SwiftUI
 import UserNotifications
+import PersonaWire
 
 /// A system entry point kept in AppModel. The action is claimed before it is sent; a change of appearance or a rebuilt window only redraws, never replays the write.
 @Observable final class ExtensionSystemOpen: Identifiable {
@@ -43,11 +44,7 @@ extension AppModel {
     func openExtensionSettings(_ id: String, manager: String? = nil) {
         extensionOpen = nil
         settingsPath = NavigationPath([SettingsPage.plugins, SettingsPage.plugin(id, manager: manager)])
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
-        #endif
     }
 
     /// Opens `url` when it is an extension's settings link (`ExtensionSettingsLink`); false for any other, which the
@@ -78,11 +75,7 @@ extension AppModel {
         guard SubscriptionsUI.isGraph(url) else { return false }
         extensionOpen = nil
         settingsPath = NavigationPath([SettingsPage.inboxSources, SettingsPage.sourcesGraph])
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
-        #endif
         return true
     }
 }
@@ -105,7 +98,7 @@ private struct ExtensionSystemPresentation: ViewModifier {
             NavigationStack {
                 Group {
                     if let ui = route.link.ui {
-                        ExtensionPageView(plugin: route.link.owner, ui: ui, title: String(localized: "Extensions"),
+                        ExtensionPageView(plugin: route.link.owner, ui: ui, title: openedTitle(route.link, ui: ui),
                                           state: route.link.state, group: route.link.group, initial: route)
                     } else {
                         EmptyStateView(symbol: Theme.Icon.plugins, title: String(localized: "No Page to Open"),
@@ -113,13 +106,19 @@ private struct ExtensionSystemPresentation: ViewModifier {
                     }
                 }
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done [Extension System Presentation c0b3fb]") { app.extensionOpen = nil }.lineLimit(1)
-                    }
+                    SheetClose { app.extensionOpen = nil }
                 }
             }
             .environment(app)
         } else { content }
+    }
+
+    /// The title a page opened by a link starts with, until its View has one: a Dashboards page its place's (the index's
+    /// for one not pinned), any other page Extensions.
+    private func openedTitle(_ link: ExtensionSystemLink, ui: String) -> String {
+        guard DashboardsUI.owns(link.owner) else { return String(localized: "Extensions") }
+        let places = link.group == app.hub?.group ? ExtensionSlots.shared.pages : []
+        return DashboardsUI.title(view: nil, place: DashboardsUI.placeTitle(ui, in: places), ui: ui)
     }
 }
 

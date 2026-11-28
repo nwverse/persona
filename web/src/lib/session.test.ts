@@ -27,6 +27,9 @@ describe("session capability contract", () => {
     for (const op of operations.filter((op) => op !== "read")) expect(sessionCan(history, op)).toBe(false);
     expect(sourceSubtitle(history)).toContain("仅查看：外部进程正在使用此会话");
     expect(sourceSubtitle({ ...history, source_kind: "claude_bg", read_only_reason: "回复请在电脑上打开" })).toBe("Claude 后台 · 仅查看：回复请在电脑上打开");
+    // The node's own "仅查看：" prefix is said once (#7803); a reason that is only the prefix falls back to the default.
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：这个子 Agent 由父 Agent 驱动" })).toBe("Codex 实时 · 仅查看：这个子 Agent 由父 Agent 驱动");
+    expect(sourceSubtitle({ ...history, source_kind: "codex_app_server", read_only_reason: "仅查看：" })).toBe("Codex 实时 · 仅查看：该来源暂不支持发送消息");
   });
 
   it("names Claude sessions outside Persona's terminals and lets them send only when the node says so", () => {
@@ -36,7 +39,7 @@ describe("session capability contract", () => {
     for (const op of ["interrupt", "approve", "terminal"] as const) expect(sessionCan(desktop, op)).toBe(false);
     expect(sessionMenuActions(desktop)).toEqual([]);
     const terminal: Session = { ...desktop, source_kind: "claude_cli", capabilities: { read: true }, read_only_reason: "回复请在电脑上" };
-    expect(sourceSubtitle(terminal)).toBe("终端里的 Claude · 仅查看：回复请在电脑上");
+    expect(sourceSubtitle(terminal)).toBe("在标签页中的 Claude · 仅查看：回复请在电脑上");
     expect(sessionCan(terminal, "send")).toBe(false);
   });
 
@@ -55,6 +58,8 @@ describe("session capability contract", () => {
     expect(sessionCan(runtime, "terminal")).toBe(false);
     expect(sessionCan(runtime, "close")).toBe(true);
     expect(sessionMenuActions(runtime)).toEqual(["stop", "close"]);
+    expect(sessionMenuActions({ ...runtime, background_working: true })).toEqual(["close"]);
+    expect(sessionMenuActions({ ...runtime, view: { phase: "working", reason: { kind: "background" }, rank: 0 } })).toEqual(["close"]);
     expect(sessionMenuActions({ ...runtime, status: "offline" })).toEqual([]);
     expect(sessionMenuActions({ ...legacy, capabilities: { terminal: true, interrupt: true, close: false } })).toEqual(["stop", "resume"]);
     expect(sessionCan({ ...runtime, capabilities: { terminal: true } }, "close")).toBe(true);
@@ -83,6 +88,23 @@ describe("session capability contract", () => {
     expect(resumeCommand({ ...legacy, cwd: "~/My Project" })).toBe("cd ~/'My Project' && claude --resume raw-thread");
     expect(resumeCommand({ ...legacy, cwd: "" })).toBe("claude --resume raw-thread");
     expect(resumeCommand({ ...legacy, agent: "traex", cwd: "" })).toBe("traex resume raw-thread");
+  });
+
+  it("gives no resume command for a runtime's session, which its runtime keeps (#8142)", () => {
+    const paseo: Session = { ...legacy, source_kind: "runtime", source_instance_id: "paseo", capabilities: { read: true, send: true } };
+    expect(resumeCommand({ ...paseo, session_id: "paseo-1", agent: "paseo", agent_label: "Grok", launcher: "grok" })).toBe("");
+    expect(resumeCommand({ ...paseo, session_id: "aaaaaaaa-0000-4000-8000-000000000001", agent: "claude", launcher: "my-claude" })).toBe("");
+    expect(resumeCommand({ ...paseo, session_id: "paseo-2", agent: "codex", launcher: "my-codex" })).toBe("");
+  });
+
+  it("says a runtime's session comes from its agent, by name, never a raw id (#8142)", () => {
+    const paseo: Session = { ...legacy, source_kind: "runtime", source_instance_id: "paseo", capabilities: { read: true, send: true } };
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "Grok", launcher: "grok" })).toBe("Grok");
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", agent_label: "TRAE CLI", launcher: "traecli" })).toBe("TRAE CLI");
+    expect(sourceSubtitle({ ...paseo, agent: "claude", launcher: "my-claude" })).toBe("Claude Code");
+    // a row Paseo names no label for yet: its provider, never "paseo"
+    expect(sourceSubtitle({ ...paseo, agent: "paseo", launcher: "kimi" })).toBe("kimi");
+    expect(sourceSubtitle({ ...paseo, agent: "dsh", agent_label: "DSH", source_instance_id: "dsh" })).toBe("DSH");
   });
 
   it("keeps plain paths as they are and a leading ~ outside the quotes", () => {

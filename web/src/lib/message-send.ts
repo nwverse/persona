@@ -1,11 +1,13 @@
+import { onConversationDeleted } from "./conversation-deleted";
 // Per-message transport feedback. It never changes session state, list ordering or counts.
 import { useSyncExternalStore } from "react";
 import { credentialOwner, getToken, onCredentialChange, sessionPath } from "./api";
 import { BASE } from "./base";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { MANAGER_HEADER, managerHeaderFor, onManagerChoice, shownManager } from "./manager-choice";
 import type { Item, Session } from "./types";
-import { sameMessage } from "./queue";
+import { sameMessage } from "./echo";
+import { timeNs } from "./times";
 
 interface FeedbackDeps {
   getSession(mid: string, sid: string): Session | undefined;
@@ -13,8 +15,9 @@ interface FeedbackDeps {
   onHubEvent(type: string, listener: (msg: Record<string, unknown>) => void): unknown;
   subscribe(listener: () => void): unknown;
   receiptsAllowed?(): boolean;
+  watchCursor?(mid: string, sid: string): number | undefined;
 }
-let deps: Pick<FeedbackDeps, "getSession" | "send" | "receiptsAllowed"> = { getSession: () => undefined, send: () => {} };
+let deps: Pick<FeedbackDeps, "getSession" | "send" | "receiptsAllowed" | "watchCursor"> = { getSession: () => undefined, send: () => {} };
 
 export type SendFeedback = "sending" | "processing" | "unknown" | "";
 type Phase = "sending" | "processing" | "delivered" | "failed" | "unknown";
@@ -52,7 +55,11 @@ function scopedObservation(k: string, owner = scope()) {
 const publish = () => { handoffAuthority(); listeners.forEach((f) => f()); };
 const owned = (e: Flight) => e.scope === scope() && !e.retired;
 const current = (e: Flight) => owned(e) && flights.get(key(e.mid, e.sid, e.id)) === e;
-const reconcile = (e: Flight) => deps.send({ type: "subscribe", machine_id: e.mid, session_id: e.sid, lazy_images: true, fold_work: true });
+function reconcile(e: Flight, openOnly = false) {
+  const cursor = deps.watchCursor?.(e.mid, e.sid);
+  if (openOnly && cursor !== undefined) return;
+  deps.send({ type: "subscribe", machine_id: e.mid, session_id: e.sid, ...(cursor ? { since_seq: cursor } : {}), lazy_images: true, fold_work: true });
+}
 function end(e: Flight) { clearTimeout(e.timer); e.feedback = ""; }
 function wait(e: Flight) {
   clearTimeout(e.timer);
@@ -72,7 +79,7 @@ function create(mid: string, sid: string, id: string, old = flights.get(key(mid,
     flights.delete(key(first.mid, first.sid, first.id));
   }
   const row = deps.getSession(mid, sid);
-  const e: Flight = { mid, sid, id, scope: scope(), phase: "sending", feedback: "sending", since: row?.state_since, state: row && stateOf(row), queued: row?.queued ?? [], failure: row?.failure_reason, at: old?.at, retry: Boolean(old) };
+  const e: Flight = { mid, sid, id, scope: scope(), phase: "sending", feedback: "sending", since: row?.state_since, state: row && activityOf(row), queued: row?.queued ?? [], failure: row?.failure_reason, at: old?.at, retry: Boolean(old) };
   const page = pages.get(key(mid, sid, ""));
   e.baseSeq = page?.scope === e.scope ? page.seq : undefined;
   e.work = row?.work?.phase;
@@ -80,6 +87,10 @@ function create(mid: string, sid: string, id: string, old = flights.get(key(mid,
   flights.set(key(mid, sid, id), e);
   return e;
 }
+/** What every message send says on its own request (#10661), as client_hello does (lib/api.ts CLIENT_FEATURES): it shows a
+ *  message the hub holds for an Agent whose computer is away (lib/undelivered.ts). The hub holds one only for a page that
+ *  declares it, and a page whose socket is down has no client_hello to go by. */
+const SEND_HEADERS = { "X-Persona-Features": "agent_message_hold" };
 /** Capture the request owner before queuing, so quiet retries cannot move to another login or manager. */
 export function beginMessageSend(mid: string, sid: string, id: string, text?: string) {
   listenOwners();
@@ -90,14 +101,14 @@ export function beginMessageSend(mid: string, sid: string, id: string, text?: st
   e.text = text;
   wait(e);
   publish(); // local Sending precedes network and outbox work
-  reconcile(e); // the target must be subscribed before POST, including sends from another page
+  reconcile(e, true); // the target must be subscribed before POST, including sends from another page
   const manager = managerHeaderFor(sessionPath(mid, sid));
   let pending = true;
   const isCurrent = () => pending && owned(e);
   return {
     current: isCurrent,
     echoed: () => Boolean(e.echoed),
-    request: { token: getToken(), tokenOwner: credentialOwner(), isAuthContextCurrent: isCurrent, headers: manager ? { [MANAGER_HEADER]: manager } : undefined },
+    request: { token: getToken(), tokenOwner: credentialOwner(), isAuthContextCurrent: isCurrent, headers: manager ? { [MANAGER_HEADER]: manager, ...SEND_HEADERS } : SEND_HEADERS },
     finish(phase?: "delivered" | "failed" | "unknown") {
       pending = false;
       if (requests.get(k) === e) requests.delete(k);
@@ -114,9 +125,8 @@ export function receiveMessageSend(msg: Record<string, unknown>) {
   if (!deps.receiptsAllowed?.()) return; // only the current authenticated hub may advertise this reserved type
   const { machine_id: mid, session_id: sid, client_msg_id: id, state, at } = msg;
   if (typeof mid !== "string" || typeof sid !== "string" || typeof id !== "string" || !id || typeof at !== "string") return;
-  const stamp = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(at);
-  if (!stamp || !Number.isFinite(Date.parse(at)) || !["processing", "delivered", "failed", "unknown"].includes(String(state))) return;
-  const time = `${stamp[1]}.${(stamp[2] ?? "").padEnd(9, "0")}Z`;
+  if (!at.endsWith("Z") || timeNs(at) === null || !["processing", "delivered", "failed", "unknown"].includes(String(state))) return;
+  const time = `${at.slice(0, 19)}.${at.slice(20, -1).padEnd(9, "0")}Z`;
   listenOwners();
   if (scopedObservation(key(mid, sid, id))?.done) return;
   let e = flights.get(key(mid, sid, id));
@@ -147,15 +157,15 @@ export function stopMessageFeedback(mid: string, sid: string) {
   for (const e of flights.values()) if (e.mid === mid && e.sid === sid && current(e) && (e.phase === "delivered" || e.echoed)) { e.settled = true; end(e); }
   publish();
 }
-export function messageFeedback(mid: string, sid: string, id?: string): SendFeedback | undefined {
+export function messageFeedback(mid: string, sid: string, id?: string, exclude?: ReadonlySet<string>): SendFeedback | undefined {
   const entries = id !== undefined ? [flights.get(key(mid, sid, id))] : flights.values();
   let feedback: SendFeedback | undefined;
   // Later nonempty feedback wins; keep "" when all matching flights have ended.
-  for (const e of entries) if (e && e.mid === mid && e.sid === sid && current(e)) feedback = e.feedback || feedback || "";
+  for (const e of entries) if (e && e.mid === mid && e.sid === sid && !exclude?.has(e.id) && current(e)) feedback = e.feedback || feedback || "";
   return feedback;
 }
-export function useMessageFeedback(mid: string, sid: string, id?: string) {
-  return useSyncExternalStore((f) => { listeners.add(f); return () => { listeners.delete(f); }; }, () => messageFeedback(mid, sid, id), () => undefined);
+export function useMessageFeedback(mid: string, sid: string, id?: string, exclude?: ReadonlySet<string>) {
+  return useSyncExternalStore((f) => { listeners.add(f); return () => { listeners.delete(f); }; }, () => messageFeedback(mid, sid, id, exclude), () => undefined);
 }
 export function observeMessageItems(mid: string, sid: string, items: Item[]) {
   const owner = scope();
@@ -197,7 +207,7 @@ export function configureMessageFeedback(next: FeedbackDeps) {
     if (!Array.isArray(msg.items)) return;
     observeMessageItems(String(msg.machine_id), String(msg.session_id), msg.items as Item[]);
   });
-  next.onHubEvent("hello", () => { for (const e of flights.values()) if (current(e) && e.feedback) reconcile(e); });
+  next.onHubEvent("hello", () => { for (const e of flights.values()) if (current(e) && e.feedback) reconcile(e, true); });
   next.subscribe(() => { if (handoffAuthority()) publish(); });
 }
 function handoffAuthority() {
@@ -206,7 +216,7 @@ function handoffAuthority() {
     if (!e.feedback || !current(e)) continue;
     const row = deps.getSession(e.mid, e.sid);
     if (!row) continue;
-    const state = stateOf(row);
+    const state = activityOf(row);
     const queued = e.text && (row.queued ?? []).filter(q => sameMessage(q, e.text!)).length > e.queued.filter(q => sameMessage(q, e.text!)).length;
     const fresh = e.state !== "working" && (row.state_since !== e.since || state !== e.state);
     const executing = (fresh || e.phase === "delivered" || e.echoed) && (state === "working" || state === "needs_you");
@@ -215,3 +225,14 @@ function handoffAuthority() {
   }
   return changed;
 }
+
+onConversationDeleted((mid, sid) => {
+  for (const [k, flight] of new Map([...flights, ...requests])) {
+    if (flight.mid !== mid || flight.sid !== sid) continue;
+    flight.retired = true;
+    end(flight);
+    flights.delete(k);
+    requests.delete(k);
+  }
+  publish();
+});

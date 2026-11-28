@@ -21,9 +21,31 @@ export interface BotFeatures {
   report_steps?: boolean;
   /** A finished run's answer is posted as a new card and the progress card folds (#5396); a hub from before leaves it out. */
   answer_new_card?: boolean;
+  /** A topic run also shows thinking and tools in a native agent message beside the progress card. */
+  topic_cot?: boolean;
+  /** A private-chat turn also shows thinking and tools in a native agent message beside the progress card; off by default, and a hub from before leaves it out. */
+  dm_cot?: boolean;
+  /** When a turn's native agent message is allowed (dm_cot in a DM, topic_cot in a topic), the answer is written into it and no progress or answer card is sent; off by default, and a hub from before leaves it out. */
+  cot_answer?: boolean;
+  /** The owner's "@bot /read <task>" in a group reads the group's recent messages, images and files first (#11803); off by default, and a hub from before leaves it out. */
+  read_group?: boolean;
+  /** A /read's answer goes straight under the owner's message in the group, as before #14437; off (the default), it goes to the owner's private chat first and into the group only when they post it. A hub from before leaves it out. */
+  read_group_direct?: boolean;
+}
+
+export type TopicTodoMode = "answer_only" | "main_decides" | "always_todo";
+
+export interface BotTopicChat {
+  chat_id: string;
+  name?: string;
+  home?: boolean;
+  require_owner_mention?: boolean;
+  todo_mode?: TopicTodoMode;
+  added_at?: number;
 }
 
 export interface FeishuBotStatus {
+  topic_chats?: BotTopicChat[];
   enabled: boolean;
   app_id: string;
   /** The open platform's URL the hub resolved (feishu / lark / a custom one). */
@@ -43,6 +65,8 @@ export interface FeishuBotStatus {
   agents?: { title: string; machine_id: string; session_id: string }[] | null;
   /** Minutes an unanswered card waits before the one nudge under it, 0 off (#6084); a hub from before leaves it out (60). */
   nudge_after?: number;
+  source_report_delay_minutes?: number;
+  source_report_full_reply?: boolean;
   larkcli?: LarkCLIStatus;
 }
 
@@ -64,6 +88,7 @@ export interface LarkCLIStatus {
 
 /** The edit sent to PUT: only what is set changes. */
 export interface FeishuBotUpdate {
+  topic_chats?: BotTopicChat[];
   enabled?: boolean;
   app_id?: string;
   app_secret?: string;
@@ -71,10 +96,12 @@ export interface FeishuBotUpdate {
   /** The switches to change: the hub merges them over its own (a hub before 0.1.12 replaces them all, see `featureEdit`). */
   features?: Partial<BotFeatures>;
   nudge_after?: number;
+  source_report_delay_minutes?: number;
+  source_report_full_reply?: boolean;
   larkcli_profile?: string;
 }
 
-export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false, report_steps: false, answer_new_card: false };
+export const DEFAULT_FEATURES: BotFeatures = { main: true, cards: true, all_cards: false, pushes: false, sync: false, agents: false, reports: true, board: false, only_conclusions: false, workbench: false, report_steps: false, answer_new_card: false, topic_cot: true, dm_cot: false, cot_answer: false, read_group: false, read_group_direct: false };
 
 /** What a hub from before the setting does: nudge after an hour. */
 export const DEFAULT_NUDGE_AFTER = 60;

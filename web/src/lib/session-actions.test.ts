@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canSwitchToBypass, EFFORTS, effortOptions, effortTitle, hasEffortOnly, hasModes, isMuted, modeTitle, renameBody, SWITCHABLE_MODES, switchableModes, toggleMute } from "./session-actions";
+import { canSwitchToBypass, EFFORTS, effortOptions, effortTitle, hasEffortOnly, hasModes, isMuted, listedModesOf, modeTitle, renameBody, SWITCHABLE_MODES, switchableModes, toggleMute } from "./session-actions";
 import type { Session } from "./types";
 
 const s = (over: Partial<Session> = {}): Session => ({ machine_id: "mac", session_id: "s1", title: "修登录", cwd: "/home/me/app", status: "idle", space_name: "app", slot_id: "p1", slot_name: "login", ...over });
@@ -39,7 +39,7 @@ describe("modes", () => {
     expect(modeTitle("plan")).toBe("计划模式");
     expect(modeTitle("weird")).toBe("weird");
     expect(modeTitle(undefined)).toBe("");
-    expect(effortTitle("xhigh")).toBe("很高");
+    expect(effortTitle("xhigh")).toBe("XHigh");
   });
 
   it("never offers 完全访问 on a running session that can't reach it", () => {
@@ -75,6 +75,18 @@ describe("modes", () => {
     expect(hasModes(undefined)).toBe(false);
   });
 
+  it("gives no chips to agy or cursor in a terminal pane, whose mode is their start's", () => {
+    // herdr's agy / cursor-agent pane: no source_kind. The node refuses session.modes there (it would press shift+tab at
+    // a TUI that is not Claude Code's and answer 502), as iOS and Android already hide them.
+    for (const agent of ["agy", "cursor"]) {
+      expect(hasModes(s({ agent, pane_id: "w1:p2" }))).toBe(false);
+      expect(hasModes(s({ agent, pane_id: "w1:p2", permission_mode: "bypassPermissions", capabilities: { read: true, send: true, interrupt: true, approve: true, terminal: true, modes: false } }))).toBe(false);
+      expect(listedModesOf(s({ agent, pane_id: "w1:p2", capabilities: { read: true, send: true, terminal: true, modes: false } }))).toBeUndefined();
+    }
+    // Antigravity's runtime (the companion conversation) keeps them.
+    expect(hasModes(s({ agent: "agy", source_kind: "runtime", capabilities: { read: true, send: true, modes: true } }))).toBe(true);
+  });
+
   it("follows the node's modes capability when it gives one (#1843)", () => {
     // Orca's conversations: a runtime that applies the modes
     expect(hasModes(s({ agent: "claude", source_kind: "runtime", capabilities: { read: true, send: true, modes: true } }))).toBe(true);
@@ -95,8 +107,8 @@ describe("modes", () => {
     expect(hasModes(live)).toBe(false);
     expect(hasEffortOnly(live)).toBe(true);
     expect(effortOptions(live).map((m) => m.id)).toEqual(["low", "high", "ultra"]);
-    expect(effortOptions(live).map((m) => m.title)).toEqual(["低", "高", "极高"]);
-    expect(effortTitle("minimal")).toBe("极低");
+    expect(effortOptions(live).map((m) => m.title)).toEqual(["Low", "High", "Ultra"]);
+    expect(effortTitle("minimal")).toBe("Minimal");
     // A herdr pane joined on the app-server: no source, the node's levels say it.
     expect(hasEffortOnly(s({ agent: "codex", efforts: ["medium"] }))).toBe(true);
     // A level this app does not know yet keeps its id.

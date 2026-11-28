@@ -99,7 +99,7 @@ Time Profiler (main thread, "Hide system libraries" off) or `sample <pid>` durin
 
 **Rule.** Keychain reads (`SecItemCopyMatching`) happen once per launch or change, off the main thread or before the first
 frame is needed, and the result is cached in memory. Values that change often (scroll positions, drafts, split frames,
-counters) never go into UserDefaults: use `StateCache` (`apple/Shared/StateCache.swift`). Heavy views read settings
+counters) never go into UserDefaults: use `StateCache` (`apple/Packages/PersonaWire/Sources/PersonaWire/StateCache.swift`). Heavy views read settings
 through `@StoredValue` (`apple/Persona/App/StoredValue.swift`), not `@AppStorage`. Never call `synchronize()`.
 
 **Why.** A keychain read is IPC to `securityd` and can take tens of milliseconds, more while the device is locking or
@@ -111,7 +111,7 @@ unlocking. Every UserDefaults write, for any key, makes every `@AppStorage` view
 - Fixed before: `AgentSync` wrote UserDefaults on every chat fetch (`docs/apple/ios-state.md`, "Current data flow").
 - `apple/Persona/App/AppModel.swift:277`: writes UserDefaults on every set of the current conversation, changed or not.
 
-**Do.** One reader, `Keychain` (`apple/Shared/Keychain.swift`), called from the code that loads credentials at launch or
+**Do.** One reader, `Keychain` (`apple/Packages/PersonaWire/Sources/PersonaWire/Keychain.swift`), called from the code that loads credentials at launch or
 pairing; keep the value in the model and pass it down. For new persisted state pick `StateCache` first.
 
 **Check.** The isolation lint counts `SecItemCopyMatching` on the main actor and the ratchet counts `synchronize()`; `AppStorageRatchetTests` keeps the list of files
@@ -166,7 +166,7 @@ not looked up on every redraw.
 every push and every frame of a scroll.
 
 **Counter-examples.**
-- `apple/Persona/Views/Inbox/Lark/LarkInline.swift:303`: compiles a regular expression on every call, from every Lark card node's `body`.
+- Fixed before: `apple/Persona/Views/Inbox/Lark/LarkInline.swift` compiled a regular expression on every call, and another per attribute, from every Lark card node's `body`; the three fixed expressions are now `static let`.
 - `apple/Persona/Views/Knowledge/KnowledgeView.swift:1092`: a new `DateFormatter` per call from `body` (`apple/Persona/Views/Knowledge/KnowledgeView.swift:826`).
 - Fixed before, `apple/Shared/StateNames.swift`: `StateName.text` called `interfaceText(_:)` each time it was read. With an explicit locale,
   `String(localized:)` reads the string tables on every call (1–2 ms each on the simulator, against the cached lookup of
@@ -225,6 +225,18 @@ in one place, move that read into a small child view. Actions read unobserved va
   - `ChatsView`'s body read where the shell's bar is drawn (`AgentsHeader.bar`) to fade it. The bar is put back each time
     the strip rests on Agents and reports its place again: one run of the page and one of the list. The read moved
     into the bar's own modifier (`AgentsTopBarPlace`).
+- Fixed before: a switch between the system tab bar's tabs at regular width (the open iPhone Duo, the iPad, Separate
+  layout) ran both tabs' pages three or four times, the Persona conversation and each of its messages too, about 54
+  bodies a switch (#10303). The system `TabView` takes the tab going behind out of the window and puts the other one
+  back, and SwiftUI then looks at the inputs of everything in both again. A closure read from the environment is reported
+  changed each time SwiftUI looks, even one made once and handed down unchanged (`ChatActions`, seen with
+  `_printChanges`). So every view that read one from the environment ran again: the split's `splitShowList` and `splitPush`, the Agents page's `openSpace`, the chat's
+  `openFile` and `loadImage`, now one object each for the life of the view that hands it down (`SplitShowList`,
+  `SpaceOpener`, `FileOpener`, `ImageLoader`). A choice of the Agents tab moved `agentsListReveal`, read in `ChatsView`'s
+  body for an `onChange` (now `AgentsRevealWatch`), and the chat handing its menu to the Persona page as it appeared and
+  went ran the page (`liftBlur(host:)`, `MessageLiftHostLayer`). The column's bar items, handed to a navigation bar the
+  column hides, were given to UIKit anew, images looked up and all, on every switch (about a fifth of its main thread).
+  Now about 7 bodies a switch; a switch's longest frame went from 122 ms to 81 (median, the Duo simulator on its side).
 
 **Do.** Follow `docs/apple/ios-state.md` ("Keeping redraws small"). An environment value that changes with the
 presentation (`dismiss`, `isPresented`, `scenePhase`, `tabIsActive`) and a model value that only an action or a side
@@ -234,7 +246,8 @@ many pages share hands each one a projection of its own key, built per change: `
 photos with each row's content worked out, so the meeting thread reads only their order, each photo row reads the rest,
 and another recording's uploads redraw neither.
 
-**Check.** `RenderBudgetTests` (views per push, and `testShellSwitch`: views per switch between Assistant and Agents) and
+**Check.** `RenderBudgetTests` (views per push, `testShellSwitch`: views per switch between Assistant and Agents, and
+`testTabsSwitch`: views per switch of the system tab bar at regular width) and
 `AllSessionsReadersTests` (who may read `allSessions`) fail on regressions; add a `PerfTrace.body("Name")` to a new heavy
 view so its count shows up. To find what made a body run, put `let _ = Self._printChanges()` at its top in a local build
 and read the app's console (`xcrun simctl launch --console-pty …`): it names the property, environment value or
@@ -319,10 +332,18 @@ decode takes tens of milliseconds. `UIImage(data:)` decodes lazily at first draw
 - `apple/Persona/Persona/PersonaStore.swift:566`: `avatar(_:points:scale:)` reads and decodes the avatar file and calls
   `preparingForDisplay()` on the main actor; `apple/Persona/Persona/PersonaViews.swift:19` calls it from `body`, so the
   first draw of each avatar decodes on the main thread (cached afterwards).
-- `apple/Persona/Views/Inbox/Lark/LarkAttachmentView.swift:33` and `apple/Persona/Views/Session/CompareView.swift:249`: `UIImage(data:)` in `body`, on every render.
 - `apple/Persona/Views/Chat/PhotoAttach.swift:35`: picked photos decoded, scaled and encoded on the main actor.
-- `apple/Persona/Views/Machines/ClipboardSection.swift:131`: the clipboard preview builds `UIImage(data:)` from the
-  computer's full-size picture in `body`, so every redraw of the machine page decodes it again (#3281, listed in #5414).
+- Fixed before: `ImageCompareView` created both images on each divider update. It now keeps the two ImageIO previews
+  for the displayed revision pair and shares them between the side-by-side and slider layouts (#4267).
+- Fixed before: `LarkAttachmentView` decoded its thumbnail in `body` on every render. Its attachment-ID-keyed,
+  byte-costed `LarkAttachmentThumbnailCache` now shares ImageIO thumbnails decoded off the main actor at the compact and
+  full pixel sizes; malformed or missing thumbnail bytes keep the file-card fallback.
+- Fixed before: the clipboard preview built `UIImage(data:)` from the computer's full-size picture in `body` (#7925).
+  SwiftUI decodes such a picture on its own threads, but Core Animation's commit waits for that decode
+  (`-[_SwiftUIProxyImage finish]`). A new `UIImage` in every `body` also means a full decode on every redraw. With a
+  5120 × 2880 picture, 24 redraws of the computer's page blocked the main thread for 0.3–0.4 s in all and held about
+  110 MB more. `PerfCount`'s push-to-idle time did not show the wait; sampling the main thread over the whole burst did.
+  `ClipboardModel.previewPicture` now keeps an ImageIO thumbnail at the size the preview draws.
 
 **Do.** Follow `LarkMedia` (`apple/Persona/Views/Inbox/Lark/LarkMedia.swift:101-120`): download, then
 `Task.detached { decode(data, maxPixel:) }` with a `nonisolated` ImageIO thumbnail, in-flight requests shared, an `NSCache`
@@ -396,6 +417,9 @@ they draw and never load whole transcripts.
 **Why.** iOS ends a process that grows past its memory limit without a crash report the user sees; extensions get much
 lower limits than the app. A cache with no bound is a leak with extra steps.
 
+The same holds on disk: a cache folder that grows with use has a byte budget (`AttachedVideos.budget`, `CacheBudget` for
+chat pictures, Feishu media and WebKit's disk cache, #8341), and a versioned folder removes all its older versions.
+
 **Do.** Give caches a cost; drop them on `UIApplication.didReceiveMemoryWarningNotification`; release retained stores on
 `onTabVisibility` disappear. Full-size decodes of user pictures run one at a time and let the original go as soon as it
 is downscaled (`MeetingPhotos` prepares a pick's photos in turn, and `MeetingPhotoPipeline.prepare` drops the original
@@ -436,6 +460,10 @@ Start from a reproduction, measure the base, change one thing, measure again.
    - Instruments: Time Profiler (attach to the simulator app's PID); Hangs (reports main-thread blocks over the
      threshold you set, 250 ms by default; set it lower to find 100 ms blocks); SwiftUI (Xcode 26: view body updates,
      their causes and long updates); App Launch; Allocations and Leaks. Animation Hitches needs a device.
+   - A trace attached after launch misses what the launch builds: for that, `xcrun xctrace record --device <udid>
+     --template 'Time Profiler' --launch -- <Persona.app> <launch arguments>`. Count the main thread's samples under the
+     views in question and when the page asked for starts, not only the longest frame: a launch onto a chat built the
+     Agents list under it in a frame of its own, ~150 ms that the longest frame (the chat's) never showed (#8467).
    - Signposts: `PerfTrace.event("Name", detail)` (`apple/Persona/App/PerfSignpost.swift`, subsystem `Persona.Performance`,
      Points of Interest) marks moments. For a span, use an `OSSignposter` interval in the same subsystem, compiled under
      `#if DEBUG || PERF_SIGNPOST`. The launch marks are `Snapshot restored`, `First frame (root appeared)` and `Connected`;
@@ -457,7 +485,8 @@ Start from a reproduction, measure the base, change one thing, measure again.
    numbers to a file (`-showAutoScroll YES` → `Documents/frames.json` from `FrameStats`; `-showPagePerf YES` →
    `frames-page-*.json`); a script launches the app, drives the mock hub (`/mock/churn`, `/mock/say?stream=1`, or
    `/mock/say?trace=markdown|prose&node=lead|trail` for a recorded model stream at the node's cadence), waits with a
-   timeout, reads the file and ends with a one-line verdict. Screen probes (`-probes YES`, `docs/apple/ios-state.md`,
+   timeout, reads the file and ends with a one-line verdict. Each frame's interval and the main thread's time before it
+   are in the report too (`deltas_ms`, `busies_ms`): line them up with the cues to see which frames of an animation grew. Screen probes (`-probes YES`, `docs/apple/ios-state.md`,
    "Probes and assertions") expose state for UI tests. The suites in `scripts/app/perf-test.sh` (`PerfAgentsTests`,
    `PerfAssistantTests`, `PerfComposerTests`, …) do this with `XCTHitchMetric` and report through
    `scripts/app/perf_report.py`.
@@ -475,7 +504,8 @@ Start from a reproduction, measure the base, change one thing, measure again.
    the app, and `waitForExistence` takes one per poll, all on the app's main thread: 55–70 ms each with the `assistant`
    suite's data, about three quarters of the main thread's busy time during `testTabSwitchAssistantAgents` (#5438). A
    test that taps and waits inside `measure` reports XCTest's hitches with the app's. For an animation, give the app a
-   cue (a Darwin notification handled by `FrameProbe`, as `com.persona.perf.shell.switch`) and let the test only sleep
+   cue (a Darwin notification handled by `FrameProbe`, as `com.persona.perf.shell.switch`, or
+   `com.persona.perf.sidebar.toggle` for the Sidebar layout's column, `PerfSidebarTests`) and let the test only sleep
    while frames are recorded (`testTabSwitchAssistantAgentsByCue`; the list glides run inside the app the same way, `FrameProbe.runGlide`). To see the split,
    `PERF_SAMPLE=<test>` samples the app during a test: XCTest's share is everything under `__XCTPerformOnMainRunLoop`.
 8. **In the field.** TestFlight builds report hangs, launch time and memory to Xcode Organizer. MetricKit is not wired yet
@@ -488,7 +518,7 @@ Report the device or simulator, OS, build settings, data set, number of runs and
 | Check | What it does | State |
 | --- | --- | --- |
 | `scripts/test/test_apple_perf_patterns.py` | Ratchet over Swift under `apple/` (tests excluded): `UserDefaults.synchronize()`, `TimelineView(.animation…)` without `paused:`, localization lookups with an explicit locale (`interfaceText(`, `String(localized:…, locale:)`; P4), and reads of a view's frame in the window (`frame(in: .global)`; P7). Each file's counts (`scripts/test/apple_perf_baseline.json`) may only go down; a call verified to be fine is marked `// perf-ok: <reason>`. After removing calls, run it with `--update`; `--list` prints every counted call. Runs in `scripts/ci/python-tests.py`. | Implemented |
-| `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push and per switch between Assistant and Agents (`testShellSwitch`: no page's body runs, the composer bar's at most three times), who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
+| `RenderBudgetTests`, `AllSessionsReadersTests`, `AppStorageRatchetTests`, `HoldSourceTests`, `ContinuousMotionTests` | Views per push and per switch between Assistant and Agents (`testShellSwitch`: no page's body runs, the composer bar's at most three times; `testTabsSwitch` on the tabs at regular width: no message, column or Agents page runs), who reads `allSessions`, files still holding `@AppStorage`, no self-managed waits, every unending animation stops under Reduce Motion | Existing |
 | `scripts/app/perf-test.sh` | Scroll, navigation and composer hitches per page, plus cold / warm first-frame launch timing | Existing, run by hand |
 | `scripts/test/isolation-lint.sh` | Isolation lint over Swift under `apple/` (tests excluded): Photos fetches, `SecItemCopyMatching`, `Data` / `String(contentsOf:)`, directory listings and `UIImage(data:)` / `(contentsOfFile:)` / `NSImage(data:)`, each with where it runs: on the main actor, off it, or unknown. Only the first and the last count; each file's counts (`scripts/test/apple_isolation_baseline.json`) may only go down, and no comment clears a call ("Isolation lint"). Runs in `scripts/ci/apple.sh`. | Implemented, #4262 |
 | `scripts/test/test_apple_state_initial_values.py` | P3 ratchet over Swift under `apple/`, including tests: class construction in `@State` with non-trivial `init` bodies or eager stored-property initial values. Each file/type count (`scripts/test/apple_state_initial_values_baseline.json`) may only go down; new entries start at zero. `--update` lowers the baseline; `--list` prints every counted site and its reason. Automatically discovered by `scripts/ci/python-tests.py` in the scripts lane. | Implemented, #4263 |
@@ -569,9 +599,9 @@ is off the main actor and nothing can call it unseen.
 | A closure literal that only its destination's type makes `@Sendable` | `main` when written in main-actor code (a false positive: write `{ @Sendable in` to say so) |
 | A closure kept in a local variable, or read out of a property and handed on | `unknown` outside main-actor code |
 | `map`, `filter` and the like on a lazy sequence, in a file that imports Combine, or in the sequence of a `for await` | `unknown` outside main-actor code |
-| A call on a value whose type no declaration states (`$0.load()`, a value out of an untyped closure) | may make the callee `unknown`, never `main` or `off` |
+| A call on a value whose type no declaration states (`$0.load()`, a value out of an untyped closure), or whose type has the name of a generic parameter or associated type anywhere in the sources | may make the callee `unknown`, never `main` or `off` |
 | `@objc` members, `#selector`, overrides of SDK classes, callbacks of SDK delegate protocols | `unknown`: the caller is outside the sources |
-| A function handed on as a value, or a property named in a key path | `unknown` |
+| A function handed on as a value, or a property named in a key path (a name only compared, used in arithmetic or interpolated into a string is read, not handed on, unless an `appendInterpolation` of the sources takes, unlabeled, a value that may be a function: anything but a concrete type such as `Int`, `String` or a struct of the sources) | `unknown` |
 | `nonisolated` code with no call in the sources | `unknown` |
 | A conformance other than `Error`, `LocalizedError` or `CodingKey` that makes the compiler infer `nonisolated` | read as MainActor |
 | `SWIFT_DEFAULT_ACTOR_ISOLATION` set per build configuration | the run stops with an error |
@@ -618,7 +648,7 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 
 - `apple/Persona/App/AppModel.swift:277`: `assistantCurrent` writes UserDefaults on every set, even when the value did not change; `apple/Persona/App/AppModel.swift:229` writes `dev.openChat` on every chat open. Each write recomputes every `@AppStorage` view (49 remain, most in `apple/Persona/Views/Session/SessionPanes.swift` and `apple/Persona/Views/Session/Terminal/TerminalExtras.swift`).
 - `apple/PersonaWatch/PersonaWatchApp.swift:196`: the watch writes its whole seen-card list to UserDefaults on each refresh that finds new cards.
-- `apple/Persona/Views/Machines/ScreenCredentials.swift:36`: a keychain read on the main actor when Screen Sharing opens (once per tap; minor).
+- `apple/Modules/ScreenShare/ScreenCredentials.swift:33`: a keychain read on the main actor when Screen Sharing opens (once per tap; minor).
 
 **P3: `@State` initial values**
 
@@ -630,12 +660,11 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 
 **P4: work in `body`**
 
-- `apple/Persona/Views/Inbox/Lark/LarkInline.swift:303`: `cardMarkdown` compiles an `NSRegularExpression` on every call, and another per attribute (`apple/Persona/Views/Inbox/Lark/LarkInline.swift:310`), for every card node's `body` (`apple/Persona/Views/Inbox/Lark/LarkCard.swift:327`). 45 uncached `NSRegularExpression(` sites in all.
 - `apple/Persona/Views/Knowledge/KnowledgeView.swift:1092`: a new `DateFormatter` per call, from `body` (`apple/Persona/Views/Knowledge/KnowledgeView.swift:826`); same in `apple/Persona/Views/Settings/ExtensionCodeViews.swift:382-389` (`ISO8601DateFormatter`, `RelativeDateTimeFormatter`).
 - `apple/Shared/Models.swift:2505`: `storageText` creates a `ByteCountFormatter` on each read; 35 callers, many in rows and in a progress label (`apple/Persona/Views/Chat/VideoFileView.swift:145`).
 - `apple/Persona/Views/Session/ReviewPage.swift:267-283`: rebuilds a file's diff rows, scans them for the widest line number and filters the drafts once per line, on every `body`.
 - Counts: 22 `DateFormatter()`, 13 `ISO8601DateFormatter()`.
-- Good: `ChatScratch`'s memoized lines (`apple/Persona/Views/Chat/ChatView.swift:880`), `TextMemo` (`apple/Shared/TextMemo.swift`), `InboxProjectionMemo`.
+- Good: `ChatScratch`'s memoized lines (`apple/Persona/Views/Chat/ChatView.swift:880`), `TextMemo` (`apple/Packages/PersonaWire/Sources/PersonaWire/TextMemo.swift`), `InboxProjectionMemo`.
 
 **P5 / P7: reads and high-frequency updates**
 
@@ -654,8 +683,6 @@ Grep counts are across `apple/` without tests; they are leads to read, not each 
 **P8: images**
 
 - `apple/Persona/Persona/PersonaStore.swift:566`: avatar decode and `preparingForDisplay()` on the main actor, from `body` (`apple/Persona/Persona/PersonaViews.swift:19`); `isOnPhone` checks the file system before the cache on every call.
-- `apple/Persona/Views/Inbox/Lark/LarkAttachmentView.swift:33`: `UIImage(data:)` of the thumbnail in `body`, every render.
-- `apple/Persona/Views/Session/CompareView.swift:249`: decodes both full images of a comparison from `body`, every render.
 - `apple/Persona/Views/Chat/PhotoAttach.swift:35`: picked photos are decoded at full size, scaled and encoded to JPEG on the main actor (`MessagePhotos`); `apple/Persona/Views/Assistant/AssistantView.swift:1036-1042` does the same.
 - `apple/PersonaWatch/WatchPetView.swift:169`: `UIImage(contentsOfFile:)` in a watch row's `body`.
 - Good: `apple/Persona/Views/Inbox/Lark/LarkMedia.swift:110`, `apple/Persona/Views/Chat/ChatImageLoader.swift:34`, `apple/Persona/Views/Settings/AvatarUploadModel.swift:82`.

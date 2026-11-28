@@ -2,6 +2,7 @@ package kb
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
@@ -124,7 +125,7 @@ func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 	var dirty []*Project
 	live := map[string]bool{}
 	for _, p := range e.Store.Projects() {
-		if p.Dirty && p.Status != "ignored" && p.Live() {
+		if p.Dirty && p.Status != "ignored" && p.Live() && !p.referenceOnly() {
 			live[p.Slug] = true
 			if e.retries().projects.waits(p.Slug, "", now) {
 				continue
@@ -144,6 +145,11 @@ func (e *Engine) RefreshProjects(ctx context.Context, max int) int {
 			calls++
 		}
 		if err != nil {
+			if errors.Is(err, ErrReferenceOnly) {
+				e.retries().projects.clear(p.Slug)
+				e.logf("project %s: %v: skipped in-flight rewrite", p.Slug, err)
+				continue
+			}
 			if deferred(ctx, err) { // the connection is held, no model, or the run ended: the rest wait (still dirty)
 				break
 			}
@@ -164,36 +170,35 @@ func (e *Engine) refreshProject(ctx context.Context, p *Project) error {
 	return err
 }
 
+// projectRefreshTimeout bounds one kb.project digest model call. Large projects ask for up to 8000 output tokens and
+// often reach the ceiling, and JSONMax's larger retry shares this same context, so 3 minutes cut long replies mid-read
+// ("ai: read stream: context deadline exceeded") and parked the project in the retry backoff. Project refreshes run
+// serially in their own lane, so the longer background budget is cheap; set it back to 3*time.Minute to roll back.
+const projectRefreshTimeout = 6 * time.Minute
+
 // refreshProjectCall rewrites p's summary; called: the model was asked (not for a project gone meanwhile).
 func (e *Engine) refreshProjectCall(ctx context.Context, p *Project) (called bool, err error) {
 	current, ok := e.Store.Project(p.Slug)
-	if !ok {
+	if !ok || current.referenceOnly() {
 		return false, nil
 	}
 	p = current
+	owner := e.knowledgeOwner()
 	in := e.projectInput(p)
+	in.Language = owner.Language
 	var d projectDigest
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	cctx, cancel := context.WithTimeout(ctx, projectRefreshTimeout)
 	defer cancel()
-	if err := e.modelFor("kb.project").JSONMax(cctx, prompts.RenderKBProject(prompts.KBOwner{Owner: e.ownerName()}), prompts.RenderKBProjectInput(in), 8000, &d); err != nil {
+	if err := e.modelFor("kb.project").JSONMax(cctx, prompts.RenderKBProject(owner), prompts.RenderKBProjectInput(in.KBProjectInput), 8000, &d); err != nil {
 		return true, err
 	}
 	return true, e.commitProject(p, in, d)
 }
 
-func (e *Engine) projectInput(p *Project) prompts.KBProjectInput {
-	in := prompts.KBProjectInput{Pinned: p.Pinned, Name: p.Name, Kind: p.Kind, Aliases: p.Aliases, Tags: e.TopTags(40),
-		Summary: e.Store.Summary(KindProject, p.Slug), Log: e.Store.Log(p.Slug, 40)}
-	for i, cid := range p.Chats {
-		if i >= 8 {
-			break
-		}
-		sum := e.Store.Summary(KindChat, cid)
-		if r := []rune(sum); len(r) > 1500 {
-			sum = string(r[:1500]) + "…"
-		}
-		in.Chats = append(in.Chats, prompts.KBProjectChat{ID: cid, Summary: sum})
-	}
-	in.Moments = e.projectMomentsForPrompt(p, 5)
+func (e *Engine) projectInput(p *Project) projectInput {
+	tags := e.TopTags(40)
+	in, _ := e.projectEvidence(p, e.Store.projectTimeline(p, false))
+	in.Tags = tags
+	in.Summary = e.Store.Summary(KindProject, p.Slug)
 	return in
 }

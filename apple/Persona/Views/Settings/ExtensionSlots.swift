@@ -1,6 +1,7 @@
 import BeautifulUI
 import Observation
 import SwiftUI
+import PersonaWire
 
 // The UI slots (docs/extensions/extensions.md「UI slots」): where plugins put their declarative UI beyond their own settings.
 //
@@ -20,7 +21,10 @@ import SwiftUI
 
     /// nav_page entries, in the hub's order.
     private(set) var pages: [ExtensionUIPlace] = []
-    /// overview_card entries, in the hub's order.
+    /// The entries Settings › Extensions lists: the extensions' own. Dashboards (#15017) are the assistant's, kept in the
+    /// sidebar and the drawer only.
+    var extensionPages: [ExtensionUIPlace] { pages.filter { !DashboardsUI.owns($0.owner) } }
+    /// overview_card entries, in the hub's order: the extensions' own (not a reserved "-" id's, see `reload`).
     private(set) var cards: [ExtensionUIPlace] = []
     /// The cards' models, made when the cards are listed (the page pushes what they ask for, `extensionPushes`).
     private var cardModels: [String: ExtensionViewModel] = [:]
@@ -39,6 +43,10 @@ import SwiftUI
 
     /// The hub has the slots (and so the context, charts and badges).
     var available: Bool { features().hasExtensionFeature("ui_slots") }
+
+    /// The optional domain-space product surface is enabled only while its
+    /// extension contributes a running navigation page.
+    var spaceConversationsEnabled: Bool { pages.contains { $0.owner == "space-conversations" && $0.id == "home" } }
 
     /// Asks the hub again for the entries and the cards (a list that cannot be read keeps what there was).
     func reload(for hub: String? = nil) async {
@@ -65,7 +73,9 @@ import SwiftUI
             if next != pages { pages = next }
         }
         do {
-            let next = all.filter { $0.placement == "overview_card" }
+            // Settings draws the extensions' own cards only: an id that starts with "-" is a manager's (Dashboards' watch
+            // cards, #13020, which a hub lists only to the web's Overview), never asked for or drawn here.
+            let next = all.filter { $0.placement == "overview_card" && !ReservedExtensionUI.reserved($0.owner) }
             if next != cards { cards = next }
             var models = cardModels.filter { k, _ in next.contains { Self.key($0) == k } }
             for c in next where models[Self.key(c)] == nil {
@@ -111,7 +121,7 @@ import SwiftUI
         model.assistantManagerID == nil ? total : (0, false)
     }
 
-    static func key(_ p: ExtensionUIPlace) -> String { p.owner + "/" + p.id }
+    static func key(_ p: ExtensionUIPlace) -> String { p.scopedID }
 
     /// What the lists depend on: which hub (paired again with another, or another group picked) and whether it has slots.
     nonisolated struct Source: Hashable, Sendable {
@@ -198,10 +208,11 @@ struct ExtensionSlotsSettingsSection: View {
     var body: some View {
         if slots.available {
             ExtensionCardsSection(link: $link, slots: slots)
-            if !slots.pages.isEmpty {
+            let pages = slots.extensionPages
+            if !pages.isEmpty {
                 Section {
                     Group {
-                        ForEach(slots.pages) { page in
+                        ForEach(pages, id: \.scopedID) { page in
                             NavigationLink(value: SettingsPage.pluginPage(plugin: page.owner, ui: page.id, title: page.title, manager: slots.manager)) {
                                 ExtensionNavRow(place: page)
                             }
@@ -250,7 +261,7 @@ struct ExtensionCardsSection: View {
     var slots: ExtensionSlots = .shared
 
     var body: some View {
-        ForEach(slots.cards) { card in
+        ForEach(slots.cards, id: \.scopedID) { card in
             Section {
                 ExtensionCard(card: card, model: slots.model(for: card), link: $link) {
                     if let (ui, title) = slots.opened(by: card) {
@@ -272,6 +283,17 @@ struct ExtensionCard: View {
     var open: () -> Void
 
     private var opens: Bool { card.opens?.isEmpty == false }
+    /// A graph or 3D scene preview owns its tap (full screen). The card's title keeps the card's ordinary page-opening path.
+    private var graphPreview: Bool {
+        model.view?.sections.contains { section in
+            section.items.contains { item in
+                switch item {
+                case .graph, .scene, .map: true
+                default: false
+                }
+            }
+        } == true
+    }
 
     var body: some View {
         if !model.unsupported {
@@ -281,12 +303,12 @@ struct ExtensionCard: View {
 
     private var content: some View {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
-                HStack(spacing: Theme.Space.s) {
-                    Text(model.view?.title ?? card.title).font(Theme.Font.labelStrong).lineLimit(1)
-                    Spacer(minLength: Theme.Space.s)
-                    if opens {
-                        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
-                    }
+                if opens && graphPreview {
+                    Button(action: open) { title }
+                        .buttonStyle(.plain)
+                        .tapTargetOutset(.vertical)
+                } else {
+                    title
                 }
                 if let v = model.view {
                     ExtensionViewStack(view: v, model: model, cards: false, link: $link)
@@ -308,11 +330,37 @@ struct ExtensionCard: View {
             }
             .padding(.vertical, Theme.Space.xs)
             .contentShape(.rect)
-            .onTapGesture { if opens { open() } }
+            .modifier(ExtensionCardOpenGesture(enabled: opens && !graphPreview, action: open))
             .accessibilityElement(children: .contain)
-            .accessibilityAddTraits(opens ? .isButton : [])
+            .accessibilityAddTraits(opens && !graphPreview ? .isButton : [])
             .task { if model.view == nil { await model.load() } }
             .pluginRefresh(model)
+    }
+
+    private var title: some View {
+        HStack(spacing: Theme.Space.s) {
+            Text(model.view?.title ?? card.title).font(Theme.Font.labelStrong).lineLimit(1)
+            Spacer(minLength: Theme.Space.s)
+            if opens {
+                ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
+            }
+        }
+        .contentShape(.rect)
+    }
+}
+
+/// Installs a card's page-opening gesture only where the whole card opens. A graph card instead has a title button and
+/// a full-screen preview button; even a disabled parent gesture would compete with those nested controls in a list.
+private struct ExtensionCardOpenGesture: ViewModifier {
+    var enabled: Bool
+    var action: () -> Void
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled {
+            content.onTapGesture(perform: action)
+        } else {
+            content
+        }
     }
 }
 
@@ -357,7 +405,7 @@ struct ExtensionMachineSections: View {
     @Binding var link: LinkTarget?
 
     var body: some View {
-        ForEach(page.places) { place in
+        ForEach(page.places, id: \.scopedID) { place in
             if let m = page.models[ExtensionSlots.key(place)], !m.unsupported {
                 ExtensionMachineSection(place: place, model: m, link: $link)
             }
@@ -376,6 +424,7 @@ private struct ExtensionMachineSection: View {
                 .padding(.horizontal, Theme.Space.xs)
             if let v = model.view {
                 ExtensionViewStack(view: v, model: model, link: $link)
+                    .environment(\.pluginUICompact, true)
             } else if let e = model.error {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
                     Label(e, systemImage: Theme.Icon.error).font(Theme.Font.label).foregroundStyle(Theme.danger)

@@ -26,12 +26,16 @@ type taskNode struct {
 	starts []map[string]any
 	sends  []map[string]any
 	n      int
+	// nextID: when non-empty, the next session.start uses this id before returning to s1, s2…
+	nextID string
 	// failStart: session.start answers this error instead of a session.
 	failStart error
 	// gate: when set, session.start waits for it to close (a start that takes a while).
 	gate chan struct{}
 	// items: what session.items answers (the agent's latest turn).
 	items []proto.Item
+	// prOwnership answers an independent GitHub ownership readback for a test PR.
+	prOwnership json.RawMessage
 }
 
 func (tn *taskNode) calls() (starts, sends []map[string]any) {
@@ -67,11 +71,18 @@ func connectTaskNode(t *testing.T, h *Hub, id string) *taskNode {
 			}
 			tn.n++
 			sid := "s" + string(rune('0'+tn.n))
+			if tn.nextID != "" {
+				sid, tn.nextID = tn.nextID, ""
+			}
 			return map[string]any{"session": proto.Session{SessionID: sid, Cwd: p["cwd"].(string), Agent: "claude"}}, nil
 		case "session.send":
 			tn.sends = append(tn.sends, p)
 		case "session.items":
 			return map[string]any{"items": tn.items}, nil
+		case "git.pr":
+			if p["ownership"] == true && tn.prOwnership != nil {
+				return tn.prOwnership, nil
+			}
 		case "launchers.check":
 			return proto.LauncherCheck{OK: true, Agent: "claude", Answer: "ok"}, nil
 		}
@@ -153,7 +164,7 @@ func taskLine(h *Hub, todo Todo) string {
 func planArgs(readonly bool) json.RawMessage {
 	task := map[string]any{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "bypassPermissions",
+		"role": "worker", "readonly": readonly, "why": "这个仓库最近在 box 上", "permission": "bypassPermissions",
 		// What task_plan requires of a brief (#3822): a read-only task's goal and how long it should take.
 		"goal": "登录页横屏不再崩溃", "expect_minutes": 10,
 	}
@@ -194,8 +205,10 @@ func TestTaskPlanReadOnlyStartsAtOnce(t *testing.T) {
 	}
 	starts, _ := tn.calls()
 	wantPrompt := "iPad 横屏时登录页崩溃，修好并补测试\n\n本任务只读：不改项目文件、不提交、不对外写入"
-	if len(starts) != 1 || !strings.HasPrefix(starts[0]["prompt"].(string), wantPrompt+"\n\nPersona task handoffs:") || starts[0]["cwd"] != "/code/app" ||
-		starts[0]["permission_mode"] != "bypassPermissions" {
+	if prompt, _ := starts[0]["prompt"].(string); len(starts) != 1 ||
+		!strings.HasPrefix(prompt, wantPrompt+"\n\nPersona task handoffs:") ||
+		!strings.Contains(prompt, "file: <这台电脑上的绝对路径>") ||
+		starts[0]["cwd"] != "/code/app" || starts[0]["permission_mode"] != "bypassPermissions" {
 		t.Fatalf("session.start = %+v", starts)
 	}
 	if got := strings.Join(feedKinds(h, "conv1"), ","); got != "plan,task" {
@@ -574,8 +587,18 @@ func TestTaskPlanWaitsForTheUser(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer "+h.cfg.Token)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("dismiss after start: %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss after start: %d %s", w.Code, w.Body)
+	}
+	var dismissed struct{ Plan *assistant.TaskPlan }
+	if err := json.Unmarshal(w.Body.Bytes(), &dismissed); err != nil {
+		t.Fatal(err)
+	}
+	if dismissed.Plan == nil || dismissed.Plan.ID != id || dismissed.Plan.State != "started" {
+		t.Fatalf("dismiss after start must return the started plan: %+v", dismissed.Plan)
+	}
+	if p := loadPlan(h, id); p.State != "started" {
+		t.Fatalf("dismiss changed the started plan: %+v", p)
 	}
 }
 

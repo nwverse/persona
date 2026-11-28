@@ -3,6 +3,8 @@ package persona.android.di
 import persona.android.AppText
 import persona.android.R
 import android.app.Application
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import persona.android.PersonaApp
@@ -12,6 +14,7 @@ import persona.core.data.ChatDataRepositories
 import persona.core.data.ScopedHubData
 import persona.core.hub.*
 import persona.feature.chat.ChatAppBindings
+import persona.platform.phonetools.AndroidPhoneTools
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.*
@@ -40,6 +43,10 @@ class GroupStack internal constructor(
     internal val mergedTerminal: TerminalTransport by lazy { terminal.inGroup(names) }
     internal val files: SessionFiles by lazy { HubSessionFiles(connection).inGroup(names) }
     internal val actions: ChatActions by lazy { HttpChatActions(connection).inGroup(names) }
+    /** Successful manager snapshots follow this pairing across refreshed HTTP routes. */
+    internal val metricSnapshots = HttpMachineMetricsApi.Cache()
+    /** The single TasksStore shared by shell badges, the To-dos page and chat bindings for this hub group. */
+    val tasks: persona.core.domain.tasks.TasksStore? get() = plainBindings.tasks
     val current: Boolean get() = group.data === data && group.active
 }
 
@@ -81,12 +88,27 @@ class GroupStacks @Inject constructor(application: Application, private val runt
     private suspend fun build(group: GroupRuntime, data: ScopedHubData): GroupStack {
         val connection = group.connection
         fun current() = group.data === data && group.active
+        val retryKey = stringSetPreferencesKey("held_agent_retry_receipts")
+        val receipts = HeldAgentRetryReceipts(data.heldRetryPreferences.data.map { it[retryKey].orEmpty() }) { update ->
+            data.heldRetryPreferences.edit { prefs ->
+                val before = prefs[retryKey].orEmpty()
+                val after = update(before)
+                if (after != before) prefs[retryKey] = after
+            }
+        }
         val repositories = withContext(Dispatchers.IO) {
             ChatDataRepositories(data, HubChatTransport(connection), connection, foreground,
-                HttpHubPreferencesTransport(connection) { current() })
+                HttpHubPreferencesTransport(connection) { current() }, reconcileHeldRetries = receipts::reconcile,
+                continuityFactory = app.continuityFactory)
         }
         val names = GroupNames(group.namespace)
         group.adoptSession = { previous, session -> if (current()) repositories.sessions.adoptThread(previous, session) }
+        group.heldActions = { session ->
+            HttpHeldAgentActions(session, connection.serverFeatures, receipts, data.coroutineScope, { path, method, body ->
+                if (!current()) throw CancellationException("Pairing changed")
+                connection.request(path, method, body)
+            }, { id, retry -> if (current()) repositories.sessions.heldActionCompleted(session, id, retry) })
+        }
         val view = object : HubConnection {
             override val state = group.state
             override val resumed get() = connection.resumed
@@ -94,12 +116,16 @@ class GroupStacks @Inject constructor(application: Application, private val runt
             override fun reconnect() = group.reconnect()
             override fun send(message: JsonObject) = connection.send(message)
         }
-        val plain = createChatWiring(data, repositories, connection, view, ::current)
+        val plain = createChatWiring(data, repositories, connection, view, ::current,
+            // The conversation's Undo of the assistant's calendar write (iOS `CalendarTool.remove`): this phone's own
+            // delete, so it is not a tool call that would ask the user to confirm again. The current group's phone is the
+            // only phone these cards can undo on: a card made on another phone has no event here and says so.
+            quickResults = persona.core.contracts.api.PhoneQuickResults { id -> AndroidPhoneTools(app) { true }.removeCalendarEvent(id) })
         return GroupStack(group, data, connection, repositories, plain.inGroup(names), plain)
     }
 
     private fun closeStack(stack: GroupStack) {
-        app.scope.launch { runCatching { stack.repositories.close() } }
+        app.scope.launch { val _ = runCatching { stack.repositories.close() } }
         // Its forwarded ports' listeners, or the next pairing cannot bind the same numbers (#3483).
         (stack.plainBindings.ports as? AutoCloseable)?.let { ports -> runCatching { ports.close() } }
     }

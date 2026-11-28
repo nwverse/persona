@@ -15,6 +15,8 @@ data class PanelModel(
     val description: String? = null,
     /** The concrete model an alias stands for under this provider. */
     val resolved: String? = null,
+    /** Other spellings folded into this row; each still selects it. Empty on an older hub. */
+    val aliases: List<String> = emptyList(),
     /** Thinking efforts it takes, weakest first; empty: no effort control. */
     val efforts: List<String> = emptyList(),
     /** The effort it runs with when none is set: the slider's "Recommended" stop. */
@@ -23,6 +25,8 @@ data class PanelModel(
     val custom: Boolean = false,
     /** It stands for whatever its provider runs when no model is given (a launcher's default entry). */
     val providerDefault: Boolean = false,
+    /** The current Desktop model reports its session value independently of saved choices. */
+    val sessionEffortOnly: Boolean = false,
 )
 
 /** Why a provider's rows can't be picked here, in the words the UI gives each. */
@@ -39,6 +43,8 @@ sealed interface PanelReason {
     data object Busy : PanelReason
     /** The chat's provider is not on its computer any more. */
     data object ProviderGone : PanelReason
+    /** This connection cannot receive separate task follow-up instructions. */
+    data object SupervisionUnavailable : PanelReason
     /** The hub's own words (a provider that can't run Persona chats there). */
     data class Hub(val words: String) : PanelReason
 }
@@ -170,6 +176,17 @@ data class PanelRow(
 ) {
     /** A model of a provider's list (also in Recommended), a favorite's copy, a recent setup, or "Use “…”" for a typed id. */
     enum class Kind { Model, Favorite, Recent, Typed }
+
+    enum class EffortEdit { ReadOnly, Live, Preference }
+
+    fun effortEdit(live: Boolean): EffortEdit = when {
+        model.sessionEffortOnly -> EffortEdit.ReadOnly
+        live -> EffortEdit.Live
+        else -> EffortEdit.Preference
+    }
+
+    val reportsSessionEffort: Boolean get() = current && kind == Kind.Model && model.sessionEffortOnly
+    val shownEffort: String get() = if (reportsSessionEffort) setup.effort.orEmpty() else ModelPanel.shownEffort(setup, model)
 }
 
 data class PanelSection(
@@ -189,13 +206,13 @@ object ModelPanel {
         if (current == null || current.provider != provider.id) return false
         val want = current.model.lowercase()
         if (provider.models.orEmpty().any { it.id.lowercase() == want }) return model.id.lowercase() == want
-        return isCurrentModel(model.id, model.resolved, current.model)
+        return isCurrentModel(model.id, model.resolved, current.model, model.aliases)
     }
 
-    /** Whether a model ([id], the model it stands for [resolved]) is [current], in any case. */
-    fun isCurrentModel(id: String, resolved: String?, current: String?): Boolean {
+    /** Whether a model ([id], the model it stands for [resolved], or a folded [aliases] spelling) is [current], in any case. */
+    fun isCurrentModel(id: String, resolved: String?, current: String?, aliases: List<String> = emptyList()): Boolean {
         val c = current?.lowercase() ?: return false
-        return id.lowercase() == c || resolved?.lowercase() == c
+        return id.lowercase() == c || resolved?.lowercase() == c || aliases.any { it.lowercase() == c }
     }
 
     private fun takes(model: PanelModel, effort: String?) = effort?.takeIf { it.isNotEmpty() && it in model.efforts }
@@ -208,7 +225,8 @@ object ModelPanel {
     fun rowSetup(provider: PanelProvider, model: PanelModel, state: PanelState, override: PanelOverride?): PanelConfig {
         val current = state.current
         val now = runsNow(provider, model, current)
-        val effort = if (now) takes(model, current?.effort) ?: (if (state.starting) null else takes(model, override?.effort))
+        val effort = if (now && model.sessionEffortOnly) current?.effort
+            else if (now) takes(model, current?.effort) ?: (if (state.starting) null else takes(model, override?.effort))
             else takes(model, override?.effort) ?: takes(model, current?.effort)
         val fast = if (now) current?.fast else override?.fast
         return PanelConfig(provider.id, model.id, effort, fast).clean()
@@ -248,9 +266,9 @@ object ModelPanel {
         else -> rowBlock(row.provider, state) == null && row.model.efforts.isNotEmpty()
     }
 
-    /** The search (every word, any case) over the model's name, id, the model it stands for, its description and the provider's name. */
+    /** The search (every word, any case) over the model's names, folded aliases, description and provider's name. */
     fun matches(provider: PanelProvider, model: PanelModel, query: String): Boolean = matchesWords(
-        listOfNotNull(model.name, model.id, model.resolved, model.description, provider.name), query)
+        listOfNotNull(model.name, model.id, model.resolved, model.description, provider.name) + model.aliases, query)
 
     private fun matchesWords(fields: List<String>, query: String): Boolean {
         val words = query.trim().lowercase().split(Regex("""\s+""")).filter(String::isNotEmpty)
@@ -265,7 +283,7 @@ object ModelPanel {
     private fun resolve(providers: List<PanelProvider>, copy: PanelConfig): Resolved? {
         val provider = providers.firstOrNull { it.id == copy.provider } ?: return null
         val models = provider.models ?: return Resolved(provider, PanelModel(copy.model, copy.model), false)
-        models.firstOrNull { isCurrentModel(it.id, it.resolved, copy.model) }?.let { return Resolved(provider, it, true) }
+        models.firstOrNull { isCurrentModel(it.id, it.resolved, copy.model, it.aliases) }?.let { return Resolved(provider, it, true) }
         if (provider.typable) return Resolved(provider, PanelModel(copy.model, copy.model, custom = true), false)
         return null
     }
@@ -276,7 +294,9 @@ object ModelPanel {
      * started yet), then one group per provider (an emptied group is left out; one whose list is being read shows a
      * spinner). A provider's view: its favorites, then its models. Favorites: the favorites only. Recent: the last setups
      * applied. A search looks through every provider, and a typed model id none of whose models answers is offered as
-     * "Use “…”" in each provider that takes a pick here and takes typed ids.
+     * "Use “…”" in each provider that takes a pick here and takes typed ids. A provider or a model listed twice (Claude
+     * Code lists `default` twice when its settings name it, #9998) is one row, the first: a key used twice in the list
+     * closes the app.
      */
     fun sections(providers: List<PanelProvider>, state: PanelState, chosen: PanelView, query: String, prefs: PanelPrefs): List<PanelSection> {
         val q = query.trim()
@@ -289,7 +309,7 @@ object ModelPanel {
                 val r = resolve(providers, c) ?: return@mapNotNull null
                 val setup = copySetup(c, r.model, r.listed)
                 val starred = prefs.favorites.firstOrNull { f ->
-                    f.setup.provider == setup.provider && isCurrentModel(r.model.id, r.model.resolved, f.setup.model) &&
+                    f.setup.provider == setup.provider && isCurrentModel(r.model.id, r.model.resolved, f.setup.model, r.model.aliases) &&
                         copySetup(f.setup, r.model, r.listed).same(setup)
                 }
                 val now = state.current
@@ -308,11 +328,11 @@ object ModelPanel {
         if (favorites.isNotEmpty()) out += PanelSection("favorites", PanelSection.Kind.Favorites, rows = favorites)
         if (view == PanelView.Favorites) return out
 
-        val shown = providers.filter(::inView)
+        val shown = providers.filter(::inView).distinctBy { it.id }
         val groups = LinkedHashMap<String, List<PanelRow>>()
         for (p in shown) {
             val models = p.models ?: continue
-            groups[p.id] = models.filter { matches(p, it, q) }.map { m ->
+            groups[p.id] = models.distinctBy { it.id }.filter { matches(p, it, q) }.map { m ->
                 val override = prefs.overrides[PanelPrefs.overrideKey(p.id, m.id)]
                 PanelRow("model:${p.id}\n${m.id}", PanelRow.Kind.Model, p, m, rowSetup(p, m, state, override),
                     current = runsNow(p, m, state.current), customized = override != null)
@@ -342,7 +362,7 @@ object ModelPanel {
             val rows = groups[p.id].orEmpty().toMutableList()
             // only in a provider that takes a pick here, and only when none of its models answers the search by its own words
             if (typed != null && p.typable && p.unavailable == null && !p.locked &&
-                p.models.none { matchesWords(listOfNotNull(it.name, it.id, it.resolved, it.description), q) }) {
+                p.models.none { matchesWords(listOfNotNull(it.name, it.id, it.resolved, it.description) + it.aliases, q) }) {
                 val model = PanelModel(typed, typed, custom = true)
                 rows += PanelRow("typed:${p.id}\n$typed", PanelRow.Kind.Typed, p, model, PanelConfig(p.id, typed))
             }

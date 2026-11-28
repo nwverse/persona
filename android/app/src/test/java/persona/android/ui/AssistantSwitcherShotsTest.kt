@@ -108,6 +108,7 @@ class AssistantSwitcherShotsTest {
         override suspend fun newCode(id: String): ManagerCode { codes += id; error("no code in this test") }
         override suspend fun rename(id: String, name: String) = error("not used")
         override suspend fun makeDefault(id: String) = error("not used")
+        override suspend fun setHide(id: String, hide: Boolean) = error("not used")
         override suspend fun delete(id: String) = error("not used")
     }
 
@@ -239,6 +240,17 @@ class AssistantSwitcherShotsTest {
         rule.onNodeWithText("在线 · MacBook").assertExists()
         rule.onAllNodesWithText("新建助手").assertCountEquals(0)
         each("switched")
+        // A manager rename updates the switcher/sidebar head; the main conversation keeps its fixed localized label.
+        val renamed = managers.map { if (it.id == "m-3fa21c") it.copy(name = "公司") else it }
+        rule.runOnIdle {
+            fake.list = renamed
+            roster = ManagerRoster(renamed, "assistant")
+        }
+        rule.onNodeWithText("公司").assertIsDisplayed()
+        rule.onNodeWithContentDescription("公司", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("主对话").assertIsDisplayed()
+        rule.onAllNodesWithText("公司的主对话").assertCountEquals(0)
+        each("renamed-current")
         // An offline one can be picked too.
         tap("在线 · MacBook")
         tap("家里")
@@ -261,6 +273,41 @@ class AssistantSwitcherShotsTest {
         rule.onAllNodesWithText("默认").assertCountEquals(0)
         assertTrue(out().listFiles().orEmpty().size >= 30)
         scenario.close()
+    }
+
+    /**
+     * The hub's own assistant kept out of the switcher while it is not used (#9055; 工作 is the default): the open
+     * roster leaves its row out, while 工作 keeps its Default tag (two installed still); once the hub shows it again
+     * (a computer went back to it) its row is back.
+     */
+    @Test fun aHiddenBuiltInIsLeftOutOfTheRosterInEveryStyle() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        val hidden = managers.map {
+            if (it.builtin) it.copy(isDefault = false, hide = true, hidden = true, inboxNeedsYou = null) else it.copy(isDefault = it.id == "m-3fa21c")
+        }
+        var roster by mutableStateOf(ManagerRoster(hidden, "m-3fa21c"))
+        AssistantManagerChoice.choose("hub", null, "m-3fa21c")
+        val scenario = launch {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) { Sidebar(roster, Fake(hidden)) {} }
+        }
+        try {
+            rule.waitForIdle()
+            tap("在线 · MacBook")
+            rule.onNodeWithText("新建助手").assertExists()
+            rule.onNodeWithContentDescription("工作，默认，在线 · MacBook，当前").assertExists()
+            rule.onNodeWithText("离线 · 最后同步于 3 小时前").assertExists()
+            rule.onNodeWithText("安装中 · 码 7 分钟后过期").assertExists()
+            rule.onAllNodesWithText("在线 · server").assertCountEquals(0)
+            for (s in AppStyle.entries) for (d in listOf(false, true)) {
+                rule.runOnIdle { style = s; dark = d }
+                rule.onAllNodesWithText("在线 · server").assertCountEquals(0)
+                capture("switcher-hidden-open-${s.name.lowercase()}-${if (d) "dark" else "light"}")
+            }
+            // Only the choice, not in effect: listed again.
+            rule.runOnIdle { style = AppStyle.Glass; dark = false; roster = ManagerRoster(hidden.map { it.copy(hidden = false) }, "m-3fa21c") }
+            rule.onNodeWithContentDescription("助手，在线 · server").assertExists()
+        } finally { scenario.close() }
     }
 
     // Taller than the class's screen: the drawer's Health row (#4329) left the conversations below 900dp.
@@ -414,7 +461,7 @@ class AssistantSwitcherShotsTest {
      * assistants… start out of view, come wholly into view inside the menu's visible part, and take a real tap there.
      * (New assistant's name dialog is not opened here: its field's blinking cursor never lets Robolectric go idle.)
      */
-    @Config(qualifiers = "zh-w400dp-h400dp-xhdpi", fontScale = 2f)
+    @Config(qualifiers = "zh-w400dp-h300dp-xhdpi", fontScale = 2f)
     @Test fun atTheLargestTextSizeTheActionsScrollIntoViewAndWork() {
         AssistantManagerChoice.choose("hub", null, "assistant")
         var managed = 0

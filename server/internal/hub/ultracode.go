@@ -1,15 +1,15 @@
 package hub
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -21,15 +21,8 @@ import (
 // silently ignore it and claim success. Dismissing a resume-loss notice uses the same new RPC without changing
 // the switch: {"ultracode_dismiss_lost":true} becomes {"dismiss_lost":true}.
 func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
-	p := map[string]any{}
-	if r.ContentLength != 0 {
-		if err := decodeJSONBody(w, r, &p, 32<<20); err != nil && !errors.Is(err, io.EOF) {
-			writeBodyErr(w, err, err)
-			return
-		}
-	}
-	if p == nil {
-		writeErr(w, http.StatusBadRequest, errors.New("request body must be a JSON object"))
+	p, ok := optionalObject(w, r, 32<<20)
+	if !ok {
 		return
 	}
 	if pr := principalOf(r.Context()); pr.Role == roleExtension { // extension_modes.go
@@ -39,22 +32,24 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 			return
 		}
 	}
+	if principalOf(r.Context()).Role == roleScoped {
+		if mode, ok := p["permission_mode"].(string); !ok || mode == "" || len(p) != 1 {
+			writeErr(w, http.StatusBadRequest, errors.New("provide only a nonempty permission_mode"))
+			return
+		}
+	}
+	if restrictedAgentData(r) && !h.publicSessionForControl(m, r.PathValue("sid")) {
+		writeErr(w, http.StatusNotFound, errDeleteUnknown)
+		return
+	}
 	// Keep speed separate from session.modes, which older nodes ignore unknown fields in.
 	if tier, exists := p["service_tier"]; exists {
 		if value, ok := tier.(string); !ok || value == "" || len(p) != 1 {
 			writeErr(w, http.StatusBadRequest, errors.New("service_tier must be a nonempty string in a separate request"))
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-		defer cancel()
-		var out json.RawMessage
-		if err := m.call(ctx, "session.speed", map[string]any{"session_id": r.PathValue("sid"), "service_tier": tier}, &out); err != nil {
-			var re *rpc.Error
-			if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "rpc-errors.node_outdated"), nil)
-				return
-			}
-			callErr(w, err)
+		out, ok := h.callNode(w, r, m, "session.speed", map[string]any{"session_id": r.PathValue("sid"), "service_tier": tier}, 30*time.Second, "rpc-errors.node_outdated", nil)
+		if !ok {
 			return
 		}
 		writeJSON(w, out)
@@ -89,38 +84,154 @@ func (h *Hub) sessionModes(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p["session_id"] = r.PathValue("sid")
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
+	// Both node calls share the original 90-second deadline.
+	r = r.WithContext(ctx)
 	var out json.RawMessage
+	modesApplied := false
 	if len(p) > 1 || len(ultra) == 1 {
-		if err := m.call(ctx, "session.modes", p, &out); err != nil {
-			if m.oldEngineRefusal(r.PathValue("sid"), p, err) {
+		sid := r.PathValue("sid")
+		var ok bool
+		out, ok = h.callNode(w, r, m, "session.modes", p, 90*time.Second, "", nil, func(err error) bool {
+			if m.oldEngineRefusal(sid, p, err) {
 				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-machine.node_no_engine_switch"), nil)
-				return
+				return true
 			}
-			callErr(w, err)
+			return false
+		})
+		if !ok {
 			return
 		}
+		modesApplied = modesReplyChanged(p, out)
 		if model, _ := p["model"].(string); strings.TrimSpace(model) != "" { // switched (the node read it back), or picked with a launcher
-			sid := r.PathValue("sid")
 			s, _ := m.session(sid)
 			h.modelUsed(h.sessionOwner(m.cfg.ID, sid), m.cfg.ID, modesLauncher(p, s), model)
 		}
 	}
 	if len(ultra) > 1 {
-		if err := m.call(ctx, "session.ultracode", ultra, &out); err != nil {
-			var re *rpc.Error
-			if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
-				writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(h.requestLang(r), "hub-ultracode.node_outdated"), nil)
-				return
-			}
-			callErr(w, err)
+		var (
+			next json.RawMessage
+			ok   bool
+		)
+		if modesApplied {
+			next, ok = h.callNode(w, r, m, "session.ultracode", ultra, 90*time.Second, "", nil, func(err error) bool {
+				return h.writePartialModesError(w, r, err)
+			})
+		} else {
+			next, ok = h.callNode(w, r, m, "session.ultracode", ultra, 90*time.Second, "hub-ultracode.node_outdated", nil)
+		}
+		if !ok {
 			return
+		}
+		if len(next) > 0 {
+			out = next
 		}
 	}
 	if len(out) == 0 {
 		out = json.RawMessage(`{}`)
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = w.Write(out)
+	writeRawJSON(w, out)
+}
+
+// writePartialModesError answers a failed second RPC (session.ultracode) after session.modes already succeeded in the
+// same /modes request: it preserves the refusal's code and details while marking delivered="unknown" and partial=true
+// so client_ops records the combined request as "unknown" instead of "failed" and users are not told nothing changed.
+func (h *Hub) writePartialModesError(w http.ResponseWriter, r *http.Request, err error) bool {
+	var re *rpc.Error
+	if errors.As(err, &re) && strings.HasPrefix(re.Message, "unknown method") {
+		lang := h.requestLang(r)
+		writeCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.T(lang, "rpc-errors.modes_partial_node_outdated"), map[string]any{
+			"delivered": "unknown",
+			"partial":   true,
+			"retryable": false,
+			"detail":    i18n.T(lang, "hub-ultracode.node_outdated"),
+		})
+		return true
+	}
+	if errors.Is(err, errManagerOffline) {
+		lang := h.requestLang(r)
+		writeCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, i18n.T(lang, "rpc-errors.modes_partial_failed"), map[string]any{
+			"delivered": "unknown",
+			"partial":   true,
+			"retryable": false,
+			"detail":    i18n.Localize(errAssistantOffline, lang),
+		})
+		return true
+	}
+	lw := routeLanguageWriter{ResponseWriter: w, language: h.requestLang(r)}
+	if errors.Is(err, apierr.ErrOffline) {
+		body := apierr.CallStatusBody(lw, http.StatusServiceUnavailable, err)
+		if _, hasDetail := body["detail"]; !hasDetail {
+			body["detail"] = body["error"]
+		}
+		body["error"] = i18n.T(lw.language, "rpc-errors.modes_partial_failed")
+		body["delivered"], body["partial"], body["retryable"] = "unknown", true, false
+		apierr.WriteBody(lw, http.StatusServiceUnavailable, body)
+		return true
+	}
+	if !errors.As(err, &re) {
+		status := http.StatusBadGateway
+		body := apierr.CallStatusBody(lw, status, err)
+		if _, hasDetail := body["detail"]; !hasDetail {
+			body["detail"] = body["error"]
+		}
+		body["error"] = i18n.T(lw.language, "rpc-errors.modes_partial_failed")
+		body["delivered"], body["partial"], body["retryable"] = "unknown", true, false
+		apierr.WriteBody(lw, status, body)
+		return true
+	}
+	var data map[string]any
+	if len(re.Data) > 0 {
+		_ = json.Unmarshal(re.Data, &data)
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["delivered"] = "unknown"
+	data["partial"] = true
+	data["retryable"] = false
+	msg := re.Message
+	if re.Code != "" {
+		partialKey := "rpc-errors.modes_partial_failed"
+		switch re.Code {
+		case "not_delivered":
+			if reason, _ := data["reason"].(string); reason == "terminal_finished" {
+				partialKey = "rpc-errors.modes_partial_terminal_finished"
+			} else {
+				partialKey = "rpc-errors.modes_partial_not_delivered"
+			}
+		case "dialog_open":
+			partialKey = "rpc-errors.modes_partial_dialog_open"
+		}
+		if _, hasDetail := data["detail"]; !hasDetail && re.Message != "" {
+			data["detail"] = re.Message
+		}
+		msg = i18n.T(i18n.Default, partialKey)
+	}
+	b, _ := json.Marshal(data)
+	callErr(lw, &rpc.Error{Code: re.Code, Message: msg, Data: b})
+	return true
+}
+
+// modesReplyChanged reports whether a successful session.modes reply confirmed (or, for an older node that omits
+// "changed", was asked for) a settings change before a subsequent session.ultracode RPC runs.
+func modesReplyChanged(p map[string]any, out json.RawMessage) bool {
+	var reply struct {
+		Changed       *bool  `json:"changed"`
+		Applied       string `json:"applied"`
+		PendingEffort string `json:"pending_effort"`
+	}
+	if json.Unmarshal(out, &reply) == nil && reply.Changed != nil {
+		return *reply.Changed
+	}
+	if reply.Applied != "" || reply.PendingEffort != "" {
+		return true
+	}
+	for _, k := range []string{"model", "permission_mode", "effort", "launcher"} {
+		if s, _ := p[k].(string); strings.TrimSpace(s) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // modesLauncher is the launcher a model in a POST …/modes body p runs on: the launcher it names (a switch, #5035),
@@ -129,7 +240,19 @@ func modesLauncher(p map[string]any, s proto.Session) string {
 	if l, _ := p["launcher"].(string); strings.TrimSpace(l) != "" {
 		return strings.TrimSpace(l)
 	}
-	return cmp.Or(s.Launcher, "claude")
+	if s.Launcher != "" {
+		return s.Launcher
+	}
+	switch {
+	case s.Agent == "codex" && s.AgentSurface == "desktop":
+		return "codex-app"
+	case s.Agent == "codex":
+		return "codex"
+	case s.SourceKind == "claude_desktop" || s.SpaceKind == "claude_desktop":
+		return "claude-desktop"
+	default:
+		return "claude"
+	}
 }
 
 // oldEngineRefusal says whether err, a node's refusal of POST …/modes with a launcher (p), is a node without
@@ -149,7 +272,7 @@ func (m *Machine) oldEngineRefusal(sid string, p map[string]any, err error) bool
 		return true
 	case proto.CodeSwitchUnsupported:
 		s, ok := m.session(sid)
-		return ok && s.Agent == "codex"
+		return ok && (s.Agent == "codex" || s.Agent == "agy")
 	}
 	return false
 }

@@ -1,5 +1,6 @@
 package persona.feature.chat
 
+import persona.core.moduleapi.asMenuActions
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
@@ -17,9 +18,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
@@ -29,12 +32,16 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.core.content.FileProvider
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatComposerService
 import persona.core.contracts.api.ComposerOperationException
 import persona.core.contracts.api.DraftUploadState
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
+import persona.core.designsystem.icons.dismissKeyboard
 import persona.core.designsystem.icons.PhIcons
 import persona.feature.chat.media.MediaShare
 import java.io.File
@@ -42,7 +49,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+
+/** The upload boundary of an ordinary composer attachment; tests can complete it without native image decoding. */
+typealias ComposerAttachmentUpload = suspend (ChatComposerService, SessionKey, ComposerAttachment, suspend (Long) -> Unit) -> String
 
 /** How long an upload waits for the hub connection to be ready again before it fails (a setting, not measured). */
 internal const val UPLOAD_READY_WAIT_MILLIS = 15_000L
@@ -56,15 +68,21 @@ fun ChatComposer(
     sending: Boolean,
     canClear: Boolean,
     service: ChatComposerService?,
+    /** An ordinary file's own destination, such as a Health conversation's reports; media never uses it. */
+    uploadDestination: String? = null,
     onSend: () -> Unit,
     onCommand: (String) -> Unit,
     onNotice: (String) -> Unit,
     // Content queued outside the text field (selected page context) also makes the draft sendable.
     extraContent: Boolean = false,
+    /** Persona's conversation, including a new one: its own command list, never an Agent session's quick commands. */
+    assistantChat: Boolean = false,
     enabled: Boolean = true,
     placeholder: String = stringResource(R.string.chat_composer_placeholder),
     leading: (@Composable RowScope.() -> Unit)? = null,
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
+    /** Short chips sharing one wrapping row with [modeHint] above [accessory] (e.g., Brief/Board's launcher chip). */
+    hintChips: (@Composable FlowRowScope.() -> Unit)? = null,
     modeHint: String? = null,
     onOverlay: (Boolean) -> Unit = {},
     visible: Boolean = true,
@@ -82,6 +100,12 @@ fun ChatComposer(
     onMentionOpen: (Boolean) -> Unit = {},
     /** /model in the "/" list, which opens the model choices instead of typing (Claude in a terminal pane). */
     onModel: (() -> Unit)? = null,
+    /**
+     * /permissions in the "/" list (#6513): opens the chat's permission mode menu with every mode, nothing sent. Null where
+     * the chat has no mode picker, so the words are an ordinary message there.
+     */
+    onPermissions: (() -> Unit)? = null,
+    onWorkflows: (() -> Unit)? = null,
     /** /loop in the "/" list, with a line under the box saying what it will do (Claude Code only, web `hasLoop`). */
     loop: Boolean = false,
     /**
@@ -90,32 +114,51 @@ fun ChatComposer(
      */
     blockedLabel: String? = null,
     onBlocked: () -> Unit = {},
+    useShellSurface: Boolean = false,
     /**
      * The model pill (#5055, Glass): at the right of the toolbar row, before the mic and Send, while the toolbar shows; it
      * gets how much room the composer has ([ModelPillWidth], the web's container rules). Null: none.
      */
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
+    upload: ComposerAttachmentUpload? = null,
+    wrapPlaceholder: Boolean = false,
+    dictate: DictationControl? = rememberComposerDictation(session, state, visible && enabled, onNotice),
+    /** The hub's picture limits for this session's agent (docs/protocol/protocol.md "Pictures in a message"). */
+    imageLimits: ImageLimits = LocalHubImageLimits.current.forAgent(null),
 ) {
     val context = LocalContext.current
+    val currentImageLimits by rememberUpdatedState(imageLimits)
+    val performUpload: ComposerAttachmentUpload = upload ?: { uploadService, uploadSession, attachment, onStaged ->
+        uploadAttachment(context, uploadService, uploadSession, attachment, destination = uploadDestination,
+            limits = currentImageLimits, onStaged = onStaged)
+    }
+    val compactShell = useShellSurface && PersonaTheme.style == AppStyle.Glass
     val adaptiveProbePage = "chat:${session.path}"
     val resources = LocalResources.current
     val photosOnly = stringResource(R.string.chat_composer_photos_only)
     val videosOnly = stringResource(R.string.chat_composer_videos_only)
-    SideEffect { state.photosOnlyText = photosOnly; state.videosOnlyText = videosOnly }
+    val filesOnly = stringResource(R.string.chat_composer_files_only)
+    SideEffect { state.photosOnlyText = photosOnly; state.videosOnlyText = videosOnly; state.filesOnlyText = filesOnly }
     val hasContent = state.hasContent || extraContent
     val scope = rememberCoroutineScope()
+    // Picker callbacks can overlap while a provider is read; serialize them so each sees the places already taken.
+    val pickerLock = remember { Mutex() }
+    val uploadLimiter = remember(state, session, service) { ComposerUploadLimiter() }
     var menu by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
     var cameraDenied by remember { mutableStateOf(false) }
     val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     // A photo in the draft being marked up (iOS editingIndex); [editOpening] while it is read for the editor.
     var editing by remember { mutableStateOf<ComposerPhotoEdit?>(null) }
     var editOpening by remember { mutableStateOf(false) }
     // The draft full screen (#5688): offered once the field has grown to its line limit and scrolls.
     var expandedEditor by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(menu, confirmClear, cameraDenied, editing, expandedEditor) {
-        onOverlay(menu || confirmClear || cameraDenied || editing != null || expandedEditor)
+    val composerCovered = menu || confirmClear || cameraDenied || editing != null || expandedEditor
+    LaunchedEffect(composerCovered, dictate) {
+        if (composerCovered) dictate?.stopListening()
+        onOverlay(composerCovered)
     }
     DisposableEffect(Unit) { onDispose { onOverlay(false) } }
     var cameraUri by rememberSaveable { mutableStateOf<String?>(null) }
@@ -132,30 +175,81 @@ fun ChatComposer(
         }
     }
 
-    // [media]: from the photo picker, the camera or the clipboard, photos and videos sharing four places (iOS).
+    // [media]: from the photo picker, the camera or the clipboard; pictures follow the hub's image limits (spilling
+    // past count or body budget into file attachments when a computer is available) while videos keep their own cap of 4.
     fun select(uris: List<Uri>, media: Boolean, capture: Boolean = false) {
         scope.launch {
-            val allowed = if (media) (MAX_COMPOSER_MEDIA - state.attachments.count { it.media }).coerceAtLeast(0) else uris.size
-            if (uris.size > allowed) onNotice(resources.getString(R.string.chat_composer_photo_limit))
-            if (capture) withContext(Dispatchers.IO) { uris.drop(allowed).forEach { deleteCapture(context, it.toString()) } }
-            for (uri in uris.take(allowed)) {
-                try {
-                    val attachment = withContext(Dispatchers.IO) {
-                        val video = media && isVideo(context, uri)
-                        selectAttachment(context, uri, image = media && !video, video = video)
+            pickerLock.withLock {
+                val limits = currentImageLimits
+                if (!media) {
+                    var overflow = false
+                    for (uri in uris) {
+                        if (composerFileRoom(state.attachments) == 0) {
+                            overflow = true
+                            continue
+                        }
+                        try {
+                            val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = false, video = false) }
+                            state.beginEdit()
+                            state.attachments += attachment
+                            attachment.error?.let(onNotice)
+                        } catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { onNotice(resources.getString(R.string.chat_composer_attachment_unreadable)) }
                     }
-                    state.beginEdit()
-                    state.attachments += attachment
-                    attachment.error?.let(onNotice)
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) {
-                    if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
-                    onNotice(resources.getString(R.string.chat_composer_attachment_unreadable))
+                    if (overflow) onNotice(resources.getString(R.string.chat_composer_file_limit))
+                    return@withLock
                 }
+                var videoOverflow = false
+                val photoCandidates = mutableListOf<PhotoCandidate>()
+                for (uri in uris) {
+                    try {
+                        val video = withContext(Dispatchers.IO) { isVideo(context, uri) }
+                        if (video) {
+                            if (composerVideoRoom(state.attachments) == 0) {
+                                videoOverflow = true
+                                if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
+                                continue
+                            }
+                            val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = false, video = true) }
+                            state.beginEdit()
+                            state.attachments += attachment
+                            attachment.error?.let(onNotice)
+                        } else {
+                            val attachment = withContext(Dispatchers.IO) { selectAttachment(context, uri, image = true, video = false) }
+                            if (attachment.uploadState == DraftUploadState.Invalid) {
+                                state.beginEdit()
+                                state.attachments += attachment
+                                attachment.error?.let(onNotice)
+                            } else {
+                                val scaled = withContext(Dispatchers.IO) { measurePhotoBytes(context, uri, limits) }
+                                photoCandidates += PhotoCandidate(attachment, scaled)
+                            }
+                        }
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        if (capture) withContext(Dispatchers.IO) { deleteCapture(context, uri.toString()) }
+                        onNotice(resources.getString(R.string.chat_composer_attachment_unreadable))
+                    }
+                }
+                if (photoCandidates.isNotEmpty()) {
+                    val existing = refreshHeldPhotoSizes(context, state.attachments, limits) { id, bytes ->
+                        state.updateAttachment(id) { if (it.scaledBytes == null) it.copy(scaledBytes = bytes) else it }
+                    }
+                    val plan = planComposerPhotos(existing, photoCandidates, limits, canSpill = service != null)
+                    if (plan.added.isNotEmpty()) {
+                        state.beginEdit()
+                        state.attachments += plan.added
+                    }
+                    if (capture && plan.refused.isNotEmpty()) {
+                        withContext(Dispatchers.IO) { plan.refused.forEach { deleteCapture(context, it.uri) } }
+                    }
+                    plan.notices(resources, limits).forEach(onNotice)
+                }
+                if (videoOverflow) onNotice(resources.getString(R.string.chat_composer_video_limit, MAX_COMPOSER_VIDEOS))
             }
         }
     }
-    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_COMPOSER_MEDIA)) { select(it, true) }
+    val photos = rememberLauncherForActivityResult(DynamicPickVisualMedia()) { select(it, true) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { select(it, false) }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         cameraUri?.let { value ->
@@ -196,7 +290,7 @@ fun ChatComposer(
         clipboardImages.dismiss()
         if (clip == null) return
         scope.launch {
-            val pasted = withContext(Dispatchers.IO) { pastedImages(context, clip, MAX_COMPOSER_MEDIA) }
+            val pasted = withContext(Dispatchers.IO) { pastedImages(context, clip, currentImageLimits.perMessage + MAX_COMPOSER_FILES) }
             if (pasted.isEmpty()) onNotice(resources.getString(R.string.chat_composer_attachment_unreadable))
             else select(pasted, media = true, capture = true)
         }
@@ -209,10 +303,11 @@ fun ChatComposer(
         scope.launch {
             try {
                 // An edited photo opens from its source with its edits, still undoable; its source gone, it starts over on itself.
+                val maxSide = currentImageLimits.maxSide
                 val prior = state.photoEdits[photo.id]
-                val source = prior?.let { runCatching { withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(it.sourceUri)) } }.getOrNull() }
+                val source = prior?.let { runCatching { withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(it.sourceUri), maxSide) } }.getOrNull() }
                 editing = if (prior != null && source != null) ComposerPhotoEdit(photo, source, prior.sourceUri, prior)
-                    else ComposerPhotoEdit(photo, withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(photo.uri)) })
+                    else ComposerPhotoEdit(photo, withContext(Dispatchers.IO) { decodePhoto(context, Uri.parse(photo.uri), maxSide) })
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { onNotice(resources.getString(R.string.chat_attach_edit_unreadable)) }
             finally { editOpening = false }
@@ -226,12 +321,21 @@ fun ChatComposer(
             var edited: ComposerAttachment? = null
             var kept = false
             try {
-                edited = MediaShare.writeEditedPhoto(context, result)
+                val limits = currentImageLimits
+                edited = MediaShare.writeEditedPhoto(context, result, limits)
                 val carried = PhotoEdits(edit.sourceUri, done).takeUnless { done.edits.isEmpty }
+                var stagedBytes = edited.scaledBytes
                 val outcome = state.replaceWithEdited(edit.original, edited, carried) { photo ->
-                    uploadAttachment(context, checkNotNull(service), session, photo)
+                    uploadLimiter.withSlot {
+                        uploadAttachment(context, checkNotNull(service), session, photo, limits = limits) { size ->
+                            if (size > 0L) stagedBytes = size
+                        }
+                    }
                 }
                 kept = outcome == PhotoEditOutcome.Replaced
+                if (kept && stagedBytes != null) {
+                    state.updateAttachment(edited.id) { it.copy(size = stagedBytes, scaledBytes = stagedBytes) }
+                }
                 if (outcome is PhotoEditOutcome.Failed) onNotice(resources.getString(R.string.chat_attach_edit_failed))
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { onNotice(resources.getString(R.string.chat_attach_edit_failed)) }
@@ -245,33 +349,39 @@ fun ChatComposer(
 
     state.attachments.forEach { attachment ->
         key(attachment.id) {
-            LaunchedEffect(attachment.id, attachment.error, service) {
+            LaunchedEffect(attachment.id, attachment.error, service, uploadDestination, upload) {
                 if (attachment.uploadState == DraftUploadState.Invalid) return@LaunchedEffect
+                // Once the computer has it, a revoked local picker grant cannot make the attachment unsendable.
+                if (attachment.path != null) return@LaunchedEffect
                 if (!withContext(Dispatchers.IO) { attachmentReadable(context, attachment) }) {
                     val reason = resources.getString(R.string.chat_composer_attachment_gone)
-                    state.attachments = state.attachments.map {
-                        if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Invalid, error = reason) else it
+                    state.updateAttachment(attachment.id) {
+                        it.copy(uploadState = DraftUploadState.Invalid, error = reason)
                     }
                     onNotice(reason)
                     return@LaunchedEffect
                 }
-                if (attachment.path != null) return@LaunchedEffect
                 if (attachment.error != null || service == null) return@LaunchedEffect
                 try {
-                    state.attachments = state.attachments.map {
-                        if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it
-                    }
-                    val path = uploadAttachment(context, service, session, attachment)
-                    if (state.attachments.any { it.id == attachment.id }) {
-                        state.attachments = state.attachments.map {
-                            if (it.id == attachment.id) it.copy(path = path, uploadState = DraftUploadState.Uploaded) else it
+                    val path = uploadLimiter.withSlot {
+                        state.updateAttachment(attachment.id) { it.copy(uploadState = DraftUploadState.Uploading) }
+                        performUpload(service, session, attachment) { size ->
+                            state.updateAttachment(attachment.id) {
+                                if (it.image) {
+                                    val staged = size.takeIf { v -> v > 0L }
+                                    it.copy(size = staged ?: it.size, scaledBytes = staged ?: it.scaledBytes)
+                                } else it.copy(size = size)
+                            }
                         }
+                    }
+                    if (state.attachments.any { it.id == attachment.id }) {
+                        state.updateAttachment(attachment.id) { it.copy(path = path, uploadState = DraftUploadState.Uploaded) }
                     }
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     val reason = (e as? ComposerOperationException)?.message ?: resources.getString(R.string.chat_composer_upload_failed)
-                    state.attachments = state.attachments.map {
-                        if (it.id == attachment.id) it.copy(error = reason, uploadState = DraftUploadState.Failed) else it
+                    state.updateAttachment(attachment.id) {
+                        it.copy(error = reason, uploadState = DraftUploadState.Failed)
                     }
                 }
             }
@@ -284,20 +394,27 @@ fun ChatComposer(
         key(edit) { ImageEditor(edit.source, onCancel = { if (editing === edit) editing = null }, onDone = { finishEdit(edit, it, done) },
             start = edit.prior?.state ?: ImageEditState(), onEdited = { done = it }) }
     }
-    // Voice input: what the phone's recognizer heard goes at the end of the draft, to edit before sending.
-    val dictation = rememberDictation(onHeard = { state.appendDictation(it) }, onError = onNotice)
     if (!visible) return
     if (AdaptiveProbe.enabled) {
         AdaptiveComposerProbe(adaptiveProbePage, state.value, state.attachments.map { it.id to it.uploadState.name }, state.draftLoaded)
     }
     LaunchedEffect(state.focusRequest) { if (state.focusRequest > 0) focusRequester.requestFocus() }
     // A read-only session (enabled = false) offers nothing to type with: no +, no mic, no "/" list, no send.
-    val dictate = dictation?.takeIf { enabled }
     // The main conversation's /clear (#5100): offered while it works too (the hub stops the turn), and it never asks first.
     val mainClear = LocalMainChatClear.current?.takeIf { enabled }
-    val suggestions = if (enabled) SlashCommand.suggestions(state.value.text, canClear && !working || mainClear != null,
-        model = onModel != null, loop = loop) else emptyList()
-    val hint = if (enabled && loop) loopHint(state.value.text, resources) else null
+    // Both the "/" list and the + sheet offer only what an Assistant conversation runs, never an Agent's quick messages.
+    val useMainCommands = assistantChat || mainClear != null
+    val slashDraft = state.value.text.takeIf { enabled && !state.hasPickedSavedPrompt }.orEmpty()
+    val saved = matchingSavedPrompts(LocalSavedPrompts.current, slashDraft)
+    val suggestions = if (useMainCommands) {
+        SlashCommand.mainSuggestions(slashDraft, clear = mainClear != null, resources = resources,
+            permissions = onPermissions != null)
+    } else {
+        SlashCommand.suggestions(slashDraft, canClear && !working, resources, model = onModel != null, loop = loop,
+            permissions = onPermissions != null, keepExact = saved.isNotEmpty(),
+            workflows = onWorkflows != null && canOpenWorkflows(state, extraContent))
+    }
+    val hint = if (loop) loopHint(slashDraft, resources) else null
     // @: the word being typed just before the caret, while nothing is selected and no "/" list is open.
     val selection = state.value.selection
     val mention = if (enabled && mentions != null && suggestions.isEmpty() && selection.collapsed) mentionAt(state.value.text, selection.start) else null
@@ -352,17 +469,23 @@ fun ChatComposer(
         state.focusRequest++
     }
     val extensionPrompts = if (enabled) LocalExtensionPrompts.current else emptyList()
-    val quick = ExtensionPromptText.matching(extensionPrompts, state.value.text)
+    val quick = ExtensionPromptText.matching(extensionPrompts, slashDraft)
+    val savedSection = stringResource(R.string.chat_slash_saved_prompts)
+    val slashItems = suggestions.map { ComposerSuggestion(it.word, it.detail, destructive = it.clear && mainClear == null) } +
+        saved.map { ComposerSuggestion("/${it.name}", it.text.lineSequence().first(), key = "saved:${it.id}",
+            flexible = true, section = savedSection) } +
+        quick.map { ComposerSuggestion(it.title, it.extensionName, key = "extension:${it.extension}/${it.id}", flexible = true) }
     // The main conversation's /clear: the box empties and the hub clears it; /clear goes back into the box if it did not.
     fun clearMain(clear: MainChatClear) {
         state.beginEdit()
         state.value = TextFieldValue()
         clear.clear { state.value = TextFieldValue(SlashCommand.CLEAR, TextRange(SlashCommand.CLEAR.length)) }
     }
-    // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`).
+    // /clear sent alone in the main conversation clears it instead of going to Persona (web `isClearCommand`);
+    // /permissions typed out opens the mode picker (shared with LargeWindowComposer's hardware send path).
     fun send() {
-        val clear = mainClear
-        if (clear != null && isMainClearCommand(state.value.text, state.attachments.size, extraContent)) clearMain(clear) else onSend()
+        if (dictate?.active == true) return
+        dispatchComposerSend(state, extraContent, mainClear, onPermissions, onWorkflows, onSend)
     }
     // Picking a quick message puts its words in the box to send; /clear empties the box and asks first (the main
     // conversation's clears at once).
@@ -372,17 +495,23 @@ fun ChatComposer(
             command.clear && mainClear != null -> clearMain(mainClear)
             command.clear -> { state.value = TextFieldValue(); confirmClear = true }
             command.model -> { state.value = TextFieldValue(); onModel?.invoke() }
+            command.permissions -> { state.value = TextFieldValue(); onPermissions?.invoke() }
+            command.workflows && onWorkflows != null && canOpenWorkflows(state, extraContent) -> {
+                state.value = TextFieldValue()
+                onWorkflows()
+            }
             else -> state.value = TextFieldValue(command.text, TextRange(command.text.length))
         }
     }
 
-    // The field grows with the draft through six lines, then scrolls inside and offers Expand.
-    // The text keeps clear of the button only while it shows.
+    // The field grows through six lines. On a compact Agent chat the editor is also a shortcut while typing or for a
+    // multiline draft, as on the iPhone. The text keeps clear of the button only while it shows.
     val growLines = ComposerGrowLines
     var lineCount by remember { mutableIntStateOf(1) }
-    val offersExpand = enabled && composerOffersExpand(lineCount, growLines)
+    val offersExpand = enabled && (composerOffersExpand(lineCount, growLines) ||
+        compactShell && (state.focused || '\n' in state.value.text))
     LaunchedEffect(enabled) { if (!enabled) expandedEditor = false }
-    val canSend = enabled && state.ready && !sending
+    val canSend = enabled && state.ready && !sending && dictate?.active != true
     val homeAssistant = LocalHomeChrome.current?.let { it.items.firstOrNull()?.key == it.selected } == true
     val fullToolbar = !homeAssistant || state.focused || hasContent
     // Expand once on focus, not when the first character arrives. ComposerFrame keeps the field in the same row across
@@ -394,29 +523,51 @@ fun ChatComposer(
     val density = androidx.compose.ui.platform.LocalDensity.current
     var composerDp by remember { mutableFloatStateOf(0f) }
     ComposerFrame(
-        modifier = if (modelPill != null) Modifier.onSizeChanged { composerDp = with(density) { it.width.toDp().value } } else Modifier,
+        modifier = if (!compactShell && modelPill != null) Modifier.onSizeChanged { composerDp = with(density) { it.width.toDp().value } } else Modifier,
         // Blank space around the field (its padding, beside the buttons) types too: one tap, not a hunt for the line.
         onBlankTap = { if (enabled) { focusRequester.requestFocus(); keyboard?.show() } },
         expanded = expanded,
+        useShellSurface = useShellSurface,
         leading = {
-            JIconButton(PhIcons.Plus, stringResource(R.string.chat_composer_add), { menu = true }, enabled = !sending && enabled)
+            if (!compactShell || enabled)
+                JIconButton(PhIcons.Plus, stringResource(R.string.chat_composer_add), { menu = true }, enabled = !sending && enabled)
+            if (compactShell && state.focused) {
+                JIconButton(PersonaIcons.dismissKeyboard, stringResource(R.string.chat_composer_hide_keyboard), {
+                    focusManager.clearFocus()
+                    keyboard?.hide()
+                }, raised = false)
+            }
             if (expanded) {
-                if (mentions != null) JIconButton(PhIcons.At, stringResource(R.string.chat_mention), ::startMention, enabled = enabled)
+                // The + sheet opens the same mention picker. Keep the direct entry while the + sheet is disabled by sending.
+                if (mentions != null && (!compactShell || sending))
+                    JIconButton(PhIcons.At, stringResource(R.string.chat_mention), ::startMention, enabled = enabled)
                 leading?.invoke(this)
             }
         },
         trailing = {
-            if (expanded && enabled) modelPill?.invoke(ModelPillWidth.of(composerDp))
+            if (expanded && compactShell) {
+                if (enabled && modelPill != null) {
+                    // A model pill that cannot fit its touch target would overlap a neighbor.
+                    BoxWithConstraints(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                        when {
+                            maxWidth >= Tokens.Size.box80 -> modelPill(ModelPillWidth.AgentComposer)
+                            maxWidth >= Tokens.MinTouch.android -> modelPill(ModelPillWidth.Compact)
+                            else -> Unit
+                        }
+                    }
+                } else Spacer(Modifier.weight(1f))
+            } else if (expanded && enabled) modelPill?.invoke(ModelPillWidth.of(composerDp))
             // The mic stays (iOS ShellComposerBar): more can be dictated after what is typed. Send beside it once there is
             // something to send, else a stop while the agent works; nothing else while the box is empty. On Glass the button
             // changing grows and shrinks as iOS's does (ComposerActionSlot, #4210 T3).
-            dictate?.let { JIconButton(PhIcons.Microphone, stringResource(R.string.chat_composer_dictate), it, enabled = !sending) }
+            dictate?.let { DictationMic(it, stringResource(R.string.chat_composer_dictate), enabled = !sending) }
             if (blockedLabel != null && enabled) BlockedSendButton(blockedLabel, onBlocked)
             else ComposerActionSlot(
                 when {
-                    hasContent -> ComposerAction(SendKind.Send, enabled = canSend, loading = sending)
-                    working && canInterrupt -> ComposerAction(SendKind.Stop, enabled = !sending && !interruptPending && service != null)
-                    dictate == null -> ComposerAction(SendKind.Send, enabled = false, loading = sending)
+                    hasContent && (!compactShell || enabled) -> ComposerAction(SendKind.Send, enabled = canSend, loading = sending)
+                    working && canInterrupt && (!compactShell || enabled) ->
+                        ComposerAction(SendKind.Stop, enabled = !sending && !interruptPending && service != null)
+                    dictate == null && (!compactShell || enabled && sending) -> ComposerAction(SendKind.Send, enabled = false, loading = sending)
                     else -> null
                 },
                 // A lambda, not `::send`: references to a local function compare equal whatever they capture, so the slot was
@@ -435,54 +586,82 @@ fun ChatComposer(
             )
         },
         accessory = {
-            if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
-                color = PersonaTheme.palette.cautionText)
-            if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)
-                PasteImageChip(onPaste = ::pasteImages, onDismiss = clipboardImages::dismiss)
-            ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
-            if (fullToolbar) accessory?.invoke(this)
-            if (fullToolbar) modeHint?.let { JChip(it, icon = PhIcons.SlidersHorizontal) }
-            if (working && hasContent && enabled) Text(stringResource(R.string.chat_composer_will_queue), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-            // A draft that is one "/" word: the quick messages it can be, right above the field.
-            ComposerSuggestions(quick.map { ComposerSuggestion(it.title, it.extensionName, key = "${it.extension}/${it.id}", flexible = true) },
-                onPick = { picked -> quick.firstOrNull { "${it.extension}/${it.id}" == picked.key }?.let { state.fillQuickPrompt(it) } },
-                modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            ComposerSuggestions(suggestions.map { ComposerSuggestion(it.word, it.detail, destructive = it.clear && mainClear == null) },
-                onPick = { picked -> suggestions.firstOrNull { it.word == picked.word }?.let(::pick) },
-                modifier = Modifier.padding(vertical = Tokens.Space.xs))
-            // The @ menu: Persona's open tasks, files this chat used, the session folder's entries, then other sessions; a word
-            // that matches nothing says so. On Glass it grows in and out in iOS's state motion, rising from the field, as the
-            // lines over New chat's composer step aside for it (`NeedsStepAside`).
-            Column(Modifier.fillMaxWidth().then(if (PersonaTheme.style == AppStyle.Glass && !PersonaTheme.reduceMotion)
-                Modifier.animateContentSize(PersonaTheme.motion.enter(), Alignment.BottomStart) else Modifier)) {
-                ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
-                if (mention != null && mentionItems.isEmpty()) Text(stringResource(when {
-                        browsing.reading -> R.string.chat_mention_reading_folder
-                        browsing.browse != null -> R.string.chat_mention_no_match_folder
-                        else -> R.string.chat_mention_no_match
-                    }), Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+            CompactAccessoryStack(gap = Tokens.Space.xs) {
+                dictate?.let { DictationStatus(it) }
+                if (state.oldVersion) Text(stringResource(R.string.chat_composer_old_version), style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.cautionText)
+                if (PersonaTheme.style == AppStyle.Glass && enabled && !sending && service != null && state.focused && clipboardImages.offered)
+                    PasteImageChip(onPaste = ::pasteImages, onDismiss = clipboardImages::dismiss)
+                ComposerAttachmentPreviews(state, service, sending, enabled, onEdit = ::editPhoto)
+                if (fullToolbar && (hintChips != null || modeHint != null)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        hintChips?.invoke(this)
+                        modeHint?.let {
+                            // Match clickable chip height so side-by-side hint pills align visually without growing row height.
+                            JChip(
+                                it,
+                                Modifier.heightIn(min = JChipTokens.height).testTag("chat-composer-mode-hint"),
+                                icon = PhIcons.SlidersHorizontal,
+                            )
+                        }
+                    }
+                }
+                if (fullToolbar && accessory != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) { accessory.invoke(this) }
+                }
+                if (working && hasContent && enabled) Text(stringResource(R.string.chat_composer_will_queue), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                ComposerSuggestions(slashItems,
+                    onPick = { row ->
+                        when {
+                            row.key.startsWith("saved:") -> saved.firstOrNull { "saved:${it.id}" == row.key }?.let { state.fillSavedPrompt(it.text) }
+                            row.key.startsWith("extension:") -> quick.firstOrNull { "extension:${it.extension}/${it.id}" == row.key }?.let { state.fillQuickPrompt(it) }
+                            else -> suggestions.firstOrNull { it.word == row.key }?.let(::pick)
+                        }
+                    },
+                    modifier = Modifier.padding(vertical = Tokens.Space.xs))
+                // The @ menu: Persona's open tasks, files this chat used, the session folder's entries, then other sessions; a word
+                // that matches nothing says so. On Glass it grows in and out in iOS's state motion, rising from the field, as the
+                // lines over New chat's composer step aside for it (`NeedsStepAside`).
+                Column(Modifier.fillMaxWidth().then(if (PersonaTheme.style == AppStyle.Glass && !PersonaTheme.reduceMotion)
+                    Modifier.animateContentSize(PersonaTheme.motion.enter(), Alignment.BottomStart) else Modifier)) {
+                    ComposerSuggestions(mentionItems, onPick = ::pickMention, modifier = Modifier.padding(vertical = Tokens.Space.xs))
+                    if (mention != null && mentionItems.isEmpty()) Text(stringResource(when {
+                            browsing.reading -> R.string.chat_mention_reading_folder
+                            browsing.browse != null -> R.string.chat_mention_no_match_folder
+                            else -> R.string.chat_mention_no_match
+                        }), Modifier.padding(vertical = Tokens.Space.xs), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
+                }
+                hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
             }
-            hint?.let { Text(it.text, style = PersonaTheme.type.caption, color = if (it.missing) PersonaTheme.palette.cautionText else PersonaTheme.palette.ink2) }
         },
     ) {
-        BasicTextField(state.value, { state.beginEdit(); state.value = it },
-            modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
-                .testTag("chat-composer-field") else Modifier)
-                .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
-                .focusRequester(focusRequester).onFocusChanged {
-                    state.focused = it.isFocused
-                    if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
-                },
-            maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
-            enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
-            cursorBrush = SolidColor(PersonaTheme.palette.ink),
-            decorationBox = { field ->
-                Box {
-                    if (state.value.text.isEmpty()) Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
-                        style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    field()
-                }
-            })
+        ReadingContent {
+            BasicTextField(state.value, { state.beginEdit(); state.value = it },
+                modifier = Modifier.fillMaxWidth().then(if (AdaptiveProbe.enabled) Modifier.semantics { testTagsAsResourceId = true }
+                    .testTag("chat-composer-field") else Modifier)
+                    .then(if (offersExpand) Modifier.padding(end = ComposerExpandInset) else Modifier)
+                    .focusRequester(focusRequester).onFocusChanged {
+                        state.focused = it.isFocused
+                        if (AdaptiveProbe.enabled) AdaptiveProbe.publishComposerFocus(adaptiveProbePage, it.isFocused)
+                    },
+                maxLines = growLines, onTextLayout = { lineCount = it.lineCount },
+                enabled = enabled, textStyle = PersonaTheme.type.body.copy(color = PersonaTheme.palette.ink),
+                cursorBrush = SolidColor(PersonaTheme.palette.ink),
+                decorationBox = { field ->
+                    Box {
+                        if (state.value.text.isEmpty()) InterfaceContent {
+                            Text(if (working && enabled && !homeAssistant) stringResource(R.string.chat_composer_placeholder_working) else composerPlaceholder,
+                                style = PersonaTheme.type.body, color = PersonaTheme.palette.ink3, maxLines = if (wrapPlaceholder) growLines else if (compactShell) 1 else 2,
+                                overflow = TextOverflow.Ellipsis)
+                        }
+                        field()
+                    }
+                })
+        }
         if (offersExpand) ComposerExpandButton(expanded = false, onClick = { expandedEditor = true }, modifier = Modifier.align(Alignment.TopEnd))
     }
     // Same draft and caret as the field; collapsing puts the caret back in the field. Sending closes it.
@@ -490,21 +669,27 @@ fun ChatComposer(
         onCollapse = { expandedEditor = false; state.focusRequest++ }, enabled = enabled) {
         SendButton(onClick = { expandedEditor = false; send() }, enabled = canSend && hasContent && blockedLabel == null, loading = sending)
     }
+    // The modules' composer actions (#13847), asked only while the menu is open.
+    val moduleActions = if (menu) persona.core.moduleapi.LocalModuleActions.current.actions(persona.core.moduleapi.MenuSlot.ComposerActions,
+        persona.core.moduleapi.ModuleActionTarget(session.machineId, session.sessionId)) else emptyList()
     if (menu) ChatActionsSheet(onDismiss = { menu = false }, title = stringResource(R.string.chat_composer_menu_title), actions = buildList {
-        // Photos picks pictures and videos (iOS mediaPicker), four together at most.
-        val roomForMedia = state.attachments.count { it.media } < MAX_COMPOSER_MEDIA
-        add(JAction(stringResource(R.string.chat_composer_photos), enabled = service != null && roomForMedia) {
-            launchPicker { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) }
+        // Photos picks pictures (hub image limits + overflow file room) and videos (up to 4) sized by what is left.
+        val mediaRoom = composerMediaPickerRoom(state.attachments, currentImageLimits, canSpill = service != null)
+        val photoRoom = composerCanAddPhoto(state.attachments, currentImageLimits, canSpill = service != null)
+        add(JAction(stringResource(R.string.chat_composer_photos), enabled = service != null && mediaRoom > 0) {
+            launchPicker { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo) to mediaRoom) }
         })
-        add(JAction(stringResource(R.string.chat_composer_take_photo), enabled = service != null && roomForMedia) { takePhoto() })
+        add(JAction(stringResource(R.string.chat_composer_take_photo), enabled = service != null && photoRoom) { takePhoto() })
         add(JAction(stringResource(R.string.chat_composer_files), enabled = service != null) { launchPicker { files.launch(arrayOf("*/*")) } })
         // iOS's Mention a File or Session, after the attachments (`AttachMoreSection.common`): where the composer has an @ list.
         if (mentions != null) add(JAction(stringResource(R.string.chat_mention)) { menu = false; startMention() })
-        // Quick messages go out at once; /clear asks first, and only while nothing is running or being cleared.
+        // An Agent's quick messages go out at once and /clear asks first; the main sheet has only its in-place clear.
         extensionPrompts.forEach { prompt -> add(JAction(prompt.title) { menu = false; state.fillQuickPrompt(prompt) }) }
-        SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
-        if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
-        else if (mainClear != null) add(JAction(SlashCommand.clearCommand(resources).title) { menu = false; clearMain(mainClear) })
+        if (!useMainCommands) {
+            SlashCommand.all(resources).forEach { command -> add(JAction(command.title) { menu = false; onCommand(command.text) }) }
+            if (canClear && !working) add(JAction(SlashCommand.clearCommand(resources).title, destructive = true) { menu = false; confirmClear = true })
+        } else if (mainClear != null) add(JAction(SlashCommand.mainClearCommand(resources).title) { menu = false; clearMain(mainClear) })
+        addAll(moduleActions.asMenuActions { menu = false })
     })
     if (confirmClear) JDialog(onDismiss = { confirmClear = false }, title = stringResource(R.string.chat_composer_clear_title),
         text = stringResource(R.string.chat_composer_clear_text, agentName),
@@ -512,4 +697,71 @@ fun ChatComposer(
     if (cameraDenied) JDialog(onDismiss = { cameraDenied = false }, title = stringResource(R.string.chat_composer_camera_title),
         text = stringResource(R.string.chat_composer_camera_text, appLabel(context)),
         confirm = stringResource(R.string.chat_composer_open_settings) to { cameraDenied = false; openAppSettings(context) })
+}
+
+/** Stacks non-zero-height composer accessory items with [gap], skipping zero-height placeholders so empty slots add no gap. */
+@Composable
+private fun CompactAccessoryStack(
+    gap: Dp,
+    content: @Composable () -> Unit,
+) {
+    Layout(content = content) { measurables, constraints ->
+        val childConstraints = constraints.copy(minWidth = 0, minHeight = 0)
+        val visible = measurables.map { it.measure(childConstraints) }.filter { it.height > 0 }
+        if (visible.isEmpty()) {
+            layout(0, 0) {}
+        } else {
+            val gapPx = gap.roundToPx()
+            val width = visible.maxOf { it.width }.coerceIn(constraints.minWidth, constraints.maxWidth)
+            val height = (visible.sumOf { it.height } + gapPx * (visible.size - 1))
+                .coerceIn(constraints.minHeight, constraints.maxHeight)
+            layout(width, height) {
+                var y = 0
+                visible.forEach { placeable ->
+                    placeable.placeRelative(0, y)
+                    y += placeable.height + gapPx
+                }
+            }
+        }
+    }
+}
+
+/** True when [dispatchComposerSend] opens the permission picker instead of sending the draft. */
+internal fun isPermissionsCommand(state: ChatComposerState, extraContent: Boolean, onPermissions: (() -> Unit)?): Boolean =
+    onPermissions != null && !state.hasPickedSavedPrompt && SlashCommand.isPermissions(state.value.text) &&
+        state.attachments.isEmpty() && !extraContent
+
+private fun canOpenWorkflows(state: ChatComposerState, extraContent: Boolean): Boolean =
+    !state.hasPickedSavedPrompt && state.attachments.isEmpty() && !extraContent
+
+/**
+ * Shared send dispatcher for both touch/IME send (`ChatComposer`) and hardware keyboard send (`LargeWindowComposer`):
+ * intercepts `/clear` in the main conversation and bare `/permissions` or `/workflows` queries.
+ */
+internal fun dispatchComposerSend(
+    state: ChatComposerState,
+    extraContent: Boolean,
+    mainClear: MainChatClear?,
+    onPermissions: (() -> Unit)?,
+    onWorkflows: (() -> Unit)? = null,
+    onSend: () -> Unit,
+) {
+    when {
+        mainClear != null && !state.hasPickedSavedPrompt && isMainClearCommand(state.value.text, state.attachments.size, extraContent) -> {
+            state.beginEdit()
+            state.value = TextFieldValue()
+            mainClear.clear { state.value = TextFieldValue(SlashCommand.CLEAR, TextRange(SlashCommand.CLEAR.length)) }
+        }
+        isPermissionsCommand(state, extraContent, onPermissions) -> {
+            state.beginEdit()
+            state.value = TextFieldValue()
+            onPermissions?.invoke()
+        }
+        onWorkflows != null && canOpenWorkflows(state, extraContent) && SlashCommand.isWorkflows(state.value.text) -> {
+            state.beginEdit()
+            state.value = TextFieldValue()
+            onWorkflows()
+        }
+        else -> onSend()
+    }
 }

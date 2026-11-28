@@ -1,0 +1,17 @@
+{
+  "name": "model_profile_capture",
+  "description": "With phone approval, save current model fields into a profile.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Saved profile ID"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id"
+    ]
+  }
+}

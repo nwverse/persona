@@ -10,28 +10,49 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 // ListenUnix serves ext on a unix socket at path (made anew; only this user may connect): its sandbox's way out.
 func (p *Proxy) ListenUnix(ext, path string) error { return p.listenUnix(ext, path, false) }
 
+// Socketed says whether ext reaches the proxy through a socket of its own (ListenUnix: its sandbox's), not the loopback
+// listener.
+func (p *Proxy) Socketed(ext string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.unix[ext] != nil
+}
+
 // ListenRuntimeUnix additionally bounds pre-header sockets from source runtimes.
 func (p *Proxy) ListenRuntimeUnix(ext, path string) error { return p.listenUnix(ext, path, true) }
 
 func (p *Proxy) listenUnix(ext, path string, source bool) error {
+	p.unixMu.Lock()
+	defer p.unixMu.Unlock()
 	p.mu.Lock()
-	if old := p.unix[ext]; old != nil {
-		_ = old.Close()
-		delete(p.unix, ext)
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
 	}
+	old := p.unix[ext]
+	delete(p.unix, ext)
 	p.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := osproc.Listen("unix", path)
 	if err != nil {
 		return err
 	}
 	_ = os.Chmod(path, 0o600)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	if source {
 		ln = p.boundLocked(ln)
 	}
@@ -49,19 +70,31 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 // a sandboxed agent runtime's way to this machine's node (#5413), and to nothing else. Unregister closes it.
 // Each connection holds two descriptors and three goroutines here, so the socket is bounded (runtimeListener).
 func (p *Proxy) RelayUnix(ext, path, target string) error {
+	p.unixMu.Lock()
+	defer p.unixMu.Unlock()
 	p.mu.Lock()
-	if old := p.relay[ext]; old != nil {
-		_ = old.Close()
-		delete(p.relay, ext)
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
 	}
+	old := p.relay[ext]
+	delete(p.relay, ext)
 	p.mu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
 	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := osproc.Listen("unix", path)
 	if err != nil {
 		return err
 	}
 	_ = os.Chmod(path, 0o600)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	if p.relay == nil {
 		p.relay = map[string]net.Listener{}
 	}

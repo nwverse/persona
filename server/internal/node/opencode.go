@@ -62,9 +62,24 @@ func (n *Node) mergeOpencodeRow(s *proto.Session) {
 	if r.Title != "" {
 		s.Title, s.TitleManual, s.TitleSource = r.Title, r.TitleManual, r.TitleSource
 	}
-	s.OutputTokens = r.OutputTokens
-	s.LastText, s.Model, s.UpdatedAt, s.Rev = r.LastText, r.Model, r.UpdatedAt, r.Rev
+	s.SetOutputTokens(int(r.OutputTokensValue()))
+	if r.LastText != "" {
+		s.LastText = r.LastText
+	}
+	s.Model, s.UpdatedAt, s.Rev = r.Model, r.UpdatedAt, r.Rev
 	s.ContextTokens, s.ContextWindow = r.ContextTokens, r.ContextWindow
+	if r.PermissionMode != "" {
+		s.PermissionMode = r.PermissionMode
+	}
+	if r.Effort != "" {
+		s.Effort = r.Effort
+	}
+	if len(r.Efforts) > 0 {
+		s.Efforts = r.Efforts
+	}
+	if r.Launcher != "" && s.Launcher == "" {
+		s.Launcher = r.Launcher
+	}
 	if r.Status == proto.StatusBlocked {
 		s.Status = proto.StatusBlocked
 	}
@@ -78,9 +93,11 @@ func otherNoReader(agent string) string {
 }
 
 // otherAgent: an agent herdr reports that no branch of setAgents reads (gemini, amp…): listed with its terminal only.
+// A work agent is read elsewhere (pi through its extension, cursor and agy through the pane herdr drives), so it is not
+// one of these.
 func otherAgent(a host.Agent) bool {
 	switch a.Agent {
-	case "", "claude", "codex", traexAgent, piAgent, ompAgent, opencodeAgent:
+	case "", "claude", "codex", traexAgent, piAgent, ompAgent, opencodeAgent, cursorAgent, agyAgent:
 		return false
 	}
 	return host.ParsePane(a.PaneID).Kind != host.Botmux
@@ -134,7 +151,7 @@ func (n *Node) terminalOnlyCalls(ctx context.Context, method, id string, r termi
 	case "session.items":
 		return map[string]any{"items": []proto.Item{{ID: r.kind + "#0", Seq: 1, Role: "system", Kind: "notice", Text: r.notice,
 			TS: time.Now().UTC()}}, "has_more": false, "history": r.kind + "-pane:" + id, "to_seq": 1}, nil, true
-	case "session.item", "session.image":
+	case "session.item", "session.image", "session.visualization":
 		return nil, fmt.Errorf("no item"), true
 	case "session.watch", "session.unwatch":
 		return okResult(nil), nil, true

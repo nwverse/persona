@@ -1,9 +1,7 @@
 import Foundation
 import Observation
-#if os(iOS) || os(visionOS)
 import AVFoundation
 import UIKit
-#endif
 
 /// The rates of a call's audio: the microphone's PCM16 goes up at `inputRate`, the voice comes down at `outputRate`
 /// (the `ready` frame's `input_rate` / `output_rate`).
@@ -23,6 +21,9 @@ nonisolated enum VoiceAudioEvent: Equatable, Sendable {
     case outputLevel(Float)
     /// A phone call, or another app, took the audio session (docs/assistant/voice.md 6.5「来电」).
     case interrupted
+    /// The interruption is over (`shouldResume`: the system says the audio may go on): a call to Persona's (#9290) and the
+    /// phone's voice chat's, which paused at `interrupted` (#9887).
+    case interruptionEnded(shouldResume: Bool)
     /// The system's media services restarted: every audio object is gone.
     case reset
     /// The route changed (headphones, Bluetooth) and the microphone could not be set up again on the new one.
@@ -104,9 +105,47 @@ nonisolated enum VoiceCapture: Equatable, Sendable {
     /// Drops everything queued and not yet played.
     func clear()
     func stop()
+    /// After an interruption that may go on (`interruptionEnded(shouldResume: true)`): the session active again and the
+    /// microphone and the player running again (the phone's voice chat, #9887). Throws when the session will not come back.
+    func resume() throws
     /// The microphone records with echo cancellation: what the speaker plays is taken out of it. Without it the voice
     /// can come back as the user's caption, which the `start` frame tells the extension (docs/assistant/voice.md 3.2).
     var cancelsEcho: Bool { get }
+    /// The extension says one of the voice's replies began (`true`) or ended (`false`) (`reply` frames, #14933): the
+    /// jitter buffer holds through its pauses and plays what it holds as it ends (`VoicePlayout`).
+    func reply(_ open: Bool)
+    /// How far the jitter buffer grew this call and what its replies said of the voice's pace (`VoicePlayout.lead`): read
+    /// as the call ends or changes voice, for the next call of that voice (`VoiceLeadMemory`).
+    var lead: VoiceLead { get }
+    /// The jitter buffer starts at `level`: where the last calls of this voice left it, 0 for one never measured slow.
+    /// After `start` (which starts it at 0), and again when the voice changes during the call.
+    func startLead(at level: Int)
+}
+
+extension VoiceAudio {
+    /// Nothing to bring back by default (the Mac's, a meeting's on the recorder's capture, the samples).
+    func resume() throws {}
+    /// No jitter buffer by default (the Mac's, the samples, `-openVoice silent`).
+    func reply(_ open: Bool) {}
+    var lead: VoiceLead { VoiceLead() }
+    func startLead(at level: Int) {}
+}
+
+/// A system call's audio (#9290, a call to Persona): the system owns the audio session. It activates it for the call
+/// (`activate`, LiveCommunicationKit's `didActivate`) and takes it away (`deactivate`: a hold, another call) without the
+/// call ending; the app never sets the category or activates it, and never moves the route by itself.
+@MainActor protocol SystemCallAudio: VoiceAudio {
+    /// The system activated the session: the engine starts (now, or once `start` has come).
+    func activate()
+    /// The system took the session away: the engine stops, the call goes on.
+    func deactivate()
+    /// On hold: nothing starts the engine (an activation, a route change) until it is off hold again.
+    func setHeld(_ held: Bool)
+    /// Each time the engine runs (voice processing on, the microphone open).
+    var onRunning: (@MainActor () -> Void)? { get set }
+    /// Just before a new engine starts on the session the call has (a route change rebuilt it): turning voice processing
+    /// on can surface as a system mute again. `onRunning` follows once it runs.
+    var onStarting: (@MainActor () -> Void)? { get set }
 }
 
 /// The microphone and the voice's loudness, about 20 times a second: an object of its own, so only the orb redraws.
@@ -154,27 +193,17 @@ nonisolated struct SystemVoiceClock: VoiceClock {
 
 struct SystemMicPermission: MicPermission {
     func request() async -> Bool {
-        #if os(iOS) || os(visionOS)
         await AVAudioApplication.requestRecordPermission()
-        #else
-        false
-        #endif
     }
 }
 
 final class SystemIdleTimer: IdleTimerControl {
     var isDisabled: Bool {
         get {
-            #if os(iOS) || os(visionOS)
             UIApplication.shared.isIdleTimerDisabled
-            #else
-            false
-            #endif
         }
         set {
-            #if os(iOS) || os(visionOS)
             UIApplication.shared.isIdleTimerDisabled = newValue
-            #endif
         }
     }
 }

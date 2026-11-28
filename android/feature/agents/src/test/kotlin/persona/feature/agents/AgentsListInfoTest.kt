@@ -119,6 +119,17 @@ class AgentsListInfoTest {
         assertEquals(listOf("live", "old"), visibleAgentRequests(requests, sessions, AgentPreferences(), settings).map { it.id })
     }
 
+    @Test fun displayCopiesStayOutOfAggregateRequests() {
+        val original = Interaction("original", "box", "side", kind = "permission")
+        val mirror = original.copy(id = "display", sessionId = "main", mirrorOf = original.id)
+        val pending = listOf(original, mirror)
+        val visible = visibleAgentRequests(pending, emptyList(), AgentPreferences(), AgentListSettings())
+        assertEquals(listOf("original"), visible.map { it.id })
+        // Main need not be in the Agents page's bounded session list: its copy still gets no waiting row of its own.
+        val rows = agentNeedsYouRows(pending, emptyList(), AgentListSettings()) { false }
+        assertEquals(listOf("original"), rows.flatMap { it.cards }.map { it.id })
+    }
+
     @Test fun anotherAgentsCardSaysWhoAsks() {
         val claude = Interaction("ix", kind = "permission", toolName = "Bash")
         assertEquals("在等你批准", claude.cardTitle(res))
@@ -126,6 +137,16 @@ class AgentsListInfoTest {
         assertEquals("在等你批准", claude.copy(toolName = "mcp__persona__mail_send").cardTitle(res))
         assertEquals("DSH 在问你", claude.copy(kind = "question", agent = "dsh", agentLabelHint = "DSH").cardTitle(res))
         assertEquals("Claude 在问你", claude.copy(kind = "question", agent = "claude").cardTitle(res))
+    }
+
+    /** #8143: a Paseo provider's card names the provider; one naming only the engine (an older node's) names no one. */
+    @Test fun aPaseoCardNamesItsProviderNeverTheEngine() {
+        val grok = Interaction("ix", kind = "permission", toolName = "Bash", agent = "paseo", agentLabelHint = "Grok")
+        assertEquals("Grok 在等你批准", grok.cardTitle(res))
+        assertEquals("Grok 在问你", grok.copy(kind = "question").cardTitle(res))
+        val engine = grok.copy(agentLabelHint = "Paseo")
+        assertEquals("在等你批准", engine.cardTitle(res))
+        assertEquals("在问你", engine.copy(kind = "question").cardTitle(res))
     }
 
     @Test fun requestCardsPreviewPlansWithoutMarkdownSyntax() {
@@ -161,11 +182,22 @@ class AgentsListInfoTest {
     }
 
     @Test fun byToDoIsOfferedOnlyWhileTheHubHasToDos() {
-        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo), offeredGroupings(true))
-        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State), offeredGroupings(false))
+        assertEquals(
+            listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo,
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent),
+            offeredGroupings(true),
+        )
+        assertEquals(
+            listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State,
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent),
+            offeredGroupings(false),
+        )
         // By pinned only with the hub's direction tree (#4352), after the rest.
-        assertEquals(listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo, AgentGrouping.Direction),
-            offeredGroupings(true, directions = true))
+        assertEquals(
+            listOf(AgentGrouping.Repo, AgentGrouping.MachineSpace, AgentGrouping.State, AgentGrouping.Todo,
+                AgentGrouping.Machine, AgentGrouping.App, AgentGrouping.Recent, AgentGrouping.Direction),
+            offeredGroupings(true, directions = true),
+        )
         // A saved By To-do on a hub without to-dos shows By project; the others stay.
         assertEquals(AgentGrouping.MachineSpace, resolvedGrouping(AgentGrouping.Todo, false))
         assertEquals(AgentGrouping.Todo, resolvedGrouping(AgentGrouping.Todo, true))

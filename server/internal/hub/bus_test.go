@@ -238,7 +238,9 @@ func TestBusHello(t *testing.T) {
 			// the finished push's timings: the manager's to apply (fleet_push.go there)
 			Notify:      assistantwire.NotifyTimings{DoneDelayMS: 60000, LongTurnMS: 60000, BackgroundHoldMS: 7200000},
 			PersonaView: true, HTMLViews: true, // the cards, always on, for a manager from before #5509
-			SecretHandoffGate: true}} // this hub checks who approves a hand-off card (secret_handoff.go)
+			SecretHandoffGate: true,  // this hub checks who approves a hand-off card (secret_handoff.go)
+			ArchivedApart:     true,  // it takes a machine's archived rows apart from its list (fleet.archived, #6836)
+			ApprovalMirrors:   true}} // display-only approval copies are capability-negotiated per client
 	if !jsonEqual(reply, want) {
 		t.Fatalf("hello answer %+v, want %+v", reply, want)
 	}
@@ -301,7 +303,7 @@ func TestBusWrongIdentity(t *testing.T) {
 
 // Only a bus token opens the bus, and it opens nothing else; a revoked or replaced token is cut off at once.
 func TestBusRejectsTokens(t *testing.T) {
-	h, srv, store := newBusHub(t)
+	h, srv, _ := newBusHub(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, tok := range []string{"", "jb_" + randomHex(24), h.cfg.Token} {
@@ -344,19 +346,28 @@ func TestBusRejectsTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// What createBusToken refuses; an identity of another role (none is made yet) is refused at the upgrade.
+	// What createBusToken refuses.
 	for _, id := range []string{"", "Bad", "a.b", strings.Repeat("a", 33)} {
 		if _, err := h.createBusToken(ctx, id, ""); err == nil {
 			t.Errorf("createBusToken(%q) took it", id)
 		}
 	}
-	other := "jb_" + randomHex(24)
-	if err := store.SaveBusIdentity(ctx, db.BusIdentity{ID: "later", Role: "app"}, hashToken(other)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := bus.Dial(ctx, srv.URL, other, nil); !errors.Is(err, bus.ErrRejected) {
-		t.Fatalf("a token of another role: %v", err)
-	}
+	t.Run("unsupported role", func(t *testing.T) {
+		// The database CHECK permits only manager on new writes. Inject an unsupported identity through the
+		// existing bus store seam to keep testing the upgrade's independent role check (including legacy rows).
+		h := newTestHub(t)
+		idents := &memIdents{}
+		h.bus.idents = idents
+		srv := httptest.NewServer(h.routes())
+		t.Cleanup(srv.Close)
+		other := "jb_" + randomHex(24)
+		if err := idents.SaveBusIdentity(ctx, db.BusIdentity{ID: "later", Role: "app"}, hashToken(other)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bus.Dial(ctx, srv.URL, other, nil); !errors.Is(err, bus.ErrRejected) {
+			t.Fatalf("a token of another role: %v", err)
+		}
+	})
 }
 
 // A second connection of the same identity takes over when it says its handshake; the first is hung up.

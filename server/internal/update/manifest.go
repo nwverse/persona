@@ -15,18 +15,24 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // Manifest is latest.json: the release the publisher put up (docs/operations/hub-update.md "Release manifest and signature").
 type Manifest struct {
-	Version     string          `json:"version"`
-	Build       int64           `json:"build"`
-	Commit      string          `json:"commit"`
-	Released    time.Time       `json:"released"`
-	MinAppBuild int             `json:"min_app_build,omitempty"`
-	Protocol    int             `json:"protocol"`
-	Notes       string          `json:"notes,omitempty"`
-	Files       map[string]File `json:"files"` // "linux-amd64" -> its download
+	Version     string    `json:"version"`
+	Build       int64     `json:"build"`
+	Commit      string    `json:"commit"`
+	Released    time.Time `json:"released"`
+	MinAppBuild int       `json:"min_app_build,omitempty"`
+	Protocol    int       `json:"protocol"`
+	Notes       string    `json:"notes,omitempty"`
+	Channel     string    `json:"channel,omitempty"` // absent: the existing stable feed; beta: prereleases only
+	// Edition is the edition of every download listed (nodeproto.Edition.Marker): left out for the full build,
+	// "core" for Persona Core alone, which is served as core-latest.json and never read by a full install.
+	Edition string          `json:"edition,omitempty"`
+	Files   map[string]File `json:"files"` // "linux-amd64" -> its download
 	// Ancestors is every commit the release's code contains (EncodeAncestors of git rev-list <commit>): a hub installs
 	// it by itself only when its own commit is one of them (Build.Hold).
 	Ancestors string `json:"ancestors,omitempty"`
@@ -37,6 +43,14 @@ type Manifest struct {
 	// "linux-amd64" -> its download. A manager sends one to a node that runs it (docs/operations/node-update.md); personad's own
 	// downloads (Files) run a node too. Older hubs ignore them.
 	Nodes map[string]map[string]File `json:"nodes,omitempty"`
+	// Links are the independently installed persona-link connectors, by platform. They are downloaded and installed
+	// explicitly, never swapped by a hub or manager. Old hubs ignore this field.
+	Links map[string]File `json:"links,omitempty"`
+	// Helpers are native programs a computer's node runs beside it and installs on demand (HelperPrograms:
+	// persona-iphone-bridge, docs/extensions/iphone-bridge.md "Releases"): name -> "linux-amd64" -> its download. Built
+	// from native/, with versions of their own (no build number in them); a platform this release could not build is
+	// left out. Old hubs ignore this field.
+	Helpers map[string]map[string]File `json:"helpers,omitempty"`
 	// NodeProtocol, NodeProtocolMin and NodeCapabilities are what this release's nodes announce in node.info
 	// (internal/nodeproto, docs/protocol/protocol.md "Node handshake"): a manager of another build sends one only when it
 	// drives such a node. Releases from before leave them out (0: unknown, never taken in another build's place).
@@ -47,6 +61,9 @@ type Manifest struct {
 
 // NodePrograms are the programs in Manifest.Nodes, each built from server/cmd/<name>.
 var NodePrograms = []string{"persona-node"}
+
+// HelperPrograms are the programs in Manifest.Helpers: <name>-<os>-<arch>.gz.
+var HelperPrograms = []string{"persona-iphone-bridge"}
 
 // ProgramNames are the programs released with personad, each built from server/cmd/<name>: the
 // hub's and the manager's own programs (personad runs the same code: docs/server/server.md "Programs").
@@ -131,6 +148,9 @@ type File struct {
 	Size         int64  `json:"size"`   // of the .gz
 	SHA256       string `json:"sha256"` // of the .gz
 	BinarySHA256 string `json:"binary_sha256"`
+	// Served is the name the download is fetched under when that is not Name (Remote): the core edition's
+	// core-personad-linux-amd64.gz. Left out in a full release's manifest.
+	Served string `json:"served,omitempty"`
 }
 
 // ParseManifest reads latest.json.
@@ -147,8 +167,9 @@ func ParseManifest(b []byte) (*Manifest, error) {
 }
 
 // BuildManifest describes the downloads in dir: every personad-<os>-<arch>.gz there, every program's
-// <program>-<os>-<arch>.gz and every node program's (persona-node-<os>-<arch>.gz), with its hashes and the hash of
-// what it unpacks to.
+// <program>-<os>-<arch>.gz, every node program's (persona-node-<os>-<arch>.gz), every helper's
+// (persona-iphone-bridge-<os>-<arch>.gz) and the independent connector's (persona-link-<os>-<arch>[.exe].gz), with its
+// hashes and the hash of what it unpacks to.
 func BuildManifest(dir string, m Manifest) (*Manifest, error) {
 	gzs, err := manifestArtifacts(dir)
 	if err != nil {
@@ -170,8 +191,46 @@ func BuildManifest(dir string, m Manifest) (*Manifest, error) {
 			if m.Nodes[p] == nil {
 				m.Nodes[p] = map[string]File{}
 			}
-			m.Nodes[p][strings.TrimSuffix(strings.TrimPrefix(filepath.Base(gz), p+"-"), ".gz")] = f
+			platform := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(gz), p+"-"), ".gz"), ".exe")
+			m.Nodes[p][platform] = f
 		}
+	}
+	for _, p := range HelperPrograms {
+		more, err := filepath.Glob(filepath.Join(dir, p+"-*-*.gz"))
+		if err != nil {
+			return nil, err
+		}
+		for _, gz := range more {
+			f, err := describe(gz)
+			if err != nil {
+				return nil, err
+			}
+			if m.Helpers == nil {
+				m.Helpers = map[string]map[string]File{}
+			}
+			if m.Helpers[p] == nil {
+				m.Helpers[p] = map[string]File{}
+			}
+			platform := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(gz), p+"-"), ".gz"), ".exe")
+			m.Helpers[p][platform] = f
+		}
+	}
+	links, err := filepath.Glob(filepath.Join(dir, "persona-link-*-*.gz"))
+	if err != nil {
+		return nil, err
+	}
+	m.Links = map[string]File{}
+	for _, link := range links {
+		f, err := describe(link)
+		if err != nil {
+			return nil, err
+		}
+		platform := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(link), "persona-link-"), ".gz")
+		platform = strings.TrimSuffix(platform, ".exe")
+		m.Links[platform] = f
+	}
+	if len(m.Links) == 0 {
+		m.Links = nil
 	}
 	m.Files = map[string]File{}
 	for _, p := range gzs {
@@ -201,7 +260,33 @@ func BuildManifest(dir string, m Manifest) (*Manifest, error) {
 		return nil, fmt.Errorf("no personad-*.gz in %s", dir)
 	}
 	compatiblePrograms(&m)
+	edition, ok := nodeproto.ParseEdition(m.Edition)
+	if !ok {
+		return nil, fmt.Errorf("unknown edition %q", m.Edition)
+	}
+	m.Edition = edition.Marker()
+	m.serveAs(edition)
 	return &m, nil
+}
+
+// serveAs names what every download of m is served under for edition e (File.Served): nothing for the full edition,
+// core-<name> for the core's, which shares one flat namespace with the full release.
+func (m *Manifest) serveAs(e nodeproto.Edition) {
+	each := func(files map[string]File) {
+		for plat, f := range files {
+			if f.Served = e.Served(f.Name); f.Served == f.Name {
+				f.Served = ""
+			}
+			files[plat] = f
+		}
+	}
+	each(m.Files)
+	each(m.Links)
+	for _, group := range []map[string]map[string]File{m.Programs, m.Nodes, m.Helpers} {
+		for _, files := range group {
+			each(files)
+		}
+	}
 }
 
 func describe(gz string) (File, error) {
@@ -222,8 +307,17 @@ func describe(gz string) (File, error) {
 	if err != nil {
 		return File{}, fmt.Errorf("%s: %w", gz, err)
 	}
+	defer zr.Close()
 	inner := sha256.New()
-	if _, err := io.Copy(inner, zr); err != nil {
+	limit := unpackedBinaryLimit()
+	unpacked, err := io.Copy(inner, io.LimitReader(zr, limit+1))
+	if err != nil {
+		return File{}, fmt.Errorf("%s: %w", gz, err)
+	}
+	if unpacked > limit {
+		return File{}, fmt.Errorf("%s: unpacked binary exceeds %d bytes", gz, limit)
+	}
+	if err := zr.Close(); err != nil {
 		return File{}, fmt.Errorf("%s: %w", gz, err)
 	}
 	return File{Name: filepath.Base(gz), Size: n, SHA256: hex.EncodeToString(outer.Sum(nil)), BinarySHA256: hex.EncodeToString(inner.Sum(nil))}, nil
@@ -250,6 +344,19 @@ func CheckNext(served *Manifest, build int64, commit string, isAncestor func(old
 		return fmt.Errorf("the served release's commit %.12s is not an ancestor of %.12s: this would publish an older branch as newer", served.Commit, commit)
 	}
 	return nil
+}
+
+// HelperFile is helper's download for plat ("darwin-arm64"), if the release has one.
+func (m *Manifest) HelperFile(helper, plat string) (File, bool) {
+	f, ok := m.Helpers[helper][plat]
+	return f, ok && f.Name != ""
+}
+
+// LinkFile is the persona-link connector's download for plat ("linux-amd64"; a Windows one is listed without its
+// .exe, "windows-amd64"), if the release has one.
+func (m *Manifest) LinkFile(plat string) (File, bool) {
+	f, ok := m.Links[plat]
+	return f, ok && f.Name != ""
 }
 
 // NodeFile is the download of a node that runs program on plat ("linux-amd64"): program's own (Nodes) when the

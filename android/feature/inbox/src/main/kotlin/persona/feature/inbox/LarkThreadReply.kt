@@ -1,5 +1,7 @@
 package persona.feature.inbox
 
+import persona.core.inbox.*
+
 /** Use the pairing's durable draft store for both the editor and its immutable pending request. */
 internal class LarkThreadReplyRepository(
     private val base: InboxRepository,
@@ -22,8 +24,8 @@ internal class LarkThreadReplyRepository(
     override suspend fun reply(target: ReplyTarget, request: ReplyRequest) {
         if (base.supportsThreadOutbox) { base.reply(this.target, request); return }
         val previous = pending()
-        require(previous == null || previous == ReplyDraft(request.text, request.clientId))
-        base.saveDraft(pendingTarget, ReplyDraft(request.text, request.clientId))
+        require(previous == null || previous == ReplyDraft(request.text, request.clientId, mentions = request.mentions))
+        base.saveDraft(pendingTarget, ReplyDraft(request.text, request.clientId, mentions = request.mentions))
         check(source.reply(request)) { "Thread reply outcome is pending" }
         confirm(request.clientId)
     }

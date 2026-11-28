@@ -7,15 +7,9 @@
     <string name="settings_pairing_notice_local_denied">ローカルネットワークへのアクセスが許可されていません。システム設定で許可してから、戻ってもう一度お試しください。</string>
     <string name="settings_pairing_notice_camera_denied">カメラへのアクセスがオフです。アドレスとペアリングコードを手動で入力できます。</string>
     <string name="settings_pairing_notice_clipboard_empty">クリップボードにペアリングリンクがありません。</string>
+    <string name="settings_pairing_help">ヘルプ</string>
     <string name="settings_pairing_welcome_title">Personaへようこそ</string>
-    <string name="settings_pairing_welcome_body">ハブをこのスマートフォンにつなぐと、コンピューター上のエージェントをいつでも確認し、対応が必要なことを処理できます。</string>
-    <string name="settings_pairing_welcome_agents">作業の様子を見て、質問に答え、プランやツールの操作を承認します。</string>
-    <string name="settings_pairing_welcome_inbox_title">受信トレイ</string>
-    <string name="settings_pairing_welcome_inbox">Larkとメールをまとめて確認し、AIが仕分けと返信の下書きを手伝います。</string>
-    <string name="settings_pairing_welcome_assistant_title">Personaアシスタント</string>
-    <string name="settings_pairing_welcome_assistant">ナレッジとつながります。スマートフォンのデータは必要なときに個別に許可を求めます。</string>
-    <string name="settings_pairing_welcome_push">Googleサービスがなくても通知を受け取れます。スマートフォンは常時接続でハブのメッセージを受け取ります。</string>
-    <string name="settings_pairing_welcome_connect">ハブに接続</string>
+    <string name="settings_pairing_welcome_guide">ハブがまだない場合</string>
     <string name="settings_pairing_failed_title">接続できませんでした</string>
     <string name="settings_pairing_failed_body">下の案内に沿って対処してから、もう一度お試しください。</string>
     <string name="settings_pairing_stopped_at">「%1$s」で停止</string>
@@ -94,6 +88,12 @@
     <string name="settings_pairing_scan_title">ペアリングQRコードをスキャン</string>
     <string name="settings_pairing_scan_hint">ハブのインストール時に表示された QR コード、\nまたはログイン済みデバイスの「新しいデバイスを接続」のコードを\n枠に合わせてください</string>
     <string name="settings_pairing_scan_manual">スキャンできない場合は手動で入力</string>
+    <string name="settings_pairing_scan_photo">写真から選択</string>
+    <string name="settings_pairing_scan_camera_unavailable">カメラを利用できません。QRコードの写真を選んでください。</string>
+    <string name="settings_pairing_scan_photo_reading">QRコードを読み込んでいます…</string>
+    <string name="settings_pairing_scan_photo_unreadable">この写真のQRコードを読み込めませんでした。別の写真を試してください。</string>
+    <string name="settings_pairing_scan_photo_none">この写真にはQRコードが見つかりませんでした。別の写真を試してください。</string>
+    <string name="settings_pairing_scan_photo_multiple">この写真には複数のQRコードがあります。QRコードが1つだけ写った写真を選んでください。</string>
 
     <!-- Hubs -->
     <string name="settings_hubs_title">ハブ</string>
@@ -136,7 +136,6 @@
     <string name="settings_hub_update_turn_off">オフにする</string>
     <string name="settings_hub_update_got_it">OK</string>
     <string name="settings_hub_update_auto">ハブを自動更新</string>
-    <string name="settings_hub_update_retry">再試行</string>
     <string name="settings_hub_update_now_title">今すぐ更新しますか？</string>
     <string name="settings_hub_update_now">今すぐ更新</string>
     <string name="settings_hub_update_now_more">今すぐ更新…</string>
@@ -210,6 +209,8 @@
     <string name="settings_engine_retry">再試行</string>
     <string name="settings_engine_continue">ひとまず続ける</string>
     <string name="settings_engine_save_failed">保存に失敗しました：%1$s</string>
+    <string name="settings_engine_orca_chats">新しい Agent を Orca チャットで開始</string>
+    <string name="settings_engine_orca_chats_detail">新規 Agent の Claude Code と Codex を、ターミナルではなく Orca のチャット画面で開きます。選んだランチャーはターミナルで開き、アシスタントの Agent も常にターミナルを使います。</string>
 
     <!-- Candidate addresses (Connection diagnostics) -->
     <string name="settings_endpoint_hint_unchanged">アドレスは変更されていません</string>

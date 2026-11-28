@@ -42,6 +42,8 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.lifecycle.HiltViewModel
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.RetainedTextDensity
+import persona.core.designsystem.currentTextDensities
 import persona.core.designsystem.dense
 import persona.core.designsystem.dismissKeyboardOnBlankTap
 import persona.core.contracts.SessionKey
@@ -84,7 +86,9 @@ class ShareActivity : ComponentActivity() {
                         finish()
                     }
                 }
+                val densities = currentTextDensities()
                 ModalBottomSheet(onDismissRequest = { finish() }, sheetState = sheet) {
+                    RetainedTextDensity(densities) {
                     Column(
                         Modifier.fillMaxWidth().dismissKeyboardOnBlankTap().verticalScroll(rememberScrollState())
                             .padding(horizontal = 24.dp.dense).padding(bottom = 24.dp.dense),
@@ -161,6 +165,7 @@ class ShareActivity : ComponentActivity() {
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
@@ -372,7 +377,8 @@ internal suspend fun <T> sendSharedContent(
 ) {
     val paths = attachments.map { upload(it) }
     beforeSend()
-    sender.send(target, formatSharedContent(title, text, paths, note, asContext, untitled), id)
+    sender.send(target, formatSharedContent(title, text, paths, note, asContext, untitled), id,
+        null, null, null, persona.core.contracts.api.MessageVia.Share)
 }
 
 /** [untitled] is the context card's title when the share has none, in the app's language (`app_share_content`). */

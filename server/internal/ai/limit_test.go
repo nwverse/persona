@@ -84,6 +84,18 @@ func newUpstream(t *testing.T, reply func(w http.ResponseWriter)) *upstream {
 		reply(w)
 	}))
 	t.Cleanup(u.srv.Close)
+	// Gates are package-global and keyed by the server's address, and every test runs on the same fake clock: once this
+	// server's port is reused by a later test's server, a pause left here would still be in force there and its request
+	// would never go out. The gates of this server go with it.
+	host := strings.TrimPrefix(u.srv.URL, "http://")
+	t.Cleanup(func() {
+		gates.Range(func(k, v any) bool {
+			if v.(*gate).host == host {
+				gates.Delete(k)
+			}
+			return true
+		})
+	})
 	return u
 }
 
@@ -476,7 +488,7 @@ func TestClassify(t *testing.T) {
 		{429, `{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}`, ReasonQuota},
 		{529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, ReasonBusy},
 		{503, `upstream connect error`, ReasonBusy},
-		{500, quotaBody, ""},
+		{500, quotaBody, ReasonQuota},
 		{400, `{"error":{"message":"bad request"}}`, ""},
 	}
 	for _, c := range cases {

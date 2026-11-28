@@ -53,6 +53,8 @@ let rosterDefault = BUILTIN_MANAGER;
 // Whether rosterDefault is the roster's (read once, or the hub has none to read): until then it is a placeholder, and
 // what goes by the default (the pages without a switcher, an item's requests) waits for it or is evaluated again.
 let defaultSettled = false;
+// Whether the hub returned a roster with a default manager (false after a failed/404 roster read or reset).
+let defaultConfirmed = false;
 const listeners = new Set<() => void>();
 const defaultListeners = new Set<(was: { id: string; settled: boolean }) => void>();
 
@@ -85,6 +87,12 @@ export function notePickedName(name: string | null) {
 export interface ShownIdentity {
   id: string;
   name: string;
+  /** Display-only: whether this identity was the roster's default assistant (keeps the Persona face while the roster loads). */
+  isDefault?: boolean;
+  /** Display-only: the last status subtitle shown under the assistant name, preventing subtitle jumps while loading. */
+  line?: string;
+  /** Display-only: the last presence dot tone shown on the avatar while online. */
+  tone?: "green" | "grey" | "accent";
 }
 
 export const DISPLAY_IDENTITY_KEY = `persona.shownAssistant${BASE ? `:${BASE}` : ""}`;
@@ -93,8 +101,13 @@ function storedShownIdentity(): ShownIdentity | null {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(DISPLAY_IDENTITY_KEY) ?? "null");
     if (!value || typeof value !== "object") return null;
-    const { id, name } = value as Record<string, unknown>;
-    return typeof id === "string" && id && typeof name === "string" && name ? { id, name } : null;
+    const { id, name, isDefault, line, tone } = value as Record<string, unknown>;
+    if (typeof id !== "string" || !id || typeof name !== "string" || !name) return null;
+    const out: ShownIdentity = { id, name };
+    if (typeof isDefault === "boolean") out.isDefault = isDefault;
+    if (typeof line === "string" && line) out.line = line;
+    if (tone === "green" || tone === "grey" || tone === "accent") out.tone = tone;
+    return out;
   } catch {
     return null; // unavailable storage or malformed JSON: the in-memory identity still lasts this page
   }
@@ -111,7 +124,11 @@ export function shownIdentity(): ShownIdentity | null {
 /** Records (or clears) the identity for the sidebar's head. Null is for a fresh roster with no installed current
  *  assistant, a genuinely old hub, and test cleanup; merely reloading or failing to read a roster does not call it. */
 export function noteShownIdentity(identity: ShownIdentity | null) {
-  const unchanged = rememberedIdentity?.id === identity?.id && rememberedIdentity?.name === identity?.name;
+  const unchanged = rememberedIdentity?.id === identity?.id
+    && rememberedIdentity?.name === identity?.name
+    && rememberedIdentity?.isDefault === identity?.isDefault
+    && rememberedIdentity?.line === identity?.line
+    && rememberedIdentity?.tone === identity?.tone;
   if (unchanged && identity) return;
   rememberedIdentity = identity;
   try {
@@ -157,6 +174,7 @@ export function chooseManager(id: string | null) {
 export function setRosterDefault(id: string) {
   const was = { id: rosterDefault, settled: defaultSettled };
   defaultSettled = true;
+  defaultConfirmed = Boolean(id);
   if (!id || id === rosterDefault) {
     if (!was.settled) defaultListeners.forEach((l) => l(was));
     return;
@@ -170,6 +188,16 @@ export function setRosterDefault(id: string) {
   }
   emit();
   defaultListeners.forEach((l) => l(was));
+}
+
+/** The default manager confirmed by a live roster response, or undefined before the roster loaded or when unavailable. */
+export function confirmedDefaultManager(): string | undefined {
+  return defaultConfirmed ? rosterDefault : undefined;
+}
+
+/** Clears the confirmed-roster marker (tests resetting the roster). */
+export function clearConfirmedDefault() {
+  defaultConfirmed = false;
 }
 
 /** The hub has no roster (from before it), or it could not be read: the default stays the hub's own assistant, and
@@ -323,8 +351,9 @@ function itemManager(path: string): string | undefined {
 
 const CONVERSATION = /^\/assistant\/conversations\/[^/?]+/;
 // The routes that are the current assistant's as a whole: its page, conversations, scheduled tasks and memory
-// (`/assistant…`), and its knowledge base with the recordings it keeps there.
-const CURRENT = /^\/(?:assistant|kb|kb-search|recordings)(?=$|[/?])/;
+// (`/assistant…`), its knowledge base with the recordings it keeps there, and its computers' token history (the
+// new-chat page's calendar, #9506; the island's `/usage` stays the default's).
+const CURRENT = /^\/(?:assistant|kb|kb-search|recordings|usage\/days|usage\/hours)(?=$|[/?])/;
 
 /** The header value for a request to path (under /api/v1), or undefined.
  *  - One conversation's routes name its manager when a page listed it, else none: the hub then sends them to the
@@ -415,6 +444,7 @@ export function resetManagerChoice() {
   pins.clear();
   rosterDefault = BUILTIN_MANAGER;
   defaultSettled = false;
+  defaultConfirmed = false;
   emit();
   // Choice listeners may note the roster's current identity; tests still end with every remembered display gone.
   noteShownIdentity(null);

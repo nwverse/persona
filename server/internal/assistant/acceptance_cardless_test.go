@@ -51,7 +51,7 @@ var botNotSetUp = FeishuStatus{}
 // deployedCardless runs the deploying turn and waits for the ask the hub keeps.
 func deployedCardless(t *testing.T, s *Service, f *fakeHub, id string) *acceptAsk {
 	t.Helper()
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the ask", func() bool { a := askOf(s, id); return a != nil && !a.AskedAt.IsZero() })
 	return askOf(s, id)
 }
@@ -78,7 +78,7 @@ func TestAcceptanceIsKeptWithoutABot(t *testing.T) {
 	}
 	// Another turn that says deployed does not ask twice.
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	time.Sleep(6 * testReportDelay)
 	if b := askOf(s, id); !b.AskedAt.Equal(a.AskedAt) {
 		t.Fatalf("asked again: %+v then %+v", a, b)
@@ -87,19 +87,20 @@ func TestAcceptanceIsKeptWithoutABot(t *testing.T) {
 
 // The briefing's "To accept" section lists the card-less ask with the round the Accept button is made for.
 func TestAcceptanceWithoutABotIsInTheBriefing(t *testing.T) {
+	needsBriefingModule(t)
 	ctx := context.Background()
 	s, f, _, id := cardlessService(t, botNotSetUp)
 	a := deployedCardless(t, s, f, id)
 	facts := s.briefFactsAt(ctx, time.Now(), "")
-	if len(facts.Accept) != 1 || facts.Accept[0].id != id || facts.Changed[id] != a.Changed {
+	if len(facts.Accept) != 1 || facts.Accept[0].ID != id || facts.Changed[id] != a.Changed {
 		t.Fatalf("facts: %+v changed=%v", facts.Accept, facts.Changed)
 	}
-	body := facts.body(s, "Morning")
+	body := s.briefBodyOf(facts, "Morning")
 	if len(body.Accept) != 1 || body.Accept[0].ID != id || !body.Accept[0].AskedAt.Equal(a.AskedAt) || body.Accept[0].Title != "修登录崩溃" {
 		t.Fatalf("brief item: %+v", body.Accept)
 	}
-	if !strings.Contains(facts.modelText(), a.Changed) {
-		t.Fatalf("the model is not told what changed:\n%s", facts.modelText())
+	if !strings.Contains(s.briefModelText(facts), a.Changed) {
+		t.Fatalf("the model is not told what changed:\n%s", s.briefModelText(facts))
 	}
 }
 
@@ -122,7 +123,7 @@ func TestAcceptButtonVerifiesACardlessAsk(t *testing.T) {
 	}
 	// The next deploy asks again, card-less; its button verifies.
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the next round's ask", func() bool { b := askOf(s, id); return b != nil && b.AskedAt.After(a.AskedAt) })
 	b := askOf(s, id)
 	if code := post(b.AskedAt); code != http.StatusOK {
@@ -156,8 +157,9 @@ func TestAcceptanceWithReportsOffHasNoCard(t *testing.T) {
 
 // Bot ready: unchanged, the ask has its card and is not marked card-less.
 func TestAcceptanceWithABotKeepsItsCard(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts, id := cardlessService(t, FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", Features: FeishuFeatures{Main: true, Cards: true, Reports: true}})
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitAcceptCard(t, s, id, posts)
 	if a := askOf(s, id); a.NoCard || len(a.Messages) != 1 {
 		t.Fatalf("ask: %+v", a)
@@ -171,6 +173,7 @@ func TestAcceptanceWithABotKeepsItsCard(t *testing.T) {
 // waiting for its card, not card-less, and the next tick posts it once the status reads (acceptance_retry_test.go). A
 // card whose send failed is the same (TestAcceptanceCardRetriedAfterAFailedSend).
 func TestAcceptanceStatusErrorIsNotNoCard(t *testing.T) {
+	needsLarkLayer(t)
 	waiting := func(t *testing.T, s *Service, id string, posts func() []string) {
 		t.Helper()
 		if a := askOf(s, id); a == nil || a.AskedAt.IsZero() || a.MessageID != "" || a.NoCard {
@@ -183,11 +186,11 @@ func TestAcceptanceStatusErrorIsNotNoCard(t *testing.T) {
 	t.Run("status unreadable", func(t *testing.T) {
 		s, f, posts, id := cardlessService(t, botNotSetUp)
 		f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return nil, errors.New("manager away") })
-		s.feishuForgetStatus()
+		s.larkModule().ForgetStatus()
 		s.askAcceptance(onlyTodo(s), "box", "s1", deployedReply)
 		waiting(t, s, id, posts)
 		f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return botReady, nil })
-		s.feishuForgetStatus()
+		s.larkModule().ForgetStatus()
 		s.retryAcceptance(time.Now())
 		if a := askOf(s, id); a == nil || a.MessageID == "" || countAcceptCards(posts()) != 1 {
 			t.Fatalf("the card for later did not go out: %+v, %d cards", a, countAcceptCards(posts()))
@@ -203,7 +206,7 @@ func TestCardlessAskIsNotReminded(t *testing.T) {
 	f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { // the bot is set up later
 		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", PublicURL: cardlessWeb, Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}, nil
 	})
-	s.feishuForgetStatus()
+	s.larkModule().ForgetStatus()
 	s.accept.mu.Lock()
 	s.accept.asks[id].AskedAt = time.Now().Add(-30 * time.Hour)
 	s.accept.mu.Unlock()
@@ -274,6 +277,7 @@ func TestCardlessAskEndsLikeACardedOne(t *testing.T) {
 
 // Verifying a card-less ask says so in the to-do's Lark topic, as verifying on a card does.
 func TestCardlessAcceptSaysSoInTheTopic(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	e := newPostEnv(t)
 	id := e.bound("验收", testThread)
@@ -285,11 +289,12 @@ func TestCardlessAcceptSaysSoInTheTopic(t *testing.T) {
 		t.Fatal("not accepted")
 	}
 	e.clk.advance(threadPostSettle)
-	mustContain(t, "accepted line", textOf(e.onlyPost(t)), "已验收", testWeb+"/todos?id="+id)
+	mustContain(t, "accepted line", textOf(e.onlyPost(t)), "已验收", testWeb+"/todos/"+id)
 }
 
 // Verifying a card-less ask plans the report back to where the request came from, as verifying on a card does.
 func TestCardlessAcceptPlansTheSourceReport(t *testing.T) {
+	needsLarkLayer(t)
 	forStores(t, func(t *testing.T, e *askEnv, database *db.DB) {
 		ctx := context.Background()
 		e.ask(ownerAsk("om_a1", "/ai 修登录崩溃"))

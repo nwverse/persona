@@ -13,6 +13,8 @@ When on, the top of the iPhone home screen shows **Assistant / Agents / Messages
 The regular-width iPad gets a matching **Messages** tab; it shares the hub's Lark account, so no second sign-in is needed.
 On the retired native Mac, the same switch added a **Messages** section above the Inbox in the sidebar: chat list on the left, chat on the right (#3162, [mac.md](../archive/apple/mac.md), "Main window").
 
+On Android, the same device-local switch adds **Messages** to the shared Assistant sidebar rather than creating a third primary destination. It is visible while the selected hub provides native Lark chats; a real pairing's initial null repository is loading and preserves any process-restored route until DI publishes it. Demo mode has no repository and offers neither the switch nor the destination. The page keeps the original default-account, server-order direct / group chat browser with cursor pagination and opens the existing native `LarkScreen`; Back stays on the Messages host. Loading, empty and failed first reads differ, refresh is atomic over the loaded window, and refresh / tail failure retains rows. Disabling the switch forgets only Messages and its drill-downs without erasing the saved preference or changing other roots; the retained Assistant path is restored even while Agents is selected, without switching tabs. Account chips, the pinned shelf, All / Unread filters, deep search, a conversation-list disk cache and chat-body prefetch are not part of this Android slice. See `docs/android/android.md` "Optional Lark Messages on home (#511)".
+
 - The Inbox keeps doing cross-source aggregation, AI triage, drafts and to-dos; the Lark filter keeps its original purpose.
 - **Messages** browses all direct and group chats; tapping one reuses `LarkChatView`. Swiping right in a chat returns to the message list; the list and the neighboring home pages switch with a horizontal swipe.
 - The top right of **Messages** opens the existing Lark settings. If the switch is turned off on that page, the settings stay open; closing the settings returns to **Assistant**.
@@ -20,6 +22,34 @@ On the retired native Mac, the same switch added a **Messages** section above th
   The list does not add every chat to background message prefetch; prefetch keeps the existing Inbox / recent chats policy.
 - Search is explicitly limited to loaded chats. When not connected it goes back to the Lark settings; on network errors it keeps the cache and offers a retry.
 - Quotes, thread replies, read state, media, time grouping and message alignment follow the mainline implementation.
+
+## Personal Agents in Messages
+
+The Messages page lists the personal Agents (`/api/v1/agents/sessions`: Grok Bot, Muse, Claude Duet and the other
+sources' conversations) with the Lark chats, the latest message first, as Lark's own client lists its bots among the
+chats. Each Agent row draws its own avatar (`/api/v1/agents/sessions/{id}/avatar`), its service's name beside the
+title, its latest message (`previewText`; "Me:" before the user's own, `previewIsMine`), the time and its unread count.
+Who it serves: everyday people who talk to both their colleagues and their AI assistants and want one place to read them.
+
+- **Order without breaking Lark's paging.** The Lark rows keep the gateway's order and its cursor; each Agent goes before
+  the first chat older than it (`rankTimeMs` against `updated_at`). While Lark has a next page, an Agent older than the
+  oldest chat loaded waits for that page, since a later page may hold newer chats and the Agent would jump up past them;
+  an Agent without a time (`rankTimeMs <= 0`) is never put on top. With no next page, or while searching, every Agent that
+  matches is shown. The rule is pure logic in both apps: web `web/src/modules/lark/mixed-feed.ts`, iOS
+  `apple/Persona/Views/Inbox/Lark/LarkAgentFeed.swift`.
+- **Pinned.** An Agent pinned in the shared personal-Agent preferences (`pins`, `GET`/`PUT /api/v1/agents/prefs`) sits on
+  the pinned shelf with the pinned chats, with its unread badge; the web pins and unpins it from the open conversation's
+  title row, iOS from the row's context menu. On the web a pinned Agent leaves the list below; on iOS it stays in the
+  list too, as pinned chats do there.
+- **Filter and switch.** With Agents present the page shows All / Lark / AI assistants on the web (iOS adds AI Assistants
+  beside All / Unread). Settings › Connectors › Lark › "AI assistants in Messages" turns the mixing off for that browser or
+  device (on by default; it changes nothing while there are no personal Agents).
+- **Opening one.** The web opens it on the page's right side at `/messages/agent/<session id>` (two segments, so no Lark
+  chat id is read as an Agent), in the Agents page's conversation view without its own title row
+  (`AgentConversation` in `web/src/views/agents/AgentsView.tsx`); iOS pushes `PersonalAgentSessionView`.
+- **Hub.** `previewText`, `previewIsMine` and `onTopRankTimeMs` are optional fields of a source's `sessions` answer
+  (docs/extensions/extensions.md), passed through unchanged; `previewText` is also part of the list index's search text.
+  Avatars that are `.ico` favicons are served as PNG (`server/internal/agents/avatar_ico.go`), like SVGs.
 
 ## Later scope
 

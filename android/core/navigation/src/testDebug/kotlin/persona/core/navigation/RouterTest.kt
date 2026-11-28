@@ -70,6 +70,16 @@ class RouterTest {
         assertNull(router.parseDebug(mapOf("debug.openRequest" to "request")))
     }
 
+    @Test fun canonicalAppLinksResolveColdAndRefuseUnsafeRoutes() {
+        assertRoute(router.parse(RouteInput.DeepLink("persona://open/todos/t-19")), AppTab.Agents, TodoDetailRoute("t-19"))
+        for (link in listOf(
+            "persona://open//evil.example/x",
+            "persona://open:8080/s/machine/agent",
+            "persona://open?route=%2F%2Fevil.example%2Fx",
+            "persona://open/%5Cevil",
+        )) assertNull(link, router.parse(RouteInput.DeepLink(link)))
+    }
+
     @Test fun personaDeepLinksKeepCredentialsTransient() {
         val pair = "persona://pair?url=https%3A%2F%2Fhub.example.com&token=fixture"
         val route = router.parse(RouteInput.DeepLink(pair))
@@ -93,6 +103,13 @@ class RouterTest {
         assertFalse(agents!!.focusComposer)
         assertFalse(router.parse(RouteInput.DeepLink("persona://open?target=tab&tab=persona&focus=search"))!!.focusComposer)
         assertNull(router.parse(RouteInput.DeepLink("$AskPersonaLink&focus=composer")))
+        val chatAsk = router.parse(RouteInput.DeepLink("persona://open?target=chat&machine=m1&session=s1&kind=assistant&focus=composer"))
+        assertEquals(AppTab.Persona, chatAsk?.tab)
+        assertEquals(ChatRoute("m1", "s1", ConversationKind.Assistant), chatAsk?.key)
+        assertTrue(chatAsk!!.focusComposer)
+        val stacks = mapOf(AppTab.Persona to mutableListOf<androidx.navigation3.runtime.NavKey>(AssistantRoute), AppTab.Agents to mutableListOf<androidx.navigation3.runtime.NavKey>(AgentsRoute))
+        assertEquals(AppTab.Persona, chatAsk.restore(stacks))
+        assertEquals(listOf(AssistantRoute, ChatRoute("m1", "s1", ConversationKind.Assistant)), stacks[AppTab.Persona])
         val newTodo = router.parse(RouteInput.DeepLink(NewTodoLink))
         assertEquals(AppTab.Agents, newTodo!!.tab)
         assertEquals(NewTodoRoute, newTodo.key)

@@ -22,11 +22,15 @@ internal val DeliveryState.pendingStatus: PendingStatus?
         DeliveryState.Verifying -> PendingStatus.Verifying
         DeliveryState.NeedsConfirmation -> PendingStatus.NeedsReview
         DeliveryState.Rejected, DeliveryState.Refused -> PendingStatus.Refused
-        DeliveryState.Sent -> null
+        DeliveryState.Sent, DeliveryState.Held -> null
     }
 
 /** [RetryNow]: one still on its way (queued, waiting for the network) tries at once (iOS's Retry Now on a waiting message). */
 internal enum class DeliveryAction { Cancel, Edit, Retry, RetryNow, Delete, Discard, ConfirmDelivered, ConfirmNotDelivered }
+
+/** Sending and restoring text into a composer require an editable chat; cleanup and delivery review do not. */
+internal fun DeliveryAction.available(canSend: Boolean): Boolean = canSend ||
+    this !in setOf(DeliveryAction.Edit, DeliveryAction.Retry, DeliveryAction.RetryNow)
 
 /**
  * Cancel and edit are for what has not gone out yet; a refused message (refused by the computer, or confirmed as never
@@ -34,7 +38,7 @@ internal enum class DeliveryAction { Cancel, Edit, Retry, RetryNow, Delete, Disc
  * or deleted outright. Cancel and Delete take the bubble away with Undo ([ChatDeliveryActions.perform]'s `removed`).
  * One whose delivery is unknown can be discarded: the phone stops asking and retrying, whatever the computer got.
  */
-internal fun DeliveryState.allows(action: DeliveryAction): Boolean = when (action) {
+internal fun DeliveryState.allows(action: DeliveryAction, canSend: Boolean = true): Boolean = action.available(canSend) && when (action) {
     DeliveryAction.Cancel, DeliveryAction.RetryNow -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork
     DeliveryAction.Edit -> this == DeliveryState.Queued || this == DeliveryState.WaitingForNetwork || this == DeliveryState.Refused
     DeliveryAction.Delete -> this == DeliveryState.Refused || this == DeliveryState.Rejected
@@ -72,14 +76,15 @@ internal class ChatDeliveryActions(private val sender: MessageSender) {
 
 /** Why the computer refused the message ([refusalText]). */
 @androidx.compose.runtime.Composable
-internal fun OutboxMessage.refusalReason(): String = refusalText(error).text()
+internal fun OutboxMessage.refusalReason(): String = refusalText(error, reason).text()
 
 /**
  * Why the computer refused a message, by the hub's [code]: the chat's own words for what stops typing into a session,
- * the shared words for the other codes (the computer asleep, the session changed), the generic refusal for a code
- * the app has no words for. Never the hub's raw code or detail.
+ * the shared words for the other codes (the computer asleep, the session changed), then the hub's own sentence for a
+ * code the app has no words for ([hubWords], in the app's language: an agy open in a terminal, #16531), as iOS and the
+ * web show it, and the generic refusal when the hub gave none. Never the hub's raw code or detail.
  */
-internal fun refusalText(code: String?): UiText = when (code) {
+internal fun refusalText(code: String?, hubWords: String? = null): UiText = when (code) {
     "input_draft" -> UiText.Res(R.string.chat_delivery_input_draft)
     "dialog_open" -> UiText.Res(R.string.chat_delivery_dialog_open)
     "codex_not_ready" -> UiText.Res(R.string.chat_delivery_codex_not_ready)
@@ -91,5 +96,7 @@ internal fun refusalText(code: String?): UiText = when (code) {
     // The provider does not run on this computer (docs/integrations/launchers.md "Device scope and on-demand delivery").
     "launcher_out_of_scope", "launcher_own_service" -> UiText.Res(R.string.chat_delivery_out_of_scope)
     else -> mapOperationFailure(code, "none", false).takeIf { it.reason != FailureReason.Failed }
-        ?.let { operationFeedback(it).text } ?: UiText.Res(R.string.chat_delivery_refused)
+        ?.let { operationFeedback(it).text }
+        ?: hubWords?.takeIf { code != null && it.isNotBlank() }?.let(UiText::Plain)
+        ?: UiText.Res(R.string.chat_delivery_refused)
 }

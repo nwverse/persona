@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// A comment on lines of a review, kept on the device until the review is sent (#151, docs/web/review.md): the file,
 /// the lines (the old file's when only removed lines were picked), the diff rows with their marks, and the note.
@@ -42,12 +43,13 @@ nonisolated struct ReviewPick: Hashable, Sendable {
 }
 
 nonisolated enum ReviewLogic {
-    /// A file's hunks as rows: each hunk's header, then its lines numbered from where it starts.
+    /// A file's hunks as rows: each hunk's header, then its lines numbered from where it starts. A hunk git names no
+    /// function for (every hunk of a new file) has no header row, as on the web, not an empty band (#8733).
     static func rows(_ file: GitReview.File) -> [ReviewRow] {
         var out: [ReviewRow] = []
         var i = 0
         for h in file.hunks ?? [] {
-            out.append(ReviewRow(kind: .hunk(h.header), index: -1))
+            if !h.header.isEmpty { out.append(ReviewRow(kind: .hunk(h.header), index: -1)) }
             for l in CodeDiffModel.lines(oldStart: h.oldStart, newStart: h.newStart, raw: h.lines) {
                 out.append(ReviewRow(kind: .line(l), index: i))
                 i += 1
@@ -99,6 +101,73 @@ nonisolated enum ReviewLogic {
 
     /// A draft on old-side lines written against another diff: its numbers belong to that diff.
     static func outdated(_ d: ReviewDraft, now: MessageComment.Diff) -> Bool { d.old && d.diff != now }
+
+    /// What a failure says under its title: the hub's words, never Swift's own decoding text (#8733).
+    static func failureText(_ error: any Error) -> String {
+        if error is DecodingError {
+            return String(localized: "This version of the app can't read this computer's answer. Update the app and try again.")
+        }
+        return error.localizedDescription
+    }
+
+    /// What a big file asked for on its own is compared with: the base the review pinned, or before the first commit
+    /// (no base hash) the review's own scope, as the web's `loadReviewFile`.
+    static func bigFileScope(_ review: GitReview, current: GitReviewScope) -> GitReviewScope {
+        guard let hash = review.base?.hash, !hash.isEmpty else { return current }
+        return .commit(hash)
+    }
+
+    /// Outcome of resolving a Changed Files card's target file against a review's current load phase (#12016).
+    enum TargetResolution: Equatable, Sendable {
+        case pending
+        /// Review is for a different scope than requested (e.g. user manually switched scope while loading).
+        case ignore
+        /// Matched a file path in the loaded review (repository-relative `GitReview.File.path`).
+        case select(String)
+        /// Review failed to load or did not contain the target file: fall back to the native file viewer for `path`.
+        case fallback(String)
+    }
+
+    /// Stable scroll anchor identifier for one file header in `ReviewPage`.
+    static func fileAnchor(_ path: String) -> String { "review-file-" + path }
+
+    /// Resolves `targetFile` (typically absolute or normalized) against the loaded review's repository root (falling
+    /// back to `cwd` when `root` is absent), selecting the matching review file or falling back to `FileViewer`.
+    static func resolveTargetFile(
+        _ targetFile: String,
+        cwd: String,
+        requestedScope: GitReviewScope,
+        currentScope: GitReviewScope,
+        phase: ReviewModel.Phase
+    ) -> TargetResolution {
+        guard currentScope == requestedScope else { return .ignore }
+        switch phase {
+        case .loading:
+            return .pending
+        case .failed:
+            return .fallback(targetFile)
+        case .loaded(let review):
+            if let wireScope = review.scope, !wireScope.isEmpty, wireScope != requestedScope.wireName {
+                return .ignore
+            }
+            let root = (review.root?.isEmpty == false) ? review.root : (cwd.isEmpty ? nil : cwd)
+            let repoRelative = TurnChanges.relative(to: root, path: targetFile)
+            if let match = review.files.first(where: { $0.path == repoRelative }) {
+                return .select(match.path)
+            }
+            return .fallback(targetFile)
+        }
+    }
+}
+
+nonisolated extension GitReviewScope {
+    var wireName: String {
+        switch self {
+        case .uncommitted: "uncommitted"
+        case .branch: "branch"
+        case .commit: "commit"
+        }
+    }
 }
 
 /// The review of one session's changes: what is compared, the answer, the drafts (kept per session in `StateCache`,
@@ -107,7 +176,7 @@ nonisolated enum ReviewLogic {
     enum Phase: Equatable {
         case loading
         case loaded(GitReview)
-        /// `code` is the hub's (`not_git`, `node_outdated`, `no_default_branch`, `no_merge_base`, `bad_base`…).
+        /// `code` is the hub's (`not_git`, `no_folder`, `node_outdated`, `no_default_branch`, `no_merge_base`, `bad_base`…).
         case failed(code: String?, message: String)
     }
 
@@ -126,6 +195,10 @@ nonisolated enum ReviewLogic {
     var picking: ReviewPick?
     /// For Since a Commit.
     var commits: [GitCommit] = []
+    /// The commits came (the list may be empty: no commit yet).
+    var commitsRead = false
+    /// Why they couldn't be listed.
+    var commitsFailure: String?
     /// Big files asked for on their own, by path.
     var loadedBig: [String: GitReview.File] = [:]
 
@@ -153,7 +226,7 @@ nonisolated enum ReviewLogic {
             phase = .loaded(r)
             stale = false
         } catch {
-            phase = .failed(code: (error as? APIError)?.code, message: error.localizedDescription)
+            phase = .failed(code: (error as? APIError)?.code, message: ReviewLogic.failureText(error))
         }
     }
 
@@ -167,16 +240,22 @@ nonisolated enum ReviewLogic {
 
     /// A big file, asked for on its own with the base pinned.
     func loadBig(_ path: String) async {
-        guard let api = api(), let base = review?.base?.hash else { return }
-        if let r = try? await api.gitReview(machine: key.machineID, cwd: cwd, scope: .commit(base), path: path),
+        guard let api = api(), let review else { return }
+        if let r = try? await api.gitReview(machine: key.machineID, cwd: cwd, scope: ReviewLogic.bigFileScope(review, current: scope), path: path),
            let f = r.files.first(where: { $0.path == path }) {
             loadedBig[path] = f
         }
     }
 
     func loadCommits() async {
-        guard commits.isEmpty, let api = api() else { return }
-        commits = (try? await api.gitLog(machine: key.machineID, cwd: cwd, skip: 0, limit: 30)) ?? []
+        guard !commitsRead, let api = api() else { return }
+        commitsFailure = nil
+        do {
+            commits = try await api.gitLog(machine: key.machineID, cwd: cwd, skip: 0, limit: 30)
+            commitsRead = true
+        } catch {
+            commitsFailure = ReviewLogic.failureText(error)
+        }
     }
 
     /// A tap on a line's number: the first starts a pick; another in the same file moves the range's other end.

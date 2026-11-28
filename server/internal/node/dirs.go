@@ -3,6 +3,7 @@ package node
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -12,20 +13,15 @@ import (
 )
 
 func (n *Node) dirs(path string) (*proto.DirList, error) {
-	if path == "" || path == "~" {
+	if path == "" {
 		path = n.home
-	} else if strings.HasPrefix(path, "~/") {
-		path = filepath.Join(n.home, path[2:])
 	}
-	path = filepath.Clean(path)
+	path = filepath.Clean(proto.ExpandHome(path, n.home))
 	ents, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
 	}
-	res := &proto.DirList{Path: path, Parent: filepath.Dir(path), Entries: []proto.DirEntry{}, Recent: n.recentDirs()}
-	if path == "/" {
-		res.Parent = ""
-	}
+	res := &proto.DirList{Path: path, Parent: directoryParent(path), Entries: []proto.DirEntry{}, Recent: n.recentDirs()}
 	for _, e := range ents {
 		name := e.Name()
 		if strings.HasPrefix(name, ".") {
@@ -50,6 +46,16 @@ func (n *Node) dirs(path string) (*proto.DirList, error) {
 		return strings.ToLower(res.Entries[i].Name) < strings.ToLower(res.Entries[j].Name)
 	})
 	return res, nil
+}
+
+// directoryParent stops browsing at a filesystem root, including Windows drives and UNC shares.
+func directoryParent(path string) string {
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	if parent == path {
+		return ""
+	}
+	return parent
 }
 
 // dirsByUse is every working directory a session on this node is known to have run in, with when it was last used
@@ -77,21 +83,35 @@ func (n *Node) dirsByUse() map[string]time.Time {
 	return last
 }
 
+// recentDirs are the directories New Agent offers as recently used: the 15 most recently used that still exist, the
+// assistant's aside. A directory reached by more than one path (a symlinked home, a bind mount, another letter case on
+// a case-insensitive disk) is one entry, under the path it was used by last and with that time (#8909).
 func (n *Node) recentDirs() []proto.RecentDir {
 	last := n.dirsByUse()
-	var out []proto.RecentDir
-	for p, t := range last {
-		if identity.IsAssistantDir(p) {
-			continue
+	paths := make([]string, 0, len(last))
+	for p := range last {
+		if !identity.IsAssistantDir(p) {
+			paths = append(paths, p)
 		}
-		if st, err := os.Stat(p); err != nil || !st.IsDir() {
-			continue
-		}
-		out = append(out, proto.RecentDir{Path: p, Name: filepath.Base(p), LastUsed: t.UTC()})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].LastUsed.After(out[j].LastUsed) })
-	if len(out) > 15 {
-		out = out[:15]
+	slices.SortFunc(paths, func(a, b string) int {
+		if c := last[b].Compare(last[a]); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+	var out []proto.RecentDir
+	var kept []os.FileInfo
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil || !st.IsDir() || slices.ContainsFunc(kept, func(k os.FileInfo) bool { return os.SameFile(k, st) }) {
+			continue
+		}
+		kept = append(kept, st)
+		out = append(out, proto.RecentDir{Path: p, Name: filepath.Base(p), LastUsed: last[p].UTC()})
+		if len(out) == 15 {
+			break
+		}
 	}
 	return out
 }

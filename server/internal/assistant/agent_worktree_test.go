@@ -9,6 +9,20 @@ import (
 	"testing"
 )
 
+func TestAgentStartPassesModelAliases(t *testing.T) {
+	s, f := newTaskService(t)
+	if _, err := s.runTool(t.Context(), "server", "conv9", "agent_start", json.RawMessage(`{"machine":"box","cwd":"/code/app","prompt":"Inspect","model_aliases":{"sonnet_model":"vendor/standard","haiku_model":"vendor/fast"}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.starts) != 1 {
+		t.Fatalf("starts: %d", len(f.starts))
+	}
+	raw, _ := json.Marshal(f.starts[0]["model_aliases"])
+	if string(raw) != `{"haiku_model":"vendor/fast","sonnet_model":"vendor/standard"}` {
+		t.Fatalf("node aliases: %s", raw)
+	}
+}
+
 // agent_start with worktree: the machine's engine makes the worktree first (named for the branch the way the dialog
 // names it, from the workspace cwd is in), then the agent starts in it, in that new workspace.
 func TestAgentStartInANewWorktree(t *testing.T) {
@@ -22,6 +36,9 @@ func TestAgentStartInANewWorktree(t *testing.T) {
 		f.worktrees[1]["method"] != DeviceWorktreeCreate || f.worktrees[1]["cwd"] != "/code/app" ||
 		f.worktrees[1]["branch"] != "fix/Login" || f.worktrees[1]["path"] != "/wt/app/fix-login" {
 		t.Fatalf("worktree calls %v", f.worktrees)
+	}
+	if f.worktrees[1]["for_agent"] != true { // the node marks its first shell as Persona's (#10624)
+		t.Fatalf("worktree.create without for_agent: %v", f.worktrees[1])
 	}
 	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/wt/app/fix-login" || f.starts[0]["workspace_id"] != "ws-new" {
 		t.Fatalf("starts %v", f.starts)

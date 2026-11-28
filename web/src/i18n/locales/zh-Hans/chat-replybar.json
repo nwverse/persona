@@ -11,11 +11,12 @@
   "cache_line": "缓存拆分：读取 {read} · 写入 {write} · 命中率 {rate}",
   "cache_line_no_rate": "缓存拆分：读取 {read} · 写入 {write}",
   "time_line": "耗时 {duration}",
+  "ttft_line": "首字延迟 {ttft}",
   "model_line": "模型：{model}",
   "models_other": "{count} 个模型",
   "suggestion_line": "建议：{suggestion}",
-  "low_cache": "缓存命中率偏低，本轮较多上下文重新计费",
-  "no_cost": "本轮费用暂不可用，仅显示用量",
-  "persona_cost": "这条回复约 {cost}，按公开价格估算",
-  "persona_title": "这条回复的估算费用"
+  "low_cache": "缓存命中率偏低，本轮有较多上下文重新计费。",
+  "no_cost": "本轮暂无法计算费用，仅显示用量。",
+  "persona_cost": "本条回复费用约 {cost}（按公开价格估算）",
+  "persona_title": "本条回复的估算费用"
 }

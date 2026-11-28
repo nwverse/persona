@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Package selection and retired drawing compatibility, run against both native apps.
 @MainActor struct PersonaSelectionTests {
@@ -130,7 +131,8 @@ import Testing
         #expect(store.current.id == "persona" && store.chosenID == id)
         let relaunched = PersonaStore(root: root, defaults: defaults)
         #expect(relaunched.current.id == "persona" && relaunched.chosenID == id)
-        #expect(defaults.string(forKey: PersonaStore.chosenKey) == id)
+        // The launch id follows what is shown; the choice is kept apart from it (#11537).
+        #expect(defaults.string(forKey: PersonaStore.chosenKey) == "persona")
 
         try list([info(id, rev: "2")], on: hub)
         await relaunched.refresh(hub.client)

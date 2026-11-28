@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -36,21 +35,38 @@ type layout struct {
 // the agents it gave last. A host that is not running (host.ErrNotRunning: herdr-core without its socket) answered: it
 // has no agents.
 func (n *Node) refreshHosts(ctx context.Context, only ...host.Host) error {
-	return n.refreshHostInventory(ctx, false, only...)
+	return n.refreshHostInventoryWithFailures(ctx, false, nil, only...)
+}
+
+// refreshHostsWithFailures refreshes only (or every host when empty) and reports which host kinds failed to answer.
+// host.ErrNotRunning counts as an answer (not a failure).
+func (n *Node) refreshHostsWithFailures(ctx context.Context, only ...host.Host) (map[string]bool, error) {
+	failed := map[string]bool{}
+	err := n.refreshHostInventoryWithFailures(ctx, false, failed, only...)
+	return failed, err
 }
 
 // refreshHostInventory retains the display's tolerant refresh by default. An
 // update evidence producer must request every host and reject cached fallbacks.
 func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...host.Host) error {
+	return n.refreshHostInventoryWithFailures(ctx, strict, nil, only...)
+}
+
+func (n *Node) nextHostSnapSeqLocked(kind string) uint64 {
+	if n.hostSnapSeq == nil {
+		n.hostSnapSeq = map[string]uint64{}
+	}
+	n.hostSnapSeq[kind]++
+	return n.hostSnapSeq[kind]
+}
+
+func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool, failed map[string]bool, only ...host.Host) error {
 	if n.sessionScope != nil {
 		if strict {
 			return errors.New("scoped node cannot attest complete host inventory")
 		}
 		return nil
 	}
-	n.mu.Lock()
-	epoch := n.engEpoch // a refresh that outlives an engine switch must not bring the old engine's agents back
-	n.mu.Unlock()
 	all := n.hosts.All()
 	if len(all) == 0 {
 		return errNoHost
@@ -59,8 +75,18 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 	if len(targets) == 0 {
 		targets = all
 	}
+	// Capture engine epoch and per-host snapshot sequence numbers before querying hosts
+	// so a delayed older snapshot cannot overwrite a newer live snapshot (#2133).
+	seqs := make([]uint64, len(targets))
+	n.mu.Lock()
+	epoch := n.engEpoch // a refresh that outlives an engine switch must not bring the old engine's agents back
+	for i, h := range targets {
+		seqs[i] = n.nextHostSnapSeqLocked(h.Kind())
+	}
+	n.mu.Unlock()
 	type outcome struct {
 		kind   string
+		seq    uint64
 		agents []host.Agent
 		full   bool
 		err    error
@@ -69,11 +95,11 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 	var wg sync.WaitGroup
 	for i, h := range targets {
 		wg.Add(1)
-		go func(i int, h host.Host) {
+		go func(i int, h host.Host, seq uint64) {
 			defer wg.Done()
-			agents, full, err := n.lookAt(ctx, h, epoch)
-			outs[i] = outcome{kind: h.Kind(), agents: agents, full: full, err: err}
-		}(i, h)
+			agents, full, err := n.lookAtSnapshot(ctx, h, epoch, seq, strict, "")
+			outs[i] = outcome{kind: h.Kind(), seq: seq, agents: agents, full: full, err: err}
+		}(i, h, seqs[i])
 	}
 	wg.Wait()
 	if strict {
@@ -110,6 +136,9 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 	if n.hostAgents == nil {
 		n.hostAgents = map[string][]host.Agent{}
 	}
+	if n.hostAgentsSeq == nil {
+		n.hostAgentsSeq = map[string]uint64{}
+	}
 	answered, snapped, firstErr := false, false, error(nil)
 	heard := map[string]bool{} // the hosts that answered: the merge asks only their panes what they run (setAgentsAt)
 	for _, o := range outs {
@@ -120,24 +149,41 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 			if firstErr == nil {
 				firstErr = o.err
 			}
-			o.agents = n.hostAgents[o.kind]
-		} else {
-			answered, snapped = true, snapped || o.full
-			n.hostAgents[o.kind] = o.agents
-			heard[o.kind] = true
+			if failed != nil {
+				failed[o.kind] = true
+			}
+			continue
 		}
+		answered, snapped = true, snapped || o.full
+		heard[o.kind] = true // its entry is this snapshot now, or a newer one
+		if o.seq < n.hostAgentsSeq[o.kind] {
+			continue // a newer snapshot of this host is in hostAgents already: it stays (#2133)
+		}
+		n.hostAgentsSeq[o.kind] = o.seq
+		n.hostAgents[o.kind] = o.agents
 	}
+	if !answered {
+		n.mu.Unlock()
+		return firstErr
+	}
+	// Merged even when every snapshot here was superseded: the refresh that superseded it may not have written agents
+	// yet, and this one's caller reads them next (sessions.list, the list engine.use sends). Before, it returned and its
+	// caller got the agents from before both, which right after an engine switch is none (#17826). The merge is of
+	// hostAgents as they are now, so of the newer snapshots, never of this refresh's older ones.
+	n.agentsGen++
+	gen := n.agentsGen
 	union := make([]host.Agent, 0)
 	for _, agents := range n.hostAgents { // hosts not in this partial refresh keep what they gave last
 		union = append(union, agents...)
 	}
 	n.mu.Unlock()
 
-	if !answered {
-		return firstErr
-	}
-	if !n.setAgentsAt(union, epoch, heard) {
+	committed, epochChanged := n.setAgentsAtGen(union, epoch, gen, heard)
+	if epochChanged {
 		return errEngineChanged
+	}
+	if !committed {
+		return nil
 	}
 	n.backfillResume(union) // herdrresume.go
 	if snapped {
@@ -146,16 +192,112 @@ func (n *Node) refreshHostInventory(ctx context.Context, strict bool, only ...ho
 	return nil
 }
 
+type paneStrictSnapshotter interface {
+	snapshotForPaneStrict(context.Context, string) (*host.Layout, error)
+}
+
+type allStrictSnapshotter interface {
+	snapshotStrictAll(context.Context) (*host.Layout, error)
+}
+
+// refreshHostForPaneStrict refreshes host h with a guaranteed fresh (non-cached) snapshot for the server or
+// named session owning paneID, refusing partial/list fallbacks and cached lastLayout fallbacks.
+func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID string) error {
+	if n.sessionScope != nil {
+		return errors.New("scoped node cannot verify live host state")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	epoch := n.engEpoch
+	seq := n.nextHostSnapSeqLocked(h.Kind())
+	n.mu.Unlock()
+	agents, full, err := n.lookAtSnapshot(ctx, h, epoch, seq, true, paneID)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err != nil {
+		if !errors.Is(err, host.ErrNotRunning) {
+			return fmt.Errorf("incomplete host inventory %s: %w", h.Kind(), err)
+		}
+		agents, full, err = nil, true, nil
+	}
+	if !full {
+		return fmt.Errorf("incomplete host inventory %s: full snapshot unavailable", h.Kind())
+	}
+	n.mu.Lock()
+	if n.engEpoch != epoch {
+		n.mu.Unlock()
+		return errEngineChanged
+	}
+	if n.hostAgentsSeq == nil {
+		n.hostAgentsSeq = map[string]uint64{}
+	}
+	if n.hostAgents == nil {
+		n.hostAgents = map[string][]host.Agent{}
+	}
+	// A newer snapshot of this host already in hostAgents stays (#2133); the merge below still runs, so the caller reads
+	// agents at least as new as this snapshot (refreshHostInventoryWithFailures, #17826).
+	if seq >= n.hostAgentsSeq[h.Kind()] {
+		n.hostAgentsSeq[h.Kind()] = seq
+		n.hostAgents[h.Kind()] = agents
+	}
+	n.agentsGen++
+	gen := n.agentsGen
+	union := make([]host.Agent, 0)
+	for _, list := range n.hostAgents {
+		union = append(union, list...)
+	}
+	n.mu.Unlock()
+	committed, epochChanged := n.setAgentsAtGen(union, epoch, gen, map[string]bool{h.Kind(): true})
+	if epochChanged {
+		return errEngineChanged
+	}
+	if !committed {
+		return nil
+	}
+	n.backfillResume(union)
+	n.panesChanged()
+	return nil
+}
+
 // lookAt is one host's agents: from a snapshot (full), which also gives the space / slot names; a host that cannot
 // snapshot (older herdr without `api snapshot`) gives its agent list instead.
 func (n *Node) lookAt(ctx context.Context, h host.Host, epoch uint64) (agents []host.Agent, full bool, err error) {
-	snap, err := h.Snapshot(ctx)
-	if err != nil {
-		agents, aerr := h.Agents(ctx)
-		if aerr != nil {
-			return nil, false, err
+	return n.lookAtSnapshot(ctx, h, epoch, 0, false, "")
+}
+
+func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch, seq uint64, strict bool, targetPane string) (agents []host.Agent, full bool, err error) {
+	var (
+		snap *host.Layout
+		serr error
+	)
+	if strict {
+		if targetPane != "" {
+			if ps, ok := h.(paneStrictSnapshotter); ok {
+				snap, serr = ps.snapshotForPaneStrict(ctx, targetPane)
+			} else {
+				snap, serr = h.Snapshot(ctx)
+			}
+		} else if as, ok := h.(allStrictSnapshotter); ok {
+			snap, serr = as.snapshotStrictAll(ctx)
+		} else {
+			snap, serr = h.Snapshot(ctx)
 		}
-		return agents, false, nil
+		if serr != nil {
+			return nil, false, serr
+		}
+	} else {
+		snap, serr = h.Snapshot(ctx)
+		if serr != nil {
+			agents, aerr := h.Agents(ctx)
+			if aerr != nil {
+				return nil, false, serr
+			}
+			n.enrichAgyPresence(ctx, h, agents)
+			return agents, false, nil
+		}
 	}
 	l := layout{spaces: map[string]host.Space{}, slots: map[string]host.Slot{}, panes: snap.Panes, paneIndex: snap.PaneIndex, at: time.Now()}
 	for _, w := range snap.Spaces {
@@ -169,13 +311,22 @@ func (n *Node) lookAt(ctx context.Context, h host.Host, epoch uint64) (agents []
 		n.mu.Unlock()
 		return nil, false, errEngineChanged
 	}
-	if n.layouts == nil {
-		n.layouts = map[string]layout{}
+	if n.hostLayoutSeq == nil {
+		n.hostLayoutSeq = map[string]uint64{}
 	}
-	n.layouts[h.Kind()] = l
+	if seq == 0 || seq >= n.hostLayoutSeq[h.Kind()] {
+		if seq > 0 {
+			n.hostLayoutSeq[h.Kind()] = seq
+		}
+		if n.layouts == nil {
+			n.layouts = map[string]layout{}
+		}
+		n.layouts[h.Kind()] = l
+	}
 	n.mu.Unlock()
 	// Panes running an agent the host does not detect (a compatible CLI) become agents of our own.
 	agents = append(snap.Agents, n.traexAgents(ctx, snap.Panes, snap.Agents)...)
+	n.enrichAgyPresence(ctx, h, agents)
 	// Retain active Claude agents when Herdr temporarily drops agent detection during tool or subshell execution (#1641).
 	return append(agents, n.claudeGraceAgents(snap.Panes, agents)...), true, nil
 }
@@ -271,10 +422,10 @@ func (n *Node) placeIn(s *proto.Session, a host.Agent) {
 	n.mu.Unlock()
 	s.SpaceKind, s.SpaceID, s.SlotID = kind, a.WorkspaceID, a.TabID
 	if wok {
-		s.SpaceName, s.SpaceIndex, s.ParentSpaceID = w.Label, w.Number, w.ParentID
+		s.SpaceName, s.SpaceIndex, s.ParentSpaceID = w.Label, int32(w.Number), w.ParentID
 	}
 	if tok {
-		s.SlotName, s.SlotIndex = t.Label, t.Number
+		s.SlotName, s.SlotIndex = t.Label, int32(t.Number)
 	}
 	s.PaneIndex = nil
 	if piok {
@@ -317,6 +468,13 @@ func (n *Node) setAgents(agents []host.Agent) {
 // another host keeps the pid its own refresh found (sessionFromKnownProcess), and is looked at again only by that
 // host's refresh. Ownership's rule 1 still asks every candidate's host (resolve).
 func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]bool) bool {
+	committed, _ := n.setAgentsAtGen(agents, epoch, 0, heard)
+	return committed
+}
+
+// setAgentsAtGen is setAgentsAt for merge gen of hostAgents (0: none). It sets nothing (committed false) when a newer
+// merge was written already, and says when the engine changed since (epochChanged).
+func (n *Node) setAgentsAtGen(agents []host.Agent, epoch, gen uint64, heard map[string]bool) (committed, epochChanged bool) {
 	fromProcess := func(pane string) string {
 		if heard == nil || heard[host.ParsePane(pane).Kind] {
 			return n.sessionFromProcess(pane)
@@ -353,6 +511,12 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 		}
 		if a.Agent == "codex" {
 			codex = append(codex, a)
+			continue
+		}
+		if a.Agent == cursorAgent || a.Agent == agyAgent { // a work agent herdr detects (workagent.go): its own row
+			if id := otherSession(a); id != "" {
+				other[id] = a
+			}
 			continue
 		}
 		if piFamily(a.Agent) { // its session: herdr's integration, or the extension in it (pi.go, pifamily.go)
@@ -407,8 +571,12 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.notePanes(unknown)
 	n.mu.Unlock()
+	var omps []familyNote
 	for _, a := range family {
 		id := n.piSession(a)
+		if a.Agent == ompAgent && a.PaneID != "" {
+			omps = append(omps, familyNote{pane: a.PaneID, session: id}) // the panes that may write a file ompdisk.go lists
+		}
 		if id == "" {
 			id = otherSession(a) // nothing reported its session yet: the pane is the row, terminal only (pi.go)
 		}
@@ -418,6 +586,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			}
 		}
 	}
+	n.noteFamilyPanes(omps)
 	for _, a := range opencode {
 		id := n.opencodeSession(a)
 		if id == "" {
@@ -475,44 +644,43 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	}
 	n.resolve(m, contested) // the owner of every session live in two hosts (ownership.go)
 	// Codex panes: the thread named in the title (what the pane shows now: a /resume in Codex changes it), else what
-	// herdr's codex integration or our own start said; only then, after every pane that could be told has its
-	// thread, the newest rollout in the directory nobody else has.
-	var unnamed []host.Agent
+	// herdr's Codex integration or our own start said. An unidentified Codex in a herdr tab has its own waiting row.
+	var unnamed, manual []host.Agent
+	if n.codices != nil {
+		n.codices.paneReads.retain(codex)
+	}
+	paneDeadline := time.Now().Add(n.codexHomeListBudget())
 	for _, a := range codex {
-		if w := n.codexWaitOf(a.PaneID); w != nil {
-			// Opened with no first message (codex_waiting.go): its row until its thread is attached, which only the look
-			// does. What herdr's integration and the pane's title name are noted for it, never taken as is.
-			named, titled := "", n.codexTitleThread(a)
-			if sid := a.SessionID(); sid != "" {
-				home := n.codexPaneHome(a.PaneID)
-				named = n.codexPublicID(home, mainThread(home, sid))
-			}
+		w := n.codexWaitOf(a.PaneID)
+		n.mu.Lock()
+		bound := n.panes[a.PaneID]
+		n.mu.Unlock()
+		reported := a.SessionID()
+		if w == nil && reported == "" && isCodexWaitID(bound) {
+			m[bound] = a
+			continue
+		}
+		look, ok := n.codexPaneIdentity(a, bound, w != nil, m, paneDeadline)
+		if w != nil {
 			n.mu.Lock()
-			w.herdr, w.titled = named, titled
+			w.herdr, w.titled = look.named, look.titled
 			n.mu.Unlock()
 			m[w.id] = a
 			continue
 		}
-		home := n.codexPaneHome(a.PaneID)
-		id := a.SessionID()
-		if id != "" {
-			id = mainThread(home, id) // a subagent's id stands for its conversation
+		if !ok {
+			continue // an unreadable or ambiguous owner cannot drive this pane
 		}
-		if id == "" {
-			n.mu.Lock()
-			id = n.panes[a.PaneID]
-			n.mu.Unlock()
-		}
-		if named := n.codexByTitle(a, id, m); named != "" {
-			id = named
-		} else if strings.LastIndex(a.Title, " | ") > 0 {
-			id = "" // an unrecognised current title must not reuse a stale pane binding either
-		}
-		if id != "" {
-			id = n.codexPublicID(home, id)
-		}
+		id := look.id
 		if _, taken := m[id]; id == "" || taken {
-			unnamed = append(unnamed, a)
+			kind := host.ParsePane(a.PaneID).Kind
+			if kind == host.Herdr || kind == host.HerdrCore {
+				if a.PaneID != "" && reported == "" && bound == "" && a.AgentStatus != proto.StatusOffline {
+					manual = append(manual, a)
+				}
+			} else {
+				unnamed = append(unnamed, a)
+			}
 			continue
 		}
 		m[id] = a
@@ -537,10 +705,48 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 			m[id] = a
 		}
 	}
+	// Session state moved to a pane's real id is written once mu is released: a write tells the hub (stateFile.persist).
+	var moved []func()
+	defer func() {
+		for _, put := range moved {
+			put()
+		}
+	}()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.engEpoch != epoch {
-		return false
+		return false, true
+	}
+	if gen != 0 {
+		// Only a newer merge already written wins. One still running does not: dropped for it, this refresh's caller
+		// would read the agents from before both (#17826).
+		if gen < n.agentsCommitted {
+			return false, false
+		}
+		n.agentsCommitted = gen
+	}
+	for id, a := range m {
+		if isCodexWaitID(id) && n.panes[a.PaneID] != id {
+			// The look for threads won a concurrent refresh. Follow the current binding, including a pane that left.
+			delete(m, id)
+			if bound := n.panes[a.PaneID]; bound != "" && !liveTaken(m, bound) {
+				m[bound] = a
+			}
+		}
+	}
+	for _, a := range manual {
+		if n.codexStarting[a.PaneID] || n.state.isLoading() {
+			continue // the app's start, or the manager's stored binding, has the identity for this pane
+		}
+		if bound := n.panes[a.PaneID]; bound != "" {
+			if !liveTaken(m, bound) {
+				m[bound] = a // another refresh already created its row or attached its thread
+			}
+			continue
+		}
+		w := n.watchManualCodexLocked(a)
+		m[w.id] = a
+		moved = append(moved, func() { n.saveManualCodexWait(w) })
 	}
 	// A pane that now runs another session than it did: rare, and the first thing to look at when a session drops off
 	// the live list while its agent runs (#5463: a tmux worker took its manager's pane).
@@ -568,11 +774,55 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 		live[a.PaneID] = true
 		if old := was[a.PaneID]; old != "" && old != id && !validID(old) && piFamily(a.Agent) {
 			n.idAlias[old] = paneAlias{id: id, pane: a.PaneID}
+			// The pane is the session's now: herdr's restore and a later send find the real id (herdrresume.go stays
+			// out of a fallback id it cannot resume).
+			n.panes[a.PaneID] = id
+			if st, ok := n.state.get(old); ok {
+				st.Pane = a.PaneID
+				moved = append(moved, func() { n.state.put(id, st) })
+			}
+			if l, ok := n.launches[a.PaneID]; ok && l.ID == old {
+				l.ID = id
+				n.launches[a.PaneID] = l
+			}
+		}
+	}
+	for pane, thread := range n.codexManual {
+		if m[thread].PaneID != pane {
+			delete(n.codexManual, pane)
+			if n.panes[pane] == thread {
+				delete(n.panes, pane)
+			}
 		}
 	}
 	for fallback, alias := range n.idAlias {
 		if !live[alias.pane] {
 			delete(n.idAlias, fallback) // its pane is gone: nothing is left to point at
+		}
+	}
+	for pane := range n.agyBound {
+		a, ok := m[otherSession(host.Agent{Agent: agyAgent, PaneID: pane})]
+		if !ok || a.Agent != agyAgent || a.PaneID != pane {
+			delete(n.agyBound, pane)
+		}
+	}
+	for pane, r := range n.agyReports { // a pane whose agent is gone, or that no engine lists any more
+		row, listed := agyRowOfPane(m, pane)
+		if listed && row.Agent != agyAgent || !listed && time.Since(r.at) > agyReportGrace {
+			delete(n.agyReports, pane)
+		}
+	}
+	// herdr's omp integration reports the session file: what resuming a stopped one needs (ompresume.go).
+	if n.ompFiles == nil {
+		n.ompFiles = map[string]string{}
+	}
+	for _, a := range agents {
+		if a.Agent == ompAgent {
+			if p := a.SessionPath(); p != "" {
+				if id := a.SessionID(); id != "" {
+					n.ompFiles[id] = p
+				}
+			}
 		}
 	}
 	n.agents = m
@@ -583,7 +833,7 @@ func (n *Node) setAgentsAt(agents []host.Agent, epoch uint64, heard map[string]b
 	for id, a := range m {
 		n.lastPanes[id] = a.PaneID
 	}
-	return true
+	return true, false
 }
 
 // liveTaken: a running agent already has session id in m. An offline one (a parked botmux session) gives way to the

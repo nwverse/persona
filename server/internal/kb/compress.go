@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/aiwire"
 	"slices"
 	"sort"
 	"strings"
@@ -18,6 +19,10 @@ import (
 type Model interface {
 	JSONMax(ctx context.Context, system, user string, maxTokens int, out any) error
 }
+
+// NewModel is a Model that calls the provider cfg names: the client the engine's models are, for a caller that has
+// only a config (a live check of the recordings' writers, which are outside this package and the core's client).
+func NewModel(cfg aiwire.Config) Model { return ai.New(cfg) }
 
 // When a chat is due for compression: enough new messages, or some new ones and a quiet while.
 const (
@@ -102,10 +107,10 @@ func settleCompression(current, snapshot *Chat) bool {
 
 // compressFailed records that compressing c (the copy the call started from) failed with err, and returns the error to
 // log. A refused snapshot is settled without a summary only when no new live work arrived; otherwise that work stays
-// eligible for another judgment. Any other failure puts the chat off (compressRetry). A paused connection or an ended
-// run changes nothing: the chat stays due.
+// eligible for another judgment. Any other failure puts the chat off (compressRetry). A paused connection, no model set
+// up and an ended run change nothing: the chat stays due.
 func (e *Engine) compressFailed(ctx context.Context, c *Chat, err error) error {
-	if ai.IsPaused(err) || ctx.Err() != nil {
+	if deferred(ctx, err) {
 		return err
 	}
 	e.Store.chatMu.Lock() // read and written whole: what archiving or a history import wrote meanwhile stays
@@ -183,18 +188,22 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 		_, err := e.putCompressed(c, func(cur *Chat) { cur.Pending = 0 })
 		return err
 	}
-	in := prompts.RenderKBCompressInput(prompts.KBCompressInput{Name: c.Name, Kind: c.Kind, Automated: c.Kind == "mail" && !HasPeople(c),
+	owner := e.knowledgeOwner()
+	in := prompts.RenderKBCompressInput(prompts.KBCompressInput{Language: owner.Language, Name: c.Name, Kind: c.Kind, Automated: c.Kind == "mail" && !HasPeople(c),
 		Pinned: c.Pinned, People: e.pinnedPeople(c.People), Projects: e.knownProjects(), Tags: e.TopTags(40), Summary: e.Store.Summary(KindChat, c.ID), News: news})
 
 	var d chatDigest
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(prompts.KBOwner{Owner: e.ownerName()}), in, 4000, &d); err != nil {
+	if err := e.modelFor("kb.compress").JSONMax(cctx, prompts.RenderKBCompress(owner), in, 4000, &d); err != nil {
 		return e.compressFailed(ctx, c, err)
 	}
-	if _, ok := e.Store.Chat(c.ID); !ok { // forgotten while the model wrote (ForgetSource): not written back
+	fresh, ok := e.Store.Chat(c.ID)
+	if !ok { // forgotten while the model wrote (ForgetSource): not written back
 		return nil
 	}
+	// Whether compression links the chat goes by the chat as it is now: a lock made while the model wrote counts.
+	link := !heldOffProjects(fresh)
 	started := *c // the chat as the model read it; c gets what compression decides, and only that is written back
 	now := time.Now().UTC()
 	if strings.TrimSpace(d.Summary) != "" {
@@ -206,7 +215,7 @@ func (e *Engine) Compress(ctx context.Context, c *Chat) error {
 	applyTags(&c.Tagging, d.Importance, int(d.Relevance), d.Tags, now)
 	if HasPeople(c) {
 		for _, p := range d.Projects {
-			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, p.Update, now)
+			slug := e.evolveProject(p.Name, p.Kind, p.Aliases, p.MyRole, c, link, p.Update, now)
 			c.Projects = addUnique(c.Projects, slug)
 		}
 	}

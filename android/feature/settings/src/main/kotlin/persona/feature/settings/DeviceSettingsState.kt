@@ -2,13 +2,54 @@ package persona.feature.settings
 
 import androidx.annotation.StringRes
 import persona.core.contracts.api.*
+import persona.core.contracts.parseTime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/** Grouping for Settings › Devices, aligned with web and Apple. */
+enum class DeviceGroupKind { Devices, Browsers, Links, Integrations }
+
+data class DeviceGroup(val kind: DeviceGroupKind, val devices: List<PairedDevice>)
+
+fun deviceGroupOf(device: PairedDevice): DeviceGroupKind = when {
+    device.role == "scoped" -> DeviceGroupKind.Integrations
+    device.kind == "web" -> DeviceGroupKind.Browsers
+    device.kind == "link" -> DeviceGroupKind.Links
+    device.kind == "phone" || device.kind == "watch" || (device.kind == "other" && device.role == "full") -> DeviceGroupKind.Devices
+    else -> DeviceGroupKind.Integrations
+}
+
+fun groupPairedDevices(devices: PairedDevices): List<DeviceGroup> {
+    val buckets = DeviceGroupKind.entries.associateWith { mutableListOf<PairedDevice>() }
+    for (device in devices.devices) {
+        buckets.getValue(deviceGroupOf(device)).add(device)
+    }
+    val currentId = devices.currentId
+    val onlineIds = devices.onlineIds
+    val order = Comparator<PairedDevice> { a, b ->
+        when {
+            a.id == currentId && b.id != currentId -> -1
+            b.id == currentId && a.id != currentId -> 1
+            (a.id in onlineIds) != (b.id in onlineIds) -> if (a.id in onlineIds) -1 else 1
+            else -> {
+                val ta = (a.lastSeen?.takeIf(String::isNotBlank) ?: a.createdAt)?.let(::parseTime)?.toEpochMilli() ?: Long.MIN_VALUE
+                val tb = (b.lastSeen?.takeIf(String::isNotBlank) ?: b.createdAt)?.let(::parseTime)?.toEpochMilli() ?: Long.MIN_VALUE
+                tb.compareTo(ta).takeIf { it != 0 } ?: a.id.compareTo(b.id)
+            }
+        }
+    }
+    return DeviceGroupKind.entries.mapNotNull { kind ->
+        val items = buckets.getValue(kind)
+        if (items.isEmpty()) null else DeviceGroup(kind, items.sortedWith(order))
+    }
+}
+
 data class DeviceSettingsUiState(
     val devices: PairedDevices? = null,
     val preferences: DeviceNotificationPreferences? = null,
+    /** The hub's low-distraction switch (#8157), for every device; null until read and on a hub without it. */
+    val lowDistraction: Boolean? = null,
     val busy: Boolean = false,
     val message: SettingsUiText? = null,
     val needsCleanup: Boolean = false,
@@ -30,6 +71,27 @@ class DeviceSettingsState(private val api: DeviceSettings?, private val unpair: 
 
     suspend fun loadPreferences() = perform(R.string.settings_notify_prefs_load_failed) {
         mutable.value = mutable.value.copy(preferences = requireNotNull(api).preferences())
+    }
+
+    /** Reads the hub's low-distraction switch; a hub without it, or one that does not answer, shows no row. */
+    suspend fun loadLowDistraction() {
+        val on = try { api?.lowDistraction() } catch (error: CancellationException) { throw error } catch (_: Exception) { null }
+        mutable.value = mutable.value.copy(lowDistraction = on)
+    }
+
+    /** Shown at once; the hub's answer then stands, and a refusal puts the switch back and says so. */
+    suspend fun saveLowDistraction(on: Boolean) {
+        val previous = mutable.value.lowDistraction
+        if (mutable.value.busy || previous == null || previous == on) return
+        perform(R.string.settings_notify_low_distraction_save_failed) {
+            mutable.value = mutable.value.copy(lowDistraction = on)
+            try {
+                mutable.value = mutable.value.copy(lowDistraction = requireNotNull(api).saveLowDistraction(on))
+            } catch (error: Exception) {
+                mutable.value = mutable.value.copy(lowDistraction = previous)
+                throw error
+            }
+        }
     }
 
     suspend fun savePreferences(next: DeviceNotificationPreferences) {

@@ -21,9 +21,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/streams"
 )
 
 // The ports the agents listen on (docs/operations/ports.md): each live agent's processes — what runs under it and what else
@@ -34,7 +36,8 @@ import (
 // (about 0.17 s of CPU with ~3,700 processes), on Windows a Toolhelp snapshot and GetExtendedTcpTable
 // (ports_windows.go). It runs every portSweep while there are live agents, and sooner
 // (portKickGap after the last) when an agent's transcript grew — a dev server is usually started by a tool call — or
-// a forward found its port gone.
+// a forward found its port gone. The host is asked for a pane's foreground processes only when its first one is no
+// longer the process it was (#5515): with agents at work, asking for each pane on each scan was ~10 herdr calls/s.
 
 const (
 	portSweep   = 15 * time.Second
@@ -58,6 +61,34 @@ type portState struct {
 	// scanErr: the last scan's error, logged when it first happens and when scans work again, not every scan
 	// (only scanPorts, on watchPorts' goroutine, touches it).
 	scanErr string
+	// roots: each live pane's foreground processes as the host last reported them (only scanPorts touches it).
+	roots map[string]paneRoots
+}
+
+// paneRoots is a pane's foreground processes and what the process table said of each then (seen[0] is the first
+// one: claude / codex itself). They are used again while the first is still there unchanged, each other one only while
+// its own entry is (a pid that exited may be reused by an unrelated process); the rest of what the scan walks (their
+// children, the processes on their terminals) comes from the process table, which every scan reads anyway.
+type paneRoots struct {
+	pids []int
+	seen []proc
+}
+
+// reuse is r's pids still in procs as they were, or ok false when the first is not (ask the host again). Dropping a
+// changed one loses nothing: the foreground processes are on the first one's terminal or under it.
+func (r paneRoots) reuse(procs map[int]proc) (kept paneRoots, ok bool) {
+	if len(r.pids) == 0 {
+		return paneRoots{}, false
+	}
+	if p, in := procs[r.pids[0]]; !in || p != r.seen[0] {
+		return paneRoots{}, false
+	}
+	for i, pid := range r.pids {
+		if p, in := procs[pid]; in && p == r.seen[i] {
+			kept.pids, kept.seen = append(kept.pids, pid), append(kept.seen, p)
+		}
+	}
+	return kept, true
 }
 
 type portProbe struct {
@@ -124,24 +155,55 @@ func (n *Node) scanPorts(ctx context.Context) (changed bool) {
 		}
 	}
 	n.mu.Unlock()
+	failed := func(err error) bool {
+		if e := err.Error(); e != n.ports.scanErr {
+			n.logger.Printf("ports: %v (logged again only if it changes)", err)
+			n.ports.scanErr = e
+		}
+		return false
+	}
+	var procs map[int]proc
+	if len(panes) > 0 {
+		var err error
+		if procs, err = listProcs(ctx); err != nil {
+			return failed(err)
+		}
+	}
 	roots := map[string][]int{}
+	kept := map[string]paneRoots{}
 	for pane := range panes {
+		if r, ok := n.ports.roots[pane].reuse(procs); ok {
+			roots[pane], kept[pane] = r.pids, r
+			continue
+		}
 		pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		pids, err := n.paneProcesses(pctx, pane)
 		cancel()
-		if err == nil && len(pids) > 0 {
-			roots[pane] = pids
+		if err != nil || len(pids) == 0 {
+			continue
+		}
+		roots[pane] = pids
+		// Kept only for the agent itself: a shell first (claude not started yet) stays while claude starts under it, and
+		// claude's own sockets would then count as the pane's servers. A process not in the table (it started after
+		// the table was read, or a host's pid from elsewhere) is asked for again next scan.
+		if lead, ok := procs[pids[0]]; ok && !shellProgram(lead.cmd) {
+			r := paneRoots{pids: pids, seen: make([]proc, len(pids))}
+			for i, pid := range pids {
+				r.seen[i] = procs[pid] // one not in the table is zero, so it is dropped on reuse
+			}
+			kept[pane] = r
 		}
 	}
+	// Saved before the listener scan, which can still fail (lsof, the Windows table; never on Linux): kept is what
+	// this scan checked against the process table, every reusable root included, so a failed scan loses nothing and
+	// the panes asked for just now are not asked again next scan. A failed process listing returns above, with the
+	// cache untouched.
+	n.ports.roots = kept
 	var found map[string][]listener
 	if len(roots) > 0 {
 		var err error
-		if found, err = scanListeners(ctx, roots); err != nil {
-			if e := err.Error(); e != n.ports.scanErr {
-				n.logger.Printf("ports: %v (logged again only if it changes)", err)
-				n.ports.scanErr = e
-			}
-			return false
+		if found, err = scanListeners(ctx, procs, roots, n.panesOfPID); err != nil {
+			return failed(err)
 		}
 	}
 	if n.ports.scanErr != "" {
@@ -155,6 +217,10 @@ func (n *Node) scanPorts(ctx context.Context) (changed bool) {
 	n.ports.byPane = next
 	return changed
 }
+
+// panesOfPID are the panes a process's engine pane variables name (its environment, cached per process), as the
+// hosts write PaneIDs.
+func (n *Node) panesOfPID(pid int) []string { return n.enginePaneRefs(paneEnvOfPID(pid)) }
 
 // portsOf is a pane's ports from the last scan.
 func (n *Node) portsOf(pane string) []proto.Port {
@@ -330,21 +396,23 @@ func pageTitle(page string) string {
 	return t
 }
 
-// scanListeners finds, for each pane, the listeners of the processes it owns (owned).
-func scanListeners(ctx context.Context, roots map[string][]int) (map[string][]listener, error) {
-	var procs map[int]proc
-	var err error
+// listProcs reads the process table.
+func listProcs(ctx context.Context) (map[int]proc, error) {
 	switch runtime.GOOS {
 	case "linux":
-		procs, err = procfsProcs("/proc")
+		return procfsProcs("/proc")
 	case "windows":
-		procs, err = winProcs()
+		return winProcs()
 	default:
-		procs, err = psProcs(ctx)
+		return psProcs(ctx)
 	}
-	if err != nil {
-		return nil, err
-	}
+}
+
+// scanListeners finds, for each pane, the listeners of the processes it owns (owned) in procs. On Windows, where Git
+// Bash breaks the process tree, also those of a process whose environment names the pane (panesOf, paneListeners).
+func scanListeners(ctx context.Context, procs map[int]proc, roots map[string][]int,
+	panesOf func(pid int) []string) (map[string][]listener, error) {
+	var err error
 	owners := map[int]string{} // pid -> pane
 	var all []int
 	for pane, pids := range roots {
@@ -362,7 +430,8 @@ func scanListeners(ctx context.Context, roots map[string][]int) (map[string][]li
 			}
 		}
 	}
-	if len(all) == 0 {
+	// Windows reads every listener anyway, and a server whose process tree Git Bash broke is in none of roots' trees.
+	if len(all) == 0 && runtime.GOOS != "windows" {
 		return nil, nil
 	}
 	var ls []listener
@@ -370,7 +439,7 @@ func scanListeners(ctx context.Context, roots map[string][]int) (map[string][]li
 	case "linux":
 		ls = procfsListeners("/proc", all)
 	case "windows":
-		ls, err = winListeners(all)
+		ls, err = winListeners(owners, roots, panesOf) // adds to owners the processes it finds by their environment
 	default:
 		ls, err = lsofListeners(ctx, all)
 	}
@@ -639,24 +708,11 @@ func procNetAddr(h string) (string, bool) {
 // portDial is port.dial: a stream (streams.Mux) to the port on this machine, at the address the scan found it on,
 // else at loopback. Only this machine's own addresses are ever dialed.
 func (n *Node) portDial(ctx context.Context, params json.RawMessage) (any, error) {
-	var p struct {
-		ID   string `json:"id"`
-		Port int    `json:"port"`
-		// The live screen (5900) is being watched: the Mac stays awake until it closes (awake.go).
-		KeepAwake bool `json:"keep_awake"`
-		// Pair ties this 5900 stream to a later screen.dial for the video channel (#3954); the node follows Screen
-		// Sharing's login on it. Empty for every other port and for 5900 without the video channel.
-		Pair string `json:"pair"`
-		// Link: the phone asked for a screen session (#6398, screenlink): the stream carries the session's framing,
-		// not Screen Sharing's bytes, and the answer says {link: 1}. Attach: a relay rejoining the live session for
-		// pair, which sends the session's token first; nothing is dialed. Only for 5900 with a pair.
-		Link   bool `json:"link"`
-		Attach bool `json:"attach"`
-	}
+	var p devicewire.PortDial
 	if err := json.Unmarshal(params, &p); err != nil || p.ID == "" || p.Port <= 0 || p.Port > 65535 {
 		return nil, errors.New("port.dial: need id and port")
 	}
-	link := p.Link && p.Port == screenPort && p.Pair != "" && n.links != nil
+	link := p.Link && p.Port == screenPort && p.Pair != "" && n.screenLinks() != nil
 	if link && p.Attach {
 		return n.reattachScreen(p.ID, p.Pair, false)
 	}
@@ -680,11 +736,21 @@ func (n *Node) portDial(ctx context.Context, params json.RawMessage) (any, error
 	}
 	if p.Port == screenPort && p.Pair != "" {
 		c = n.screens.observe(p.Pair, c) // follow Screen Sharing's login so screen.dial can bind to it (#3954)
+		if n.screenStart != nil {
+			n.askScreenPermission(p.Pair, nil) // once it signs in: macOS asks for the helper's grant, once per version
+		}
+		if n.inputs != nil {
+			c = n.inputs.wrap(p.Pair, c) // the phone's scroll records out of the stream, to Persona Input (#7775)
+		}
 	}
 	if link {
-		_, relay := n.links.Open(p.Pair, c) // the session owns Screen Sharing's connection from here
+		relay := n.screenLinks().Open(p.Pair, c) // the session owns Screen Sharing's connection from here
 		n.streams.Start(p.ID, relay)
 		return map[string]any{"link": 1}, nil
+	}
+	if tcp, ok := c.(streams.HalfCloseConn); ok && p.StreamVersion == devicewire.PortStreamHalfCloseV1 {
+		n.streams.StartHalfClose(p.ID, tcp, true)
+		return devicewire.PortDialReply{StreamVersion: p.StreamVersion}, nil
 	}
 	n.streams.Start(p.ID, c)
 	return map[string]any{}, nil
@@ -694,7 +760,7 @@ func (n *Node) portDial(ctx context.Context, params json.RawMessage) (any, error
 // its current video channel. Nothing is dialed or started; the relay must send the session's token first. session_gone
 // when there is no such session (or no live video in it): the phone starts over.
 func (n *Node) reattachScreen(id, pair string, video bool) (any, error) {
-	s := n.links.Get(pair)
+	s := n.screenLinks().Get(pair)
 	if s == nil || (video && !s.HasVideo()) {
 		return nil, &rpc.Error{Code: "session_gone", Message: "no live screen session for this pair"}
 	}

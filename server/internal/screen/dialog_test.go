@@ -251,6 +251,73 @@ func TestParseDangerousCommandPrompt(t *testing.T) {
 	}
 }
 
+const borderlessBashScreen = `────────────────────────────────────────────────
+ Bash command
+   │ target=$WORKSPACE/example.tmp
+   │ rm -- "$target"
+ Clean the temporary
+ workspace files
+
+ │ Dangerous rm operation on statically-unresolvable target: $target
+ │ Review the target before proceeding.
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No`
+
+func TestParseBorderlessCommandPrompt(t *testing.T) {
+	const bashCommand = "target=$WORKSPACE/example.tmp\nrm -- \"$target\""
+	const warning = "Dangerous rm operation on statically-unresolvable target: $target Review the target before proceeding."
+	const powershellScreen = `────────────────────────────────────────────────
+ PowerShell command
+
+   │ $target = './example'
+   │ Get-ChildItem -Path $target
+ List the example files
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No`
+	withoutDescription := strings.Replace(borderlessBashScreen, " Clean the temporary\n workspace files\n", "", 1)
+	for _, tc := range []struct {
+		name, text, command, description, warning, risk string
+	}{
+		{"Bash", borderlessBashScreen, bashCommand, "Clean the temporary workspace files", warning, RiskDelete},
+		{"Bash with an ASCII warning and no description", strings.ReplaceAll(withoutDescription, "\n │ ", "\n | "), bashCommand, "", warning, RiskDelete},
+		{"PowerShell without a warning", powershellScreen, "$target = './example'\nGet-ChildItem -Path $target", "List the example files", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := ParseDialog(tc.text)
+			if d == nil {
+				t.Fatal("no dialog")
+			}
+			if d.Command != tc.command || d.Description != tc.description || d.Warning != tc.warning || d.Risk != tc.risk {
+				t.Errorf("command %q, description %q, warning %q, risk %q", d.Command, d.Description, d.Warning, d.Risk)
+			}
+			if d.Question != "Do you want to proceed?" || len(d.Options) != 2 || d.Options[0].Label != "Yes" || d.Options[1].Label != "No" {
+				t.Errorf("question %q, options %+v", d.Question, d.Options)
+			}
+			if !strings.Contains(d.Detail, tc.command) {
+				t.Errorf("detail omits the command: %q", d.Detail)
+			}
+		})
+	}
+}
+
+func TestBorderlessCommandRevision(t *testing.T) {
+	first := ParseDialog(borderlessBashScreen)
+	changedCommand := ParseDialog(strings.Replace(borderlessBashScreen, "example.tmp", "another.tmp", 1))
+	changedWarning := ParseDialog(strings.Replace(borderlessBashScreen, "Review the target", "Check the target", 1))
+	if first == nil || changedCommand == nil || changedWarning == nil {
+		t.Fatal("no dialog")
+	}
+	if first.Rev == changedCommand.Rev {
+		t.Errorf("different commands share revision %q", first.Rev)
+	}
+	if first.Rev != changedWarning.Rev {
+		t.Errorf("changing the warning changed the revision from %q to %q", first.Rev, changedWarning.Rev)
+	}
+}
+
 // Claude Code 2.1.322's safety check on a command its parser cannot read (real captures in a private pty, the command
 // a placeholder), at 120, 100, 57 and 40 columns and a few seconds apart. 2.1.322 draws a │ before each of the
 // command's rows, as before the warning under it, so the command was read as part of the warning: no client showed
@@ -529,5 +596,59 @@ func TestDialogWhole(t *testing.T) {
 	}
 	if DialogWhole(fixture(t, "claude-2.1.312-empty-162.txt")) {
 		t.Error("no dialog is whole")
+	}
+}
+
+// A trust prompt drawn with a `>` cursor and a `↑/↓ Navigate · enter Confirm` footer (Antigravity CLI), the path
+// synthetic: its rows are options, picked by arrow moves and enter.
+const angleCursorScreen = `Accessing workspace:
+
+/work/example-project
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                                     auto · Example model · medium`
+
+func TestAngleCursorListUnderNavigateFooterIsADialog(t *testing.T) {
+	if !Choosing(angleCursorScreen) {
+		t.Fatal("the footer should say a dialog has the keyboard")
+	}
+	d := ParseDialog(angleCursorScreen)
+	if d == nil || len(d.Options) != 2 {
+		t.Fatalf("dialog %+v", d)
+	}
+	if d.Options[0].Label != "Yes, I trust this folder" || d.Options[1].Label != "No, exit" {
+		t.Fatalf("options %+v", d.Options)
+	}
+	if !slices.Equal(d.Options[0].Keys, []string{"enter"}) || !slices.Equal(d.Options[1].Keys, []string{"down", "enter"}) {
+		t.Fatalf("keys %v / %v", d.Options[0].Keys, d.Options[1].Keys)
+	}
+	// With the cursor on the second row, the first is reached by up.
+	moved := strings.Replace(strings.Replace(angleCursorScreen, "> Yes", "  Yes", 1), "  No, exit", "> No, exit", 1)
+	if d := ParseDialog(moved); d == nil || !slices.Equal(d.Options[0].Keys, []string{"up", "enter"}) {
+		t.Fatalf("moved cursor: %+v", d)
+	}
+}
+
+func TestAngleRowsWithoutNavigateFooterAreNotOptions(t *testing.T) {
+	for name, screen := range map[string]string{
+		// The input box: a `> text` row, its wrapped line lined up under it, and a status hint.
+		"input box": "Some answer\n\n> fix the login bug and\n  then run the tests\n\n  ? for shortcuts",
+		// Quoted output with `>` in it, no footer.
+		"output": "$ cat notes.md\n> first quote\n  second line\n> third quote\nDone.",
+		// The footer is there but the `>` row has no row lined up with it: nothing to choose between.
+		"single": "Pick one\n\n> only row\n\n  ↑/↓ Navigate · enter Confirm",
+		// A footer of other hints (or a `>` row far above it, under other text) is not the arrow-key list.
+		"other footer": "Pick one\n\n> Yes\n  No\n\n  Esc to cancel",
+	} {
+		if d := ParseDialog(screen); d != nil {
+			t.Errorf("%s: read as a dialog %+v", name, d)
+		}
 	}
 }

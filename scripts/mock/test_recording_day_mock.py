@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import unittest
+from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 import uuid
 
@@ -23,7 +24,7 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.call("POST", "/mock/recording_minutes", {"mode": "ready"})
         self.call("POST", "/mock/recording_day", {"on": True, "recap": "ready"})
         self.call("POST", "/mock/meeting_attendance", {"kb_read_only": False})
-        self.call("PUT", "/api/v1/assistant", {"recording_days": 14})
+        self.call("PUT", "/api/v1/assistant", {"recording_text_days": 14})
         self.now = datetime.now(timezone.utc).replace(hour=8, minute=0, second=0, microsecond=0)
         self.rid = str(uuid.uuid4())
 
@@ -258,11 +259,11 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         old = self.now - timedelta(days=30)
         self.assertEqual(self.put(started_at=old.isoformat(), day=old.date().isoformat())[1]["status"], "expired")
         self.assertEqual(self.call("GET", "/api/v1/recordings")[1]["recordings"], [])
-        self.assertEqual(self.call("PUT", "/api/v1/assistant", {"recording_days": 60})[0], 200)
+        self.assertEqual(self.call("PUT", "/api/v1/assistant", {"recording_text_days": 60})[0], 200)
         self.assertEqual(self.put(started_at=old.isoformat(), day=old.date().isoformat(), segments=[segment()])[1]["status"], "stored")
         note = str(uuid.uuid4())
         self.put(note, kind="note", started_at=old.isoformat())
-        self.call("PUT", "/api/v1/assistant", {"recording_days": 14})
+        self.call("PUT", "/api/v1/assistant", {"recording_text_days": 14})
         self.error(self.append(base=0), 400)
         out = self.append(base=99, revision=100, **{"from": 500})[1]
         self.assertEqual((out["status"], out["revision"], out["next"]), ("expired", 10, 1))
@@ -270,8 +271,13 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertEqual(self.state()["revision"], 10)
 
     def test_recap_shape_and_reconciliation(self):
-        self.put(tz="Asia/Shanghai", segments=[segment(3700, "I will write the test"), segment(1, "A meeting about exports"),
-                                               segment(7500, "A walk outside")],
+        # The day as Shanghai has it, begun at 16:00 there: a recap is final from 06:00 the next day in its zone, which a
+        # UTC date reached at 22:00 UTC (06:00 Shanghai), so this failed every day from then until midnight UTC.
+        local = datetime.now(ZoneInfo("Asia/Shanghai")).replace(hour=16, minute=0, second=0, microsecond=0)
+        day = local.date().isoformat()
+        self.put(tz="Asia/Shanghai", day=day, started_at=local.astimezone(timezone.utc).isoformat(),
+                 segments=[segment(3700, "I will write the test"), segment(1, "A meeting about exports"),
+                           segment(7500, "A walk outside")],
                  coverage={"to": 8000, "gaps": [{"from": 3000, "to": 3200, "reason": "interrupted"}]})
         detail = self.detail()
         recap = detail["recap"]
@@ -288,7 +294,7 @@ class RecordingDayMockTests(Hub, unittest.TestCase):
         self.assertIn("## Outside meetings", recap["markdown"])
         listed = self.state()
         self.assertEqual({k: listed[k] for k in ("kind", "day", "part", "base", "next", "recap_state")},
-                         {"kind": "day", "day": self.now.date().isoformat(), "part": 1, "base": 10, "next": 3, "recap_state": "ready"})
+                         {"kind": "day", "day": day, "part": 1, "base": 10, "next": 3, "recap_state": "ready"})
         self.assertNotIn("recap_final", listed)
         matches = self.call("GET", "/api/v1/kb/recordings/" + self.rid + "?q=walk")[1]["matches"]
         self.assertTrue(matches)

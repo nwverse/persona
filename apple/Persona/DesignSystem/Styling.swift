@@ -9,6 +9,10 @@ extension View {
         modifier(Surface(shape: shape, tint: tint, interactive: interactive))
     }
 
+    /// A lens gliding over a bar's items (iPhone Duo's tab bar, #9837): clear Liquid Glass in the glass styles, over the
+    /// items, bending them as it passes; in the others the style's soft pill, under them (`StyleSpec.usesGlass` says which).
+    func lensSurface<S: Shape>(in shape: S) -> some View { modifier(LensSurface(shape: shape)) }
+
     /// A list row on the style's canvas (plain lists paint rows white otherwise).
     @ViewBuilder func themedRow() -> some View {
         if StyleSpec.current.usesGlass { self } else { listRowBackground(Color.clear) }
@@ -24,6 +28,27 @@ extension View {
             self
         } else {
             scrollContentBackground(.hidden).background(Theme.pageBackground)
+        }
+    }
+}
+
+private struct LensSurface<S: Shape>: ViewModifier {
+    var shape: S
+
+    func body(content: Content) -> some View {
+        if StyleSpec.current.usesGlass {
+            #if os(visionOS)
+            content.background(.ultraThinMaterial, in: shape)
+            #else
+            if #available(iOS 26.0, *) {
+                content.glassEffect(.clear, in: shape)
+            } else {
+                // iOS 18 has no Liquid Glass (#6730): visionOS's material.
+                content.background(.ultraThinMaterial, in: shape)
+            }
+            #endif
+        } else {
+            content.background(Theme.Shell.segment, in: shape)
         }
     }
 }
@@ -44,7 +69,14 @@ private struct Surface<S: Shape>: ViewModifier {
                 .background(.regularMaterial, in: shape)
                 .hoverEffect(isEnabled: interactive)
             #else
-            content.glassEffect(glass, in: shape)
+            if #available(iOS 26.0, *) {
+                content.glassEffect(glass, in: shape)
+            } else {
+                // iOS 18 has no Liquid Glass (#6730): visionOS's material, the tint washed over it.
+                content
+                    .background { if let tint { shape.fill(tint) } }
+                    .background(.regularMaterial, in: shape)
+            }
             #endif
         case .puffy:
             // Clay: a puffy pastel slab — light from the top left, a soft shadow below in the color's wash.
@@ -77,6 +109,7 @@ private struct Surface<S: Shape>: ViewModifier {
     }
 
     #if !os(visionOS)
+    @available(iOS 26.0, *)
     private var glass: Glass {
         var g = Glass.regular
         if let tint { g = g.tint(tint) }
@@ -92,33 +125,16 @@ extension View {
     /// pill under the round ⋯ (#502). visionOS draws a glass platter under the label, a blank white pill once the
     /// tertiary ⋯ fades into it. iOS unchanged.
     @ViewBuilder func labelOnlyMenu() -> some View {
-        #if os(macOS)
-        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-        #elseif os(visionOS)
+        #if os(visionOS)
         menuStyle(.button).buttonStyle(.plain)
         #else
         self
         #endif
     }
 
-    /// A `Menu` that keeps the button the system draws for it, without the Mac's ⌄ beside the label: a ⋯ among a
-    /// toolbar's bordered buttons (the file viewer's, next to Done). iOS unchanged.
-    @ViewBuilder func arrowlessMenu() -> some View {
-        #if os(macOS)
-        menuIndicator(.hidden).fixedSize()
-        #else
-        self
-        #endif
-    }
-
-    /// A button in a settings form (`SettingsForm`): the phone's themed button; on the Mac the system's standard push
-    /// button (prominent: the default-looking one), as System Settings has them, not a tinted capsule (#1221).
+    /// A button in a settings form (`SettingsForm`): the themed button.
     @ViewBuilder func formButton(prominent: Bool = false) -> some View {
-        #if os(macOS)
-        if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
-        #else
         themedButton(prominent: prominent)
-        #endif
     }
 
     /// Glass buttons in the glass styles, bordered ones in Lark, soft raised pills in Clay / Island. Picks the system
@@ -126,15 +142,7 @@ extension View {
     /// stack overflowed (crash on opening a chat in the glass styles).
     /// Primary and secondary decisions on a pending draft use large targets, not compact utility buttons.
     @ViewBuilder func draftDecisionButton(prominent: Bool = false) -> some View {
-        #if os(macOS)
-        if StyleSpec.current.buttons == .glass {
-            buttonStyle(MacCapsuleButton(prominent: prominent, minimumHeight: Theme.Size.tapTarget)).controlSize(.large)
-        } else {
-            themedButton(prominent: prominent).controlSize(.large)
-        }
-        #else
         themedButton(prominent: prominent).controlSize(.large)
-        #endif
     }
 
     /// The style's button; capped at the interface's largest size like everything but reading content, with the Large
@@ -147,28 +155,24 @@ extension View {
         switch StyleSpec.current.buttons {
         case .glass:
             // .glassProminent keeps its full color when disabled (iOS 26.0): an empty composer's send looked tappable.
-            #if os(macOS)
-            // The Mac's glass styles took their colors from the window, not from us: the prominent one drew its label
-            // cyan on the blue (about 3.2:1), the plain one turned solid blue in the active window (2026-11-02). Both
-            // drawn here (`MacCapsuleButton`).
-            buttonStyle(MacCapsuleButton(prominent: prominent))
-            #elseif os(visionOS)
+            #if os(visionOS)
             // visionOS has no .glassProminent: its windows are glass already, and the system's prominent style is the filled one.
             if prominent { buttonStyle(.borderedProminent).modifier(DimWhenDisabled()) } else { buttonStyle(.bordered) }
             #else
-            if prominent {
-                buttonStyle(.glassProminent).modifier(DimWhenDisabled())
+            if #available(iOS 26.0, *) {
+                if prominent {
+                    buttonStyle(.glassProminent).modifier(DimWhenDisabled())
+                } else {
+                    buttonStyle(RedWhenDestructive()).buttonStyle(.glass).menuStyle(SystemStyleMenu()).modifier(LabelOffItsFill())
+                }
             } else {
-                buttonStyle(RedWhenDestructive()).buttonStyle(.glass).menuStyle(SystemStyleMenu()).modifier(LabelOffItsFill())
+                // iOS 18 has no glass buttons (#6730): the bordered style's.
+                borderedButton(prominent: prominent)
             }
             #endif
         case .bordered:
             #if os(iOS)
-            if prominent {
-                buttonStyle(.borderedProminent)
-            } else {
-                buttonStyle(RedWhenDestructive()).buttonStyle(.bordered).menuStyle(SystemStyleMenu(bordered: true)).modifier(LabelOffItsFill())
-            }
+            borderedButton(prominent: prominent)
             #else
             if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered).modifier(LabelOffItsFill()) }
             #endif
@@ -176,6 +180,16 @@ extension View {
             buttonStyle(SoftButtonStyle(prominent: prominent))
         }
     }
+
+    #if os(iOS)
+    @ViewBuilder private func borderedButton(prominent: Bool) -> some View {
+        if prominent {
+            buttonStyle(.borderedProminent)
+        } else {
+            buttonStyle(RedWhenDestructive()).buttonStyle(.bordered).menuStyle(SystemStyleMenu(bordered: true)).modifier(LabelOffItsFill())
+        }
+    }
+    #endif
 }
 
 /// A secondary glass or bordered button's label, pushed away from the fill under it (#6157): blended with it, lighter in
@@ -227,8 +241,10 @@ private struct SystemStyleMenu: MenuStyle {
     @ViewBuilder func makeBody(configuration: Configuration) -> some View {
         if bordered {
             Menu(configuration).buttonStyle(.bordered)
-        } else {
+        } else if #available(iOS 26.0, *) {
             Menu(configuration).buttonStyle(.glass)
+        } else {
+            Menu(configuration).buttonStyle(.bordered)
         }
     }
 }

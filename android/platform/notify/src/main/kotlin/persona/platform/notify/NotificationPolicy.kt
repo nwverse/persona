@@ -39,7 +39,7 @@ internal data class NotificationAction(
 internal object NotificationPolicy {
     fun expired(ix: Interaction, now: Instant = Instant.now()): Boolean = RequestExpiry.expired(ix.expiresAt, now)
 
-    fun actions(ix: Interaction): List<NotificationAction> =
+    fun actions(ix: Interaction): List<NotificationAction> = if (ix.isSecretHandoff) emptyList() else
         ApprovalPolicy.actions(AnswerEntry.Notification, ix.kind, locked = true).sortedBy { order(it.id) }.flatMap { policy ->
             fun action(key: String, label: String?, answer: AnswerAction, draft: AnswerDraft = AnswerDraft(), @StringRes labelRes: Int? = null) =
                 NotificationAction(
@@ -56,13 +56,14 @@ internal object NotificationPolicy {
                 ApprovalAction.ApproveEdits -> listOf(action(policy.id.wire, null, AnswerAction.ApproveEdits, labelRes = R.string.notify_action_approve))
                 ApprovalAction.Reject -> listOf(action(policy.id.wire, null, AnswerAction.Reject, labelRes = R.string.notify_action_reject))
                 ApprovalAction.ChooseOption -> when {
+                    AnswerRequirement.QuestionNotIrreversible in policy.requirements && ix.reversible == false -> emptyList()
                     AnswerRequirement.SingleQuestionSingleChoice in policy.requirements ->
                         ix.questions?.singleOrNull()?.takeUnless { it.multiSelect }?.let { question ->
                             question.options.take(policy.maxOptions ?: 0).mapIndexed { index, option ->
                                 action("answer.$index", option.label, AnswerAction.PickOption, AnswerDraft(optionIndex = index))
                             }
                         }.orEmpty()
-                    AnswerRequirement.PlainDialogOption in policy.requirements -> ix.dialog?.options.orEmpty()
+                    AnswerRequirement.PlainDialogOption in policy.requirements -> ix.dialog?.takeUnless { it.multi }?.options.orEmpty()
                         .filter { it.kind == null || it.kind == "" || it.kind == "plain" }
                         .take(policy.maxOptions ?: 0).map { action("option.${it.key}", it.label, AnswerAction.ScreenOption, AnswerDraft(option = it.key)) }
                     else -> emptyList()

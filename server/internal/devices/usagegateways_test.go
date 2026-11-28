@@ -3,6 +3,7 @@ package devices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -33,10 +34,10 @@ func TestMergeLocalAndGatewayAreOneAccountWhenTheResetsAgree(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	h5, d7 := now.Add(2*time.Hour), now.Add(3*24*time.Hour)
 	in := []proto.UsageAccount{
-		local("codex", "Codex Pro", now.Add(-time.Minute), uw("5h", 300, 31, h5), uw("7d", 10080, 41, d7)),
-		gw("Relay", "c1", "codex", "work seat", now.Add(-10*time.Minute), uw("5h", 300, 30, h5), uw("7d", 10080, 40, d7)),
+		local("claude", "Claude Max", now.Add(-time.Minute), uw("5h", 300, 31, h5), uw("7d", 10080, 41, d7)),
+		gw("Relay", "c1", "claude", "work seat", now.Add(-10*time.Minute), uw("5h", 300, 30, h5), uw("7d", 10080, 40, d7)),
 		// another account of the gateway: other resets
-		gw("Relay", "c2", "codex", "spare seat", now.Add(-time.Hour), uw("5h", 300, 2, now.Add(4*time.Hour)), uw("7d", 10080, 3, now.Add(5*24*time.Hour))),
+		gw("Relay", "c2", "claude", "spare seat", now.Add(-time.Hour), uw("5h", 300, 2, now.Add(4*time.Hour)), uw("7d", 10080, 3, now.Add(5*24*time.Hour))),
 	}
 	got := mergeUsageAccounts(in, now)
 	if len(got) != 2 {
@@ -299,11 +300,55 @@ func TestUsageWindowsRouteIncludesGatewayAccounts(t *testing.T) {
 	}
 }
 
+// A relay read with an ordinary API key (#12311): its key self-service document feeds the same bars, named after the
+// provider and plan, and neither the key nor the gateway's account ids reach the answer.
+func TestUsageWindowsRouteIncludesAKeysRelayAccounts(t *testing.T) {
+	now := time.Now()
+	at, reset := now.UTC().Format(time.RFC3339), now.Add(3*time.Hour).UTC().Format(time.RFC3339)
+	var paths []string
+	gate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.RequestURI())
+		if r.Header.Get("Authorization") != "Bearer an-api-key" {
+			w.WriteHeader(401)
+			return
+		}
+		if r.URL.Path != "/me/usage" {
+			w.WriteHeader(404)
+			return
+		}
+		fmt.Fprintf(w, `{"account_quota_shared":true,"accounts":[
+		 {"account_id":"acct-1","provider":"claude","plan":"max","windows":[{"kind":"five_hour","scope":"account","used_ratio":0.4,"resets_at":%[2]q,"checked_at":%[1]q},{"kind":"weekly_fable","scope":"model","scoped_model":"Fable","used_ratio":0.1,"resets_at":%[2]q,"checked_at":%[1]q}]},
+		 {"account_id":"acct-2","provider":"claude","plan":"max","windows":[{"kind":"weekly","scope":"account","used_ratio":0.83,"resets_at":%[2]q,"checked_at":%[1]q}]}]}`, at, reset)
+	}))
+	defer gate.Close()
+	h := newTestDevices(t)
+	h.usageGW.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Team relay", Type: "relay_key", URL: gate.URL + "/v1", Key: "an-api-key"}}}, h.usageWin.invalidate, h.logf)
+	h.usageGW.pollDue(context.Background(), now)
+	if len(paths) != 1 || paths[0] != "GET /me/usage" {
+		t.Fatalf("one read of the document: %v", paths)
+	}
+	mux := h.Handler(http.NotFoundHandler())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/usage/windows", nil))
+	body := w.Body.String()
+	for _, want := range []string{`"name":"Claude Max"`, `"name":"Claude Max 2"`, `"plan":"max"`, `"sources":["Team relay"]`, `"used_percent":40`, `"used_percent":83`, `"model":"Fable"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s in %s", want, body)
+		}
+	}
+	if strings.Contains(body, "an-api-key") || strings.Contains(body, "acct-") || strings.Contains(body, `"local"`) {
+		t.Errorf("the key and the gateway's ids stay out: %s", body)
+	}
+	if inv := h.usageGW.gatewayAccounts(); len(inv.Sources) != 0 || len(inv.Accounts) != 0 {
+		t.Errorf("a key sees no pool inventory: %+v", inv)
+	}
+}
+
 func TestOfflineNodeCannotClaimASource(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	var u usageWindowsHub
 	src := usageSource{id: "m1", online: true, ask: func(context.Context) (proto.UsageSnapshot, error) {
-		return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageAccount{{Provider: "codex", Name: "Codex", SampledAt: now, Sources: []string{"Relay"}, Problem: "unreachable", Windows: []proto.UsageWindow{uw("7d", 10080, 1, now.Add(time.Hour))}}}}, nil
+		return proto.UsageSnapshot{Enabled: true, Accounts: []proto.UsageNodeAccount{{UsageAccount: proto.UsageAccount{Provider: "codex", Name: "Codex", SampledAt: now, Sources: []string{"Relay"}, Problem: "unreachable", Windows: []proto.UsageWindow{uw("7d", 10080, 1, now.Add(time.Hour))}}}}}, nil
 	}}
 	got := u.poll(context.Background(), []usageSource{src}, now)
 	if len(got) != 1 || !got[0].Local || len(got[0].Sources) != 0 || got[0].Problem != "" {
@@ -379,20 +424,21 @@ func TestGatewayAccountsKeepsEachSourcesListAndMarksAFailedReadStale(t *testing.
 
 func TestUsageGatewayAccountsOverTheDevicesMethod(t *testing.T) {
 	h := newTestDevices(t)
-	out, handled, err := h.Request(context.Background(), devicewire.MethodUsageGatewayAccounts, json.RawMessage(`{}`))
-	if err != nil || !handled {
-		t.Fatalf("%v %v", handled, err)
-	}
-	b, _ := json.Marshal(out)
-	if string(b) != `{"sources":[],"accounts":[]}` {
-		t.Errorf("no sources: %s", b)
+	for _, params := range []json.RawMessage{nil, json.RawMessage(`{}`), json.RawMessage(`false`), json.RawMessage(`{"future_field":true}`)} {
+		out, handled, err := h.Request(t.Context(), devicewire.MethodUsageGatewayAccounts, params)
+		if err != nil || !handled {
+			t.Fatalf("params %s: handled %v, err %v", params, handled, err)
+		}
+		if raw, err := json.Marshal(out); err != nil || string(raw) != `{"sources":[],"accounts":[]}` {
+			t.Fatalf("params %s: no sources: %s, err %v", params, raw, err)
+		}
 	}
 }
 
 // A hub.json written before the relay type had its name still reads: any type that is not generic was the relay one.
 func TestUsageSourceConfigReadsOlderTypeNames(t *testing.T) {
 	var cfg UsageConfig
-	raw := `{"sources":[{"id":"a","type":"generic"},{"id":"b","type":"relay"},{"id":"c","type":"some-earlier-name"},{"id":"d"}]}`
+	raw := `{"sources":[{"id":"a","type":"generic"},{"id":"b","type":"relay"},{"id":"c","type":"some-earlier-name"},{"id":"d"},{"id":"e","type":"relay_key"}]}`
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +446,189 @@ func TestUsageSourceConfigReadsOlderTypeNames(t *testing.T) {
 	for _, s := range cfg.Sources {
 		got = append(got, s.Type)
 	}
-	if want := []string{"generic", "relay", "relay", ""}; !slices.Equal(got, want) {
+	if want := []string{"generic", "relay", "relay", "", "relay_key"}; !slices.Equal(got, want) {
 		t.Fatalf("types = %q, want %q", got, want)
+	}
+}
+
+// A source of type extension is asked through the manager's hook, its rows stay as the extension sent them (not merged
+// with a computer's account of the same provider) and go last, in its order.
+func TestExtensionSourceRowsAreNotMerged(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	var g usageGateways
+	asked := 0
+	g.fetchExtension = func(_ context.Context, ext, launcher string) (json.RawMessage, error) {
+		asked++
+		if ext != "example-usage" || launcher != "pool" {
+			t.Errorf("asked %q %q", ext, launcher)
+		}
+		return json.RawMessage(`{"accounts": [
+			{"provider": "claude", "name": "Pool", "headline": "available 5/6", "windows": [{"label": "5h", "used_percent": 40, "group": "5h"}, {"label": "7d", "used_percent": 10, "group": "weekly"}]},
+			{"provider": "claude", "name": "Seat 1", "notice": "no numbers"}]}`), nil
+	}
+	g.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Pool", Type: "extension", Extension: "example-usage", Launcher: "pool"}}}, func() {}, func(string, ...any) {})
+	g.pollDue(context.Background(), now)
+	got := g.accounts(now)
+	if asked != 1 || len(got) != 2 || !got[0].Pass || got[0].Sources[0] != "Pool" || got[0].Ref != "" {
+		t.Fatalf("%d %+v", asked, got)
+	}
+	machine := local("claude", "Claude", now, uw("5h", 300, 40, now.Add(time.Hour)), uw("7d", 10080, 10, now.Add(48*time.Hour)))
+	merged := mergeUsageAccounts(append([]proto.UsageAccount{machine}, got...), now)
+	if len(merged) != 3 || merged[0].Name != "Claude" || merged[1].Name != "Pool" || merged[2].Name != "Seat 1" {
+		t.Fatalf("%+v", merged)
+	}
+	if merged[1].Headline != "available 5/6" || merged[1].Windows[0].Group != "5h" || merged[1].StaleAt == nil || merged[1].ID == merged[2].ID || merged[1].ID == merged[0].ID {
+		t.Fatalf("%+v", merged[1])
+	}
+	if merged[2].Windows == nil || merged[2].Notice != "no numbers" {
+		t.Fatalf("%+v", merged[2])
+	}
+	// The hook failing keeps the last answer and says why; no hook at all is a configuration problem.
+	g.fetchExtension = func(context.Context, string, string) (json.RawMessage, error) {
+		return nil, errors.New("extension is not running")
+	}
+	g.pollDue(context.Background(), now.Add(6*time.Minute))
+	if got := g.accounts(now.Add(6 * time.Minute)); len(got) != 2 || !got[0].Stale || got[0].Problem != "unreachable" {
+		t.Fatalf("%+v", got)
+	}
+	var none usageGateways
+	none.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s2", Name: "X", Type: "extension", Extension: "e", Launcher: "l"}}}, func() {}, func(string, ...any) {})
+	none.pollDue(context.Background(), now)
+	if st := none.status("s2"); st.Error != usagesource.CodeBadConfig {
+		t.Fatalf("%+v", st)
+	}
+}
+
+func TestExtensionSourceAccountIDsSurviveReordering(t *testing.T) {
+	now := time.Now()
+	var g usageGateways
+	makeRows := func(first, second string) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{"accounts":[
+			{"provider":"claude","id":%q,"name":%q,"notice":"unavailable"},
+			{"provider":"claude","id":%q,"name":%q,"notice":"unavailable"},
+			{"provider":"claude","name":"No identity","notice":"unavailable"}]}`, first, first, second, second))
+	}
+	raw := makeRows("one", "two")
+	g.fetchExtension = func(context.Context, string, string) (json.RawMessage, error) {
+		return raw, nil
+	}
+	g.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Pool", Type: "extension", Extension: "example-usage", Launcher: "pool"}}}, func() {}, func(string, ...any) {})
+	poll := func(at time.Time) []proto.UsageAccount {
+		g.pollDue(context.Background(), at)
+		rows := mergeUsageAccounts(g.accounts(at), at)
+		if len(rows) != 3 || rows[0].ID == rows[1].ID || rows[1].ID == rows[2].ID || rows[0].ID == rows[2].ID {
+			t.Fatalf("expected three distinct account IDs, got %+v", rows)
+		}
+		return rows
+	}
+	before := poll(now)
+	raw = makeRows("two", "one")
+	after := poll(now.Add(6 * time.Minute))
+	if after[0].Name != "two" || after[0].ID != before[1].ID || after[1].ID != before[0].ID || after[2].ID != before[2].ID {
+		t.Fatalf("reorder changed identity: before %+v, after %+v", before, after)
+	}
+	raw = makeRows("one", "one")
+	duplicate := poll(now.Add(12 * time.Minute))
+	if duplicate[0].ID == before[0].ID || duplicate[1].ID == before[0].ID {
+		t.Fatalf("ambiguous extension identity was used: %+v", duplicate)
+	}
+}
+
+// manager.json's extension source keeps its extension and launcher through a read and a rewrite, and a different one is
+// another source (its samples are not the old one's).
+func TestExtensionSourceConfigRoundTrip(t *testing.T) {
+	var c UsageConfig
+	if err := json.Unmarshal([]byte(`{"sources": [{"id": "s1", "name": "Pool", "type": "extension", "extension": "example-usage", "launcher": "pool"}]}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	s := c.Sources[0]
+	if s.Type != "extension" || s.Extension != "example-usage" || s.Launcher != "pool" {
+		t.Fatalf("%+v", s)
+	}
+	other := s
+	other.Launcher = "pool2"
+	if s.fingerprint() == other.fingerprint() {
+		t.Fatal("same fingerprint")
+	}
+}
+
+// A usage extension's protection line per window reaches GET /api/v1/usage/windows as protect_percent, different per
+// account, and is absent where the extension did not say.
+func TestUsageWindowsRouteCarriesAnExtensionsProtectionLines(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	h := newTestDevices(t)
+	h.usageGW.fetchExtension = func(context.Context, string, string) (json.RawMessage, error) {
+		return json.RawMessage(`{"accounts": [
+			{"provider": "claude", "name": "Seat A", "windows": [{"label": "5h", "used_percent": 40, "protect_percent": 98}, {"label": "7d", "used_percent": 10, "protect_percent": 99}]},
+			{"provider": "claude", "name": "Seat B", "windows": [{"label": "5h", "used_percent": 5, "protect_percent": 90}, {"label": "7d", "used_percent": 20}]}]}`), nil
+	}
+	h.usageGW.init(UsageConfig{Sources: []UsageSourceConfig{{ID: "s1", Name: "Pool", Type: "extension", Extension: "example-usage", Launcher: "pool"}}}, h.usageWin.invalidate, h.logf)
+	h.usageGW.pollDue(context.Background(), now)
+	mux := h.Handler(http.NotFoundHandler())
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/usage/windows", nil))
+	var out struct {
+		Accounts []struct {
+			Name    string `json:"name"`
+			Windows []struct {
+				Label          string   `json:"label"`
+				ProtectPercent *float64 `json:"protect_percent"`
+			} `json:"windows"`
+		} `json:"accounts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || len(out.Accounts) != 2 {
+		t.Fatalf("%v %s", err, w.Body.String())
+	}
+	want := map[string]*float64{"Seat A 5h": f64(98), "Seat A 7d": f64(99), "Seat B 5h": f64(90), "Seat B 7d": nil}
+	for _, a := range out.Accounts {
+		for _, win := range a.Windows {
+			k := a.Name + " " + win.Label
+			exp := want[k]
+			if (exp == nil) != (win.ProtectPercent == nil) || (exp != nil && *exp != *win.ProtectPercent) {
+				t.Errorf("%s: protect_percent %v, want %v", k, win.ProtectPercent, exp)
+			}
+			delete(want, k)
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("windows missing from the answer: %v", want)
+	}
+}
+
+func f64(v float64) *float64 { return &v }
+
+func TestDirectUsageDiscoveryNeedsNoSavedSource(t *testing.T) {
+	now := time.Now()
+	source := NewDirectUsageSource("example-usage", "pool", "Direct pool", now)
+	installed := true
+	var g usageGateways
+	g.discoverDirect = func() []DirectUsageSource {
+		if installed {
+			return []DirectUsageSource{source}
+		}
+		return nil
+	}
+	calls := 0
+	g.fetchDirect = func(_ context.Context, got DirectUsageSource) (json.RawMessage, error) {
+		calls++
+		if got != source {
+			t.Errorf("source %+v, want %+v", got, source)
+		}
+		return json.RawMessage(`{"accounts":[{"id":"opaque","provider":"claude","name":"Direct","windows":[{"label":"5h","used_percent":20}]}]}`), nil
+	}
+	g.init(UsageConfig{}, func() {}, nil)
+	g.pollDue(context.Background(), now)
+	if rows := g.accounts(now); len(rows) != 1 || rows[0].Sources[0] != "Direct pool" || calls != 1 || len(g.config().Sources) != 0 {
+		t.Fatalf("rows=%+v calls=%d config=%+v", rows, calls, g.config())
+	}
+	source = NewDirectUsageSource(source.Extension(), source.Contribution(), source.Name(), now.Add(time.Second))
+	g.pollDue(context.Background(), source.UpdatedAt())
+	if calls != 2 {
+		t.Fatal("changed settings must invalidate and repoll the source")
+	}
+	installed = false
+	g.pollDue(context.Background(), now.Add(2*time.Second))
+	if len(g.accounts(now.Add(2*time.Second))) != 0 || calls != 2 {
+		t.Fatal("removed contribution retained usage or was polled")
 	}
 }

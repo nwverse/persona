@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Pure logic behind the intents: wording, selection rules and what each interaction kind resolves to.
 /// Everything here runs without a hub, which is why it is testable at all.
@@ -270,6 +271,15 @@ struct IntentsTests {
                         cards: [waitingCard("m", session: "muted", created: 1), waitingCard("u", session: "unknown", created: 2)],
                         visible: ["u"], first: "u"),
         ]
+    }
+
+    @Test func waitingCountsAndApprovesOnlyTheAuthoritativeCard() {
+        let original = waitingCard("original", session: "plain", created: 10)
+        var copy = waitingCard("copy", session: "persona", created: 1)
+        copy.mirrorOf = original.id
+        let waiting = IntentPicker.waiting([copy, original], sessions: waitingSessions, mutes: waitingMutes)
+        #expect(waiting.cards.map(\.id) == ["original"])
+        #expect(waiting.first?.id == "original")
     }
 
     @Test func waitingSkipsMutedAndQuietCards() {

@@ -10,6 +10,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import persona.core.inbox.*
 
 /** One instance per pairing. Its scope outlives pages and is cancelled when the pairing is discarded. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -23,7 +24,7 @@ class InboxExperienceRepository(
     invalidations: Flow<Unit> = emptyFlow(),
     /** The app's strings, for the errors the snapshot carries. */
     private val resources: Resources,
-) : InboxRepository by delegate {
+) : InboxRepository by delegate, InboxHandOffBarOwner {
     private val json = Json { ignoreUnknownKeys = true }
     private val lock = Mutex()
     private val sends = Mutex()
@@ -32,6 +33,12 @@ class InboxExperienceRepository(
     private val local = MutableStateFlow(InboxLocalState())
     override val preferences = local.map { it.preferences }.distinctUntilChanged()
     internal val composers = ReplyComposers(this, ownerScope)
+    private val bars = InboxHandOffBars(ownerScope, resources, this)
+    override val handOffBars = MutableStateFlow<InboxHandOffBars?>(bars)
+
+    /** One bar per item in this pairing: its wait and send outlive the event page, never the pairing. */
+    internal fun handOffBar(itemId: String): InboxHandOffBarModel = bars.get(itemId)
+
     private val ready = ownerScope.async {
         val document = storage.read()?.let { json.decodeFromString<InboxLocalState>(it) } ?: InboxLocalState()
         local.value = document
@@ -160,6 +167,6 @@ class InboxExperienceRepository(
 
     override suspend fun askPersona(itemId: String, action: InboxAiAction) {
         ready.await()
-        sendToPersona(itemId, action, actions.context(itemId))
+        sendToPersona(itemId, action, actions.context(itemId).text)
     }
 }

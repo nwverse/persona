@@ -4,7 +4,7 @@ because it is missing." on the mock while they were missing."""
 import json
 import os
 from pathlib import Path
-import socket
+import re
 import subprocess
 import tempfile
 import time
@@ -18,21 +18,31 @@ REQUIRED = {"id", "name", "is_group", "unread", "at_me", "muted", "preview", "is
 
 class MockHub:
     def __init__(self, **env):
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            self.port = sock.getsockname()[1]
-        self.log = tempfile.TemporaryFile()
+        # PORT=0: the hub binds a free port itself and prints it. Choosing one here and handing it over raced with the
+        # other suites of the shard, which could take it in between (the hub then failed to bind, or the health check
+        # reached someone else's listener).
+        self.log = tempfile.NamedTemporaryFile(prefix="lark-mock-", suffix=".log")
         self.process = subprocess.Popen(["python3", "-I", str(Path(__file__).with_name("mock_hub.py"))],
-                                        env=dict(os.environ, PORT=str(self.port), **env), stdout=self.log, stderr=self.log)
-        for _ in range(60):
+                                        env=dict(os.environ, **env, PORT="0"), stdout=self.log, stderr=self.log)
+        self.port = None
+        for _ in range(100):
             if self.process.poll() is not None:
-                raise RuntimeError("mock hub exited before startup")
-            try:
-                with urlopen(self.url("/api/v1/health"), timeout=1):
-                    return
-            except (URLError, TimeoutError):
-                time.sleep(0.1)
+                raise RuntimeError("mock hub exited before startup: " + self.output())
+            if self.port is None:
+                found = re.search(r"^mock hub on 127\.0\.0\.1:(\d+)$", self.output(), re.M)
+                self.port = int(found.group(1)) if found else None
+            if self.port is not None:
+                try:
+                    with urlopen(self.url("/api/v1/health"), timeout=1):
+                        return
+                except (URLError, TimeoutError):
+                    pass
+            time.sleep(0.1)
+        self.stop()
         raise RuntimeError("mock hub startup timed out")
+
+    def output(self):
+        return Path(self.log.name).read_text(errors="replace")
 
     def url(self, path):
         return f"http://127.0.0.1:{self.port}{path}"
@@ -94,6 +104,10 @@ class LarkChatListTests(unittest.TestCase):
     def test_the_topic_group_chats_decode(self):
         self.check(MOCK_LARK_TOPIC="1")
 
+    def test_the_rich_page_and_the_topic_group_decode_together(self):
+        """PerfInbox's mock: MOCK_LARK answers /api/v1/lark/… first and must still serve f4 (#8561)."""
+        self.check(MOCK_LARK="1", MOCK_LARK_TOPIC="1", MOCK_LARK_RICH="1")
+
 
 class LarkTopicGroupTests(unittest.TestCase):
     """MOCK_LARK_TOPIC=1 (#1087): the topic group the topic cards are drawn from."""
@@ -138,6 +152,37 @@ class LarkTopicGroupTests(unittest.TestCase):
         hub = MockHub()
         self.addCleanup(hub.stop)
         self.assertNotIn("f4", [c["id"] for c in hub.get("/api/v1/lark/conversations")["conversations"]])
+
+    def test_the_rich_feishu_page_still_serves_the_topic_group(self):
+        """MOCK_LARK=1 used to swallow /api/v1/lark/conversations and f4's topics (#8561)."""
+        hub = MockHub(MOCK_LARK="1", MOCK_LARK_TOPIC="1", MOCK_LARK_RICH="1")
+        self.addCleanup(hub.stop)
+        listed = hub.get("/api/v1/lark/conversations")
+        self.assertEqual(listed.get("account_id"), "mock-lark-account")
+        chats = listed["conversations"]
+        self.assertIn("f3", [c["id"] for c in chats])
+        chat = next(c for c in chats if c["id"] == "f4")
+        self.assertTrue(chat["is_topic"])
+        page = hub.get("/api/v1/lark/conversations/f4/messages?topic=1")
+        self.assertTrue(page["topic"])
+        self.assertEqual([m["position"] for m in page["messages"] if m.get("sender_type") == "bot"], ["401", "402", "403"])
+        hiking = hub.get("/api/v1/lark/conversations/f3/messages")
+        self.assertTrue(hiking["has_older"])
+        self.assertEqual(len(hiking["messages"]), 40)
+
+    def test_plain_mock_lark_keeps_the_rich_page_body(self):
+        """Without TOPIC/RICH, MOCK_LARK's conversations, f3 page and threads stay as they were on main."""
+        hub = MockHub(MOCK_LARK="1")
+        self.addCleanup(hub.stop)
+        listed = hub.get("/api/v1/lark/conversations")
+        self.assertEqual(set(listed), {"conversations", "next_cursor"})
+        self.assertEqual([c["id"] for c in listed["conversations"]], ["f1", "f2", "f3"])
+        hiking = hub.get("/api/v1/lark/conversations/f3/messages")
+        self.assertFalse(hiking["has_older"])
+        self.assertLessEqual(len(hiking["messages"]), 40)
+        thread = hub.get("/api/v1/lark/messages/lm_f2_187/thread")
+        self.assertEqual([m["id"] for m in thread["messages"] if m], ["lm_f2_187", "lm_f2_1871", "lm_f2_1872"])
+        self.assertFalse(thread["has_older"])
 
 
 class LarkDeliveryProofTests(unittest.TestCase):

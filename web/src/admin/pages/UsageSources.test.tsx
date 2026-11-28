@@ -127,13 +127,40 @@ describe("the usage sources page", () => {
     expect(input("Key").type).toBe("password");
     await act(async () => byText(dialog()!, "测试连接")!.click());
     await flush();
-    expect(dialog()!.textContent).toContain("连上了：12 个账号、31 个窗口 (codex 8 · claude 4)");
+    expect(dialog()!.textContent).toContain("连接成功：12 个账号，31 个窗口 (codex 8 · claude 4)");
     expect(calls.find((c) => c.path === "/usage-sources/test")?.body).toMatchObject({ type: "relay", url: "https://gateway.example.com/", key: SECRET });
     expect(calls.some((c) => c.method === "POST" && c.path === "/usage-sources")).toBe(false);
     await act(async () => (byText(dialog()!, "保存") as HTMLButtonElement).click());
     await flush();
     expect(calls.find((c) => c.method === "POST" && c.path === "/usage-sources")?.body).toMatchObject({ type: "relay", url: "https://gateway.example.com/", key: SECRET });
     expect(dialog()).toBeNull();
+  });
+
+  it("adds a relay read with an API key (#12311): its key is required, and a test says when the key shares no allowances", async () => {
+    testAnswer = { ok: true, accounts: 0, windows: 0, listed: 0, providers: {}, quota_hidden: true };
+    await open();
+    await act(async () => byText(host, "添加来源")!.click());
+    await flush();
+    const relayKey = [...dialog()!.querySelectorAll<HTMLElement>('[role="radio"]')].find((b) => b.textContent === "中转（API Key）")!;
+    await act(async () => relayKey.click());
+    await flush();
+    expect(relayKey.getAttribute("aria-checked")).toBe("true");
+    expect(dialog()!.textContent).toContain("启动器使用的 Base URL");
+    expect(dialog()!.textContent).toContain("无需管理 Key");
+    await typeInto(input("地址"), "https://relay.example.com/v1");
+    const test = byText(dialog()!, "测试连接") as HTMLButtonElement;
+    const save = byText(dialog()!, "保存") as HTMLButtonElement;
+    expect(test.disabled).toBe(true); // no key yet
+    expect(save.disabled).toBe(true);
+    await typeInto(input("Key"), SECRET);
+    expect(test.disabled).toBe(false);
+    await act(async () => test.click());
+    await flush();
+    expect(dialog()!.textContent).toContain("中转尚未对此 Key 开放账号额度");
+    expect(calls.find((c) => c.path === "/usage-sources/test")?.body).toMatchObject({ type: "relay_key", url: "https://relay.example.com/v1", key: SECRET });
+    await act(async () => save.click());
+    await flush();
+    expect(calls.find((c) => c.method === "POST" && c.path === "/usage-sources")?.body).toMatchObject({ type: "relay_key", key: SECRET });
   });
 
   it("says why a test failed", async () => {
@@ -145,7 +172,7 @@ describe("the usage sources page", () => {
     await typeInto(input("Key"), "wrong");
     await act(async () => byText(dialog()!, "测试连接")!.click());
     await flush();
-    expect(dialog()!.textContent).toContain("没连上：Key 不对或已过期");
+    expect(dialog()!.textContent).toContain("连接失败：Key 错误或已过期");
   });
 
   it("does not take an address with a password in it", async () => {
@@ -153,7 +180,7 @@ describe("the usage sources page", () => {
     await act(async () => byText(host, "添加来源")!.click());
     await flush();
     await typeInto(input("地址"), "https://me:pw@gateway.example.com");
-    expect(dialog()!.textContent).toContain("不能带用户名和密码");
+    expect(dialog()!.textContent).toContain("不能包含用户名和密码");
     await typeInto(input("Key"), SECRET);
     expect((byText(dialog()!, "保存") as HTMLButtonElement).disabled).toBe(true);
   });
@@ -167,7 +194,7 @@ describe("the usage sources page", () => {
     expect(input("Key").placeholder).toContain("已保存");
     expect((byText(dialog()!, "保存") as HTMLButtonElement).disabled).toBe(false); // the saved key stands
     await typeInto(input("地址"), "https://other.example.com");
-    expect(dialog()!.textContent).toContain("要重新填 Key");
+    expect(dialog()!.textContent).toContain("请重新输入 Key");
     expect((byText(dialog()!, "保存") as HTMLButtonElement).disabled).toBe(true);
     await typeInto(input("Key"), SECRET);
     expect((byText(dialog()!, "保存") as HTMLButtonElement).disabled).toBe(false);
@@ -286,6 +313,20 @@ describe("the usage sources page", () => {
   it("invites adding one when there are none", async () => {
     view.sources = [];
     await open();
-    expect(text()).toContain("还没有来源");
+    expect(text()).toContain("暂无用量来源");
+  });
+
+  it("writes usage.hidden_providers from one switch per provider (#13173)", async () => {
+    view = { ...fresh(), providers: ["claude", "codex", "xai"], hidden_providers: ["codex"] };
+    await open();
+    const switches = () => [...host.querySelectorAll<HTMLElement>('[role="switch"]')];
+    // the master switch, then one per provider in order (claude, codex, xai), then one per source
+    expect(switches().slice(1, 4).map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "false", "true"]);
+    await act(async () => switches()[3].click()); // hide xai
+    await flush();
+    expect(calls.filter((c) => c.method === "PUT" && c.path === "/usage-sources").at(-1)?.body).toEqual({ hidden_providers: ["codex", "xai"] });
+    await act(async () => switches()[2].click()); // show codex again
+    await flush();
+    expect(calls.filter((c) => c.method === "PUT" && c.path === "/usage-sources").at(-1)?.body).toEqual({ hidden_providers: ["xai"] });
   });
 });

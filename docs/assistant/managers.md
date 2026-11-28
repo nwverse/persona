@@ -14,9 +14,19 @@ The document uses Settings CAS and a revision; at most 200 active records contai
 instance, full namespace path, canonical URL, optional name/aliases/purpose and `verified_at`. No credentials,
 computer or checkout are stored. HTTP(S), `git@host:path.git` and `ssh://git@host/path.git` normalize to the same
 identity. GitHub Enterprise and self-hosted GitLab require an explicit provider; nested GitLab groups are preserved.
+A provider extension (#10330, `docs/extensions/repository-providers.md`) is the source of the hosts it claims: an
+address on one of them with no provider chosen goes to it (`repo.parse`, then `repo.check` when saving), its provider
+is `ext:<extension>/<contribution>`, and its name is kept as `provider_name`. An explicit `github` / `gitlab` still wins.
+While that extension is off or gone, its saved references still list, edit (name, aliases, purpose) and bind to
+to-dos; only adding one, changing its address or checking it fails (`repository_provider_off` /
+`repository_no_provider`). Right after a restart, a save that needs a provider waits for the extensions within its
+eight-second budget and, if they are still starting, answers `repository_providers_starting` (409), never
+`repository_no_provider`.
 
-The web form parses locally on every URL/provider change and immediately shows the provider, full repository path,
-canonical web root and an explicit not-yet-checked state. No preview button or remote request is needed. The server
+The web form parses GitHub and GitLab addresses locally on every URL/provider change and immediately shows the
+provider, full repository path, canonical web root and an explicit not-yet-checked state; no remote request is needed
+for them. An address on a provider extension's host, or with one picked, is read through `/preview` before Save is
+enabled; the page lists the sources only once such an extension or a saved row of one exists. The server
 reparses on preview and save; both parsers share `spec/fixtures/repository-remotes.json`. GitHub repository pages
 (such as `/pull/5581`) and GitLab's `/-/` project pages discard their page suffix, ordinary query and fragment.
 GitLab paths without `/-/` keep every namespace segment; ambiguous old page URLs are not guessed by taking two
@@ -45,7 +55,8 @@ The shared server routes serve every caller; repository binding UI currently exi
 Android. Browser fixtures cover synthetic saves, while Go route and isolated database tests cover persistence.
 
 The manager-owned `/api/v1/assistant/repositories` routes list/create; `/{id}` reads/updates/unbinds;
-`/preview` parses without contacting a remote. Mutations require full access. `/{id}/restore` accepts the unbind
+`/preview` parses without contacting a remote (a provider extension's address is read by that extension, answering
+`provider_name` beside the identity); `GET /providers` lists the sources (`docs/protocol/protocol.md`). Mutations require full access. `/{id}/restore` accepts the unbind
 receipt once within ten minutes and restores the original ID and verification evidence, without a new probe.
 The latest 20 removed references are retained for undo. A failed persistence acknowledgement is not success.
 
@@ -68,12 +79,40 @@ The exact HTTP(S) instance (including nondefault port) and private CIDR must bot
 CIDRs cannot opt in private networks. Configure only infrastructure the operator trusts; this is not a connector
 or sign-in system. Public-only installations need no configuration.
 
+Built-in GitLab also reads a task's merge request when its delivery is checked (#11584,
+`server/internal/assistant/code_host_gitlab.go`): on gitlab.com, and on the self-hosted instances this manager's
+`manager.json` names. `token_file` (0600, read at each call, never logged or shown to a model) holds a token with
+`read_api`; without one only public projects answer. A private instance also needs its `repository_trusted_targets`
+entry above.
+
+```json
+{"gitlab":{"instances":[{"instance_url":"https://gitlab.example.com","token_file":"~/.persona/gitlab.token"}]}}
+```
+
+The remote image route (`docs/protocol/protocol.md` "Remote images (#9473)") asks a DNS-over-HTTPS service for a picture
+host's real addresses when this machine's resolver answers only a fake-IP proxy's (#9550). `remote_images.doh` in this
+manager's `manager.json` names that service's JSON API; without it `https://dns.alidns.com/resolve` is asked, and `""`
+asks none (those pictures are then refused). The service learns the host names of the pictures looked up this way:
+
+```json
+{"remote_images":{"doh":"https://dns.alidns.com/resolve"}}
+```
+
 Read-only MCP `repositories_list(query?, cursor?, limit?)` and `repository_get(id)` return only this manager's saved
 metadata. Search covers name, aliases, namespace path and purpose (200-character query, at most 50 records/page).
 Cursors are bounded and tied to query/document revision; edits invalidate old cursors. Neither tool accepts a
 manager selector or fetches source. Their descriptions and the existing `task_plan` description guide identity
 resolution: explicit user URLs/paths win, references grant no authorization, and machine/cwd must never be inferred.
 There is no forced lookup preflight, injected list, new prompt or launcher-dependent behavior.
+
+Assistant-only MCP `repository_add(url, provider?, name?, aliases?, purpose?)` (an address on a provider extension's
+host needs no provider) adds a reference through the same
+`saveRepository` service, including normalization, anonymous existence checks, uniqueness, limits and CAS. The
+permission card shows the canonical repository URL and proposed details; only the user's own approval saves it.
+It neither clones nor grants access. The saved ID and verification time are returned and immediately visible to
+Settings and the existing retrieval tools. On a lost/uncertain response, list/get before retrying; duplicates are
+refused. Remove the binding in Settings to reverse the addition. No manager, machine, credential or verification
+selector is accepted from the model.
 
 ## Steps
 
@@ -84,10 +123,12 @@ There is no forced lookup preflight, injected list, new prompt or launcher-depen
 
 ## Roster
 
-The roster is the bus's identity table `bus_identities` (`docs/protocol/protocol.md`, "Bus"): every row with role `manager` is a manager. Migration 0419 adds where its last handshake said it runs (`host`, `os`, `arch`, `deploy`, `version`) and `last_seen` (recorded on handshake and on disconnect), so the app can show an offline manager's place and "Last synced…".
+The roster is the bus's identity table `bus_identities` (`docs/protocol/protocol.md`, "Bus"): every row with role `manager` is a manager. Migration 0419 adds where its last handshake said it runs (`host`, `os`, `arch`, `deploy`, `version`) and `last_seen` (recorded on handshake and on disconnect), and a later migration adds `machine_uid` (the host's `~/.persona/machine-uid` when present, additive/omitempty), so clients can correlate hosted managers with their host computer even when display names differ and still show an offline manager's place and "Last synced…". While connected, the hub also keeps ephemeral `pending_restart` in memory (`manager.hello` and live `manager.status` events), cleared on disconnect.
 
+- `extension_info_access_scoped` is true in `GET /api/v1/managers` for a connected Assistant when the hub enforces the scoped authorization contract and that Assistant advertises `extension_info_access_scoped` in `manager.hello`. Clients can offer information-access settings for a non-default Assistant once its roster entry reports this capability and its explicitly targeted trust list loads. An absent field keeps the legacy entry rules. The capability is independent of the `integrations_v2` Labs setting.
 - The hub gives the assistant it starts a new token on every start, but **the name stays**: a name the user gave it is kept.
 - Manager ids: `m-` plus 6 hex digits for one made in the app; `assistant` for the hub's own.
+- **The hub's own can be kept out of the switcher while it is not used (#9055)**: `PATCH /api/v1/managers/assistant {"hide": true}` stores the choice in the hub's settings (`managers.builtin_hide`). The roster then says `hide` and, while it is not the default, owns no machine and has nothing in its inbox that needs the user (`inbox_needs_you`), `hidden`. A machine that falls back to it (its manager revoked) or making it the default shows it again, the choice kept. It is refused (`409 builtin_in_use`) while it is in use; showing it again always works. It stays the carrier, and nothing else changes.
 - Names: 1–40 characters, no control characters (C0 or C1) and no bidirectional formatting characters.
 
 ## Install codes
@@ -225,6 +266,7 @@ The answers of `POST /api/v1/managers` and `POST /api/v1/managers/{id}/code` car
 
 - `personad manager join <hub> <code> [--dir D] [--database-url U] [--fingerprint F] [--install]`: first checks that there will be a database (no Docker and no `--database-url`: it stops without using the code, exit 2), then trades the code and writes `manager.json`. A directory that is already another manager's is not overwritten: the new manager goes to its own default directory.
 - `personad manager run [--dir D] [--join <hub> <code>]`: runs it. `--dir` can be left out when this computer has only one manager. `--join`: trades the code first when the directory has no `manager.json` yet (a container runs the same command on every start, and from the second start on the join is skipped). Configuration mistakes (no `manager.json`, no database to use) exit 2, which the systemd service doesn't restart (`RestartPreventExitStatus=2`). A container's `--restart unless-stopped` restarts on exit 2 too, so when the join itself can't work (the code was used or expired, a plaintext join was refused, no database it can have) `run --join --dir D` prints one line and waits, polling `D`'s `manager.json` as it does after a revoke (without `--dir` it exits 2: there is no directory to wait on, and it never takes up another manager's). Get a new code in the app, then run the new install command (the docker script makes again a manager container that never joined, see "Containers"), or write `manager.json` into the directory with `personad manager join <hub> <new code> --dir <its directory>`.
+  - **Following a co-located node Redeploy (supervised service mode, #14963)**: when `personad manager run` runs under a service supervisor (`PERSONA_ASSISTANT_DEPLOY=service`, as set by `personad manager install`'s systemd unit and launchd plist, and never for one-shot CLI runs, Docker containers, hub child processes or development trial workers), it records its startup executable identity (`dev`/`ino` on Unix, size/mtime fallback) and checks the path on disk every minute. If the executable was atomically replaced by a different, valid binary (regular executable file whose `version -v` answers within 30 seconds), it never interrupts active assistant turns or supervision work: when idle it stops and exits cleanly so systemd/launchd starts the new binary automatically; while busy it immediately reports `pending_restart: true` to the hub (`manager.status` and `manager.hello` across reconnects) and exits cleanly as soon as it becomes idle (cancelling `pending_restart` if the file on disk is reverted or removed before idle). A restart-loop guard (`.binary-restart.json` in the manager's directory plus re-verification after stopping) prevents repeated restarts onto a broken binary or a binary already attempted within 5 minutes.
 - `personad manager install [--dir D]`: first sets up its database (its own container, see "Database"; a database it was given is just used), then on Linux writes the systemd user unit `persona-manager-<id>.service` (`Restart=always`, `RestartPreventExitStatus=2`, with a reminder about linger); on a Mac the launchd agent `com.persona.manager.<id>` (its log is `manager.log` in its directory). The binary it runs is the hub machine's `~/.persona/bin/personad` when there is one (so it upgrades with the hub), else the current one. On other systems, or without a systemd user instance, it says how to keep it running yourself.
 - `personad manager uninstall [--dir D] [--purge]`: stops and removes the service and says what happens to the data. Its database container is stopped and **its volume, with all the data, stays**; `install` again picks it up. **`--purge` removes the container and the volume**, so the data is gone and the next install starts with an empty database. A database given with `--database-url` is never touched. The directory stays either way (deleting the manager in the app is what makes the hub stop accepting its token).
 - `personad manager status [--dir D]`: this computer's managers, with directory, hub, database (and whether its container runs; Docker not running or missing is said as such) and service state.
@@ -246,7 +288,7 @@ To remove it: `docker rm -f persona-mgr-<id> persona-mgr-<id>-pg && docker netwo
 
 The built-in manager runs on the hub's machine: its extensions call the hub there (`hub.json`'s `listen`), with a token of the scopes they were granted or, the old way (`hub_api`, the extensions in `manager.json`), the hub's own token (`docs/extensions/extensions.md`, "Permissions"). Another manager has neither: it may run on another computer and reach the hub only at its `manager.json`'s `hub`, across the internet with a pinned key the extensions don't know, and it never has the hub's token. So its extensions reach the hub through it: it is **relayed** (`extmgr` `relayed()`). Every manager but the built-in one is relayed; the built-in one becomes relayed with that one switch once it is a service of its own (step 3), and until then its extensions get exactly what they always did.
 
-- **The token** is made by the manager each time it starts the extension's program, kept in its memory only (nothing written to its directory or any `hub.json`; its database records the token's SHA-256 and what it was for, never the token, and nothing recorded is read back as a credential: `extension_tokens`, `docs/extensions/extensions.md` "Permissions"), and dropped when the extension stops for good, is switched off, upgraded, reconfigured or uninstalled. It opens what the extension was granted and no more: the scopes its manifest asks for and the user agreed to (`permissions.hub`). Only an extension that asks for no scope but for the hub's full token the old way (`hub_api`, and the extensions written in `manager.json`) gets a token of **every scope** instead of the hub's own: every route an extension may be granted (`extwire.RouteScopes`, any `extensions.call:<id>` too) but `agents.permission_mode`'s, which an extension gets only when its manifest names it, none of those open to full credentials only (pairing, tokens, managers, the admin pages, `/api/v1/ws`…; `TestAllScopesOpenNoFullOnlyRoute` goes through every route the hub lists). The manager never hands out its bus token, and a token in a `hub.json` that happens to be in its directory is not read for this.
+- **The token** is made by the manager each time it starts the extension's program, kept in its memory only (nothing written to its directory or any `hub.json`; its database records the token's SHA-256 and what it was for, never the token, and nothing recorded is read back as a credential: `extension_tokens`, `docs/extensions/extensions.md` "Permissions"), and dropped when the extension stops for good, is switched off, upgraded, reconfigured or uninstalled. It opens what the extension was granted and no more: the scopes its manifest asks for and the user agreed to (`permissions.hub`). Only an extension that asks for no scope but for the hub's full token the old way (`hub_api`, and the extensions written in `manager.json`) gets a token of **every scope** instead of the hub's own: every route an extension may be granted (`extwire.RouteScopes`, any `extensions.call:<id>` too) except the named-only `agents.permission_mode`, `assistant.start_defaults`, `decisions.raise`, `dispatch.guard`, `push.grading` and `market.refresh_own`, which an extension gets only when its manifest names them and the owner approves them; none of those open to full credentials only (pairing, tokens, managers, the admin pages, `/api/v1/ws`…; `TestAllScopesOpenNoFullOnlyRoute` goes through every route the hub lists). The manager never hands out its bus token, and a token in a `hub.json` that happens to be in its directory is not read for this.
 - **The address** is the manager's relay to the hub (`internal/extension/hubrelay`): it listens on the loopback, on a port the system picks, once an extension needs it, and passes each request (WebSockets too) on to its `manager.json`'s `hub` with its own client, the one that pins the hub's key. It passes on only the hub's API (`/api/…`, no `.` or `..` segment) with a live token of one of its own extensions (the header, else `?token=`, as the hub reads them), as the extension sent it: no cookie, no `X-Forwarded-*`, nothing of the extension's making but the request. Anything else gets 401 or 404 from it and never reaches the hub. While the manager is off the hub's bus (a hub restart, a network blip) it answers `503 manager_offline` with `Retry-After` itself and sends nothing on: the hub could not ask it whose a token is. A hub can also lose the manager before the manager notices (it crashed and came back, the connection is half open: the manager's keepalive finds out within a minute or so). So when the hub's auth layer refuses a token the relay knows (`401`, or `503 manager_offline`), the relay holds its extensions' requests the same way until the manager's next bus connection, or for a minute at most (a refusal that was not about the connection); a refusal of a token that went meanwhile (its extension stopped), or of a request sent on an earlier connection than the manager's now (it came back after a reconnect), holds nothing. The hub's auth layer says it is its own refusal with `X-Persona-Auth-Refused` (`token` on the 401, `manager_offline` on the 503) and takes that header off every other response, a manager's or an extension's passed on included, as the response's head actually leaves (outside gzip, which may hold it back): a `401` that comes from further on (a route whose own upstream refused its token) holds nothing. The extensions get it as `PERSONA_HUB_URL` and in `initialize`'s `hub.url`; the sandbox's egress proxy points `hub.persona.internal` at it.
 - **The proof**: on each request the relay adds `X-Persona-Manager-Proof` (`extwire` `SignProof`): an HMAC-SHA256 over the method, the path with its query, the hash of the extension's token, a time and a random nonce, with the manager's id. Its key is made from the manager's bus token (`extwire.ProofKey`: an HMAC of a fixed label keyed by the token); the token itself is never sent. The hub makes the same key from the token as the manager connects and keeps it with that connection, in memory only: it is not the hash of the token the hub's database keeps, so reading the database or a backup forges no proof. An extension never sees it and cannot make one. The proof is set as each request goes out, so a bodiless `GET` or `HEAD` the hub refuses as sent before (`proof_replayed`: the transport may send a request again, nonce and all, on a connection that dropped) is sent once more with a new one.
 - **Who it is**: the extensions of a manager other than the built-in one get `PERSONA_MANAGER=<id>` and `initialize`'s `hub.manager`; the built-in manager's get neither, as before.
@@ -255,6 +297,20 @@ The built-in manager runs on the hub's machine: its extensions call the hub ther
 - **Never logged**: neither the relay nor the hub logs a token, a proof or its key (the relay says only the method of a request that failed, the hub never logs headers and only fixed paths for refusals), and the token is not in the program's start environment the manager keeps, only in the one it hands the program each start. The tests look for them in every log line.
 
 Not yet covered: the built-in voice extension (off until it is turned on) also calls routes open to full credentials only (`/api/v1/ws`, `/api/v1/channels`, `/api/v1/agents/triage`). Turned on in another manager, those calls are refused.
+
+### Extension information access
+
+`GET /api/v1/assistant/extension-trust` and `PUT /api/v1/assistant/extension-trust/{id}` require a full-access client.
+The request's Assistant owns the trust and category grants. Use `X-Persona-Manager` to name the Assistant, including
+the default Assistant when addressing a known owner.
+
+For reads served by the hub, `extensions.authorize` adds an optional `owner` boolean. The Assistant that recognizes
+the token reads the current trust row from its own database. A current Assistant grants the extra reads through
+`owner: true` and the existing route scope on a live connection. A missing trust row or a failed lookup produces
+`owner: false`. An older Assistant that omits the verdict can establish owner trust through `Profile.ExtensionOwners`
+in its latest snapshot on the same connection. A missing profile, a disconnected or replaced connection, or an
+advertised capability with a missing verdict leaves the extension with ordinary third-party access. Current
+Assistants still send `Profile.ExtensionOwners` for older hubs.
 
 ### After it is revoked
 
@@ -308,9 +364,44 @@ On an upgraded install the manager's `secret.key` began as the same bytes as the
 
 ## Automatic updates for an independent manager
 
-An independent manager's executable is separate from the Hub and the node. Updating either
-of those does not update that manager. Older `manager run` processes have no update command
-or RPC. Their first update is driven externally by the existing release publisher, executing
+An independent assistant runs its own manager executable and deploys the node programs
+on the computers it owns. Each installation confirms its own update.
+
+Independent managers on Linux and macOS can follow a confirmed release or direct Hub deploy
+when automatic node updates are enabled. A co-located manager with its own executable can also
+follow the confirmed build when Redeploy installs that build on its host's node. The manager
+verifies its package and waits for idle before the supervised trial. Existing managers from
+before package negotiation use their installed service's replacement watcher or release bootstrap.
+
+On a shared Hub state root the service watcher uses the inode of the running executable and
+checks which build the Hub serves. It waits through a Hub self-update trial. Built-in child
+managers start with the Hub, while independent services wait for their own active work to finish.
+
+### Following a Web development commit
+
+When a Linux or macOS Hub with a built-in child assistant confirms a Web development
+update, it sends capable independent managers the confirmed commit, version and build.
+A pending candidate and a failed Hub update never become manager update targets.
+
+The manager authenticates to the Hub, requests a package for its own platform and
+verifies the archive and executable hashes. If the manifest lacks that platform,
+the manager can use Git and Go on its host to build the same detached commit from the
+canonical Persona repository. The program must match the target's version, commit and
+build. Missing tools or failed verification leave the running manager in place.
+
+The manager waits until it is idle to replace its program and keeps its previous
+executable through startup. If the new manager fails to start, recovery restores the
+previous program. The manager also obtains packages for the computers it owns and reports
+each deployment separately. See [Node packages](../operations/node-update.md#node-packages).
+
+A remote assistant with its own storage can keep running during the Hub's backup. Another
+manager installed under the Hub's runtime, or extra databases or data roots in that backup,
+requires a pair of local quiesce and resume hooks. See [Web development updates](../operations/hub-update.md#web-development-updates).
+
+### Release bootstrap for older managers
+
+Older `manager run` processes have no update command or RPC. Their first update is
+driven externally by the existing release publisher, executing
 the **new, same-source release artifact** as `personad manager update`. It does not ask the
 old process to execute a new command, reinstall or join again.
 
@@ -404,6 +495,18 @@ activation. One exact owned machine must be covered; additional machines fail cl
 After candidate checks, the publisher reads authority again and binds the fresh real digest
 to the activation plan. A maintenance window alone never establishes idle state.
 
+A newly created manager can instead have no main or machine yet. Its private target has both
+`main` and `machine_id` as empty strings. The publisher accepts this only while two complete
+Hub reads confirm empty ownership and no conversation state, and passes an explicit
+`unassigned` inventory plan with all three identity flags deliberately empty. The CLI reads
+the selected manager's own database twice, binding the existing empty row's revision. It
+produces two complete empty-runtime inventories without dialing a node or inventing an identity.
+An absent settings row, failed read, malformed settings object or identity field, partial
+identity, missing existing-row revision, runtime row, background activity, changed revision,
+owned machine, or newly assigned main/machine fails closed. No settings row or identity is
+created. An empty display list alone is not evidence. Candidate checks and the final pre-start
+authority read are the same as for a populated manager.
+
 ### Confirmation and recovery
 
 The formal artifact is staged in the manager's own `.manager-updates/<run-id>` directory.
@@ -455,7 +558,7 @@ By default the hub starts the built-in manager as its child (`personad assistant
 - **Its service.** `persona-manager install --builtin [--join <hub address>]` (`personad manager install --builtin`) installs it on Linux as the systemd user unit `persona-manager-assistant.service`, and on a Mac as the launchd agent `com.persona.manager.assistant` (log: `managers/assistant/manager.log` in the data directory). The unit runs `<data dir>/bin/persona-manager assistant` when that is beside `<data dir>/bin/personad` and its build (`version -v`), else `<data dir>/bin/personad assistant` (the binary updates replace; without one there, the running program); a new agent on a Mac by the same rules, but on a Mac installed with `personad` it stays on `personad`: its own agent ran it, or, before it has one, the hub's agent runs it (Full Disk Access lists `personad` for the node of the hub's computer, and moving would need another program added there); `install --builtin` says so when `persona-manager` is beside it, and says which program Full Disk Access needs when it moves an agent ([server.md](../server/server.md) ("Programs")). Each runs it with `PERSONA_ASSISTANT_DEPLOY=service` and `PERSONA_HOME` set to the data directory. The unit restarts it on any exit but 2 (`RestartPreventExitStatus=2`: not bound, another one running). With `--join` and a code in `PERSONA_MANAGER_CODE` (which it takes out of its environment once read, so `systemctl` and `launchctl` don't get it), it keeps a binding whose token the hub still takes: it checks with a bare dial, which takes nothing over, and leaves the code to run out. Otherwise it trades the code first. Without a working binding and a code it installs nothing (exit 2). No systemd user instance, or another system, stops it before the code is spent; `install --builtin --check` checks just that, changing nothing. The unit is started when it does not run, restarted when it changed or the binding is new, and left alone otherwise. A unit or agent that ran another program is moved to this one, and it says so (`it runs … now, not …`); one under the former name keeps `personad`, and `PERSONA_SPLIT_PROGRAMS=0` in its environment keeps `personad` too, written into the unit or agent until `install --builtin` runs again without it ([server.md](../server/server.md) ("Programs")). On a Mac, `bootstrap` right after `bootout` is tried up to 5 times, a second apart. `persona-manager join --builtin <hub address> [<code>] --install` (the code given, or in `PERSONA_MANAGER_CODE`) always trades the code, then installs it the same way. `persona-manager uninstall --builtin` stops and removes the service; the binding and the data stay. `persona-manager status` lists it too (`status --builtin`: only it).
 - **A new binary.** Updates (the hub's self-update swaps `personad` and its programs together) and `install.sh` replace the file the service runs from, and nothing else restarts the service. So the service looks at that file every minute. When another file is there, or this one was written over:
   - **Check:** the new file must be an executable regular file whose `version -v` answers within 30 seconds (one that hangs is killed with what it started). One that doesn't is not used: the service goes on with the code it runs, says so in its log, and doesn't check that file again until another one is there.
-  - **Idle:** with a file that runs, it waits until nothing is going on. That means no request being answered (an app's call or an extension's through the hub; an agent's tool call or a write the gate forwarded from a computer), no hub event left to handle, and no request or stream of the extensions' open (a voice call, or a live view such as an extension's log page left open, which holds it up to the 30 minutes below). None of its own conversations may be on a turn (or their machine not answering), no agent's finished turn being looked at, and no scheduled task's message or channel's answer going out. A task agent's start also keeps it busy, counted before its goroutine is launched until linking, failure bookkeeping or entering a retained-tab remedy finishes; normal starts and both retry paths are covered (#3251). A computer's card or question waits on a person and is taken up again after a restart, so it doesn't count. Its outbox doesn't hold it back: what it keeps waits in its database. It logs what it waits for. A check of all this that doesn't answer within 10 seconds counts as busy, and its late answer is dropped. After 30 minutes it goes ahead anyway, saying so.
+  - **Idle:** with a file that runs, it waits until nothing is going on. That means no request being answered (an app's call or an extension's through the hub; an agent's tool call or a write the gate forwarded from a computer), no hub event left to handle, and no request or stream of the extensions' open (a voice call, or a live view such as an extension's log page left open). None of its own conversations may be on a turn (or their machine not answering), no agent's finished turn being looked at, and no scheduled task's message or channel's answer going out. A task agent's start also keeps it busy, counted before its goroutine is launched until linking, failure bookkeeping or entering a retained-tab remedy finishes; normal starts and both retry paths are covered (#3251). A computer's card or question waits on a person and is taken up again after a restart, so it doesn't count. Its outbox doesn't hold it back: what it keeps waits in its database. It logs what it waits for. A check of all this that doesn't answer within 10 seconds counts as busy, and its late answer is dropped.
   - **Restart:** then it stops and starts again in place on the new file, after one more check (as after a refused token, with the same exec).
   - **Failure:** when the check or the exec fails then, it runs again on its old code, and that file isn't tried again. The file that was there when it started isn't started on, not even when that very file is renamed back while it waits. A rollback that copies the old binary back in is a new file, so the service starts again once more, onto the old version. After a refused token it starts again only on a file that passes the same check.
 - **Binding by hand.**
@@ -514,6 +617,8 @@ Each manager's assistant runs its conversations in a directory of its own on a c
 
 Under a custom `PERSONA_HOME` they are in that root instead of `~/.persona`. The manager names them when it prepares one (`assistant.prepare`, `internal/identity` `AssistantDirName` / `HealthDirName`). The node knows any manager's (`IsAssistantDir`: `assistant`, `health`, and the same with `-m-<hex>`; `assistant-bin` and the like are not), and keeps every manager's health space from the conversations outside it, another manager's health conversations included (a health conversation reads its own space only). The hub and each manager count a conversation as the assistant's only in the directories of the computer's manager (`IsAssistantDirOf`); the hub asks a computer for another manager's skills in that manager's directory. A computer that moved keeps the old manager's directories, which the new one does not read ("Moving a machine or a source").
 
+Every later message and every resume of a conversation runs in the directory it started in: such a message names no folder (`session.send`, the manager's next `assistant.send`, a recovery), so the node takes the one its start record names, and never the built-in manager's `~/.persona/assistant` for another manager's conversation, which would leave it without its manager's instructions and assistant tools (#11047).
+
 The node lists an assistant or health conversation in the directory it started in, not where the model's last `cd` left it (#2368: a `cd` into `.claude/skills/<skill>` had one listed as an agent): its start record, else the transcript's first `cwd`, else its own project directory's name. The other way round, an agent whose `cd` landed in an assistant or health directory itself (one started in the home directory) is listed where it started, so only a conversation that started there is ever listed in one. The hub and the managers keep counting only exact directories (`IsAssistantDirOf`), not anything inside them: a conversation the user runs in a subfolder is theirs, not the assistant's. An older node's rows at rest may still drift until the node is updated; health cards are kept off the lock screen and the channels for every node version (the manager places a card of its conversation in the conversation's directory, `placeCard`).
 
 Health reports the user uploads (`POST /api/v1/machines/{mid}/files?dest=health`) go in the health space of the computer's manager, whose health conversations run there: `health/reports/` for the built-in one as ever, `health-<id>/reports/` for another; its Health page lists and deletes those only (`health.reports.*` with its `health_dir`), and its health CLAUDE.md names its own space. Another manager's space needs a node with the `health_spaces` capability that also says, on each call, which space it used (an older one answers 409 `node_outdated` rather than put, list or delete a report in the built-in's space; a delete is asked only after a list of the same space came back saying so). Reports belong to the space they were uploaded to, not to the computer: those uploaded before a computer moves stay in the previous manager's health space on it, the new owner neither lists nor reads them, and they show again if the computer moves back.
@@ -570,6 +675,7 @@ Every client has the same page (web: `docs/web/web.md`, Android: `docs/android/a
 
 - The list shows each manager's name, a Default chip, a status dot with Online / Offline · last synced … / Installing · code expires in n min, and where it runs (host · OS · the hub's own / service / container / standalone).
 - A manager's page (`SettingsPage.manager(id)`) has its status, where it runs, version, and when it connected or last synced. Its actions are Rename, Make Default, Install Elsewhere (it warns first that the old install stops; a manager still installing gets New Install Code instead), and Delete (confirmed; Cancel Install while installing). Delete is disabled for the hub's own manager and for the default one, and the footer says why.
+- The hub's own manager's page has Show in Switcher (#9055): off sends `{"hide": true}`, on `{"hide": false}`. It can't be turned off while that manager is the default; the footer says why, or that it is listed for now while it has a computer, and a `409 builtin_in_use` is shown in plain words. While the roster marks it `hidden` the list gives it a Hidden chip and the switcher leaves it out (docs/apple/ios.md "The Persona page's manager").
 - New Manager asks for a name, then opens the install code sheet: the code with Copy, an m:ss countdown, and New Install Code once it runs out. When the hub sends `commands`, the sheet adds As a Service and With Docker, each with Copy. Without them it shows the code and a short note.
 - The socket asks for feature `managers` in its URL's `?features=` (`LiveConnection.queryItems`; the Apple apps' `client_hello` only carries the locale), and each `{"type":"managers"}` push moves `AppModel.managersRevision`, which makes the open page reread the roster. A hub without the roster (404 without a code) gets a line saying to update the hub.
 - DEBUG launch arguments for screenshots: `-tab settings -openManagers YES`, `-openManagerPage <id>`, and `-showManagerCode YES` (makes a manager on the fake hub and opens its code sheet). The fake hub (`scripts/mock/mock_hub.py`) serves the roster; `MOCK_MANAGER_COMMANDS=1` adds the commands.
@@ -612,11 +718,30 @@ list or old mtime never proves completion. An unloaded persisted main is covered
 only after the complete live sources have answered. Snapshot data includes no
 prompts, task commands, transcript content or credentials.
 
+Each configured host needs an audited fresh read for this (`SnapshotForUpdate`,
+`server/internal/node/update_inventory_hosts.go`); a host without one fails the
+inventory. herdr, the Herdr App and Orca have one. Orca's
+(`server/internal/node/hostorca_update.go`) reads `terminal.list` with its
+layouts, a full `worktree.ps` outside the listing's snapshot series and a new
+process scan, none from the listing's caches; either list cut short at Orca's limit,
+a failed `worktree.ps` or an unreadable process table fails it, and Orca not running
+is an empty source. It also stands for the built-in Orca bridge, whose sessions are
+Orca's chats: any chat open on this machine that has had a turn refuses the read
+(a chat's row is Orca's display state, with no background or child inventory; a
+chat with no turn yet runs nothing, and one listed closed is not open in Orca),
+and only while Orca's read
+stands for it is the bridge's connection, told by its hello instance, not counted
+as a runtime of its own.
+
 An explicitly remote Codex terminal can use the configured app-server's authority.
-The supported command form is `codex resume --remote <configured-local-endpoint> <thread-id>`:
+The supported command forms are `codex resume --remote <configured-local-endpoint> <thread-id>`
+and the one Persona's own Codex start writes, `codex --remote <configured-local-endpoint> [--no-alt-screen] resume <thread-id>`,
+word for word:
 the host must report that exact session, its foreground PID must match the owner's
 process inventory, and kernel argv must bind that PID to the same endpoint and
-thread. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
+thread. Orca reports no agent session, so for an Orca pane the session is the
+thread its foreground Codex's kernel argv resumes; two different threads in one
+pane, or an argv that cannot be read, leave it without one. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
 `KERN_PROCARGS2` on macOS, never the formatted `ps` command or a title. The endpoint
 must already be a configured, connected local app-server; collection neither starts
 one nor resumes the terminal. A matching historical thread ID alone is insufficient.
@@ -740,9 +865,10 @@ An app shows one assistant at a time, the **current assistant**, picked in a swi
 
 - **Names**: what people read says assistant (助手, アシスタント): New assistant, Manage assistants…, Settings › Assistants, Default assistant; the settings row for the assistant's own profile is Assistant profile (助手资料). Code, the protocol, `manager.json` and these docs keep `manager`.
 - **The pick** is kept on the device, per hub, across launches. A device that never picked follows the hub's default, and a pick whose manager left the roster (deleted, or never installed) goes back to it. Requests name the pick with `X-Persona-Manager: <id>`; with the default current none is sent, so a hub with one manager gets the requests it always got. Until the roster is read after a launch, the kept pick already counts: the pages list its things only and the switcher shows the name the roster last gave it, rather than every assistant's and the hub's own name for a moment.
-- **One identity for the default assistant (#6401)**: the default manager is the Persona of the main conversation, so every client shows the chosen look's face in the switcher's head — not the first-letter monogram every other assistant keeps — with the same presence and needs-you corner marks. Changing the look changes that face. Its name is the manager name the hub keeps (`PATCH /api/v1/managers/{id}`), shown in the switcher's head, the main conversation's row, the profile and the composer; on web and Apple the profile edits it directly (a pencil on the name), and every client can rename it from Settings › Assistants. A hub without a roster keeps the look's own name and the earlier header, read-only.
+- **One identity for the default assistant (#6401)**: the default manager is the Persona of the main conversation, so every client shows the chosen look's face in the switcher's head — not the first-letter monogram every other assistant keeps — with the same presence and needs-you corner marks. Changing the look changes that face. Its name is the manager name the hub keeps (`PATCH /api/v1/managers/{id}`), shown in the switcher's head, the main conversation's row (on Apple the row says Main Chat under the head instead and Persona's top bar names it, #9973), the profile and the composer; every client's profile/Details page edits it directly (web and Apple use a pencil on the name, Android a **Rename** row), and every client can also rename it from Settings › Assistants. A hub without a roster keeps the look's own name and the earlier header, read-only.
 
-- **The switcher** shows the current assistant's avatar, name and status (Online · its computer, Offline · last synced …). It opens the roster: the installed managers, the default first and tagged Default, the current one checked, an offline one's whole row faded (avatar, name and line) but still selectable (its pages show what the app last read, as below); then the ones still installing (Installing · code expires in n minutes), where choosing one opens its install code and commands instead of switching; then **New assistant** and **Manage assistants…** (Settings › Assistants). With one installed manager, web, Android and Apple show the same switcher and a one-row roster without a Default tag; New assistant and Manage assistants… remain available. New assistant also remains in Settings › Assistants. With two or more installed managers, all three use the switcher above, including offline managers; pending installs alone do not enable it. On Apple, a hub without a roster keeps the persona's name as the sidebar's title; web and Android keep their earlier header and controls.
+- **The switcher** shows the current assistant's avatar, name and status (Online · its computer, Offline · last synced …). It opens the roster: the installed managers, the default first and tagged Default, the current one checked, an offline one's whole row faded (avatar, name and line) but still selectable (its pages show what the app last read, as below); then the ones still installing (Installing · code expires in n minutes), where choosing one opens its install code and commands instead of switching; then **New assistant** and **Manage assistants…** (Settings › Assistants). With one installed manager, web, Android and Apple show the same switcher and a one-row roster without a Default tag; New assistant and Manage assistants… remain available. New assistant also remains in Settings › Assistants. With two or more installed managers, all three use the switcher above, including offline managers; pending installs alone do not enable it. On Apple, a hub without a roster keeps the persona's name as the sidebar's title; web and Android keep their earlier header and controls. With several hubs on one device (`docs/protocol/multi-hub.md`), Apple's switcher lists the hubs first, the current one checked, then the current hub's assistants under its name (hub › its assistants, #12594); picking a hub makes it the current hub and closes the list.
+- **A hidden built-in assistant** (`hidden` in the roster, #9055) is left out of the switcher's rows on every client. It still counts as installed, so scoping, badges and the Default tag are unchanged; a pick that becomes hidden goes back to the default. Settings' page of the built-in manager has a **Show in the switcher** switch (在切换器里显示, 切り替えに表示): off sends `hide: true`, which cannot be turned off while it is the default or has a computer; on sends `hide: false`.
 - **Avatars** are a disc with the first character of the name. The default manager's is the AI purple; any other takes one of five hues by the sum of its id's UTF-8 bytes modulo 5, in the order blue, green, orange, pink, indigo, each client using its own design system's color of that name. A mark at its foot gives its status (online green, offline neutral, installing orange), and on the sidebar's head a mark at its top says another assistant has something waiting. Where a client already shows the user's chosen Persona look, it keeps the look and changes only the name beside it.
 - **Counts** (one definition on every client): an assistant's count = its agents waiting for the user + its `inbox_needs_you` from the roster (`docs/protocol/protocol.md`; absent counts as 0). An agent waiting is a session of that assistant that is not a quiet task's, is not muted, and has at least one pending card or is in Needs you; each session counts once. A pending card on no session counts 1 each. The current assistant's row shows no count. The mark on the sidebar's avatar means another assistant's count is above 0. Clients count from the sessions and cards the hub already pushes with their `manager`, and again after every `managers` push. The Apple apps get no session pushes from a hub with bounded lists (`sessions_list`), so there they read the hub's sessions in Needs you for it.
 - **Pages**: the assistant page, Agents, computers, the inbox, to-dos, scheduled tasks and the knowledge base show the current assistant's only, with no manager headings. The hub's merged lists and pushes stay whole and the app filters by each item's `manager` (none, or one the roster doesn't know: the default's); the assistant's own routes and its knowledge base (`/api/v1/assistant…`, `/api/v1/kb…`, `/api/v1/kb-search`, `/api/v1/recordings…`) name the pick, and so does a new to-do. The Apple apps ask a hub that can for the current assistant's page of agents (`sessions_manager`, `docs/protocol/protocol.md` ("One manager's sessions")), as their Agents list is paged by the hub, and leave the recordings, and their part of the knowledge base (`/api/v1/kb/recordings…`), with the default: the phone syncs its own in the background, whichever assistant is current. An item opened from a notification or a link opens as itself, routed by its own manager as before, and does not change the pick; nor does anything done to another assistant's item (handing it to Persona, summarizing its chat, the outbox, answering a card): the conversation it starts or uses opens as itself on its own computer (its address names that computer and, when another than the default, its manager, so a reload, a new tab or a link opens it there too), its requests name its manager, and only the switcher, or a pick leaving the roster, changes the current assistant. What a conversation's feed offers (a plan's Start or Don't start, a briefing question's Handled) names the conversation's manager: those routes name no conversation, so the hub would take them to the default. A page that stays where it is when the pick changes shows the new assistant's at once: the lists filter again, and the pages that read the assistant's things themselves (All chats, the profile, scheduled tasks, the knowledge base) read them again, so nothing on screen and no request is the last assistant's; what a client keeps of them (the knowledge base's lists, the to-dos' projects) is kept per assistant. A page about one thing (an entry, an item, a to-do) either closes when the pick changes or keeps writing to the assistant it was read from; a knowledge entry opened by its address (which names no assistant) is read from the current assistant and everything its page writes names that same one. A new mail written on the inbox page is the current assistant's (its mail accounts, sent through it). A to-do made for an agent (Create and link, a project's new to-do) is the agent's assistant's, and the to-dos offered there are that assistant's.
@@ -753,7 +879,7 @@ An app shows one assistant at a time, the **current assistant**, picked in a swi
 
 ### What the hub gives
 
-- **Badges**: the roster gives each online manager's `inbox_needs_you`, the open items of its inbox under "Needs you" (`docs/protocol/protocol.md`, "Bus"; what the Inbox badge counts of that manager's list). It is absent for a manager that is offline, being installed or from before it reported one: an app then counts only what it knows itself (the agents waiting for the user, from the live pushes). It changes with a `{"type":"managers"}` push (within about a second of the inbox changing), after which the apps read the roster again as they do for any other change of it.
+- **Badges**: the roster gives each online manager's `inbox_needs_you`, the open items of its inbox under "Needs you" (`docs/protocol/protocol.md`, "Bus"), read ones included: its inbox part of the switcher's count ("Counts" above). The Inbox badge counts only the unread ones, so it is not this number. It is absent for a manager that is offline, being installed or from before it reported one: an app then counts only what it knows itself (the agents waiting for the user, from the live pushes). It changes with a `{"type":"managers"}` push (within about a second of the inbox changing), after which the apps read the roster again as they do for any other change of it.
 - **Push switches**: a device's `muted_managers` in `PUT /api/v1/devices/{id}/prefs` (`docs/protocol/protocol.md`; an app offers the switch only when the hub's answer has the field, and sends only that field). Whatever a manager asks for skips the devices that muted it, on APNs and as `ws_notify` events alike: `notify.request` from its bus connection (its assistant's reminders, finished turns, reply reminders and cards, from its outbox too), its extensions' `hub.push_localized` and `POST /api/v1/notify` with their token, `POST /api/v1/notify` with another credential that names one of its computers (an id this hub has no computer for leaves it the hub's own), and `personad notify` on one of its computers (the computer's manager). The mute is applied per device where the hub sends (`Pusher.sendFrom`, `notifyWSFrom`), so a push asked for explicitly still goes past Phone Muted and to an open desktop as before (`docs/lessons/server.md`). The Live Activity shows one manager's agents (the default's, else the assistant's: `fleetLiveOf`); on a device that muted that manager it starts without its alert, as in quiet hours. A write of the prefs keeps only managers of the roster, so a removed manager's id takes none of the 64 places. The hub's own pushes (pairing, a computer joining, updates) and an extension's silent `hub.push_background` are no manager's and still come.
 - **Live updates**: another manager's `ws.broadcast` messages carry `manager` (`docs/protocol/protocol.md`, "Messages to the App"); one without it is the assistant the hub starts. What names a conversation (feed items, cards, plans) goes by its conversation, whichever manager's it is, so another manager's conversation open elsewhere stays live; only what is about the assistant page itself (`assistant_schedule`) is the shown manager's.
 - **An offline manager's computers**: the hub shows them offline with its words for an unreachable assistant (`hub-assistant_link.offline`, no `error_code`). An app with several managers may say instead that the computer's manager is offline (the roster's `online` and the computer's `manager`), and offers no Reconnect, which goes through that manager.

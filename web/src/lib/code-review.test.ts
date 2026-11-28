@@ -163,6 +163,25 @@ describe("suggestions", () => {
     expect(splitSuggestions("no block")).toEqual([{ kind: "text", text: "no block" }]);
   });
 
+  it("ignores outer code fences, supports 4-backtick suggestion fences, and strips CRLF", () => {
+    const quoted = "Example:\n```md\n```suggestion\nnoop\n```\n```\nDone.";
+    expect(splitSuggestions(quoted)).toEqual([{ kind: "text", text: quoted }]);
+
+    const tildeQuoted = "~~~\n```suggestion\nnoop\n```\n~~~";
+    expect(splitSuggestions(tildeQuoted)).toEqual([{ kind: "text", text: tildeQuoted }]);
+
+    const nested = "Wrap in fence:\n````suggestion\n```ts\nconst x = 1;\n```\n````\nAfter";
+    expect(splitSuggestions(nested)).toEqual([
+      { kind: "text", text: "Wrap in fence:\n" },
+      { kind: "suggestion", lines: ["```ts", "const x = 1;", "```"] },
+      { kind: "text", text: "\nAfter" },
+    ]);
+
+    expect(splitSuggestions("```suggestion\r\na\r\nb\r\n```\r\n")).toEqual([
+      { kind: "suggestion", lines: ["a", "b"] },
+    ]);
+  });
+
   it("writes the block of the lines picked", () => {
     expect(suggestionBlock(["a", "b"])).toBe("```suggestion\na\nb\n```\n");
   });
@@ -177,7 +196,18 @@ describe("picking lines and links", () => {
 
   it("fills a line link, https only", () => {
     expect(lineLink("https://example.com/a.go#L{start}-L{end}", 3, 7)).toBe("https://example.com/a.go#L3-L7");
-    expect(lineLink("javascript:alert({start})", 1)).toBeUndefined();
+    for (const bad of [
+      "javascript:alert({start})",
+      "http://example.com/a.go#L{start}",
+      "https:/admin#L{start}",
+      "https:admin#L{start}",
+      "https://user:pw@evil.example/a.go#L{start}",
+      "https://@evil.example/a.go#L{start}",
+      "https://good.example\\@evil.example/a.go#L{start}",
+      "https://example.com/a.go\t#L{start}",
+    ]) {
+      expect(lineLink(bad, 1), bad).toBeUndefined();
+    }
     expect(lineLink(undefined, 1)).toBeUndefined();
   });
 });
@@ -190,6 +220,18 @@ describe("keys", () => {
     const input = document.createElement("textarea");
     expect(reviewCommand({ key: "n", target: input })).toBeNull();
     expect(reviewCommand({ key: "q" })).toBeNull();
+  });
+
+  it("takes a key typed with AltGr (Ctrl+Alt on Windows) as the character it types", () => {
+    // a German layout on Windows: AltGr+9 types "]", AltGr+8 "["
+    const altGr = (k: string) => k === "AltGraph";
+    expect(reviewCommand({ key: "]", ctrlKey: true, altKey: true, getModifierState: altGr })).toBe("next-thread");
+    expect(reviewCommand({ key: "[", ctrlKey: true, altKey: true, getModifierState: altGr })).toBe("prev-thread");
+    // Ctrl+Alt without AltGr is still a chord, and AltGr does not make ⌘ a typed key
+    expect(reviewCommand({ key: "]", ctrlKey: true, altKey: true, getModifierState: () => false })).toBeNull();
+    expect(reviewCommand({ key: "]", ctrlKey: true, altKey: true, metaKey: true, getModifierState: altGr })).toBeNull();
+    const input = document.createElement("input");
+    expect(reviewCommand({ key: "]", ctrlKey: true, altKey: true, getModifierState: altGr, target: input })).toBeNull();
   });
 
   it("finds the next and the previous one from the top of the screen", () => {

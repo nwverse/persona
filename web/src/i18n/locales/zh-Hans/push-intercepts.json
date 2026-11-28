@@ -1,0 +1,18 @@
+{
+  "held_entry": "已拦截推送",
+  "held_entry_label": "已拦截推送，今日 {count} 条",
+  "held_entry_hint": "开启推送分级后被拦截的 P1 / P2 推送",
+  "held_title": "今日已拦截的推送",
+  "held_explanation": "P1 推送等待你查阅，P2 推送已静默处理并默认折叠。",
+  "held_p1": "P1 · 待查阅",
+  "held_p1_count": "P1 · 待查阅（{count}）",
+  "held_p2": "P2 · 静默",
+  "held_p2_count": "P2 · 静默（{count}）",
+  "held_empty": "今日暂无被拦截的推送。",
+  "held_untitled": "无摘要",
+  "held_reason_p1": "已归入简报",
+  "held_reason_p2": "静默处理",
+  "held_reason_dedup": "过去 12 小时内已发送过相关提醒",
+  "held_loading": "正在加载已拦截推送…",
+  "held_load_failed": "无法加载已拦截的推送，请检查网络连接后重试。"
+}

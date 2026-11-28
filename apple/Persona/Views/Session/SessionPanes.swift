@@ -153,17 +153,9 @@ struct TerminalPanel: View {
     @AppStorage(TerminalPrefs.autoHide) private var autoHideKeys = false
     @AppStorage(TerminalPrefs.inputMode) private var inputMode = "direct"
     @AppStorage(TerminalPrefs.tipsSeen) private var tipsSeen = false
-    /// The first-use tips are about touch (double-tap to paste, two-finger swipe, the keyboard button): not on the Mac.
-    /// The key bar stays there: its ⚡ is how saved commands are reached.
-    #if os(macOS)
-    private static let touchTips = false
-    #else
+    /// The first-use tips are about touch (double-tap to paste, two-finger swipe, the keyboard button).
     private static let touchTips = true
-    #endif
     @AppStorage(TerminalPrefs.size) private var sizeMode = "phone"
-    #if os(macOS)
-    @AppStorage(TerminalPrefs.mouseMode) private var mouseMode = MacTerminalMouse.Mode.program.rawValue
-    #endif
     /// A grid change waiting to go out (the keyboard animates, a pinch goes on: the last size is what counts).
     @State private var gridTask: Task<Void, Never>?
     /// The keyboard is up on the terminal (typing straight in).
@@ -245,9 +237,6 @@ struct TerminalPanel: View {
         }
         .sheet(isPresented: $showSettings) {
             TerminalSettingsView().environment(\.colorScheme, scheme)
-            #if os(macOS)
-                .macSheet()
-            #endif
         }
         .alert("Another program on the computer is using this terminal", isPresented: Binding(get: { feed.control == .busy }, set: { shown in
             if !shown, feed.control == .busy { feed.watchOnly(String(localized: "View only: another program on the computer is using this terminal")) }
@@ -269,7 +258,7 @@ struct TerminalPanel: View {
             Task { await takePhotos(items) }
         }
         .fileUploadPicker(isPresented: $pickingFiles) { takeFiles($0.map { .file($0) }) }
-        .confirmationDialog(pasting.map { String(localized: "Paste \($0.split(separator: "\n", omittingEmptySubsequences: false).count) lines into the terminal?") } ?? "",
+        .accessibleConfirmationDialog(pasting.map { String(localized: "Paste \($0.split(separator: "\n", omittingEmptySubsequences: false).count) lines into the terminal?") } ?? "",
                             isPresented: Binding(get: { pasting != nil }, set: { if !$0 { pasting = nil } }),
                             titleVisibility: .visible) {
             Button("Paste") { if let t = pasting { paste(t) } }
@@ -514,12 +503,6 @@ struct TerminalPanel: View {
                              onWheel: feed.drives && model.canScrollTerminal(key.group) ? { model.terminalScroll(key, lines: $0, at: $1) } : nil,
                              onClick: feed.drives && model.canClickTerminal(key.group) ? { model.terminalClick(key, column: $0, row: $1) } : nil,
                              onGrid: gridChanged)
-                #if os(macOS)
-                .files(takeFiles, dropping: { on in dropping = on && feed.drives })
-                .mouse(feed.drives && model.canMouseTerminal(key.group) ? { e in
-                    model.terminalMouse(key, action: e.action.rawValue, button: e.button.rawValue, column: e.column, row: e.row, mods: e.mods)
-                } : nil, mode: MacTerminalMouse.mode(mouseMode))
-                #endif
             }
             .overlay(alignment: .top) {
                 if let status = uploads.status { uploadingBar(status).padding(Theme.Space.s) }
@@ -580,8 +563,8 @@ struct TerminalPanel: View {
         }
     }
 
-    /// Over the page (TerminalCover): a bar on top in every state — its size on the left, the handle, settings and Close
-    /// on the right. Dragged down it takes the terminal with it (far or fast enough: closed); a tap on the handle or on
+    /// Over the page (TerminalCover): a bar on top in every state — Close and its size on the left (#9653), the handle,
+    /// settings on the right. Dragged down it takes the terminal with it (far or fast enough: closed); a tap on the handle or on
     /// Close closes it. With no terminal (#4328) only the handle and Close: size and settings have nothing to act on.
     /// A terminal that can be renamed (#6996) has ⋯ in the settings button's place: Rename… and Terminal Settings.
     private func grabBar(_ g: TerminalGrab) -> some View {
@@ -593,6 +576,16 @@ struct TerminalPanel: View {
                 .onTapGesture { Haptics.tap(); g.close() }
                 .accessibilityHidden(true) // Close says it
             HStack(spacing: Theme.Space.sm) {
+                // The way out first, at the leading corner, as on every presented page (#9653).
+                Button { Haptics.tap(); g.close() } label: {
+                    ThemedIcon(Theme.Icon.clear).symbolRenderingMode(.hierarchical).font(Theme.Font.title)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(fg.opacity(0.75))
+                .accessibilityLabel("Close Terminal")
+                .accessibilityIdentifier("terminal-close")
                 if !noTerminal {
                     if feed.wantsControl, feed.control != .off { sizeChip } else { wrapToggle }
                     if feed.loading { ProgressView().controlSize(.mini).tint(fg) }
@@ -618,19 +611,10 @@ struct TerminalPanel: View {
                     .foregroundStyle(fg.opacity(0.75))
                     .accessibilityLabel("Terminal Settings")
                 }
-                Button { Haptics.tap(); g.close() } label: {
-                    ThemedIcon(Theme.Icon.clear).symbolRenderingMode(.hierarchical).font(Theme.Font.title)
-                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(fg.opacity(0.75))
-                .accessibilityLabel("Close Terminal")
-                .accessibilityIdentifier("terminal-close")
             }
         }
-        .padding(.leading, Theme.Space.m)
-        .padding(.trailing, Theme.Space.xs)
+        .padding(.leading, Theme.Space.xs)
+        .padding(.trailing, Theme.Space.m)
         .scaledFrame(height: Theme.Size.tapTarget)
         .contentShape(.rect)
         .modifier(TerminalGrabDrag(grab: g))
@@ -1294,7 +1278,7 @@ struct ActivitySheet: View {
             .background(Theme.pageBackground)
             .navigationTitle(loop != nil && background.isEmpty ? String(localized: "Loop") : loop == nil ? String(localized: "Background Task") : String(localized: "Loop & Background Tasks"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -1345,7 +1329,7 @@ struct LoopStrip: View {
         .padding(.horizontal, Theme.Space.l)
         .padding(.vertical, Theme.Space.m)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
-        .confirmationDialog("Stop this loop?", isPresented: $confirming, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Stop this loop?", isPresented: $confirming, titleVisibility: .visible) {
             Button("Stop Loop", role: .destructive, action: stop)
         } message: {
             Text("This sends the agent a message asking it not to schedule another wake-up. The current round finishes first.")
@@ -1596,7 +1580,7 @@ struct SubagentTreeSheet: View {
             .background(Theme.pageBackground)
             .navigationTitle("All Subagents")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)

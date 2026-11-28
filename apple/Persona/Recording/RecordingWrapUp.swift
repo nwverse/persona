@@ -42,14 +42,14 @@ struct RecordingWrapUp: View {
             }
             .safeAreaInset(edge: .top, spacing: Theme.Space.flush) {
                 HStack {
+                    RecordingCornerButton(kind: .close, identifier: "recording-wrapup-done") { finish() }
                     Spacer(minLength: Theme.Space.flush)
-                    RecordingSheetCloseButton(title: String(localized: "Done"), identifier: "recording-wrapup-done") { finish() }
                 }
                 .padding(.horizontal, Theme.Space.page)
             }
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) { buttons(phase, entry: entry) }
             .navigationDestination(isPresented: $opening) { RecordingDetailView(id: id) }
-            .task(id: "\(entry.revision)|\(minutes.round)|\(entry.transcribedAll)") { await followMinutes() }
+            .tabActiveTask(id: "\(entry.revision)|\(minutes.round)|\(entry.transcribedAll)") { await followMinutes() }
             .onChange(of: phase) { old, new in announce(from: old, to: new) }
         }
     }
@@ -90,6 +90,7 @@ struct RecordingWrapUp: View {
         case .ready: .ready
         case .failed: .failed
         case .unsupported: .unsupported
+        case .paused: .paused
         }
     }
 
@@ -226,10 +227,13 @@ struct RecordingWrapUp: View {
                 .themedButton()
                 .accessibilityIdentifier("recording-wrapup-resume")
             case .tryAgainMinutes:
-                Button { Task { await minutes.regenerate(id) } } label: { Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1) }
-                    .themedButton()
-                    .disabled(minutes.asking)
-                    .accessibilityIdentifier("recording-wrapup-retry")
+                // Not while the hub's recording module is off (#15214): the route that writes them is gone with it.
+                if minutes.offersWrites {
+                    Button { Task { await minutes.regenerate(id) } } label: { Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1) }
+                        .themedButton()
+                        .disabled(minutes.asking)
+                        .accessibilityIdentifier("recording-wrapup-retry")
+                }
             }
         }
     }

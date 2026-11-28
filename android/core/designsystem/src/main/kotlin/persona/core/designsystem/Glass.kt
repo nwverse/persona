@@ -13,8 +13,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
@@ -38,7 +40,10 @@ import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.blur.HazeBlurStyle
 import dev.chrisbanes.haze.blur.HazeColorEffect
 import dev.chrisbanes.haze.blur.hazeBlur
+import dev.chrisbanes.haze.glass.GlassOptics
 import dev.chrisbanes.haze.glass.GlassStyle
+import dev.chrisbanes.haze.glass.OpticalSizeValue
+import dev.chrisbanes.haze.glass.RefractionProfile
 import dev.chrisbanes.haze.glass.hazeGlass
 import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.delay
@@ -61,6 +66,62 @@ fun Modifier.glassSource(): Modifier {
     else this.hazeSource(state)
 }
 
+private val FloatingGlassBlurRadius = 28.dp
+
+private val HomeNavigationGlass = GlassStyle.regular.then {
+    shape(CircleShape)
+    // Keep the bend at the curved edge and use the same capture for the whole surface.
+    optics(
+        GlassOptics(
+            refractionProfile = RefractionProfile.Edge(Tokens.Android.HomeSwitcherGlass.refractionBand),
+            refractionDisplacement = Tokens.Android.HomeSwitcherGlass.refractionDisplacement,
+            refractionDetailIntensity = 0f,
+            blurRadius = OpticalSizeValue.Fixed(Tokens.Android.HomeSwitcherGlass.blur),
+        )
+    )
+    lightPosition(Alignment.TopStart)
+    specularIntensity(0.55f)
+    ambientResponse(0.25f)
+    edgeShadow(Tokens.Android.HomeSwitcherGlass.edgeShadow)
+}
+
+private val InteractiveHomeNavigationGlass = HomeNavigationGlass.then {
+    pressed {
+        // A white-point change would invalidate the refracted output throughout the press.
+        lightingIntensity(HomeTokens.switcherPressLightIntensity)
+    }
+}
+
+@Composable
+internal fun Modifier.homeNavigationGlassSurface(interactive: Boolean): Modifier {
+    val palette = PersonaTheme.palette
+    val state = LocalGlassSource.current
+    val level = PersonaTheme.glass
+    if (state != null && level == GlassLevel.Liquid) {
+        val material = if (interactive) InteractiveHomeNavigationGlass else HomeNavigationGlass
+        val tint = if (palette.dark) Tokens.Android.HomeSwitcherGlass.darkTint else Tokens.Android.HomeSwitcherGlass.lightTint
+        val style = remember(material, tint) { material.then { tint(tint) } }
+        return hazeGlass(
+            HazeInput.Sources(state),
+            style = style,
+        )
+    }
+
+    val edge = Brush.linearGradient(
+        listOf(palette.strokeTop, palette.strokeTop.copy(alpha = 0f), Tokens.Android.HomeSwitcherGlass.edgeShadow),
+    )
+    val surface = if (state != null && level == GlassLevel.Frosted) {
+        val tint = if (palette.dark) HomeTokens.chromeDark else HomeTokens.chromeLight
+        this.clip(CircleShape).hazeBlur(HazeInput.Sources(state), style = HazeBlurStyle {
+            blurRadius(FloatingGlassBlurRadius)
+            colorEffects(listOf(HazeColorEffect.tint(tint)))
+        })
+    } else {
+        this.background(palette.surfaceOpaque, CircleShape)
+    }
+    return surface.border(Tokens.Android.HomeSwitcherGlass.fallbackStroke, edge, CircleShape)
+}
+
 /**
  * Floating chrome (bars, dock, decision sheets): refraction when the device can, plain blur otherwise, an
  * opaque panel as the last resort. Outside the glass style it is a normal raised surface.
@@ -69,7 +130,9 @@ fun Modifier.glassSource(): Modifier {
 fun Modifier.floatingSurface(shape: RoundedCornerShape, accentEdge: Color? = null): Modifier {
     val palette = PersonaTheme.palette
     val state = LocalGlassSource.current
-    val edge = Brush.verticalGradient(listOf(accentEdge ?: palette.strokeTop, palette.strokeBottom))
+    val edgeTop = accentEdge ?: palette.strokeTop
+    val edgeBottom = palette.strokeBottom
+    val edge = remember(edgeTop, edgeBottom) { Brush.verticalGradient(listOf(edgeTop, edgeBottom)) }
     if (PersonaTheme.style != AppStyle.Glass) {
         return this.clip(shape).background(palette.surfaceOpaque).border(1.dp, accentEdge ?: palette.line, shape)
     }
@@ -80,12 +143,16 @@ fun Modifier.floatingSurface(shape: RoundedCornerShape, accentEdge: Color? = nul
     return when {
         state == null || PersonaTheme.glass == GlassLevel.Solid ->
             this.clip(shape).background(palette.surfaceOpaque.copy(alpha = 0.97f)).border(1.dp, edge, shape)
-        PersonaTheme.glass == GlassLevel.Liquid -> this
-            .hazeGlass(HazeInput.Sources(state), style = GlassStyle.regular.then { shape(shape); tint(tint) })
-            .border(1.dp, edge, shape)
-        else -> this.clip(shape)
-            .hazeBlur(HazeInput.Sources(state), style = HazeBlurStyle { blurRadius(28.dp); colorEffects(listOf(HazeColorEffect.tint(tint))) })
-            .border(1.dp, edge, shape)
+        PersonaTheme.glass == GlassLevel.Liquid -> {
+            val style = remember(shape, tint) { GlassStyle.regular.then { shape(shape); tint(tint) } }
+            this.hazeGlass(HazeInput.Sources(state), style = style).border(1.dp, edge, shape)
+        }
+        else -> {
+            val blurStyle = remember(tint) {
+                HazeBlurStyle { blurRadius(FloatingGlassBlurRadius); colorEffects(listOf(HazeColorEffect.tint(tint))) }
+            }
+            this.clip(shape).hazeBlur(HazeInput.Sources(state), style = blurStyle).border(1.dp, edge, shape)
+        }
     }
 }
 

@@ -3,8 +3,9 @@ import { storedValue, storeValue } from "./compatibility";
 // "<source>:<sessionKey>" and bridge keys contain "/", so the whole id is percent-encoded in paths.
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { api, errorText } from "./api";
+import { api, errorText, invalidateInFlightGets } from "./api";
 import { SessionList, compareListIds } from "./session-list";
+import type { MarkedAgent } from "./agent-kind";
 import { toast } from "../ui/atoms";
 
 export interface AgentSession {
@@ -20,6 +21,64 @@ export interface AgentSession {
   rankTimeMs: number;
   hasAvatar?: boolean;
   avatarVersion?: string;
+  /** The latest message as the source lists it (older sources leave it out), and whether the user sent it. */
+  previewText?: string;
+  previewIsMine?: boolean;
+  /** When the user pinned it at the source; 0 or absent: not pinned there. */
+  onTopRankTimeMs?: number;
+  /** What is left of the account's allowance at its service, when the source knows (quotaGauge reads it). */
+  quota?: AgentQuota;
+}
+
+/** A source's account allowance as the hub passes it on (server/internal/agents/wire.go AgentQuota). */
+export interface AgentQuota {
+  state: string;
+  /** What is left as a fraction (0–1). */
+  remaining?: number | null;
+  /** What is left as a percentage (0–100). */
+  percent?: number | null;
+  tone?: string;
+  kind?: string;
+  label?: string;
+  /** When it resets: epoch ms or an ISO date. */
+  resetsAt?: number | string | null;
+  checkedAt?: number | string | null;
+  source?: string;
+  sourceNote?: string;
+  stale?: boolean;
+  /** The source's own "show it" flag. Not read: older accounts say false while they have a real figure. */
+  show?: boolean;
+  [more: string]: unknown;
+}
+
+/** How a charge is drawn: ok, low (20% or less), exhausted (nothing left), stale (an old reading, muted). */
+export type QuotaTone = "ok" | "low" | "exhausted" | "stale";
+export interface QuotaGauge {
+  /** 0–1. */
+  level: number;
+  percent: number;
+  tone: QuotaTone;
+  resetsAt?: number;
+}
+
+const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+
+/** The charge to draw for a quota, or null when there is no figure to draw (no quota, or neither remaining nor percent
+ * and not exhausted). `show: false` is not a reason to hide it: accounts made before the switch say false by default. */
+export function quotaGauge(q: AgentQuota | null | undefined): QuotaGauge | null {
+  if (!q || typeof q !== "object") return null;
+  const exhausted = q.state === "exhausted";
+  let level: number | null = null;
+  if (finite(q.percent)) level = q.percent / 100;
+  else if (finite(q.remaining)) level = q.remaining > 1 ? q.remaining / 100 : q.remaining;
+  else if (exhausted) level = 0;
+  if (level === null) return null;
+  level = Math.min(1, Math.max(0, level));
+  if (exhausted) level = 0;
+  const percent = Math.round(level * 100);
+  const tone: QuotaTone = q.stale || q.state === "stale" ? "stale" : level <= 0 ? "exhausted" : level <= 0.2 || q.state === "low" ? "low" : "ok";
+  const reset = typeof q.resetsAt === "string" ? Date.parse(q.resetsAt) : q.resetsAt;
+  return { level, percent, tone, ...(finite(reset) && reset > 0 ? { resetsAt: reset } : {}) };
 }
 
 // Blocks are open-ended: text and tool-call are known, anything else is shown raw.
@@ -50,8 +109,21 @@ export interface MessagePage {
   nextCursor?: string;
 }
 
+export interface AgentOutboxEntry {
+  clientId: string;
+  sessionId?: string;
+  preview?: string;
+  length?: number;
+  origin?: string;
+  status: string;
+  error?: string;
+  attempts?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface SendResult {
-  outbox: { clientId: string; status: string; error?: string };
+  outbox: AgentOutboxEntry;
   duplicate: boolean;
   upstream?: AgentMessage;
 }
@@ -68,7 +140,16 @@ export interface AgentSourceStatus {
   enabled: boolean;
   error?: string;
   setup?: "missing" | "disabled" | "no_accounts" | string;
-  accounts?: unknown[];
+  accounts?: AgentAccount[];
+}
+
+/** One of a source's accounts as `/agents` lists it: the personal list's Browse by account groups by `accountId`. */
+export interface AgentAccount {
+  accountId: string;
+  provider?: string;
+  displayName?: string;
+  status?: string;
+  sessionCount?: number;
 }
 
 const SETUP_HINTS: Record<string, string> = {
@@ -84,10 +165,17 @@ export function fetchSources() {
   return api<{ sources: AgentSourceStatus[] | null }>("/agents").then((r) => r.sources ?? []);
 }
 
-export function fetchMessages(id: string, cursor?: string, limit = 50) {
+export function fetchMessages(id: string, cursor?: string, limit = 50, signal?: AbortSignal) {
   const q = new URLSearchParams({ limit: String(limit) });
   if (cursor) q.set("cursor", cursor);
-  return api<MessagePage>(`${agentPath(id)}/messages?${q}`).then((p) => ({ ...p, messages: p.messages ?? [] }));
+  return api<MessagePage>(`${agentPath(id)}/messages?${q}`, { signal }).then((p) => ({ ...p, messages: p.messages ?? [] }));
+}
+
+export const personalAgentDraftKey = (id: string) => `agent:${id}`;
+
+export function fetchAgentOutbox(id: string, limit = 100) {
+  const q = new URLSearchParams({ session_id: id, limit: String(limit) });
+  return api<{ outbox: AgentOutboxEntry[] | null }>(`/agents/outbox?${q}`).then((r) => ({ ...r, outbox: r.outbox ?? [] }));
 }
 
 export function sendMessage(id: string, clientId: string, text: string) {
@@ -179,9 +267,37 @@ export async function restoreAgentSession(s: Pick<AgentSession, "id" | "title">,
 
 // ── pure helpers (tested) ───────────────────────────────
 
-const PROVIDER_LABEL: Record<string, string> = { grok_bot: "Grok Bot", muse: "Muse", cue: "Cue", dots: "Dots", claude_duet: "Claude Duet" };
+const PROVIDER_LABEL: Record<string, string> = { grok_bot: "Grok Bot", muse: "Muse", muse2api: "Muse", cue: "Cue", dots: "Dots", claude_duet: "Claude Duet", gemini_tasks: "Gemini", groq: "Groq" };
 export function providerLabel(p: string): string {
+  if (p === "bot") return t("lib-agents.bot");
   return PROVIDER_LABEL[p] ?? (p || t("lib-agents.other"));
+}
+
+// The agent mark (ui/AgentMark.tsx) a provider's product is drawn with, only where the provider is that product's own
+// agent. Dots and Grok Bot are different products: they draw their labels' letters, never ChatGPT's or Grok's marks.
+const PROVIDER_MARK: Record<string, MarkedAgent> = { claude_duet: "claude", gemini_tasks: "gemini" };
+
+/** The `agent` to hand AgentMark for a provider: its product's mark, else its label, whose first letter is drawn ("" would
+ *  be Claude Code's). */
+export function providerMarkAgent(p: string): string {
+  return PROVIDER_MARK[p] ?? providerLabel(p);
+}
+
+/** What the personal list knows of the account a group is keyed by: its name and provider. The name is the account's own
+ *  (`displayName`), else its provider's label; an account `/agents` does not list is named after the provider of its
+ *  loaded sessions, and only one known nowhere by its id. `provider` is "" when nothing says which it is. */
+export function accountGroup(id: string, sources: readonly AgentSourceStatus[] | null | undefined, sessions: readonly Pick<AgentSession, "accountId" | "provider">[]): { name: string; provider: string } {
+  for (const src of sources ?? []) {
+    for (const a of Array.isArray(src.accounts) ? src.accounts : []) {
+      if (!a || typeof a !== "object" || a.accountId !== id) continue;
+      const provider = typeof a.provider === "string" ? a.provider : "";
+      const named = typeof a.displayName === "string" ? a.displayName.trim() : "";
+      if (named) return { name: named, provider };
+      if (provider) return { name: providerLabel(provider), provider };
+    }
+  }
+  const provider = sessions.find((s) => s.accountId === id && s.provider)?.provider ?? "";
+  return provider ? { name: providerLabel(provider), provider } : { name: id, provider: "" };
 }
 
 export const totalUnread = (list: AgentSession[]) => list.reduce((n, s) => n + (s.unreadCount || 0), 0);
@@ -211,9 +327,13 @@ export const messageText = (m: AgentMessage) => m.blocks.filter((b) => b.type ==
 export interface Outgoing {
   clientId: string;
   text: string;
+  /** When the message was first typed; a same-id retry keeps it. */
   at: number;
+  /** The local or hub status change, whichever this entry last reconciled. */
+  updatedAt: number;
   status: "sending" | "sent" | "failed";
   error?: string;
+  attempts?: number;
 }
 
 // Persisted messages lose the clientId (externalId changes from local:<clientId>), so a local bubble is dropped once
@@ -263,14 +383,26 @@ let queued: Promise<void> | null = null;
 // Bumped by resetAgents(): a pull still on its way belongs to the previous login, so its answer (and the follow-up
 // pull queued behind it) is dropped.
 let listGen = 0;
-export function refreshAgentSessions(): Promise<void> {
+// The sources' status (GET /api/v1/agents: setup, error, accounts) is the hub asking every source's extension in turn.
+// It changes with the list, which the hub announces as an agents event with session_ids [] (a source removed, a source's
+// listing starting or stopping to fail, an extension's agentsrc.updated without keys, a hide), not with one session's
+// new message. So an event naming sessions re-reads only the list, and its pull no longer waits on every extension; the
+// status is read with it again once it is SOURCES_FRESH_MS old, for what an extension changes without saying so.
+export const SOURCES_FRESH_MS = 60_000;
+let sourcesReadAt = Number.NEGATIVE_INFINITY;
+// Whether one of the calls the queued follow-up stands for wanted the status too.
+let queuedSources = false;
+export function refreshAgentSessions(withSources = true): Promise<void> {
   if (inflight) {
     const gen = listGen;
+    queuedSources ||= withSources;
     if (!queued) {
       const next: Promise<void> = inflight.then(() => {
         // only clear our own slot: after resetAgents() a newer login may have queued its own follow-up
         if (queued === next) queued = null;
-        return gen === listGen ? refreshAgentSessions() : undefined;
+        const sources = queuedSources;
+        if (gen === listGen) queuedSources = false;
+        return gen === listGen ? refreshAgentSessions(sources) : undefined;
       });
       queued = next;
     }
@@ -278,7 +410,17 @@ export function refreshAgentSessions(): Promise<void> {
   }
   const gen = listGen;
   const read = bounded ? personalSessions.load().then(() => personalSessions.getSnapshot().rows) : fetchSessions();
-  const pull: Promise<void> = Promise.all([read, fetchSources().catch(() => null)])
+  const status =
+    withSources || Date.now() - sourcesReadAt >= SOURCES_FRESH_MS
+      ? fetchSources().then(
+          (sources) => {
+            if (gen === listGen) sourcesReadAt = Date.now();
+            return sources;
+          },
+          () => null,
+        )
+      : Promise.resolve(null);
+  const pull: Promise<void> = Promise.all([read, status])
     .then(([sessions, sources]) => {
       if (gen === listGen) emit({ sessions, loaded: true, error: "", ...(sources ? { sources, hints: setupHints(sources) } : {}) });
     })
@@ -295,7 +437,7 @@ export function refreshAgentSessions(): Promise<void> {
 // Called by the WebSocket handler: re-pull the list, and tell open sessions which ids moved (empty = all).
 export function agentsChanged(ids: string[]) {
   if (bounded) personalSessions.invalidate();
-  void refreshAgentSessions();
+  void refreshAgentSessions(ids.length === 0);
   changedListeners.forEach((l) => l(ids));
 }
 
@@ -315,9 +457,13 @@ export function resetAgents() {
   bounded = false;
   personalSessions.reset();
   listGen++;
+  invalidateInFlightGets("/agents/sessions");
+  invalidateInFlightGets("/agents");
   // the next login's first pull starts right away instead of waiting behind the old one
   inflight = null;
   queued = null;
+  queuedSources = false;
+  sourcesReadAt = Number.NEGATIVE_INFINITY;
   emit({ sessions: [], loaded: false, error: "", hints: [], sources: null });
 }
 
@@ -328,6 +474,7 @@ export function useAgentList(): ListState {
       return () => listeners.delete(l);
     },
     () => list,
+    () => list, // a static render (an Inbox detail's Trail names personal Agents, #16770) reads the same list
   );
 }
 
@@ -336,7 +483,7 @@ export function useAgentList(): ListState {
 export type GroupBy = "date" | "provider" | "none";
 export type SortBy = "updated" | "unread" | "name";
 export type ShowMode = "all" | "unread" | "sendable";
-export interface AgentView {
+export interface AgentListView {
   group?: GroupBy;
   sort?: SortBy;
   show?: ShowMode;
@@ -348,15 +495,15 @@ export interface AgentSectionDef {
 }
 export interface AgentPrefs {
   pins: string[];
-  view: AgentView;
+  view: AgentListView;
   sections: AgentSectionDef[];
   assign: Record<string, string>; // session id → section id
   /** Removed from the list: session id → when (ms). Changed only through hide / unhide; the hub keeps it on a save. */
   hidden?: Record<string, number>;
 }
-export const DEFAULT_VIEW: Required<AgentView> = { group: "date", sort: "updated", show: "all", providers: [] };
+export const DEFAULT_VIEW: Required<AgentListView> = { group: "date", sort: "updated", show: "all", providers: [] };
 export const emptyPrefs = (): AgentPrefs => ({ pins: [], view: {}, sections: [], assign: {} });
-export const viewOf = (p: AgentPrefs): Required<AgentView> => ({ ...DEFAULT_VIEW, ...Object.fromEntries(Object.entries(p.view ?? {}).filter(([, v]) => v !== undefined && v !== "")) }) as Required<AgentView>;
+export const viewOf = (p: AgentPrefs): Required<AgentListView> => ({ ...DEFAULT_VIEW, ...Object.fromEntries(Object.entries(p.view ?? {}).filter(([, v]) => v !== undefined && v !== "")) }) as Required<AgentListView>;
 export const isDefaultView = (p: AgentPrefs) => {
   const v = viewOf(p);
   return v.group === DEFAULT_VIEW.group && v.sort === DEFAULT_VIEW.sort && v.show === DEFAULT_VIEW.show && !v.providers.length;
@@ -373,20 +520,21 @@ export interface SessionGroup {
   unread: number;
 }
 
-const DAY = 86_400_000;
+/** A session's date group by local calendar days: a day is 23 or 25 hours on the days the clocks change, so the
+ *  groups start at midnights, never at 24-hour steps back from today's (#9912). */
 export function dateBucket(ms: number, now = Date.now()): { key: string; label: string; order: number } {
   const d = new Date(now);
-  const today = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  if (ms >= today) return { key: "today", label: t("lib-agents.date_today"), order: 0 };
-  if (ms >= today - DAY) return { key: "yesterday", label: t("lib-agents.date_yesterday"), order: 1 };
-  if (ms >= today - 7 * DAY) return { key: "week", label: t("lib-agents.date_week"), order: 2 };
-  if (ms >= today - 30 * DAY) return { key: "month", label: t("lib-agents.date_month"), order: 3 };
+  const daysBack = (n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - n).getTime();
+  if (ms >= daysBack(0)) return { key: "today", label: t("lib-agents.date_today"), order: 0 };
+  if (ms >= daysBack(1)) return { key: "yesterday", label: t("lib-agents.date_yesterday"), order: 1 };
+  if (ms >= daysBack(7)) return { key: "week", label: t("lib-agents.date_week"), order: 2 };
+  if (ms >= daysBack(30)) return { key: "month", label: t("lib-agents.date_month"), order: 3 };
   return { key: "older", label: t("lib-agents.date_older"), order: 4 };
 }
 
 export function matchesQuery(s: AgentSession, q: string) {
   const needle = q.trim().toLowerCase();
-  return !needle || s.title.toLowerCase().includes(needle) || s.provider.toLowerCase().includes(needle) || providerLabel(s.provider).toLowerCase().includes(needle);
+  return !needle || s.title.toLowerCase().includes(needle) || s.provider.toLowerCase().includes(needle) || providerLabel(s.provider).toLowerCase().includes(needle) || Boolean(s.previewText?.toLowerCase().includes(needle));
 }
 
 function sorter(sort: SortBy) {
@@ -451,7 +599,7 @@ export function removeSection(p: AgentPrefs, id: string): AgentPrefs {
 }
 // "Reset to default" resets the view only; pins and sections stay.
 export const resetView = (p: AgentPrefs): AgentPrefs => ({ ...p, view: {} });
-export function setView(p: AgentPrefs, patch: AgentView): AgentPrefs {
+export function setView(p: AgentPrefs, patch: AgentListView): AgentPrefs {
   return { ...p, view: { ...p.view, ...patch } };
 }
 export function toggleProvider(p: AgentPrefs, provider: string): AgentPrefs {
@@ -505,7 +653,7 @@ export function refreshAgentPrefs(): Promise<void> {
   const rev = prefsOut ? -1 : prefsRev;
   if (rev === -1) prefsPullAfterSave = true;
   const seq = ++prefsGetSeq;
-  return api<AgentPrefs>("/agents/prefs")
+  return api<AgentPrefs>("/agents/prefs", { dedupe: false })
     .then((p) => {
       hubPrefs = true;
       if (rev !== prefsRev || seq < prefsGetApplied) return;

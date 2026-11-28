@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The hub's built-in background supervisor on the Apple apps (#5083, docs/assistant/unified-entry.md "Background
 /// supervisor"): its conversation is listed with the scheduled tasks' ones and is told apart by the assistant settings'
@@ -126,7 +127,7 @@ struct BackgroundSupervisorTests {
         #expect(split.bySource(tasks: tasks).map { "\($0.source.id):\($0.sessions.map(\.sessionID))" } == [#"task:["bg-1"]"#])
         let main = SessionKey(machineID: "box", sessionID: "main-1")
         #expect(AssistantSidebarGroups.recent(all, leaders: ["lead"], main: main, background: "bg-1").map(\.sessionID) == ["mine"])
-        #expect(AssistantSidebarGroups.directions(all, leaders: ["lead"], main: main).map(\.sessionID) == ["lead"])
+        #expect(AssistantSidebarGroups.directions(all, leaders: ["lead"], main: main).map(\.id) == ["lead"])
     }
 
     /// The hub makes it on first use, while the app is open: a task's conversation the settings held do not know has

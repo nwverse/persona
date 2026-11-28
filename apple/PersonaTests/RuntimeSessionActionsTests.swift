@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Sessions without a terminal (an agent runtime's, such as Paseo's) rename, close, switch their model and rewind where
 /// their node says so (#6294: `capabilities.close`, `rename`, `model`, `rewind`, `rewind_code`); a row that does not say
@@ -60,6 +61,43 @@ struct RuntimeSessionActionsTests {
         #expect(pane.switchesModel && !pane.picksModelByModes)
         #expect(!(try session(#","pane_id":"w1:p1","agent":"codex""#)).switchesModel)
         #expect(!(try session(#","pane_id":"w1:p1","agent":"traex""#)).switchesModel)
+    }
+
+    @Test func claudeTerminalCommandsRequireAnOwnSendablePane() throws {
+        for agent in ["", #","agent":"""#, #","agent":"claude""#] {
+            let pane = try session(#","pane_id":"w1:p1""# + agent)
+            #expect(SessionModes.paneClaude(pane))
+            #expect(pane.takesModelCommand)
+        }
+
+        for fields in [
+            #","pane_id":"w1:p1","agent":"agy""#,
+            #","pane_id":"w1:p1","agent":"codex""#,
+            #","pane_id":"w1:p1","agent":"traex""#,
+            #","pane_id":"w1:p1","agent":"other""#,
+            #","pane_id":"w1:p1","assistant":true"#,
+            #","pane_id":"w1:p1","source_kind":"runtime","capabilities":{"read":true,"send":true,"terminal":true}"#,
+            #","agent":"claude""#,
+            #","pane_id":"w1:p1","capabilities":{"read":true,"send":false,"terminal":true}"#,
+            #","pane_id":"w1:p1","capabilities":{"read":true,"send":true,"terminal":false}"#,
+        ] {
+            let pane = try session(fields)
+            #expect(!SessionModes.paneClaude(pane), "\(fields)")
+            #expect(!pane.takesModelCommand, "\(fields)")
+        }
+    }
+
+    @Test func explicitModelSupportNeedsTheLaunchersList() throws {
+        let list = [AgentModel(id: "gpt-5.5", name: "GPT-5.5")]
+        let byModes = try runtime(#","model":true"#, agent: "codex")
+        #expect(!SessionModes.offersModels(byModes, list: nil))
+        #expect(SessionModes.offersModels(byModes, list: list))
+        #expect(!byModes.takesModelCommand)
+
+        let declined = try session(#","pane_id":"w1:p1","capabilities":{"read":true,"send":true,"terminal":true,"model":false}"#)
+        #expect(SessionModes.paneClaude(declined))
+        #expect(!SessionModes.offersModels(declined, list: list))
+        #expect(!declined.takesModelCommand)
     }
 
     @Test func rewindsWhereTheNodeSaysSo() throws {

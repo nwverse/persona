@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
@@ -36,6 +38,8 @@ type herdrStarter struct {
 	said chan struct{}
 	once sync.Once
 	init sync.Once
+	// started is the socket of a server this node process started itself (startHerdr); n.hstart.mu.
+	started string
 }
 
 func (s *herdrStarter) saidCh() chan struct{} {
@@ -60,22 +64,56 @@ var launchHerdr = launchHerdrServer
 // findHerdr is herdrBinary; tests replace it.
 var findHerdr = herdrBinary
 
+// dialHerdr connects to herdr's API socket; tests replace it to simulate stalled probes.
+var dialHerdr = herdr.Dial
+
 // errHerdrNotInstalled: neither the node's PATH nor the login shell has a herdr command.
 var errHerdrNotInstalled = errors.New("herdr is not installed (no herdr command in PATH or the login shell)")
 
+// errHerdrBusy: probing herdr's socket timed out or was inconclusive, so the server may be busy rather than missing (#13578).
+var errHerdrBusy = errors.New("herdr did not answer within its probe timeout (busy or overloaded)")
+
+// herdrProbe distinguishes a live herdr server (true, true), a definitively absent/refusing listener (false, true),
+// and an inconclusive/timed-out probe under load (false, false) so Persona does not misreport a busy herdr as not
+// running or spawn a duplicate server (#13578).
+func herdrProbe(ctx context.Context, sock string) (running, known bool) {
+	if sock == "" {
+		return false, true
+	}
+	if ctx.Err() != nil {
+		return false, false
+	}
+	pctx, cancel := context.WithTimeout(ctx, herdrDialWait)
+	defer cancel()
+	c, err := dialHerdr(pctx, sock) // a named pipe on Windows
+	if err == nil {
+		_ = c.Close()
+		return true, true
+	}
+	if isHerdrProbeInconclusive(ctx, pctx, err) {
+		return false, false
+	}
+	return false, true
+}
+
+func isHerdrProbeInconclusive(parent, probe context.Context, err error) bool {
+	if parent.Err() != nil || probe.Err() != nil {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EWOULDBLOCK)
+}
+
 // herdrAlive says whether something answers on herdr's socket (a stale socket file refuses the connection).
 func herdrAlive(ctx context.Context, sock string) bool {
-	if sock == "" {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(ctx, herdrDialWait)
-	defer cancel()
-	c, err := herdr.Dial(ctx, sock) // a named pipe on Windows
-	if err != nil {
-		return false
-	}
-	_ = c.Close()
-	return true
+	running, _ := herdrProbe(ctx, sock)
+	return running
 }
 
 // ensureHerdr starts herdr's server when the engine is classic herdr, starting it is on, and its socket does not
@@ -109,16 +147,22 @@ func (n *Node) startHerdrServer(ctx context.Context) (map[string]any, error) {
 	return map[string]any{"running": herdrAlive(ctx, h.c.Socket)}, nil
 }
 
-// startHerdr starts herdr's server unless it already answers, whatever asked for it.
+// startHerdr starts herdr's server unless it already answers or its probe timed out (busy), whatever asked for it.
 func (n *Node) startHerdr(ctx context.Context, h *herdrHost, why string) error {
 	sock := h.c.Socket
-	if herdrAlive(ctx, sock) {
+	if running, known := herdrProbe(ctx, sock); running {
 		return nil
+	} else if !known {
+		n.logf("herdr: probe timed out on %s (%s); leaving server alone", sock, why)
+		return errHerdrBusy
 	}
 	n.hstart.mu.Lock()
 	defer n.hstart.mu.Unlock()
-	if herdrAlive(ctx, sock) { // started by the call this one waited for
+	if running, known := herdrProbe(ctx, sock); running { // started by the call this one waited for
 		return nil
+	} else if !known {
+		n.logf("herdr: probe timed out on %s (%s); leaving server alone", sock, why)
+		return errHerdrBusy
 	}
 	dir := filepath.Dir(sock)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -129,8 +173,11 @@ func (n *Node) startHerdr(ctx context.Context, h *herdrHost, why string) error {
 		return fmt.Errorf("herdr: lock %s: %w", dir, err)
 	}
 	defer unlock()
-	if herdrAlive(ctx, sock) {
+	if running, known := herdrProbe(ctx, sock); running {
 		return nil
+	} else if !known {
+		n.logf("herdr: probe timed out on %s (%s); leaving server alone", sock, why)
+		return errHerdrBusy
 	}
 	bin := findHerdr(ctx, h.c.Bin)
 	if bin == "" {
@@ -149,6 +196,7 @@ func (n *Node) startHerdr(ctx context.Context, h *herdrHost, why string) error {
 		return err
 	}
 	n.logf("herdr: server running after %s", time.Since(start).Round(10*time.Millisecond))
+	n.hstart.started = sock
 	return nil
 }
 
@@ -212,7 +260,8 @@ func herdrBinary(ctx context.Context, bin string) string {
 // the locale, where herdr's socket, session and config are (so it listens where the node looks and reads the config
 // file herdr.WorktreesDir reads), and where Persona's data directory is (PERSONA_HOME, and the older name the node
 // still reads): every pane inherits it, and `personad launch` and the hooks find the node's socket in that directory.
-// Nothing else — no ANTHROPIC_*, no proxies, no PATH: the login shell sets its own.
+// Nothing else — no ANTHROPIC_*, no proxies, no PATH: the login shell sets its own, on the system's directories and
+// the tool directories (herdrToolDirs).
 var herdrServerKeep = append([]string{"HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
 	"XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "XDG_DATA_HOME", "XDG_STATE_HOME", "HERDR_SOCKET_PATH", "HERDR_SESSION",
 	"HERDR_CONFIG_PATH"},
@@ -225,8 +274,10 @@ func personaHomeNames() []string {
 }
 
 // herdrServerEnv is the environment the login shell starts with: the kept variables of environ, the shell, a
-// terminal type and the system PATH (the login shell's profile builds on it).
-func herdrServerEnv(environ []string, shell string) []string {
+// terminal type and the system PATH with tools after it (herdrToolDirs: the version managers' shims, which the rc file
+// that activates mise is not read for, and hub.json's machines[].extra_path; #10127). The login shell's profile
+// builds on it.
+func herdrServerEnv(environ []string, shell string, tools []string) []string {
 	keep := map[string]bool{}
 	for _, k := range herdrServerKeep {
 		keep[k] = true
@@ -238,7 +289,7 @@ func herdrServerEnv(environ []string, shell string) []string {
 			out = append(out, kv)
 		}
 	}
-	return append(out, "SHELL="+shell, "TERM=xterm-256color", "PATH=/usr/bin:/bin:/usr/sbin:/sbin")
+	return append(out, "SHELL="+shell, "TERM=xterm-256color", "PATH="+withDirsAfter("/usr/bin:/bin:/usr/sbin:/sbin", tools))
 }
 
 // withHerdrSession names the herdr session of the node's data directory in the server's environment (herdr.Session:
@@ -299,4 +350,34 @@ func sessionNote(session string) string {
 		return ""
 	}
 	return " (session " + session + ", the one of this data directory)"
+}
+
+// StopUnusedHerdr is what a node serving one hub connection over stdio does as it ends (#10114): the herdr server it
+// started itself in this process (startHerdr) is stopped when nothing is open in it, so a hub's own machine, or a
+// throwaway hub run for a check, leaves no server behind that it made and nobody used. A server with any pane, one
+// this process did not start, or one that does not answer is left as it is; a later start starts one again. The
+// resident node (--attach) never calls it: its herdr is the user's working set.
+func (n *Node) StopUnusedHerdr(ctx context.Context) {
+	n.hstart.mu.Lock()
+	defer n.hstart.mu.Unlock()
+	sock := n.hstart.started
+	if sock == "" {
+		return
+	}
+	c := &herdr.Client{Bin: "herdr", Socket: sock}
+	panes, err := c.PaneCount(ctx)
+	switch {
+	case err != nil:
+		n.logf("herdr: the server this node started (%s) did not say what is open in it, left running: %v", sock, err)
+		return
+	case panes > 0:
+		n.logf("herdr: the server this node started (%s) has %d panes, left running", sock, panes)
+		return
+	}
+	if err := c.ServerStop(ctx); err != nil {
+		n.logf("herdr: could not stop the unused server this node started (%s): %v", sock, err)
+		return
+	}
+	n.hstart.started = ""
+	n.logf("herdr: stopped the server this node started (%s): nothing was open in it", sock)
 }

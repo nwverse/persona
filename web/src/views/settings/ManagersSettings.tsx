@@ -6,7 +6,7 @@ import { formatList, t } from "../../i18n";
 import { isAbort } from "../../lib/api";
 import { ago } from "../../lib/format";
 import {
-  deleteBlocked, deleteManager, listManagers, makeDefault, managerError, NAME_MAX, renameManager, renewCode, statusLine,
+  deleteBlocked, deleteManager, hideManager, listManagers, makeDefault, managerError, NAME_MAX, renameManager, renewCode, statusLine,
   unsupported, validName, whereText, type BotConflict, type InstallCode, type Manager, type Tone,
 } from "../../lib/managers";
 import { loadNotifyPrefs, managerMuted, saveManagerPush, useNotifyPrefs, useNotifyPrefsGeneration } from "../../lib/notify";
@@ -114,6 +114,7 @@ function ManagerRow({ m, now, onOpen }: { m: Manager; now: number; onOpen: () =>
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px]", m.online || m.installing ? "text-ink" : "text-ink-2")}>{m.name}</span>
           {m.default && <Pill tone="accent">{t("settings-managers.default")}</Pill>}
+          {m.pending_restart && <Pill tone="orange">{t("settings-managers.pending_restart")}</Pill>}
           {m.needs_update && <Pill tone="orange">{t("settings-managers.needs_update")}</Pill>}
         </div>
         <div className="mt-0.5 truncate text-[11.5px] text-ink-3">{[status.text, where].filter(Boolean).join(" · ")}</div>
@@ -144,6 +145,34 @@ function PushSwitch({ id }: { id: string }) {
         </Row>
       </div>
       <p className="px-1 text-[11.5px] leading-snug text-ink-3">{t("settings-managers.push_note")}</p>
+    </div>
+  );
+}
+
+/** The built-in assistant's place in the switcher (#9055): off keeps it out while it is not used. The hub refuses to
+ *  hide it while it is the default or has a computer, so the switch cannot turn off then; it can always turn on. */
+function SwitcherSwitch({ m, ownMachines, onChanged }: { m: Manager; ownMachines: number; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const inUse = !!m.default || ownMachines > 0;
+  const on = !m.hide;
+  const save = (next: boolean) => {
+    setBusy(true);
+    hideManager(m.id, !next)
+      .then(onChanged, (e) => {
+        if (!isAbort(e)) toast(t("settings-managers.in_switcher_failed", { error: managerError(e) }), "error");
+      })
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="overflow-hidden rounded-card bg-inset shadow-hairline">
+        <Row label={t("settings-managers.in_switcher")}>
+          <Switch on={on} label={t("settings-managers.in_switcher")} disabled={busy || (on && inUse)} onChange={save} />
+        </Row>
+      </div>
+      <p className="px-1 text-submeta leading-snug text-ink-3">
+        {t(inUse ? "settings-managers.in_switcher_in_use" : "settings-managers.in_switcher_note")}
+      </p>
     </div>
   );
 }
@@ -245,6 +274,7 @@ function ManagerDetail({ m, onClose, onChanged, onCode }: { m: Manager | null; o
       <div className="flex flex-col gap-4">
         <div className="divide-y divide-line overflow-hidden rounded-card bg-inset shadow-hairline">
           <Row label={t("settings-managers.row_status")}>
+            {shownM.pending_restart && <Pill tone="orange">{t("settings-managers.pending_restart")}</Pill>}
             {shownM.needs_update && <Pill tone="orange">{t("settings-managers.needs_update")}</Pill>}
             <span aria-hidden className={cx("size-2 shrink-0 rounded-full", DOT[status.tone])} />
             <span className="truncate">{status.text}</span>
@@ -254,8 +284,10 @@ function ManagerDetail({ m, onClose, onChanged, onCode }: { m: Manager | null; o
           {shownM.online && shownM.since && <Row label={t("settings-managers.row_since")}>{ago(shownM.since)}</Row>}
           {!shownM.online && shownM.last_seen && <Row label={t("settings-managers.row_last_seen")}>{ago(shownM.last_seen)}</Row>}
         </div>
+        {shownM.pending_restart && <p className="-mt-2 px-1 text-submeta leading-snug text-orange" data-testid="pending-restart-note">{t("settings-managers.pending_restart_note")}</p>}
         {shownM.needs_update && <p className="-mt-2 px-1 text-[11.5px] leading-snug text-ink-3">{t("settings-managers.needs_update_note")}</p>}
         {!installing && <PushSwitch id={shownM.id} />}
+        {shownM.builtin && !installing && <SwitcherSwitch m={shownM} ownMachines={ownMachines} onChanged={onChanged} />}
         <div className="flex flex-wrap gap-2">
           {!installing && (
             <Button icon="pencil" disabled={busy} onClick={() => (setName(shownM.name), setStep("rename"))}>{t("settings-managers.rename")}</Button>

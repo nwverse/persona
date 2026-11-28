@@ -82,8 +82,27 @@
         "expires_at": {"type": "string", "format": "date-time"}
       }
     },
+    "SettingsCheckParams": {
+      "description": "settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.",
+      "type": "object",
+      "properties": {
+        "config": {"description": "The whole configuration as it would be saved, the schema's defaults filled in."},
+        "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
+        "proxy": {"type": "string", "description": "The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of permissions.network names an address: requests sent through it reach the addresses this configuration names, its ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's ordinary proxy (an older hub sends none)."}
+      },
+      "required": ["config", "secrets"]
+    },
+    "SettingsCheckResult": {
+      "description": "settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and cuts it to 300 characters).",
+      "type": "object",
+      "properties": {
+        "ok": {"type": "boolean"},
+        "error": {"type": "string"}
+      },
+      "required": ["ok"]
+    },
     "HubRole": {"type": "string", "enum": ["center", "member"]},
-    "HubCapability": {"type": "string", "enum": ["inbox_group", "inbox_group_state"]},
+    "HubCapability": {"type": "string", "enum": ["inbox_group", "inbox_group_state", "tool_images", "tool_views"]},
     "InitializeParams": {
       "description": "What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer hubs send both.",
       "type": "object",
@@ -93,6 +112,7 @@
         "extension": {"$ref": "#/$defs/ExtensionInfo"},
         "plugin": {"$ref": "#/$defs/ExtensionInfo"},
         "config": {"description": "The configuration with the schema's defaults filled in."},
+        "inbox_visibility": {"description": "The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime authorization input, not extension settings persisted in the extension registry."},
         "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
         "granted": {"$ref": "manifest.schema.json#/$defs/Permissions"},
         "active": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -249,6 +269,12 @@
         "locale": {"type": "string"},
         "platform": {"$ref": "view.schema.json#/$defs/Platform"},
         "ui_version": {"type": "integer"},
+        "unsupported": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64},
+          "description": "Component types this client cannot draw even within ui_version (such as [\"scene\"] while rendering v12 \"map\"). The hub downgrades each listed type in place."
+        },
         "stream": {"$ref": "stream.schema.json#/$defs/UIStreamCapability",
           "description": "Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client or hub advertises it."}
       }
@@ -278,7 +304,9 @@
         "icon": {"$ref": "view.schema.json#/$defs/NavIcon"},
         "opens": {"type": "string"},
         "badge": {"$ref": "view.schema.json#/$defs/Badge"},
-        "connector": {"type": "string"}
+        "connector": {"type": "string"},
+        "group": {"$ref": "manifest.schema.json#/$defs/UIGroup", "description": "A nav_page's sidebar group, its title in the request's language (#9071)."},
+        "icon_color": {"$ref": "view.schema.json#/$defs/Color", "description": "A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822)."}
       },
       "required": ["id", "title", "placement"]
     },
@@ -505,6 +533,81 @@
       },
       "required": ["status"]
     },
+    "TextLookupStateParams": {
+      "description": "text_lookup.state's parameters: which contribution to ask for the words the user saved and whether saved words are underlined.",
+      "type": "object",
+      "properties": {"contribution": {"type": "string"}},
+      "required": ["contribution"]
+    },
+    "TextLookupStateResult": {
+      "description": "What text_lookup.state answers. words is capped by the manager at 5000.",
+      "type": "object",
+      "properties": {
+        "underline_saved": {"type": "boolean"},
+        "words": {"type": "array", "maxItems": 5000, "items": {"type": "string", "maxLength": 64}}
+      },
+      "required": ["underline_saved"]
+    },
+    "TextLookupLookupParams": {
+      "description": "text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it, the word's language and the language of the app.",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "word": {"type": "string", "minLength": 1, "maxLength": 64},
+        "context": {"type": "string", "maxLength": 500},
+        "lang": {"type": "string"},
+        "ui_lang": {"type": "string"}
+      },
+      "required": ["contribution", "word", "lang", "ui_lang"]
+    },
+    "TextLookupSense": {
+      "description": "One meaning of a looked-up word.",
+      "type": "object",
+      "properties": {
+        "pos": {"type": "string", "maxLength": 40},
+        "text": {"type": "string", "maxLength": 500}
+      },
+      "required": ["text"]
+    },
+    "TextLookupLookupResult": {
+      "description": "What text_lookup.lookup answers: found is false when the dictionary has no entry.",
+      "type": "object",
+      "properties": {
+        "found": {"type": "boolean"},
+        "word": {"type": "string", "maxLength": 64},
+        "lemma": {"type": "string", "maxLength": 64},
+        "phonetic": {"type": "string", "maxLength": 80},
+        "senses": {"type": "array", "maxItems": 20, "items": {"$ref": "#/$defs/TextLookupSense"}},
+        "saved": {"type": "boolean"}
+      },
+      "required": ["found", "word", "saved"]
+    },
+    "TextLookupSaveParams": {
+      "description": "text_lookup.save's parameters: the word to remember, an optional sentence around it and where the user saved it from.",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "word": {"type": "string", "minLength": 1, "maxLength": 64},
+        "context": {"type": "string", "maxLength": 500},
+        "source": {"type": "string", "maxLength": 200}
+      },
+      "required": ["contribution", "word"]
+    },
+    "TextLookupRemoveParams": {
+      "description": "text_lookup.remove's parameters: the saved word to forget.",
+      "type": "object",
+      "properties": {
+        "contribution": {"type": "string"},
+        "word": {"type": "string", "minLength": 1, "maxLength": 64}
+      },
+      "required": ["contribution", "word"]
+    },
+    "TextLookupSavedResult": {
+      "description": "What text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.",
+      "type": "object",
+      "properties": {"saved": {"type": "boolean"}},
+      "required": ["saved"]
+    },
     "SecretPurpose": {
       "description": "What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the user approved it on the phone, id the variable's name, machine and session the Agent's).",
       "type": "object",
@@ -540,7 +643,8 @@
       "properties": {
         "contribution": {"type": "string"},
         "reference": {"type": "string", "maxLength": 1024},
-        "purpose": {"$ref": "#/$defs/SecretPurpose"}
+        "purpose": {"$ref": "#/$defs/SecretPurpose"},
+        "quiet": {"type": "boolean", "description": "The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them."}
       },
       "required": ["contribution", "reference", "purpose"]
     },
@@ -551,6 +655,153 @@
         "value": {"type": "string", "minLength": 1, "maxLength": 16384}
       },
       "required": ["value"]
+    },
+    "SecretStoreField": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "STRING",
+            "CONCEALED",
+            "OTP"
+          ]
+        },
+        "delete": {
+          "type": "boolean"
+        },
+        "keep_value": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "A public field name/type or edit action (delete, keep_value); never a value or source path."
+    },
+    "SecretStoreTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "edit"
+          ]
+        },
+        "vault": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "item": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretStoreField"
+          },
+          "minItems": 1,
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "operation",
+        "vault",
+        "fields"
+      ],
+      "description": "The canonical public target approved on the secret storage card."
+    },
+    "SecretStoreParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contribution": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "describe",
+            "prepare",
+            "commit"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/SecretStoreTarget"
+        },
+        "machine": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "session": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "key_id": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "sealed": {
+          "type": "string",
+          "maxLength": 550000
+        }
+      },
+      "required": [
+        "phase",
+        "target",
+        "machine",
+        "session"
+      ],
+      "description": "secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted payload."
+    },
+    "SecretStoreResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SecretStoreTarget"
+        },
+        "vault_name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "key_id": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "references": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "description": "Metadata and a recipient key, or references of written fields. Never values."
     },
     "SecretsUsedEvent": {
       "description": "secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own page shows. Never the value.",

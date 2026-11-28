@@ -79,9 +79,8 @@ func (d *modesDevices) Request(_ context.Context, method string, _ json.RawMessa
 	return nil, false, nil
 }
 
-// An effort set on the main conversation (the only one with a pick, #6911) through POST …/modes (the apps' effort
-// chip) becomes the pick's, so the next message runs on it instead of putting the pick's back. A modes effort on
-// another conversation makes no pick and changes nothing.
+// An effort set on a conversation with a pick through POST …/modes (the apps' effort chip) becomes the pick's, so the
+// next message runs on it instead of putting the pick's back. A modes effort on one without a pick makes none.
 func TestModesEffortBecomesThePicks(t *testing.T) {
 	s, _ := pickFixture(t)
 	if r := putPick(t, s, "main", `{"launcher":"claude","model":"opus","effort":"high"}`); r.Code != 200 {
@@ -115,6 +114,13 @@ func TestModesEffortBecomesThePicks(t *testing.T) {
 	}
 	if p, _ := s.modelPickOf(context.Background(), "server", "main"); p.Effort != "low" {
 		t.Fatalf("the main pick changed: %+v", p)
+	}
+	if r := putPick(t, s, "side", `{"launcher":"claude","model":"opus","effort":"high"}`); r.Code != 200 { // another conversation with a pick
+		t.Fatal(r.Body.String())
+	}
+	call("side", "session.modes", map[string]any{"effort": "max"})
+	if p, _ := s.modelPickOf(context.Background(), "server", "side"); p.Effort != "max" {
+		t.Fatalf("the side pick's effort: %+v", p)
 	}
 }
 
@@ -228,7 +234,6 @@ func TestPicksReadWhileOneIsWritten(t *testing.T) {
 	f := newFakeHub().withMachine()
 	st := &gatedStore{memStore: &memStore{}, entered: make(chan struct{}, 1), open: make(chan struct{})}
 	s := newServiceOn(t, f, st)
-	setSettings(t, s, func(v *Settings) { v.Main = "main" }) // only the main conversation's pick is read back (#6911)
 	if _, ok := s.modelPicksSet(); !ok {
 		t.Fatal("book unreadable")
 	}

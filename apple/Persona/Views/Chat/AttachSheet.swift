@@ -272,8 +272,8 @@ private enum AttachWarmSlot {
 @Observable
 private final class AttachSheetState<More: View> {
     var caption = ""
-    var photoRoom = 4
-    var videoRoom = 4
+    var photoRoom = ImageLimits.standard.perMessage
+    var videoRoom = VideoAttachments.most
     var hasCamera = false
     var showsMore = true
     var initialWidth: CGFloat = Theme.Space.flush
@@ -416,7 +416,7 @@ private struct AttachSheet<More: View>: View {
         panel.edited[id] = edit.edits.isEmpty ? nil : edit
         if !panel.picked.contains(id) {
             guard AttachGrid<More>.hasRoom(for: asset, picked: panel.picked, photoRoom: state.photoRoom, videoRoom: state.videoRoom) else {
-                AppModel.shared.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+                AppModel.shared.toast = Toast(AttachGrid<More>.noRoom(for: asset), style: .error)
                 return
             }
             panel.picked.append(id)
@@ -701,7 +701,7 @@ private struct AttachGrid<More: View>: View {
         let id = asset.localIdentifier
         if let i = panel.picked.firstIndex(of: id) { panel.picked.remove(at: i); return }
         guard hasRoom(for: asset, picked: panel.picked, photoRoom: state.photoRoom, videoRoom: state.videoRoom) else {
-            AppModel.shared.toast = Toast(String(localized: "Up to 4 at a time"), style: .error)
+            AppModel.shared.toast = Toast(noRoom(for: asset), style: .error)
             return
         }
         panel.picked.append(id)
@@ -713,6 +713,13 @@ private struct AttachGrid<More: View>: View {
         let video = asset.mediaType == .video
         let same = picked.compactMap(AttachLibrary.asset).filter { ($0.mediaType == .video) == video }.count
         return same < (video ? videoRoom : photoRoom)
+    }
+
+    /// The word when `asset` has no room: the videos' own limit, or no more room for pictures (a picture's room is the
+    /// hub's pictures and the files the rest go as, #12973, so no one number says it).
+    static func noRoom(for asset: PHAsset) -> String {
+        asset.mediaType == .video ? String(localized: "Up to \(VideoAttachments.most) videos at a time")
+                                  : String(localized: "No room for more pictures in this message")
     }
 }
 
@@ -855,9 +862,7 @@ private struct AttachPhotoEditor: View {
                     ProgressView().tint(.white)
                 }
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }.accessibilityIdentifier("image-edit-cancel")
-                    }
+                    SheetClose(id: "image-edit-cancel") { dismiss() }
                 }
                 .toolbarBackground(.black, for: .navigationBar)
                 .toolbarColorScheme(.dark, for: .navigationBar)
@@ -1602,22 +1607,26 @@ extension AttachPanel {
 }
 
 extension AttachMoreSection {
-    /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the calls and the
-    /// camera, then Mention. A row whose action is nil is not there (no call before a conversation exists, no camera).
+    /// The rows every composer's + offers besides photos and files, in their order (#3225, #3805): the camera, then
+    /// Mention. A row whose action is nil is not there (no camera). No Voice Chat or Call Persona rows (#9887 one
+    /// button): the composer's phone icon is the one voice entry.
     /// `scan`: Scan Document (#3720), next to Take Photo. `meeting`: Persona's main conversation's Meeting Recording
     /// (#3723), the sidebar's row by its words: with a recording under way it says so and opens it. `context`: Add as
     /// Context › Knowledge Note… / To-do… / Inbox Item… (#3721), folded under Mention.
-    static func common(voice: (() -> Void)?, camera: (() -> Void)?, scan: (() -> Void)? = nil, glasses: (() -> Void)?,
+    /// `modules`: the active modules' composer actions (`Modules.registry.composerActions`, Glasses Photo), after Scan
+    /// Document, each row `attach-<id>`; `open` presents one's sheet.
+    static func common(camera: (() -> Void)?, scan: (() -> Void)? = nil,
+                       modules: [ModuleComposerAction] = [], open: @escaping (ModuleComposerAction) -> Void = { _ in },
                        meeting: (() -> Void)? = nil, mention: @escaping () -> Void,
                        context: ((ContextPickKind) -> Void)? = nil) -> [AttachMoreSection] {
         var capture: [AttachMoreRow] = []
-        if let voice { capture.append(AttachMoreRow(id: "composer-menu-voice", title: String(localized: "Voice Chat"), symbol: Theme.Icon.voiceChannel, action: voice)) }
         if let camera { capture.append(AttachMoreRow(id: "composer-menu-camera", title: String(localized: "Take Photo [Chat View 6e3a10]"), symbol: Theme.Icon.camera, action: camera)) }
         if let scan { capture.append(AttachMoreRow(id: "composer-menu-scan", title: String(localized: "Scan Document"), symbol: Theme.Icon.scanDocument, action: scan)) }
-        if let glasses { capture.append(AttachMoreRow(id: "attach-glasses", title: String(localized: "Glasses Photo"), symbol: Theme.Icon.glasses, action: glasses)) }
+        capture += modules.map { action in
+            AttachMoreRow(id: "attach-" + action.id, title: String(localized: action.title), symbol: action.symbol) { open(action) }
+        }
         if let meeting {
-            let recording = RecordingCapture.shared.state != .idle
-            capture.append(AttachMoreRow(id: "composer-menu-meeting", title: recording ? String(localized: "Recording… Open") : String(localized: "Record [Recordings Section ef2821]"),
+            capture.append(AttachMoreRow(id: "composer-menu-meeting", title: MeetingWords.running ?? MeetingWords.start,
                                          symbol: Theme.Icon.recording, action: meeting))
         }
         var sections: [AttachMoreSection] = []
@@ -1643,14 +1652,15 @@ extension AttachMoreSection {
 }
 
 extension ComposerAttachments {
-    /// What was picked in the panel, into the box: pictures as its photos (at most `MessagePhotos.limit`), the ones
-    /// edited there as edited (and still editable in the strip), videos uploaded to `machine` as files; a toast says how
-    /// many could not be read.
-    func addPicked(_ picks: AttachPicks, machine: MachineRef, model: AppModel) async {
+    /// What was picked in the panel, into the box: pictures as its photos while they fit `limits` (the hub's, #12973) and
+    /// as files to `machine` past them, the ones edited there as edited (and still editable in the strip), videos uploaded
+    /// to `machine` as files; a toast says how many could not be read.
+    func addPicked(_ picks: AttachPicks, machine: MachineRef, model: AppModel, limits: ImageLimits, dest: String? = nil) async {
         var failed = 0
+        let spill = MessagePhotos.spill(into: files, machine: machine, model: model, dest: dest)
         for id in picks.ids {
             if let edit = picks.edited[id] {
-                add(edit, model: model)
+                add(edit, model: model, limits: limits, spill: spill)
                 continue
             }
             guard let asset = AttachLibrary.asset(id) else { failed += 1; continue }
@@ -1659,7 +1669,7 @@ extension ComposerAttachments {
                 videos.start(staged: url, machine: machine, model: model)
             } else {
                 guard let picture = await AttachLibrary.picture(asset) else { failed += 1; continue }
-                MessagePhotos.add(picture, to: &images, model: model)
+                MessagePhotos.add(picture, to: &images, model: model, limits: limits, spill: spill)
             }
         }
         if failed > 0 {

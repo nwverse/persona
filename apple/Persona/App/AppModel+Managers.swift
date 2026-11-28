@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Several managers on one hub (docs/assistant/managers.md "Clients"), as the app reads them outside Settings › Assistants:
 // each group's roster, read when its hub says hello and on each of its `managers` pushes. Pages that group a list read
@@ -19,6 +20,15 @@ extension AppModel {
     /// The same for what is said in conversation `key` (a voice call's captions): another assistant's conversation
     /// opened from elsewhere names its own, as the top bar does.
     func assistantShownName(in key: SessionKey) -> String { otherAssistant(of: key)?.name ?? assistantShownName }
+
+    /// Whose page it is, as the Assistant chat's top bar says it (#9973) and the screenshot banner shows it (#12243):
+    /// the named manager on a hub with several, else the current assistant (with one too, as the sidebar's head shows
+    /// it), else the persona's name, "Persona" only as the last fallback. `assistantShownName` keeps the persona's
+    /// name with one assistant (the composer, calls, voice captions).
+    var assistantTitleName: String { assistantManager?.name ?? currentAssistant?.name ?? persona.name }
+
+    /// The same for conversation `key`: another assistant's conversation opened from elsewhere names its own.
+    func assistantTitleName(in key: SessionKey?) -> String { key.flatMap { otherAssistant(of: $0) }?.name ?? assistantTitleName }
 
     /// Reads group's roster again. A hub without one (404) has none; one that can't be read now keeps the last.
     func refreshManagerRoster(_ group: String) async {
@@ -49,7 +59,12 @@ extension AppModel {
         guard managerRosters[group] != roster || assistantPick(in: group) != wasPick else {
             // The same roster and pick, yet what the pages list or ask may have changed: the hub answered a roster the
             // last launch kept, or that it has none (a kept pick stopped counting).
-            if group == hub?.group { followScope() }
+            if group == hub?.group {
+                followScope()
+                #if os(iOS)
+                refreshStarred(force: false)
+                #endif
+            }
             return
         }
         let was = managerRosters[group].map { shownOwner($0, group: group) }
@@ -63,9 +78,10 @@ extension AppModel {
             assistantByGroup[group] = roster.flatMap { assistantByManager[Self.managerKey(group, $0.defaultID)] }
         }
         managerRosters[group] = roster
-        // A pick of a manager that left the roster goes with it: back to the default, also should it come back. A hub
-        // without a roster leaves the pick alone: it names nothing there.
-        if let roster, let pick = assistantPicks[group], !roster.installed.contains(where: { $0.id == pick }) {
+        // A pick of a manager that left the roster goes with it: back to the default, also should it come back. So does
+        // one the hub now keeps out of the switcher (the built-in assistant hidden, #9055). A hub without a roster leaves
+        // the pick alone: it names nothing there.
+        if let roster, let pick = assistantPicks[group], !roster.canPick(pick) {
             assistantPicks[group] = nil
         }
         saveSnapshot()
@@ -84,7 +100,14 @@ extension AppModel {
         let now = roster.map { shownOwner($0, group: group) }
         let back = wasOffline && assistantManagerOffline == nil
         let switched = was != nil ? was != now : assistantPick(in: group) != wasPick
-        if defaultMoved || back || switched { assistantManagerChanged(switched: switched) } else { relistAssistant() }
+        if defaultMoved || back || switched {
+            assistantManagerChanged(switched: switched)
+        } else {
+            relistAssistant()
+            #if os(iOS)
+            refreshStarred(force: false)
+            #endif
+        }
     }
 
     /// The default manager's Persona settings for group while another assistant is current (`assistantByGroup`), unless
@@ -142,7 +165,7 @@ extension AppModel {
         guard let roster = managerRosters[key.group], roster.isMulti else { return nil }
         let manager: String?
         if let s = session(key) {
-            guard s.assistant, !s.isHealth else { return nil }
+            guard s.assistant, !s.inSpace else { return nil }
             manager = s.manager
         } else {
             guard let m = assistantItemManagers[key] else { return nil }
@@ -173,10 +196,11 @@ extension AppModel {
 
     /// Manager `id` is the current assistant from now on, on this device (nil: the hub's default again, whichever that
     /// becomes): the Persona page's settings, conversations and readiness are that manager's. The pick is the manager
-    /// itself, so it stays when another one becomes the default. Nothing for one the roster hasn't installed.
+    /// itself, so it stays when another one becomes the default. Nothing for one the roster hasn't installed, or keeps
+    /// out of the switcher.
     func selectAssistantManager(_ id: String?) {
         guard let group = hub?.group, let roster = managerRosters[group] else { return }
-        if let id, !roster.installed.contains(where: { $0.id == id }) { return }
+        if let id, !roster.canPick(id) { return }
         let was = assistantManagerID
         assistantPicks[group] = id
         if assistantManagerID != was { assistantManagerChanged() }
@@ -184,12 +208,8 @@ extension AppModel {
 
     /// Settings, on the page `settingsPath` names, where the caller has no way of its own to it.
     func showSettings() {
-        #if os(macOS)
-        MacShellState.shared.go(.settings, self)
-        #else
         selectedTab = .settings
         if tabRouter != nil { shellSettings = true }
-        #endif
     }
 
     /// Whether `api` was made for the Persona page as it is now (its group and manager): what it read lands.

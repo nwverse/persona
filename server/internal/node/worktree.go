@@ -1,15 +1,16 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -57,7 +58,7 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	if workspace == "" && cwd == "" {
 		return nil, "", repo, errors.New("workspace_id is required")
 	}
-	if kind == "" {
+	if kind = spaceHostKind(kind); kind == "" {
 		kind = n.defaultKind()
 	}
 	if _, runtime := engineRuntimes[kind]; runtime && n.hosts.Get(kind) == nil {
@@ -94,7 +95,7 @@ func (n *Node) repoOfWorkspace(ctx context.Context, kind, workspace, cwd string)
 	}
 	dir, err = n.gitDir(dir)
 	if err != nil {
-		return nil, "", repo, errors.New("不知道这个工作区的目录")
+		return nil, "", repo, composerError(ctx, "workspace_dir_unknown")
 	}
 	if repo, err = repoAt(ctx, dir); err != nil {
 		return nil, "", repo, err
@@ -124,7 +125,7 @@ func repoAt(ctx context.Context, dir string) (worktreeRepo, error) {
 	var repo worktreeRepo
 	root, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil || strings.TrimSpace(root) == "" {
-		return repo, errors.New("这个工作区不在 Git 仓库里")
+		return repo, composerError(ctx, "not_git_workspace")
 	}
 	repo.root = strings.TrimSpace(root)
 	// "" on a detached HEAD
@@ -252,47 +253,56 @@ func (n *Node) worktreePrepare(ctx context.Context, kind, workspace, cwd string)
 // revision expression.
 func checkBranch(ctx context.Context, root, branch string) error {
 	if branch == "" {
-		return errors.New("分支名不能为空")
+		return composerError(ctx, "branch_required")
 	}
 	if len(branch) > maxBranch || strings.HasPrefix(branch, "-") {
-		return errors.New("分支名不合法")
+		return composerError(ctx, "branch_invalid")
 	}
 	if out, err := git(ctx, root, "check-ref-format", "--branch", branch); err != nil || strings.TrimSpace(out) != branch {
-		return errors.New("分支名不合法")
+		return composerError(ctx, "branch_invalid")
 	}
 	return nil
 }
 
 // checkoutPath turns what was typed into the absolute path of the checkout, and refuses one that already holds
-// something (an empty directory is fine: git fills it) or lies inside the repository's own git directory.
-func (n *Node) checkoutPath(root, typed string) (string, error) {
+// something (an empty directory is fine: git fills it; anything else is CodeWorktreePathTaken, in the request's
+// language) or lies inside the repository's own git directory.
+func (n *Node) checkoutPath(ctx context.Context, root, typed string) (string, error) {
 	p := strings.TrimSpace(typed)
 	if p == "" {
-		return "", errors.New("检出路径不能为空")
+		return "", composerError(ctx, "path_required")
 	}
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		p = filepath.Join(n.home, p[1:])
 	}
 	if !filepath.IsAbs(p) {
-		return "", errors.New("检出路径要写完整路径")
+		return "", composerError(ctx, "path_not_absolute")
 	}
 	p = filepath.Clean(p)
 	// Compared as real paths: git gives the root with its symlinks resolved (macOS's /var is /private/var), so a
 	// path typed through a link would pass a check of the spelling alone (#2650).
 	if within(realPath(p), realPath(filepath.Join(root, ".git"))) {
-		return "", errors.New("检出路径不能放在 .git 里面")
+		return "", composerError(ctx, "path_in_git")
 	}
 	switch fi, err := os.Stat(p); {
 	case err == nil && !fi.IsDir():
-		return "", errors.New("检出路径已经是一个文件")
+		return "", composerError(ctx, "path_is_file")
 	case err == nil:
 		if entries, err := os.ReadDir(p); err != nil || len(entries) > 0 {
-			return "", errors.New("检出路径已存在且不是空目录")
+			return "", pathTakenError(ctx, p)
 		}
 	case !errors.Is(err, os.ErrNotExist):
-		return "", fmt.Errorf("读不了检出路径：%w", err)
+		return "", composerError(ctx, "path_unreadable", i18n.Args{"reason": err.Error()})
 	}
 	return p, nil
+}
+
+// pathTakenError is checkoutPath's refusal of a checkout path that holds something: coded, so the hub can say what to
+// do next (the path's own checkout may be the task's to reuse), and never adopted here.
+func pathTakenError(ctx context.Context, p string) error {
+	data, _ := json.Marshal(map[string]string{"path": p})
+	return &rpc.Error{Code: proto.CodeWorktreePathTaken, Data: data,
+		Message: i18n.T(i18n.From(ctx), "worktree-composer.path_taken", i18n.Args{"path": p})}
 }
 
 // within: p is dir or lies under it (both clean).
@@ -300,15 +310,18 @@ func within(p, dir string) bool {
 	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
 }
 
-// worktreeCreate makes the checkout and opens it as a workspace of the host.
-func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch, path string, parents ...string) (proto.WorktreeCreateResult, error) {
+// worktreeCreate makes the checkout and, unless a grouped task requests checkout only, opens it as a workspace of the host.
+func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch, path, parentWorkspace string, openWorkspace *bool) (proto.WorktreeCreateResult, error) {
 	var res proto.WorktreeCreateResult
 	branch = strings.TrimSpace(branch)
 	if rt, runtime, err := n.worktreeRuntime(ctx, kind); runtime { // an engine runtime makes them (runtimeworkspaces.go)
 		if err != nil {
 			return res, err
 		}
-		return n.runtimeWorktreeCreate(ctx, rt, workspace, cwd, branch, path, firstOf(parents...))
+		if openWorkspace != nil && !*openWorkspace {
+			return res, errors.New("open_workspace=false is supported only on classic herdr or Orca")
+		}
+		return n.runtimeWorktreeCreate(ctx, rt, workspace, cwd, branch, path, parentWorkspace)
 	}
 	h, workspace, repo, err := n.repoOfWorkspace(ctx, kind, workspace, cwd)
 	if err != nil {
@@ -320,16 +333,24 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 	if err := checkBranch(ctx, repo.root, branch); err != nil {
 		return res, err
 	}
-	dest, err := n.checkoutPath(repo.root, path)
+	dest, err := n.checkoutPath(ctx, repo.root, path)
 	if err != nil {
 		return res, err
 	}
 	var created *host.Created
-	parent := workspace
-	if len(parents) > 0 && parents[0] != "" {
-		parent = parents[0]
+	checkoutOnly := openWorkspace != nil && !*openWorkspace
+	parent := parentWorkspace
+	if parent == "" {
+		parent = workspace
 	}
-	if parent != workspace {
+	if checkoutOnly {
+		if h.Kind() != host.Herdr && h.Kind() != host.Orca {
+			return res, errors.New("open_workspace=false requires classic herdr or Orca")
+		}
+		// Older herdr versions have no checkout-only RPC. Use the node's existing Git fallback for every
+		// source workspace, then open the Agent's tab in the task workspace instead of opening a new one.
+		created, err = n.worktreeByGit(ctx, h, repo, branch, dest, false)
+	} else if parent != workspace {
 		w, ok := h.(interface {
 			CreateWorktreeUnder(context.Context, string, string, string, string) (*host.Created, error)
 		})
@@ -353,6 +374,13 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 			created, err = main.CreateWorktreeFromMain(ctx, workspace, repo.mainRoot, base, branch, dest)
 		} else if workspace != "" {
 			created, err = w.CreateWorktree(ctx, workspace, branch, dest)
+		} else if fromCwd, ok := h.(interface {
+			CreateWorktreeFromCwd(context.Context, string, string, string) (*host.Created, error)
+		}); ok {
+			// No workspace holds the repository (none open, or one whose tabs are in different folders): herdr still
+			// makes it from the repository's own folder, so the workspace carries its repository and sits under it in
+			// the sidebar. worktreeByGit's plain workspace carried neither, only the repository's name as its label.
+			created, err = fromCwd.CreateWorktreeFromCwd(ctx, repo.root, branch, dest)
 		} else {
 			created, err = n.worktreeByGit(ctx, h, repo, branch, dest)
 		}
@@ -362,9 +390,15 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 	if err != nil {
 		return res, errors.New(gitFailure(err)) // the dialog says "Couldn't create the worktree" before it
 	}
-	_ = n.refreshHosts(ctx, h) // the new workspace is in the layout the terminal page lists
+	// A host that ran git on this computer wrote the links under the home's real path; nothing to do when the host's
+	// git (herdr's, in its own environment) or worktreeByGit already wrote the home's spelling (worktree_links.go).
+	n.portableWorktreeLinks(cmp.Or(created.Path, dest))
+	if !checkoutOnly {
+		n.markWorktreeShell(ctx, h, created) // an Agent's worktree: its first shell is Persona's (finished_close.go)
+		_ = n.refreshHosts(ctx, h)           // the new workspace is in the layout the terminal page lists
+	}
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: dest, Branch: branch}
-	if h.Kind() == host.Orca {
+	if h.Kind() == host.Orca && !checkoutOnly {
 		res.ParentWorkspaceID = parent
 	}
 	if created.Path != "" {
@@ -412,7 +446,7 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 			if branchExists(ctx, repo.root, branch) || pathTaken(path) {
 				continue
 			}
-			return n.worktreeCreate(ctx, kind, workspace, cwd, branch, path, parent)
+			return n.worktreeCreate(ctx, kind, workspace, cwd, branch, path, parent, nil)
 		}
 		return res, errors.New("Could not find an unused worktree name")
 	}
@@ -423,6 +457,7 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 	if err != nil {
 		return res, errors.New(gitFailure(err))
 	}
+	n.markWorktreeShell(ctx, h, created)
 	_ = n.refreshHosts(ctx, h)
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: created.Path,
 		Branch: created.Branch, ParentWorkspaceID: parent}
@@ -434,9 +469,9 @@ func (n *Node) worktreeCreateAutomatic(ctx context.Context, kind, workspace, cwd
 }
 
 // worktreeByGit is the way for a host that makes no worktrees itself: git adds the checkout (an existing local branch
-// as it is, else a new branch from the repository's HEAD; no --force), then the host opens a workspace in it. When the
-// workspace cannot be opened the checkout stays, and the error says so.
-func (n *Node) worktreeByGit(ctx context.Context, h host.Host, repo worktreeRepo, branch, dest string) (*host.Created, error) {
+// as it is, else a new branch from the repository's HEAD; no --force), then the host opens a workspace in it unless
+// this is a herdr task checkout. When the workspace cannot be opened the checkout stays, and the error says so.
+func (n *Node) worktreeByGit(ctx context.Context, h host.Host, repo worktreeRepo, branch, dest string, open ...bool) (*host.Created, error) {
 	l, ok := h.(host.Launcher)
 	if !ok {
 		return nil, unsupported(h)
@@ -445,8 +480,11 @@ func (n *Node) worktreeByGit(ctx context.Context, h host.Host, repo worktreeRepo
 	if _, err := git(ctx, repo.root, "show-ref", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
 		args = []string{"worktree", "add", "--", dest, branch}
 	}
-	if _, err := gitTimed(ctx, repo.root, 2*time.Minute, args...); err != nil {
+	if err := n.addWorktree(ctx, repo.root, dest, args...); err != nil {
 		return nil, err
+	}
+	if len(open) > 0 && !open[0] {
+		return &host.Created{Path: dest, Branch: branch}, nil
 	}
 	c, err := l.CreateSpace(ctx, dest, repo.name)
 	if err != nil {
@@ -455,13 +493,36 @@ func (n *Node) worktreeByGit(ctx context.Context, h host.Host, repo worktreeRepo
 	return c, nil
 }
 
-// gitFailure is the line git gave as the reason ("fatal: …"), else the error as it is; one short line for a toast.
+// gitFailure is the line git gave as the reason ("fatal: …"), after an earlier line that names the cause when there
+// is one (gitCause), else the error as it is; one short line for a toast.
 func gitFailure(err error) string {
 	msg := err.Error()
-	for _, line := range strings.Split(msg, "\n") {
+	lines := strings.Split(msg, "\n")
+	for i, line := range lines {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "fatal: "); ok {
+			if cause := gitCause(lines[:i]); cause != "" && !strings.Contains(rest, cause) {
+				return clip(cause + "; " + rest)
+			}
 			return clip(rest)
 		}
 	}
 	return clip(msg)
+}
+
+// gitCause is what lines (git's output before its fatal line) say of why git stopped: a program the shell could not
+// run (bash and zsh say "command not found", dash "not found"), else the last "error: …" line; "" for neither. A filter
+// git-lfs installs fails as "git-lfs filter-process: git-lfs: command not found", and what git says after it ("the
+// remote end hung up unexpectedly", "a.bin: smudge filter lfs failed") does not name git-lfs (#10127).
+func gitCause(lines []string) string {
+	cause := ""
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "command not found") || strings.HasSuffix(line, ": not found") {
+			return line
+		}
+		if rest, ok := strings.CutPrefix(line, "error: "); ok {
+			cause = rest
+		}
+	}
+	return cause
 }

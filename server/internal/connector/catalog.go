@@ -4,44 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
-
-// Catalog is an optional collection of subscribable read-only sources. Find it
-// through ReadCatalog and dispatch through CallCatalog, which also serve older
-// connectors' declared ReadTools without exposing any Actions.
-type Catalog interface {
-	Catalog(context.Context) ([]CatalogSource, error)
-	CatalogCall(context.Context, CatalogQuery) (string, error)
-}
-
-// Catalog payloads share the schema-generated SDK types with extension authors.
-type (
-	CatalogSource      = wire.ConnectorCatalogSource
-	CatalogTool        = wire.ConnectorCatalogTool
-	CatalogAnnotations = wire.ConnectorCatalogAnnotations
-	SubscriptionRecipe = wire.ConnectorSubscriptionRecipe
-	SubscriptionFields = wire.ConnectorSubscriptionFields
-	CatalogResult      = wire.ConnectorCatalog
-)
-
-// ReadJSON is optional for a connector whose catalog comes from its ReadTools (docs/extensions/subscriptions.md
-// "Existing connectors"). CallCatalog calls CallJSON first: a read tool answers subscriptions with JSON, a list of
-// items with stable ids that they can follow item by item, while the models keep the text Call gives them. ok is
-// false for a tool without a JSON answer, and CallCatalog calls Call instead. It is not a capability: nothing else
-// asks for it.
-type ReadJSON interface {
-	CallJSON(ctx context.Context, name string, args json.RawMessage) (out json.RawMessage, ok bool, err error)
-}
-
-type CatalogQuery struct {
-	Source string          `json:"source"`
-	Tool   string          `json:"tool"`
-	Args   json.RawMessage `json:"args,omitempty"`
-}
 
 // ReadCatalog validates the catalog a connector declares. Without that optional
 // capability, its existing read tools form one source whose stable id is the
@@ -69,6 +39,8 @@ func ReadCatalog(ctx context.Context, c Connector) ([]CatalogSource, error) {
 			if !strings.HasPrefix(t.Name, c.ID()+"_") {
 				return nil, errors.New("read tool lacks its connector prefix")
 			}
+			localized := prompts.LocalizeTool(prompts.MCPTool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema}, string(i18n.From(ctx)))
+			t.Description, t.InputSchema = localized.Description, localized.InputSchema
 			source.Tools = append(source.Tools, CatalogTool{Name: strings.TrimPrefix(t.Name, c.ID()+"_"),
 				Description: t.Description, InputSchema: t.InputSchema, ReadOnly: true})
 		}
@@ -82,6 +54,20 @@ func ReadCatalog(ctx context.Context, c Connector) ([]CatalogSource, error) {
 			return nil, notReadOnly()
 		}
 		return nil, err
+	}
+	// Catalogs may return shared slices. Only fixed built-in definitions are
+	// localized; authored declarations with the same name are kept intact.
+	sources = slices.Clone(sources)
+	for i := range sources {
+		sources[i].Tools = slices.Clone(sources[i].Tools)
+		for j, tool := range sources[i].Tools {
+			name := tool.Name
+			if !strings.HasPrefix(name, c.ID()+"_") {
+				name = c.ID() + "_" + name
+			}
+			localized := prompts.LocalizeTool(prompts.MCPTool{Name: name, Description: tool.Description, InputSchema: tool.InputSchema}, string(i18n.From(ctx)))
+			sources[i].Tools[j].Description, sources[i].Tools[j].InputSchema = localized.Description, localized.InputSchema
+		}
 	}
 	return sources, nil
 }

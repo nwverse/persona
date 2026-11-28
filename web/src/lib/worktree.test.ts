@@ -105,11 +105,15 @@ describe("errors", () => {
     expect(worktreeProblem(new ApiError(502, "unknown method worktree.prepare", { code: "internal" }), WORKTREE_COPY.readFailed).needsUpdate).toBe(true);
     expect(worktreeProblem(new ApiError(409, "unsupported: herdr cannot do this", {}), WORKTREE_COPY.failed).needsUpdate).toBe(true);
     expect(worktreeProblem(new ApiError(500, "unsupported: herdr cannot do this", {}), WORKTREE_COPY.failed)).toEqual({ text: WORKTREE_COPY.needsUpdate, needsUpdate: true });
+    // the same refusal worded by a newer hub in the reader's language (#17057)
+    const worded = new ApiError(409, "Orca on this computer can’t do this. Updating it may help.", { code: "unsupported", reason: "engine_unsupported", engine: "orca" });
+    expect(worktreeProblem(worded, WORKTREE_COPY.failed)).toEqual({ text: WORKTREE_COPY.needsUpdate, needsUpdate: true });
+    expect(worktreeProblem(new ApiError(409, "This Orca chat can’t do that.", { code: "unsupported", reason: "orca_unsupported" }), WORKTREE_COPY.failed).needsUpdate).toBe(false);
   });
   it("keeps other failures' readable detail without asking for an update", () => {
     const failed = new ApiError(502, "新建 worktree 失败：'x' is already used by worktree", {});
     expect(worktreeProblem(failed, WORKTREE_COPY.failed)).toEqual({
-      text: `没能新建 worktree：${errorText(failed)}`, needsUpdate: false,
+      text: `创建 worktree 失败：${errorText(failed)}`, needsUpdate: false,
     });
     expect(worktreeProblem(new ApiError(403, "changing a computer's terminals needs a full device", {}), WORKTREE_COPY.failed).needsUpdate).toBe(false);
   });
@@ -138,6 +142,16 @@ describe("a new agent's own worktree (#6115)", () => {
     expect(agentBranch(agentNameHint(" Fix login ", "/home/me/code/weather"))).toBe("persona/fix-login");
     expect(agentNameHint("", "")).toBe("");
     expect(agentBranch("a".repeat(30) + " " + "b".repeat(30))).toBe("persona/" + "a".repeat(30) + "-" + "b".repeat(9));
+  });
+
+  it("names it after a Windows computer's folder by that folder's own separator (#9911)", () => {
+    expect(agentNameHint("修登录", "C:\\Users\\me\\code\\weather")).toBe("weather");
+    expect(agentBranch(agentNameHint("修登录", "C:\\Users\\me\\code\\weather\\"))).toBe("persona/weather");
+    expect(agentBranch(agentNameHint("修登录", "\\\\server\\share\\weather"))).toBe("persona/weather");
+    expect(agentBranch(agentNameHint("修登录", "d:/code/weather"))).toBe("persona/weather");
+    // elsewhere a backslash is part of a name; the root still has no name to give
+    expect(agentNameHint("修登录", "/home/me/a\\b")).toBe("a\\b");
+    expect(agentNameHint("修登录", " / ")).toBe("");
   });
 
   it("counts what removing it loses: the branch's commits only with the branch", () => {

@@ -81,7 +81,8 @@ function hostForHeader(host) {
 
 /**
  * The client end of a WebSocket: 'message' (text), 'close' (code, reason) once, 'error'. Pings are answered; a
- * message over MAX_MESSAGE, a masked server frame or a bad opcode closes it.
+ * message over MAX_MESSAGE, a masked server frame or a bad opcode closes it. local: this end closed it (close(), or a
+ * frame it refused), not the server's close frame nor a socket that ended without one (1006).
  */
 export class WsClient extends EventEmitter {
   constructor(socket, rest) {
@@ -92,6 +93,7 @@ export class WsClient extends EventEmitter {
     this.size = 0
     this.binary = false
     this.closed = false
+    this.local = false
     this.code = 1006
     this.reason = ''
     socket.setNoDelay?.(true)
@@ -117,6 +119,7 @@ export class WsClient extends EventEmitter {
       const b = rx.peek(2)
       const fin = (b[0] & 0x80) !== 0
       const op = b[0] & 0x0f
+      if ((b[0] & 0x70) !== 0) return this.fail(1002, 'unexpected reserved bits')
       if ((b[1] & 0x80) !== 0) return this.fail(1002, 'server frames must not be masked')
       let len = b[1] & 0x7f
       let at = 2
@@ -139,6 +142,7 @@ export class WsClient extends EventEmitter {
         if (!fin || len > 125) return this.fail(1002, 'bad control frame')
         if (op === OP.ping) this.frame(OP.pong, payload)
         else if (op === OP.close) {
+          if (len === 1) return this.fail(1002, 'bad close frame')
           this.code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005
           this.reason = payload.subarray(2).toString('utf8')
           this.frame(OP.close, payload.subarray(0, 2))
@@ -194,11 +198,18 @@ export class WsClient extends EventEmitter {
   /** Close (a normal closure unless a code says otherwise). */
   close(code = 1000, reason = '') {
     if (this.closed) return
-    const p = Buffer.alloc(2 + Buffer.byteLength(reason))
+    this.local = true
+    let rbuf = Buffer.from(String(reason), 'utf8')
+    if (rbuf.length > 123) {
+      let end = 123
+      while (end > 0 && (rbuf[end] & 0xc0) === 0x80) end--
+      rbuf = rbuf.subarray(0, end)
+    }
+    const p = Buffer.alloc(2 + rbuf.length)
     p.writeUInt16BE(code, 0)
-    p.write(reason, 2)
+    rbuf.copy(p, 2)
     this.code = code
-    this.reason = reason
+    this.reason = rbuf.toString('utf8')
     this.frame(OP.close, p)
     this.end()
   }

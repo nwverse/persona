@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  customModel, defaultDetail, defaultLabel, effortChoices, fitEffort, followedBinding, forgetCustomModel, launcherAgent, launcherModels, modelDetail, modelName, modelRows,
-  pickerLauncher, machineLaunchers, oneOff, providerModels, startPicks, takesTypedModel, tierLeftOut, typedModelOffered, withoutCustom, type AgentModel, type LauncherModels,
+  customModel, defaultDetail, defaultLabel, effortChoices, effortRule, fitEffort, followedBinding, forgetCustomModel, launcherAgent, launcherModels, listedModel, listedModes, modelDetail,
+  modelName, modelRows, nativeOmpStart, pickerLauncher, machineLaunchers, providerModels, startPicks, takesEffort, takesTypedModel, tierLeftOut, typedModelOffered, withoutCustom,
+  type AgentModel, type LauncherModels,
 } from "./launcher-models";
 
 const all = ["low", "medium", "high", "xhigh", "max"];
@@ -46,12 +47,15 @@ describe("哪个启动器的列表", () => {
 
 describe("模型显示名称", () => {
   it.each([
-    ["gpt-6.1-sol", "6.1 Sol"],
-    ["gpt-6.1", "6.1"],
-    ["gpt-5.5-codex", "5.5 Codex"],
-    ["gpt-4o-mini", "4o Mini"],
-    ["gpt-4.1-2025-04-14", "4.1 2025 04 14"],
-    ["gpt-oss-120b", "oss 120b"],
+    ["gpt-6.1-sol", "GPT-6.1 Sol"],
+    ["gpt-6.2-sol", "GPT-6.2 Sol"],
+    ["gpt-5.6-terra", "GPT-5.6 Terra"],
+    ["gpt-6.2-astra", "GPT-6.2 Astra"],
+    ["gpt-6.1", "GPT-6.1"],
+    ["gpt-5.5-codex", "GPT-5.5 Codex"],
+    ["gpt-4o-mini", "GPT-4o Mini"],
+    ["gpt-4.1-2025-04-14", "GPT-4.1 2025 04 14"],
+    ["gpt-oss-120b", "GPT-oss 120b"],
     ["claude-opus-5-5", "claude-opus-5-5"],
     ["model-x", "model-x"],
     ["gpt-", "gpt-"],
@@ -66,9 +70,9 @@ describe("模型显示名称", () => {
     expect(modelName({ id: "gpt-6.1-sol", name: "我的模型" })).toBe("我的模型");
     expect(modelName({ id: "gpt-6.1-sol", name: "GPT 专用" })).toBe("GPT 专用");
     expect(modelName({ id: "gpt-6.1-sol", name: "gpt-4o-mini" })).toBe("gpt-4o-mini");
-    expect(modelName({ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" })).toBe("6.1 Sol");
-    expect(modelName({ id: "gpt-6.1", name: "" })).toBe("6.1");
-    expect(modelName({ id: "gpt-6.1", name: "   " })).toBe("6.1");
+    expect(modelName({ id: "gpt-6.1-sol", name: "GPT-6.1-Sol" })).toBe("GPT-6.1 Sol");
+    expect(modelName({ id: "gpt-6.1", name: "" })).toBe("GPT-6.1");
+    expect(modelName({ id: "gpt-6.1", name: "   " })).toBe("GPT-6.1");
     expect(modelName({ id: "", name: "默认" })).toBe("默认");
     expect(modelName(claude.models[1])).toBe("Opus 5.5");
   });
@@ -76,6 +80,7 @@ describe("模型显示名称", () => {
   it("searches the displayed words and keeps picks and details as raw ids", () => {
     const model = { id: "gpt-6.1-sol", name: "gpt-6.1-sol", efforts: ["high"] };
     const list = { agent: "claude", models: [model] };
+    expect(modelRows(list.models, "GPT-6.1 Sol").rows).toEqual([model]);
     expect(modelRows(list.models, "6.1 Sol").rows).toEqual([model]);
     expect(modelDetail(model)).toBe("");
     expect(modelDetail({ ...model, name: "我的模型" })).toBe(model.id);
@@ -115,11 +120,11 @@ describe("列表", () => {
       .mockResolvedValueOnce({ ok: false, status: 502, text: async () => JSON.stringify({ error: "claude: command not found" }) });
     vi.stubGlobal("fetch", fetcher);
     expect(await launcherModels("desk top", "traex")).toEqual({ agent: "traex", models: [] });
-    expect(await launcherModels("desktop", "gateway/x", { refresh: true })).toEqual(claude);
+    expect(await launcherModels("desktop", "gateway/x", { refresh: true, purpose: "assistant" })).toEqual(claude);
     expect(await launcherModels("desktop", "claude")).toBeNull();
     await expect(launcherModels("desktop", "claude")).rejects.toMatchObject({ status: 502, message: "claude: command not found" });
     expect(fetcher.mock.calls.map((c) => c[0]).slice(0, 2)).toEqual([
-      "/api/v1/machines/desk%20top/launchers/traex/models", "/api/v1/machines/desktop/launchers/gateway%2Fx/models?refresh=1",
+      "/api/v1/machines/desk%20top/launchers/traex/models", "/api/v1/machines/desktop/launchers/gateway%2Fx/models?refresh=1&purpose=assistant",
     ]);
   });
 });
@@ -175,9 +180,56 @@ describe("思考强度", () => {
     expect(fitEffort("high", effortChoices(claude, "gateway/glm-5.3"))).toBe("high");
     expect(fitEffort("", all)).toBe("");
   });
+
+  // A launcher that lists its own permission modes (#8261, Paseo's other providers) takes the efforts its model lists and
+  // nothing else: no list, or a model it doesn't list, offers none rather than Claude Code's five.
+  it("a launcher that lists its permission modes or runs Codex takes only the efforts its model lists", () => {
+    const grok = { name: "grok", agent: "paseo", source: "paseo", permission_modes: ["default", "bypassPermissions"] };
+    const list: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true, efforts: ["low", "high"] }, { id: "grok-mini", name: "Grok mini" }] };
+    const codexRich: LauncherModels = { agent: "codex", models: [
+      { id: "gpt-5.5", name: "GPT-5.5", default: true, efforts: ["minimal", "low", "medium", "high", "xhigh"], default_effort: "medium" },
+      { id: "gpt-5.5-plain", name: "GPT-5.5 Plain" },
+      { id: "gpt-5.5-none", name: "GPT-5.5 None", efforts: ["none", "low", "high"] },
+      { id: "gpt-5.5-ultra", name: "GPT-5.5 Ultra", efforts: ["high", "ultra"] },
+    ] };
+    expect([effortRule("claude"), effortRule("agy"), effortRule("paseo", grok), effortRule("codex", grok), effortRule("paseo"), effortRule("codex")])
+      .toEqual(["any", "any", "listed", "listed", "none", "listed"]);
+    expect([listedModes(grok), listedModes({ permission_modes: [] }), listedModes(undefined)]).toEqual([["default", "bypassPermissions"], undefined, undefined]);
+    expect([takesEffort("paseo", grok), takesEffort("paseo"), takesEffort("claude"), takesEffort("codex")]).toEqual([true, false, true, true]);
+    expect(effortChoices(list, "", {}, "listed")).toEqual(["low", "high"]);
+    expect(effortChoices(list, "grok-mini", {}, "listed")).toEqual([]);
+    expect(effortChoices(list, "typed-id", {}, "listed")).toEqual([]);
+    expect(effortChoices(null, "", {}, "listed")).toEqual([]);
+    expect(effortChoices(list, "", {}, "none")).toEqual([]);
+    expect(effortChoices(codexRich, "", {}, "listed")).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    expect(effortChoices(codexRich, "gpt-5.5-plain", {}, "listed")).toEqual([]);
+    expect(effortChoices(codexRich, "gpt-5.5-none", {}, "listed")).toEqual(["low", "high"]);
+    expect(effortChoices(codexRich, "gpt-5.5-ultra", {}, "listed")).toEqual(["high", "ultra"]);
+    expect(effortChoices(codexRich, "unlisted-codex", {}, "listed")).toEqual([]);
+    expect(effortChoices(undefined, "gpt-5.5", {}, "listed")).toEqual([]);
+    expect(startPicks({ agent: "paseo", list, model: "", effort: "high", launcher: grok })).toEqual({ effort: "high" });
+    expect(startPicks({ agent: "paseo", list, model: "", effort: "max", launcher: grok })).toEqual({});
+    expect(startPicks({ agent: "paseo", list, model: "", effort: "high" }), "an older computer's launcher: no effort, as before").toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "", effort: "" })).toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5", effort: "" })).toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5", effort: "minimal" })).toEqual({ effort: "minimal" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5", effort: "ultra" })).toEqual({});
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5-none", effort: "none" })).toEqual({ model: "gpt-5.5-none" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5-ultra", effort: "ultra" })).toEqual({ model: "gpt-5.5-ultra", effort: "ultra" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "gpt-5.5-plain", effort: "high" })).toEqual({ model: "gpt-5.5-plain" });
+    expect(startPicks({ agent: "codex", list: codexRich, model: "unlisted-codex", effort: "high" })).toEqual({ model: "unlisted-codex" });
+  });
 });
 
 describe("启动时发什么", () => {
+  it("sends only the model and effort offered by the TRAE CLI catalog", () => {
+    const list: LauncherModels = { agent: "traex", models: [{ id: "example-fast", name: "Example Fast", efforts: ["medium", "xhigh"] }] };
+    expect(startPicks({ agent: "traex", list, model: "example-fast", effort: "xhigh" }))
+      .toEqual({ model: "example-fast", effort: "xhigh" });
+    expect(startPicks({ agent: "traex", list, model: "example-fast", effort: "max" })).toEqual({ model: "example-fast" });
+    expect(startPicks({ agent: "traex", list, model: "", effort: "" })).toEqual({});
+  });
+
   it("sends a picked model unless it is the default or the launcher fixes its own", () => {
     expect(startPicks({ agent: "claude", list: claude, model: "opus", effort: "" })).toEqual({ model: "opus" });
     expect(startPicks({ agent: "claude", list: claude, model: "default", effort: "" })).toEqual({});
@@ -186,11 +238,13 @@ describe("启动时发什么", () => {
     expect(startPicks({ agent: "claude", list: null, model: "opus", effort: "" })).toEqual({});
   });
 
-  it("sends an effort only to Claude Code and only one the model takes", () => {
+  it("sends an effort only when the launcher takes one and the model reports it", () => {
     expect(startPicks({ agent: "claude", list: claude, model: "gateway/glm-5.3", effort: "high" })).toEqual({ model: "gateway/glm-5.3", effort: "high" });
     expect(startPicks({ agent: "claude", list: claude, model: "haiku", effort: "high" })).toEqual({ model: "haiku" });
     expect(startPicks({ agent: "claude", list: null, model: "", effort: "max" })).toEqual({ effort: "max" });
-    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "high" })).toEqual({ model: "gpt-5.5-codex" });
+    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "high" })).toEqual({ model: "gpt-5.5-codex", effort: "high" });
+    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "max" })).toEqual({ model: "gpt-5.5-codex" });
+    expect(startPicks({ agent: "codex", list: codex, model: "gpt-5.5-codex", effort: "" })).toEqual({ model: "gpt-5.5-codex" });
   });
 });
 
@@ -199,9 +253,8 @@ describe("启动器的默认值 (#2455)", () => {
     expect(defaultLabel({ provider: "kcc", model: "kimi-k2.6", effort: "high" })).toBe("默认：kcc · kimi-k2.6");
     expect(defaultLabel({ provider: "kcc", model: "gateway/glm-5.3" })).toBe("默认：kcc · glm-5.3");
     expect(defaultLabel({ provider: "kcc", model: "" })).toBe("默认：kcc");
-    expect(defaultLabel(null, "claude")).toBe("默认：claude");
+    expect(defaultLabel(null, "claude")).toBe("默认：Claude Code");
     expect(defaultLabel(undefined)).toBe("默认");
-    expect(oneOff()).toBe("仅这一次");
   });
   it("titles the default's provider by its display name (#5029)", () => {
     const names = [{ name: "relay-example-com", display_name: "我的中转 站" }, { name: "kcc" }];
@@ -239,7 +292,8 @@ describe("手动输入的模型 ID（#1644）", () => {
 
   it("Claude Code and Codex take one, unless the launcher fixes its own --model", () => {
     expect(takesTypedModel("claude") && takesTypedModel("codex")).toBe(true);
-    expect(takesTypedModel("traex") || takesTypedModel("agy")).toBe(false);
+    expect(takesTypedModel("pi") && takesTypedModel("cursor") && takesTypedModel("agy")).toBe(true);
+    expect(takesTypedModel("traex") || takesTypedModel("dsh")).toBe(false);
     expect(typedModelOffered("claude", claude)).toBe(true);
     expect(typedModelOffered("claude", undefined)).toBe(true); // the list couldn't be read
     expect(typedModelOffered("claude", { ...claude, locked: "固定了模型" })).toBe(false);
@@ -255,6 +309,27 @@ describe("手动输入的模型 ID（#1644）", () => {
     expect(startPicks({ agent: "claude", list: null, model: "acme/coder-9", effort: "" })).toEqual({});
     expect(startPicks({ agent: "traex", list: undefined, model: "acme/coder-9", effort: "" })).toEqual({});
     expect(startPicks({ agent: "claude", list: typed, model: "vendor/model-x", effort: "" })).toEqual({ model: "vendor/model-x" });
+  });
+
+  it("offers a typed omp model only for a new, unlocked start", () => {
+    const list = { agent: "omp", models: [], supports_start_model: true };
+    const pick = { agent: "omp", model: "openai/gpt-5.2", effort: "high", nativeOmp: nativeOmpStart("omp", { name: "omp" }, "herdr") };
+    expect(typedModelOffered("omp", list)).toBe(false);
+    expect(startPicks({ ...pick, list })).toEqual({ model: pick.model });
+    expect(startPicks({ ...pick, list, model: "opus" })).toEqual({ model: "opus" });
+    expect(nativeOmpStart("omp", { name: "omp" }, "orca")).toBe(true);
+    expect(startPicks({ ...pick, nativeOmp: nativeOmpStart("omp", { name: "omp" }, "orca"), list })).toEqual({ model: pick.model });
+    expect(nativeOmpStart("omp", { name: "alias" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "alias" }, "orca")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "omp", source: "paseo" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "omp" }, "herdr-core")).toBe(false);
+    expect(nativeOmpStart("codex", { name: "omp" }, "herdr")).toBe(false);
+    expect(startPicks({ ...pick, list: { ...list, locked: "Launcher fixes its model" } })).toEqual({});
+    expect(startPicks({ ...pick, list: null })).toEqual({});
+    expect(startPicks({ ...pick, list: undefined })).toEqual({});
+    expect(startPicks({ ...pick, list: { agent: "omp", models: [{ id: pick.model, name: "Listed" }] } })).toEqual({});
+    expect(startPicks({ ...pick, list: { ...list, supports_start_model: false } })).toEqual({});
+    expect(startPicks({ ...pick, list, model: "two words" })).toEqual({});
   });
 
   it("a typed ID's efforts aren't known: all of them", () => {
@@ -279,6 +354,24 @@ describe("手动输入的模型 ID（#1644）", () => {
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.method).toBe("DELETE");
     expect(url).toContain("/api/v1/machines/mac/launchers/cc%20gw/models/custom?model=~vendor%2Fmodel-latest%5B1m%5D");
+  });
+});
+
+describe("spellings the hub folded into one row (#10365)", () => {
+  const gateway: LauncherModels = { agent: "claude", models: [
+    { id: "default", name: "Default (recommended)", resolved: "claude-opus-5-5", default: true, efforts: all },
+    { id: "claude-opus-5-5", name: "Opus 5.5", aliases: ["opus", "fable", "sonnet", "haiku"], efforts: ["low", "high"] },
+    { id: "kiro/claude-opus-5-5", name: "Opus 5.5 (kiro)" },
+  ] };
+
+  it("a model saved as an alias finds its row: its efforts, no typed row for it, a search by it", () => {
+    expect(listedModel(gateway.models, "sonnet")?.id).toBe("claude-opus-5-5");
+    expect(listedModel(gateway.models, "kiro/claude-opus-5-5")?.id).toBe("kiro/claude-opus-5-5");
+    expect(listedModel(gateway.models, "claude-opus-4-8")).toBeUndefined();
+    expect(effortChoices(gateway, "haiku")).toEqual(["low", "high"]);
+    expect(effortChoices(gateway, "", { provider: "launcher.gateway-api", model: "opus" })).toEqual(["low", "high"]);
+    expect(customModel(gateway.models, "fable")).toBe("");
+    expect(ids(modelRows(gateway.models, "fable").rows)).toEqual(["claude-opus-5-5"]);
   });
 });
 

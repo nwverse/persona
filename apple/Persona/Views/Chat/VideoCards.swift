@@ -1,16 +1,111 @@
 import AVKit
 import SwiftUI
 
-/// The files a sent message carries (`AttachedFile`), above its text: one card each.
+/// The files a sent message carries (`AttachedFile`), above its text: one card each, a video or a recording to play,
+/// any other file to open (#8361). More than `foldAt` show `folded` and a row that opens the rest in place.
 struct AttachedFileCards: View {
     @Environment(\.fileScope) private var scope
+    @Environment(\.openFile) private var openFile
     var files: [AttachedFile]
+    @State private var all = false
+
+    /// More than this many fold (as a queue, or several forwards, past a few).
+    nonisolated static let foldAt = 4
+    /// What a folded list shows.
+    nonisolated static let folded = 3
+
+    /// The cards shown: all of them, or the first `folded` while folded.
+    nonisolated static func shown(_ files: [AttachedFile], all: Bool) -> [AttachedFile] {
+        files.count > foldAt && !all ? Array(files.prefix(folded)) : files
+    }
 
     var body: some View {
+        let shown = Self.shown(files, all: all)
         VStack(alignment: .trailing, spacing: Theme.Space.sm) {
-            ForEach(files, id: \.path) { f in AttachedVideoCard(file: f, machine: scope?.machine) }
+            ForEach(shown, id: \.path) { f in
+                if f.playable {
+                    AttachedVideoCard(file: f, machine: scope?.machine)
+                } else {
+                    AttachedDocumentCard(file: f, open: openFile?.open)
+                }
+            }
+            if files.count > Self.foldAt {
+                Button {
+                    withAnimation(Theme.Motion.state) { all.toggle() }
+                } label: {
+                    HStack(spacing: Theme.Space.xs) {
+                        Text(all ? String(localized: "Show Less") : String(localized: "\(files.count - shown.count) More Files"))
+                            .lineLimit(1)
+                        ThemedIcon(all ? Theme.Icon.collapse : Theme.Icon.expand).font(Theme.Font.label)
+                    }
+                    .font(Theme.Font.secondary)
+                    .foregroundStyle(Theme.accent)
+                    .tapTargetHeight()
+                    .scaledFrame(maxWidth: Theme.Size.box280)
+                    .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                    .contentShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("file-cards-more")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
+        .lookUpFiles(files.filter { !$0.playable }.map(\.path)) // is each still there (`AttachedDocumentCard`)
+    }
+}
+
+/// A file sent with a message (#8361): its kind's mark, name and size; a tap opens it in the file viewer, to read it,
+/// save it to Files or share it. One the computer no longer has (a temp directory cleared since) is dimmed and says so.
+struct AttachedDocumentCard: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.fileScope) private var scope
+    var file: AttachedFile
+    var open: ((String) -> Void)?
+
+    private var gone: Bool { scope.map { model.filePresence.kind(file.path, in: $0) == .missing } ?? false }
+
+    private var detail: String {
+        let size = file.size > 0 ? file.size.storageText : ""
+        guard gone else { return size }
+        return [size, String(localized: "No longer on the computer")].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    var body: some View {
+        let gone = gone
+        Button { open?(file.path) } label: {
+            HStack(spacing: Theme.Space.m) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+                        .fill(gone ? Theme.Fill.chip : Theme.accent.opacity(0.14))
+                    ThemedIcon(gone ? Theme.Icon.missingFile : FileViewer.symbol(for: file.name)).font(Theme.Font.heading)
+                        .foregroundStyle(gone ? Color.secondary : Theme.accent)
+                }
+                .scaledFrame(width: Theme.Size.avatarL, height: Theme.Size.avatarL)
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    Text(file.name).font(Theme.Font.secondaryMedium).foregroundStyle(Color.primary)
+                        .lineLimit(1).truncationMode(.middle)
+                    if !detail.isEmpty {
+                        Text(detail).font(Theme.Font.label.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(Theme.Space.s)
+            .padding(.trailing, Theme.Space.xs)
+            .scaledFrame(maxWidth: Theme.Size.box280, alignment: .leading)
+            .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .contentShape(.rect(cornerRadius: Theme.Radius.card, style: .continuous))
+            .opacity(gone ? 0.6 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(gone || open == nil)
+        .contextMenu {
+            Button { UIPasteboard.general.string = file.path } label: { Label("Copy Path", systemImage: Theme.Icon.copy) }
+        }
+        .accessibilityLabel(String(localized: "File \(file.name)"))
+        .accessibilityValue(detail)
+        .accessibilityHint(gone ? "" : String(localized: "Open"))
+        .accessibilityIdentifier(gone ? "file-card-gone" : "file-card")
     }
 }
 
@@ -23,9 +118,6 @@ struct AttachedVideoCard: View {
     var machine: MachineRef?
     @State private var received: Int64?
     @State private var task: Task<Void, Never>?
-    #if os(macOS)
-    @State private var playing: MacVideo?
-    #endif
 
     var body: some View {
         Button(action: tap) {
@@ -58,15 +150,6 @@ struct AttachedVideoCard: View {
         .accessibilityHint(received == nil ? String(localized: "Play") : String(localized: "Stop download"))
         .accessibilityIdentifier("video-card")
         .onDisappear { task?.cancel() }
-        #if os(macOS)
-        .sheet(item: $playing) { v in
-            VideoPlayer(player: v.player)
-                .macLargeSheet()
-                .onAppear { v.player.play() }
-                .onDisappear { v.player.pause() }
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done [Extension System Presentation c0b3fb]") { playing = nil }.lineLimit(1) } }
-        }
-        #endif
     }
 
     private var status: String {
@@ -116,20 +199,10 @@ struct AttachedVideoCard: View {
     }
 
     private func play(_ url: URL) {
-        #if os(macOS)
-        playing = MacVideo(player: AVPlayer(url: url))
-        #else
         SystemVideoPlayer.present(url)
-        #endif
     }
 }
 
-#if os(macOS)
-private struct MacVideo: Identifiable {
-    let id = UUID()
-    let player: AVPlayer
-}
-#else
 /// The system's full-screen player (AVPlayerViewController), presented over whatever is on top.
 enum SystemVideoPlayer {
     static func present(_ url: URL) {
@@ -143,4 +216,3 @@ enum SystemVideoPlayer {
         top.present(vc, animated: true) { vc.player?.play() }
     }
 }
-#endif

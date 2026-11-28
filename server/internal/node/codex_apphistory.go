@@ -36,6 +36,10 @@ import (
 // (<file>.lock: the others wait for its write). The database is read while the App has it closed too (codexDBTarget).
 // Without sqlite3 or the history database there is none, as before.
 
+// codexAppHistoryVersion changes when already-written JSONL no longer matches what the converter produces. A mark
+// without it is a legacy cache and is rebuilt once, even when the App database has not changed.
+const codexAppHistoryVersion = 4
+
 // codexAppHistoryWait bounds one read of the history database; a long chat's turns stream in well under it.
 const codexAppHistoryWait = 30 * time.Second
 
@@ -65,6 +69,7 @@ type codexHistoryFailure struct {
 // files (the App may write a turn's rows after updating the chat, and finish a turn without updating it) — and the size
 // the file had then (-1: no file, the chat has no finished turn).
 type codexHistoryMark struct {
+	Version int    `json:"version,omitempty"`
 	Turn    int64  `json:"turn"`
 	TurnID  string `json:"turn_id"`
 	Status  string `json:"status"`
@@ -76,10 +81,17 @@ type codexHistoryMark struct {
 
 // codexHistoryDBPath is the newest history database in home (thread_history_1.sqlite in 2026-11).
 func codexHistoryDBPath(home string) string {
-	paths, _ := filepath.Glob(filepath.Join(home, "thread_history_*.sqlite"))
+	return codexNumberedDB(home, "thread_history_")
+}
+
+// codexNumberedDBGlob is what codexNumberedDB globs with, indirected so a test can count the history/log Globs.
+var codexNumberedDBGlob = filepath.Glob
+
+func codexNumberedDB(home, prefix string) string {
+	paths, _ := codexNumberedDBGlob(filepath.Join(home, prefix+"*.sqlite"))
 	best, bestN := "", -1
 	for _, p := range paths {
-		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "thread_history_"), ".sqlite"))
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), prefix), ".sqlite"))
 		if err == nil && n > bestN {
 			best, bestN = p, n
 		}
@@ -156,6 +168,9 @@ func (n *Node) codexAppHistoryPath(src codexSource, pass *codexListPass) string 
 
 // codexAppHistoryChat: session id is an App chat with no rollout, whose transcript comes from the App's database.
 func (n *Node) codexAppHistoryChat(id string) (codexSource, codexAppThread, bool) {
+	if t, ok := n.traexThread(id); ok {
+		return codexSource{home: n.traexHome(), thread: id}, t, true
+	}
 	src, ok := n.codexSource(id)
 	if !ok || n.codexBlocked(id) || n.ownedAssistantSource(id) { // as findTranscriptPath: no transcript of these here
 		return codexSource{}, codexAppThread{}, false
@@ -203,8 +218,11 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 	history := ""
 	if db != "" {
 		history = fileStamp(db) + fileStamp(db+"-wal")
+		if t.includeRunning {
+			history = traexHistoryStamp(db, t.ID, history)
+		}
 	}
-	if mark.Updated == t.UpdatedAtMs && mark.History == history && mark.Size == size && (!t.Paginated || mark.Lineage == t.RolloutPath) {
+	if mark.Version == codexAppHistoryVersion && mark.Updated == t.UpdatedAtMs && mark.History == history && mark.Size == size && (!t.Paginated || mark.Lineage == t.RolloutPath) {
 		return nil // up to date
 	}
 	if db == "" {
@@ -222,14 +240,14 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 	if t.Paginated {
 		lineage = t.RolloutPath
 	}
-	grow := mark.Size >= 0 && mark.Size == size && mark.TurnID != "" && mark.Lineage == lineage
+	grow := !t.includeRunning && mark.Version == codexAppHistoryVersion && mark.Size >= 0 && mark.Size == size && mark.TurnID != "" && mark.Lineage == lineage
 	res, err := writeCodexAppHistory(ctx, db, t, p, mark, grow)
 	if errors.Is(err, errCodexHistoryChanged) { // a written turn is not what it was (the App rolled back): anew
 		res, err = writeCodexAppHistory(ctx, db, t, p, codexHistoryMark{Turn: -1}, false)
 	}
 	if err == nil {
 		_, size = readCodexHistoryMark(p)
-		err = writeCodexHistoryMark(p, codexHistoryMark{Turn: res.turn, TurnID: res.turnID, Status: res.status,
+		err = writeCodexHistoryMark(p, codexHistoryMark{Version: codexAppHistoryVersion, Turn: res.turn, TurnID: res.turnID, Status: res.status,
 			Updated: t.UpdatedAtMs, History: history, Size: size, Lineage: lineage})
 	}
 	codexAppHistoryFailed.Lock()
@@ -243,6 +261,9 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 		n.logf("codex app history %s: %v", src.thread, err)
 		return err
 	}
+	n.mu.Lock()
+	delete(n.metas, p)
+	n.mu.Unlock()
 	live := map[string]codexAppThread{}
 	for id, row := range codexAppThreads(src.home) {
 		live[id] = row
@@ -328,7 +349,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	if grow {
 		res = codexHistoryWrite{turn: mark.Turn, turnID: mark.TurnID, status: mark.Status}
 	}
-	sqlite, err := exec.LookPath("sqlite3")
+	sqlite, err := codexSQLiteProgram()
 	if err != nil {
 		return res, err
 	}
@@ -345,10 +366,12 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	if err != nil {
 		return res, err
 	}
-	defer file.Close()
-	if !grow {
-		defer os.Remove(file.Name()) // renamed away once complete
-	}
+	defer func() {
+		file.Close()
+		if !grow {
+			os.Remove(file.Name()) // close first: Windows cannot remove the open temporary file
+		}
+	}()
 	w := bufio.NewWriterSize(file, 256<<10)
 	line := func(at time.Time, typ string, payload any) {
 		b, _ := json.Marshal(map[string]any{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": typ, "payload": payload})
@@ -377,6 +400,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 		`LEFT JOIN thread_items i ON i.thread_id = t.thread_id AND i.turn_id = t.turn_id AND t.history_ordinal > %d `+
 		`WHERE t.history_ordinal >= %d ORDER BY t.history_ordinal, i.rollout_ordinal`, from, from)
 	cmd := exec.CommandContext(ctx, sqlite, "-readonly", "-bail", "-noheader", "-list", "-separator", "\x1f", "-cmd", ".timeout 2000", codexDBTarget(db), q)
+	hideCodexSQLiteWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -503,6 +527,14 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	}
 	if cur != nil && !cur.done && cur.final {
 		closeTurn(cur, false) // the last turn while it still runs is left for later
+	} else if cur != nil && !cur.done && t.includeRunning {
+		// Terminal CLIs have no separate live stream. Include their stored current items
+		// without inventing a completion; the next revision rebuilds this snapshot.
+		startTurn(cur, cur.heldStart)
+		for _, it := range cur.held {
+			line(it[0].(time.Time), "event_msg", map[string]any{"type": "item_completed", "item": it[1]})
+		}
+		res.turn, res.turnID, res.status = cur.ordinal, cur.id, cur.status
 	}
 	if err := w.Flush(); err != nil {
 		return res, err
@@ -596,6 +628,8 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		} `json:"content"`
 		Text             string          `json:"text"`
 		Phase            string          `json:"phase"`
+		Delivery         string          `json:"delivery"`
+		Questions        json.RawMessage `json:"questions"`
 		Summary          []string        `json:"summary"`
 		Command          string          `json:"command"`
 		Status           string          `json:"status"`
@@ -607,8 +641,10 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		Arguments        json.RawMessage `json:"arguments"`
 		Result           *struct {
 			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				Data     string `json:"data"`
+				MimeType string `json:"mimeType"`
 			} `json:"content"`
 			IsError bool `json:"isError"`
 		} `json:"result"`
@@ -653,6 +689,9 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		item["type"], item["content"] = "UserMessage", content
 	case "agentMessage":
 		item["type"], item["content"], item["phase"] = "AgentMessage", []map[string]string{{"type": "text", "text": v.Text}}, v.Phase
+		if v.Delivery == "async" && len(v.Questions) > 0 {
+			item["delivery"], item["questions"] = v.Delivery, v.Questions
+		}
 	case "reasoning":
 		item["type"], item["summary_text"] = "Reasoning", v.Summary
 	case "commandExecution":
@@ -688,6 +727,21 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		item["type"], item["kind"], item["query"], item["results"] = "Extension", "web.search", v.Query, v.Results
 		if v.Action != nil {
 			item["action"] = v.Action
+		}
+	case "collabAgentToolCall", "subAgentActivity", "plan":
+		if json.Unmarshal(raw, &item) != nil || item == nil {
+			return nil
+		}
+		item["type"] = map[string]string{"collabAgentToolCall": "CollabAgentToolCall", "subAgentActivity": "SubAgentActivity", "plan": "Plan"}[kind]
+		for from, to := range map[string]string{
+			"senderThreadId": "sender_thread_id", "receiverThreadIds": "receiver_thread_ids",
+			"receiverAgents": "receiver_agents", "agentsStates": "agents_states",
+			"agentThreadId": "agent_thread_id", "agentPath": "agent_path", "reasoningEffort": "reasoning_effort",
+		} {
+			if value, ok := item[from]; ok {
+				item[to] = value
+				delete(item, from)
+			}
 		}
 	case "contextCompaction":
 		item["type"] = "ContextCompaction"

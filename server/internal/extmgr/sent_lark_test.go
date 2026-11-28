@@ -54,16 +54,18 @@ func TestRecordNodeSentWritesARow(t *testing.T) {
 	}
 
 	send(proto.LarkSent{Command: "ex", Method: "post", Path: "/conversations/oc_1/messages", Text: "hello", SessionID: "conv1",
-		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: "ix_9", AnsweredBy: proto.AnsweredByAssistant}})
+		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: "ix_9", AnsweredBy: proto.AnsweredByAssistant, EditedFrom: "original text"}})
 	send(proto.LarkSent{Method: "POST", Path: "/messages/om_2/reactions",
-		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughAlways}})
+		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughAlways, EditedFrom: "must not leak"}})
 	send(proto.LarkSent{Method: "POST", Path: "/conversations", Text: "hi",
 		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughRule, Rule: &proto.LarkRule{Method: "POST", Path: "/conversations", Body: map[string]any{"type": "p2p"}, Action: "allow"}}})
 	send(proto.LarkSent{Method: "DELETE", Path: "/messages/om_3",
 		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughRule, Rule: &proto.LarkRule{Method: "*", Path: "**", Action: "allow"}}})
+	send(proto.LarkSent{Method: "GET", Path: "/links/open",
+		LetThrough: proto.LarkLetThrough{Kind: proto.LarkThroughCard, InteractionID: "ix_get"}})
 
 	rows := st.all()
-	if len(rows) != 4 {
+	if len(rows) != 5 {
 		t.Fatalf("rows %+v", rows)
 	}
 	r := rows[0]
@@ -76,7 +78,7 @@ func TestRecordNodeSentWritesARow(t *testing.T) {
 	if origin := objectOf(t, r.Origin); origin["machine_id"] != "box" || origin["session_id"] != "conv1" || len(origin) != 2 {
 		t.Fatalf("origin %s", r.Origin)
 	}
-	if through := objectOf(t, r.LetThrough); through["kind"] != "card" || through["interaction_id"] != "ix_9" || through["answered_by"] != "assistant" || len(through) != 3 {
+	if through := objectOf(t, r.LetThrough); through["kind"] != "card" || through["interaction_id"] != "ix_9" || through["answered_by"] != "assistant" || through["edited_from"] != "original text" || len(through) != 4 {
 		t.Fatalf("let through %s", r.LetThrough)
 	}
 
@@ -101,6 +103,9 @@ func TestRecordNodeSentWritesARow(t *testing.T) {
 	}
 	if rule, _ := objectOf(t, rows[3].LetThrough)["rule"].(map[string]any); rule["action"] != "*" || rule["match"] != nil {
 		t.Fatalf("a rule for any call: %s", rows[3].LetThrough)
+	}
+	if rows[4].Action != "GET /links/open" {
+		t.Fatalf("the side-effecting GET was not recorded: %+v", rows[4])
 	}
 }
 

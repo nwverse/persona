@@ -28,6 +28,10 @@ class ResolvedRoute(
     val pairingLink: String? = null,
     val focusComposer: Boolean = false,
     val card: RequestRef? = null,
+    /** An explicit secondary parent when a management entry has no stack to infer it from. */
+    val parent: NavKey? = null,
+    /** The hub group this page belongs to; the shell selects it before opening when needed. */
+    val hubGroupId: String? = null,
 )
 
 /** The launcher's "Ask Persona": the Persona tab with the cursor in its composer, cold start or not. */
@@ -37,6 +41,8 @@ const val AskPersonaLink = "persona://open?target=tab&tab=persona&focus=composer
 const val NewTodoLink = "persona://open?target=new-todo"
 
 class Router(
+    /** Resolves feature-specific hub pages in the app shell; null uses the destinations core navigation owns. */
+    private val hubLink: ((String) -> ResolvedRoute?)? = null,
     private val conversationKind: (machineId: String, sessionId: String) -> ConversationKind? = { _, _ -> null },
 ) {
     /** Null means invalid input or missing session metadata; retain pending legacy input until metadata arrives. */
@@ -58,6 +64,7 @@ class Router(
         ConnectionSettingsRoute -> resolve(SettingsPageRoute(SettingsPage.Diagnostics))
         PairingRoute, is SettingsPageRoute -> ResolvedRoute(AppTab.Persona, key)
         is ExtensionUiRoute -> key.takeIf { it.extensionId.isNotBlank() && it.uiId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is ExtensionRoute -> key.takeIf { it.extensionId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is InboxItemRoute -> key.takeIf { it.itemId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is LarkChatRoute -> key.takeIf { it.chatId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
         is ChatRoute -> normalizedChat(key)?.let { ResolvedRoute(it.kind.tab, it) }
@@ -82,6 +89,11 @@ class Router(
     private fun deepLink(url: String): ResolvedRoute? {
         val uri = try { URI(url) } catch (_: IllegalArgumentException) { return null }
             catch (_: java.net.URISyntaxException) { return null }
+        if (uri.scheme?.lowercase() in ProtocolCompatibility.appSchemes && uri.isPageLink()) {
+            if (hubLink != null) return hubLink.invoke(url)
+            val parsed = HubLinks.parse(url, emptyList()) as? HubLinks.Result.Page ?: return null
+            return resolve(parsed.page)
+        }
         if (uri.scheme !in ProtocolCompatibility.appSchemes || uri.rawAuthority !in setOf("open", "pair") ||
             !uri.rawPath.isNullOrEmpty() || uri.rawFragment != null) return null
         if (uri.host == "pair") {
@@ -111,8 +123,15 @@ class Router(
                     InteractionRoute(chat, request ?: return null)
                 else chat
             }
-            "extension" -> ExtensionUiRoute(parameters["extension"] ?: return null, parameters["ui"] ?: return null,
-                parameters["title"].orEmpty(), parameters["state"])
+            "extension" -> {
+                val extension = parameters["extension"] ?: return null
+                val ui = parameters["ui"]
+                if (ui == null) {
+                    if (parameters["trigger"] != "content") return null
+                    ExtensionRoute(extension, manager = parameters["manager"])
+                } else ExtensionUiRoute(extension, ui, parameters["title"].orEmpty(), parameters["state"],
+                    manager = parameters["manager"], notificationActionToken = parameters["notification"])
+            }
             "inbox" -> InboxItemRoute(parameters["item"] ?: return null)
             "new-todo" -> NewTodoRoute
             "lark" -> LarkChatRoute(parameters["chat"] ?: return null)
@@ -124,11 +143,48 @@ class Router(
             else -> return null
         }
         val resolved = resolve(key) ?: return null
-        // Only the Persona tab has a composer to focus; elsewhere the parameter means nothing.
-        return if (parameters["focus"] == "composer" && resolved.key == AssistantRoute) {
+        // Both the Persona tab (main chat) and an explicit ChatRoute have a composer to focus.
+        return if (parameters["focus"] == "composer" && (resolved.key == AssistantRoute || resolved.key is ChatRoute)) {
             ResolvedRoute(resolved.tab, resolved.key, resolved.pairingLink, focusComposer = true)
         } else resolved
     }
+
+    private fun resolve(page: HubPage): ResolvedRoute? = when (page) {
+        is HubPage.Agent -> {
+            page.itemId?.let { MessageJumps.request(page.machineId, page.sessionId, it) }
+            if (page.view == "term") ResolvedRoute(AppTab.Agents, TerminalRoute(page.machineId, page.sessionId))
+            else resolve(ChatRoute(page.machineId, page.sessionId, ConversationKind.Agent))
+        }
+        is HubPage.Conversation -> {
+            if (page.sessionId == null) return resolve(AssistantRoute)
+            val machine = page.machineId?.takeIf { it.isNotBlank() } ?: return null
+            page.itemId?.let { MessageJumps.request(machine, page.sessionId, it) }
+            resolve(ChatRoute(machine, page.sessionId, ConversationKind.Assistant))
+        }
+        HubPage.NewConversation -> ResolvedRoute(AppTab.Persona, AssistantRoute, focusComposer = true)
+        is HubPage.Knowledge, is HubPage.KnowledgeEntry -> null // Feature routes are supplied by the app shell.
+        is HubPage.Screen -> resolveLinkedScreen(page.key)
+    }
+
+    /** Additional destinations accepted from a route-table link without changing RouteInput.Internal's old contract. */
+    private fun resolveLinkedScreen(key: NavKey): ResolvedRoute? = when (key) {
+        TodosRoute -> ResolvedRoute(AppTab.Agents, key)
+        is TodoDetailRoute -> key.takeIf { it.todoId.isNotBlank() }?.let { ResolvedRoute(AppTab.Agents, it) }
+        MachinesRoute -> ResolvedRoute(AppTab.Persona, key)
+        is MachineDetailRoute -> key.takeIf { it.machineId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is TerminalRoute -> key.takeIf { it.machineId.isNotBlank() && it.sessionId.isNotBlank() }?.let { ResolvedRoute(AppTab.Agents, it) }
+        is ModelPurposeRoute -> key.takeIf { it.purposeId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is ChannelRoute -> key.takeIf { it.channelId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is ConnectorRoute -> key.takeIf { it.connectorId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        is ManagerRoute -> key.takeIf { it.managerId.isNotBlank() }?.let { ResolvedRoute(AppTab.Persona, it) }
+        else -> resolve(key)
+    }
+}
+
+private fun URI.isPageLink(): Boolean = when (host?.lowercase()) {
+    "session", "task", "kb", "settings", "extension" -> true
+    "open" -> !rawPath.isNullOrEmpty() || rawQuery.orEmpty().split('&').any { it.substringBefore('=') == "route" }
+    else -> false
 }
 
 private fun decode(value: String): String = URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
@@ -160,8 +216,8 @@ internal fun linkedPage(name: String): NavKey? = when (name.lowercase()) {
 fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: NewTodoRequests = NewTodoOpen): AppTab {
     val stack = stacks.getValue(tab)
     if (stack.isEmpty()) stack.add(tabRoot(tab))
-    // The card is listed on the tab's root and the composer to focus sits there: pages left open on top are closed first.
-    if (card != null || focusComposer) while (stack.size > 1) stack.removeAt(stack.lastIndex)
+    // The card is listed on the tab's root and the Persona tab's composer sits there: pages left open on top are closed first.
+    if (card != null || (focusComposer && key == tabRoot(tab))) while (stack.size > 1) stack.removeAt(stack.lastIndex)
     if (key == tabRoot(tab)) return tab
     // Conversations have one owning tab; secondary pages can legitimately remain open in both stacks.
     if (key is ChatRoute || key is InteractionRoute) {
@@ -174,13 +230,16 @@ fun ResolvedRoute.restore(stacks: Map<AppTab, MutableList<NavKey>>, newTodo: New
         while (stack.lastIndex > existing) stack.removeAt(stack.lastIndex)
         // Preserve the existing NavKey and its UI state when only provenance changed.
         val previous = stack[existing]
+        val withDecisionSource = if (previous is ChatRoute && key is ChatRoute)
+            previous.copy(decisionSource = key.decisionSource ?: previous.decisionSource) else previous
         if (previous == ConnectionSettingsRoute ||
             previous is ChatRoute && key is ChatRoute && previous.kind != key.kind ||
             // A notification about one request of a conversation already open: that page shows this request first.
             key is InteractionRoute && previous != key) {
             stack[existing] = key
-        }
+        } else if (withDecisionSource != previous) stack[existing] = withDecisionSource
     }
+    if (parent != null && !stack.contains(parent)) stack.add(stack.lastIndex, parent)
     // Keep the serialized Sent key compatible, but make its parent explicit for links and history restores.
     restoreSecondaryParents(stack)
     // The list kept from an earlier use keeps its state too: its sheet opens on this request, each time.
@@ -197,9 +256,11 @@ fun restoreSecondaryParents(stack: MutableList<NavKey>) {
     while (index < stack.size) {
         val key = stack[index]
         val parent = when (key) {
-            PairingRoute, ConnectionSettingsRoute, is SettingsPageRoute, is ExtensionUiRoute, is ExtensionRoute,
+            PairingRoute, ConnectionSettingsRoute, is SettingsPageRoute, is ExtensionRoute,
             is ModelProviderRoute, is ChannelRoute, is ManagerRoute, is ConnectorRoute,
             ExtensionMarketRoute, ExtensionMarketsRoute, is ExtensionCatalogRoute -> SettingsRoute.takeUnless { hasSettings }
+            // An extension page keeps the Assistant, Inbox or Settings stack it was opened from.
+            is ExtensionUiRoute -> null
             is InboxItemRoute, is InboxItemUiRoute, is LarkChatRoute -> InboxRoute.takeUnless { hasInbox }
             else -> null
         }
@@ -229,7 +290,8 @@ fun restoreConnectorParents(stack: MutableList<NavKey>) {
 }
 
 private fun sameTarget(left: NavKey, right: NavKey): Boolean = when {
-    left is ChatRoute && right is ChatRoute -> left.machineId == right.machineId && left.sessionId == right.sessionId
+    // A side session's own chat (#7944) sits over the page a link to it opened, its parent's: two pages.
+    left is ChatRoute && right is ChatRoute -> left.machineId == right.machineId && left.sessionId == right.sessionId && left.side == right.side
     // One conversation is one page, whichever of its requests it was opened at.
     left is InteractionRoute -> sameTarget(left.chat, right)
     right is InteractionRoute -> sameTarget(left, right.chat)

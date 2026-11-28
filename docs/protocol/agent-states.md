@@ -9,17 +9,41 @@ whether there's a pending interaction, and whether the user has looked at it in 
 | --- | --- | --- | --- | --- |
 | `needs_you` Needs you | Stuck somewhere a person must step in | `blocked` (a question / confirm box in the TUI) | A pending question, plan, permission or terminal interaction (herdr still shows working while a hook holds it) | Blue, breathing |
 | `working` Working | Running | `working` | Claude: herdr reports `done` / `idle` / `unknown`, but the session has hooks (Persona's, or the global report-only ones) and the hook turn count says the turn isn't over (see "Hook turn signals" below); for sessions without hooks, the terminal title shows Claude Code's working spinner glyph (◐◓◑◒; older versions used braille dots), or the transcript shows this turn has started and not ended (no `turn_duration`, not interrupted) and was written within 45 seconds (#2069; if the transcript shows the turn ended, herdr's state is used). "Written" is its newest timestamped line, not the file's mtime: Claude Code rewrites its trailing metadata in place while idle (#5967); or the turn has stopped but its background commands / sub-Agents / Monitor / workflow are still running (#2228, #2935: when they finish they hand it the result and it carries on; assistant chats excluded). Codex: herdr reports `done` / `idle` / `unknown`, but its app-server runs a turn in its thread or its title shows Codex's spinner ("Codex" below, #4865) | Amber, breathing |
-| Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count | Amber, faded, still |
+| Waiting in the background (a kind of `working`) | The turn is over and all the agent still runs only waits: background commands that sleep, loop on a check (`until … sleep`), `gh … --watch`, `tail -f` (#6045, `Session.background_waiting`) | — | The node looks at the processes under the session's `claude`: every background command is a shell Claude Code starts there (it sources its shell snapshot). One `ps` at most every 20 s, and only while an agent with background commands has ended its turn; CPU is what they used between two looks (Linux `ps` counts whole seconds). Waiting: only waiters, shells and filters in their pipes, near-zero CPU, a loop's short probes (younger than 10 s) left out. Working: a compiler, build tool, test runner or download runs, or CPU is used, or a process nothing here knows runs while their output grew in the last 2 minutes. No look to compare with yet, or no shell found: Working, as before. Subagents and workflows are work. `state` stays `working` (older apps show Working); new clients leave it out of the Working count. Stalled background commands carry `background_stalled_since` (#13744, #16418): a known worker that used no CPU at any look and wrote no output for 10 minutes (a test hung on a lock, an esbuild service nobody talks to); after 3 minutes, a process nothing here knows or a command Claude Code's timeout moved to the background (`moved_from_foreground`) with no waiter under it (a `cmp` reading a stdin nobody writes to); after 2 minutes of looks in a row, background commands alone whose shells are gone from under the live `claude` with no output (one that ended without a notification). A waiter the agent started is never stalled, and CPU or output clears it. Beside a subagent, a workflow or a Monitor the Agent stays Working and clients add a muted "background commands quiet for 3 hr" line. Stalled background commands that are all that is left no longer make a finished turn Working (#16418): `state` is the turn's own (Unread, Idle), `background_working` is false, and `background` and `background_stalled_since` stay on the row, so the task's turn settles and its supervisor hears of it as usual. A task's lone Agent that reported the task done (`report_to_supervisor`) in the round under way settles at once with background commands left that only wait, were moved from the foreground or stalled. iOS and Android do not show the stall yet; the web shows it on Working rows only | Amber, faded, still |
 | `unread` Unread | A turn finished and the result hasn't been seen | `done` (never focused in herdr) | And not viewed in the App since it finished | Green |
 | `idle` Seen | Finished and seen, waiting for input | `idle` (seen in herdr) | Or herdr still says `done` but it was viewed in the App | Gray |
+| Just finished (a kind of `idle`) | The triage found the turn done before anybody looked, less than three hours ago ("Just finished" below, #9751, `work.just_finished`) | — | Session Triage on, and the turn Unread before the triage took it out | Green, a plain dot |
 | `offline` Not running | Not in the host, only a transcript. An Agent of a terminal engine is read-only (#4754): a message is refused (`agent_stopped`), and Resume on its terminal page brings it back (`--resume`) | — | — | Light gray |
 | `interrupted` Interrupted by restart | Was running before a restart, and the restart took herdr's panes with it (#1917) | — | The record has a pane, the start time is earlier than this node's start, and there's no live agent now | Light gray, with "Continue" |
 | `unknown` Unknown | The host recognized the agent but can't tell its state | `unknown` | — | Gray |
 
-List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Seen → Unknown → Not running.
+A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
-Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply right after Unread on Android.
+The Web Agents list uses `Session.view.rank` ("Five phases" below). Clients using the older list order (iOS / Mac `AgentListOrder.rank`, Android `agentRank`) show Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
+
+Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
+
+### Needs you that is not counted
+
+D6 and D11 of `docs/plans/plan-derived-counts.md` ("6. Decisions") decided this; `spec/fixtures/needs-you` pins the
+counts. Each client draws the groups in its own D6 change; until then its fixture replay keeps today's numbers behind
+marks.
+
+- **What the count leaves out**: the Agents count (the tab's badge, and the Needs you section's header and filter)
+  leaves out a muted agent, a quiet task's agent and a session whose only pending cards are held. A held card is a
+  `delegating` one: the assistant is still deciding whether it may answer it, or it waits with its task's supervisor,
+  until it is first handed to the owner. A card its task's supervisor holds (a permission, a plan, or a parsed terminal
+  question routed to it, kind `screen`) is not even listed, and the clients offer no way to answer it; a session whose
+  pending cards are all so held is no row, the terminal dialog behind a held screen card included (the owner confirmed
+  this case of D11 on 2026-11-23).
+- **The state does not change**: a session whose only cards are held stays `needs_you` (`agentState` in
+  `server/internal/assistant/fleet.go` marks a session with any pending card so). The counts leave it out; the state
+  does not.
+- **How such a row reads**: it stays listed in the Needs you section, answerable, in an uncounted group named for why:
+  Muted, or Assistant is looking (quiet tasks' agents and held cards). Its state word stays Needs you, since it still
+  waits for a person. The group's name says why the number leaves it out, so no other state word is added for it. Any
+  other mark, such as a muted agent's look, stays as it is elsewhere.
 
 ### Awaiting your reply (#5096)
 
@@ -41,8 +65,9 @@ forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; ol
   `done` with something missing or waited for, and no closeout at all leave the words to decide, as before. The node marks the session `asks_read`; only without it (an older node, a
   host that does not say) the manager reads `last_text` itself, and only when it was not cut.
 - **Still waiting** (`awaits_reply`, the manager's): Unread or Seen, no pending interaction (that is Needs You), no model
-  error, no background work or `/loop`, and either the triage says it waits on the user (not put off on its card:
-  `work.deferred`), or the triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A turn the triage
+  error, no background work or `/loop`, and either triage found an answerable user wait (not put off on its card:
+  `work.deferred`), or triage has no word on the turn (off, not yet, unsure) and the turn has `asks`. A model's
+  summary alone is not a user wait: it must have a grounded question or an authorization link. A turn the triage
   found done does not count (a closing "shall I also…" is an offer).
 - **Lists**: a Seen, not muted agent with `awaits_reply` gets its own rank, Awaiting Reply, after Unread and before Working;
   it and its space stay out of Idle Spaces and the "N more idle" folds, and its row shows what it asks (the triage's line when
@@ -64,6 +89,38 @@ forgotten. So a stopped session carries `awaits_reply` (`state` is unchanged; ol
 - The finished push of a turn that asks says the question, not the reply's first lines.
 - **The assistant knows**: its live snapshot has a section for agents asking the user that the user saw and has not answered,
   and `agents_list`'s `active` lists them with an "asking you, unanswered" line.
+
+### Just finished (#9751)
+
+With Session Triage on, a turn the triage finds done stops being Unread ("Work state" below): the green dot stays for
+what needs a look. But it went straight to Seen, and the Agents list sorted and folded it with sessions seen long ago
+(Idle Spaces, "N more idle", the folded Seen section), so the work that had just finished was hard to find. A stopped
+session therefore carries `work.just_finished` (`state` is unchanged; older apps still show Seen):
+
+- **Set** by the manager while it makes the lists (`decorateWork`, `server/internal/assistant/fleet_work.go`): the triage
+  found the turn done (`work.phase` `done`), the session was Unread before that took it out (nobody had seen it: not
+  opened or marked seen in an app, not focused in herdr, not viewed in Paseo's own App), no `/loop` wakes it again (that
+  is Waiting), and the turn ended less than `agents.triage.just_finished_hours` ago (manager.json, 3 by default;
+  `work.turn_at`, else `updated_at`). Only on the lists; the triage's record never holds it. With Session Triage off no
+  turn has a work state, so a finished one is Unread as before.
+- **Gone** when the session is seen (opening its chat, Mark as Seen, Mark all as seen, a look in the host), when a new
+  turn starts, and when the window ends. Nothing else tells a list again when only time passes, so the manager keeps
+  when each machine's first Just finished row runs out and tells that list again once it has (`republishFinished`,
+  looked at every 30 seconds).
+- **Lists**: a Just finished, not muted agent gets its own rank, after Working and Waiting in the background, before
+  Waiting, Muted and Seen: work still going comes first, finished work before the parked waits and the seen ones. It
+  and its space stay out of Idle Spaces and the "N more idle" folds. A muted one is plain Seen, as a muted Awaiting
+  reply is. Its row draws the unread tint as a plain dot (not the glowing Unread one), names its state "Just finished"
+  (`lib-state-labels.just_finished`, the To-dos' "Just finished" section's word), and keeps the triage's "✓
+  conclusion" as its second line. Opening it, or Mark all as seen, takes it out on that device at once and waits in the
+  seen outbox for the hub ("Seen" below).
+- **Why three hours**, not the To-dos' 24 (`docs/assistant/todo-status-sop.md`): the Agents list sees far more turns than
+  the To-dos page; on a busy hub a day kept dozens of rows, the pile the section was made to end. Three hours covers a
+  meeting or a stretch of focused work; the setting changes it.
+- **Not counted**: no push, badge, Needs you count, Live Activity or widget count changes, and the assistant's snapshot
+  still lists these turns under "Done (within 24 hours)".
+- **Clients** (#9751): the web, Android (#9786), iOS and Mac (#9787) and the shared Rust sort core use this rank.
+  Android and Apple keep an open chat's row in its original place until the chat is left.
 
 ### Codex (#4865)
 
@@ -88,15 +145,15 @@ Deciding "Needs you" / "done" and pushing are the hub's existing logic (based on
 - **Unrecognized agents** (`gemini`, `amp`…): used to be dropped entirely; now listed as a terminal-only row (`docs/integrations/opencode.md` ("Terminal rows for other agents")). The state is herdr's, so when it's stuck in a confirm box the phone shows "Needs you",
   but there's no card to answer (the hub doesn't parse screens of TUIs it doesn't know); answer it on the terminal page.
 
-### Claude in a Tern block
+### Claude in a Tern or Rex block
 
-Tern reports no agent state: every agent it lists is `unknown` (`node/hosttern.go`). For a Claude, node takes the status Claude Code keeps in its own
+Tern and Rex report no agent state: every agent they list is `unknown` (`node/hosttern.go`, `node/hostrex.go`). For a Claude, node takes the status Claude Code keeps in its own
 `sessions/<pid>.json` instead (the file of the block's `claude` process, the one that names its session; `ternClaudeStatus` in `server/internal/node/agent_status.go`),
 before the hook and transcript rules below:
 
 - `busy` → `working`.
 - `waiting` (a question, permission or other dialog of its own has the keyboard) → `blocked`: Needs you, and the manager makes its screen card as for herdr's `blocked`.
-- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern has nothing like herdr's "seen in the terminal", so a finished
+- `idle` → `done` once the session has a transcript (`idle` before its first message). Tern and Rex have nothing like herdr's "seen in the terminal", so a finished
   turn is Unread until it is opened in an app, and its finished push follows the usual rules.
 - `shell` (Claude Code 2.1.31x and later: the turn is over while a background command or Monitor still runs) is read like `idle`: `done` once
   there is a transcript, and the row then shows Working (background) from the transcript's background tasks.
@@ -129,8 +186,9 @@ Global events carry `report_only`, and the hub doesn't take them as meaning the 
 Decisions (when herdr says `done` / `idle` / `unknown`; `blocked` and `working` follow herdr):
 
 - **A dialog is open in the terminal** (#2553, `node/dialogstatus.go`): for a Claude still `done` / `idle` / `unknown` after the checks above (excluding botmux, those in Claude's agents list, and ones where Persona itself is operating a picker)
-  in a herdr or Tern pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
+  in a herdr, Tern, Rex or Orca pane, node reads its screen in the background every 5 seconds (the list doesn't wait for the read). If the bottom is a dialog (`screen.Choosing`) it's recorded as `blocked`, `attention_reason` is the dialog's first line, and the "last said" in the App list and the assistant's `agents_list` shows that line.
   Why: Claude Code 2.1.309's auto mode billing notice blocked 3 Agents for several minutes; herdr reported done and Persona showed Unread.
+  Orca reports permission dialogs and the ones it recognizes (`blocked`, "dialog open") itself; any other dialog it calls the turn being over, so its panes are read too, the plain text being enough (#17042).
 - **An allow Claude did not take** (#3752, `node/allowwatch.go`): whatever herdr says, `working` included. Once node hands a PermissionRequest
   hook an allow (a terminal Agent's, not the assistant's), it reads the pane 1.5 s later; a dialog still at the bottom (`screen.DialogHead`) lists
   the session as `blocked` with the dialog's first line as `attention_reason`, so the manager makes its screen card. The pane is read again every
@@ -169,11 +227,11 @@ The `sessions/<pid>.json` Claude Code writes also has `status` (busy / idle) and
 
 **Work state** (2026-11-04, #1686, [agent-work.md](../assistant/agent-work.md)): everything above is the host's view; "Unread" only says the turn stopped. After a turn stops, the hub triages it
 and adds a work state `work` to the session: working / blocked on a named precondition (waiting for your decision, another Agent, an external event, a transient error) / done, with a line saying "what it's waiting for" or the conclusion.
-State computation takes it into account: **done**, or **blocked on something the hub waits on for it** (the hub retries automatically, wakes it at the set time), is no longer `unread` but `idle`;
+State computation takes it into account: **done**, or **blocked on something the hub waits on for it** (the hub retries automatically, wakes it at the set time), is no longer `unread` but `idle` (a done one nobody had seen is Just finished for three hours, "Just finished" above);
 for a decision you need to make, the hub opens a question card, so it's `needs_you`. Anything not triaged (just stopped, model failure, can't tell) stays `unread`.
 There is only one set of colors: `apple/Shared/StatusPalette.swift`, shared by the App, the watch and Live Activities (`docs/apple/ios.md` ("Design language")).
 The Agents list also has "Waiting": the state is Seen, but a `/loop` hasn't fired yet (`Session.isWaiting`), so a new message will come. Sessions whose background commands / sub-Agents are still running are counted as Working directly by the hub (#2228, `backgroundState`) and no longer go into Waiting; the assistant chat's background tasks and Monitor are always running and don't count.
-A long-running process started in the background (such as a dev server) keeps the Agent Working until it exits (node stops listing background tasks older than 24 hours). Turn-end decisions such as the "done" push and hub self-update look at the host state and aren't affected by this.
+A long-running process started in the background (such as a dev server) keeps the Agent Working until it exits (node stops listing background tasks older than 24 hours). Stop on such a session, once its turn is over, interrupts nothing: the node presses the Escape as always and answers `turn_over_background`, so the app says the turn had ended and the background work still runs instead of "Interrupted" (#10828); ending the background work itself is done in the terminal. Turn-end decisions such as the "done" push and hub self-update look at the host state and aren't affected by this.
 
 ### Background workflows and Monitor (#2935)
 
@@ -183,6 +241,10 @@ They count as background work just like background commands: the Agent is Workin
 - **Where it's read from**: the Workflow tool result in the transcript, "Workflow launched in background. Task ID: … Run ID: wf_…" (`turn_duration`'s `pendingWorkflowCount` also says some are running),
   and Monitor's "Monitor started (task …, expires in 30m …)". The end is the notification for the same task id (with `<status>`) or `TaskStop`. node's background scan reads the whole transcript, so nothing is missed by only reading the tail.
   The result alone starts a run: that scan skips lines over 64 KiB, and a call with its script inline is as long as the script (#6003).
+- **A Monitor event is not its end** (#10356). A notification parsed as `kind: monitor`, `status: event` keeps the
+  running task's ID, description and `expires_at`, including after repeated events. A stream-ended notification or
+  `TaskStop` still removes it; node's existing expiry filter still excludes an expired Monitor. Commands and Agent
+  notifications keep their own lifecycle rules. This uses the existing background inventory and wire fields.
 - **Progress is on disk**: `<session>/subagents/workflows/<run>/journal.jsonl` (one `started` line per agent, with label and phase; `result` means it came back), and in the same directory `agent-<id>.jsonl` / `.meta.json` (each agent's conversation, read as a sub-Agent).
   When done it writes `<session>/workflows/<run>.json` (status, error, duration); the `meta` of the script `<session>/workflows/scripts/<name>-<run>.js` has the name and phases.
 - **Session field** `workflows` (`docs/protocol/protocol.md`): name, status, current phase, finished / started counts, duration, the sub-agent list and each one's last line. While running it's also put into `background` (kind `workflow`), so old clients and old hubs can still tell "there's background work".
@@ -196,7 +258,7 @@ They count as background work just like background commands: the Agent is Workin
 - **Summary rows** (#5888, #5950): a `summary=1` row (for example iOS Agents › Recent) has no `workflows`. Clients take its `workflow_progress` as the running run (name, phase with `phase_count`, counts, time) and `running_workflows > 0` alone as background work, so the row's workflow line and "Working (Background)" read the same in every grouping (iOS `Session.runningWorkflows` / `isBackgroundWorking`, web `runningWorkflows`, Android `Session.runningWorkflows` / `AgentSession.isBackgroundWorking`). They key on the summary marker (`waiting` present), not on `workflows` being absent: a client keeps an older complete row's `workflows` under a summary (iOS `preservingDetails`, Android `keepingDetails`, the web store's merge), and the summary's own counts win over that kept array, as in "Summary rows" in `docs/protocol/protocol.md` (#3588). A chat whose row a summary last updated reads its running run the same way; its header cards (`workflows`) wait for the complete row. A summary names only the newest run, so its line has no "and N more".
 - **Fallback**: with no notification and no status file, 30 minutes without any write counts as `stalled` (its claude is gone) and no longer as running; a Monitor past `expires_at` doesn't count; finished ones stop being listed after a day.
 - The assistant's live snapshot and `agents_list` spell out running workflows ("this turn stopped to wait for results, it isn't done"), so it won't nudge or close these Agents.
-List order (the same for all three groupings): Needs you → Unread → Awaiting reply → Working → Waiting → Muted → Seen; within a state, by last update time (`docs/apple/ios.md`).
+List order (the same for all three groupings): Needs you → Unread → Awaiting reply → Working → Waiting in the background → Just finished → Waiting → Muted → Seen; within a state, by last update time (`docs/apple/ios.md`).
 
 ### "Seen"
 
@@ -207,13 +269,106 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
   WS messages have no acknowledgment and are silently dropped on a half-open connection (#1588), so the App keeps reads the hub hasn't recorded yet in `SeenOutbox`: it counts as recorded only when a list from the hub has this session's
   `seen_at` later than the mark. Meanwhile it still shows as Seen and is resent on reconnect; it stops waiting if the session does another turn, starts working or needs you, disappears from the list,
   or still isn't recorded after 10 minutes.
-- Rule: herdr `done` and `seen_at` earlier than the session's last update time (the transcript's modification time, i.e. when the turn ended) → `unread`, otherwise `idle`.
+  Once a list shows it recorded, the mark settles for 15 seconds on the web and Apple clients. It holds only rows that still carry the pre-open `seen_at`, is not sent again (including when the chat returns to the front), and ends at once on a new turn, work or a question. Thus an independently paged list cannot turn its older row Unread again while that list catches up.
+  When `sessions_page_counts` brings counts with rows, a held agent leaves Unread / Just finished only against the rows from that same answer; Unread moves to `idle`, Just finished leaves the Seen calculation (`state.idle` less `just_finished`), and `total` is unchanged. A separately read count stays the hub's unadjusted value, even when its rows are held Seen locally. Cursor continuations keep the first answer's counts and send `with_counts` only on first / initial `since` reads.
+  Android's shipping Agents screen instead uses a complete per-hub collection, applies its seen override before deriving rows and counts together, and has no independently paged row/count split (`android/feature/agents`, #12770). It needs no settling window there.
+- A parent and the side sessions folded into it (`docs/protocol/protocol.md` "Session hierarchy") are seen separately: the parent's row shows Unread while one of its sides is
+  (`children.sides_unread`), and viewing the parent records only the parent. The web (`docs/web/web.md`
+  "Side sessions live in their parent's chat", #13496), Android (`docs/android/android.md` "Aligning the Agents list and the Machines page (#3038)", #13524), and Apple clients (`docs/apple/ios.md` "Side sessions (#7944)", #13524) name that side on the parent's row and open it in one tap/click; a seen mark on the parent leaves the row Unread while a side is.
+- Rule: herdr `done` and `seen_at` earlier than the session's last conversational activity → `unread`, otherwise `idle`.
+  Claude Code's trailing metadata (#5967) and a Codex command result recorded after its turn closed do not count as a new turn.
   So if it does another turn after you looked, it becomes Unread again.
+- Where a seen row is listed (#12514 on iPhone and iPad; #12585 on the web): the state is Seen at once, but the Agents list keeps every row it
+  showed as Unread or Just finished during the visit in that place once seen, whether it was opened or marked there or
+  seen elsewhere (another device, herdr, the Codex app), drawn as Seen and left out of the section's count, until the
+  list is refreshed: pull to refresh (reload on the web), the section's **Clear Seen**, a quick filter chosen, another computer, hub or
+  assistant, a new launch. **Mark All as Seen** lets its rows go at once. This is the device's own display; the hub, the counts, the
+  badge and the Live Activity only know the state. Settings › Appearance & Display › Agents List Layout › Seen Agents
+  (on the web, Settings › General › Agent preferences › Seen Agents)
+  has the behavior before it, **Leave When the Chat Closes**: only the open row keeps its place (`AppModel.heldInList`,
+  #2213), and leaving its chat moves it to Seen. Android (#12584) and HarmonyOS (#12583) keep that
+  behavior until then (`docs/design/DESIGN_SYSTEM.md` 3.4, "Rows read during a visit").
 
 ### Ordering
 
 - The list is grouped by state, newest first within a group. Normally that's `updated_at`, but a working agent's `updated_at` changes with every step and would jump around within the group,
   so "Working" uses `state_since`: the hub records when each agent entered its current state (in memory; after a hub restart it counts from the restart).
+
+## Five phases
+
+`Session.view` (`schema/wire/agent-view.schema.json`, #15397, the typed core plan's 2.1, step P5) is the one view of
+an Agent every client draws: `{phase, reason, counted, rank}`. The manager computes it on every list it publishes
+(`server/internal/assistant/agentview`, through `fleetcountadapt.Views` in `fleet_views.go`), the archived rows a hub
+takes apart included; the hub relays it and
+advertises the feature `agent_view` (`proto.FeatureAgentView`). `state` and `status` above stay frozen and are still
+sent, for older clients. A new client draws `view` and sorts by `rank`; it never derives a phase, a count or an order
+of its own. `spec/fixtures/agent-view` pins every case.
+
+| Phase | Absorbs | Reasons (`reason.kind`, with its fields) |
+| --- | --- | --- |
+| `needs_you` | `state=needs_you`, and a row the hub folds a waiting child or side under | `cards` (`n`: the cards in its row, its folded ones' included; `held`: none is the owner's yet, D11) · `terminal_dialog` (a dialog its terminal shows that no card stands for) |
+| `error` | `turn_error*`, `start_error*` and `interrupted`, on a session that is not working | `model` (`code`: `turn_error_code`) · `usage_limit` (`resets_at`, `resumes`) · `start_refused` (`code`: `start_error_code`, `args`: `start_error_args`) · `restart_interrupted` (`resumable`, D-C) |
+| `working` | `working`, background work, background waiting; a session whose task's supervisor holds every card it asked | `turn` · `background` (`waiting`: that work only waits, #6045) |
+| `done` | `unread`, Just finished (`work.just_finished`) and Awaiting your reply (`awaits_reply`, D-A) | `unseen` · `just_finished` · `asks` (`question`: `asks`; `unseen`: the owner has not seen the reply) |
+| `idle` | `idle` (Seen), `offline`, `unknown` | `seen` · `not_running` · `host_unknown` (D-B: a screen may say "status unknown") |
+
+Decided by the owner on 2026-11-25 (#15397): **D-A** Awaiting your reply is `done`, reason `asks`, never counted in
+Needs you; **D-B** `unknown` (and a state this hub does not know) is `idle`, reason `host_unknown`; **D-C**
+`interrupted` is `error`, reason `restart_interrupted{resumable}`, which carries the "Continue" remedy. Before this,
+`agentState` had no interrupted branch, so an interrupted session read as `unknown`.
+
+- **Needs you first, from fleetcount.** The phase is `needs_you` when fleetcount's Agents list
+  (`fleetcount.AgentsNeedsYou` on the badge surface, `spec/fixtures/needs-you`) has a row for the session, by its cards
+  or by its dialog; `counted` is that row's `Why.Counted()`, never computed again (muted, quiet and held rows are
+  listed, not counted). A session with cards and no row of its own (a folded child, a directory-hidden one, one of the
+  assistant's conversations) is `needs_you`, `cards`, not counted; one whose every card its task's supervisor holds is
+  in no row and reads `working`, `turn` (D11). A session the hub says waits with no card and no row is `needs_you`,
+  `terminal_dialog`, not counted.
+- **Then its own turn**: working (with its background), then `interrupted`, then an error (a start error first, then a
+  turn error; Persona's own Stop is none), then a finished turn: `asks`, `unseen`, `just_finished`, `seen`; then not
+  running; anything else is `host_unknown`.
+- **Per computer.** Each machine's list is told on its own, so a row is decided with its own computer's rows and every
+  pending card: a child folded under a parent on another computer is decided as a row of its own (`counted` on the
+  child, not on the parent). The Web Agents list keeps that counted child visible. Clients using the older hierarchy
+  can fold it under the parent. Cross-computer folds are rare (A2A subagents). Deciding the whole fleet at once is a follow-up.
+
+### Rank
+
+`rank` is one total order for every list, lower first: the phase, then the reason within it, then a muted session
+last in its phase. Equal ranks go by the shared tie-break: newest first by `state_since` for `working`, else
+`updated_at`; then session id, then machine id (the web's `byAttention`, iOS `AgentListOrder.ordered`).
+
+| Rank | Phase | Reason |
+| --- | --- | --- |
+| 0 | `needs_you` | counted |
+| 1 | `needs_you` | not counted (muted, quiet, held, no row of its own) |
+| 10 | `error` | `model`, `start_refused`, `restart_interrupted`, `usage_limit` that does not resume by itself |
+| 11 | `error` | `usage_limit` whose CLI goes on by itself once it resets |
+| 19 | `error` | muted |
+| 20 | `working` | `turn` |
+| 21 | `working` | `background` |
+| 22 | `working` | `background`, only waiting |
+| 29 | `working` | muted |
+| 30 | `done` | `unseen`, and `asks` the owner has not seen |
+| 31 | `done` | `asks`, seen |
+| 32 | `done` | `just_finished` |
+| 39 | `done` | muted |
+| 40 | `idle` | `seen` (muted or not) |
+| 41 | `idle` | `host_unknown` |
+| 42 | `idle` | `not_running` |
+
+Why this order: the phases go by how soon the owner has to act. A counted Needs you row waits for them now; an error
+stopped the work until they fix it or say Continue; working is moving on its own; done has a result to read but asks
+nothing more (D-A); idle has nothing. Within a phase the reasons keep the order the three clients' lists have today
+(Unread → Awaiting reply → Just finished; Working → Waiting in the background; Seen → Unknown → Not running), and
+muted rows go last in their phase, as each client's Muted section does today. Each phase starts at a multiple of ten,
+so a reason added later takes a place without renumbering the others. Two changes against today's lists, which each
+client takes with its own change and screenshots (P5a–d): errors move up out of Unread and Seen, and Working now sorts
+ahead of Unread and Awaiting reply, since done asks nothing of the owner that Needs you does not already show.
+
+Older hubs send no `view` (no `agent_view` in the features) and a hub's older manager may send rows without one. The
+fallback, inferring a view from `state`, `status` and the fields above, is written once, in the Rust core
+(`native/app-core`, `state.rs`) with its TypeScript output for the web, never per client (the plan's 2.4).
 
 ## Spaces / slots (multi-tab collaboration)
 
@@ -227,19 +382,23 @@ List order (the same for all three groupings): Needs you → Unread → Awaiting
 | `pane_index` (optional, #2320) | The pane's positional index within the tab (from 0, top-left is 0) | Which position within the slot |
 | `parent_space_id` (optional, #2073) | Not set | Which space this space sits under (same machine, same `space_kind`): an Orca child workspace sets the parent workspace's `worktreeId` (`worktree.ps`'s `parentWorktreeId`) |
 
-DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name), no slots;
+DSH (`docs/integrations/dsh.md`): `space_kind` is `dsh`, the space is the session's directory (`space_id` = directory, `space_name` = directory name; the folder's space, "One folder, one space" below), no slots;
 state comes from the plugin: running → working, a permission / question waiting → blocked, otherwise done (the hub splits it into Unread / Seen by whether it's been seen, as usual).
 
 Codex App (`docs/integrations/codex.md` ("Sessions in the Codex desktop App (App-local IPC)")): `space_kind` is `codex_app`, the space is a project of the App's sidebar
 (`space_id` = `codex-project:<repository root>`, `space_name` = the App's name for it) or its chats in no project (`codex-chats:<CODEX_HOME>`);
 `space_index` is the project's place in the App's sidebar, from 1 (its `project-order`), absent for a project the App does not order and for chats in no project.
+A project's chats are in the terminal workspace rooted in its folder when there is one ("One folder, one space" below).
+
+Claude desktop app (`docs/integrations/claude-integration.md` ("The desktop app's sidebar"), #8521): `space_kind` is `claude_desktop`, the space is the repository the session works in
+(a worktree the app made is its repository's; until that is read, the folder the app started the session in), the same `space_id` as the Codex App's chats there (`codex-project:<repository root>`, `space_name` its folder name), or the terminal workspace rooted in that folder ("One folder, one space" below); a folder that is no repository is a space of its own, the home folder none. No slots.
 
 Paseo (`docs/integrations/paseo.md` ("Which sessions appear")): `space_kind` is `paseo`, the space is a Paseo project (`space_id` = project record id, `space_name` = project name);
 a repository's main checkout and its worktrees share a space. No slots (#4493): a workspace's Agents are separate conversations, not the panes of one tab;
 `slot_name` alone carries the Paseo workspace's title, as the Agent's place label.
 
 opencode (`docs/integrations/opencode.md`): those in herdr panes are herdr sessions (`space_kind` is `herdr`); those outside herdr (web, other terminals) are runtime sessions,
-`space_kind` is `opencode`, the space is the session's directory, no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).
+`space_kind` is `opencode`, the space is the session's directory (the folder's space, "One folder, one space" below), no slots, and state comes from the plugin (running → working, waiting on a permission → blocked, otherwise done / idle depending on whether there's an assistant message).
 
 node fills these fields from herdr's `session.snapshot` (workspaces, tabs and agents in one call): once whenever herdr pushes a change via `events.subscribe`
 (the list is rebuilt at most once a second; entering / leaving blocked doesn't wait, see `docs/server/server.md` ("Card fast lane (#751)")),
@@ -252,6 +411,31 @@ The workspace catalog and terminal focus reader use the same fallback. No config
 successful smaller calls do not reset that streak. These reads are not atomic. If a required small call fails (including another oversized answer),
 the client returns an error and the node keeps its existing agent-list fallback without replacing its cached layout with a partial tree.
 The workspace catalog retains its separate `workspace.list` fallback.
+
+### One folder, one space (#13533)
+
+Each way an Agent runs names its space its own way, and the hub and every client group a computer's sessions by
+`space_id` (`docs/protocol/protocol.md` ("Projects and spaces")). A folder whose Agents ran in herdr, in a desktop app
+and on a runtime was a project for each, all with the folder's name. Some of those spaces only stand for a folder: the
+desktop apps' projects (`codex-project:<root>`) and the space a runtime that keeps no workspaces names by its directory
+(agy, DSH, opencode outside herdr: `space_id` is the directory). Once the list is built, the node
+(`server/internal/node/folderspace.go`) puts every session in such a space in the folder's space on its computer:
+
+- **The terminal workspace rooted in the folder** (a herdr workspace, a Herdr App space, an Orca worktree): its
+  `space_id`, `space_name`, `space_index` and `parent_space_id`, as the host's own sessions there have them. A host's own
+  workspace goes before a directory group (`dir:<folder>`, herdr-core's terminals outside the app's spaces, botmux's
+  topics). Of several, the one named after the folder (the one New Agent reuses for it), the default engine's first;
+  of several with none named after the folder, none, since which one is the folder's is not known.
+- **Else the folder's own space**: `codex-project:<physical folder>`, named as the Codex App names its project there and
+  numbered by its place in the App's sidebar, else by the folder's name.
+
+Folders compare by their physical paths (symbolic links resolved: a home directory is often a link to another volume),
+and a folder this computer does not have (a daemon's on another machine, one removed since) keeps the space its app
+named. A session keeps its `space_kind` (`claude_desktop`, `codex_app`, `agy`…), so one space can hold several kinds,
+and the Codex App's chats in a terminal workspace have that workspace's number as `space_index`. A space action (Git, a
+new terminal, a worktree) whose `kind` names a session's app rather than a terminal host or an engine goes to the host
+that has the workspace, as one with no `kind` does. Terminal hosts' own workspaces, engines' projects (Paseo, Cindy, T3
+Code), the assistant's conversations and sessions in no space (a terminal Agent that is not running) keep what they have.
 
 ### Several panes in one tab
 

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // Decisions the owner can answer (#3804, decision.go). All names, ids and texts are placeholders.
@@ -363,6 +365,47 @@ func TestDecisionAskedWhileAPleaseVerifyIsWritten(t *testing.T) {
 	}
 }
 
+// A session list that keeps failing leaves the task's Agents unknown: the owner's choice is still made (#17431), recorded
+// and handed to the supervisor once, never sent again by the hub, and the owner is told it did not reach the Agent.
+func TestSessionListFailureRecordsDecisionForSupervisor(t *testing.T) {
+	reachA, reachB, reachM := agentReachAttempts, agentReachBackoff, agentReachMax
+	agentReachAttempts, agentReachBackoff, agentReachMax = 2, time.Millisecond, 200*time.Millisecond
+	t.Cleanup(func() { agentReachAttempts, agentReachBackoff, agentReachMax = reachA, reachB, reachM })
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.sessionsListCalls("box")
+	f.sessionsFail["box"] = 1000
+	sent := len(sentToAgent(f))
+	key := "undelivered|" + askOf(s, todo.ID).AskedAt.UTC().Format(time.RFC3339Nano)
+	result, err := s.chooseOption(context.Background(), todo.ID, "", "直接全量")
+	var routeErr *i18n.Message
+	if err != nil || !result.taken || !errors.As(result.undelivered, &routeErr) || routeErr.Key != "assistant-tasks.route_offline" {
+		t.Fatalf("a failed session list did not record the decision: result=%+v err=%v", result, err)
+	}
+	if f.sessionsListCalls("box")-calls != agentReachAttempts+1 {
+		t.Fatalf("session list calls = %d, want initial lookup plus %d retries", f.sessionsListCalls("box")-calls, agentReachAttempts)
+	}
+	s.supervise.dedupMu.Lock()
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	s.supervise.dedupMu.Unlock()
+	if (!pending || g.Key != key || !strings.Contains(g.Detail, "直接全量")) && !told {
+		t.Fatalf("supervisor not told: %+v (told %v)", g, told)
+	}
+	if listedAsk(t, s, todo.ID) != nil || len(sentToAgent(f)) != sent {
+		t.Fatalf("the decision still waits, or was sent: %d sends", len(sentToAgent(f))-sent)
+	}
+	f.sessionsFail["box"] = 0
+	if result, err = s.chooseOption(context.Background(), todo.ID, "", "直接全量"); err != nil || result.taken || len(sentToAgent(f)) != sent {
+		t.Fatalf("the recorded decision was taken again: result=%+v err=%v", result, err)
+	}
+}
+
 // A decision on priority has a default and a date without the review setting any: after a day unanswered the
 // recommendation is taken as the owner's OK would take it.
 func TestPriorityDecisionIsTakenAtItsDefaultTime(t *testing.T) {
@@ -405,9 +448,44 @@ func TestPriorityDecisionIsTakenAtItsDefaultTime(t *testing.T) {
 	}
 }
 
-// A decision that cannot be undone has no default: nothing is ever taken, however long it waits. After a day it goes
-// back to its supervisor once to be confirmed, and from then on it is raised to the owner again once a day.
-func TestIrreversibleDecisionIsNeverTakenAndRaisedDaily(t *testing.T) {
+// A default recommendation at its deadline is not an explicit owner action: with no Agent it keeps the existing
+// rollback and reminder behavior instead of becoming a recorded-only success.
+func TestDefaultRecommendationWithStoppedAgentKeepsReminder(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+	if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+		t.Fatal(err)
+	}
+	a := askOf(s, todo.ID)
+	c := idleAgent(time.Now().Add(-time.Hour))
+	c.Status = proto.StatusInterrupted
+	f.setSessions("box", c)
+	sent := len(sentToAgent(f))
+	pushes := len(decidePushes(t, f))
+	pastDeadline(t, s, todo.ID)
+	s.sweepDecisionDeadlines(time.Now())
+	got := askOf(s, todo.ID)
+	if !got.AcceptedAt.IsZero() || got.ByDefault || got.DueAt.IsZero() ||
+		todoNow(s, todo.ID).Supervision.State != reviewNeedsUser || listedAsk(t, s, todo.ID) == nil ||
+		len(decidePushes(t, f)) != pushes+1 {
+		t.Fatalf("automatic default changed its reminder behavior: %+v", got)
+	}
+	if len(sentToAgent(f)) != sent {
+		t.Fatal("the stopped Agent got the default recommendation")
+	}
+	key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+	s.supervise.mu.Lock()
+	g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+	told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+	s.supervise.mu.Unlock()
+	if pending && g.Key == key || told {
+		t.Fatalf("the default became an owner decision: %+v", g)
+	}
+}
+
+// A decision that cannot be undone has no default. After a day its old facts leave the owner queue; only a fresh
+// supervisor review raises a current, answerable round again.
+func TestIrreversibleDecisionWaitsForFreshReviewAfterRecheck(t *testing.T) {
 	for _, why := range []string{whyIrreversible, whyVisible} {
 		s, f, todo := newSupervisedService(t)
 		waitsForReview(t, s, f, todo.ID, "要删掉旧的生产库表吗？")
@@ -432,31 +510,46 @@ func TestIrreversibleDecisionIsNeverTakenAndRaisedDaily(t *testing.T) {
 		if len(pendingKinds(s, todo.ID)) != 0 || len(decidePushes(t, f)) != pushes {
 			t.Fatalf("%s: told before a day passed: %v", why, pendingKinds(s, todo.ID))
 		}
-		s.sweepDecisionDeadlines(now.Add(24*time.Hour + time.Minute)) // a day: back to its supervisor first
-		if !signalled(s, f, todo.ID, sigRecheck, "先交回你核对") || len(decidePushes(t, f)) != pushes {
+		s.sweepDecisionDeadlines(now.Add(24*time.Hour + time.Minute))
+		if !signalled(s, f, todo.ID, sigRecheck, "已交回督办") || len(decidePushes(t, f)) != pushes {
 			t.Fatalf("%s: no recheck after a day, or the owner was raised it before the supervisor looked", why)
 		}
-		s.sweepDecisionDeadlines(now.Add(25*time.Hour + 2*time.Minute)) // the supervisor had its hour: raised again
-		if got := len(decidePushes(t, f)); got != pushes+1 {
-			t.Fatalf("%s: %d pushes after a day, want one more than %d", why, got, pushes)
+		if ask := listedAsk(t, s, todo.ID); ask != nil {
+			t.Fatalf("%s: the stale decision still waits for the owner: %v", why, ask)
 		}
-		s.sweepDecisionDeadlines(now.Add(40 * time.Hour)) // once a day
-		if got := len(decidePushes(t, f)); got != pushes+1 {
-			t.Fatalf("%s: raised twice in a day", why)
+		s.sweepDecisionDeadlines(now.Add(25*time.Hour + 2*time.Minute))
+		if got := len(decidePushes(t, f)); got != pushes {
+			t.Fatalf("%s: the unrefreshed decision was pushed again: %d, want %d", why, got, pushes)
 		}
-		s.sweepDecisionDeadlines(now.Add(50 * time.Hour))
-		if got := len(decidePushes(t, f)); got != pushes+2 {
-			t.Fatalf("%s: not raised again the next day: %d", why, got-pushes)
-		}
-		if a := askOf(s, todo.ID); len(sentToAgent(f)) != sent || !a.AcceptedAt.IsZero() || a.ByDefault ||
+		if a := askOf(s, todo.ID); len(sentToAgent(f)) != sent || !a.AcceptedAt.IsZero() || a.ByDefault || !a.RaisedAt.IsZero() ||
 			todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
-			t.Fatalf("%s: taken: %+v, to the agent %q", why, a, sentToAgent(f)[sent:])
+			t.Fatalf("%s: the stale round changed: %+v, to the agent %q", why, a, sentToAgent(f)[sent:])
+		}
+
+		// Re-issuing after checking the facts is what raises it to the owner again.
+		fresh := dropTableDecision()
+		fresh["why_owner"] = why
+		if _, err := reviewErr(s, todo.ID, fresh); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(decidePushes(t, f)); got != pushes+1 {
+			t.Fatalf("%s: the fresh review did not raise the decision: %d pushes", why, got)
+		}
+		if ask := listedAsk(t, s, todo.ID); ask == nil {
+			t.Fatalf("%s: the fresh review is not answerable", why)
+		}
+		s.sweepDecisionDeadlines(time.Now().Add(time.Hour))
+		if got := pendingKinds(s, todo.ID); len(got) != 0 {
+			t.Fatalf("%s: the fresh decision inherited the recheck: %v", why, got)
+		}
+		if rec := answerAsk(s, todo.ID, map[string]string{"option": "删掉旧表"}); rec.Code != 200 {
+			t.Fatalf("%s: answering the fresh decision: %d %s", why, rec.Code, rec.Body.String())
 		}
 	}
 }
 
 // A decision older than a day is handed back to its supervisor once: the message carries the decision as it was asked
-// and says to confirm it or close it. It is not told again, also not after the assistant forgot what it told.
+// as task facts. Handling stays in the static system policy. It is not told again after a restart.
 func TestOldDecisionGoesBackToItsSupervisorOnce(t *testing.T) {
 	s, f, todo := newSupervisedService(t)
 	waitsForReview(t, s, f, todo.ID, "要删掉旧的生产库表吗？")
@@ -468,19 +561,19 @@ func TestOldDecisionGoesBackToItsSupervisorOnce(t *testing.T) {
 	s.sweepDecisionAges(day)
 	waitFor(t, "the recheck message", func() bool { return len(f.notices()) > before })
 	n := f.notices()[before]
-	// Check the actual DeviceAssistantSend text, not only the rendered template (#5665).
+	// Check the actual DeviceAssistantSend payload contains no decision-handling manual.
 	// i18n-ignore: exact instructions in the runtime-bound supervision prompt.
 	for _, instruction := range []string{
 		"- 决定交回你核对的：", "- 用户那边没有能回答的东西的：",
 		"- 用户回「你来定」的：", "- 用户回「这不是我要的」的：", "- 用户回「先讲清背景」的：",
 		"todo_decision_add",
 	} {
-		if got := strings.Count(n, instruction); got != 1 {
-			t.Errorf("runtime-bound instruction %q occurs %d times, want 1", instruction, got)
+		if got := strings.Count(n, instruction); got != 0 {
+			t.Errorf("runtime-bound event repeats instruction %q %d times", instruction, got)
 		}
 	}
-	for _, want := range []string{"等了超过一天", "先交回你核对", "why_owner=irreversible，不会默认执行", "删不删旧表", "选项「先导出再删」：多花半天，数据留一份备份",
-		"推荐：删掉旧表", "等待的代价：磁盘两周后写满", "决定交回你核对的：先核对它依据的事实还成立不"} {
+	for _, want := range []string{"等了超过一天", "已交回督办", "why_owner=irreversible，不会默认执行", "删不删旧表", "选项「先导出再删」：多花半天，数据留一份备份",
+		"推荐：删掉旧表", "等待的代价：磁盘两周后写满", "signal=recheck"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("recheck message lacks %q:\n%s", want, n)
 		}
@@ -536,7 +629,7 @@ func TestUndecidableTaskGoesBackToItsSupervisorOnce(t *testing.T) {
 		s.superviseWatch(ctx, time.Now())
 		waitFor(t, "the undecidable message", func() bool { return len(f.notices()) > before })
 		n := f.notices()[before]
-		for _, want := range []string{"标着等用户决定，但用户那边没有能回答的东西", "草稿改动等用户看了再决定合不合", "用户那边没有能回答的东西的：这是以前留下的 needs_user"} {
+		for _, want := range []string{"标着等用户决定，但用户那边没有能回答的东西", "草稿改动等用户看了再决定合不合", "signal=undecidable"} {
 			if !strings.Contains(n, want) {
 				t.Errorf("%s: message lacks %q:\n%s", tc.name, want, n)
 			}
@@ -621,6 +714,115 @@ func TestOptionChosenGoesToTheAgent(t *testing.T) {
 	}
 }
 
+// A stopped, absent or offline Agent cannot take the owner's answer, but the answer is still made: it is recorded,
+// the ask ends, and the supervisor gets the choice and the delivery failure. So is one whose send failed before
+// anything was typed (the node's "Authentication required", a request that never went out, #17431): the reply says
+// so, with the reason. A failure the hub cannot tell stays retryable.
+func TestDecisionWithoutLiveAgentIsRecordedForSupervisor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop func(*fakeHub)
+		want int
+	}{
+		{"stopped", func(f *fakeHub) {
+			c := idleAgent(time.Now().Add(-time.Hour))
+			c.Status = proto.StatusInterrupted
+			f.setSessions("box", c)
+		}, http.StatusOK},
+		{"stopped refusal", func(f *fakeHub) {
+			f.mu.Lock()
+			f.failSend = &rpc.Error{Code: proto.CodeAgentStopped, Message: "the agent has stopped"}
+			f.mu.Unlock()
+		}, http.StatusOK},
+		{"no agent", func(f *fakeHub) { f.setSessions("box") }, http.StatusOK},
+		{"offline", func(f *fakeHub) {
+			f.mu.Lock()
+			f.devices = []Device{}
+			f.mu.Unlock()
+		}, http.StatusOK},
+		{"authentication failure", func(f *fakeHub) {
+			f.mu.Lock()
+			f.failSend = &rpc.Error{Message: "Authentication required"}
+			f.mu.Unlock()
+		}, http.StatusOK},
+		{"never sent", func(f *fakeHub) {
+			f.mu.Lock()
+			f.failSend = rpc.NotSent(context.Canceled)
+			f.mu.Unlock()
+		}, http.StatusOK},
+		{"transient send failure", func(f *fakeHub) {
+			f.mu.Lock()
+			f.failSend = errors.New("temporary network break")
+			f.mu.Unlock()
+		}, http.StatusBadGateway},
+	} {
+		for _, option := range []string{"直接全量", "先灰度 10%"} {
+			t.Run(tc.name+"/"+option, func(t *testing.T) {
+				database := todoTestDB(t)
+				s, f, todo := newSupervisedServiceOn(t, database)
+				waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+				if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+					t.Fatal(err)
+				}
+				a := askOf(s, todo.ID)
+				tc.stop(f)
+				sent := len(sentToAgent(f))
+				rec := answerAsk(s, todo.ID, map[string]string{"option": option})
+				if rec.Code != tc.want {
+					t.Fatalf("accept: %d %s, want %d", rec.Code, rec.Body.String(), tc.want)
+				}
+				var body map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body["code"] != "accept_not_taken" && tc.want == http.StatusBadGateway {
+					t.Fatalf("error code %v", body["code"])
+				}
+				if got := len(sentToAgent(f)); got != sent {
+					t.Fatalf("%d sends after the failed one", got-sent)
+				}
+				decisions, err := database.ListTodoDecisions(context.Background(), todo.ID, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				key := "undelivered|" + a.AskedAt.UTC().Format(time.RFC3339Nano)
+				// A digest removes pending signals before marking them sent. Take the snapshot
+				// outside that interval, after any in-flight digest has finished.
+				s.supervise.dedupMu.Lock()
+				s.supervise.mu.Lock()
+				g, pending := s.supervise.pending[todo.ID+"|"+sigIdle]
+				told := s.supervise.sent[todo.ID+"|"+sigIdle] == key
+				s.supervise.mu.Unlock()
+				s.supervise.dedupMu.Unlock()
+				if tc.want == http.StatusBadGateway {
+					if len(decisions) != 0 || askOf(s, todo.ID).AcceptedAt.IsZero() == false ||
+						todoNow(s, todo.ID).Supervision.State != reviewNeedsUser || pending && g.Key == key || told {
+						t.Fatalf("retryable failure took the decision: decisions=%+v ask=%+v signal=%+v", decisions, askOf(s, todo.ID), g)
+					}
+					return
+				}
+				if reason, _ := body["reason"].(string); body["ok"] != true || body["delivered"] != "none" || reason == "" {
+					t.Fatalf("recorded response %v", body)
+				}
+				if tc.name == "authentication failure" && body["reason"] != "Authentication required" {
+					t.Fatalf("reason %v", body["reason"])
+				}
+				if len(decisions) != 1 || decisions[0].Choice != option {
+					t.Fatalf("decisions %+v", decisions)
+				}
+				if got := askOf(s, todo.ID); got.AcceptedAt.IsZero() || listedAsk(t, s, todo.ID) != nil ||
+					todoNow(s, todo.ID).Supervision.State == reviewNeedsUser {
+					t.Fatalf("the decision still waits: %+v", got)
+				}
+				if (!pending || g.Key != key || !strings.Contains(g.Detail, option)) && !told {
+					t.Fatalf("supervisor not told: %+v (told %v)", g, told)
+				}
+				s.waitWorkEvents() // do not let the next database fixture truncate an event still in flight
+			})
+		}
+	}
+}
+
 // "You decide" on a decision that can be undone: nothing is taken for the owner, the task no longer waits for them, the
 // supervisor is told once with the decision, and it may not put the same question to them again.
 func TestYouDecideHandsADecisionBackToTheSupervisor(t *testing.T) {
@@ -636,7 +838,7 @@ func TestYouDecideHandsADecisionBackToTheSupervisor(t *testing.T) {
 	waitFor(t, "the owner_cannot_answer message", func() bool { return len(f.notices()) > before })
 	n := f.notices()[before]
 	for _, want := range []string{"用户回答不了你发的决定，回的是「你来定」", "why_owner=priority）：先灰度还是直接全量", "选项「直接全量」",
-		"用户回「你来定」的：你自己拍板"} {
+		"signal=owner_cannot_answer"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("message lacks %q:\n%s", want, n)
 		}
@@ -685,7 +887,7 @@ func TestYouDecideNeverTakesAnIrreversibleDecision(t *testing.T) {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	waitFor(t, "the owner_cannot_answer message", func() bool { return len(f.notices()) > before })
-	if n := f.notices()[before]; !strings.Contains(n, "不会默认执行") || !strings.Contains(n, "重发成只有两个选项的批准") {
+	if n := f.notices()[before]; !strings.Contains(n, "不会默认执行") || !strings.Contains(n, "signal=owner_cannot_answer") {
 		t.Fatalf("message:\n%s", n)
 	}
 	s.sweepDecisionDeadlines(time.Now().Add(72 * time.Hour))
@@ -722,7 +924,7 @@ func TestNotWhatIAskedHoldsTheAgentsFollowUps(t *testing.T) {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	waitFor(t, "the owner_cannot_answer message", func() bool { return len(f.notices()) > before })
-	if n := f.notices()[before]; !strings.Contains(n, "回的是「这不是我要的」") || !strings.Contains(n, "hub 已经停掉这个任务 Agent 的自动跟进") ||
+	if n := f.notices()[before]; !strings.Contains(n, "回的是「这不是我要的」") || !strings.Contains(n, "signal=owner_cannot_answer") ||
 		!strings.Contains(n, "任务来历（hub 记的）") {
 		t.Fatalf("message:\n%s", n)
 	}
@@ -758,7 +960,7 @@ func TestExplainFirstKeepsTheDecision(t *testing.T) {
 		t.Fatalf("answer: %d %s", rec.Code, rec.Body.String())
 	}
 	waitFor(t, "the owner_cannot_answer message", func() bool { return len(f.notices()) > before })
-	if n := f.notices()[before]; !strings.Contains(n, "回的是「先讲清背景」") || !strings.Contains(n, "reason 里先写短背景") {
+	if n := f.notices()[before]; !strings.Contains(n, "回的是「先讲清背景」") || !strings.Contains(n, "signal=owner_cannot_answer") {
 		t.Fatalf("message:\n%s", n)
 	}
 	ask := listedAsk(t, s, todo.ID)
@@ -784,6 +986,43 @@ func TestExplainFirstKeepsTheDecision(t *testing.T) {
 	}
 }
 
+// The owner answers a decision twice within half an hour: first "Tell me the background first", the supervisor
+// re-issues it, then "You decide", or the background again. The hub takes the second answer and ends the round, so
+// the supervisor has to hear it, though its stopped agent said nothing new in between (#6027).
+func TestTheOwnersSecondAnswerReachesTheSupervisor(t *testing.T) {
+	for response, says := range map[string]string{respondDecideYourself: "回的是「你来定」", respondExplainFirst: "回的是「先讲清背景」"} {
+		t.Run(response, func(t *testing.T) {
+			s, f, todo := newSupervisedService(t)
+			waitsForReview(t, s, f, todo.ID, "两种走法：A 先灰度，B 直接全量。")
+			if _, err := reviewErr(s, todo.ID, rolloutDecision()); err != nil {
+				t.Fatal(err)
+			}
+			before := len(f.notices())
+			if rec := answerAsk(s, todo.ID, map[string]string{"response": respondExplainFirst}); rec.Code != http.StatusOK {
+				t.Fatalf("first answer: %d %s", rec.Code, rec.Body.String())
+			}
+			waitFor(t, "the first answer told", func() bool {
+				return slices.ContainsFunc(f.notices()[before:], func(n string) bool { return strings.Contains(n, "回的是「先讲清背景」") })
+			})
+			again := rolloutDecision()
+			again["reason"] = "登录页修复已合并；先灰度还是直接全量"
+			if _, err := reviewErr(s, todo.ID, again); err != nil {
+				t.Fatal(err)
+			}
+			before = len(f.notices())
+			if rec := answerAsk(s, todo.ID, map[string]string{"response": response}); rec.Code != http.StatusOK {
+				t.Fatalf("second answer: %d %s", rec.Code, rec.Body.String())
+			}
+			if v := todoNow(s, todo.ID).Supervision; v.Reviews[len(v.Reviews)-1].OwnerResponse != response {
+				t.Fatalf("the second answer was not recorded: %+v", v.Reviews[len(v.Reviews)-1])
+			}
+			waitFor(t, "the second answer told", func() bool {
+				return slices.ContainsFunc(f.notices()[before:], func(n string) bool { return strings.Contains(n, says) })
+			})
+		})
+	}
+}
+
 // The supervision message for the three decision signals, as the supervisor reads it.
 func TestGoldenSuperviseDecisions(t *testing.T) {
 	d := &prompts.SuperviseDecision{WhyOwner: "irreversible", Question: "Drop the old table?", Recommend: "Drop it", NeverDefault: true,
@@ -798,4 +1037,70 @@ func TestGoldenSuperviseDecisions(t *testing.T) {
 				Options: []prompts.SuperviseOption{{Label: "Canary", LeadsTo: "10% today"}, {Label: "Everyone", LeadsTo: "all users today"}}}},
 		{ID: "todo_5", Title: "Fix the login crash", Kind: sigOwnerCannot, Response: respondExplainFirst},
 	})}))
+}
+
+// An undecidable hand-back that comes due while its conversation is stopped (/stop, #3308) is not kept on the review
+// as told, since signal drops it then: once the user speaks again it reaches the supervisor (#13415).
+func TestUndecidableUnderStopWaitsForTheUser(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了，等你看。")
+	old := time.Now().Add(-92 * time.Hour).UTC()
+	if _, _, err := s.updateSupervision(ctx, todo.ID, func(v *Supervision) bool {
+		v.State = reviewNeedsUser
+		v.Reviews = append(v.Reviews, TaskReview{At: old, Verdict: reviewNeedsUser, Note: "草稿改动等用户看了再决定合不合"})
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.markReporter(ctx, "box", todo.Origin)
+	s.setReporterStopped(ctx, todo.Origin, "app")
+	s.superviseWatch(ctx, time.Now())
+	v := todoNow(s, todo.ID).Supervision
+	if !v.Reviews[len(v.Reviews)-1].RestateAt.IsZero() {
+		t.Fatal("kept as told while stopped, though nothing was queued")
+	}
+	s.setReporterStopped(ctx, todo.Origin, "")
+	before := len(f.notices())
+	s.superviseWatch(ctx, time.Now().Add(time.Hour))
+	waitFor(t, "the undecidable message after /stop is lifted", func() bool {
+		for _, n := range f.notices()[before:] {
+			if strings.Contains(n, "signal=undecidable") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestUndeliveredDecisionBypassesSupervisionBatchAndCooldown(t *testing.T) {
+	ctx := t.Context()
+	s, _ := newQuietService(t)
+	todo := orphanTask(t, s)
+	s.supervise.mu.Lock()
+	s.supervise.stopped = true // inspect the scheduled signal without racing its timer
+	s.supervise.mu.Unlock()
+	now := time.Now()
+	reply := s.decisionNotDelivered(ctx, todo.ID, now, "Use the agreed option", errors.New("no Agent"))
+	if !reply.taken || reply.undelivered == nil {
+		t.Fatalf("decision handoff = %+v", reply)
+	}
+	s.supervise.mu.Lock()
+	g := s.supervise.pending[todo.ID+"|"+sigIdle]
+	s.supervise.mu.Unlock()
+	if !g.Handoff || !strings.Contains(g.Detail, "Use the agreed option") {
+		t.Fatalf("decision was not routed to supervision: %+v", g)
+	}
+	for _, batch := range []time.Duration{0, time.Hour} {
+		if wait, ok := digestWaitWithBatch(g.At, g.At, []superviseSignal{g}, s.superviseTimings(), batch); !ok || wait != 0 {
+			t.Fatalf("decision delayed by %s with batch %s", wait, batch)
+		}
+	}
+	s.supervise.mu.Lock()
+	s.supervise.told = map[string]time.Time{"conv1": g.At}
+	s.supervise.mu.Unlock()
+	groups := map[string][]superviseSignal{"conv1": {g}}
+	if got := s.gateDigestBatches([]string{"conv1"}, groups, g.At, time.Hour, time.Hour); len(got) != 1 || got[0] != "conv1" {
+		t.Fatalf("the recipient's digest still waits: %v", got)
+	}
 }

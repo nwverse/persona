@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { t } from "../../i18n";
 import { isRelayContext, sourceLabel } from "../../lib/message-source";
 import { parseUserText } from "../../lib/turns";
@@ -11,12 +11,24 @@ import { useFullText } from "./FullText";
 import { keepLineBreaks } from "./Messages";
 import { useReveal } from "./search-reveal";
 import { AttachedPhotos } from "./AttachedPhotos";
-import { FileCards } from "./FileCards";
+import { LazyFileCards } from "./LazyFileCards";
 import { Thumb } from "./Steps";
 import { ContextGroup } from "./ContextGroup";
 
+export type SourceProps = { msg: UserMessage; mid: string; sid: string };
+
+// Keep the scheduled-task disclosure off the startup path for chats without one.
+const ScheduledTaskMessage = lazy(() => import("./ScheduledTaskMessage"));
+
 /** Relayed words and automatic inputs are sources in one chat, never participants or user bubbles. */
-export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string; sid: string }) {
+export function SourceMessage(props: SourceProps) {
+  if (props.msg.source?.kind === "scheduled_task") {
+    return <Suspense fallback={<div className="h-24" aria-hidden="true" />}><ScheduledTaskMessage {...props} /></Suspense>;
+  }
+  return <RelayedSourceMessage {...props} />;
+}
+
+function RelayedSourceMessage({ msg, mid, sid }: SourceProps) {
   const { scope } = useChatContext();
   const [open, setOpen] = useExpanded(`${scope}source:${msg.id}`);
   const [measuredLong, setMeasuredLong] = useState(false);
@@ -31,24 +43,28 @@ export function SourceMessage({ msg, mid, sid }: { msg: UserMessage; mid: string
   });
   const label = sourceLabel(msg.source!);
   const contexts = (full.text ? parseUserText(full.text).contexts : msg.contexts).filter((context) => context.kind !== "message-source" && !isRelayContext(context));
+  const promoted = msg.promotedRelay === true;
+  const collapsed = promoted && !open;
   return (
     <div className="chat-source" data-message-source={msg.source!.kind} data-source-conversation={msg.source!.conversation_id} data-items={[msg.id, ...msg.images.map((item) => item.id)].join(" ")}>
-      {!msg.continuedSource && <span className="chat-source-label" title={label}>@{label}</span>}
-      <div className={cx("chat-source-body", long && !open && "chat-source-folded")} data-source-folded={long && !open || undefined} ref={(el) => {
+      {(!msg.continuedSource || promoted) && <span className="chat-source-label" title={label}>@{label}</span>}
+      {!collapsed && <div className={cx("chat-source-body", long && !open && "chat-source-folded")} data-source-folded={long && !open || undefined} ref={(el) => {
         if (!el || open) return;
         const line = parseFloat(getComputedStyle(el).lineHeight);
         if (line && el.scrollHeight > line * 3.5 && !measuredLong) setMeasuredLong(true);
       }}>
         <Markdown text={keepLineBreaks(text)} mid={mid} small />
-      </div>
-      {long && <button type="button" className="chat-source-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+      </div>}
+      {(long || promoted) && <button type="button" className="chat-source-toggle" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         {t(open ? "chat-segmentview.collapse" : "chat-segmentview.expand")}
       </button>}
-      {contexts.length > 0 && <ContextGroup contexts={contexts} />}
-      {msg.images.length > 0 && <div className="flex flex-wrap gap-1.5">{msg.images.map((image) => <Thumb key={image.id} item={image} mid={mid} sid={sid} />)}</div>}
-      {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
-      {msg.files && <FileCards files={msg.files} mid={mid} />}
-      {!msg.injected && full.more}
+      {!collapsed && <>
+        {contexts.length > 0 && <ContextGroup contexts={contexts} />}
+        {msg.images.length > 0 && <div className="flex flex-wrap gap-1.5">{msg.images.map((image) => <Thumb key={image.id} item={image} mid={mid} sid={sid} />)}</div>}
+        {msg.photos && <AttachedPhotos paths={msg.photos} mid={mid} sid={sid} />}
+        {msg.files && <LazyFileCards files={msg.files} mid={mid} />}
+        {!msg.injected && full.more}
+      </>}
     </div>
   );
 }

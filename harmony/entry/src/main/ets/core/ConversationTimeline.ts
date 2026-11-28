@@ -30,3 +30,26 @@ export function mergeConversationTimeline(messages: readonly TimelineMessage[], 
   while (cursor < ordered.length) appendCard(ordered[cursor++]);
   return result;
 }
+
+export interface TimelineRowIdentity { readonly id: string; }
+
+/** Keep one observed array and describe insertion positions to native Repeat/List. */
+export function reconcileTimelineRows<T extends TimelineRowIdentity>(current: T[], next: readonly T[]): void {
+  const wanted = new Set(next.map((row: T) => row.id));
+  for (let index = current.length - 1; index >= 0; index--) if (!wanted.has(current[index].id)) current.splice(index, 1);
+  const retained = new Set(current.map((row: T) => row.id));
+  let index = 0;
+  while (index < next.length) {
+    if (current[index]?.id === next[index].id) {
+      if (current[index] !== next[index]) current[index] = next[index];
+      index++;
+    } else if (retained.has(next[index].id)) {
+      const previous = current.findIndex((row: T) => row.id === next[index].id);
+      current.splice(previous, 1); current.splice(index, 0, next[index]); index++;
+    } else {
+      let end = index + 1;
+      while (end < next.length && !retained.has(next[end].id)) end++;
+      current.splice(index, 0, ...next.slice(index, end)); index = end;
+    }
+  }
+}

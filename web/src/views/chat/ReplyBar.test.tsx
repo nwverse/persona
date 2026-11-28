@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// cindy's bar under a turn's last reply (#5314): shown by the pointer or keyboard focus, lingering after the pointer
-// leaves, kept by an open ⋯; Copy message turns into ✓ until the next hover; the time only ticks under the pointer.
+// The latest finished reply keeps its full bar. Earlier bars appear on hover or keyboard focus, linger on exit and
+// stay with an open ⋯. Copy message turns into ✓ until the next hover.
 // SegmentView gives it to a finished turn's last reply only: never narration in a work summary, nor words still coming.
 // After the time, what the exchange cost or its tokens (#5426), with cindy's usage card or tooltip.
 import { act } from "react";
@@ -15,7 +15,7 @@ import type { ModelTokens } from "../../lib/turn-cost";
 import { REPLY_BAR_LINGER_MS } from "../../ui/motion";
 import { ChatActionsContext, type ChatActions } from "./chat-actions";
 import { MessageActions } from "./MessageActions";
-import { ReplyBar } from "./ReplyBar";
+import { LatestReplyId } from "./latest-message-time";
 import { forgetPrices } from "../../lib/turn-cost";
 import { Answer, SegmentView } from "./SegmentView";
 import { StepView, type WorkProps } from "./WorkGroup";
@@ -33,6 +33,7 @@ vi.mock("../../lib/api", async (original) => ({ ...(await original<typeof import
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const chat: ChatActions = { draftKey: "m/s", canCompose: true, speaker: "Agent", title: "Fix login", forward: () => {}, fork: () => {}, images: () => [] };
+const replyTime = "2026-11-12T09:59:01Z";
 let host: HTMLDivElement;
 let root: Root;
 
@@ -55,12 +56,14 @@ afterEach(() => {
 });
 
 /** The reply with the bar, once its code is in (it loads after the first screen). */
-async function draw({ actions = chat, itemId = "r1#0" as string | null, usage = undefined as string | undefined, usageMs = undefined as number | undefined } = {}) {
+async function draw({ actions = chat, itemId = "r1#0" as string | null, pinned = false, usage = undefined as string | undefined, usageMs = undefined as number | undefined, ttftMs = undefined as number | undefined } = {}) {
   await act(async () => root.render(
     <ChatActionsContext.Provider value={actions}>
-      <MessageActions text="All done." ts="2026-11-12T09:59:01Z" itemId={itemId ?? undefined} bar usage={usage} usageMs={usageMs}>
-        <p data-message>All done.</p>
-      </MessageActions>
+      <LatestReplyId.Provider value={pinned ? itemId ?? undefined : undefined}>
+        <MessageActions text="All done." ts={replyTime} itemId={itemId ?? undefined} bar usage={usage} usageMs={usageMs} ttftMs={ttftMs}>
+          <p data-message>All done.</p>
+        </MessageActions>
+      </LatestReplyId.Provider>
     </ChatActionsContext.Provider>,
   ));
   // React tries the lazy bar again on a timer, which the fake clock holds: let it run
@@ -81,32 +84,37 @@ const leave = () => act(() => void bar().parentElement!.dispatchEvent(new MouseE
 const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("the reply bar", () => {
-  it("is in cindy's order: Copy message, Start a new session, More message actions, then the time", async () => {
-    await draw();
-    expect(labels()).toEqual(["复制消息", "开启一个新会话", "更多消息操作"]);
+  it("shows Copy, Start a new session, Translate, More and the time at rest on the latest reply", async () => {
+    await draw({ pinned: true });
+    expect(labels()).toEqual(["复制消息", "开启新会话", "翻译", "更多消息操作"]);
     expect(bar().lastElementChild?.tagName).toBe("TIME");
+    expect(bar().querySelector("time")?.textContent).toBe("刚刚");
+    for (const control of bar().querySelectorAll("button, time")) {
+      expect(control.closest(".opacity-0, .pointer-events-none")).toBeNull();
+    }
   });
 
   it("says chat, not session, in a Persona conversation", async () => {
     await draw({ actions: { ...chat, assistant: true } });
-    expect(labels()).toEqual(["复制消息", "开启一个新对话", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "开启新对话", "翻译", "更多消息操作"]);
   });
 
   it("has no Start a new session where the session cannot branch, or for words that are not a line of their own", async () => {
     await draw({ actions: { ...chat, fork: undefined } });
-    expect(labels()).toEqual(["复制消息", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "翻译", "更多消息操作"]);
     await draw({ itemId: "line12#0" });
-    expect(labels()).toEqual(["复制消息", "更多消息操作"]);
+    expect(labels()).toEqual(["复制消息", "翻译", "更多消息操作"]);
   });
 
   it("has no ⋯ with nothing to put in it (a chat that cannot send, words not in the transcript)", async () => {
     await draw({ actions: { ...chat, canCompose: false }, itemId: null });
-    expect(labels()).toEqual(["复制消息"]);
+    expect(labels()).toEqual(["复制消息", "翻译"]);
   });
 
-  it("shows on hover, stays a moment after the pointer leaves, and a quick way back keeps it", async () => {
+  it("hides earlier replies' actions and time until hover or keyboard focus, then lingers on pointer exit", async () => {
     await draw();
     expect(shown()).toBe(false);
+    expect(bar().querySelector("time")?.closest(".opacity-0")).toBe(bar());
     expect(bar().className).toContain("has-[:focus-visible]:opacity-100");
     enter();
     expect(shown()).toBe(true);
@@ -222,19 +230,16 @@ describe("what the exchange cost, after the time", () => {
     expect(card()).toBeNull();
   });
 
-  it("on the chat's last reply, whose time stays (#5285), comes with the pointer like the buttons", async () => {
-    await act(async () => root.render(<div><ReplyBar text="All done." ts="2026-11-12T09:59:01Z" more={[]} pinned usage={OPUS_TURN} /></div>));
-    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
-    const fade = () => host.querySelector<HTMLElement>("[data-usage-fade]")!;
+  it("shows the latest reply's usage in the row after the time, including after the pointer leaves", async () => {
+    await draw({ pinned: true, usage: OPUS_TURN });
     expect(usageText()?.textContent).toBe("价值 $0.35");
-    expect(fade().previousElementSibling?.tagName).toBe("TIME");
-    expect(fade().className).toContain("opacity-0");
-    expect(bar().className).not.toContain("opacity-0"); // the time stays
+    expect(usageText()?.closest(".opacity-0")).toBeNull();
+    expect(usageText()?.previousElementSibling?.tagName).toBe("TIME");
     enter();
-    expect(fade().className).toContain("opacity-100");
     leave();
     wait(REPLY_BAR_LINGER_MS);
-    expect(fade().className).toContain("opacity-0");
+    expect(usageText()?.closest(".opacity-0")).toBeNull();
+    expect(card()).toBeNull();
   });
 
   it("keeps the bar while its card is open, pins it with a click, and Esc or a click elsewhere closes it", async () => {
@@ -283,7 +288,7 @@ describe("what the exchange cost, after the time", () => {
     wait(10);
     expect(card()?.getAttribute("role")).toBe("tooltip");
     expect(usageText()?.getAttribute("aria-describedby")).toBe(card()?.id);
-    expect(cardLines()).toEqual(["Tokens：共 23.4k · 输入 100 · 输出 23.3k", "缓存拆分：读取 0 · 写入 0 · 命中率 0%", "模型：2 个模型", "本轮费用暂不可用，仅显示用量"]);
+    expect(cardLines()).toEqual(["Tokens：共 23.4k · 输入 100 · 输出 23.3k", "缓存拆分：读取 0 · 写入 0 · 命中率 0%", "模型：2 个模型", "本轮暂无法计算费用，仅显示用量。"]);
     pointer("pointerout", usageText()!);
     expect(card()).toBeNull();
     // a click closes a tooltip rather than pinning it
@@ -305,10 +310,21 @@ describe("what the exchange cost, after the time", () => {
     await draw({ actions: { ...chat, assistant: true }, usage: OPUS_TURN, usageMs: 65_000 });
     expect(usageText()?.textContent).toBe("约 $0.35");
     act(() => usageText()!.click());
-    expect(card()?.getAttribute("aria-label")).toBe("这条回复的估算费用");
-    expect(cardLines()).toEqual(["这条回复约 $0.35，按公开价格估算"]);
+    expect(card()?.getAttribute("aria-label")).toBe("本条回复的估算费用");
+    expect(cardLines()).toEqual(["本条回复费用约 $0.35（按公开价格估算）"]);
     await draw({ actions: { ...chat, assistant: true }, usage: usageKey({ entries: [tokens({ model: "claude-haiku-5-5", out: 10 })] }) });
     expect(usageText()).toBeNull();
+  });
+
+  it("includes TTFT in the Agent turn usage card when observed, while keeping Persona cards plain", async () => {
+    await draw({ usage: OPUS_TURN, usageMs: 65_000, ttftMs: 420 });
+    act(() => usageText()!.click());
+    expect(cardLines()).toContain("首字延迟 420 ms");
+    act(() => void document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+
+    await draw({ actions: { ...chat, assistant: true }, usage: OPUS_TURN, usageMs: 65_000, ttftMs: 420 });
+    act(() => usageText()!.click());
+    expect(cardLines()).toEqual(["本条回复费用约 $0.35（按公开价格估算）"]);
   });
 });
 

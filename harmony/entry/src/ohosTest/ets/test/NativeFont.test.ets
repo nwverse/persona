@@ -17,7 +17,7 @@ export default function nativeFontTests(): void {
     it('requested_native_font_scale_is_applied_before_the_layout_inspection', 0, async (): Promise<void> => {
       const context = nativeTestContext(), application = context.getApplicationContext();
       const scale = Number(fixtureArgument('fontScale'));
-      expect(scale === 2 || scale === 3.2).assertTrue();
+      expect(scale === 1.75 || scale === 2 || scale === 3.2).assertTrue();
       const holdArgument = fixtureArgument('fontHoldSeconds');
       const holdSeconds = holdArgument ? Number(holdArgument) : 45;
       expect(Number.isInteger(holdSeconds) && holdSeconds >= 15 && holdSeconds <= 120).assertTrue();

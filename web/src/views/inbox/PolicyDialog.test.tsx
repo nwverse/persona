@@ -4,7 +4,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { policyFor, policySummary, type InboxItem, type InboxPolicy } from "../../lib/inbox";
+import { type InboxItem, type InboxPolicy } from "../../lib/inbox";
+import { policyFor, policySummary } from "../../lib/inbox-page";
 import { resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
 
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
@@ -64,7 +65,7 @@ describe("收件箱规则", () => {
     await flush();
     expect(button("移除")).toBeUndefined(); // nothing to remove yet
     act(() => button("始终需要你")!.click());
-    act(() => button("分身不碰")!.click());
+    act(() => button("不交由分身")!.click());
     act(() => button("保存")!.click());
     await flush();
     const post = call("POST", "/api/v1/inbox/policies");

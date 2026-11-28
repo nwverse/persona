@@ -179,7 +179,7 @@ func TestStandingAuthorizationFailureAndRevocation(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "audit_failure":
-				e.s.store = func() Store { return failingStandingStore{database} }
+				e.s.setStore(func() Store { return failingStandingStore{database} })
 			case "revoked":
 				saveDispatchAuthorizations(t, database)
 			case "explicit_task_limit":
@@ -199,7 +199,7 @@ func TestStandingAuthorizationFailureAndRevocation(t *testing.T) {
 			}
 			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)}
 			if test == "local_card" {
-				p.local = func(proto.Resolution) error { t.Fatal("local side effect"); return nil }
+				p.local = func(context.Context, proto.Resolution) error { t.Fatal("local side effect"); return nil }
 			}
 			putPending(e.s, p)
 			e.s.record(ix)
@@ -327,7 +327,7 @@ func TestStandingAuthorizationConcurrentTaskDecision(t *testing.T) {
 }
 
 func TestStandingAuthorizationAuditTransactionRollsBack(t *testing.T) {
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

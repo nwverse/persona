@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/nwverse/persona/server/internal/larksyncwire"
+	"github.com/nwverse/persona/server/internal/mailwire"
 )
 
 // The manager's secrets sealed with its secret.key (internal/secretkey), where they are in its database: the built-in
@@ -26,7 +29,7 @@ type sealedTable struct {
 }
 
 var sealedTables = []sealedTable{
-	{"mail_accounts", []string{"id"}, []string{"password_enc", "oauth_enc"}}, // internal/mail
+	{"mail_accounts", []string{"id"}, []string{"password_enc", "oauth_enc"}}, // internal/modules/mail
 	{"connector_secrets", []string{"connector"}, []string{"sealed"}},         // internal/extmgr connectors
 	{"plugin_secrets", []string{"plugin", "name"}, []string{"sealed"}},       // internal/extension registry
 	{"plugin_markets", []string{"id"}, []string{"token_sealed"}},             // internal/extmgr extension markets
@@ -44,7 +47,20 @@ var sealedSettings = []SealedSetting{
 	{Key: "launchers.managed", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},     // internal/assistant storedLauncher
 	{Key: "launchers.machine_keys", List: true, Fields: []string{"key_sealed"}},                                // internal/assistant machineKey
 	{Key: "bots.feishu", Fields: []string{"secret_enc", "registration_device_enc", "registration_secret_enc"}}, // internal/extmgr FeishuBotSettings
-	{Key: "mail.microsoft_client", Fields: []string{"enc"}},                                                    // internal/mail sealedSetting
+	{Key: mailwire.MicrosoftClientSetting, Fields: []string{mailwire.MicrosoftClientSealedField}},              // internal/modules/mail sealedSetting
+	// internal/modules/lark/larksync: the user sync's primary-bot state, its extra bots and its bindings' user tokens.
+	{Key: larksyncwire.SettingPrefs, Fields: larksyncwire.SealedPrefsFields},
+	{Key: larksyncwire.SettingBots, List: true, Fields: larksyncwire.SealedBotsFields},
+	{Key: larksyncwire.SettingBindings, List: true, Fields: larksyncwire.SealedBindingsFields},
+	// internal/assistant: the managed channels (storedChannel), the channel ledger's points (ledgerChannel) and the
+	// launchers a channel replaced, kept for a rollback (ledgerLauncher).
+	{Key: "execution.channels", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
+	{Key: "execution.channels.ledger", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
+	{Key: "execution.channels.ledger_launchers", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},
+	// internal/extmgr storedKeptSecret: the launcher keys a provider extension gave, kept sealed (secret_kept.go).
+	{Key: "secrets.launcher_kept", List: true, Fields: []string{"value_sealed"}},
+	// internal/extmgr storedWords: references' words a provider extension gave, kept sealed (secret_words.go).
+	{Key: "secrets.described", List: true, Fields: []string{"words_sealed"}},
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).

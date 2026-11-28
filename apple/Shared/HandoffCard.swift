@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // A conversation an inbox item was handed to writes back to it (inbox_suggest with item): the reply or conclusion is
 // also a card in that conversation (#5932, docs/assistant/inbox.md "Item actions"). The card is the suggestion as it
@@ -63,6 +64,7 @@ nonisolated enum HandoffCardState: Hashable, Sendable {
         guard let item else { return .unknown }
         if item.isDone {
             guard newest else { return .replaced }
+            if item.doneBy == "source_replied" { return .selfReplied }
             if item.doneBy == "replied" {
                 let last = item.chain?.last { $0.kind == "confirmed" || $0.kind == "self_replied" }
                 if last?.kind == "self_replied" { return .selfReplied }

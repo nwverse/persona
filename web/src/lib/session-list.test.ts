@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { t } from "../i18n";
 import { filterQuery, listPair, ListCounts, ListPage, ListFilters, PAGE_SIZE, SESSIONS_LIST_FEATURE, SessionList, type SessionListOptions } from "./session-list";
+import { SectionList } from "./section-list";
 
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), api: vi.fn() }));
 
@@ -41,7 +42,7 @@ describe("SessionList baseline, filters and structural sharing", () => {
     expect(PAGE_SIZE).toBe(50);
     const list = make();
     const snapshot = list.getSnapshot();
-    expect(snapshot).toEqual({ rows: [], loaded: false, loading: false, error: null, total: 0, counts: null, hasMore: false, supported: null });
+    expect(snapshot).toEqual({ rows: [], loaded: false, loading: false, loadingMore: false, error: null, total: 0, counts: null, hasMore: false, supported: null });
     expect(list.getSnapshot()).toBe(snapshot);
     expect(api).not.toHaveBeenCalled();
   });
@@ -54,6 +55,85 @@ describe("SessionList baseline, filters and structural sharing", () => {
     expect(requestParams()).toEqual([{ summary: "1", limit: "50" }]);
     expect(Object.fromEntries(params(aggregates.mock.calls[0][0]))).toEqual({ counts: "1" });
     expect(list.getSnapshot()).toBe(list.getSnapshot());
+  });
+
+  it("applies stable presentation to an already loaded root without following later activity", async () => {
+    const list = make();
+    await list.load();
+    list.setPresentation({ compare: (a, b) => Number(b.id) - Number(a.id) });
+    const before = ids(list);
+    expect(before[0]).toBe("49");
+    expect(before.at(-1)).toBe("0");
+
+    pages.mockResolvedValueOnce(page([row("0", 20_000, "active")], { revision: "delta" }));
+    await list.load();
+    expect(ids(list)).toEqual(before);
+    expect(list.getSnapshot().rows.at(-1)?.title).toBe("active");
+    expect(requestParams().at(-1)?.since).toBe("baseline");
+  });
+
+  it("admits a created row from an older hub whose delta omits added markers (#11801)", async () => {
+    const options: SessionListOptions<Row> = { counts: false, presentation: { compare: (a, b) => a.title.localeCompare(b.title) } };
+    pages.mockResolvedValueOnce(page([row("a", 2, "1"), row("b", 1, "2")], { revision: "r0", total: 2 }))
+      .mockResolvedValueOnce(page([row("created", 3, "0")], { revision: "r1", total: 3 }));
+    const list = make(undefined, options);
+    await list.load();
+    await list.load();
+    expect(ids(list)).toEqual(["created", "a", "b"]);
+  });
+
+  it("readmits a presented identity after a filter exit, not another filter entrant (#11801)", async () => {
+    const options: SessionListOptions<Row> = { counts: false, presentation: { compare: (a, b) => a.title.localeCompare(b.title) } };
+    pages.mockResolvedValueOnce(page([row("a", 1, "1")], { revision: "r0", total: 1 }))
+      .mockResolvedValueOnce(page([], { revision: "r1", total: 0, remove: ["a"], added: [] }))
+      .mockResolvedValueOnce(page([row("other", 3, "0"), row("a", 2, "1-returned")], { revision: "r2", total: 2, added: [] }));
+    const list = make(undefined, options);
+    await list.load();
+    await list.load();
+    expect(ids(list)).toEqual([]);
+    await list.load();
+    expect(ids(list)).toEqual(["a"]);
+    expect(list.getSnapshot().rows[0]?.title).toBe("1-returned");
+  });
+
+  it("keeps a two-page slot swap in the same order after a fresh baseline and the same reads (#11801)", async () => {
+    let source = Array.from({ length: 120 }, (_, i) => row(`r${i + 1}`, i + 1, String(i + 1)));
+    let delta: Row[] = [];
+    let revision = "r0";
+    vi.mocked(api).mockImplementation((path) => {
+      const q = params(path);
+      if (q.has("since")) return Promise.resolve(page(q.get("since") === revision ? [] : delta, { revision, total: source.length })) as ReturnType<typeof api>;
+      const cursor = q.get("cursor");
+      const offset = cursor ? Number(cursor.split(":")[1]) : 0;
+      const pageRevision = cursor?.split(":")[0] ?? revision;
+      const ordered = [...source].sort((a, b) => b.rank - a.rank || a.id.localeCompare(b.id));
+      const end = offset + PAGE_SIZE;
+      return Promise.resolve(page(ordered.slice(offset, end), {
+        revision: pageRevision, total: source.length, has_more: end < source.length,
+        next_cursor: end < source.length ? `${pageRevision}:${end}` : undefined,
+      })) as ReturnType<typeof api>;
+    });
+    const options: SessionListOptions<Row> = { counts: false, presentation: {
+      compare: (a, b) => Number(a.title) - Number(b.title),
+    } };
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `r${from + i}`);
+    const list = make(undefined, options);
+    await list.load();
+    await list.more();
+    expect(ids(list)).toEqual(range(21, 120));
+
+    const left = source[109]!, right = source[119]!;
+    delta = [{ ...left, title: right.title }, { ...right, title: left.title }];
+    source = source.map((row) => delta.find((changed) => changed.id === row.id) ?? row);
+    revision = "r1";
+    await list.load();
+    const afterSwap = ids(list);
+    expect(afterSwap).toEqual([...range(21, 109), "r120", ...range(111, 119), "r110"]);
+
+    const reloaded = make(undefined, options);
+    await reloaded.load();
+    await reloaded.more();
+    expect(ids(reloaded)).toEqual(afterSwap);
   });
 
   it("publishes rows immediately even when counts have not returned", async () => {
@@ -954,21 +1034,169 @@ describe("generation isolation and inflight coalescing", () => {
     expect(pages).toHaveBeenCalledTimes(2);
   });
 
-  it("coalesces invalidation bursts and schedules one trailing delta during an inflight read", async () => {
-    const list = make();
-    await list.load();
-    const pending = deferred<ListPage<Row>>();
-    pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "latest" }));
-    list.invalidate(); list.invalidate(); list.invalidate();
-    await tick();
-    expect(pages).toHaveBeenCalledTimes(2);
-    list.invalidate(); list.invalidate();
-    await tick();
-    expect(pages).toHaveBeenCalledTimes(2);
-    pending.resolve(page([], { revision: "intermediate" }));
-    await list.load();
-    expect(pages).toHaveBeenCalledTimes(3);
-    expect(requestParams().at(-1)?.since).toBe("intermediate");
+  it("coalesces invalidation bursts and schedules one trailing delta, at the window's end, during an inflight read", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const pending = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "latest" }));
+      list.invalidate(); list.invalidate(); list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+      list.invalidate(); list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages).toHaveBeenCalledTimes(2);
+      pending.resolve(page([], { revision: "intermediate" }));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages).toHaveBeenCalledTimes(3);
+      expect(requestParams().at(-1)?.since).toBe("intermediate");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes idle between a busy fleet's hints and reads a requested page before the next refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const delta = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(delta.promise);
+      list.invalidate(); // opens a window: reads at once
+      await vi.advanceTimersByTimeAsync(0);
+      list.invalidate(); // the next agent's update lands while that read is out
+      await vi.advanceTimersByTimeAsync(0);
+      delta.resolve(page([], { revision: "delta" }));
+      await vi.advanceTimersByTimeAsync(0);
+      // idle until the window ends, so Load more (drawn only while the list is not loading) is on screen
+      expect(list.getSnapshot()).toMatchObject({ loading: false, hasMore: true });
+      expect(pages).toHaveBeenCalledTimes(2);
+      // the window ends during a refresh that has Load more's page queued behind it: the page goes first
+      const refresh = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(refresh.promise)
+        .mockImplementation(async (path) => params(path).has("since") ? page([], { revision: "delta" }) : page(rows(50, 50)));
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages).toHaveBeenCalledTimes(3);
+      list.invalidate();
+      const paging = list.more();
+      await vi.advanceTimersByTimeAsync(2_000); // another window ends while the refresh is still out
+      refresh.resolve(page([], { revision: "delta" }));
+      await paging;
+      expect(requestParams().slice(3).map((p) => p.cursor ? "page" : "refresh")).toEqual(["page", "refresh"]);
+      expect(list.getSnapshot().rows).toHaveLength(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a page is loading only for a page someone asked for, and counts a window from when a slow read came back", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const slow = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(slow.promise);
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      // a background refresh: Load more stays (loadingMore is what hides it)
+      expect(list.getSnapshot()).toMatchObject({ loading: true, loadingMore: false, hasMore: true });
+      await vi.advanceTimersByTimeAsync(1_500);
+      slow.resolve(page([], { revision: "delta" }));
+      await vi.advanceTimersByTimeAsync(0);
+      const settled = pages.mock.calls.length;
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(1_000); // 2.5 s after the read went out, 1 s after it came back
+      expect(pages.mock.calls.length).toBe(settled);
+      await vi.advanceTimersByTimeAsync(1_000); // 2 s after it came back
+      expect(pages.mock.calls.length).toBeGreaterThan(settled);
+      const next = deferred<ListPage<Row>>();
+      pages.mockReturnValueOnce(next.promise);
+      const paging = list.more();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list.getSnapshot()).toMatchObject({ loading: true, loadingMore: true });
+      next.resolve(page(rows(50, 50)));
+      await paging;
+      expect(list.getSnapshot()).toMatchObject({ loading: false, loadingMore: false });
+      expect(list.getSnapshot().rows).toHaveLength(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("throttles a hint storm into one read per window, with the changes of the whole window in it", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      expect(pages).toHaveBeenCalledTimes(1);
+      // A burst of hints (the fleet broadcasts one per working-agent update) reads a handful of times at most — the
+      // read that opens the window and a trailing read for hints that arrive while it is out — never a read per hint.
+      for (let i = 0; i < 100; i++) list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages.mock.calls.length - 1).toBeLessThanOrEqual(2);
+      // The window's end settles the hints that arrived inside it, in one read, and nothing else does.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(pages.mock.calls.length - 1).toBeLessThanOrEqual(3);
+      // Nothing more while the list is quiet: no polling of its own.
+      const quiet = pages.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(pages.mock.calls.length).toBe(quiet);
+      // The last read was a delta from the baseline the burst started at.
+      expect(requestParams().at(-1)?.since).toBe("baseline");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a hint that lands inside a quiet window when the window ends, and keeps reading the hints after it", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      const calls = () => pages.mock.calls.length;
+      const before = calls();
+      list.invalidate(); // opens a window: reads at once
+      await vi.advanceTimersByTimeAsync(0);
+      const opened = calls();
+      expect(opened).toBeGreaterThan(before);
+      list.invalidate(); // inside the window, no read out: waits for the window's end
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBe(opened);
+      await vi.advanceTimersByTimeAsync(2_000); // the window's end reads it
+      expect(calls()).toBeGreaterThan(opened);
+      const settled = calls();
+      await vi.advanceTimersByTimeAsync(5_000);
+      list.invalidate(); // a later hint, after its window: read at once, never stuck behind the old one
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls()).toBeGreaterThan(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leave the throttle's timer behind a reset (filters, projection), and a fresh window reads at once", async () => {
+    vi.useFakeTimers();
+    try {
+      const list = make();
+      await list.load();
+      for (let i = 0; i < 100; i++) list.invalidate();
+      await vi.advanceTimersByTimeAsync(1_000); // inside the window: a timer is pending
+      // A reset (setFilters → reset) drops the pending timer and checkpoint; the next hint reads at once (it may
+      // also share the read the reset's filters started, never a window's wait).
+      await list.setFilters({ machine_id: "demo" });
+      const afterFilters = pages.mock.calls.length;
+      list.invalidate();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages.mock.calls.length).toBeLessThanOrEqual(afterFilters + 2);
+      expect(pages.mock.calls.length).toBeGreaterThan(afterFilters);
+      // No timer fires later: a reset's generation guard leaves nothing of the old window.
+      const calls = pages.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(pages.mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("records fire-and-forget invalidation failures without unhandled rejection", async () => {
@@ -1152,6 +1380,33 @@ describe("counts read with the page (sessions_page_counts, #4858)", () => {
     expect(aggregates.mock.calls.map(([path]) => Object.fromEntries(params(path)))).toEqual([{ counts: "1" }, { counts: "1" }]);
   });
 
+  it("shows a page's counts with its rows, never before them, and not at all when the rest of its read fails", async () => {
+    // a list's rows and the counts read with them go on screen together: the page counts an agent seen there by those
+    // rows (lib/seen-outbox.ts heldCounts), and a newer count beside older rows counted it twice (one too few Unread)
+    const list = make(undefined, { pageCounts: () => true });
+    pages.mockResolvedValueOnce(withCounts(rows(10)));
+    await list.load();
+    const second = deferred<ListPage<Row>>();
+    pages
+      .mockResolvedValueOnce(withCounts([row("a", 20_000)], { revision: "next", has_more: true, next_cursor: "delta/two" }, "next"))
+      .mockReturnValueOnce(second.promise);
+    const loading = list.load();
+    await tick();
+    await tick();
+    expect(list.getSnapshot().counts).toEqual(counts("page"));
+    second.reject(new Error("offline"));
+    await expect(loading).rejects.toThrow("offline");
+    expect(list.getSnapshot().counts).toEqual(counts("page"));
+    expect(ids(list)).not.toContain("a");
+    pages.mockResolvedValueOnce(withCounts([row("a", 20_000)], { revision: "next" }, "next"));
+    const seen: Array<{ counts: string | undefined; a: boolean }> = [];
+    const off = list.subscribe(() => seen.push({ counts: list.getSnapshot().counts?.revision, a: ids(list).includes("a") }));
+    await list.retry();
+    off();
+    expect(seen.filter((x) => x.counts === "next").every((x) => x.a)).toBe(true);
+    expect(list.getSnapshot().counts).toEqual(counts("next"));
+  });
+
   it("keeps a failed page's checkpoint so the retry sees the same changes", async () => {
     const list = make(undefined, { pageCounts: () => true });
     pages.mockResolvedValueOnce(withCounts(rows(10)));
@@ -1237,5 +1492,118 @@ describe("a list that only shows rows (counts: false)", () => {
     await list.retry();
     expect(params(pages.mock.calls.at(-1)![0]).get("cursor")).toBe("frozen/one+");
     expect(list.getSnapshot().rows).toHaveLength(60);
+  });
+});
+
+describe("SectionList: a section that holds all its rows passes over hints about other rows (#9176)", () => {
+  // the hub names rows as [machine_id, session_id]; these rows' ids are the session ids
+  const tupleId = (id: string) => {
+    try {
+      const tuple: unknown = JSON.parse(id);
+      if (Array.isArray(tuple)) return String(tuple[1]);
+    } catch { /* a plain id */ }
+    return id;
+  };
+  const compare = (a: Row, b: Row) => b.rank - a.rank || a.id.localeCompare(b.id);
+  const section = (follows = true) => follows ? new SectionList<Row>("/sessions", (r) => r.id, compare, undefined, tupleId, { counts: false }) : make(undefined, { counts: false }, tupleId);
+  const hint = (since: string, revision: string, ...changed: string[]) => ({ since, revision, changed: changed.map((sid) => ["demo", sid]) });
+  const calls = () => pages.mock.calls.length;
+
+  beforeEach(() => {
+    pages.mockResolvedValue(page([row("a", 2), row("b", 1)], { revision: "r1", total: 2 }));
+    vi.useFakeTimers();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("passes over hints that name none of its rows, reads for one that names one, from where its last read left it", async () => {
+    const list = section();
+    await list.load();
+    expect(calls()).toBe(1);
+    list.invalidate(hint("r1", "r2", "x"));
+    list.invalidate(hint("r2", "r3", "y", "z"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls()).toBe(1);
+    pages.mockResolvedValueOnce(page([row("a", 3)], { revision: "r4", total: 2 }));
+    list.invalidate(hint("r3", "r4", "a"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(2);
+    // not r3: a row that joined the section in between (no hint it could check names that) comes with this read
+    expect(requestParams().at(-1)?.since).toBe("r1");
+    expect(ids(list)).toEqual(["a", "b"]);
+    // the read moved where it stands: the next hint chains from the read's revision
+    list.invalidate(hint("r4", "r5", "x"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls()).toBe(2);
+  });
+
+  it("reads a plain invalidation (its heading's numbers changed) from its last read, past the hints it passed over", async () => {
+    const list = section();
+    await list.load();
+    list.invalidate(hint("r1", "r2", "x"));
+    pages.mockResolvedValueOnce(page([row("c", 9)], { revision: "r2", total: 3 }));
+    list.invalidate();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(2);
+    expect(requestParams().at(-1)?.since).toBe("r1");
+    expect(ids(list)).toEqual(["c", "a", "b"]);
+  });
+
+  it("reads for a gap, for a hint that cannot say what changed, and while a read is out", async () => {
+    const list = section();
+    await list.load();
+    list.invalidate(hint("r0", "r2", "x")); // does not start where the list stands
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const before = calls();
+    list.invalidate({ since: "r1", revision: "r2" }); // no `changed`: an older hub, or too many to name
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls()).toBeGreaterThan(before);
+  });
+
+  it("holds a hint that lands while its read is out to the window: its end reads, not the read's end", async () => {
+    const list = section();
+    await list.load();
+    const pending = deferred<ListPage<Row>>();
+    pages.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([], { revision: "r3", total: 2 }));
+    list.invalidate(hint("r0", "r2", "x")); // a gap: reads at once, opening a window
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(2);
+    list.invalidate(hint("r2", "r3", "x")); // lands while that read is out
+    await vi.advanceTimersByTimeAsync(100);
+    pending.resolve(page([], { revision: "r2", total: 2 }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls()).toBe(2); // the read is in; the hint waits for the window, not the read
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls()).toBe(3);
+    // a reset drops a held read
+    await vi.advanceTimersByTimeAsync(2_100);
+    const out = deferred<ListPage<Row>>();
+    pages.mockReturnValueOnce(out.promise);
+    list.invalidate(hint("r0", "r9", "x")); // a gap, past the window: reads at once
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(4);
+    list.invalidate(hint("r9", "r10", "x")); // its read is out: held to the window's end
+    list.reset();
+    out.resolve(page([], { revision: "r10" }));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls()).toBe(4);
+  });
+
+  it("reads every hint while it has pages not read yet, and when it does not follow hints", async () => {
+    pages.mockResolvedValueOnce(page(rows(50), { revision: "r1", has_more: true, next_cursor: "frozen/one+" }))
+      .mockResolvedValueOnce(page([], { revision: "r2", total: 60 }));
+    const paged = section();
+    await paged.load();
+    paged.invalidate(hint("r1", "r2", "x"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(2);
+    pages.mockResolvedValue(page([row("a", 2)], { revision: "r1", total: 1 }));
+    const plain = section(false);
+    await plain.load();
+    const before = calls();
+    plain.invalidate(hint("r1", "r2", "x"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls()).toBe(before + 1);
   });
 });

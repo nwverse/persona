@@ -42,7 +42,8 @@ func uiRequestFromParams(p extension.UIParams) uiRequest {
 	return in
 }
 func (h *Manager) pageOpen(ctx context.Context, who extwire.UIPrincipal, req wire.UIStreamRequest) (json.RawMessage, error) {
-	if req.Context.Stream == nil || req.Context.Stream.Protocol != 1 {
+	// the hub's own pages (an id starting with "-", pages_hook.go) are drawn over HTTP only
+	if req.Context.Stream == nil || req.Context.Stream.Protocol != 1 || reservedExtension(req.Extension) {
 		return nil, pageError("negotiation")
 	}
 	var in uiRequest
@@ -64,14 +65,18 @@ func (h *Manager) pageOpen(ctx context.Context, who extwire.UIPrincipal, req wir
 			return extension.ActionResult{}, err
 		}
 		defer close(s.openDone)
+		components := make(map[string]bool, len(req.Context.Stream.Components))
+		for _, tag := range req.Context.Stream.Components {
+			components[tag] = true
+		}
+		ps := &h.uiPages
+		ps.mu.Lock()
 		s.manifest = p.Manifest
 		s.item = item
-		s.components = map[string]bool{}
-		for _, tag := range req.Context.Stream.Components {
-			s.components[tag] = true
-		}
+		s.unsupported = sanitizeUnsupported(in.Context.Unsupported)
+		s.components = components
+		ps.mu.Unlock()
 		native, err := h.pageMount(ctx, s)
-		ps := &h.uiPages
 		ps.mu.Lock()
 		if err == nil && !s.closed && s.run == s.process.Generation() {
 			if s.latest != nil && s.latest.Generation == native.Generation && s.latest.Version > native.Version {
@@ -107,6 +112,18 @@ func (h *Manager) pageMount(ctx context.Context, s *pageSession) (pageNative, er
 	var native pageNative
 	ctx, cancel := context.WithTimeout(ctx, uiTimeout)
 	defer cancel()
+	// Publish mount cancellation/completion before waiting on a lazy process so
+	// pageDispose can immediately cancel both Wait and ui.page.mount without racing.
+	h.uiPages.mu.Lock()
+	if s.closed {
+		h.uiPages.mu.Unlock()
+		return native, pageError("expired")
+	}
+	done := make(chan struct{})
+	s.mountDone = done
+	s.mountCancel = cancel
+	h.uiPages.mu.Unlock()
+	defer close(done)
 	// The reservation holds the lazy process alive. Bind its initialized run before
 	// dispatch, so cancellation can dispose a still-awaiting source root factory.
 	if waiter, ok := s.process.(interface{ Wait(context.Context) error }); ok {
@@ -120,11 +137,7 @@ func (h *Manager) pageMount(ctx context.Context, s *pageSession) (pageNative, er
 		return native, pageError("expired")
 	}
 	s.run = s.process.Generation()
-	done := make(chan struct{})
-	s.mountDone = done
-	s.mountCancel = cancel
 	h.uiPages.mu.Unlock()
-	defer close(done)
 	// Transport is a host lifecycle decision, not an app-supplied UI version hint.
 	transport := "stream"
 	if s.legacy {

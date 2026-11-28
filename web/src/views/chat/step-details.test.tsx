@@ -3,7 +3,7 @@
 // the hub cut (G002), plans and questions instead of raw JSON (G017), and the photos sent with a message (G026).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item } from "../../lib/types";
 import type { ToolStep } from "../../lib/work-groups";
 
@@ -20,6 +20,7 @@ vi.mock("../../lib/panel", async (original) => ({
   ...(await original<typeof import("../../lib/panel")>()),
   openPanel: (p: unknown) => panels.opened.push(p),
 }));
+import { loadPages } from "../../lib/lazy-page";
 import { ActionRow } from "./ActionRow";
 import { forgetExpanded } from "./expanded";
 import { Answer, UserBubble } from "./SegmentView";
@@ -61,13 +62,15 @@ afterEach(() => {
 });
 
 describe("a Codex file change (G001)", () => {
-  it("counts its patch's lines and opens it as a diff", () => {
+  it("counts its patch's lines and opens it in the changes panel", () => {
     render(step(use("Edit", { file_path: "/w/src/a.ts", change: "update", diff: "@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+more" }), result("update /w/src/a.ts")));
     expect(host.textContent).toContain("+2");
     expect(host.textContent).toContain("-1");
     openRow();
-    const lines = [...document.querySelectorAll("[data-diff-line]")].map((l) => l.getAttribute("data-diff-line"));
-    expect(lines).toEqual(["same", "del", "add", "add"]);
+    expect(document.querySelector("[data-diff-line]")).toBeNull();
+    expect(panels.opened).toEqual([
+      expect.objectContaining({ kind: "changes", mid: "m", sid: "s", at: { path: "/w/src/a.ts", call: "c1" } }),
+    ]);
   });
 
   it("opens the file when the patch is empty (an empty new file, a pure move)", () => {
@@ -88,7 +91,7 @@ describe("a cut output (G002)", () => {
     expect(host.textContent).toContain("开头的输出");
     expect(host.textContent).not.toContain("已截断，点开看全文");
     const more = host.querySelector<HTMLButtonElement>("[data-full-text]")!;
-    expect(more.textContent).toMatch(/^已截断，看全文（\d/);
+    expect(more.textContent).toMatch(/^内容已截断，查看全文（\d/);
     act(() => more.click());
     await flush();
     expect(full.calls).toEqual(["t1-r#0"]);
@@ -104,7 +107,7 @@ describe("a cut output (G002)", () => {
     await flush();
     const more = host.querySelector<HTMLButtonElement>("[data-full-text]")!;
     expect(more.getAttribute("data-full-text")).toBe("failed");
-    expect(more.textContent).toBe("加载失败，点一下重试");
+    expect(more.textContent).toBe("加载失败，点击重试");
     full.fail = false;
     act(() => more.click());
     await flush();
@@ -128,6 +131,10 @@ describe("a cut reply (G002)", () => {
 });
 
 describe("plans and questions (G017)", () => {
+  // StepDetail is a chunk of its own (StepDetail.lazy.test.tsx): in before these draw it synchronously.
+  beforeAll(async () => {
+    await loadPages();
+  });
   it("draws a plan as Markdown, not JSON", () => {
     render(step(use("ExitPlanMode", { plan: "## 计划\n\n- 第一步" }), result("User has approved your plan.")));
     openRow();
@@ -165,27 +172,69 @@ describe("plans and questions (G017)", () => {
     openRow();
     const picked = [...host.querySelectorAll("[data-step-detail=ask-user] [data-picked]")].map((e) => e.textContent);
     expect(picked).toEqual(["已选：是"]);
-    expect(host.textContent).not.toContain("没有回答");
+    expect(host.textContent).not.toContain("未回答");
   });
 
   it("says so when nobody answered", () => {
     const input = { questions: [{ question: "继续吗？", options: [{ label: "是" }] }] };
     render(step(use("mcp__persona__ask_user", input), result("The user did not answer (dismissed or timed out).")));
     openRow();
-    expect(host.querySelector("[data-step-detail=ask-user]")!.textContent).toContain("没有回答");
+    expect(host.querySelector("[data-step-detail=ask-user]")!.textContent).toContain("未回答");
     expect(host.querySelector("[data-picked]")).toBeNull();
+  });
+
+  it("renders Antigravity mcp_persona_ask_user and scoped hex names with timestamp-wrapped answers", () => {
+    const input = { questions: [{ question: "Which branch?", options: [{ label: "main" }, { label: "dev" }] }] };
+    const wrapped =
+      "Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nOutput:\nThe user answered:\n- Which branch? → main\n";
+
+    render(step(use("mcp_persona_ask_user", input), result("The user answered:\n- Which branch? → dev\n")));
+    openRow();
+    let detail = host.querySelector("[data-step-detail=ask-user]");
+    expect(detail).not.toBeNull();
+    expect([...detail!.querySelectorAll("[data-picked]")].map((e) => e.textContent)).toEqual(["已选：dev"]);
+    expect(host.textContent).not.toContain("The user answered");
+
+    forgetExpanded();
+    render(step(use("mcp_persona_0c671287_ask_user", input), result(wrapped)));
+    openRow();
+    detail = host.querySelector("[data-step-detail=ask-user]");
+    expect(detail).not.toBeNull();
+    expect([...detail!.querySelectorAll("[data-picked]")].map((e) => e.textContent)).toEqual(["已选：main"]);
+    expect(detail!.textContent).not.toContain("未回答");
+    expect(host.textContent).not.toContain("Created At:");
+    expect(host.textContent).not.toContain("The user answered");
+  });
+
+  it("keeps error output visible for Antigravity ask_user failures and ignores unrelated mcp_persona_other_ask_user", () => {
+    const input = { questions: [{ question: "Continue?", options: [{ label: "Yes" }] }] };
+
+    render(step(use("mcp_persona_ask_user", input), result("ask_user timed out", { is_error: true })));
+    openRow();
+    expect(host.querySelector("[data-step-detail=ask-user]")).not.toBeNull();
+    expect(host.textContent).toContain("ask_user timed out");
+
+    forgetExpanded();
+    render(step(use("mcp_persona_other_ask_user", input), result("The user answered:\n- Continue? → Yes\n")));
+    openRow();
+    expect(host.querySelector("[data-step-detail=ask-user]")).toBeNull();
+    expect(host.textContent).toContain("The user answered");
   });
 });
 
 describe("photos sent with a message (G026)", () => {
-  it("draws them over the bubble and opens them in the viewer", () => {
+  it("draws them over the bubble and opens them in the viewer", async () => {
     act(() => root.render(<UserBubble msg={{ id: "u1", text: "看图", images: [], contexts: [], photos: ["/tmp/persona/a.jpg", "/tmp/persona/b.png"] }} mid="m" sid="s" />));
     const thumbs = host.querySelectorAll<HTMLImageElement>("[data-attached-photos] img");
     expect(thumbs).toHaveLength(2);
     expect(thumbs[0].getAttribute("src")).toContain("/machines/m/file/thumb?path=%2Ftmp%2Fpersona%2Fa.jpg");
     act(() => button((b) => b.getAttribute("aria-label")?.startsWith("图片 2") ?? false).click());
-    const viewer = document.querySelector<HTMLElement>('[aria-label="图片 2 / 2"]');
-    expect(viewer).not.toBeNull();
+    // the viewer is a chunk of its own (LazyImageViewer.tsx), drawn once it is in
+    const viewer = await vi.waitFor(() => {
+      const v = document.querySelector<HTMLElement>('[aria-label="图片 2 / 2"]');
+      expect(v).not.toBeNull();
+      return v;
+    });
     expect(viewer!.querySelector("img")?.getAttribute("src")).toContain("/machines/m/file/download?path=%2Ftmp%2Fpersona%2Fb.png");
   });
 

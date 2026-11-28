@@ -10,10 +10,12 @@ import (
 	"slices"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/archiverecovery"
+
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/imessage"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -57,7 +59,7 @@ func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
 		if failedCleanup[src.ID] {
 			continue
 		}
-		if src.ID == imessage.ID && src.FenceVersion != assistantwire.ArchiveFenceV1 {
+		if src.ID == imessagewire.ID && src.FenceVersion != assistantwire.ArchiveFenceV1 {
 			s.logf("kb: iMessage archive requires a manager with commit fencing")
 			continue
 		}
@@ -92,7 +94,9 @@ func (s *Service) kbConnectors(ctx context.Context, e *kb.Engine) {
 
 // kbCollectItems records every connector's items (documents, meetings and events) and tags new ones; more: untagged
 // ones are left (past the round's cap, a paused connection) and kbTagItems goes on with them next round. When it
-// stops before tagging (not writable, the connectors not answering, none with items) it is more as it was.
+// stops before tagging (not writable, the connectors not answering) it is more as it was. No connector with items
+// does not stop it: items also arrive without one (documents linked in chats, an import of the owner's minutes), and
+// they are tagged too.
 func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine, more bool) bool {
 	s.kb.sourceWrites.Lock()
 	defer s.kb.sourceWrites.Unlock()
@@ -102,9 +106,6 @@ func (s *Service) kbCollectItems(ctx context.Context, e *kb.Engine, more bool) b
 	var list assistantwire.Archives
 	if err := s.appCall(ctx, AppConnectors, assistantwire.ConnectorsArchives, map[string]any{}, &list); err != nil {
 		s.logf("kb: the connectors' items: %v", err)
-		return more
-	}
-	if len(list.Items) == 0 {
 		return more
 	}
 	for _, id := range list.Items {
@@ -174,7 +175,7 @@ func (b busArchive) page(ctx context.Context, cursor string, limit int) (assista
 // cursor publication. Ending a reservation uses a separate deadline even when
 // the archive round was cancelled. A failed end remains reserved there, so
 // disable cannot falsely report success.
-func (b busArchive) commit(ctx context.Context, generation string, work archiveRecoveryWork, write, settle func() error) (retErr error) {
+func (b busArchive) commit(ctx context.Context, generation string, work archiverecovery.Work, write, settle func() error) (retErr error) {
 	if b.fenceVersion == 0 {
 		return write()
 	}
@@ -182,8 +183,8 @@ func (b busArchive) commit(ctx context.Context, generation string, work archiveR
 		return err
 	}
 	req := assistantwire.ArchiveFence{ID: b.id, Generation: generation, Token: randomHex(16)}
-	journal := newArchiveRecoveryRecord(req, archiveRecoveryBegin, work)
-	if err := writeArchiveRecovery(b.dir, journal); err != nil {
+	journal := archiverecovery.NewRecord(req, archiverecovery.Begin, work)
+	if err := archiverecovery.Write(b.dir, journal); err != nil {
 		return err
 	}
 	var answer assistantwire.ArchiveFenceResult
@@ -202,15 +203,15 @@ func (b busArchive) commit(ctx context.Context, generation string, work archiveR
 		}
 		retErr = errors.Join(retErr, b.finishReservation(assistantwire.ConnectorsArchiveEnd, req, recovery))
 	}()
-	journal.Stage = archiveRecoverySettle
-	if err := writeArchiveRecovery(b.dir, journal); err != nil {
+	journal.Stage = archiverecovery.Settle
+	if err := archiverecovery.Write(b.dir, journal); err != nil {
 		return err
 	}
 	retErr = write()
 	finished = true
 	if retErr == nil {
-		journal.Stage = archiveRecoveryEnd
-		retErr = writeArchiveRecovery(b.dir, journal)
+		journal.Stage = archiverecovery.End
+		retErr = archiverecovery.Write(b.dir, journal)
 	}
 	return retErr
 }
@@ -254,7 +255,7 @@ func (s *Service) sendArchiveReservation(parent context.Context, pending archive
 	if !answer.Acquired {
 		return errors.New("archive source did not acknowledge the reservation")
 	}
-	if err := removeArchiveRecovery(pending.dir, pending.req.Token); err != nil {
+	if err := archiverecovery.Remove(pending.dir, pending.req.Token); err != nil {
 		return err
 	}
 	s.kb.archiveCleanupMu.Lock()
@@ -396,7 +397,7 @@ func archiveConnector(ctx context.Context, e *kb.Engine, id string, a connector.
 	var generation string
 	guard, guarded := a.(interface {
 		page(context.Context, string, int) (assistantwire.ChangesResult, error)
-		commit(context.Context, string, archiveRecoveryWork, func() error, func() error) error
+		commit(context.Context, string, archiverecovery.Work, func() error, func() error) error
 	})
 	for page := 0; page < kbConnectorPages; page++ {
 		var result assistantwire.ChangesResult
@@ -445,7 +446,7 @@ func archiveConnector(ctx context.Context, e *kb.Engine, id string, a connector.
 			}
 			return nil
 		}
-		work := archiveRecoveryWork{}
+		work := archiverecovery.Work{}
 		for _, batch := range result.Batches {
 			source := id
 			if batch.Source != "" && batch.Source != id {
@@ -454,12 +455,12 @@ func archiveConnector(ctx context.Context, e *kb.Engine, id string, a connector.
 				}
 				source = batch.Source
 			}
-			work.add(source, batch.Chat.ID)
+			work.Add(source, batch.Chat.ID)
 		}
 		// A failed ingest may have installed a journal that a later store open
 		// completes. Keep the reservation until every recorded chat is settled.
 		settle := func() error {
-			for _, pair := range work.chats {
+			for _, pair := range work.Chats {
 				if err := e.Store.SettleIngest(pair.Source, pair.Chat); err != nil {
 					return err
 				}

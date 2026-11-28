@@ -1,0 +1,64 @@
+{
+  "name": "task_scope",
+  "description": "The supervisor can change criteria, modes or the estimate. This log preserves the original brief and records changes and reasons for the owner's next digest, including criteria edits via agent_supervise or agent_send. Give the full done_when list. Removed criteria appear at completion. For an owner-only step, ask via ask_user or task_review needs_user and retry in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue. A new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "todo_id",
+      "change",
+      "why"
+    ],
+    "properties": {
+      "todo_id": {
+        "type": "string",
+        "description": "the task's todo id (todo_…)"
+      },
+      "inbox_item": {
+        "type": "string",
+        "description": "Inbox ID to link to the existing task and its Agents. Omit to skip linking."
+      },
+      "change": {
+        "type": "string",
+        "description": "what changes, in one sentence the owner can read (Chinese), e.g. 「不再要求灰度验证，改为只在测试环境验证」"
+      },
+      "why": {
+        "type": "string",
+        "description": "why, in one sentence (Chinese)"
+      },
+      "work_mode": {
+        "type": "string",
+        "enum": [
+          "execute",
+          "research",
+          "coordinate"
+        ],
+        "description": "New work mode. Omit to keep the current mode."
+      },
+      "completion_mode": {
+        "type": "string",
+        "enum": [
+          "inherit",
+          "draft",
+          "ready",
+          "landed",
+          "verified"
+        ],
+        "description": "Omit to keep it. Inherit uses the assistant's delivery gate."
+      },
+      "done_when": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+          "type": "string"
+        },
+        "description": "the criteria after the change, the whole list; leave it out to keep them as they are"
+      },
+      "expect_minutes": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "how long the task should take from now; leave it out (or 0) to keep it"
+      }
+    }
+  }
+}

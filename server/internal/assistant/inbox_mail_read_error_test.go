@@ -11,11 +11,10 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// collectedJSON hands the inbox a round as the wire carries it (inbox.collected through the bus's decoding).
+// collectedJSON hands the inbox a round as the wire carries it (inbox.collected through the kernel's decoding).
 func collectedJSON(t *testing.T, h *inboxHub, round string) {
 	t.Helper()
-	decode := func(v any) error { return json.Unmarshal([]byte(round), v) }
-	if _, ok, err := inboxRequest(context.Background(), h.Service, assistantwire.MethodInboxCollected, decode); !ok || err != nil {
+	if _, ok, err := h.kernel.Answer(context.Background(), assistantwire.MethodInboxCollected, json.RawMessage(round)); !ok || err != nil {
 		t.Fatalf("inbox.collected: %v %v", ok, err)
 	}
 }
@@ -27,7 +26,7 @@ func mailAccountJSON(id, email string, uid int) string {
 		`"date":%q,"snippet":"hello","seen":false}]}`, id, email, uid, uid, uid, email, time.Now().UTC().Format(time.RFC3339))
 }
 
-// A mail account the round could not read shows in the inbox status like a connector that could not be read
+// A mail account that repeatedly fails to read shows in the inbox status like a connector that could not be read
 // (#1849): GET /api/v1/inbox names it in triage.sources (source "mail:<account>", its address as the name) with the
 // read code and the words for it, and its mail stays listed. A round without mail (a poll) leaves that as it was; the
 // next mail round that reads the account clears it.
@@ -40,8 +39,10 @@ func TestInboxSaysWhichMailAccountCouldNotBeRead(t *testing.T) {
 		t.Fatalf("after a round that read both accounts: %d items, triage %+v", len(items), tr)
 	}
 
-	collectedJSON(t, h, `{"round":"full","sources":[],`+names+`,"mail":{"accounts":[`+mailAccountJSON("acc-me", "me@example.com", 1)+
-		`],"failed":[{"id":"acc-work","email":"work@example.com","read_error":"timeout"}]}}`)
+	for range mailNoticeFailures {
+		collectedJSON(t, h, `{"round":"full","sources":[],`+names+`,"mail":{"accounts":[`+mailAccountJSON("acc-me", "me@example.com", 1)+
+			`],"failed":[{"id":"acc-work","email":"work@example.com","read_error":"timeout"}]}}`)
+	}
 	items, tr := inboxTriageOf(t, h)
 	if len(items) != 2 {
 		t.Fatalf("the account that could not be read lost its mail: %d items", len(items))
@@ -77,9 +78,11 @@ func TestInboxMailAccountReadCodes(t *testing.T) {
 		return len(h.in.changed)
 	}
 	before := pushes()
-	collectedJSON(t, h, `{"round":"full","sources":[],`+names+`,"mail":{"accounts":[],"failed":[`+
-		`{"id":"acc-me","email":"me@example.com","read_error":"login_refused"},`+
-		`{"id":"acc-work","email":"work@example.com","read_error":"a_code_from_a_newer_hub"}]}}`)
+	for range mailNoticeFailures {
+		collectedJSON(t, h, `{"round":"full","sources":[],`+names+`,"mail":{"accounts":[],"failed":[`+
+			`{"id":"acc-me","email":"me@example.com","read_error":"login_refused"},`+
+			`{"id":"acc-work","email":"work@example.com","read_error":"a_code_from_a_newer_hub"}]}}`)
+	}
 	_, tr := inboxTriageOf(t, h)
 	want := []InboxTriageSource{
 		{Source: "mail:acc-me", Name: "me@example.com", State: "ok", ReadError: assistantwire.ReadLoginRefused,

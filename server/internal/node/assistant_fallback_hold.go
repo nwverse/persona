@@ -34,8 +34,7 @@ type assistantFallback struct {
 
 // sameModelChoice: two requests for the same model, whatever the message around them.
 func sameModelChoice(a, b modelExecution) bool {
-	return a.Model == b.Model && a.Effort == b.Effort && a.UseEffort == b.UseEffort && a.Fingerprint == b.Fingerprint &&
-		a.Runtime == b.Runtime
+	return a.Model == b.Model && a.Effort == b.Effort && a.UseEffort == b.UseEffort && a.Fingerprint == b.Fingerprint
 }
 
 // holdFallback starts conversation id's hold on to, after a recovery's switch away from from answered there. n.mu is
@@ -51,24 +50,92 @@ func (n *Node) holdFallback(id, launcher string, from, to modelExecution) {
 // heldFallback is the execution conversation id's message runs on: its fallback while the hold lasts and the message
 // asks for the model the switch moved away from, else what it asks for. Another model asked for ends the hold.
 func (n *Node) heldFallback(id, launcher string, asked modelExecution) modelExecution {
+	execution, _ := n.heldFallbackWithExpiry(id, launcher, asked)
+	return execution
+}
+
+// heldFallbackWithExpiry also reports whether an existing hold for this exact request expired naturally. A missing
+// hold after a restart is not expiry, and another model choice is not expiry either. Classification leaves the old
+// chain untouched for a new choice; commitModelChoice ends it only once that choice's input is delivered.
+func (n *Node) heldFallbackWithExpiry(id, launcher string, asked modelExecution) (modelExecution, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	asked.NewModelChoice = false
 	f := n.fallbacks[id]
-	if f == nil {
-		return asked
-	}
 	now := time.Now()
-	if now.Sub(f.at) >= assistantRefusalSticky {
-		delete(n.fallbacks, id)
-		return asked
+	if f != nil {
+		aged := now.Sub(f.at) >= assistantRefusalSticky
+		same := f.launcher == launcher && sameModelChoice(asked, f.from)
+		if aged && same {
+			delete(n.fallbacks, id)
+			return asked, true // age does not turn this exact old request into a cold restart
+		}
+		if aged {
+			asked.NewModelChoice = true
+			return asked, false
+		}
+		if !now.Before(f.until) || !same {
+			expired := !now.Before(f.until) && same
+			asked.NewModelChoice = !same
+			return asked, expired
+		}
+		out := f.to
+		// The hold selects a fallback model, never the fallback turn's authorization. Keep this message's fresh origin
+		// decision so an ordinary-to-Inbox change still selects a new built-in tool policy before any input is written.
+		out.Origin, out.OriginKnown = asked.Origin, asked.OriginKnown
+		out.IsMain, out.Public, out.Interject, out.Ultracode = asked.IsMain, asked.Public, asked.Interject, asked.Ultracode // the message's own
+		out.SupervisionInstructions = asked.SupervisionInstructions
+		out.NewModelChoice = false // the old hold selected this execution, not a new pick
+		out.PersistedModel = false
+		out.FromRecovery = true
+		return out, false
 	}
-	if !now.Before(f.until) || f.launcher != launcher || !sameModelChoice(asked, f.from) {
-		f.until = time.Time{} // over; a refusal soon after still skips the same-model retry
-		return asked
+
+	// A cold restart can leave only the persisted marker. Its own original execution identity is authoritative:
+	// recovery sends may have overwritten the session's current model and effort.
+	r := n.recoveryMarks[id]
+	if r == nil {
+		if st, ok := n.state.get(id); ok {
+			r = st.ModelRecovery
+		}
 	}
-	out := f.to
-	out.IsMain, out.Interject, out.Ultracode = asked.IsMain, asked.Interject, asked.Ultracode // the message's own
-	return out
+	if !modelRecoverySwitched(r) {
+		return asked, false
+	}
+	choice := modelExecution{Model: r.From, Effort: asked.Effort, UseEffort: asked.UseEffort, Fingerprint: asked.Fingerprint}
+	oldLauncher := ""
+	if r.Choice != nil {
+		choice = modelExecution{Model: r.From, Effort: r.Choice.Effort, UseEffort: r.Choice.UseEffort, Fingerprint: r.Choice.Fingerprint}
+		oldLauncher = r.Choice.Launcher
+	} else if st, ok := n.state.get(id); ok {
+		// Compatibility for records written before choice existed. The session's full identity is reliable only while
+		// it still names the original model; recovery may have normalized effort and fingerprint on the fallback.
+		oldLauncher = st.Launcher
+		choice = modelExecution{Model: r.From, Effort: asked.Effort, UseEffort: asked.UseEffort, Fingerprint: asked.Fingerprint}
+		if st.Model == r.From {
+			choice = modelExecution{Model: r.From, Effort: st.ModelEffort, UseEffort: st.ModelFingerprint != "", Fingerprint: st.ModelFingerprint}
+		}
+	}
+	asked.NewModelChoice = !sameModelChoice(asked, choice) || oldLauncher != "" && oldLauncher != launcher
+	return asked, false
+}
+
+// commitModelChoice ends the old recovery chain after the new choice's input was actually delivered. A rejected
+// preflight or an active process that retains its old execution never reaches this commit.
+func (n *Node) commitModelChoice(id string, execution modelExecution) {
+	if !execution.NewModelChoice {
+		return
+	}
+	n.mu.Lock()
+	if f := n.fallbacks[id]; f != nil {
+		if time.Since(f.at) >= assistantRefusalSticky {
+			delete(n.fallbacks, id)
+		} else {
+			f.until = time.Time{} // the hold is over; the sticky record keeps the old chain's retry budget
+		}
+	}
+	n.mu.Unlock()
+	n.clearModelRecovery(id)
 }
 
 // recentFallback: conversation id's last fallback answered within assistantRefusalSticky, and what the conversation
@@ -99,6 +166,32 @@ func (n *Node) noteUnavailable(launcher, model string) {
 		n.unavailable = map[string]time.Time{}
 	}
 	n.unavailable[launcher+"\x00"+model] = time.Now().Add(assistantUnavailableFor)
+}
+
+// isModelUnavailable reports whether model was recently found unavailable on launcher and has not expired.
+func (n *Node) isModelUnavailable(launcher, model string) bool {
+	if launcher == "" || model == "" {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := time.Now()
+	for _, candidate := range []string{model, strings.TrimSuffix(model, oneMillionSuffix)} {
+		if candidate == "" {
+			continue
+		}
+		k := unavailableKey(launcher, candidate)
+		until, ok := n.unavailable[k]
+		if !ok {
+			continue
+		}
+		if now.After(until) {
+			delete(n.unavailable, k)
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // markUnavailableUsed marks every model of launcher found unavailable, and not expired, as used by chain r. n.mu is

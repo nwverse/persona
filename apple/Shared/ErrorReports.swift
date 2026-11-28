@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// The app's errors and crashes for the hub's error reports (#5621, docs/protocol/protocol.md "Error reports"): sent only while
 /// the hub's `features` has `error_reports` (an extension such as Sentry takes them). A report says what failed where
@@ -14,8 +15,6 @@ nonisolated enum ErrorReports {
     static let source = "watch", os = "watchos"
     #elseif os(visionOS)
     static let source = "vision", os = "visionos"
-    #elseif os(macOS)
-    static let source = "mac", os = "macos"
     #else
     static let source = "ios", os = "ios"
     #endif
@@ -77,17 +76,9 @@ nonisolated enum ErrorReports {
     /// The hardware model identifier only (iPhone17,1, Mac15,3): the simulator's is the one it simulates.
     static let deviceModel: String = {
         if let sim = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"], !sim.isEmpty { return sim }
-        #if os(macOS)
-        var size = 0
-        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 0 else { return "Mac" }
-        var bytes = [CChar](repeating: 0, count: size)
-        guard sysctlbyname("hw.model", &bytes, &size, nil, 0) == 0 else { return "Mac" }
-        return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        #else
         var info = utsname()
         guard uname(&info) == 0 else { return "" }
         return withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        #endif
     }()
 
     /// s cut to at most `bytes` of UTF-8, on a character boundary.
@@ -155,7 +146,8 @@ nonisolated final class ErrorReportQueue: @unchecked Sendable {
     /// Writes `report` at once (the crash handler calls it right before the app dies); false when it could not.
     @discardableResult
     func write(_ report: ExtensionErrorReport) -> Bool {
-        lock.withLock {
+        DevProbe.error(report) // kept on the device too while Developing Persona is on (#9460)
+        return lock.withLock {
             guard let json = try? JSON.encoder.encode(report) else { return false }
             let ms = Int64(((ErrorReports.date(report.time) ?? now()).timeIntervalSince1970 * 1000).rounded(.down))
             let id = String(report.id.filter { $0.isLetter || $0.isNumber || $0 == "-" }.prefix(64))

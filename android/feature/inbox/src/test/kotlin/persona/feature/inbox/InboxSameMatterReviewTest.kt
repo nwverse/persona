@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -32,6 +33,7 @@ import persona.core.designsystem.LocalAppFeedback
 import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 /**
  * The two picker entries on the real event page (review additions for batch ②): a link from the More menu must make the
@@ -79,7 +81,7 @@ class InboxSameMatterReviewTest {
         assertEquals(0, feedback.failures)
         // The picker stays open with the choice still offered (another one may work), and the section behind it is
         // still the line it had: no reload was asked for and nothing claims the link happened.
-        rule.onNode(hasSetTextAction()).assertExists()
+        rule.onNode(hasSetTextAction() and !hasTestTag("inbox-handoff-field")).assertExists()
         assertEquals(reads, repository.lineCalls)
         rule.onNodeWithText("Parent", substring = true).assertExists()
         rule.onAllNodesWithText("是同一件事…")[0].assertExists()

@@ -10,11 +10,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 // VerifyRelease is a publisher's last check before uploading a release (docs/operations/hub-update.md "Version manifest"):
@@ -29,6 +33,10 @@ func VerifyRelease(ctx context.Context, dir string, m *Manifest) error {
 	if _, err := ParseNumber(strconv.FormatInt(m.Build, 10)); err != nil {
 		return err
 	}
+	edition, ok := nodeproto.ParseEdition(m.Edition)
+	if !ok {
+		return fmt.Errorf("the manifest names an unknown edition %q", m.Edition)
+	}
 	type entry struct {
 		program, platform string
 		file              File
@@ -37,7 +45,7 @@ func VerifyRelease(ctx context.Context, dir string, m *Manifest) error {
 	for plat, f := range m.Files {
 		all = append(all, entry{"personad", plat, f})
 	}
-	for _, group := range []map[string]map[string]File{m.Programs, m.Nodes} {
+	for _, group := range []map[string]map[string]File{m.Programs, m.Nodes, {"persona-link": m.Links}} {
 		for prog, plats := range group {
 			for plat, f := range plats {
 				all = append(all, entry{prog, plat, f})
@@ -67,8 +75,56 @@ func VerifyRelease(ctx context.Context, dir string, m *Manifest) error {
 		} else if want := releaseLine(m); got != want {
 			return fmt.Errorf("%s says %q, not %q: the manifest was written for another build than this binary", e.file.Name, got, want)
 		}
+		// A release is of one edition: a full build listed in the core's manifest (or the reverse) would be installed
+		// by every hub that trusts it. Read from the build info; a file without any says nothing here.
+		if got, ok := EditionOf(run); ok && got != edition {
+			return fmt.Errorf("%s is the %s edition, in a manifest of the %s edition", e.file.Name, got, edition)
+		}
+	}
+	// Helpers carry their own version, not the release's build number: their bytes are checked, and the one for this
+	// machine has to run and say its name.
+	helpers := make([]string, 0, len(m.Helpers))
+	for name := range m.Helpers {
+		helpers = append(helpers, name)
+	}
+	sort.Strings(helpers)
+	for _, name := range helpers {
+		plats := make([]string, 0, len(m.Helpers[name]))
+		for plat := range m.Helpers[name] {
+			plats = append(plats, plat)
+		}
+		sort.Strings(plats)
+		for _, plat := range plats {
+			f := m.Helpers[name][plat]
+			run := ""
+			if plat == here {
+				run = filepath.Join(tmp, f.Name+".bin")
+			}
+			if err := verifyDownload(dir, f, 0, run); err != nil {
+				return fmt.Errorf("%s for %s: %w", name, plat, err)
+			}
+			if run == "" {
+				continue
+			}
+			if got, err := helperVersion(ctx, run); err != nil {
+				return fmt.Errorf("%s for %s does not run here: %w", name, plat, err)
+			} else if !strings.HasPrefix(got, name+" ") {
+				return fmt.Errorf("%s says %q, not %s's version", f.Name, got, name)
+			}
+		}
 	}
 	return nil
+}
+
+// helperVersion is what a helper's `version` prints ("persona-iphone-bridge 0.1.0 (wire 1)").
+func helperVersion(ctx context.Context, bin string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "version").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // verifyDownload checks f in dir against the manifest: size and sha256 of the archive, sha256 of what it unpacks to,
@@ -98,6 +154,7 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", f.Name, err)
 	}
+	defer zr.Close()
 	inner := sha256.New()
 	stamp := newStampScan(build)
 	sinks := []io.Writer{inner, stamp}
@@ -109,7 +166,15 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 		defer out.Close()
 		sinks = append(sinks, out)
 	}
-	if _, err := io.Copy(io.MultiWriter(sinks...), zr); err != nil {
+	limit := unpackedBinaryLimit()
+	unpacked, err := io.Copy(io.MultiWriter(sinks...), io.LimitReader(zr, limit+1))
+	if err != nil {
+		return fmt.Errorf("%s: %w", f.Name, err)
+	}
+	if unpacked > limit {
+		return fmt.Errorf("%s: unpacked binary exceeds %d bytes", f.Name, limit)
+	}
+	if err := zr.Close(); err != nil {
 		return fmt.Errorf("%s: %w", f.Name, err)
 	}
 	if out != nil {
@@ -120,8 +185,8 @@ func verifyDownload(dir string, f File, build int64, run string) error {
 	if hex.EncodeToString(inner.Sum(nil)) != f.BinarySHA256 {
 		return fmt.Errorf("%s does not unpack to the binary the manifest lists (binary_sha256)", f.Name)
 	}
-	// One that runs here says its build itself (VerifyRelease), with its version.
-	if run == "" && !stamp.done() {
+	// One that runs here says its build itself (VerifyRelease), with its version. A helper (build 0) has none.
+	if build != 0 && run == "" && !stamp.done() {
 		return fmt.Errorf("%s is not build %d: the manifest was written for another build than this binary", f.Name, build)
 	}
 	return nil

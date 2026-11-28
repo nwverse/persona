@@ -15,7 +15,7 @@ import (
 
 func taskRecoveryDatabase(t *testing.T) *db.DB {
 	t.Helper()
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,10 +140,10 @@ type stopOnRecoveryPush struct {
 	cancel context.CancelFunc
 }
 
-func (h stopOnRecoveryPush) NotifyRequest(ctx context.Context, p NotifyRequest) error {
-	err := h.fakeHub.NotifyRequest(ctx, p)
+func (h stopOnRecoveryPush) NotifyRequest(ctx context.Context, p NotifyRequest) (NotifyResult, error) {
+	res, err := h.fakeHub.NotifyRequest(ctx, p)
 	h.cancel()
-	return err
+	return res, err
 }
 
 func TestRunRecoversTaskStarts(t *testing.T) {

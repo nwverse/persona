@@ -120,6 +120,9 @@ func (s *meshStore) SaveLiveActivity(context.Context, db.LiveActivity) error   {
 func (s *meshStore) ClaimLiveActivityStart(context.Context, string, string, time.Time, time.Duration, time.Duration) (time.Time, bool, error) {
 	return time.Time{}, false, nil // no persisted activity in this non-push fixture
 }
+func (s *meshStore) HoldLiveActivityStart(context.Context, string, time.Time, time.Duration) (bool, error) {
+	return false, nil
+}
 
 func (s *meshStore) InsertInteraction(_ context.Context, ix proto.Interaction) error {
 	s.mu.Lock()
@@ -296,6 +299,22 @@ func (s *meshStore) CreatePairToken(context.Context, string, time.Time, string) 
 func (s *meshStore) PairTokenByHash(context.Context, string) (*db.PairToken, error)   { return nil, nil }
 func (s *meshStore) RedeemPairToken(context.Context, string, db.DeviceToken, string) (bool, error) {
 	return false, nil
+}
+
+// MachineLinkInUse is db.DB's without pairing codes (this store keeps none): a live link credential.
+func (s *meshStore) MachineLinkInUse(_ context.Context, machine string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, t := range s.tokens {
+		if t.MachineID == machine && t.Role == roleLink && !s.revoked[t.ID] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *meshStore) RevokeLinkPair(context.Context, string, string) (string, bool, error) {
+	return "", false, nil
 }
 func (s *meshStore) PutInboxItem(context.Context, string, []byte, time.Time, *time.Time) error {
 	return nil
@@ -511,7 +530,7 @@ func (s *meshStore) UpdateTodo(context.Context, string, *string, *string, *bool,
 func (s *meshStore) FailTodo(context.Context, string, string, time.Time) (*db.TodoRow, error) {
 	return nil, db.ErrTodoNotFound
 }
-func (s *meshStore) AutoDoneTodo(context.Context, string, string, time.Time, time.Time) (*db.TodoRow, bool, error) {
+func (s *meshStore) AutoDoneTodo(context.Context, string, string, time.Time, time.Time, func() error) (*db.TodoRow, bool, error) {
 	return nil, false, db.ErrTodoNotFound
 }
 func (s *meshStore) RetryTodo(context.Context, string, time.Time) (*db.TodoRow, bool, error) {
@@ -537,11 +556,16 @@ func (s *meshStore) FeedItem(context.Context, string) (*db.FeedRow, error) { ret
 func (s *meshStore) MarkFeedSent(context.Context, string, string, time.Time, json.RawMessage) ([]db.FeedRow, error) {
 	return nil, nil
 }
-func (s *meshStore) LinkTodoSpace(context.Context, string, string, string, time.Time) (string, error) {
+func (s *meshStore) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return nil, nil
+}
+func (s *meshStore) LinkTodoSpace(context.Context, string, string, string, time.Time, db.KeptLinks) (string, error) {
 	return "", nil
 }
-func (s *meshStore) UnlinkTodoSpace(context.Context, string, string, string) error { return nil }
-func (s *meshStore) RenameTodoSpace(context.Context, string, string, string) (bool, error) {
+func (s *meshStore) UnlinkTodoSpace(context.Context, string, string, string, db.KeptLinks) error {
+	return nil
+}
+func (s *meshStore) RenameTodoSpace(context.Context, string, string, string, db.KeptLinks) (bool, error) {
 	return false, nil
 }
 func (s *meshStore) LinkTodoAgent(context.Context, string, string, string, string, string, string, string, time.Time) ([]string, error) {

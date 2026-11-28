@@ -35,6 +35,10 @@ Complex capabilities sit behind settings or an advanced entry and open on reques
 - New advanced options default to off and live in Settings or an advanced group, not on the main chat or Agents screens.
 - Detail opens on request: tool execution stays one summary line (super rule 2); expert terms and raw values (model IDs, ports, paths, hub, node, MCP) appear only in the advanced area that needs them, or come with a plain explanation (`DESIGN_SYSTEM.md` section 5).
 - A new look is an opt-in style or theme color; the default style stays pixel-identical.
+- Web Labs is for temporary trials of real features or new implementations alongside the stable path. Each trial keeps
+  the stable default and a lossless rollback, with a linked issue to graduate or remove it. Shipped module switches
+  belong in Settings › General. Put permanent per-browser and advanced preferences in their owning category and keep
+  irreversible changes, internal debug controls and placeholder demos out of Labs. See [Labs](../web/web.md#labs).
 
 **How to check**: with the feature off, before / after screenshots of the primary screens are identical; the PR names where the option lives and that it is off by default.
 
@@ -44,7 +48,7 @@ The user can see, change and undo every behavior; what Persona shows can be expl
 
 - Every behavior-changing setting is visible in Settings with its current value; no hidden flag whose only switch is a chat command or a file.
 - Reversible actions offer Undo; irreversible ones confirm first, with a destructive-styled button and Cancel (`DESIGN_SYSTEM.md` section 4.4). An undo or rollback the user made sticks: no background job silently redoes it.
-- Background work stops things, it never removes what the user may still open: an Agent always runs in a terminal and keeps it after it stops; only the user closes a terminal (`docs/integrations/engines.md`, "Agents run in a terminal").
+- Background work stops things and keeps the terminal available. The user can close it by hand, turn on a close setting, or authorize closing the original tab of a particular task when it is accepted (`docs/integrations/engines.md`, "Agents run in a terminal").
 - When Persona or an Agent changes a setting for the user, it first says in plain words what changes, where and from when, waits for confirmation, records the change and offers a rollback (reference: model profile switch, `docs/assistant/model-profiles.md`). Every count or status can say what it counts.
 
 **How to check**: for each new setting the PR names where it is shown, how it is changed back, and, if an Agent can change it, the confirmation text and the rollback path (test or screenshot). Each new number has a one-line definition in the docs or in the UI.

@@ -1,6 +1,5 @@
 import SwiftUI
 
-#if os(visionOS)
 extension View {
     /// The main window's shell on Apple Vision Pro, around the app's TabView (RootView's `RootTabs`, which visionOS
     /// draws as the system's tab ornament at the window's leading edge): the Needs You ornament below the window.
@@ -54,7 +53,7 @@ private struct NeedsYouOrnament: View {
 
     /// The waiting ones as the badges count them, longest waiting first; the one after the conversation on screen.
     private func openNext() {
-        let keys = model.pendingInteractions.map(\.sessionKey).filter { k in
+        let keys = model.aggregatePendingInteractions.map(\.sessionKey).filter { k in
             model.latest(k)?.assistant == true || model.isQuiet(k) || !model.isMuted(k)
         }
         var order: [SessionKey] = []
@@ -64,4 +63,3 @@ private struct NeedsYouOrnament: View {
         model.open(next)
     }
 }
-#endif

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -14,8 +15,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -77,7 +80,18 @@ func New(cfg Config) (*Client, error) {
 	if err != nil || !ok {
 		return nil, errors.New("key is not an EC private key")
 	}
+	if err := checkSigningKey(ek); err != nil {
+		return nil, err
+	}
 	return NewWithKey(cfg, ek), nil
+}
+
+// checkSigningKey enforces ES256's curve and 32-byte signature components before signing.
+func checkSigningKey(key *ecdsa.PrivateKey) error {
+	if key == nil || key.Curve != elliptic.P256() {
+		return errors.New("apns: signing key must use P-256 for ES256")
+	}
+	return nil
 }
 
 // NewWithKey uses a key already in memory (tests).
@@ -125,13 +139,30 @@ func (c *Client) resign(stale string) (string, error) {
 }
 
 func (c *Client) tokenLocked() (string, error) {
+	if err := checkSigningKey(c.key); err != nil {
+		return "", err
+	}
 	now := time.Now().Unix()
-	if c.jwt != "" && now-c.jwtIat < tokenMaxAge {
+	if c.jwt != "" && now >= c.jwtIat && now-c.jwtIat < tokenMaxAge {
 		return c.jwt, nil
 	}
+	headerJSON, err := json.Marshal(struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}{Alg: "ES256", Kid: c.Cfg.KeyID})
+	if err != nil {
+		return "", err
+	}
+	claimsJSON, err := json.Marshal(struct {
+		Iss string `json:"iss"`
+		Iat int64  `json:"iat"`
+	}{Iss: c.Cfg.TeamID, Iat: now})
+	if err != nil {
+		return "", err
+	}
 	enc := base64.RawURLEncoding
-	header := enc.EncodeToString([]byte(fmt.Sprintf(`{"alg":"ES256","kid":%q}`, c.Cfg.KeyID)))
-	claims := enc.EncodeToString([]byte(fmt.Sprintf(`{"iss":%q,"iat":%d}`, c.Cfg.TeamID, now)))
+	header := enc.EncodeToString(headerJSON)
+	claims := enc.EncodeToString(claimsJSON)
 	sum := sha256.Sum256([]byte(header + "." + claims))
 	r, s, err := ecdsa.Sign(rand.Reader, c.key, sum[:])
 	if err != nil {
@@ -148,10 +179,13 @@ func (c *Client) tokenLocked() (string, error) {
 type Request struct {
 	Token      string // device token (hex), or a Live Activity's
 	Env        string // "sandbox" or production
-	Topic      string // bundle id; for liveactivity the ".push-type.liveactivity" suffix is added here
-	PushType   string // alert | background | liveactivity
+	Topic      string // bundle id; for liveactivity the ".push-type.liveactivity" suffix is added here, for voip ".voip"
+	PushType   string // alert | background | liveactivity | voip
 	Priority   string // "10" | "5"
 	CollapseID string
+	// Expiration is when APNs stops trying to deliver (Unix seconds); 0 sends no apns-expiration, so APNs keeps the
+	// push for a while as it chooses.
+	Expiration int64
 	Body       []byte
 }
 
@@ -174,9 +208,36 @@ func Host(env string) string {
 	return "https://api.push.apple.com"
 }
 
+// maxResponseBodyBytes bounds how much of an APNs response body is decoded and drained for connection reuse.
+const maxResponseBodyBytes = 64 << 10
+
+// maxDeviceTokenLen bounds device, VoIP, and Live Activity tokens accepted into APNs' /3/device/<token> path.
+const maxDeviceTokenLen = 512
+
+// ErrInvalidDeviceToken reports a malformed device token rejected locally before contacting APNs.
+var ErrInvalidDeviceToken = errors.New("apns: invalid device token")
+
+// validDeviceToken enforces a strict ASCII identifier allowlist ([A-Za-z0-9_-], 1..maxDeviceTokenLen)
+// so untrusted tokens cannot traverse paths, inject path parameters/queries/fragments, or bloat HTTP/2 :path.
+func validDeviceToken(token string) error {
+	if len(token) == 0 || len(token) > maxDeviceTokenLen {
+		return ErrInvalidDeviceToken
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return ErrInvalidDeviceToken
+		}
+	}
+	return nil
+}
+
 // Send posts one notification and waits for APNs' answer. A 403 ExpiredProviderToken is retried once with a newly
 // signed token; InvalidProviderToken is not, since a wrong key or id stays wrong.
 func (c *Client) Send(ctx context.Context, r Request) (Result, error) {
+	if err := validDeviceToken(r.Token); err != nil {
+		return Result{}, err
+	}
 	jwt, err := c.token()
 	if err != nil {
 		return Result{}, fmt.Errorf("apns jwt: %w", err)
@@ -193,6 +254,9 @@ func (c *Client) Send(ctx context.Context, r Request) (Result, error) {
 
 // post sends r once with the provider token jwt.
 func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error) {
+	if err := validDeviceToken(r.Token); err != nil {
+		return Result{}, err
+	}
 	host := Host(r.Env)
 	if c.Base != "" {
 		host = c.Base
@@ -201,8 +265,13 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 	if topic == "" {
 		topic = c.Cfg.Topic
 	}
-	if r.PushType == "liveactivity" {
-		topic += ".push-type.liveactivity"
+	if topic != "" {
+		switch {
+		case r.PushType == "liveactivity" && !strings.HasSuffix(topic, ".push-type.liveactivity"):
+			topic += ".push-type.liveactivity"
+		case r.PushType == "voip" && !strings.HasSuffix(topic, ".voip"):
+			topic += ".voip"
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", host+"/3/device/"+r.Token, bytes.NewReader(r.Body))
 	if err != nil {
@@ -215,6 +284,9 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 	if r.CollapseID != "" {
 		req.Header.Set("apns-collapse-id", r.CollapseID)
 	}
+	if r.Expiration > 0 {
+		req.Header.Set("apns-expiration", strconv.FormatInt(r.Expiration, 10))
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// The APNs connection is one long-lived HTTP/2 connection. Health pings (NewTransport) close one that
@@ -224,13 +296,17 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 		c.http.CloseIdleConnections()
 		return Result{}, err
 	}
-	defer resp.Body.Close()
+	limited := io.LimitReader(resp.Body, maxResponseBodyBytes)
+	defer func() {
+		_, _ = io.Copy(io.Discard, limited)
+		_ = resp.Body.Close()
+	}()
 	res := Result{Status: resp.StatusCode}
 	if resp.StatusCode != 200 {
 		var e struct {
 			Reason string `json:"reason"`
 		}
-		_ = json.NewDecoder(resp.Body).Decode(&e)
+		_ = json.NewDecoder(limited).Decode(&e)
 		res.Reason = e.Reason
 	}
 	return res, nil

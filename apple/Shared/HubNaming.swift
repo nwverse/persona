@@ -7,6 +7,35 @@ nonisolated enum HubNaming {
     static var productPattern: String { "(?:persona|" + NSRegularExpression.escapedPattern(for: LegacyNames.product) + ")" }
     static var contextPattern: String { productPattern + "-context" }
     static var filePattern: String { productPattern + "-file" }
+    private static let agyMCPTool = try! NSRegularExpression(
+        pattern: "^mcp_" + productPattern + "(?:_[0-9a-fA-F]{8,16})?_([a-z][a-z0-9_]*)$"
+    )
+    private static let agyToolResultHeader = try! NSRegularExpression(
+        pattern: #"^(?:Created At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\r?\nCompleted At: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})(?:\r?\n|$))+"#
+    )
+
+    /// Normalizes Antigravity's single-underscore Persona MCP names (`mcp_persona_<tool>`, `mcp_persona_<hex>_<tool>`)
+    /// to `mcp__persona__<tool>`.
+    static func canonicalMCPTool(_ name: String) -> String {
+        guard name.hasPrefix("mcp_"), !name.hasPrefix("mcp__") else { return name }
+        let range = NSRange(name.startIndex..., in: name)
+        guard let match = agyMCPTool.firstMatch(in: name, range: range),
+              let toolRange = Range(match.range(at: 1), in: name) else { return name }
+        return "mcp__persona__" + name[toolRange]
+    }
+
+    /// Strips leading Antigravity `Created At:` / `Completed At:` RFC3339 wrapper header pairs (and an immediately
+    /// following `Output:` line when preceded by those headers) so persisted JSON tool results still parse cleanly.
+    static func stripToolResultTimestampHeaders(_ text: String) -> String {
+        guard text.hasPrefix("Created At: ") else { return text }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = agyToolResultHeader.firstMatch(in: text, range: range),
+              let headerRange = Range(match.range, in: text) else { return text }
+        let rest = text[headerRange.upperBound...]
+        if rest.hasPrefix("Output:\r\n") { return String(rest.dropFirst("Output:\r\n".count)) }
+        if rest.hasPrefix("Output:\n") { return String(rest.dropFirst("Output:\n".count)) }
+        return String(rest)
+    }
 
     static func accepts(scheme: String?) -> Bool {
         guard let scheme = scheme?.lowercased() else { return false }

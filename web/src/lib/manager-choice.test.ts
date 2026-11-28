@@ -30,6 +30,11 @@ describe("the manager the assistant page shows", () => {
     expect(managerHeaderFor("/assistant/conversations")).toBe("m-1");
     expect(managerHeaderFor("/assistant?archived=1")).toBe("m-1");
     expect(managerHeaderFor("/assistant/tasks/t1/run")).toBe("m-1");
+    // the new-chat page's token calendar is the current assistant's computers' (#9506); the island's totals are not
+    expect(managerHeaderFor("/usage/days?days=280")).toBe("m-1");
+    expect(managerHeaderFor("/usage/hours")).toBe("m-1");
+    expect(managerHeaderFor("/usage")).toBeUndefined();
+    expect(managerHeaderFor("/usage/windows")).toBeUndefined();
     // the health page has no switcher; others go by ownership
     expect(managerHeaderFor("/assistant?space=health")).toBeUndefined();
     expect(managerHeaderFor("/assistant/memory?space=health")).toBeUndefined();
@@ -276,12 +281,7 @@ describe("api", () => {
       await api("/machines");
       // picking it also reads its page again (lib/store.ts)
       expect(seen).toEqual(["GET /assistant null", "GET /assistant m-1", "POST /assistant/conversations m-1", "GET /machines null"]);
-      // the health space stays the default manager's whatever the pick (docs/assistant/health.md): its list and a new conversation
-      seen.length = 0;
-      const { startHealthConversation } = await import("../views/health/reports");
-      await api("/assistant?space=health");
-      await startHealthConversation({ prompt: "x" }).catch(() => {});
-      expect(seen).toEqual(["GET /assistant?space=health null", "POST /assistant/conversations?space=health null"]);
+      // the health space's own requests: modules/health/reports.manager.test.ts
     } finally {
       globalThis.fetch = real;
     }

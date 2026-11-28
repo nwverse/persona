@@ -18,6 +18,7 @@ import persona.core.domain.inbox.InboxInteraction
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 /**
  * A background refresh of a shown inbox leaves its layout alone (#1947): no loading row over the list, and the brief
@@ -62,7 +63,7 @@ class InboxBackgroundRefreshTest {
     // only Agent requests (no inbox items yet) counts as shown too.
     @Test fun failedRefreshAndReconnectOverAShownListShowNoLoadingRow() {
         val inbox = FakeInbox(InboxSnapshot(records = records))
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.waitForIdle()
         inbox.connection.value = ConnectionState.Connecting
         inbox.snapshot.value = InboxSnapshot(records = records, loading = true)
@@ -81,7 +82,7 @@ class InboxBackgroundRefreshTest {
     @Test fun backgroundRecoveryClearsAnEarlierRefreshErrorAndRetryIsAvailable() {
         val inbox = FakeInbox(InboxSnapshot(records = records))
         inbox.refreshFailure = java.io.IOException("Synthetic refresh failure")
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.waitForIdle()
         rule.onNodeWithText("收件箱刷新失败，请重试").assertExists()
         rule.onNodeWithText("重试").assertExists()
@@ -94,7 +95,7 @@ class InboxBackgroundRefreshTest {
 
     @Test fun loadingRowOnlyWhileTheListIsEmpty() {
         val inbox = FakeInbox(InboxSnapshot(loading = true))
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.waitForIdle()
         rule.onNodeWithText("正在读取收件箱").assertExists()
         inbox.snapshot.value = InboxSnapshot(records = records)
@@ -110,7 +111,7 @@ class InboxBackgroundRefreshTest {
     @Test fun briefReconnectLeavesTheTitleAloneAndALongOneShows() {
         val inbox = FakeInbox(InboxSnapshot(records = records))
         rule.mainClock.autoAdvance = false
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.mainClock.advanceTimeBy(100)
         assertEquals(0, count("更新中…"))
         // Updating for half a second, as after every reconnect: nothing under the title.

@@ -190,6 +190,18 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
         self.assertEqual((row["origin"], row["origin_ref"]), ("meeting", rid))
         self.assertRegex(row["title"], r"^\d{4} \| .+ \| Design review$")
 
+    def test_the_note_taker_follows_the_meeting_and_takes_no_asks(self):
+        """A room meeting Persona isn't invited to (#8851): the upload's notes is taken, the room starts with a header
+        that says so, its lines still go, and an ask is refused as the hub refuses it (409 not_attending)."""
+        rid = str(uuid.uuid4())
+        room = self.ready_room(rid, role="notes")
+        header = self.items(room["session_id"])[0]["text"]
+        self.assertIn("Role: notes:", header)
+        self.call("POST", f"/api/v1/recordings/{rid}/live", {"from": 0, "segments": LINES})
+        self.wait(lambda: len([x for x in self.items(room["session_id"]) if x["kind"] == "text"]) > 1, "a batch")
+        status, out = self.call("POST", f"/api/v1/recordings/{rid}/ask", {"id": str(uuid.uuid4()), "question": "Who owns it?"})
+        self.assertEqual((status, out["code"]), (409, "not_attending"))
+
     def test_asks_go_to_the_room(self):
         rid = str(uuid.uuid4())
         room = self.ready_room(rid)
@@ -388,11 +400,13 @@ class MeetingConversationMockTests(Conversation, unittest.TestCase):
 
     def test_a_trimmed_recording_without_minutes_has_nothing_to_talk_about(self):
         """A trimmed recording's material is its minutes alone (the hub's meta.json keeps `chars`): an all-day recording
-        past recording_days keeps its recap and has no minutes."""
+        past recording_text_days keeps its recap and has no minutes. Upload it while it is still inside the retention window."""
+        self.call("PUT", "/api/v1/assistant", {"recording_text_days": 30})
+        self.addCleanup(self.call, "PUT", "/api/v1/assistant", {"recording_text_days": 7})
         day = str(uuid.uuid4())
-        status, _ = self.upload(day, kind="day", day="2026-11-10", tz="UTC", part=1, started_at="2026-11-10T08:00:00Z", device="watch",
-                                duration=0, coverage={"to": 10000, "gaps": []}, segments=LINES, complete=True)
-        self.assertEqual(status, 200)
+        status, uploaded = self.upload(day, kind="day", day="2026-11-10", tz="UTC", part=1, started_at="2026-11-10T08:00:00Z", device="watch",
+                                       duration=0, coverage={"to": 10000, "gaps": []}, segments=LINES, complete=True)
+        self.assertEqual((status, uploaded["status"]), (200, "stored"))
         self.assertEqual(self.call("POST", "/mock/recording_trim", {"id": day})[0], 200)
         self.assertNotIn("minutes", self.call("GET", f"/api/v1/kb/recordings/{day}")[1]["detail"])
         self.assertEqual(self.call("POST", f"/api/v1/recordings/{day}/followup", {"id": str(uuid.uuid4()), "text": "x"})[1]["code"], "no_material")

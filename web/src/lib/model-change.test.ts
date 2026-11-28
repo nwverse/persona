@@ -21,7 +21,7 @@ describe("replyModelName", () => {
     expect(replyModelName(OPUS)).toBe("Opus 5.5");
     expect(replyModelName(SONNET)).toBe("Sonnet 4.5");
     expect(replyModelName("claude-opus-5-5[1m]")).toBe("Opus 5.5 1M");
-    expect(replyModelName("gpt-6.1-sol")).toBe("6.1 Sol"); // as the model lists name a raw GPT id
+    expect(replyModelName("gpt-6.1-sol")).toBe("GPT-6.1 Sol"); // as the model lists name a raw GPT id
     expect(replyModelName("glm-5.1")).toBe("glm-5.1");
   });
 
@@ -132,7 +132,8 @@ describe("model change divider placement", () => {
 
   it("skips folded rounds: they are no visible reply", () => {
     const supervise = { injected: { kind: "system", state: "supervise", line: "Review a task" } } as Partial<Item>;
-    const lines = chatLines([user(1, "first"), said(2, OPUS), user(3, "check", supervise), said(4, "claude-haiku-4-5"), user(5, "second"), said(6, OPUS)]);
+    const lines = chatLines([user(1, "first"), said(2, OPUS), user(3, "check", supervise),
+      { ...said(4, "claude-haiku-4-5"), narration: true }, user(5, "second"), said(6, OPUS)]);
     expect(marks(lines)).toEqual(["first", "supervision", "second"]);
   });
 

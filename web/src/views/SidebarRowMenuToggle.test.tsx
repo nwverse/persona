@@ -94,7 +94,22 @@ async function renderSidebar() {
   await flush();
 }
 
-const personaRow = () => host.querySelector(`a[title="${t("sidebar.persona_main")}"]`) ?? undefined;
+it("lists just the counted Agents when In a tab is selected and shells are enabled", async () => {
+  await renderSidebar();
+  expect(link("Shell pane")).toBeDefined();
+  expect(link("Build docs")).toBeDefined();
+
+  const chip = host.querySelector<HTMLButtonElement>(`[role="radio"][aria-label="${t("lib-agent-filter.terminal")} 2"]`);
+  expect(chip).not.toBeNull();
+  await press(chip!);
+  expect(chip!.getAttribute("aria-checked")).toBe("true");
+  expect(link("Lead pane")).toBeDefined();
+  expect(link("Split pane")).toBeDefined();
+  expect(link("Build docs")).toBeUndefined();
+  expect(link("Shell pane")).toBeUndefined();
+});
+
+const personaRow = () => host.querySelector(`a[aria-description="${t("sidebar.persona_main")}"]`) ?? undefined;
 const rows: [string, () => Element | undefined][] = [
   ["the Persona main row", personaRow],
   ["a pinned conversation", () => link("Release notes")],
@@ -110,29 +125,29 @@ describe("a sidebar row's ⋯", () => {
     expect(button).not.toBeNull();
 
     await press(button!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
 
     await press(more(row())!);
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
 
     // and opens it again on a third
     await press(more(row())!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
   });
 
   it("moves the menu to another row's ⋯, and a press elsewhere still closes it", async () => {
     await renderSidebar();
     await press(more(personaRow())!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     expect(menus()[0].textContent).toContain(t("conversation-menu.end"));
 
     await press(more(link("Release notes"))!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     expect(menus()[0].textContent).toContain(t("conversation-menu.end_leader"));
 
     act(() => void document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 })));
     await flush();
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
 
   it("on a right-clicked row's ⋯ moves the menu there instead of closing it", async () => {
@@ -140,12 +155,12 @@ describe("a sidebar row's ⋯", () => {
     const row = link("Release notes")!;
     act(() => void row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })));
     await flush();
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
 
     await press(more(row)!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     await press(more(row)!);
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
 });
 
@@ -164,8 +179,8 @@ describe("a paged Agents row's ⋯", () => {
   }
 
   it("opens the row's menu and closes it on a second press", async () => {
-    // by state: a grouping the paged list draws (#6662), its Working section open on the row
-    localStorage.setItem("persona.agentGrouping", "state");
+    // By machine reads the section from the paging endpoint.
+    localStorage.setItem("persona.agentGrouping", "machine");
     localStorage.removeItem("sidebar.terminals");
     vi.stubGlobal("WebSocket", FakeSocket);
     // the list draws only the rows in view of its scroller: give it one with a size (jsdom has no layout)
@@ -183,7 +198,7 @@ describe("a paged Agents row's ⋯", () => {
       const socket = FakeSocket.last!;
       socket.readyState = 1;
       socket.onopen?.();
-      socket.onmessage?.({ data: JSON.stringify({ type: "hello", features: ["sessions_list", "sessions_lookup"] }) });
+      socket.onmessage?.({ data: JSON.stringify({ type: "hello", features: ["sessions_list", "sessions_lookup", "sessions_agents_only"] }) });
     });
     await flush();
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
@@ -195,8 +210,8 @@ describe("a paged Agents row's ⋯", () => {
     expect(button).not.toBeNull();
 
     await press(button!);
-    expect(menus()).toHaveLength(1);
+    await vi.waitFor(() => expect(menus()).toHaveLength(1));
     await press(more(link("Build docs"))!);
-    expect(menus()).toHaveLength(0);
+    await vi.waitFor(() => expect(menus()).toHaveLength(0));
   });
 });

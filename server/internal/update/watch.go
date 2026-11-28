@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +31,9 @@ type Health struct {
 func Watch(ctx context.Context, client *http.Client, p Pending, pendingPath string, deadline time.Time, every time.Duration,
 	restore func() error, restart func() error) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, err := os.Stat(pendingPath); os.IsNotExist(err) {
 			return nil // confirmed, or rolled back by the new version itself
 		}
@@ -39,13 +45,18 @@ func Watch(ctx context.Context, client *http.Client, p Pending, pendingPath stri
 				return nil // a build deployed straight from master took over meanwhile: not this watchdog's to undo
 			}
 		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if !time.Now().Before(deadline) {
 			break
 		}
+		t := time.NewTimer(every)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return ctx.Err()
-		case <-time.After(every):
+		case <-t.C:
 		}
 	}
 	marker := claimedPath(pendingPath)
@@ -63,13 +74,19 @@ func Watch(ctx context.Context, client *http.Client, p Pending, pendingPath stri
 		return err
 	}
 	_ = Save(RolledBackPath(filepath.Dir(pendingPath)), RolledBack{FromVersion: p.FromVersion, ToVersion: p.ToVersion, ToBuild: p.ToBuild,
-		Started: p.Started, At: time.Now(), Reason: "新版本 3 分钟内没有起来并确认（看门狗回滚）", Auto: p.Auto})
+		Started: p.Started, At: time.Now(), Reason: "新版本 3 分钟内没有起来并确认（看门狗回滚）", Auto: p.Auto, Development: p.Development, Backup: p.Backup})
 	if err := os.Remove(marker); errors.Is(err, os.ErrNotExist) && marker != pendingPath {
 		// A hub that started meanwhile put the claim back (Unclaim; launchd restarts a hub that died and leaves this
 		// process running): the rollback just written down ends that update as well.
 		_ = os.Remove(pendingPath)
 	}
-	return restart()
+	// Starting the restored program can still fail. Keep the development
+	// journal so its next boot can retry and staging cleanup stays fenced.
+	if err := restart(); err != nil {
+		return err
+	}
+	ClearDevelopmentAdoption(filepath.Dir(pendingPath), p)
+	return nil
 }
 
 // claimedPath is where Watch moves the pending marker while it goes back.
@@ -89,6 +106,17 @@ func Unclaim(pendingPath string) error {
 	return nil
 }
 
+const defaultHealthBodyLimit int64 = 64 << 10
+
+var healthBodyLimitOverride atomic.Int64
+
+func healthBodyCap() int64 {
+	if v := healthBodyLimitOverride.Load(); v > 0 {
+		return v
+	}
+	return defaultHealthBodyLimit
+}
+
 func health(ctx context.Context, client *http.Client, url string) (Health, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -97,10 +125,26 @@ func health(ctx context.Context, client *http.Client, url string) (Health, error
 	if err != nil {
 		return h, err
 	}
-	resp, err := client.Do(req)
+	var c http.Client
+	if client != nil {
+		c = *client
+	}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := c.Do(req)
 	if err != nil {
 		return h, err
 	}
 	defer resp.Body.Close()
-	return h, json.NewDecoder(resp.Body).Decode(&h)
+	if resp.StatusCode != http.StatusOK {
+		return h, fmt.Errorf("%s: HTTP %d", url, resp.StatusCode)
+	}
+	limit := healthBodyCap()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return h, err
+	}
+	if int64(len(body)) > limit {
+		return h, fmt.Errorf("%s: health response exceeds %d bytes", url, limit)
+	}
+	return h, json.Unmarshal(body, &h)
 }

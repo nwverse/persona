@@ -1,0 +1,15 @@
+{
+  "when_online": "连接后显示",
+  "not_read": "无法读取",
+  "tools_node_outdated": "更新这台电脑上的 Persona 后即可查看",
+  "tools_hub_outdated": "更新 hub 后即可查看",
+  "tools_forbidden": "需要完全信任的设备",
+  "target_offline": "离线",
+  "target_pending": "尚未确认或尚未连接",
+  "same_system": "同一系统",
+  "free_memory": "空闲内存 {size}",
+  "missing_tool": "缺少 {tool}",
+  "reason_memory": "内存 {value}",
+  "reason_disk": "磁盘 {value}",
+  "reason_cpu": "CPU {value}"
+}

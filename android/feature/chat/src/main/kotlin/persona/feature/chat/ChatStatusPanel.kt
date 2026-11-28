@@ -16,6 +16,7 @@ import persona.core.designsystem.*
 internal fun OutboxStatus(
     message: OutboxMessage, busy: Boolean, onAction: ((DeliveryAction) -> Unit)?,
     receipt: persona.core.contracts.api.MessageSendReceipt? = null,
+    canSend: Boolean = true,
     onDetails: (() -> Unit)? = null,
 ) {
     var retryConfirmation by remember(message.clientMessageId) { mutableStateOf(false) }
@@ -31,9 +32,10 @@ internal fun OutboxStatus(
             horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             if (message.state.allows(DeliveryAction.Cancel)) {
                 JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_cancel), onClick = { onAction(DeliveryAction.Cancel) }, enabled = !busy)
-                JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_edit), onClick = { onAction(DeliveryAction.Edit) }, enabled = !busy)
             }
-            if (message.state.allows(DeliveryAction.Retry)) JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_retry), onClick = {
+            if (message.state.allows(DeliveryAction.Cancel) && message.state.allows(DeliveryAction.Edit, canSend))
+                JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_edit), onClick = { onAction(DeliveryAction.Edit) }, enabled = !busy)
+            if (message.state.allows(DeliveryAction.Retry, canSend)) JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_retry), onClick = {
                 if (message.state.resultUnknown) retryConfirmation = true else onAction(DeliveryAction.Retry)
             }, enabled = !busy)
             // Nothing of a refused message reached the computer: it can simply go.
@@ -45,7 +47,9 @@ internal fun OutboxStatus(
                 JButton(kind = JButtonKind.Secondary, size = JButtonSize.Small, text = stringResource(R.string.chat_delivery_discard), onClick = { onAction(DeliveryAction.Discard) }, enabled = !busy)
         }
     }
-    if (retryConfirmation) JDialog(onDismiss = { retryConfirmation = false }, title = stringResource(R.string.chat_delivery_resend_title),
+    val canConfirmResend = canSend && message.state.resultUnknown && message.state.allows(DeliveryAction.Retry, canSend)
+    LaunchedEffect(canConfirmResend) { if (!canConfirmResend) retryConfirmation = false }
+    if (retryConfirmation && canConfirmResend) JDialog(onDismiss = { retryConfirmation = false }, title = stringResource(R.string.chat_delivery_resend_title),
         text = stringResource(R.string.chat_delivery_resend_text),
         confirm = stringResource(R.string.chat_delivery_resend_confirm) to { retryConfirmation = false; onAction?.invoke(DeliveryAction.Retry) },
         confirmEnabled = !busy, dismiss = stringResource(R.string.chat_delivery_resend_dismiss) to { retryConfirmation = false })
@@ -62,7 +66,8 @@ internal fun ChatSessionStatusLine(
     val chips = listOfNotNull(
         session?.queued?.takeIf { it.isNotEmpty() }?.let { stringResource(R.string.chat_status_chip_queued, it.size) },
         session?.loop?.takeIf { !activityInHeader }?.let { stringResource(R.string.chat_status_loop) },
-        session?.background?.takeIf { it.isNotEmpty() && !activityInHeader }?.let { stringResource(R.string.chat_status_chip_background, it.size) },
+        session?.takeUnless { activityInHeader }?.let { backgroundRunningCount(it, java.time.Instant.now()) }
+            ?.takeIf { it > 0 }?.let { stringResource(R.string.chat_status_chip_background, it) },
         draftSaveError?.let { stringResource(R.string.chat_status_draft_failed) },
     )
     // The header's title line says the state, once (#3957; iOS shows none above its composer): this line keeps only what

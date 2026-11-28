@@ -1,0 +1,477 @@
+{
+  "name": "task_plan",
+  "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. Scratch uses a managed isolated dir (omit cwd). None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "tasks"
+    ],
+    "properties": {
+      "wait_seconds": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "0/omitted: normal receipt"
+      },
+      "supervisor": {
+        "type": "string",
+        "description": "optional leader id (assistant.leaders), selected by main; omitted: planning lead or main"
+      },
+      "tasks": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "items": {
+          "type": "object",
+          "required": [
+            "title",
+            "prompt",
+            "role",
+            "readonly",
+            "user_requested",
+            "why"
+          ],
+          "anyOf": [
+            {
+              "required": [
+                "cwd"
+              ]
+            },
+            {
+              "type": "object",
+              "required": [
+                "workspace"
+              ],
+              "properties": {
+                "workspace": {
+                  "type": "string",
+                  "enum": [
+                    "scratch"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "workspace",
+                "todo_id"
+              ],
+              "properties": {
+                "workspace": {
+                  "type": "object",
+                  "required": [
+                    "backend"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "workspace"
+              ],
+              "properties": {
+                "workspace": {
+                  "type": "object",
+                  "required": [
+                    "container"
+                  ]
+                }
+              }
+            }
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Card title in Chinese, under 20 characters."
+            },
+            "context": {
+              "type": "string",
+              "description": "extra facts; no project background"
+            },
+            "prompt": {
+              "type": "string",
+              "description": "goal, bounds and facts; manager adds context, criteria and rules"
+            },
+            "skip_project_memory": {
+              "type": "boolean",
+              "description": "default false; true skips project/direction memory in prompt"
+            },
+            "machine": {
+              "type": "string",
+              "description": "Machine id; omit for automatic placement."
+            },
+            "machine_policy": {
+              "type": "string",
+              "enum": [
+                "fixed",
+                "flexible"
+              ],
+              "description": "fixed (default) or flexible (health-based moves for portable work)"
+            },
+            "placement_constraints": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Optional auto-placement constraints when machine is omitted.",
+              "properties": {
+                "os": {
+                  "type": "string",
+                  "enum": [
+                    "linux",
+                    "darwin",
+                    "windows"
+                  ]
+                },
+                "capabilities": {
+                  "type": "array",
+                  "maxItems": 16,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "require_hub": {
+                  "type": "boolean",
+                  "description": "default false (excludes hub)"
+                },
+                "workload": {
+                  "type": "string",
+                  "enum": [
+                    "light",
+                    "standard",
+                    "heavy"
+                  ]
+                },
+                "candidate_machines": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Abs or ~/ dir; omit for scratch/backend/container."
+            },
+            "workspace": {
+              "type": [
+                "string",
+                "object"
+              ],
+              "description": "policy; existing: path/id",
+              "oneOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "new",
+                    "none",
+                    "scratch"
+                  ]
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "backend"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "backend": {
+                      "type": "object",
+                      "required": [
+                        "operation_id"
+                      ],
+                      "additionalProperties": false,
+                      "properties": {
+                        "operation_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "host": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "container"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "container": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "selected_repo_ids": {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "operation_id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "host": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "existing"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "existing": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "queue": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "new"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "new": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "branch": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "launcher": {
+              "type": "string",
+              "description": "listed launcher; empty: default/fallback, claude first"
+            },
+            "host": {
+              "type": "string",
+              "description": "agy (companion) or enabled engine"
+            },
+            "model": {
+              "type": "string",
+              "description": "model id/alias; empty: launcher default"
+            },
+            "model_aliases": {
+              "type": "object",
+              "description": "Claude Code IDs: sonnet_model, haiku_model, opus_model, fable_model, subagent_model.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "permission": {
+              "type": "string",
+              "enum": [
+                "default",
+                "acceptEdits",
+                "plan",
+                "auto",
+                "bypassPermissions"
+              ],
+              "description": "mode; empty: writable default; TRAE/omp take none"
+            },
+            "role": {
+              "type": "string",
+              "enum": [
+                "worker",
+                "leader"
+              ],
+              "description": "worker or leader (starts/reviews direct workers)"
+            },
+            "ultracode": {
+              "type": "boolean",
+              "description": "large tasks only (Claude Code 2.1.284+ multi-agent); small: false; never in prompt/title"
+            },
+            "multi_issue_report": {
+              "type": "boolean",
+              "description": "Only for a report investigating several issues; requires a findings list before park or close."
+            },
+            "readonly": {
+              "type": "boolean",
+              "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
+            },
+            "work_mode": {
+              "type": "string",
+              "enum": [
+                "execute",
+                "research",
+                "coordinate"
+              ],
+              "description": "New task only. Defaults to research for readonly and execute otherwise."
+            },
+            "completion_mode": {
+              "type": "string",
+              "enum": [
+                "inherit",
+                "draft",
+                "ready",
+                "landed",
+                "verified"
+              ],
+              "description": "New task. Inherit uses assistant settings. Draft is a draft artifact, ready is for review, landed is merged or published, verified is confirmed live."
+            },
+            "user_requested": {
+              "type": "boolean",
+              "description": "True only if user's latest message asked for it."
+            },
+            "owner_step": {
+              "type": "string",
+              "enum": [
+                "money",
+                "outward",
+                "irreversible"
+              ],
+              "description": "money, outward speech, or unagreed irreversible step"
+            },
+            "why": {
+              "type": "string",
+              "description": "Chinese one-line reason for machine, directory and model."
+            },
+            "done_when": {
+              "type": "array",
+              "maxItems": 6,
+              "items": {
+                "type": "string"
+              },
+              "description": "Chinese checkable acceptance results told to Agent, one per entry. Nonempty for writable tasks; ignored with continues."
+            },
+            "goal": {
+              "type": "string",
+              "description": "Owner's one-line Chinese outcome. Required read-only; writable defaults to title."
+            },
+            "out_of_bounds": {
+              "type": "array",
+              "maxItems": 6,
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional forbidden actions/areas, in Chinese, one per entry."
+            },
+            "continues": {
+              "type": "string",
+              "description": "Original todo id (needs continues_why); reuses todo/brief, stops prior Agents, reopens if closed."
+            },
+            "scope_revision": {
+              "type": "string",
+              "description": "With continues after scope change: exact task_scope scope_revision."
+            },
+            "continues_why": {
+              "type": "string",
+              "description": "With continues: one-line replacement reason."
+            },
+            "distinct_from": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "todo_id",
+                  "reason"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "todo_id": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "description": "new tasks only: explain each conflicting open todo. Reasons stay in the brief"
+            },
+            "started_why": {
+              "type": "string",
+              "description": "Non-owner-requested start reason saved in brief."
+            },
+            "attachments": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "type": "string"
+              },
+              "description": "Abs paths of chat files (Claude/app); copied with updated mentions."
+            },
+            "expect_minutes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Optional minutes override (0/omit: auto or 60m)."
+            },
+            "project": {
+              "type": "string",
+              "description": "Existing kb_list projects slug/name; no near-duplicates."
+            },
+            "audience": {
+              "type": "string",
+              "enum": [
+                "human",
+                "autonomous"
+              ],
+              "description": "Optional to-do audience."
+            },
+            "direction_id": {
+              "type": "string",
+              "description": "Direction id."
+            },
+            "part_of": {
+              "type": "string",
+              "description": "Request todo this is a piece of."
+            },
+            "after": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "With part_of: prerequisite pieces."
+            },
+            "todo_id": {
+              "type": "string",
+              "description": "Caller's open/failed-start todo with no live Agent; equals continues if both set."
+            },
+            "inbox_item": {
+              "type": "string",
+              "description": "Inbox ID or 'none' to skip. Omit for strong-match inference outside continuations. Never files or replies."
+            },
+            "tier": {
+              "type": "string",
+              "description": "Agent preset from 模型档位; explicit launcher/model/effort/speed override."
+            },
+            "speed": {
+              "type": "string",
+              "enum": [
+                "standard",
+                "fast",
+                "ultrafast"
+              ],
+              "description": "new-start speed; standard/omitted: default; Codex: fast/ultrafast; Claude Code: fast"
+            },
+            "effort": {
+              "type": "string",
+              "description": "Explicit effort; omit for tier/purpose default."
+            }
+          }
+        }
+      }
+    }
+  }
+}

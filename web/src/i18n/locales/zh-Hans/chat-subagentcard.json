@@ -17,5 +17,6 @@
   "running_for": "已运行 {duration}",
   "open_in_background": "在后台任务面板中打开 {name}",
   "workflow_progress_line": "{phase} · {done}/{total} Agent",
-  "workflow_progress_count": "{done}/{total} Agent"
+  "workflow_progress_count": "{done}/{total} Agent",
+  "view_full": "查看完整内容"
 }

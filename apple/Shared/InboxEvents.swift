@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // Inbox phase 1 (docs/assistant/inbox.md): an inbox item grows into an event — the manager's processing conversation
 // (`handling`), at most one suggestion to confirm, and the chain (`chain`). Mirrors the hub's inbox item fields; every
@@ -8,19 +9,55 @@ extension InboxItem {
     /// The assistant's own row (#6430, source `assistant`): the manager puts a conversation into the Inbox itself.
     var isAssistantRow: Bool { source == "assistant" }
 
-    /// The row's text repeats the summary under it (the assistant's own rows: their text is the summary), so it is drawn once.
+    /// The row's text repeats the summary under it (the assistant's own rows: their text is the summary, or its first
+    /// words cut with an ellipsis when it is long), so it is drawn once.
     var repeatsSummary: Bool {
         guard isAssistantRow, let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty else { return false }
         let text = preview.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !text.isEmpty && text.hasPrefix(summary)
+        guard !text.isEmpty else { return false }
+        let head = text.hasSuffix("…") ? String(text.dropLast()) : text
+        return text.hasPrefix(summary) || !head.isEmpty && summary.hasPrefix(head)
     }
 
-    /// The assistant's own row whose text is only its title and summary, already shown above: no Content section.
+    /// A row from before the hub kept an assistant post's Markdown as `body` (#9041): its summary and preview hold that
+    /// Markdown run into one line.
+    var markdownInSummary: Bool { isAssistantRow && body == nil }
+
+    /// What the detail draws as Markdown: an assistant row's `body`, or an older row's summary (`markdownInSummary`);
+    /// nil for any other row, whose summary is the AI's line about it.
+    var markdownBody: String? {
+        guard isAssistantRow else { return nil }
+        let text = (body ?? summary)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? nil : text
+    }
+
+    /// The summary as a line or two of the list (or a strip) draws it: an older assistant row's without its marks.
+    var lineSummary: String? { markdownInSummary ? summary.map(Self.withoutMarks) : summary }
+
+    /// The preview likewise.
+    var linePreview: String { markdownInSummary ? Self.withoutMarks(preview) : preview }
+
+    nonisolated private static let marksMemo = TextMemo<String>(limit: 64)
+
+    /// Markdown run into one line, as words: emphasis, code and heading marks go (`Fmt.plain`), and so do the list
+    /// markers the lost line breaks left between words and a mark the cut left alone (`Due*…`). Only for an older
+    /// assistant row's text (`markdownInSummary`): a plain line's own dashes are not touched anywhere else.
+    nonisolated static func withoutMarks(_ text: String) -> String {
+        marksMemo(text) { text in
+            Fmt.plain(text).replacingOccurrences(of: "*…", with: "…").split(whereSeparator: \.isWhitespace)
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "*")) }
+                .filter { !$0.isEmpty && $0 != "-" && $0 != "+" }
+                .joined(separator: " ")
+        }
+    }
+
+    /// The assistant's own row whose text is only its title and summary (or its Markdown `body`), already shown above:
+    /// no Content section.
     func onlyTitleAndSummary(_ context: String?) -> Bool {
         guard isAssistantRow, let summary, !summary.isEmpty else { return false }
         func flat(_ s: String) -> String { s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
         let text = flat(context ?? preview)
-        return text.isEmpty || text == flat(title + " " + summary) || text == flat(summary)
+        return text.isEmpty || [summary, body].compactMap { $0 }.contains { text == flat(title + " " + $0) || text == flat($0) }
     }
 
     /// The processing conversation bound to the item.

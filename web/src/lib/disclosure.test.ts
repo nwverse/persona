@@ -72,8 +72,10 @@ describe("following the end", () => {
   const view = { scrollHeight: 3000, clientHeight: 800 };
   const fits = { scrollHeight: 800, clientHeight: 800 };
 
-  it("picks up again at the end, or scrolling down within 100 px of it", () => {
-    expect(followsAgain({ gap: 8, delta: -20 })).toBe(true);
+  it("picks up only on downward movement near the end, even after passive layout shrinkage", () => {
+    expect(followsAgain({ gap: 0, delta: 0 })).toBe(false);
+    expect(followsAgain({ gap: 8, delta: -20 })).toBe(false);
+    expect(followsAgain({ gap: 1, delta: 1 })).toBe(true);
     expect(followsAgain({ gap: 9, delta: -20 })).toBe(false);
     expect(followsAgain({ gap: 99, delta: 5 })).toBe(true);
     expect(followsAgain({ gap: 99, delta: 0 })).toBe(false);
@@ -107,9 +109,9 @@ describe("following the end", () => {
     expect(leavesOnScrollbarDrag({ dragging: false, delta: -300 })).toBe(false);
   });
 
-  it("the pill says 有新消息 when something came in, else 跳到底部", () => {
+  it("the pill says 有新消息 when something came in, else 回到底部", () => {
     expect(jumpLabel(true)).toBe("有新消息");
-    expect(jumpLabel(false)).toBe("跳到底部");
+    expect(jumpLabel(false)).toBe("回到底部");
   });
 });
 

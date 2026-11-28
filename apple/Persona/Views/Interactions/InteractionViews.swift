@@ -1,6 +1,7 @@
 import BeautifulUI
 import MarkdownUI
 import SwiftUI
+import PersonaWire
 
 extension InteractionKind {
     var title: String {
@@ -27,13 +28,17 @@ extension InteractionKind {
 extension Interaction {
     /// The assistant asks through its ask_user tool: it is Persona asking, not a Claude Code agent; a Codex card names
     /// Codex.
-    var title: String {
+    var title: String { title(session: nil) }
+
+    /// `title`, its agent named as `session`'s row names it where the card names only the engine that runs it
+    /// (`agentName(session:)`, #8144).
+    func title(session: Session?) -> String {
         if toolName == "ask_user" { return String(localized: "Persona Has a Question") }
         if isSecretRun { return secretRunTitle }
         if kind == .elicitation {
             return elicitation?.isURL == true ? String(localized: "MCP Link Needs You") : String(localized: "MCP Form Needs You")
         }
-        if let name = agentName {
+        if let name = agentName(session: session) {
             switch kind {
             case .question: return String(localized: "\(name) Has a Question")
             case .permission: return String(localized: "\(name) Is Waiting for Your Approval")
@@ -41,6 +46,14 @@ extension Interaction {
             }
         }
         return kind.title
+    }
+
+    /// The one post-plan mode the card may approve (#3784). Absent, empty, `plan`, and unknown modes keep the legacy choices.
+    var recordedPlanThen: String? {
+        switch planThen {
+        case "default", "acceptEdits", "auto", "bypassPermissions": planThen
+        default: nil
+        }
     }
 
     /// Whether the card offers Always: as the manager says where it does (`alwaysHonored`, #3590: its own cards keep
@@ -57,8 +70,8 @@ extension Interaction {
     /// Describe the actual remembered rule, not just the command or file in this request.
     var alwaysScopeDetail: String? {
         if let alwaysLabel, !alwaysLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return alwaysLabel }
-        guard agentName == nil else { return nil }
         let keys = alwaysKeys ?? []
+        guard agentName == nil || !keys.isEmpty else { return nil }
         if !keys.isEmpty, keys.allSatisfy({ $0.hasPrefix("tool:Read(") && $0.hasSuffix("/**)") }) {
             return String(localized: "All reads in this directory in this conversation")
         }
@@ -72,15 +85,29 @@ extension Interaction {
         return String(localized: "The approved scope remains allowed in this conversation")
     }
 
-    /// The agent's name on a card not from Claude Code: one the node read off a Codex / TRAEX TUI, or an agent
+    /// The agent's name on a card not from Claude Code: one the node read off a Codex / TRAE CLI TUI, or an agent
     /// runtime's own ("DSH", the hub's agent_label; docs/integrations/runtimes.md). Nil for Claude's.
     var agentName: String? {
         switch agent {
         case "codex": "Codex"
-        case "traex": "TRAEX"
+        case "traex", "traecli", "trae-cli": Session.traeCLIName
+        case MachineEngine.paseo.rawValue where agentLabelHint.map(Session.isTraeCLIName) == true: Session.traeCLIName
         case nil, "", "claude": nil
         default: agentLabelHint ?? agent
         }
+    }
+
+    /// The card names only the engine that runs its agent, not the provider (`Session.namesOnlyEngine`): a Paseo card
+    /// with no label of its own, or the node's "Paseo", which a node gave every card of a provider other than Claude
+    /// Code before its rows' labels reached the cards (#8142). Its session's row says who answers.
+    var namesOnlyEngine: Bool { Session.namesOnlyEngine(agent: agent, label: agentLabelHint) }
+
+    /// `agentName`, with the provider's name from `session`'s row where the card names only the engine (#8144): a Paseo
+    /// card asks "Tell Grok what to do instead", never Paseo. A card that carries its provider's label keeps it.
+    func agentName(session: Session?) -> String? {
+        guard let name = agentName else { return nil }
+        guard namesOnlyEngine, let session else { return name }
+        return session.agentLabel
     }
 }
 
@@ -98,6 +125,8 @@ struct InteractionPreviewCard: View {
     var inCell = false
     /// Under its session's first card in the Agents list (`AgentsNeedsYou`), a card does not repeat the session's place.
     var showsPlace = true
+    /// Optional promoted herdr tab name override when `use_herdr_tab_name` is on (#13899).
+    var sessionTitleOverride: String? = nil
     var open: () -> Void
 
     var body: some View {
@@ -109,16 +138,14 @@ struct InteractionPreviewCard: View {
                 VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                     Text(title).font(Theme.Font.heading).lineLimit(2) // a row title may wrap; the buttons below never do
                     if showsPlace {
-                        Text(interaction.placeLine(machine: machine))
+                        Text(interaction.placeLine(machine: machine, sessionTitleOverride: sessionTitleOverride))
                             .font(Theme.Font.label)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
                 }
                 Spacer()
-                #if !os(macOS) // a phone's row says it opens; a Mac's list row does not (#2113)
                 ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.labelStrong).foregroundStyle(.tertiary)
-                #endif
             }
             if !summary.isEmpty {
                 Text(summary)
@@ -148,14 +175,7 @@ struct InteractionPreviewCard: View {
     /// row's lines sit under its title (#2318). iOS: on the card's edge, as it always was.
     private struct UnderTitle: ViewModifier {
         func body(content: Content) -> some View {
-            #if os(macOS)
-            HStack(spacing: Theme.Space.s) { // the header row's icon column and its gap
-                Spacer(minLength: 0).scaledFrame(width: Theme.Size.icon)
-                content
-            }
-            #else
             content
-            #endif
         }
     }
 
@@ -189,6 +209,15 @@ struct InteractionPreviewCard: View {
     private var summary: String { interaction.askLine(includeToolName: true) ?? "" }
 
     @ViewBuilder private var quickActions: some View {
+        // A card its task's supervisor holds is not the user's to answer: no buttons, a line saying who has it.
+        if !interaction.answerableHere {
+            SupervisorHeldNote(compact: true).modifier(UnderTitle())
+        } else {
+            quickAnswers
+        }
+    }
+
+    @ViewBuilder private var quickAnswers: some View {
         switch interaction.kind {
         case .question:
             if let qs = interaction.questions, qs.count == 1, let q = qs.first, !q.multiSelect, q.options.count <= 4 {
@@ -239,6 +268,36 @@ struct InteractionPreviewCard: View {
     }
 }
 
+/// What a card its task's supervisor holds shows in place of its answers (`Interaction.supervisorHeld`): the supervisor
+/// has it, and it reaches the user only once the supervisor passes it up. Read-only: nothing here answers it.
+/// `compact`: the title line alone, under a list's card.
+struct SupervisorHeldNote: View {
+    var compact = false
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+            ThemedIcon(Theme.Icon.view)
+                .font(Theme.Font.captionStrong)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                Text("Supervisor is handling this")
+                    .font(Theme.Font.captionStrong)
+                if !compact {
+                    Text("This went to its task's supervisor first. It comes to you only if the supervisor passes it up.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(compact ? Theme.Space.s : Theme.Space.m)
+        .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("interaction.supervisor-held")
+    }
+}
+
 struct FlowButtons: View {
     var labels: [String]
     var action: (String) -> Void
@@ -274,6 +333,33 @@ struct RecommendedTag: View {
 /// Set by a card's form while a field in it has the keyboard (on a Mac, the focus) and the form ends with what the
 /// field is for (the password card's Run and Decline): the card keeps that end in sight, also as the keyboard takes
 /// the page's room (#1581).
+/// How many of a question card's questions are not answered yet, as its form counts them (#9392): the card's folded line
+/// says it. Nil: the form does not count (BeautifulUI's card holds its answers itself).
+struct QuestionsLeft: PreferenceKey {
+    static let defaultValue: Int? = nil
+    static func reduce(value: inout Int?, nextValue: () -> Int?) { value = nextValue() ?? value }
+}
+
+/// Where each pending card's message is in the chat, for its View in Chat (#9392): the chat finds them and keeps this
+/// up to date; a card reads only its own. A class, so the environment holding it never changes and redraws no card.
+@Observable final class CardSources {
+    /// The message each card is about (the item's id), by the card's interaction id.
+    var items: [String: String] = [:]
+    /// Brings the chat to that message.
+    @ObservationIgnored var open: ((String) -> Void)?
+
+    /// What View in Chat does for the card, or nil where the chat has not found its message.
+    func opener(for interaction: String) -> (() -> Void)? {
+        guard let item = items[interaction], let open else { return nil }
+        return { open(item) }
+    }
+}
+
+extension EnvironmentValues {
+    /// The chat's `CardSources`; nil outside a chat (a card in a sheet), where a card has no View in Chat.
+    @Entry var cardSources: CardSources? = nil
+}
+
 struct CardFormKeepsEnd: PreferenceKey {
     static let defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
@@ -284,6 +370,9 @@ struct CardFormKeepsEnd: PreferenceKey {
 struct InteractionPanel: View {
     @Environment(AppModel.self) private var model
     var interaction: Interaction
+    /// Whose card it is when it is not the chat's own session's: a side session's card in its parent's chat (#7944).
+    var from: String? = nil
+    @Environment(\.cardLocalOnly) private var localOnly
     @State private var collapsed = false
     @State private var formHeight: CGFloat = 0
     /// What the page has (PendingCards measures it): the form's cap. Not `containerRelativeFrame`: inside the cards'
@@ -302,6 +391,16 @@ struct InteractionPanel: View {
     @State private var formPosition = ScrollPosition(edge: .top)
     /// The suggested rule's line under the form (#5802) while it is drawn: what of the card the form may not have.
     @State private var suggestionHeight: CGFloat = 0
+    /// The questions not answered yet in a question card of several (`QuestionsLeft`): the folded line says how many.
+    @State private var questionsLeft: Int?
+    /// The message the card is about, where the chat can find it (#9392): View in Chat goes there.
+    @Environment(\.cardSources) private var sources
+    /// Its container lets the user size it (#12306): the grabber on its top edge.
+    @Environment(\.cardResize) private var resize
+    /// The question's Skip, drawn in the title row (#12306).
+    @State private var headerSkip: HeaderSkip?
+    /// The card is the assistant's pager's (#12831): its fold and View in Chat collapse the pager.
+    @Environment(\.cardDock) private var dock
 
     /// The form's cap while the keyboard is up (`cardFits`): the area less the card's header and margins; at least a tap
     /// target, so a sliver of a form never shows (a small iPhone with the shell's composer leaves the cards little more).
@@ -309,7 +408,8 @@ struct InteractionPanel: View {
         guard available > 0, headerHeight > 0 else { return .infinity }
         let row = headerAway ? 0 : headerHeight + Theme.Space.m // the row and the gap under it
         let line = suggestionHeight > 0 ? suggestionHeight + Theme.Space.m : 0 // a suggested rule's line and its gap
-        return max(available - row - line - Theme.Space.m - Theme.Space.l, Theme.Size.tapTarget) // and the margins
+        let top = grabber == nil ? Theme.Space.m : Theme.Space.l // the top margin, or the grabber's strip in its place
+        return max(available - row - line - top - Theme.Space.l, Theme.Size.tapTarget) // and the margins
     }
 
     private var fitsCap: CGFloat { cap(for: fits) }
@@ -341,13 +441,20 @@ struct InteractionPanel: View {
         return fits - headerHeight - Theme.Space.m - Theme.Space.m - Theme.Space.l < Theme.Size.box120
     }
 
+    /// The grabber shows on an open card its container lets the user size, the keyboard down (`headerAway` is only while up).
+    private var grabber: CardResize? { collapsed || headerAway ? nil : resize }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        VStack(alignment: .leading, spacing: 0) {
+            if let grabber { CardGrabber(resize: grabber) }
             if !headerAway { header }
-            if !collapsed {
+            // Folded, the form stays in the card at no height (#9392): a question of several keeps its page and its
+            // picks, and folding and unfolding animate its height, not a cut between two cards.
+            VStack(alignment: .leading, spacing: Theme.Space.m) {
                 if ownsScroll {
                     // These forms own their one scroll area and keep their answers outside it (#4839, #6605).
                     form.environment(\.cardFormCap, formCap)
+                        .environment(\.cardHeaderTakesSkip, !headerAway)
                         .transition(.opacity)
                 } else {
                     ScrollView {
@@ -378,9 +485,18 @@ struct InteractionPanel: View {
                                    card: .interaction(uid: interaction.uid, manager: interaction.manager),
                                    group: interaction.group, height: $suggestionHeight)
             }
+            .padding(.top, headerAway || collapsed ? 0 : Theme.Space.m)
+            .frame(height: collapsed ? 0 : nil, alignment: .top)
+            .clipped()
+            .opacity(collapsed ? 0 : 1)
+            .allowsHitTesting(!collapsed)
+            .accessibilityHidden(collapsed)
         }
+        .onPreferenceChange(QuestionsLeft.self) { questionsLeft = $0 }
+        .onPreferenceChange(HeaderSkipKey.self) { headerSkip = $0 }
         .padding(.horizontal, Theme.Space.l)
-        .padding(.top, Theme.Space.m)
+        // The grabber's strip takes the top margin's place, and a little more (#12306).
+        .padding(.top, grabber == nil ? Theme.Space.m : Theme.Space.flush)
         .padding(.bottom, Theme.Space.l)
         .foregroundStyle(Theme.primaryText)
         .surface(in: .rect(cornerRadius: Theme.Radius.panel, style: .continuous))
@@ -389,58 +505,159 @@ struct InteractionPanel: View {
 
     /// The title, ⋯ and fold; a tap anywhere on it folds the card.
     private var header: some View {
-        HStack(spacing: Theme.Space.sm) {
-            ThemedIcon(interaction.symbol)
-                .font(Theme.Font.labelStrong)
-                .foregroundStyle(StatusPalette.needsYou.dot)
-            Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
-                .lineLimit(1)
-            VoiceAskMark(interaction: interaction) // Asking by Voice (docs/assistant/voice.md 1.2 H)
-            if collapsed {
-                Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
-            }
-            Spacer(minLength: 4)
-            if interaction.kind == .plan && !collapsed {
-                Button { showFullPlan = true } label: {
-                    ThemedIcon(Theme.Icon.enlarge)
+        VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+            HStack(spacing: Theme.Space.sm) {
+                ThemedIcon(interaction.symbol)
+                    .font(Theme.Font.labelStrong)
+                    .foregroundStyle(StatusPalette.needsYou.dot)
+                Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
+                    .lineLimit(1)
+                AppModel.shared.voice?.askMark(interaction) // Asking by Voice (the voice module) (docs/assistant/voice.md 1.2 H)
+                if collapsed {
+                    Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
+                        .layoutPriority(-1)
+                    // How many of a card's several questions are still to answer (#9392).
+                    if let left = foldedQuestionsLeft {
+                        Text("\(left) left [Question Card]")
+                            .font(Theme.Font.captionMedium).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                            .accessibilityIdentifier("interaction-questions-left")
+                    }
+                }
+                Spacer(minLength: 4)
+                // Back to the message the card is about (#9392): the chat goes there and the card folds out of the way.
+                // A task's card in the assistant's pager opens its Agent's chat at that message instead (#12625), the pager
+                // left as it is for Back.
+                let inChat = sources?.opener(for: interaction.id)
+                if !collapsed, let open = inChat ?? dock?.source {
+                    Button {
+                        Haptics.tap()
+                        if inChat != nil {
+                            if let dock { dock.collapse() } else { withAnimation(Theme.Motion.standard) { collapsed = true } }
+                        }
+                        open()
+                    } label: {
+                        Text("View in Chat [Question Card]").lineLimit(1).fixedSize()
+                            .contentShape(.rect.inset(by: -Theme.Space.s)) // a finger's room without a taller row
+                    }
+                    .buttonStyle(.plain)
+                    .font(Theme.Font.captionMedium)
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityIdentifier("interaction-source")
+                }
+                // Skip, a word beside View in Chat (#12306): it had a row of its own under the options.
+                if !collapsed, let skip = headerSkip {
+                    // In flight it stays, disabled, beside the sending mark, as it did under the options.
+                    if skip.skipping { SendingMark() }
+                    QuestionSkipButton(inHeader: true) { skip.action() }
+                        .fixedSize()
+                        .disabled(skip.sending)
+                } else if !collapsed, noSkip != nil {
+                    // In the pager a card that can't be skipped says so: Skip greyed, the reason under the title (#12831).
+                    QuestionSkipButton(inHeader: true) {}
+                        .fixedSize()
+                        .disabled(true)
+                        .accessibilityIdentifier("question-skip-unavailable")
+                }
+                if interaction.kind == .plan && !collapsed {
+                    Button { showFullPlan = true } label: {
+                        ThemedIcon(Theme.Icon.enlarge)
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(.secondary)
+                            .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("View plan full screen")
+                }
+                if interaction.toolName != "ask_user" && interaction.noHandBack != true {
+                    Menu {
+                        Button { Task { await model.resolve(interaction, .dismissed) } } label: {
+                            Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
+                        }
+                    } label: {
+                        ThemedIcon(Theme.Icon.more)
+                            .font(Theme.Font.captionStrong)
+                            .foregroundStyle(.secondary)
+                            .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                            .contentShape(.rect)
+                    }
+                    .labelOnlyMenu() // just the ⋯, next to the fold ⌄
+                    .accessibilityIdentifier("interaction-menu")
+                }
+                // The fold, a button of its own (the whole row folds the card too): in a circle, so it reads as one.
+                Button(action: toggleFold) {
+                    ThemedIcon(Theme.Icon.expand)
                         .font(Theme.Font.captionStrong)
                         .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(collapsed ? 180 : 0))
                         .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                        .background(Theme.Fill.chip, in: .circle)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("View plan full screen")
+                .accessibilityLabel(collapsed ? Text("Expand [Question Card]") : Text("Collapse [Question Card]"))
+                .accessibilityIdentifier(dock == nil ? "interaction-fold" : "question-dock.collapse")
             }
-            if interaction.toolName != "ask_user" {
-                Menu {
-                    Button { Task { await model.resolve(interaction, .dismissed) } } label: {
-                        Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)
-                    }
-                } label: {
-                    ThemedIcon(Theme.Icon.more)
-                        .font(Theme.Font.captionStrong)
-                        .foregroundStyle(.secondary)
-                        .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
-                        .contentShape(.rect)
-                }
-                .labelOnlyMenu() // just the ⋯, next to the fold ⌄
-                .accessibilityIdentifier("interaction-menu")
-                #if os(macOS)
-                .help("More")
-                #endif
+            // A side session's card in its parent's chat says whose it is: "From Side Session · <title>" (#7944).
+            if let from {
+                Text(from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            ThemedIcon(Theme.Icon.expand)
-                .font(Theme.Font.captionStrong)
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(collapsed ? 180 : 0))
-                .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+            if let noSkip, !collapsed {
+                Text(Self.noSkipReason(noSkip)).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("interaction-no-skip")
+            }
+            // A stopped Agent's work card says why only putting it off is on (#6839).
+            if localOnly {
+                Text("This Agent has stopped. You can put this off or dismiss it.")
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("interaction-local-only")
+            }
         }
         .contentShape(.rect)
-        .onTapGesture { withAnimation(Theme.Motion.standard) { collapsed.toggle() } }
+        .onTapGesture(perform: toggleFold)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0 }
     }
 
+    private func toggleFold() {
+        Haptics.tap()
+        // In the pager the fold collapses the pager into its entry (#12831): a card folded to one line there hid itself.
+        if let dock { return dock.collapse() }
+        withAnimation(Theme.Motion.standard) { collapsed.toggle() }
+    }
+
+    /// Why the card's Skip is greyed, in the pager only (#12831); nil where it keeps today's Skip.
+    private var noSkip: QuestionDockLogic.NoSkip? {
+        guard dock != nil else { return nil }
+        return QuestionDockLogic.noSkip(kind: interaction.kind, command: interaction.screenDialog?.commandAsk != nil,
+                                        canSkip: headerSkip != nil || interaction.canCancel == true)
+    }
+
+    static func noSkipReason(_ reason: QuestionDockLogic.NoSkip) -> String {
+        switch reason {
+        case .terminal: String(localized: "This question was read off the terminal and can't be skipped yet. To leave it, tap Reply in Chat Instead.")
+        case .permission: String(localized: "This is a permission request and can't be skipped. To stop it running, tap Deny.")
+        case .plan: String(localized: "This is a plan approval and can't be skipped. To not go ahead, send it back.")
+        }
+    }
+
+    /// Folded, a question card of several says how many are left: what the form reports, or all of them before it does.
+    private var foldedQuestionsLeft: Int? {
+        guard interaction.kind == .question, let count = interaction.questions?.count, count > 1 else { return nil }
+        let left = questionsLeft ?? count
+        return left > 0 ? left : nil
+    }
+
     @ViewBuilder private var form: some View {
+        // A card its task's supervisor holds (`Interaction.supervisorHeld`): no form to answer it, a line saying who has it.
+        if !interaction.answerableHere {
+            SupervisorHeldNote()
+        } else {
+            answerForm
+        }
+    }
+
+    @ViewBuilder private var answerForm: some View {
         switch interaction.kind {
         case .question: QuestionForm(interaction: interaction)
         case .plan: PlanForm(interaction: interaction, showFull: $showFullPlan)
@@ -469,12 +686,16 @@ struct InteractionPanel: View {
             let name = model.session(interaction.sessionKey)?.agentLabel ?? "Claude"
             return d.commandAsk != nil ? String(localized: "\(name) Is Waiting for Your Approval") : String(localized: "\(name) Has a Question")
         }
-        return interaction.title
+        // A card that names only the engine (a Paseo provider's, #8144) takes its provider's name from its row.
+        return interaction.title(session: interaction.namesOnlyEngine ? model.session(interaction.sessionKey) : nil)
     }
 }
 
 /// Close a supported question without answering. A text action with a finger-sized target, not the card's fold mark.
+/// `inHeader`: in the card's title row (#12306), beside View in Chat, ⋯ and the fold: the target stays a finger's size
+/// and reaches over the row's margins, so the row is no taller than its fold.
 struct QuestionSkipButton: View {
+    var inHeader = false
     var action: () -> Void
 
     var body: some View {
@@ -490,7 +711,29 @@ struct QuestionSkipButton: View {
         .font(Theme.Font.captionMedium)
         .foregroundStyle(Theme.accent)
         .accessibilityIdentifier("question-skip")
+        .padding(.vertical, inHeader ? -(Theme.Size.tapTarget - Theme.Size.wellXS) / 2 : Theme.Space.flush)
     }
+}
+
+/// A question's Skip for its card's title row (#12306): the form owns what Skip does (its sending state, the field's
+/// focus), the panel draws it in its header. Before, Skip stood alone on a row under the options, about 60 pt for one word.
+struct HeaderSkip: Equatable {
+    var id: String
+    var sending: Bool
+    var skipping: Bool
+    var action: @MainActor () -> Void
+    static func == (a: Self, b: Self) -> Bool { a.id == b.id && a.sending == b.sending && a.skipping == b.skipping }
+}
+
+struct HeaderSkipKey: PreferenceKey {
+    static var defaultValue: HeaderSkip? { nil }
+    static func reduce(value: inout HeaderSkip?, nextValue: () -> HeaderSkip?) { value = value ?? nextValue() }
+}
+
+extension EnvironmentValues {
+    /// The card's title row shows and takes the question's Skip (`HeaderSkip`, #12306); false while it steps aside for
+    /// the keyboard (`InteractionPanel.headerAway`), when Skip goes back under the options.
+    @Entry var cardHeaderTakesSkip = false
 }
 
 /// AskUserQuestion, iOS-list style: the question, its options in one grouped box (numbered like the terminal, a
@@ -499,6 +742,7 @@ struct QuestionSkipButton: View {
 struct QuestionForm: View {
     @Environment(AppModel.self) private var model
     @Environment(\.cardFormCap) private var formCap
+    @Environment(\.cardLocalOnly) private var localOnly
     var interaction: Interaction
     @State private var contentHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
@@ -512,6 +756,9 @@ struct QuestionForm: View {
     /// Several questions (#2970): the review shown before the answers go.
     @State private var reviewing = false
     @State private var failureHeight: CGFloat = 0
+    /// A single-select pick's step to the next question while its pause runs (#6549): the next pick or Previous / Next
+    /// cancels it. Not read in `body`.
+    @State private var pendingStep: Task<Void, Never>?
     @FocusState private var otherFocused: Bool
 
     private var questions: [Question] { interaction.questions ?? [] }
@@ -519,10 +766,28 @@ struct QuestionForm: View {
     /// Its answer is on the way (#6279): this form sent it a moment ago, or the model says so (the card was drawn again).
     private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
     private var failure: String? { model.answerFailure(interaction.uid) }
-    private var canSkip: Bool { interaction.canCancel == true }
+    /// Skip cancels the question: nothing a stopped Agent's work card sends (`cardLocalOnly`).
+    private var canSkip: Bool { interaction.canCancel == true && !localOnly }
+    @Environment(\.cardHeaderTakesSkip) private var headerTakesSkip
+    /// Skip is drawn in the card's title row (#12306), not under the options.
+    private var skipInHeader: Bool { canSkip && headerTakesSkip }
 
     var body: some View {
-        if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else { plainLayout }
+        if AppStyle.current.usesBeautifulUI { BUIQuestionForm(interaction: interaction) } else {
+            plainLayout
+                // Its page, picks and typed answers outlive the view (#12831): the assistant's pager draws one card at a
+                // time and none while collapsed, and a card paged back to or opened again starts where it was.
+                .onAppear {
+                    guard let kept = QuestionFormMemory.shared.take(interaction.uid) else { return }
+                    picks = kept.picks
+                    other = kept.other
+                    page = min(kept.page, max(questions.count - 1, 0))
+                    reviewing = kept.reviewing
+                }
+                .onDisappear {
+                    QuestionFormMemory.shared.keep(interaction.uid, .init(picks: picks, other: other, page: page, reviewing: reviewing))
+                }
+        }
     }
 
     /// The options (or the review) scroll; Previous / Next / Submit are outside that scroll and stay in the panel.
@@ -540,16 +805,19 @@ struct QuestionForm: View {
             if showsReviewFooter {
                 ScreenReviewFooter(rows: QuestionSteps.rows(questions, answers: shownAnswers), sending: isSending ? "submit" : nil,
                                    back: { withAnimation(Theme.Motion.standard) { reviewing = false } }, submit: { send() }, answer: nil,
-                                   skip: canSkip ? { skip() } : nil)
+                                   skip: canSkip && !skipInHeader ? { skip() } : nil)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             } else if showsFooter {
                 footer.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0 }
             }
         }
         .deliberateTap($dragged)
+        .preference(key: QuestionsLeft.self, value: questions.filter { answer($0) == nil }.count)
+        .preference(key: HeaderSkipKey.self,
+                    value: skipInHeader ? HeaderSkip(id: interaction.uid, sending: isSending, skipping: skipping) { skip() } : nil)
     }
 
-    private var showsFooter: Bool { (needsFooter || canSkip) && !(stepped && reviewing) }
+    private var showsFooter: Bool { (needsFooter || (canSkip && !skipInHeader)) && !(stepped && reviewing) }
     private var showsReviewFooter: Bool { stepped && reviewing }
 
     private var contentCap: CGFloat? {
@@ -584,9 +852,13 @@ struct QuestionForm: View {
                     .font(Theme.Font.labelStrong)
                     .foregroundStyle(.secondary)
                 }
-                Text(q.question)
-                    .font(Theme.Font.heading)
-                    .fixedSize(horizontal: false, vertical: true)
+                if interaction.format == "markdown" {
+                    InteractionMarkdown(text: q.question)
+                } else {
+                    Text(q.question)
+                        .font(Theme.Font.heading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 options(q)
                     .id(page)
                     .transition(.asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .opacity))
@@ -603,8 +875,10 @@ struct QuestionForm: View {
                 if i > 0 { Divider().padding(.leading, 50) }
                 option(q, opt, number: i + 1)
             }
-            Divider().padding(.leading, 50)
-            otherRow(q)
+            if !localOnly { // a typed answer would go to the stopped Agent
+                Divider().padding(.leading, 50)
+                otherRow(q)
+            }
         }
         .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
     }
@@ -613,6 +887,7 @@ struct QuestionForm: View {
         let selected = picks[q.question, default: []].contains(opt.label)
         let (label, recommended) = Self.display(opt.label)
         let assistantPick = assistantPicks(q).contains(opt.label)
+        let blocked = localOnly && !interaction.isLocalChoice(opt, in: q) // it would message a stopped Agent
         return Button { if !dragged { pick(q, opt) } } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 ZStack {
@@ -626,7 +901,7 @@ struct QuestionForm: View {
                 .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     HStack(spacing: Theme.Space.sm) {
-                        Text(label).font(Theme.Font.heading).foregroundStyle(.primary)
+                        Text(label).font(Theme.Font.heading).foregroundStyle(blocked ? .tertiary : .primary)
                         if recommended { RecommendedTag() }
                         if assistantPick { AssistantPickTag() }
                     }
@@ -645,7 +920,7 @@ struct QuestionForm: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .disabled(isSending)
+        .disabled(isSending || blocked)
         .accessibilityLabel(label + (recommended ? String(localized: ", recommended", comment: "Accessibility suffix: the recommended option") : "")
                             + (assistantPick ? String(localized: ", the assistant's pick", comment: "Accessibility suffix: the option the assistant recommends") : "")
                             + (selected ? String(localized: ", selected", comment: "Accessibility suffix: a selected option") : ""))
@@ -706,12 +981,12 @@ struct QuestionForm: View {
 
     private var footer: some View {
         HStack(spacing: Theme.Space.m) {
-            if canSkip {
+            if canSkip && !skipInHeader {
                 QuestionSkipButton { skip() }
                     .disabled(isSending)
             }
             if page > 0 {
-                Button { withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
+                Button { pendingStep?.cancel(); withAnimation(Theme.Motion.standard) { page -= 1 } } label: { Text("Previous [Interaction Views 39b1c2]").lineLimit(1) }
                     .themedButton()
             }
             Spacer(minLength: 0)
@@ -725,7 +1000,7 @@ struct QuestionForm: View {
                 }
                 .themedButton(prominent: true)
                 .disabled(!canAdvance || isSending)
-            } else if skipping {
+            } else if skipping && !skipInHeader {
                 SendingMark()
             }
         }
@@ -752,13 +1027,19 @@ struct QuestionForm: View {
         if questions.count == 1 {
             submit() // one question, one choice: the tap is the answer
         } else if page < questions.count - 1 {
-            Task { try? await Task.sleep(for: .milliseconds(250)); withAnimation(Theme.Motion.standard) { page += 1 } }
+            let from = page // a newer pick starts the pause again, Previous / Next cancel it (QuestionSteps.step, #6549)
+            pendingStep = QuestionSteps.step(replacing: pendingStep) {
+                if let next = QuestionSteps.next(after: from, now: page, count: questions.count) {
+                    withAnimation(Theme.Motion.standard) { page = next }
+                }
+            }
         }
     }
 
     private var isLast: Bool { page >= questions.count - 1 || allAnswered }
 
     private func advance() {
+        pendingStep?.cancel()
         if isLast { submit() } else { withAnimation(Theme.Motion.standard) { page += 1 } }
     }
 
@@ -771,7 +1052,32 @@ struct QuestionForm: View {
     }
 
     private var allAnswered: Bool { questions.allSatisfy { answer($0) != nil } }
-    private var canAdvance: Bool { questions.indices.contains(page) && answer(questions[page]) != nil }
+    private var canAdvance: Bool { questions.indices.contains(page) && answer(questions[page]) != nil && allowed(questions[page]) }
+
+    /// Only put-off choices while the card takes nothing else (`cardLocalOnly`): a pick made before the Agent stopped
+    /// doesn't go.
+    private func allowed(_ q: Question) -> Bool {
+        guard localOnly else { return true }
+        let set = picks[q.question, default: []]
+        return !set.isEmpty && (other[q.question] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && q.options.filter { set.contains($0.label) }.allSatisfy { interaction.isLocalChoice($0, in: q) }
+    }
+
+    /// Takes back what a stopped Agent's card no longer sends (a pick made before it stopped, a typed answer), as
+    /// BeautifulUI clears its held answers, and shows the first question that lost one.
+    private func dropRefused() {
+        let first = questions.firstIndex { !allowed($0) }
+        for q in questions {
+            picks[q.question] = picks[q.question, default: []].filter { label in
+                q.options.contains { $0.label == label && interaction.isLocalChoice($0, in: q) }
+            }
+            other[q.question] = nil
+        }
+        withAnimation(Theme.Motion.standard) {
+            reviewing = false
+            if let first { page = first }
+        }
+    }
 
     /// The answers as the review shows them, by question.
     private var shownAnswers: [Int: String] {
@@ -783,6 +1089,7 @@ struct QuestionForm: View {
     }
 
     private func submit() {
+        guard questions.allSatisfy(allowed) else { dropRefused(); return }
         if !allAnswered {
             if let next = questions.firstIndex(where: { answer($0) == nil }) { withAnimation(Theme.Motion.standard) { page = next } }
             return
@@ -797,12 +1104,18 @@ struct QuestionForm: View {
 
     private func send() {
         guard !isSending else { return } // a second tap sends nothing
-        sending = true
-        otherFocused = false
         var answers: [String: String] = [:]
         for q in questions { answers[q.question] = answer(q) }
+        let resolution = Resolution(answers: answers)
+        // A review made while the Agent could answer, sent after it stopped: only put-off answers go (#6839).
+        if localOnly, !interaction.isLocalResolution(resolution) {
+            dropRefused()
+            return
+        }
+        sending = true
+        otherFocused = false
         Task {
-            await model.resolve(interaction, Resolution(answers: answers))
+            await model.resolve(interaction, resolution)
             sending = false
         }
     }
@@ -873,6 +1186,11 @@ struct PlanForm: View {
         if AppStyle.current.usesBeautifulUI { BUIPlanForm(interaction: interaction, showFull: $showFull) } else { plain }
     }
 
+    /// The card's agent, its provider's name where the card names only the engine (#8144); nil: Claude Code.
+    private var agentName: String? {
+        interaction.agentName(session: interaction.namesOnlyEngine ? model.session(interaction.sessionKey) : nil)
+    }
+
     /// The plan's first lines (Show Full Text opens it whole, #6605) over the answers, which stay in view.
     @ViewBuilder private var plain: some View {
         CardForm {
@@ -886,7 +1204,7 @@ struct PlanForm: View {
     @ViewBuilder private var answers: some View {
         if rejecting {
             // The card's own agent: a runtime's plan (DSH…) names it, as AgentPermissionForm does; nil is Claude Code.
-            TextField(String(localized: "Tell \(interaction.agentName ?? "Claude") what to change…"), text: $feedback, axis: .vertical)
+            TextField(String(localized: "Tell \(agentName ?? "Claude") what to change…"), text: $feedback, axis: .vertical)
                 .lineLimit(2...6)
                 .padding(Theme.Space.m)
                 .background(Theme.Fill.well, in: .rect(cornerRadius: Theme.Radius.card, style: .continuous))
@@ -897,6 +1215,21 @@ struct PlanForm: View {
                 } label: { Text("Send Back [Notification Actions cd3150]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity) }
                     .themedButton(prominent: true)
             }
+        } else if let mode = interaction.recordedPlanThen {
+            Text(PlanTaskRow.permissionLabel(mode))
+                .font(Theme.Font.secondary)
+                .foregroundStyle(.secondary)
+            Button {
+                Task { await model.resolve(interaction, Resolution(approve: true, mode: mode)) }
+            } label: {
+                Text("Approve [Interaction Views 905819]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            }
+            .themedButton(prominent: true)
+            .controlSize(.large)
+            Button { withAnimation { rejecting = true } } label: {
+                Text("Send Back [Notification Actions a20f13]").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+            }
+            .themedButton()
         } else {
             Button {
                 Task { await model.resolve(interaction, Resolution(approve: true, mode: "bypassPermissions")) }
@@ -929,9 +1262,27 @@ struct PlanTextSheet: View {
             }
             .navigationTitle(PlanText.title(plan))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { done() } } }
+            .toolbar { SheetClose { done() } }
         }
     }
+}
+
+/// A script ask's opt-in question, rendered by the same memoized Markdown stack as chat replies (#10857).
+struct InteractionMarkdown: View {
+    var text: String
+
+    var body: some View {
+        Markdown(MarkdownMemo.content(text))
+            .markdownTheme(.persona)
+            .readingContent()
+            .markdownTextStyle { ForegroundColor(Theme.primaryText) }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("interaction-markdown")
+    }
+}
+
+private func ownerApprovalReplyLabel(_ phrase: String) -> String {
+    String(localized: "Reply “\(phrase)” Once")
 }
 
 struct PermissionForm: View {
@@ -977,14 +1328,22 @@ struct PermissionForm: View {
             .themedButton(prominent: true)
         }
         .controlSize(.large)
+        if let phrase = interaction.ownerApprovalPhrase {
+            Button {
+                Task { await model.resolve(interaction, Resolution(allow: true, ownerApprovalPhrase: phrase)) }
+            } label: {
+                Text(ownerApprovalReplyLabel(phrase))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+            }
+            .themedButton()
+            .accessibilityIdentifier("owner-approval-exact-reply")
+        }
         if interaction.offersAlways {
             Button("Always Allow in Session") {
                 Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
             }
-            #if os(macOS)
-            // A text link as on iOS: the Mac's default style made it a third push button under Deny / Allow.
-            .buttonStyle(.link)
-            #endif
             // One line on every platform (button labels never wrap): large text or a narrow card shrinks it.
             .lineLimit(1)
             .minimumScaleFactor(0.8)
@@ -997,7 +1356,7 @@ struct PermissionForm: View {
     }
 }
 
-/// A Codex / TRAEX approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
+/// A Codex / TRAE CLI approval read off its TUI (docs/integrations/codex.md「Questions and approvals」): the command or the edits in full, the agent's
 /// reason, Deny / Approve, Always Approve naming what it would allow (only when the TUI offers it), and Deny and Explain: the reason
 /// stops the turn and goes to the agent as its next message.
 struct AgentPermissionForm: View {
@@ -1007,7 +1366,11 @@ struct AgentPermissionForm: View {
     @State private var why = ""
     @FocusState private var whyFocused: Bool
 
-    private var name: String { interaction.agentName ?? "Codex" }
+    /// Who to tell: the card's agent, its provider's name where the card names only the engine (#8144). The session is
+    /// read only then, so other cards observe no row.
+    private var name: String {
+        interaction.agentName(session: interaction.namesOnlyEngine ? model.session(interaction.sessionKey) : nil) ?? "Codex"
+    }
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { BUIPermissionForm(interaction: interaction) } else { plain }
@@ -1030,6 +1393,8 @@ struct AgentPermissionForm: View {
             }
             if let diff = PermissionDiff(interaction) {
                 PermissionDiffView(diff: diff, key: interaction.id)
+            } else if interaction.format == "markdown" {
+                InteractionMarkdown(text: interaction.permissionSubject ?? "")
             } else {
                 CardCode(text: interaction.permissionSubject ?? "", title: tool, id: "permission-command")
             }
@@ -1054,18 +1419,22 @@ struct AgentPermissionForm: View {
             Button {
                 Task { await model.resolve(interaction, Resolution(allow: true, always: true)) }
             } label: {
-                if let always = interaction.alwaysLabel, !always.isEmpty {
-                    Text("Always Approve · \(always)").lineLimit(1).minimumScaleFactor(0.8)
+                if let always = interaction.alwaysLabel, !always.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Always Approve · \(always)").lineLimit(2).minimumScaleFactor(0.8)
                 } else {
                     Text("Always Approve").lineLimit(1).minimumScaleFactor(0.8)
                 }
             }
-            #if os(macOS)
-            .buttonStyle(.link)
-            #endif
             .font(Theme.Font.caption)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("codex-always")
+            if (interaction.alwaysLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let scope = interaction.alwaysScopeDetail {
+                Text(scope)
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         reasonRow
     }
@@ -1103,9 +1472,6 @@ struct AgentPermissionForm: View {
             } label: {
                 Text("Deny and Explain…").lineLimit(1)
             }
-            #if os(macOS)
-            .buttonStyle(.link)
-            #endif
             .font(Theme.Font.caption)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
@@ -1768,6 +2134,19 @@ extension Interaction {
         """
         return try? JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
     }
+
+    /// A manager work card on an Agent whose model request failed (the hub's `persona_triage` card, #6753).
+    static func sampleStoppedWork(_ key: SessionKey) -> Interaction? {
+        // i18n-ignore
+        let json = """
+        {"id":"sample-work","machine_id":"\(key.machineID)","session_id":"\(key.sessionID)","kind":"question","tool_name":"persona_triage","questions":[
+         {"question":"模型请求失败了，要怎么处理？","header":"模型错误","multi_select":false,"options":[
+          {"label":"继续","description":"让 Agent 接着做"},
+          {"label":"稍后再说","description":"先放一放，之后再提醒我","action":"defer"},
+          {"label":"不用管了","description":"收起这张卡","action":"defer"}]}]}
+        """
+        return try? JSON.decoder.decode(Interaction.self, from: Data(json.utf8))
+    }
 }
 #endif
 
@@ -1797,6 +2176,7 @@ extension ApprovalCardOptions {
 struct BUIQuestionForm: View {
     @Environment(AppModel.self) private var model
     @Environment(\.cardFormCap) private var formCap
+    @Environment(\.cardLocalOnly) private var localOnly
     var interaction: Interaction
     /// Several questions (#2970): the card's answers held for the review, the question the card opens at when it comes
     /// back, and a new card each time (its answers and page are read once).
@@ -1814,7 +2194,8 @@ struct BUIQuestionForm: View {
     /// Its answer is on the way (#6279): sent from this form, or the model says so.
     private var isSending: Bool { sending || model.answerProgress(interaction.uid) == .sending }
     private var failure: String? { model.answerFailure(interaction.uid) }
-    private var canSkip: Bool { interaction.canCancel == true }
+    /// Skip cancels the question: nothing a stopped Agent's work card sends (`cardLocalOnly`).
+    private var canSkip: Bool { interaction.canCancel == true && !localOnly }
     private var skipCard: ((ApprovalAnswers) -> Void)? {
         guard canSkip else { return nil }
         return { answers in skip(answers) }
@@ -1876,13 +2257,7 @@ struct BUIQuestionForm: View {
             }
         } else {
             let picks = Delegated.recommendedLabels(questions, interaction.delegate?.recommend)
-            ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1) }, startAt: startAt, answers: kept,
-                         skipLabel: canSkip ? String(localized: "Skip [Question Card]") : nil,
-                         continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
-                         customPlaceholder: String(localized: "Other answer…"),
-                         sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
-                         options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true),
-                         onSkip: skipCard, onSubmit: { answers in
+            let submit: (ApprovalAnswers) -> Void = { answers in
                 Haptics.tap()
                 if QuestionSteps.enabled(questions) { // the review first
                     withAnimation(Theme.Motion.standard) { held = answers; kept = answers }
@@ -1890,8 +2265,32 @@ struct BUIQuestionForm: View {
                     kept = answers // a failed answer builds the card again with them
                     send(answers)
                 }
-            })
-            .id(round)
+            }
+            if interaction.format == "markdown" {
+                ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1, localOnly: localOnly ? interaction : nil, markdown: true) },
+                             startAt: startAt, answers: kept,
+                             skipLabel: nil,
+                             continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
+                             customPlaceholder: String(localized: "Other answer…"),
+                             sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
+                             options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true),
+                             onSubmit: submit) { qIndex in
+                    if questions.indices.contains(qIndex) {
+                        InteractionMarkdown(text: questions[qIndex].question)
+                    }
+                }
+                .id(round)
+            } else {
+                ApprovalCard(questions: zip(questions, picks).map { Self.card($0, picks: $1, localOnly: localOnly ? interaction : nil) },
+                             startAt: startAt, answers: kept,
+                             skipLabel: canSkip ? String(localized: "Skip [Question Card]") : nil,
+                             continueLabel: String(localized: "Next [Interaction Views f82c68]"), sendLabel: isSending ? String(localized: "Sending…") : String(localized: "Submit"),
+                             customPlaceholder: String(localized: "Other answer…"),
+                             sentMessage: isSending ? String(localized: "Sending…") : String(localized: "Sent"),
+                             options: .panel(sending: isSending, maxHeight: cardCap, rejectsDraggedPicks: true),
+                             onSkip: skipCard, onSubmit: submit)
+                .id(round)
+            }
         }
     }
 
@@ -1904,9 +2303,17 @@ struct BUIQuestionForm: View {
 
     private func send(_ answers: ApprovalAnswers) {
         guard !isSending else { return } // a second tap sends nothing
+        let resolution = Resolution(answers: Self.answers(answers, questions))
+        // Answers held for the review while the Agent could answer, sent after it stopped: only put-off answers go
+        // (#6839); back to the questions, whose other choices are now off.
+        if localOnly, !interaction.isLocalResolution(resolution) {
+            kept = ApprovalAnswers()
+            reopen(at: 0)
+            return
+        }
         sending = true
         Task {
-            await model.resolve(interaction, Resolution(answers: Self.answers(answers, questions)))
+            await model.resolve(interaction, resolution)
             sending = false
         }
     }
@@ -1932,16 +2339,19 @@ struct BUIQuestionForm: View {
         return out
     }
 
-    /// `picks`: the options the assistant recommends (#544).
-    static func card(_ q: Question, picks: [String] = []) -> ApprovalQuestion {
+    /// `picks`: the options the assistant recommends (#544). `localOnly`: the card takes only the choices that send its
+    /// Agent nothing (`cardLocalOnly`, #6839); the rest and the typed answer are off.
+    static func card(_ q: Question, picks: [String] = [], localOnly: Interaction? = nil, markdown: Bool = false) -> ApprovalQuestion {
         ApprovalQuestion(
-            id: q.question, q.question, kind: q.multiSelect ? .multiple : .single,
+            id: q.question, markdown ? "" : q.question, kind: q.multiSelect ? .multiple : .single,
             choices: q.options.map { o in
                 let (label, recommended) = display(o.label)
                 let tag = recommended ? String(localized: "Recommended") : picks.contains(o.label) ? String(localized: "Assistant's pick") : nil
-                return ApprovalQuestion.Choice(label, detail: o.description, tag: tag)
+                return ApprovalQuestion.Choice(label, detail: o.description, tag: tag,
+                                               isEnabled: localOnly.map { $0.isLocalChoice(o, in: q) } ?? true)
             },
-            eyebrow: eyebrow(q)
+            eyebrow: eyebrow(q),
+            allowsCustom: localOnly == nil
         )
     }
 
@@ -1984,12 +2394,15 @@ struct BUIPlanForm: View {
     ]
 
     var body: some View {
-        ApprovalCard(questions: [ApprovalQuestion(String(localized: "Go ahead with this plan?"), choices: Self.choices,
+        let choices = interaction.recordedPlanThen.map { mode in
+            [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"), detail: PlanTaskRow.permissionLabel(mode))]
+        } ?? Self.choices
+        ApprovalCard(questions: [ApprovalQuestion(String(localized: "Go ahead with this plan?"), choices: choices,
                                                   customPlaceholder: String(localized: "Send back with what to change…"))],
                      skipLabel: nil, sendLabel: String(localized: "Send"), sentMessage: String(localized: "Sent"),
                      options: .panel(maxHeight: formCap.isFinite && formCap > 0 ? formCap : nil)) { answers in
             Haptics.tap()
-            Task { await model.resolve(interaction, Self.resolution(answers)) }
+            Task { await model.resolve(interaction, Self.resolution(answers, recordedMode: interaction.recordedPlanThen)) }
         } context: { _ in
             // Its first lines, Show Full Text for the rest (#6605): it scrolled in a box of its own inside the card's scroll.
             CardPlan(plan: interaction.plan ?? "", lines: Self.planLines) { showFull = true }
@@ -2009,6 +2422,14 @@ struct BUIPlanForm: View {
         default: return Resolution(approve: false, feedback: "")
         }
     }
+
+    static func resolution(_ a: ApprovalAnswers, recordedMode: String?) -> Resolution {
+        guard let recordedMode else { return resolution(a) }
+        let feedback = (a.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !feedback.isEmpty { return Resolution(approve: false, feedback: feedback) }
+        guard a.picks[0]?.first == 0 else { return Resolution(approve: false, feedback: "") }
+        return Resolution(approve: true, mode: recordedMode)
+    }
 }
 
 /// The BeautifulUI style's tool approval: an approval card with the tool and what it will run on top, then Allow /
@@ -2027,13 +2448,15 @@ struct BUIPermissionForm: View {
         if interaction.agentName != nil {
             var c = [ApprovalQuestion.Choice(String(localized: "Approve [Interaction Views 905819]"))]
             if interaction.offersAlways {
-                let always = interaction.alwaysLabel.flatMap { $0.isEmpty ? nil : $0 }
-                c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: always))
+                c.append(ApprovalQuestion.Choice(String(localized: "Always Approve"), detail: interaction.alwaysScopeDetail))
             }
             c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
             return c
         }
         var c = [ApprovalQuestion.Choice(String(localized: "Allow [Notification Actions ce7ef2]"))]
+        if let phrase = interaction.ownerApprovalPhrase {
+            c.append(ApprovalQuestion.Choice(ownerApprovalReplyLabel(phrase)))
+        }
         if interaction.offersAlways { c.append(ApprovalQuestion.Choice(String(localized: "Always Allow in Session"), detail: interaction.alwaysScopeDetail)) }
         c.append(ApprovalQuestion.Choice(String(localized: "Deny")))
         return c
@@ -2049,7 +2472,7 @@ struct BUIPermissionForm: View {
                      // Capped, the card scrolls what it asks over Send, which stays in view (#6605).
                      options: .panel(maxHeight: formCap.isFinite && formCap > 0 ? formCap : nil)) { answers in
             Haptics.tap()
-            Task { await model.resolve(interaction, Self.resolution(answers, choices: choices)) }
+            Task { await model.resolve(interaction, Self.resolution(answers, choices: choices, interaction: interaction)) }
         } context: { _ in
             if interaction.agentName != nil, let reason = interaction.reason, !reason.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -2070,23 +2493,31 @@ struct BUIPermissionForm: View {
         if let diff = PermissionDiff(interaction) { PermissionDiffView(diff: diff, key: interaction.id) } else { subject }
     }
 
-    /// The command or path with its tool's icon in a code box; a long one folded to a few lines (`CardCode`, #6605).
-    private var subject: some View {
-        HStack(alignment: .top, spacing: Theme.Space.s) {
-            ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
-            CardCode(text: interaction.permissionSubject ?? "", title: interaction.toolDisplayName ?? String(localized: "Tool"),
-                     lines: Self.commandLines, box: .none, id: "permission-command")
+    /// A script ask's Markdown question, or the command/path with its tool's icon in a code box as before (#10857).
+    @ViewBuilder private var subject: some View {
+        if interaction.format == "markdown" {
+            InteractionMarkdown(text: interaction.permissionSubject ?? "")
+        } else {
+            HStack(alignment: .top, spacing: Theme.Space.s) {
+                ThemedIcon(ToolPresentation.symbol(interaction.toolName ?? "")).foregroundStyle(Theme.accent)
+                CardCode(text: interaction.permissionSubject ?? "", title: interaction.toolDisplayName ?? String(localized: "Tool"),
+                         lines: Self.commandLines, box: .none, id: "permission-command")
+            }
+            .padding(Theme.Space.m)
+            .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
         }
-        .padding(Theme.Space.m)
-        .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
     }
 
     /// The command's lines before Show All: a few, over the card's choices and its field (Send stays in view under them).
     private static let commandLines = 4
 
-    static func resolution(_ a: ApprovalAnswers, choices: [ApprovalQuestion.Choice]) -> Resolution {
+    static func resolution(_ a: ApprovalAnswers, choices: [ApprovalQuestion.Choice], interaction: Interaction? = nil) -> Resolution {
         let reason = (a.custom[0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !reason.isEmpty { return Resolution(allow: false, message: reason) }
+        if let phrase = interaction?.ownerApprovalPhrase,
+           a.picks[0]?.first.map({ choices[$0].label }) == ownerApprovalReplyLabel(phrase) {
+            return Resolution(allow: true, ownerApprovalPhrase: phrase)
+        }
         // The labels are localized: compare with the same localized words the choices were built from.
         switch a.picks[0]?.first.map({ choices[$0].label }) {
         case String(localized: "Allow [Notification Actions ce7ef2]"), String(localized: "Approve [Interaction Views 905819]"): return Resolution(allow: true)
@@ -2422,35 +2853,33 @@ struct SessionlessCardSheet: View {
             }
             .themedPage()
             .navigationTitle(interaction.sessionlessPlace ?? String(localized: "Script"))
-            #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
-            #endif
-            #if os(macOS)
-            .macSheetDone { dismiss() }
-            #else
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1)
-                }
+                SheetClose { dismiss() }
             }
-            #endif
         }
         .presentationDetents([.medium, .large])
         .onChange(of: model.pendingInteractions.contains { $0.uid == interaction.uid }) { _, pending in
             if !pending { dismiss() }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 }
 
 extension Interaction {
     /// The line under a card's title in a list: its session's title; a sessionless card says where it comes from, and
     /// Script when its title does not already name who asks (`personad ask` labels its cards Script, docs/integrations/script-cli.md).
-    func placeLine(machine: String?) -> String {
+    func placeLine(machine: String?, sessionTitleOverride: String? = nil) -> String {
+        if requestHomeKey != sessionKey {
+            let title = sessionTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // A side session's card says so (#7944), in the words its parent's chat uses.
+            if foldedAs == SideFold.side || foldedSide != nil, !title.isEmpty {
+                return String(localized: "From Side Session · \(title)")
+            }
+            let name = title.isEmpty ? String(localized: "Subagent task [Child Session]") : title
+            return String(localized: "From subagent · \(name)")
+        }
         let mark = (agentLabelHint ?? "").isEmpty ? String(localized: "Script") : nil
-        let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitle, machine]
+        let parts: [String?] = isSessionless ? [mark, sessionlessPlace, machine] : [sessionTitleOverride ?? sessionTitle, machine]
         return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }

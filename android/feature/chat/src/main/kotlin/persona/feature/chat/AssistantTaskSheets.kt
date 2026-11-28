@@ -1,12 +1,15 @@
 package persona.feature.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -14,16 +17,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import persona.core.contracts.AgentState
+import persona.core.contracts.CoreText
 import persona.core.contracts.PlanTask
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
@@ -35,20 +46,28 @@ import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
+import persona.core.designsystem.JCard
 import persona.core.designsystem.JChip
+import persona.core.designsystem.JCodeBlock
 import persona.core.designsystem.JDialog
+import persona.core.designsystem.JDivider
 import persona.core.designsystem.JEmptyState
 import persona.core.designsystem.JGroupItem
 import persona.core.designsystem.JIconButton
+import persona.core.designsystem.JPage
 import persona.core.designsystem.JRow
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JSheet
 import persona.core.designsystem.JStatusDot
+import persona.core.designsystem.JTextButton
 import persona.core.designsystem.JTextField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
+import persona.core.designsystem.pagePadding
+import persona.core.designsystem.startFailureCodeLine
 import persona.core.designsystem.text
 import persona.core.domain.answer.askLine
 import persona.core.domain.answer.askingLine
@@ -57,6 +76,8 @@ import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.isRemovable
 import persona.core.domain.tasks.orphanedLine
+import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.retryLauncher
 
 // A task's detail, the dock's "All" and the plan's "Edit" (iOS TaskSheets.swift / PlanEditSheet; web TaskPanel): what a
 // tap on a task opens instead of leaving the conversation for its agent's page.
@@ -70,7 +91,14 @@ internal sealed interface TaskSheet {
     data object Board : TaskSheet
 }
 
-/** The sheet [host] has open, if any. */
+/**
+ * Whether a wide window shows this detail as a page pushed into the chat's column instead of a bottom sheet (iOS
+ * `DetailPresentation`, #9347): a task's page and an agent's own. A phone keeps every detail a sheet, and "All" stays one
+ * at any width, as iOS's board does.
+ */
+internal fun TaskSheet.pushesOnWide(wide: Boolean): Boolean = wide && this !is TaskSheet.Board
+
+/** The detail [host] has open as a bottom sheet: a phone's presentation of every detail, and "All" on any window. */
 @Composable
 internal fun AssistantTaskSheets(host: AssistantTaskHost) {
     when (val open = host.sheet.value) {
@@ -82,6 +110,24 @@ internal fun AssistantTaskSheets(host: AssistantTaskHost) {
 }
 
 /**
+ * The same detail as a page of the chat's own column on a wide window (#9347, iOS `detailPresentation`): its Back is the
+ * sheet's Close and the system's Back closes it too. The chat stays composed under it, so Back finds it where it was left.
+ */
+@Composable
+internal fun AssistantTaskPage(open: TaskSheet, host: AssistantTaskHost, onDismiss: () -> Unit) {
+    BackHandler(onBack = onDismiss)
+    // The page reads; the chat's composer gives up the keyboard and the focus it had under it.
+    val focus = LocalFocusManager.current
+    LaunchedEffect(open) { focus.clearFocus() }
+    when (open) {
+        is TaskSheet.Task -> TaskDetailPage(open.todoId, host, onDismiss)
+        is TaskSheet.Agent -> AgentDetailPage(open.key, host, onDismiss)
+        // "All" is the conversation's tasks as a list: a sheet at any width, as iOS's board is.
+        TaskSheet.Board -> Unit
+    }
+}
+
+/**
  * A task: its mark, title and state, "Remove" while nothing of it runs, and its agents (a switcher when there are several).
  * The agent shows where it runs and what it is on now, with "Open chat" for its whole page and "Say something" to talk to it from
  * here; a task whose agent is still starting, or did not start, says so (with "Retry" / "Remove task").
@@ -89,65 +135,173 @@ internal fun AssistantTaskSheets(host: AssistantTaskHost) {
 @Composable
 private fun TaskDetailSheet(todoId: String, host: AssistantTaskHost, onDismiss: () -> Unit) {
     val todos by host.tasks.todos.collectAsStateWithLifecycle()
-    val busy by host.tasks.busy.collectAsStateWithLifecycle()
-    androidx.compose.runtime.LaunchedEffect(todoId) { host.tasks.reloadTodos() }
+    LaunchedEffect(todoId) { host.tasks.reloadTodos() }
     val todo = todos.firstOrNull { it.id == todoId }
-    var picked by remember(todoId) { mutableStateOf<SessionKey?>(null) }
     var menu by remember(todoId) { mutableStateOf(false) }
     JSheet(onDismiss, scrollable = true) {
         if (todo == null) {
-            JEmptyState(stringResource(R.string.chat_task_detail_gone), stringResource(R.string.chat_task_detail_gone_body), icon = PhIcons.ListChecks)
+            TaskGone()
             return@JSheet
         }
         val state = host.tasks.stateOf(todo, host.sessions)
-        val agents = host.tasks.agentsOf(todo, host.sessions)
-        val lead = host.tasks.lead(todo, host.sessions)
-        val shown = agents.firstOrNull { it.key == picked } ?: lead
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             TaskMark(state)
             Column(Modifier.weight(1f)) {
                 Text(todo.title, style = PersonaTheme.type.title, color = PersonaTheme.palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val orphaned = todo.orphanedLine.takeIf { state != TaskState.NeedsYou }
-                Text(orphaned?.text() ?: state.label.text(), style = PersonaTheme.type.caption,
-                    color = if (orphaned != null) PersonaTheme.palette.cautionText else PersonaTheme.palette.status(state.status()).text, maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
+                Text(taskStateLine(todo, state).text(), style = PersonaTheme.type.caption,
+                    color = if (taskStateLineCautions(todo, state)) PersonaTheme.palette.cautionText else PersonaTheme.palette.status(state.status()).text,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            if (state.isRemovable) JIconButton(PhIcons.DotsThree, stringResource(R.string.chat_task_detail_more), { menu = true })
+            if (state.isRemovable) TaskMoreButton { menu = true }
             JIconButton(PhIcons.X, stringResource(R.string.chat_task_detail_close), onDismiss)
         }
-        if (agents.size > 1) {
-            Spacer(Modifier.height(Tokens.Space.m))
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                agents.forEach { s ->
-                    JChip(s.displayTitle.ifBlank { s.agentLabel }, selected = s.key == shown?.key, onClick = { picked = s.key },
-                        status = s.agentState.designStatus)
-                }
+        TaskDetail(todo, state, host, onDismiss, onRemove = { menu = true })
+    }
+    if (menu && todo != null) TaskRemoveSheet(todo, host, onDismiss) { menu = false }
+}
+
+/** A task's detail as a page beside the chat (#9347): the sheet's content under a bar with Back and the task's state. */
+@Composable
+private fun TaskDetailPage(todoId: String, host: AssistantTaskHost, onDismiss: () -> Unit) {
+    val todos by host.tasks.todos.collectAsStateWithLifecycle()
+    LaunchedEffect(todoId) { host.tasks.reloadTodos() }
+    val todo = todos.firstOrNull { it.id == todoId }
+    val state = todo?.let { host.tasks.stateOf(it, host.sessions) }
+    var menu by remember(todoId) { mutableStateOf(false) }
+    JPage(
+        title = todo?.title ?: stringResource(R.string.chat_task_detail_gone),
+        subtitle = if (todo != null && state != null) taskStateLine(todo, state).text() else null,
+        onBack = onDismiss,
+        actions = {
+            if (state != null && state.isRemovable) TaskMoreButton { menu = true }
+        },
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = pagePadding)
+                .padding(top = padding.calculateTopPadding() + Tokens.Space.l, bottom = padding.calculateBottomPadding() + Tokens.Space.xl),
+        ) {
+            if (todo == null || state == null) {
+                TaskGone()
+            } else TaskDetail(todo, state, host, onDismiss, onRemove = { menu = true }, gap = Tokens.Space.l)
+        }
+    }
+    if (menu && todo != null) TaskRemoveSheet(todo, host, onDismiss) { menu = false }
+}
+
+/**
+ * One copy of a task's detail below its head (iOS TaskDetailSheet's content), for the sheet and for the page: the agents it
+ * runs on, what it asks of its owner, what its agent last reported, and the agent's summary or why it has none. The sheet
+ * stacks them as it always has; the page puts [gap] between them, as a page of its own spaces its parts.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ColumnScope.TaskDetail(
+    todo: Todo, state: TaskState, host: AssistantTaskHost, onDismiss: () -> Unit, onRemove: () -> Unit, gap: Dp = Tokens.Space.flush,
+) {
+    val busy by host.tasks.busy.collectAsStateWithLifecycle()
+    val plans by host.tasks.plans.collectAsStateWithLifecycle()
+    val features by (host.tasks.features ?: remember { MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
+    val failedTask = planTaskOf(todo, plans)
+    val instead = if (state == TaskState.Failed) retryLauncher(failedTask, features) else null
+    val agents = host.tasks.agentsOf(todo, host.sessions)
+    val lead = host.tasks.lead(todo, host.sessions)
+    var picked by remember(todo.id) { mutableStateOf<SessionKey?>(null) }
+    val shown = agents.firstOrNull { it.key == picked } ?: lead
+    if (agents.size > 1) {
+        Spacer(Modifier.height(Tokens.Space.m))
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+            agents.forEach { s ->
+                JChip(s.displayTitle.ifBlank { s.agentLabel }, selected = s.key == shown?.key, onClick = { picked = s.key },
+                    status = s.agentState.designStatus)
             }
         }
-        Spacer(Modifier.height(Tokens.Space.l))
-        TaskOwnerDecision(todo, host)
+    }
+    val sectionGap = if (gap > Tokens.Space.m) gap else Tokens.Space.m
+    val lifecyclePrUrl = taskLifecyclePrUrl(todo, host)
+    val hasPrimaryDecision = todo.hasOwnerPrimaryAction()
+    Column(
+        Modifier.fillMaxWidth().padding(top = Tokens.Space.m),
+        verticalArrangement = Arrangement.spacedBy(sectionGap),
+    ) {
+        TaskOwnerDecision(todo, host, prUrl = lifecyclePrUrl)
         TaskLifecycleDetails(todo, host)
-        LatestReport(todo, Modifier.padding(bottom = Tokens.Space.m))
+        LatestReport(todo)
         val failure = todo.startFailure
+        val codedFailure = if (failure == null) null else startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs)
+        var failureDetails by remember(todo.id, failure, failedTask?.errorCode) { mutableStateOf(false) }
         when {
-            shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
-            failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), failure.trim(), icon = PhIcons.WarningCircle, action = {
-                Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                    JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
-                        size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise, loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
-                    JButton(stringResource(R.string.chat_task_detail_remove), { menu = true },
-                        kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
+            shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss, hasPrimaryAbove = hasPrimaryDecision)
+            failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), codedFailure ?: failure.trim(), icon = PhIcons.WarningCircle, action = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (codedFailure != null) {
+                        // Plain words lead; the hub's codes, paths and exit status stay behind the existing disclosure.
+                        Column(Modifier.padding(bottom = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                            JTextButton(
+                                stringResource(if (failureDetails) persona.core.designsystem.R.string.designsystem_details_collapse
+                                else persona.core.designsystem.R.string.designsystem_details_expand),
+                                { failureDetails = !failureDetails },
+                                modifier = Modifier.testTag("assistant-task-start-failure-details"),
+                            )
+                            if (failureDetails) JCodeBlock(failure.trim(), small = true)
+                        }
+                    }
+                    if (state == TaskState.Failed) TaskShellQuestion(
+                        todo, failedTask, host.tasks, Modifier.padding(bottom = Tokens.Space.m),
+                    )
+                    val actions: @Composable () -> Unit = {
+                        if (instead != null) JButton(
+                            stringResource(persona.core.designsystem.R.string.designsystem_use_launcher_instead, instead),
+                            { host.tasks.retryTaskOnLauncher(todo, instead, host.onError) },
+                            kind = JButtonKind.Primary,
+                            size = JButtonSize.Medium,
+                            icon = PersonaIcons.retry,
+                            loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy,
+                        )
+                        JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) },
+                            kind = JButtonKind.Secondary,
+                            size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise,
+                            loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
+                        JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
+                            kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
+                    }
+                    if (instead == null) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
+                    else FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
                 }
             })
             else -> JEmptyState(stringResource(R.string.chat_task_detail_starting), stringResource(R.string.chat_task_detail_starting_body), icon = PhIcons.GearSix)
         }
     }
-    if (menu && todo != null) JActionSheet(
-        listOf(JAction(stringResource(R.string.chat_task_detail_remove), PhIcons.Trash, destructive = true) {
-            host.tasks.removeTask(todo, host.onError); onDismiss()
-        }),
-        { menu = false }, title = todo.title,
-    )
+}
+
+/** A task the hub no longer lists (iOS TaskDetailSheet's empty state): the sheet's whole content, or the page's body. */
+@Composable
+private fun TaskGone() {
+    JEmptyState(stringResource(R.string.chat_task_detail_gone), stringResource(R.string.chat_task_detail_gone_body), icon = PhIcons.ListChecks)
+}
+
+/** "More" on a task nothing of it runs any more: the sheet's head and the page's bar, both opening [TaskRemoveSheet]. */
+@Composable
+private fun TaskMoreButton(onClick: () -> Unit) {
+    JIconButton(PhIcons.DotsThree, stringResource(R.string.chat_task_detail_more), onClick)
+}
+
+/** What a task's own line under its title says (iOS TaskDetailSheet): why nothing of it runs, else its state's word. */
+private fun taskStateLine(todo: Todo, state: TaskState): CoreText =
+    todo.orphanedLine.takeIf { state != TaskState.NeedsYou } ?: state.label
+
+/** Whether that line is the orphaned reason, which the detail says in the caution tone instead of the state's. */
+private fun taskStateLineCautions(todo: Todo, state: TaskState): Boolean =
+    state != TaskState.NeedsYou && todo.orphanedLine != null
+
+/** "Remove task", for a task nothing of it runs any more (iOS `TaskRemoveMenuItem`): the ⋯ menu of the sheet's head and of the page's bar. */
+@Composable
+private fun TaskRemoveSheet(todo: Todo, host: AssistantTaskHost, onDismiss: () -> Unit, onClose: () -> Unit) {
+    JActionSheet(listOf(JAction(stringResource(R.string.chat_task_detail_remove), PhIcons.Trash, destructive = true) {
+        host.tasks.removeTask(todo, host.onError)
+        onClose()
+        onDismiss()
+    }), onClose, title = todo.title)
 }
 
 /** An agent no task stands for, as a task's would show: it is an agent of its own, opened from the Agents page. */
@@ -166,34 +320,186 @@ private fun AgentDetailSheet(key: SessionKey, host: AssistantTaskHost, onDismiss
             JIconButton(PhIcons.X, stringResource(R.string.chat_task_detail_close), onDismiss)
         }
         Spacer(Modifier.height(Tokens.Space.l))
-        if (session != null) AgentSummary(session, host, routeTo = null, onDismiss = onDismiss)
-        else JEmptyState(stringResource(R.string.chat_task_detail_agent_gone), stringResource(R.string.chat_task_detail_agent_gone_body), icon = PhIcons.Robot)
+        AgentDetail(session, host, onDismiss)
     }
+}
+
+/** An agent's own detail as a page beside the chat (#9347): the sheet's content under a bar with Back. */
+@Composable
+private fun AgentDetailPage(key: SessionKey, host: AssistantTaskHost, onDismiss: () -> Unit) {
+    val session = host.sessions.firstOrNull { it.key == key }
+    JPage(
+        title = session?.displayTitle ?: stringResource(R.string.chat_task_detail_agent),
+        subtitle = stringResource(R.string.chat_task_detail_own_agent),
+        onBack = onDismiss,
+    ) { padding ->
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = pagePadding)
+                .padding(top = padding.calculateTopPadding() + Tokens.Space.l, bottom = padding.calculateBottomPadding() + Tokens.Space.xl),
+        ) { AgentDetail(session, host, onDismiss) }
+    }
+}
+
+/** One copy of an agent's own detail, for the sheet and for the page: where it runs and what it is on, or that it is gone. */
+@Composable
+private fun AgentDetail(session: Session?, host: AssistantTaskHost, onDismiss: () -> Unit) {
+    if (session != null) AgentSummary(session, host, routeTo = null, onDismiss = onDismiss)
+    else JEmptyState(stringResource(R.string.chat_task_detail_agent_gone), stringResource(R.string.chat_task_detail_agent_gone_body), icon = PhIcons.Robot)
 }
 
 /** Where the agent runs, what it is on now, and the ways on: its whole page, or a word to it from the conversation. */
 @Composable
-private fun AgentSummary(session: Session, host: AssistantTaskHost, routeTo: String?, onDismiss: () -> Unit) {
+private fun AgentSummary(
+    session: Session,
+    host: AssistantTaskHost,
+    routeTo: String?,
+    onDismiss: () -> Unit,
+    hasPrimaryAbove: Boolean = false,
+) {
     val now = when (session.agentState) {
         AgentState.NeedsYou -> session.askingLine(host.cards[session.key])?.text() ?: stringResource(R.string.chat_tasks_now_needs_you)
         else -> TaskNow.of(session, session.agentState == AgentState.Working)?.text ?: session.lastText?.takeIf(String::isNotBlank)
             ?: stringResource(R.string.chat_tasks_now_quiet)
     }
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-        JGroupItem(GroupPosition.Single) {
-            JRow(session.displayTitle.ifBlank { session.agentLabel },
-                subtitle = listOf(listOfNotNull(host.machineName(session.machineId), session.folderName.takeIf(String::isNotBlank), session.agentLabel)
-                    .joinToString(" · "), now).joinToString("\n"),
-                subtitleLines = 6, leading = { JStatusDot(session.agentState.designStatus) })
+    val metadata = agentMetadataLine(host.machineName(session.machineId), session.cwd, session.agentLabel)
+    val subagents = TaskNow.subagents(session)
+    val body: @Composable () -> Unit = {
+        Column(
+            Modifier.fillMaxWidth().testTag("task-detail-agent-summary"),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            ) {
+                JStatusDot(session.agentState.designStatus)
+                Text(
+                    session.displayTitle.ifBlank { session.agentLabel },
+                    Modifier.weight(1f),
+                    style = PersonaTheme.type.bodyStrong,
+                    color = PersonaTheme.palette.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (metadata.isNotEmpty()) {
+                Text(
+                    metadata,
+                    Modifier.padding(start = Tokens.Space.l).testTag("task-detail-agent-meta"),
+                    style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink3,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                summaryWords(now),
+                Modifier.padding(start = Tokens.Space.l).testTag("task-detail-agent-now"),
+                style = PersonaTheme.type.callout,
+                color = PersonaTheme.palette.ink2,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subagents.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.chat_tasks_subagents, subagents.joinToString(stringResource(R.string.chat_tasks_list_separator))),
+                    Modifier.padding(start = Tokens.Space.l),
+                    style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink3,
+                )
+            }
         }
-        val subagents = TaskNow.subagents(session)
-        if (subagents.isNotEmpty()) Text(stringResource(R.string.chat_tasks_subagents, subagents.joinToString(stringResource(R.string.chat_tasks_list_separator))),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
-        Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            JButton(stringResource(R.string.chat_task_detail_open_chat), { onDismiss(); host.onOpen(session.key) }, Modifier.weight(1f),
-                size = JButtonSize.Medium, icon = PhIcons.ChatCircle)
-            if (routeTo != null) JButton(stringResource(R.string.chat_tasks_say), { host.tasks.setRoute(host.conversation, routeTo); onDismiss() },
-                kind = JButtonKind.Secondary, size = JButtonSize.Medium, icon = PhIcons.PaperPlaneTilt)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+        if (hasPrimaryAbove) {
+            JDivider()
+            body()
+        } else {
+            JCard(Modifier.fillMaxWidth(), padding = Tokens.Space.l) { body() }
+        }
+        TaskDetailActionRow(
+            openKind = if (hasPrimaryAbove) JButtonKind.Secondary else JButtonKind.Primary,
+            equalWhenSideBySide = hasPrimaryAbove,
+            openChat = { modifier ->
+                JButton(
+                    stringResource(R.string.chat_task_detail_open_chat),
+                    { onDismiss(); host.onOpen(session.key) },
+                    modifier.testTag("task-detail-open-chat"),
+                    kind = if (hasPrimaryAbove) JButtonKind.Secondary else JButtonKind.Primary,
+                    size = JButtonSize.Medium,
+                    icon = PersonaIcons.message,
+                )
+            },
+            say = routeTo?.let { target ->
+                { modifier ->
+                    JButton(
+                        stringResource(R.string.chat_tasks_say),
+                        { host.tasks.setRoute(host.conversation, target); onDismiss() },
+                        modifier.testTag("task-detail-say"),
+                        kind = JButtonKind.Secondary,
+                        size = JButtonSize.Medium,
+                        icon = PersonaIcons.handToAI,
+                    )
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Places Open chat and Message side by side while both labels fit on one line, and stacks them full-width when
+ * narrow viewports or large text scales would otherwise truncate a label (DESIGN_SYSTEM.md 1.2 rule 3, 3.7).
+ */
+@Composable
+private fun TaskDetailActionRow(
+    openKind: JButtonKind,
+    equalWhenSideBySide: Boolean,
+    openChat: @Composable (Modifier) -> Unit,
+    say: (@Composable (Modifier) -> Unit)?,
+) {
+    if (say == null) {
+        openChat(Modifier.fillMaxWidth())
+        return
+    }
+    val gap = Tokens.Space.s
+    Layout(
+        content = {
+            openChat(Modifier.fillMaxWidth())
+            say(Modifier.fillMaxWidth())
+        },
+        modifier = Modifier.fillMaxWidth().testTag("task-detail-actions-${openKind.name.lowercase()}"),
+    ) { measurables, constraints ->
+        val maxW = constraints.maxWidth
+        val gapPx = gap.roundToPx()
+        val w1 = measurables[0].maxIntrinsicWidth(Constraints.Infinity)
+        val w2 = measurables[1].maxIntrinsicWidth(Constraints.Infinity)
+        val fitsRow = maxW != Constraints.Infinity && w1 + gapPx + w2 <= maxW
+        if (fitsRow) {
+            val half = ((maxW - gapPx) / 2).coerceAtLeast(0)
+            val (firstW, secondW) = when {
+                equalWhenSideBySide && w1 <= half && w2 <= half -> half to (maxW - gapPx - half)
+                equalWhenSideBySide -> {
+                    val extra = (maxW - gapPx - w1 - w2).coerceAtLeast(0)
+                    (w1 + extra / 2) to (maxW - gapPx - (w1 + extra / 2))
+                }
+                else -> (maxW - gapPx - w2).coerceAtLeast(w1) to w2
+            }
+            val first = measurables[0].measure(Constraints.fixedWidth(firstW))
+            val second = measurables[1].measure(Constraints.fixedWidth(secondW))
+            val h = maxOf(first.height, second.height)
+            layout(maxW, h) {
+                first.placeRelative(0, (h - first.height) / 2)
+                second.placeRelative(firstW + gapPx, (h - second.height) / 2)
+            }
+        } else {
+            val widthConstraint = if (maxW == Constraints.Infinity) Constraints() else Constraints.fixedWidth(maxW)
+            val first = measurables[0].measure(widthConstraint)
+            val second = measurables[1].measure(widthConstraint)
+            val w = if (maxW == Constraints.Infinity) maxOf(first.width, second.width) else maxW
+            layout(w, first.height + gapPx + second.height) {
+                first.placeRelative(0, 0)
+                second.placeRelative(0, first.height + gapPx)
+            }
         }
     }
 }
@@ -263,7 +569,7 @@ private fun boardSubtitle(todo: Todo, state: TaskState, host: AssistantTaskHost,
 
 /** An agent's row in "All" (iOS agentSubtitle): computer · folder · agent · its last words. */
 private fun agentSubtitle(session: Session, host: AssistantTaskHost): String =
-    listOfNotNull(host.machineName(session.machineId), session.folderName, session.agentLabel, session.lastText?.trim())
+    listOfNotNull(host.machineName(session.machineId), session.folderName, session.agentLabel, plainSummaryText(session.lastText))
         .filter(String::isNotBlank).joinToString(" · ")
 
 /** "Edit" (iOS PlanEditSheet): each task's title, computer, folder, model, permission and first message before it starts. */

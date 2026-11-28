@@ -41,7 +41,10 @@ def rows(stream, since, until):
     allowed = route_templates()
     for line in stream:
         try:
-            message = json.loads(line).get("MESSAGE", "")
+            entry = json.loads(line)
+            if not isinstance(entry, dict):
+                continue
+            message = entry.get("MESSAGE", "")
             if not isinstance(message, str) or "traffic minute=" not in message:
                 continue
             fields = shlex.split(message[message.index("traffic minute=") + len("traffic "):])
@@ -93,12 +96,13 @@ def connection_report(sessions, since, until, identity=None):
     for s in selected:
         start = timestamp(s["start"])
         end = timestamp(s["end"]) if s.get("end") else until
-        if start >= until or end <= since:
+        if start >= until or end < since:
             continue
         heartbeat = s.get("heartbeat_interval", 0)
         if not isinstance(heartbeat, int) or not 0 <= heartbeat <= 900:
             heartbeat = 0
-        heartbeats[str(heartbeat)] += 1
+        if end > since:
+            heartbeats[str(heartbeat)] += 1
         if since <= start < until:
             hours[iso(start.replace(minute=0, second=0, microsecond=0))]["opens"] += 1
             if s.get("end") and end < until:
@@ -110,12 +114,15 @@ def connection_report(sessions, since, until, identity=None):
                 reason = "unknown"
             h["closes"] += 1
             h["reasons"][reason] += 1
-        h = since.replace(minute=0, second=0, microsecond=0)
-        while h < until:
-            overlap = max(0, (min(end, until, h+dt.timedelta(hours=1))-max(start, since, h)).total_seconds())
-            if overlap:
-                hours[iso(h)]["connected_seconds"] += overlap
-            h += dt.timedelta(hours=1)
+        overlap_start, overlap_end = max(start, since), min(end, until)
+        if overlap_start >= overlap_end:
+            continue
+        hour = overlap_start.replace(minute=0, second=0, microsecond=0)
+        while hour < overlap_end:
+            next_hour = hour + dt.timedelta(hours=1)
+            overlap = min(overlap_end, next_hour) - max(overlap_start, hour)
+            hours[iso(hour)]["connected_seconds"] += overlap.total_seconds()
+            hour = next_hour
     return {"hourly": [dict(hour=h, **value) for h, value in sorted(hours.items())],
             "mean_completed_in_window_seconds": sum(durations)/len(durations) if durations else None,
             "completed_in_window_count": len(durations), "heartbeat_intervals": dict(heartbeats)}
@@ -133,7 +140,7 @@ def read_connections(args, since, until):
         container = matches[0]
     sql = """BEGIN READ ONLY; SET LOCAL statement_timeout='15s';
 SELECT coalesce(json_agg(json_build_object('identity',left(encode(sha256(convert_to('persona-traffic','UTF8')||decode('00','hex')||convert_to(device_id,'UTF8')),'hex'),16), 'start',connected_at,'end',disconnected_at,'reason',reason,'heartbeat_interval',heartbeat_interval)), '[]'::json)
-FROM device_sessions WHERE connected_at < '%s' AND (disconnected_at IS NULL OR disconnected_at > '%s'); COMMIT;""" % (iso(until), iso(since))
+FROM device_sessions WHERE connected_at < '%s' AND (disconnected_at IS NULL OR disconnected_at >= '%s'); COMMIT;""" % (iso(until), iso(since))
     cmd = ["docker", "exec", "-i", container, "sh", "-c", 'exec psql -X -U "${POSTGRES_USER:-persona}" -d "${POSTGRES_DB:-$POSTGRES_USER}" -At -v ON_ERROR_STOP=1']
     out = subprocess.run(cmd, input=sql, capture_output=True, text=True, timeout=30)
     if out.returncode:

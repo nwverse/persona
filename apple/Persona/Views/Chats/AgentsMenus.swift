@@ -34,42 +34,57 @@ struct AgentsListMenu: View {
     @Environment(AppModel.self) private var model
     var actions: Actions
 
-    /// Kept current by the list (`update`), read when an item is tapped.
-    @MainActor final class Actions {
-        private(set) var sections: [String] = []
-        private var foldAll: ([String]) -> Void = { _ in }
-        private var unfoldAll: () -> Void = {}
+    /// Kept current by the list (`update`), read when an item is tapped. Only `showingHidden` is observed: the menu's
+    /// reveal item names what a tap does next, and nothing else here redraws it (the menu stays out of each push's redraw).
+    @Observable @MainActor final class Actions {
+        @ObservationIgnored private(set) var sections: [String] = []
+        @ObservationIgnored private var foldAll: ([String]) -> Void = { _ in }
+        @ObservationIgnored private var unfoldAll: () -> Void = {}
         /// Not `openMonitor` / `openMachines`: a stored property's name is in the Release binary, and those are DEBUG
         /// launch arguments the release check looks for (TestFlight 50 stopped on one).
-        private var onMachines: () -> Void = {}
-        private var onTerminals: () -> Void = {}
+        @ObservationIgnored private var onMachines: () -> Void = {}
+        @ObservationIgnored private var onTerminals: () -> Void = {}
+        private(set) var showingHidden = false
+        @ObservationIgnored private var toggleHidden: () -> Void = {}
 
         /// `sections`: the fold ids of what the list shows now.
         func update(sections: [String], foldAll: @escaping ([String]) -> Void, unfoldAll: @escaping () -> Void,
-                    onMachines: @escaping () -> Void, onTerminals: @escaping () -> Void = {}) {
+                    onMachines: @escaping () -> Void, onTerminals: @escaping () -> Void = {},
+                    showingHidden: Bool = false, toggleHidden: @escaping () -> Void = {}) {
             self.sections = sections
             self.foldAll = foldAll
             self.unfoldAll = unfoldAll
             self.onMachines = onMachines
             self.onTerminals = onTerminals
+            if self.showingHidden != showingHidden { self.showingHidden = showingHidden }
+            self.toggleHidden = toggleHidden
         }
 
         func collapse() { foldAll(sections) }
         func expand() { unfoldAll() }
         func machinesPage() { onMachines() }
         func terminalsPage() { onTerminals() }
+        func toggleHiddenSessions() { toggleHidden() }
     }
 
     @StoredValue("dev.machineFilter") private var machineFilter = ""
-    @StoredValue(HubFilter.key) private var hubFilter = ""
+    @StoredValue(HubFilter.key) private var storedHubFilter = ""
+    /// The group the list shows when narrowed: the current hub's (`HubFilter.shown`, #11657).
+    private var hubFilter: String { HubFilter.shown(storedHubFilter, current: model.hub?.group) }
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     /// The grouping the list shows: a stored By To-do is By Project on a hub without todos (`DevGrouping.resolved`).
     private var shownGrouping: DevGrouping { DevGrouping.resolvedNow(grouping) }
     private var groupingChoice: Binding<DevGrouping> { Binding(get: { shownGrouping }, set: { grouping = $0 }) }
     @StoredValue("dev.sort") private var sort: AgentSort = .state
+    @StoredValue("dev.showEmptyWorkspaces") private var showEmptyWorkspaces = false
     #if os(iOS)
     /// The rows' style or Compact List (#2530), as Settings › Appearance › Layout sets it.
     private let display = AgentListDisplayChoice()
+    /// What the search reads (#7443): the field names it while it is not Full Text (`AgentsSearchField`).
+    @StoredValue(AgentSearchScope.key) private var searchScope: AgentSearchScope = .all
+    /// The Sidebar layout (#6332): its one field searches Persona's chats and the Agents and cannot name a scope, so
+    /// it searches Full Text and the menu does not offer Search In.
+    @Environment(\.unifiedSidebar) private var unified
     #else
     @StoredValue("dev.compact") private var compact = false
     #endif
@@ -112,6 +127,22 @@ struct AgentsListMenu: View {
             Picker("Display", selection: display.binding) {
                 ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
             }
+            if unified == nil {
+                // The web's Filter › Search in, its scopes in its order and words; Full Text is what an untouched app
+                // searches. A submenu of its own whose row names the choice under it: inline, six choices with no
+                // heading would read as the list's. The row's words are two Texts and an Image: a `Label` around them
+                // drops the second line.
+                Section {
+                    Picker(selection: $searchScope) {
+                        ForEach(AgentSearchScope.allCases) { s in Label(s.title, systemImage: s.symbol).tag(s) }
+                    } label: {
+                        Text("Search In [Agent Search Scope]")
+                        Text(searchScope.title)
+                        Theme.Icon.image(Theme.Icon.search)
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
             #else
             // The Mac and Apple Vision Pro keep their rows (#2530): cards or Compact List.
             Picker("Display", selection: $compact) {
@@ -130,14 +161,28 @@ struct AgentsListMenu: View {
                 }
             }
             if model.isMultiHub {
-                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only.
-                Picker("hub", selection: Binding(get: { hubFilter }, set: { hubFilter = $0; machineFilter = "" })) {
+                // Several groups of hubs (docs/protocol/multi-hub.md「What the user sees」): one group's agents only. That
+                // group is the current hub (#11657): picking it here makes it current, so Persona's sidebar, the Inbox and
+                // the hub's settings show it too; All Hubs leaves the current hub as it is.
+                Picker("hub", selection: Binding(get: { hubFilter }, set: { pick in
+                    storedHubFilter = pick
+                    machineFilter = ""
+                    if let g = HubFilter.group(pick) { model.selectHub(g) }
+                })) {
                     Label("All Hubs", systemImage: Theme.Icon.hubGroup).tag("")
                     ForEach(model.groupIDs, id: \.self) { g in
                         Label(model.groupName(g), systemImage: Theme.Icon.hubGroup).tag(HubFilter.value(g))
                     }
                 }
             }
+            if shownGrouping == .repo {
+                Toggle(isOn: $showEmptyWorkspaces) {
+                    Label("Show empty workspaces", systemImage: Theme.Icon.folder)
+                }
+            }
+            Button(actions.showingHidden ? String(localized: "Hide directory matches") : String(localized: "Show hidden sessions")) {
+                actions.toggleHiddenSessions()
+            }.lineLimit(1)
             Picker("Machines", selection: $machineFilter) {
                 Label("All Machines", systemImage: Theme.Icon.allMachines).tag("")
                 ForEach(machines.filter { m in HubFilter.matches(hubFilter, MachineRef(path: m.id).group) }) { m in
@@ -179,6 +224,23 @@ struct AgentsListMenu: View {
     }
 }
 
+#if os(iOS)
+/// The Sidebar layout's Agents heading's ⋯ (#10738): `AgentsListMenu` in a view graph of its own (`MenuIsland`). In the
+/// sidebar's list the list's updates reached the menu several times a second while agents worked, and SwiftUI handed its
+/// items to UIKit again each time: open and scrolled down, it jumped back to its top.
+struct SidebarAgentsListMenu: View, Equatable {
+    let actions: AgentsListMenu.Actions
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.actions === b.actions }
+
+    var body: some View {
+        AgentsListMenu(actions: actions)
+            .accessibilityIdentifier("sidebar-agents-menu")
+    }
+}
+#endif
+
+#if !os(iOS)
 /// A row's long-press menu in Agents. Equal while the facts it shows are: the row's session changes with every push
 /// while its agent works (a new last line), and the menu held open on it was rebuilt each time.
 struct AgentRowMenu: View, Equatable {
@@ -204,34 +266,8 @@ struct AgentRowMenu: View, Equatable {
     nonisolated var unread = false
     nonisolated var takeoverAvailable = false
     nonisolated var continueAvailable = false
-    nonisolated let actions: Actions
-
-    @MainActor final class Actions {
-        private var renameHandler: (Session) -> Void = { _ in }
-        private var closeHandler: (Session) -> Void = { _ in }
-        private var linkTodoHandler: (Session) -> Void = { _ in }
-        private var deleteHandler: (Session) -> Void = { _ in }
-        private var takeoverHandler: (Session) -> Void = { _ in }
-        private var continueHandler: (Session) -> Void = { _ in }
-
-        func update(rename: @escaping (Session) -> Void, close: @escaping (Session) -> Void, linkTodo: @escaping (Session) -> Void = { _ in },
-                    delete: @escaping (Session) -> Void = { _ in }, takeover: @escaping (Session) -> Void = { _ in },
-                    continueInNewSession: @escaping (Session) -> Void = { _ in }) {
-            renameHandler = rename
-            closeHandler = close
-            linkTodoHandler = linkTodo
-            deleteHandler = delete
-            takeoverHandler = takeover
-            continueHandler = continueInNewSession
-        }
-
-        func rename(_ s: Session) { renameHandler(s) }
-        func close(_ s: Session) { closeHandler(s) }
-        func linkTodo(_ s: Session) { linkTodoHandler(s) }
-        func delete(_ s: Session) { deleteHandler(s) }
-        func takeover(_ s: Session) { takeoverHandler(s) }
-        func continueInNewSession(_ s: Session) { continueHandler(s) }
-    }
+    /// The same handlers as iOS's `AgentActionMenu` (`ChatsView.rowActions`): the list's sheets and alerts.
+    nonisolated let actions: AgentMenuHandlers
 
     nonisolated static func == (a: Self, b: Self) -> Bool {
         a.key == b.key && a.pinned == b.pinned && a.muted == b.muted && a.looping == b.looping && a.live == b.live
@@ -247,10 +283,7 @@ struct AgentRowMenu: View, Equatable {
         #endif
         // The session as it is when an item is tapped (all of it: Hand to Persona sends its last line).
         let now = { model.latest(key) }
-        #if os(macOS)
-        MacOpenInWindowButton(key: key)
-        Divider()
-        #elseif os(visionOS)
+        #if os(visionOS)
         VisionOpenInWindowButton(key: key)
         Divider()
         #endif
@@ -264,13 +297,11 @@ struct AgentRowMenu: View, Equatable {
             Button { model.markSeen(key) } label: { Label("Mark as Seen", systemImage: Theme.Icon.view) }
         }
         #if os(iOS)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            if takeoverAvailable {
-                Button { if let s = now() { actions.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
-            }
-            if continueAvailable {
-                Button { if let s = now() { actions.continueInNewSession(s) } } label: { Label("Continue in a new session", systemImage: Theme.Icon.compose) }
-            }
+        if takeoverAvailable {
+            Button { if let s = now() { actions.takeover(s) } } label: { Label("Take over", systemImage: Theme.Icon.terminal) }
+        }
+        if continueAvailable {
+            Button { if let s = now() { actions.continueInNewSession(s) } } label: { Label("Continue in a new session", systemImage: Theme.Icon.compose) }
         }
         #endif
         if renamable {
@@ -347,16 +378,21 @@ struct AgentRowMenu: View, Equatable {
 extension AgentRowMenu {
     /// The menu of a row's agent, its long-press menu (on iOS the only way to it since the row's ⋯ went, #2530). With
     /// the rows' swipes gone there (#1244), Interrupt and Mark as Seen are here too.
-    @MainActor init(_ s: Session, model: AppModel, actions: Actions) {
+    @MainActor init(_ s: Session, model: AppModel, actions: AgentMenuHandlers) {
         self.init(key: s.key, pinned: model.isPinned(s.key), muted: model.isMuted(s), looping: s.loop != nil, live: s.state.isLive,
                   terminal: s.canTerminal, renamable: s.canRename, closable: s.canClose, attachable: s.canAttach, deletable: s.canDelete,
                   paneActions: NodeMenu.offersPaneActions(s),
-                  interruptible: (s.state == .working || s.state == .needsYou) && s.canInterrupt, unread: s.state == .unread,
+                  interruptible: (s.state == .working || s.state == .needsYou) && s.canInterrupt, unread: s.needsSeen(muted: model.isMuted(s)),
                   takeoverAvailable: s.isCodex && !s.canSend && s.capabilities?.takeover?.canResume == true,
                   continueAvailable: s.isCodex && !s.canSend && s.capabilities?.takeover != nil,
                   actions: actions)
     }
 }
+
+#else
+/// iOS aliases the shared definition used by the detail More menu too.
+typealias AgentRowMenu = AgentActionMenu
+#endif
 
 /// The ⋯ on a space's header in Agents: `SpaceMenuItems`, equal while what it offers is (the space, its unread agents,
 /// whether it can be renamed); the group's other fields change with every push.
@@ -370,9 +406,9 @@ struct SpaceHeaderMenu: View, Equatable {
     var open: () -> Void
     var linkTodo: (() -> Void)?
 
-    init(group: SpaceGroup, rename: @escaping () -> Void, open: @escaping () -> Void, linkTodo: (() -> Void)? = nil) {
+    init(group: SpaceGroup, isMuted: (Session) -> Bool, rename: @escaping () -> Void, open: @escaping () -> Void, linkTodo: (() -> Void)? = nil) {
         id = group.id + "|" + group.spaceID + "|" + group.name
-        unread = group.sessions.filter { $0.state == .unread }.map(\.key)
+        unread = group.sessions.filter { $0.needsSeen(muted: isMuted($0)) }.map(\.key)
         nodeActions = NodeMenu.offersSpaceActions(group)
         self.group = group
         self.rename = rename
@@ -391,9 +427,12 @@ struct SpaceHeaderMenu: View, Equatable {
 }
 
 /// The grouping, one tap away under the quick filters (#5766), in a cell without the search input. The same stored
-/// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes.
-struct AgentsGroupingMenu: View {
+/// choice as the ⋯ menu's (`dev.grouping`), kept across launches. Reads nothing that a hub push changes. Equal while
+/// it is drawn the same way: in the list it sits in a `MenuIsland` (#10738), as the list's updates replaced it while open.
+struct AgentsGroupingMenu: View, Equatable {
     var iconOnly = false
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.iconOnly == b.iconOnly }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StoredValue("dev.grouping") private var grouping: DevGrouping = .standard
     private var shown: DevGrouping { DevGrouping.resolvedNow(grouping) }
@@ -432,30 +471,60 @@ struct AgentsGroupingMenu: View {
     }
 }
 
-/// The personal agents page, one tap away beside the grouping (#140): on a phone the shell has no other way there (the
-/// iPad and Mac use the toolbar's button).
-struct AgentsPersonalPill: View {
+/// The personal agents page as one of the list's top-level groups (#140, #16769): on a phone the shell has no other way
+/// there (the iPad and Mac use the toolbar's button). Drawn as a computer's heading is (`HostHeading`): the mark in a
+/// tile, the name a level above the headers under it, how many there are, and a forward chevron, since it opens a page
+/// rather than folding. A lone capsule under the quick filters read as left over once the grouping joined the filter bar.
+struct AgentsPersonalHeading: View {
+    /// How many personal agent conversations there are; nil while unknown.
+    var count: Int?
     var open: () -> Void
+    @Environment(\.compactList) private var compact
 
     var body: some View {
         Button {
             Haptics.tap()
             open()
         } label: {
-            HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(Theme.Icon.personalAgents)
-                Text("Personal Agents")
-                ThemedIcon(Theme.Icon.forward).font(Theme.Font.label)
+            HStack(spacing: Theme.Space.sm) {
+                CountsHeading {
+                    ThemedIcon(Theme.Icon.personalAgents)
+                        .font(Theme.Font.secondaryStrong)
+                        .foregroundStyle(Color.primary)
+                        .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                        .background(Theme.Fill.chip, in: .rect(cornerRadius: Theme.Radius.badge))
+                    Text("Personal Agents")
+                        .font(compact ? Theme.Font.title : Theme.Font.heading)
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                } counts: {
+                    if let count {
+                        Text("\(count)")
+                            .font((compact ? CompactList.metaStrong : Theme.Font.labelHeavy).monospacedDigit())
+                            .foregroundStyle(Color.secondary)
+                            .contentTransition(.numericText(value: Double(count)))
+                    }
+                }
+                Spacer(minLength: Theme.Space.xs)
+                ThemedIcon(Theme.Icon.forward)
+                    .font(Theme.Font.labelHeavy)
+                    .foregroundStyle(.tertiary)
             }
-            .agentsPill()
+            // A finger's height, the room above its words, as a computer's heading (`FoldButton`).
+            .modifier(TouchHeight(alignment: .bottom))
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Personal Agents"))
+        .accessibilityValue(count.map { String(localized: "\($0) agents") } ?? "")
+        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("agents.personal")
     }
 }
 
 private extension View {
-    /// The look of the pills under the quick filters: the grouping and Personal Agents.
+    /// The look of the grouping's pill under the quick filters.
     func agentsPill() -> some View {
         font(Theme.Font.secondaryMedium)
             .lineLimit(1)
@@ -464,5 +533,30 @@ private extension View {
             .padding(.vertical, Theme.Space.s)
             .background(Capsule().fill(Theme.Fill.chip))
             .contentShape(Capsule())
+    }
+}
+
+extension AgentSearchScope {
+    /// The web's words for each (`lib-agent-filter.json`, `scope_*`), in Title Case as Apple menus write them.
+    var title: String {
+        switch self {
+        case .all: String(localized: "Full Text [Agent Search Scope]")
+        case .title: String(localized: "Title [Agent Search Scope]")
+        case .conversation: String(localized: "Without Tools [Agent Search Scope]")
+        case .user: String(localized: "User [Agent Search Scope]")
+        case .assistant: String(localized: "Assistant [Agent Search Scope]")
+        case .errors: String(localized: "Errors [Agent Search Scope]")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .all: Theme.Icon.search
+        case .title: Theme.Icon.sessionTitle
+        case .conversation: Theme.Icon.conversation
+        case .user: Theme.Icon.user
+        case .assistant: Theme.Icon.ai
+        case .errors: Theme.Icon.error
+        }
     }
 }

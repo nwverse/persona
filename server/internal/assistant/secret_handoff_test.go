@@ -42,7 +42,12 @@ type handoffSecretsFake struct {
 func (f *handoffSecretsFake) LauncherSecret(context.Context, string, string, string) (string, error) {
 	return "", nil
 }
+func (f *handoffSecretsFake) RefreshLauncherSecret(context.Context, string, string, string) error {
+	return nil
+}
 func (f *handoffSecretsFake) ForgetLauncherSecrets(string) {}
+func (f *handoffSecretsFake) RetainLauncherSecrets(context.Context, func(string, string, string) bool) {
+}
 func (f *handoffSecretsFake) SecretReference(context.Context, string) *extmgr.SecretReferenceView {
 	return nil
 }
@@ -374,6 +379,11 @@ func TestHandoffNotApprovedStartsNothing(t *testing.T) {
 			ix := r.card()
 			if c.answer != nil {
 				c.answer(r, ix)
+			} else {
+				// Unseen hand-off cards do not expire until viewed in the app.
+				if !r.s.markInteractionSeen(context.Background(), ix.ID) {
+					t.Fatal("markInteractionSeen returned false")
+				}
 			}
 			answer, errText := r.answer(done)
 			if errText != "" || !strings.Contains(answer, c.want) || !strings.Contains(answer, "No agent was started") {
@@ -441,6 +451,9 @@ func TestHandoffFailuresAfterTheApproval(t *testing.T) {
 	}
 	if r.stages != 0 || len(r.f.starts) != 0 {
 		t.Fatalf("staged %d, started %d", r.stages, len(r.f.starts))
+	}
+	if task := onlyTodo(r.s); task.DoneAt == nil || task.StartError == "" {
+		t.Fatalf("the pre-start failure left an open task without a start error: %+v", task)
 	}
 	r.leaks(answer)
 
@@ -571,7 +584,16 @@ func TestHandoffAMixedNoDeclines(t *testing.T) {
 			r := newHandoffRig(t)
 			done := r.start(handoffArgs)
 			ix := r.card()
-			if w := r.post(ix.ID, body, &assistantwire.HandoffApprover{DeviceID: "d1"}); w.Code != http.StatusOK {
+			approver := &assistantwire.HandoffApprover{DeviceID: "d1"}
+			if body == `{}` {
+				if w := r.post(ix.ID, body, nil); w.Code != http.StatusForbidden {
+					t.Fatalf("empty answer without a vouched-for approver: %d %s", w.Code, w.Body)
+				}
+				if w := r.post(ix.ID, `{"approve":true}`, approver); w.Code != http.StatusBadRequest {
+					t.Fatalf("plan answer on the hand-off: %d %s", w.Code, w.Body)
+				}
+			}
+			if w := r.post(ix.ID, body, approver); w.Code != http.StatusOK {
 				t.Fatalf("the answer: %d %s", w.Code, w.Body)
 			}
 			answer, errText := r.answer(done)

@@ -7,13 +7,14 @@ import { formatNumber, t } from "../../i18n";
 import { enc, errorText } from "../../lib/api";
 import { defaultManager, pinManagerAt } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import {
-  addMarket, agreeLabel, canUninstall, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, previewFromMarket,
+  addMarket, agreeLabel, canUninstall, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, newerIncompatibleHint, previewFromMarket,
   previewVersion, renameConsent, refreshMarket, removeMarket, setMarketToken, specLabel, uninstallExtension, upgradePreview, upgradingFrom, wantsGitHubToken,
   GITHUB_TOKEN_URL, isGitHubMarket, type Catalog, type CatalogItem, type Market, type MarketPreview,
 } from "../../lib/extension-market";
 import { extensionDetail, extensionUpgrades, listExtensions, pointText, setExtensionUpgrades, type ExtensionPermission } from "../../lib/extensions";
+import type { ScopedAssistantClient } from "../../lib/scoped-assistant-api";
 import { Button, cx, Dialog, EASE, IconButton, Loading, Spinner, toast, useNow } from "../../ui/atoms";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { ExtensionDownloads, packageDownloads } from "../../ui/ExtensionDownloads";
@@ -28,12 +29,15 @@ import { OperationSteps, useOperation } from "./ExtensionOperation";
 // A paragraph of body text in the market's pages and dialogs, as each writes it.
 const BODY = "text-[12.5px] leading-relaxed text-ink-2";
 
-function Back({ label, onBack, right }: { label: string; onBack: () => void; right?: React.ReactNode }) {
+/** `onBack`: none where the page's top bar has the way back (a phone, Settings.tsx). */
+function Back({ label, onBack, right }: { label: string; onBack?: () => void; right?: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-        {label}
-      </Button>
+      {onBack && (
+        <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
+          {label}
+        </Button>
+      )}
       <span className="flex-1" />
       {right}
     </div>
@@ -68,8 +72,28 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 // ── the catalog ─────────────────────────────────────────
 
 const askKey = (q: string, market: string) => `${market}\n${q}`;
+const MARKET_SETTINGS = ["/extensions/-/markets", "/plugins/-/markets", "/extensions/-/upgrades", "/plugins/-/upgrades"];
 
-export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => void; onOpen: (it: CatalogItem) => void; onMarkets: () => void }) {
+export function MarketCatalog({
+  manager,
+  onBack,
+  backLabel,
+  onOpen,
+  onMarkets,
+  onManageMarkets,
+}: {
+  manager?: string;
+  onBack?: () => void;
+  /** Back button label when opened outside legacy Extensions (for example Settings › Integrations). */
+  backLabel?: string;
+  onOpen: (it: CatalogItem) => void;
+  /** Callback to open the Markets management page (legacy Extensions.tsx prop). */
+  onMarkets?: () => void;
+  /** Optional callback to open the Markets management page from the catalog header's top-right action. */
+  onManageMarkets?: () => void;
+}) {
+  useLayoutEffect(() => pinManagerAt(MARKET_SETTINGS, manager), [manager]);
+  const manageMarkets = onManageMarkets ?? onMarkets;
   const [q, setQ] = useState("");
   const [market, setMarket] = useState("");
   const [data, setData] = useState<Catalog | null>(null);
@@ -84,7 +108,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
     const n = ++seq.current;
     const asked = askKey(q, market);
     setLoading(true);
-    getCatalog(q, market, refresh)
+    getCatalog(q, market, refresh, manager)
       .then((c) => n === seq.current && (setData(c), setAnswered(asked), setError("")))
       .catch((e) => n === seq.current && setError(errorText(e)))
       .finally(() => n === seq.current && setLoading(false));
@@ -94,7 +118,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
     const timer = setTimeout(() => load(), q ? 250 : 0);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, market]);
+  }, [q, market, manager]);
 
   const markets = data?.markets ?? [];
   const updating = !error && (loading || (data !== null && answered !== askKey(q, market)));
@@ -105,14 +129,16 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
   return (
     <>
       <Back
-        label={t("settings-extensionmarket.extensions")}
+        label={backLabel ?? t("settings-extensionmarket.extensions")}
         onBack={onBack}
         right={
           <>
             <IconButton icon="retry" label={t("settings-extensionmarket.reload_all")} onClick={() => load(true)} disabled={loading} />
-            <Button tone="secondary" icon="gear" onClick={onMarkets}>
-              {t("settings-extensionmarket.manage_markets")}
-            </Button>
+            {manageMarkets && (
+              <Button tone="secondary" icon="gear" testId="market-manage-markets" onClick={manageMarkets}>
+                {t("settings-extensionmarket.manage_markets")}
+              </Button>
+            )}
           </>
         }
       />
@@ -164,8 +190,8 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
               <Icon name="info" size={13} className="mt-0.5 shrink-0" />
               {t("settings-extensionmarket.official_unreachable")}
             </p>
-            {wantsGitHubToken(m) && (
-              <button type="button" onClick={onMarkets} className="mt-1 block max-w-full truncate pr-1 pl-[25px] text-[11.5px] text-ink-3 underline underline-offset-2 hover:text-ink-2">
+            {wantsGitHubToken(m) && manageMarkets && (
+              <button type="button" onClick={manageMarkets} className="mt-1 block max-w-full truncate pr-1 pl-[25px] text-[11.5px] text-ink-3 underline underline-offset-2 hover:text-ink-2">
                 {t("settings-extensionmarket.official_token_link")}
               </button>
             )}
@@ -201,9 +227,11 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
             </span>
             <p className="text-[13px] font-medium text-ink">{t("settings-extensionmarket.no_markets")}</p>
             <p className="max-w-[420px] text-[12px] leading-relaxed text-ink-3">{t("settings-extensionmarket.no_markets_body")}</p>
-            <Button tone="primary" icon="plus" onClick={onMarkets}>
-              {t("settings-extensionmarket.add_market")}
-            </Button>
+            {manageMarkets && (
+              <Button tone="primary" icon="plus" onClick={manageMarkets}>
+                {t("settings-extensionmarket.add_market")}
+              </Button>
+            )}
           </div>
         )}
         {data && !error && !updating && markets.length > 0 && data.extensions.length === 0 && (
@@ -211,6 +239,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
         )}
         {!error && data?.extensions.map((it, i) => {
           const st = itemState(it);
+          const incompatible = newerIncompatibleHint(it);
           return (
             <button
               key={`${it.market}/${it.id}`}
@@ -234,6 +263,20 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
                     <Pill key={tag}>{tag}</Pill>
                   ))}
                 </div>
+                {incompatible && (
+                  <div
+                    data-incompatible-hint
+                    title={incompatible.reason || undefined}
+                    className="mt-1.5 flex min-w-0 items-center gap-1.5 text-submeta text-orange"
+                  >
+                    <Icon name="info" size={12} className="shrink-0" />
+                    <span className="truncate">
+                      {incompatible.reason
+                        ? t("settings-extensionmarket.newer_incompatible_inline", { version: incompatible.version, reason: incompatible.reason })
+                        : t("settings-extensionmarket.newer_incompatible_title", { version: incompatible.version })}
+                    </span>
+                  </div>
+                )}
               </div>
               <span className="flex shrink-0 flex-col items-end gap-1">
                 <Pill tone={STATE_TONE[st.tone]}>{st.label}</Pill>
@@ -264,7 +307,7 @@ export function MarketCatalog({ onBack, onOpen, onMarkets }: { onBack: () => voi
 /** `manager`: whose copy it is for (an upgrade from another manager's extension page, docs/assistant/managers.md "Clients"): its
  *  catalog, preview, consent and operation are that manager's, named on each request, and the page says so; none: the
  *  default's. */
-export function MarketItem({ market, id, manager, onBack, onInstalled }: { market: string; id: string; manager?: string; onBack: () => void; onInstalled: (id: string) => void }) {
+export function MarketItem({ market, id, manager, onBack, onInstalled }: { market: string; id: string; manager?: string; onBack?: () => void; onInstalled: (id: string) => void }) {
   // what goes to the extension itself (its details, its upgrade, uninstalling it) names the manager while this is open
   const managerName = useRoster()?.managers.find((m) => m.id === manager)?.name ?? manager;
   const [it, setIt] = useState<CatalogItem | null>(null);
@@ -338,13 +381,9 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
   // What a request about the operation got back: one the manager no longer has is let go (lib), and the page says so.
   const opFailed = (e: unknown) => (opGone(e) ? toast(t("settings-extensionmarket.op_gone"), "info") : toast(errorText(e), "error"));
   const st = it ? itemState(it) : null;
+  const incompatible = it ? newerIncompatibleHint(it) : null;
   const contributes = Object.entries(it?.contributes ?? {});
-  let home = "";
-  try {
-    home = it?.homepage && new URL(it.homepage).protocol === "https:" ? it.homepage : "";
-  } catch {
-    home = "";
-  }
+  const home = safeWebURL(it?.homepage, true) ?? "";
 
   return (
     <>
@@ -359,7 +398,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
           {loading && !it && <Spinner />}
           {st && <Pill tone={STATE_TONE[st.tone]}>{st.label}</Pill>}
         </div>
-        {(it?.description || it?.tags?.length || it?.problem || error || managerName) && (
+        {(it?.description || it?.tags?.length || it?.problem || incompatible || error || managerName) && (
           <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
             {it?.description && <p className={BODY}>{it.description}</p>}
             {!!it?.tags?.length && (
@@ -370,6 +409,23 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
               </div>
             )}
             {it?.problem && <p className="text-[12px] text-orange">{it.problem}</p>}
+            {incompatible && (
+              <div
+                role="note"
+                data-incompatible-notice
+                className="flex items-start gap-2 rounded-control bg-orange-tint px-3 py-2 text-label leading-relaxed"
+              >
+                <Icon name="info" size={14} className="mt-0.5 shrink-0 text-orange" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-orange">
+                    {t("settings-extensionmarket.newer_incompatible_title", { version: incompatible.version })}
+                  </p>
+                  {incompatible.reason && (
+                    <p className="mt-0.5 break-words text-ink-2">{incompatible.reason}</p>
+                  )}
+                </div>
+              </div>
+            )}
             {managerName && <p className="text-[12px] text-ink-2" data-for-manager>{t("settings-extensionmarket.for_manager", { name: managerName })}</p>}
             {error && <p className="text-[12px] break-words text-red">{error}</p>}
           </div>
@@ -642,10 +698,12 @@ export function PackMemberRow({ member, name, mono }: { member: PackMember; name
 }
 
 /** Uninstalling an extension a market installed; its data can stay for a later install. */
-export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { id: string; name: string; version?: string; pack?: PackMember[]; onClose: () => void; onDone: () => void }) {
+export function UninstallDialog({ id, name, version, pack, client, onClose, onDone }: {
+  id: string; name: string; version?: string; pack?: PackMember[]; client?: ScopedAssistantClient; onClose: () => void; onDone: () => void;
+}) {
   const [members, setMembers] = useState(false);
   const [packMembers, setPackMembers] = useState(pack);
-  useEffect(() => { if (!pack) void extensionDetail(id).then((d) => setPackMembers(d.extension_pack), () => {}); }, [id, pack]);
+  useEffect(() => { if (!pack) void extensionDetail(id, undefined, client).then((d) => setPackMembers(d.extension_pack), () => {}); }, [id, pack, client]);
   // A pack's members by the names they're installed under (#4072); one not installed keeps its id.
   const names = useInstalledNames(!!packMembers?.length);
   const named = (ids: string[]) => ids.map((m) => names[m] || m).join(t("settings-extensionmarket.list_separator"));
@@ -663,7 +721,7 @@ export function UninstallDialog({ id, name, version, pack, onClose, onDone }: { 
     setError("");
     setPartial(null);
     try {
-      const result = await uninstallExtension(id, keep, cascade, members);
+      const result = await uninstallExtension(id, keep, cascade, members, client);
       if (result.warnings?.length) setWarnings(result.warnings);
       else {
         toast(t("settings-extensionmarket.uninstalled", { name }), "ok");
@@ -756,7 +814,8 @@ function RemovalNote({ count }: { count: number | null }) {
   );
 }
 
-export function Markets({ onBack }: { onBack: () => void }) {
+export function Markets({ onBack, manager }: { onBack?: () => void; manager?: string }) {
+  useLayoutEffect(() => pinManagerAt(MARKET_SETTINGS, manager), [manager]);
   const [list, setList] = useState<Market[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -773,8 +832,7 @@ export function Markets({ onBack }: { onBack: () => void }) {
     setConfirm(m.id);
     setAffected(null);
     const settle = (count: number | null) => asking.current === m.id && setAffected({ market: m.id, count });
-    // the markets here are the default manager's (no manager header), so are the extensions counted
-    listExtensions().then((l) => settle(upgradingFrom(m.id, l, defaultManager())), () => settle(null));
+    listExtensions().then((l) => settle(upgradingFrom(m.id, l, manager ?? defaultManager())), () => settle(null));
   };
   const stopAsking = () => ((asking.current = ""), setConfirm(""));
   const affectedBy = (id: string) => (affected?.market === id ? affected.count : null);
@@ -1135,4 +1193,3 @@ function permissionIcon(key: string) {
       return "info";
   }
 }
-

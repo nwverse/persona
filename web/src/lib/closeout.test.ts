@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { closeoutClaim, closeoutContradicted, closeoutLine, closeoutSuffix, shownCloseout, stripCloseout } from "./closeout";
+import { closeoutClaim, closeoutContradicted, closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
+import { stripCloseout } from "./closeout-text";
 import { sessionPreview } from "./format";
 import { orphanedLine } from "./todos";
 import type { Closeout, Session } from "./types";
@@ -46,8 +48,8 @@ describe("closeoutSuffix", () => {
     expect(closeoutSuffix(done())).toBe("");
   });
   it("marks a claim the hub found untrue", () => {
-    expect(closeoutSuffix(done({ merged: "yes", deployed: "no", checked: { merged: "no" } }))).toBe("✗ 说已合并，实际没有 · 未部署");
-    expect(closeoutSuffix(done({ merged: "yes", deployed: "yes", checked: { merged: "yes", deployed: "no" } }))).toBe("已合并 ✓ · ✗ 说已部署，实际没有");
+    expect(closeoutSuffix(done({ merged: "yes", deployed: "no", checked: { merged: "no" } }))).toBe("✗ 报告已合并，实际未合并 · 未部署");
+    expect(closeoutSuffix(done({ merged: "yes", deployed: "yes", checked: { merged: "yes", deployed: "no" } }))).toBe("已合并 ✓ · ✗ 报告已部署，实际未部署");
     // it said no and the hub found yes: the finding
     expect(closeoutSuffix(done({ merged: "no", checked: { merged: "yes" } }))).toBe("已合并 ✓");
   });
@@ -61,11 +63,11 @@ describe("sessionPreview with a closeout", () => {
   });
   it("speaks from the closeout when the hub gave no line, never the raw block", () => {
     const raw = '<closeout status="done" merged="yes">\ndid: x\n</closeout>';
-    expect(sessionPreview(session({ last_text: raw, work: { phase: "", closeout: done({ merged: "yes", checked: { merged: "no" } }) } }))).toBe("自述已完成 · ✗ 说已合并，实际没有");
-    expect(closeoutLine({ status: "blocked", waiting: "DBA 批准" })).toBe("卡在：DBA 批准");
-    expect(closeoutLine({ status: "blocked" })).toBe("卡住了");
-    expect(closeoutLine({ status: "not_done", missing: "分词库" })).toBe("没做完：分词库");
-    expect(closeoutLine({ status: "not_done" })).toBe("没做完");
+    expect(sessionPreview(session({ last_text: raw, work: { phase: "", closeout: done({ merged: "yes", checked: { merged: "no" } }) } }))).toBe("已报告完成 · ✗ 报告已合并，实际未合并");
+    expect(closeoutLine({ status: "blocked", waiting: "DBA 批准" })).toBe("阻塞于：DBA 批准");
+    expect(closeoutLine({ status: "blocked" })).toBe("已阻塞");
+    expect(closeoutLine({ status: "not_done", missing: "分词库" })).toBe("未完成：分词库");
+    expect(closeoutLine({ status: "not_done" })).toBe("未完成");
   });
   it("leaves a working session and what is more urgent alone", () => {
     const closeout = done({ merged: "yes" });
@@ -75,6 +77,16 @@ describe("sessionPreview with a closeout", () => {
 });
 
 describe("stripCloseout", () => {
+  const fixture = JSON.parse(readFileSync(new URL("../../../spec/fixtures/work-reports/terminal.json", import.meta.url), "utf8")) as {
+    cases: { name: string; text: string; display: string }[];
+  };
+  it.each(fixture.cases)("shows the same reply above the card: $name", ({ text, display }) => {
+    expect(stripCloseout(text)).toBe(display);
+  });
+  it("keeps a report from an incomplete reply visible", () => {
+    const done = fixture.cases.find((c) => c.name === "done")!;
+    expect(stripCloseout(done.text, false)).toBe(done.text);
+  });
   const block = '<closeout status="done" merged="yes" deployed="n/a">\ndid: 改了导出\nverified: untested\n</closeout>';
   it("takes out exactly the block", () => {
     expect(stripCloseout(`修好了。\n\n${block}`)).toBe("修好了。");
@@ -102,10 +114,10 @@ describe("stripCloseout", () => {
 
 describe("orphanedLine", () => {
   it("says nobody is working on an open to-do, and why", () => {
-    expect(orphanedLine({ orphaned: { reason: "error", since: "2026-11-10T00:00:00Z" } })).toEqual({ lead: "没人在做", reason: "出错后关闭" });
+    expect(orphanedLine({ orphaned: { reason: "error", since: "2026-11-10T00:00:00Z" } })).toEqual({ lead: "当前无人处理", reason: "出错后关闭" });
     expect(orphanedLine({ orphaned: { reason: "closed" } })?.reason).toBe("已关闭");
     expect(orphanedLine({ orphaned: { reason: "offline" } })?.reason).toBe("电脑离线");
-    expect(orphanedLine({ orphaned: { reason: "moved" } })).toEqual({ lead: "没人在做", reason: "" });
+    expect(orphanedLine({ orphaned: { reason: "moved" } })).toEqual({ lead: "当前无人处理", reason: "" });
   });
   it("is nothing for a done to-do or one the hub did not flag", () => {
     expect(orphanedLine({ orphaned: { reason: "error" }, done_at: "2026-11-10T00:00:00Z" })).toBeUndefined();

@@ -14,7 +14,7 @@ import persona.core.contracts.api.ManagerRoster
 import persona.core.domain.inbox.InboxInteraction
 import persona.core.domain.inbox.InboxItem
 import persona.core.domain.sort.AgentPreferences
-import persona.feature.inbox.InboxRecord
+import persona.core.inbox.InboxRecord
 
 /**
  * The shell's counts (Root.kt through [ShellCounts], docs/assistant/managers.md "Clients"): beside the pages only the
@@ -22,6 +22,22 @@ import persona.feature.inbox.InboxRecord
  * button when another assistant than the current one has something waiting.
  */
 class ShellCountsTest {
+    @Test fun foldedChildrenCountOnceEvenBeforeTheParentPageHasLoaded() {
+        val parent = Session("box", "p", state = "idle", children = persona.core.contracts.SessionChildren(2, needsYou = 2))
+        val child = Session("box", "child", state = "needs_you", foldedUnder = "p")
+        val cards = listOf(Interaction("first", "box", "child", foldedUnder = "p"),
+            Interaction("second", "box", "other", foldedUnder = "p"))
+        for (rows in listOf(listOf(parent, child), listOf(child), emptyList())) {
+            val counts = ShellCounts(on(null), rows, AgentPreferences())
+            assertEquals(1, counts.agentsWaiting(cards))
+            assertEquals(1, counts.waiting(roster, cards)["assistant"])
+        }
+        val muted = ShellCounts(on(null), listOf(parent, child), AgentPreferences(sessions = listOf("box/p")))
+        assertEquals(0, muted.agentsWaiting(cards))
+        assertFalse("assistant" in muted.waiting(roster, cards))
+        assertEquals("child", cards.first().sessionId)
+    }
+
     private val roster = ManagerRoster(listOf(
         HubManager("assistant", "助手", online = true, isDefault = true, builtin = true),
         HubManager("m-2", "工作", online = true, inboxNeedsYou = 2),

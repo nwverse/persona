@@ -2,6 +2,7 @@ package kb
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -68,7 +69,9 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 		} else {
 			_, _, err := e.Store.updatePerson(p.ID, true, nil, func(p *Person) bool {
 				kept := slices.DeleteFunc(slices.Clone(p.Chats), func(id string) bool { return slices.Contains(out.Chats, id) })
-				if len(kept) == len(p.Chats) {
+				removed := len(p.Excluded["chats"])
+				taggingInclude(&p.Tagging, "chats", out.Chats...) // the chats the user had removed go with them
+				if len(kept) == len(p.Chats) && len(p.Excluded["chats"]) == removed {
 					return false
 				}
 				p.Chats = kept
@@ -84,7 +87,9 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 			continue
 		}
 		kept := slices.DeleteFunc(slices.Clone(c.People), func(id string) bool { return slices.Contains(out.People, id) })
-		if len(kept) != len(c.People) {
+		removed := len(c.Excluded["people"])
+		taggingInclude(&c.Tagging, "people", out.People...)
+		if len(kept) != len(c.People) || len(c.Excluded["people"]) != removed {
 			c.People = kept
 			if err := e.Store.putEntity(KindChat, c.ID, c, &c.Tagging, true); err != nil {
 				return out, err
@@ -117,6 +122,9 @@ func (e *Engine) ForgetSource(source string, archiveSources ...string) (Forgotte
 		p.Chats = slices.DeleteFunc(slices.Clone(p.Chats), func(id string) bool { return slices.Contains(out.Chats, id) })
 		p.People = slices.DeleteFunc(slices.Clone(p.People), func(id string) bool { return slices.Contains(out.People, id) })
 		p.Items = slices.DeleteFunc(slices.Clone(p.Items), func(id string) bool { return itemKeys[id] })
+		taggingInclude(&p.Tagging, "chats", out.Chats...)
+		taggingInclude(&p.Tagging, "people", out.People...)
+		taggingInclude(&p.Tagging, "items", slices.Collect(maps.Keys(itemKeys))...)
 		p.Moments = slices.DeleteFunc(slices.Clone(p.Moments), goneMoment)
 		if m := p.Merge; m != nil {
 			m.Chats = slices.DeleteFunc(m.Chats, func(id string) bool { return slices.Contains(out.Chats, id) })

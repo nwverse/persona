@@ -3,7 +3,7 @@
 // The width reaches the column as a CSS variable this sets on it, so a drag moves only the column and the page beside
 // it: the shell, the sidebar's rows and the page are not rendered again on each pointer move.
 import { useEffect, useLayoutEffect, useState } from "react";
-import { CHAT_MIN, PANEL_MIN, resetSidebarWidth, setSidebarWidth, SIDEBAR_MIN, sidebarWidth, useSidebarWidth } from "../lib/layout";
+import { CHAT_MIN, PANEL_GAP, PANEL_MIN, resetSidebarWidth, setSidebarWidth, SIDEBAR_MIN, sidebarWidth, useSidebarWidth } from "../lib/layout";
 import { usePanel } from "../lib/panel";
 import { t } from "../i18n";
 import { ResizeHandle } from "../ui/ResizeHandle";
@@ -25,7 +25,8 @@ export function SidebarResize({ column }: { column: string }) {
     addEventListener("resize", resized);
     return () => removeEventListener("resize", resized);
   }, []);
-  const room = windowWidth - CHAT_MIN - (panel ? PANEL_MIN : 0);
+  // Reserve the outer right inset (PANEL_GAP), plus the inter-card gap and minimum width when a side panel is open.
+  const room = windowWidth - CHAT_MIN - PANEL_GAP - (panel ? PANEL_MIN + PANEL_GAP : 0);
   const shown = sidebarWidth(want, room);
   const draw = (w: number) => document.getElementById(column)?.style.setProperty(SIDEBAR_VAR, `${w}px`);
   // before paint, so the column never shows another width first; only when it changes, so another render in the middle
@@ -45,7 +46,7 @@ export function SidebarResize({ column }: { column: string }) {
       label={t("sidebar.resize_label")}
       title={t("sidebar.resize_title")}
       controls={column}
-      className="hidden lg:block"
+      className="hidden lg:flex"
     />
   );
 }

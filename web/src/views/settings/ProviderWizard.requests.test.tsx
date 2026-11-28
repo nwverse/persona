@@ -145,7 +145,7 @@ describe("provider discovery ownership", () => {
   it("does not save A's deferred models into B after closing and reopening (#1314)", async () => {
     await draw(a);
     click("settings-providerwizard.discover");
-    expect(pending[0]!.body).toEqual({ name: "provider-a", base_url: "https://a.example.com", auth: "bearer", api: "messages" });
+    expect(pending[0]!.body).toEqual({ name: "provider-a", base_url: "https://a.example.com", auth: "bearer", api: "messages", agent: "claude" });
     click("common.cancel");
     await draw(b);
     await settle(pending[0]!, "success");
@@ -247,9 +247,7 @@ describe("provider discovery ownership", () => {
       click("settings-providerwizard.direct_api");
       if (field === "protocol") act(() => [...document.querySelectorAll("button")].find((el) => el.textContent === "OpenAI Responses")!.click());
     } else {
-      click("settings-providerwizard.next");
-      click("settings-providerwizard.advanced");
-      const headers = document.querySelector<HTMLTextAreaElement>("textarea")!;
+      const headers = document.querySelector<HTMLTextAreaElement>('textarea[placeholder^="X-Name"]')!;
       type(headers, "X-Example: changed");
     }
     const expectedURL = field === "endpoint" ? "https://b.example.com" : "https://a.example.com";
@@ -257,8 +255,8 @@ describe("provider discovery ownership", () => {
     if (field !== "headers") {
       expect(input('input[inputmode="url"]').value).toBe(expectedURL);
       expect(input('input[type="password"]').value).toBe(field === "key" ? "example-key-b" : "example-key-a");
-      click("settings-providerwizard.next");
     }
+    click("settings-providerwizard.next");
     expect(document.querySelector('[data-model="a-only-model"]')).toBeNull();
     await addModel("manual-model");
     click("common.save");
@@ -376,7 +374,9 @@ describe("the Connect step's own check (#4881)", () => {
     click("settings-providerwizard.test");
     expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/test"]);
     click("settings-providerwizard.next");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(t("lib-launcher-presets.name_invalid"));
+    // said under the startup ID, which takes the focus (audit item 19)
+    expect(document.getElementById(nameInput().getAttribute("aria-describedby")!)?.textContent).toBe(t("lib-launcher-presets.name_invalid"));
+    expect(document.activeElement).toBe(nameInput());
     expect(urlInput().value).toBe("https://a.example.com");
     // a check started by hand is the check: nothing more is sent by itself
     await advance(AUTO * 3);
@@ -571,7 +571,9 @@ describe("the Connect step's own check (#4881)", () => {
     type(keyInput(), "example-key-a");
     type(urlInput(), "https://api.exa");
     click("settings-providerwizard.next");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(t("lib-launcher-presets.name_invalid"));
+    // said under the startup ID, which takes the focus (audit item 19)
+    expect(document.getElementById(nameInput().getAttribute("aria-describedby")!)?.textContent).toBe(t("lib-launcher-presets.name_invalid"));
+    expect(document.activeElement).toBe(nameInput());
     await advance(AUTO * 3);
     expect(pending).toHaveLength(0);
   });
@@ -657,4 +659,3 @@ describe("the Connect step's own check (#4881)", () => {
     expect(pending.map((r) => r.path)).toEqual(["/api/v1/launchers/discover"]);
   });
 });
-

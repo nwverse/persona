@@ -40,36 +40,60 @@ func (s *Service) modelPurpose(ctx context.Context, id string, providers []Model
 		return p, err
 	}
 	p.InheritedFrom = inheritedLabel(s.requestCtxLang(ctx), p, base, from, providers)
+	if isExtensionPurpose(p.ID) && !readOnly {
+		p.Candidates = s.purposeCandidates(ctx, p.ID, r.Candidates, p.Effective)
+	}
 	if p.Kind == "api" {
 		p.MachineID = s.settings(ctx).MachineID // where a launcher picked for it runs (models_run.go)
 	}
 	stored := s.storedLaunchers(ctx)
+	var roomHere []ConfiguredLauncher // the assistant's computer's launchers as last seen: what each runs there
+	if p.ID == purposeMeetingRoom {
+		roomHere = s.roomLaunchers(ctx, p.MachineID, "", false)
+	}
 	p.Fields = []string{"provider", "model"}
 	p.ProviderIDs = []string{}
 	for _, v := range providers {
-		if s.modelProviderCompatible(p, v, stored) {
+		offered := s.modelProviderCompatible(p, v, stored)
+		if p.ID == purposeMeetingRoom { // Claude Code only, as the assistant's computer runs it (models_room.go)
+			here, ok := onRoomMachine(v, stored, roomHere)
+			offered = ok && s.modelProviderCompatible(p, here, stored)
+		}
+		if offered {
 			p.ProviderIDs = append(p.ProviderIDs, v.ID)
 		}
 		if v.ID == p.Effective.Provider {
 			if p.Effective.Model == "" {
 				p.Effective.Model = v.Model
 			}
-			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "") {
+			if p.Kind == "api" && (v.API == "responses" || v.API == "messages" || v.API == "chat" || v.API == "") {
 				p.Fields = append(p.Fields, "effort")
 			}
 		}
 	}
-	if p.Kind == "launcher" {
-		p.Fields = append(p.Fields, "effort")
+	if p.Candidates != nil {
+		for _, provider := range s.candidateProviders(ctx, p.Effective.Provider) {
+			id := "launcher." + provider.Name
+			if slices.Contains(p.ProviderIDs, id) {
+				p.Candidates.DirectProviderIDs = append(p.Candidates.DirectProviderIDs, id)
+			}
+		}
 	}
-	if len(p.Runtimes) > 0 {
-		p.Fields = append(p.Fields, "runtime")
+	if p.Kind == "launcher" {
+		p.Fields = append(p.Fields, "effort", "permission_mode")
+	}
+	if len(p.ConfigDirs) > 0 {
+		p.Fields = append(p.Fields, "config_dir")
 	}
 	l := s.requestCtxLang(ctx)
 	p.Status = modelUnverified
-	if scope := s.purposeScopeStatus(ctx, l, p.Effective.Provider, p.MachineID); p.Kind == "launcher" && scope != "" {
+	if room := roomNotClaudeStatus(l, p, providers, stored, roomHere); room != "" {
+		p.Status = room // it follows a main chat on Codex, say: no room starts until a Claude Code launcher is picked here
+	} else if scope := s.purposeScopeStatus(ctx, l, p.Effective.Provider, p.MachineID); p.Kind == "launcher" && scope != "" {
 		p.Status = scope // the provider is out of the main chat's computer's scope: why it does not run there
-	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) {
+	} else if !slices.Contains(p.ProviderIDs, p.Effective.Provider) && !s.mainChatOffers(ctx, p) {
+		// The provider list leaves out a runtime's launchers: one the main chat's picker offers on its computer is not
+		// incompatible (#11772); one gone from that computer, or one there that can't run the assistant, still is.
 		p.Status = mc(l, "status_provider_incompatible")
 		if p.Kind == "api" && strings.HasPrefix(p.Effective.Provider, "legacy.") && s.legacyModelConfig(ctx, p.Effective.Provider).BaseURL == "" {
 			p.Status = mc(l, s.noAPIStatus(ctx))
@@ -145,6 +169,7 @@ func (s *Service) modelConfigRoutes() {
 			}
 			purposes = append(purposes, p)
 		}
+		s.addModelUsage(ctx, purposes)
 		apierr.WriteJSON(w, map[string]any{"purposes": purposes, "providers": providers})
 	})
 	detail := func(w http.ResponseWriter, r *http.Request) {
@@ -198,14 +223,25 @@ func (s *Service) modelConfigRoutes() {
 			apierr.Write(w, 409, errModelConflict)
 			return
 		}
-		if in.Runtime != nil && string(in.Runtime) != "null" && len(p.Runtimes) == 0 {
-			apierr.Write(w, 400, i18n.Err("assistant-models.err_runtime_assistant_only"))
+		if in.ConfigDir != nil && string(in.ConfigDir) != "null" && len(p.ConfigDirs) == 0 {
+			apierr.Write(w, 400, i18n.Err("assistant-models.err_config_dir_assistant_only"))
+			return
+		}
+		if in.PermissionMode != nil && string(in.PermissionMode) != "null" && p.Kind != "launcher" {
+			apierr.Write(w, 400, i18n.Err("assistant-models.err_permission_mode_launcher_only"))
 			return
 		}
 		b, err := patchModel(p.Override, in)
 		if err != nil {
 			apierr.Write(w, 400, err)
 			return
+		}
+		var candidates *candidateSetting
+		if in.Candidates != nil {
+			if candidates, err = s.patchCandidates(ctx, p, in.Candidates); err != nil {
+				apierr.Write(w, 400, err)
+				return
+			}
 		}
 		if p.Kind == "launcher" { // passed to an agent as --model: a model id (#1644)
 			if err := checkModelID(b.Model); err != nil {
@@ -232,7 +268,7 @@ func (s *Service) modelConfigRoutes() {
 				apierr.Write(w, 400, e)
 				return
 			}
-			if !messagesAPI(config.API) && config.API != "responses" {
+			if !messagesAPI(config.API) && config.API != "responses" && config.API != "chat" {
 				apierr.Write(w, 400, i18n.Err("assistant-models.err_api_effort"))
 				return
 			}
@@ -243,7 +279,7 @@ func (s *Service) modelConfigRoutes() {
 				return
 			}
 		}
-		if err = s.saveModelRecord(ctx, id, p.Revision, b); err != nil {
+		if err = s.writeModelRecord(ctx, id, p.Revision, b, candidates, in.Candidates != nil); err != nil {
 			status := 500
 			if errors.Is(err, errModelConflict) {
 				status = 409

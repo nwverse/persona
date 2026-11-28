@@ -24,14 +24,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/cliport"
+
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/agents"
+	"github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/remoteimage"
 	"github.com/nwverse/persona/server/internal/secretkey"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 	"github.com/nwverse/persona/server/internal/update"
@@ -51,6 +57,10 @@ type Devices interface {
 
 // Options are how the manager reaches what it needs.
 type Options struct {
+	// Modules is the run-time module switch the manager started with (the `modules` settings row, read before New,
+	// assistant.ReadModuleSwitch): a module it switches off gets nothing from its provider port, exactly as in a build
+	// without it (moduleswitch). The zero value has every module on.
+	Modules moduleswitch.Set
 	// Dir is the data directory (~/.persona): hub.json, extensions/ in it, and secret.key unless SecretKey says.
 	Dir string
 	// SecretKey is the manager's own key file (the built-in manager's in its directory, managerconf.OwnFile); "":
@@ -84,6 +94,8 @@ type Options struct {
 	// TranscriptionChanged invalidates the assistant's availability cache after an extension registry change.
 	// It must not block or call back into the registry; nil means no observer.
 	TranscriptionChanged func()
+	// TracksChanged invalidates the headless track registry after extension contributions change.
+	TracksChanged func()
 	// DialRelay opens the hub's relay channel with query.
 	DialRelay func(ctx context.Context, query string) (*websocket.Conn, error)
 	// Connected says whether the bus is up now (nil: always), and Connection which connection it is: a comparable
@@ -93,6 +105,9 @@ type Options struct {
 	// Ask shows a card on the phones and waits for its answer, in the assistant's interaction queue (its askHub);
 	// ctx ending withdraws the card. nil: the hub is asked (tests).
 	Ask func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error)
+	// AskPrepared retains an assistant-owned mutation through clarification. It is separate from Ask so runtime-owned
+	// coding-Agent permission cards cannot accidentally acquire a second execution path.
+	AskPrepared func(context.Context, proto.Interaction, approval.Operation) (approval.Outcome, error)
 	// AssistantMachine is where the assistant's conversations run ("" while not known).
 	AssistantMachine func() string
 	// AssistantTools are the assistant's tools now (a connector's tool may not shadow one).
@@ -102,6 +117,9 @@ type Options struct {
 	// Lang and Timezone are the user's language and zone ("" when not known).
 	Lang     func() i18n.Lang
 	Timezone func() string
+	// Pages draws the assistant's pages (Dashboards, #15017) under the reserved extension id PagesExtension
+	// (pages_hook.go); nil: there are none (only the default manager has them).
+	Pages Pages
 }
 
 // Manager is the extensions, connectors and bots as the manager runs them.
@@ -112,6 +130,8 @@ type Manager struct {
 	inboxReads sourceReads
 	// errReports: the error reports' pipeline (error_reports.go).
 	errReports errorReports
+	// browserBackends: pluggable BrowserBackend registry for extension browser.machines / browser.run (#12866).
+	browserBackends browserRegistry
 	// iphoneTurns: one iphone_do at a time per iPhone, across conversations (iphone.go, iphoneTurn).
 	iphoneTurns sync.Map
 	// serving: the requests the hub relayed to the extensions being served now, a WebSocket (a voice call, an
@@ -130,6 +150,8 @@ type Manager struct {
 
 	mail               Mail
 	connectors         *connector.Registry
+	larkCLIRefreshMu   sync.Mutex
+	larkCLIRecovery    larkCLIRecovery
 	imessageSettingsMu imessageContextLock
 	imessageArchive    imessageArchiveFence
 	imessageAIPending  atomic.Bool
@@ -139,6 +161,7 @@ type Manager struct {
 	connectorsOff map[string]bool
 	migrated      sync.Map
 	media         mediaCache
+	avatars       *remoteimage.Fetcher // the avatars route's (avatars.go)
 	recalls       recallLocks
 	extensions    *extensions
 	hostCLIMu     sync.Mutex
@@ -148,12 +171,17 @@ type Manager struct {
 	uiPages       pageSessions
 	uiDelivery    pageDelivery
 	agents        *agents.Service
-	bots          botHub
-	channels      channelsHub
-	chans         struct{ in inbound }
-	inbox         inboxSources
-	larkDefault   larkDefault
-	admin         struct {
+	// orcaBots are the Orca bots found on the computers (orcabots.go, #16891), each an Agents → Bots source.
+	orcaBots orcaBotDiscovery
+	bots     botHub
+	channels channelsHub
+	chans    struct{ in inbound }
+	// clarificationProofs are one-time owner-question attestations issued after
+	// a fresh channel action, never reusable approval capabilities.
+	clarificationProofs clarificationProofBook
+	inbox               inboxSources
+	larkDefault         larkDefault
+	admin               struct {
 		extensions extensionGate
 		now        func() time.Time // the admin UI's clock (tests move it)
 	}
@@ -171,11 +199,17 @@ type Manager struct {
 	isMemberNow atomic.Bool
 	hello       atomic.Pointer[assistantwire.Hello]
 
+	// cuaSessions is what is known of the Cua Driver session labels the computer tools call under (computer_session.go).
+	cuaSessions cuaSessionBook
+
 	started chan struct{} // closed once Run started everything
 
 	reportMu            sync.Mutex
 	reportSent          []byte
 	reportBotIdentities []extwire.BotIdentity
+	// reservedLogged are the "<extension> <feature>" pairs whose reserved module feature was dropped and logged once
+	// (extension_api.go).
+	reservedLogged sync.Map
 
 	// ruleStore keeps the user's per-chat rules (chat_rules.go): the manager's setting connector_chat_rules, made in New.
 	// It is set before Run, which reads it as the gate starts (startConnectorGate): assigned later it would race with that
@@ -209,6 +243,12 @@ func New(opts Options) *Manager {
 	if cfg.dir == "" {
 		cfg.dir = opts.Dir
 	}
+	if cfg.Lark.CLI != nil && !cliport.Available(opts.Modules) { // built in but switched off: as a build without it
+		opts.Logf("extensions: lark.cli is not read: the lark module is switched off in the modules setting")
+		c := *cfg
+		c.Lark.CLI = nil
+		cfg = &c
+	}
 	h := &Manager{opts: opts, cfg: cfg, version: opts.Build.Version, build: opts.Build, store: opts.Store,
 		logger: log.New(logWriter(opts.Logf), "", 0)}
 	h.secret = secretkey.NewWithFallback(h.secretKeyPath()) // and the old keys while a rotation keeps them
@@ -217,6 +257,7 @@ func New(opts Options) *Manager {
 	h.started = make(chan struct{})
 	h.extTokens.dropped = h.tellHubDropped
 	h.droppedWait = time.Second
+	h.avatars = newAvatars(cfg.dir, h.avatarDoH, opts.Logf)
 	return h
 }
 
@@ -308,13 +349,36 @@ func (h *Manager) broadcast(message any) {
 	}
 }
 
-// approve asks the user on the phone to allow a sensitive call (the hub's card).
-func (h *Manager) approve(ctx context.Context, by asker, tool, summary string, input json.RawMessage) bool {
+// approveOutcome asks the user on the phone to allow a sensitive call (the hub's card), and says how the card ended
+// (proto.Resolution.Outcome): a refusal is the user's own decline only when it is proto.OutcomeDeclined; otherwise
+// nobody answered it (notApproved).
+func (h *Manager) approveOutcome(ctx context.Context, by asker, tool, summary string, input json.RawMessage) (bool, string) {
 	r, _ := h.approveCard(ctx, by, tool, summary, input)
-	return r.Allow != nil && *r.Allow
+	return r.Allow != nil && *r.Allow, r.Outcome()
 }
 
-// approveCard is approve for a caller that keeps a record of the answer: it gives the answer itself and the id of the
+// declinedText is what a call the user declined on the phone answers.
+const declinedText = "The user declined this on the phone. Do not retry it unless they ask."
+
+// notApproved is what a call whose card did not let it go answers (outcome: how the card ended): the user's decline
+// only when they declined it themselves on a device; otherwise nobody answered it (it expired, was withdrawn or
+// cleared, someone else answered it), and the model is told the user did not decline it.
+func notApproved(outcome string) proto.ToolResult {
+	if outcome == proto.OutcomeDeclined {
+		return proto.TextResult(declinedText, true)
+	}
+	return proto.TextResult(prompts.RenderOutboundUnanswered(prompts.OutboundUnanswered{Outcome: outcome, Nothing: "nothing was done"}), true)
+}
+
+// refusalWord is how the log says a card ended that did not let a call go: "declined" only for the user's own decline.
+func refusalWord(outcome string) string {
+	if outcome == proto.OutcomeDeclined {
+		return "declined on the phone"
+	}
+	return "not answered on the phone (" + outcome + ")"
+}
+
+// approveCard is approveOutcome for a caller that keeps a record of the answer: it gives the answer itself and the id of the
 // card that asked.
 func (h *Manager) approveCard(ctx context.Context, by asker, tool, summary string, input json.RawMessage) (proto.Resolution, string) {
 	ix := proto.Interaction{
@@ -331,7 +395,61 @@ func (h *Manager) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if h.opts.Ask == nil {
 		return proto.Resolution{}, errAssistantOffline
 	}
-	return h.opts.Ask(ctx, ix)
+	r, err := h.opts.Ask(ctx, ix)
+	if r.Allow != nil && *r.Allow && !r.UserAllowed() && !proto.MaintenanceAllowed(ix, r, time.Now()) {
+		r.Allow = nil
+	}
+	if proto.InternalMaintenanceApproval(ix) && r.Remembered {
+		r.Allow = nil // forced reruns require a fresh decision, not a remembered grant
+	}
+	if err != nil || ctx.Err() != nil || !time.Now().Before(ix.ExpiresAt) || r.Late || r.Cancel || r.Dismiss {
+		r.Allow = nil
+	}
+	return r, err
+}
+
+func (h *Manager) waitPrepared(ctx context.Context, ix proto.Interaction, op approval.Operation) (approval.Outcome, error) {
+	if proto.InternalMaintenanceApproval(ix) {
+		if op.Apply == nil {
+			return approval.Outcome{}, fmt.Errorf("%w: maintenance operation has no apply callback", approval.ErrNotApplied)
+		}
+		r, err := h.waitInteraction(ctx, ix)
+		if err != nil {
+			return approval.Outcome{}, fmt.Errorf("%w: %w", approval.ErrNotApplied, err)
+		}
+		if ctx.Err() == nil && time.Now().Before(ix.ExpiresAt) && (r.UserAllowed() || proto.MaintenanceAllowed(ix, r, time.Now())) {
+			text, err := op.Apply(ctx, r)
+			return approval.Outcome{Text: text}, err
+		}
+		return approval.Outcome{Text: op.Unanswered}, nil
+	}
+	if h.opts.AskPrepared != nil {
+		return h.opts.AskPrepared(ctx, ix, op)
+	}
+	if h.opts.Ask == nil {
+		return approval.Outcome{}, fmt.Errorf("%w: %w", approval.ErrNotApplied, errAssistantOffline)
+	}
+	// Embedders that predate AskPrepared keep their original one-shot approval
+	// behavior. The production assistant supplies AskPrepared for clarification.
+	r, err := h.opts.Ask(ctx, ix)
+	if err != nil {
+		// The legacy wait never entered Apply. Keep the original error while making
+		// that definite outcome distinguishable from an uncertain Apply failure.
+		return approval.Outcome{}, fmt.Errorf("%w: %w", approval.ErrNotApplied, err)
+	}
+	switch {
+	case r.UserAllowed():
+		text, err := op.Apply(ctx, r)
+		return approval.Outcome{Text: text}, err
+	case r.UserDenied():
+		text := op.Denied
+		if text == "" {
+			text = "The user declined the change: nothing changed."
+		}
+		return approval.Outcome{Text: text}, nil
+	default:
+		return approval.Outcome{Text: op.Unanswered}, nil
+	}
 }
 
 // callAssistant asks the assistant in this process (Options.Assistant).
@@ -398,4 +516,21 @@ func (h *Manager) secretKeyPath() string {
 		return h.opts.SecretKey
 	}
 	return filepath.Join(h.cfg.dir, secretKeyFile)
+}
+
+// modules is the run-time module switch the manager started with (Options.Modules); a nil manager (a test's) has every
+// module on.
+func (h *Manager) modules() moduleswitch.Set {
+	if h == nil {
+		return moduleswitch.Set{}
+	}
+	return h.opts.Modules
+}
+
+// modules is the manager's switch the extensions were made with, every module on without one.
+func (ps *extensions) modules() moduleswitch.Set {
+	if ps == nil {
+		return moduleswitch.Set{}
+	}
+	return ps.moduleSwitch
 }

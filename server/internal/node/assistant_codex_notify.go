@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -86,6 +87,13 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		} `json:"error"`
 		WillRetry bool            `json:"willRetry"`
 		RequestID json.RawMessage `json:"requestId"`
+		// TokenUsage: thread/tokenUsage/updated, a request's usage and the model's window (#10278).
+		TokenUsage struct {
+			Last struct {
+				InputTokens int64 `json:"inputTokens"`
+			} `json:"last"`
+			ModelContextWindow int64 `json:"modelContextWindow"`
+		} `json:"tokenUsage"`
 	}
 	if json.Unmarshal(params, &ev) != nil {
 		return
@@ -108,8 +116,16 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		n.notifyCodex()
 	case "turn/started":
 		c.mu.Lock()
-		c.turnID = ev.Turn.ID
+		ended := ev.Turn.ID != "" && c.endedTurnID == ev.Turn.ID
+		if !ended {
+			c.turnID = ev.Turn.ID
+			c.loop = codexCompactionLoop{}
+		}
 		c.mu.Unlock()
+		if ended {
+			return // a duplicate notification after turn/completed cannot make the same turn active again
+		}
+		n.ttft.armIfUnarmed(p.id, time.Now(), ev.Turn.ID)
 		p.mu.Lock()
 		had := p.partial.Len() > 0
 		p.partial.Reset()
@@ -148,6 +164,9 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 			n.emitDelta(p.id, "")
 		}
 	case "item/agentMessage/delta":
+		if ev.Delta != "" {
+			n.ttft.firstToken(p.id, time.Now(), ev.TurnID)
+		}
 		p.mu.Lock()
 		p.partial.WriteString(ev.Delta)
 		text := n.partialGrewLocked(p)
@@ -156,6 +175,12 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 		if text != "" {
 			n.emitDelta(p.id, text)
 		}
+	case "item/reasoning/textDelta", "item/reasoning/summaryTextDelta":
+		if ev.Delta != "" {
+			n.ttft.firstToken(p.id, time.Now(), ev.TurnID)
+		}
+	case "thread/tokenUsage/updated":
+		c.noteRequest(ev.TokenUsage.Last.InputTokens, ev.TokenUsage.ModelContextWindow, c.turnModel())
 	case "thread/compacted":
 		c.compacted()
 	case "item/completed":
@@ -172,7 +197,11 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 			n.refresh(p.id, f)
 		}
 	case "turn/completed":
+		n.ttft.clearPending(p.id)
 		c.mu.Lock()
+		if ev.Turn.ID != "" {
+			c.endedTurnID = ev.Turn.ID
+		}
 		if c.turnID == ev.Turn.ID {
 			c.turnID = ""
 		}
@@ -187,16 +216,29 @@ func (c *codexConn) notification(method string, params json.RawMessage) {
 				failure = transcript.CodexTurnFailed
 			}
 		}
+		if stop, model := c.endTurnLoop(); stop != "" {
+			// The loop's interrupt (assistant_codex_compaction_loop.go): the user's to act on, never a "Continue".
+			if failure == "" {
+				failure, failureKind, modelServiceFailure = stop, proto.TurnErrorUser, false
+			}
+			n.leaveLoopingFallback(p.id, model)
+		}
 		if failure != "" {
 			n.logger.Printf("assistant codex %s: turn %s: %s", short(p.id), ev.Turn.Status, failure)
 		}
 		failureKinds := []string{failureKind}
 		if modelServiceFailure {
 			failureKinds = append(failureKinds, assistantModelServiceFailure)
+			if failureKind != proto.TurnErrorUser && failureKind != proto.TurnErrorUsageLimit {
+				failureKind = proto.TurnErrorTransient
+			}
 		}
 		recovering := n.recoverAssistantResult(p, failure != "", failure, failureKinds...)
 		if !recovering {
 			n.clearAssistantRecovery(p, failure == "")
+			if failure != "" {
+				n.handleModelRouteFailure(p, failure)
+			}
 		}
 		p.mu.Lock()
 		if !recovering {

@@ -68,8 +68,9 @@ one, is more specific).
   items, `total` all of them, `current` is the first `in_progress` item's `activeForm` (else its subject) on one line,
   clipped to 120 characters. With no item in progress `current` is empty: the next pending item is not what the agent
   is doing. A list whose items are all done stays as "N/N" until the next one; an empty list is no plan. `at` moves only
-  when done, total or current change. Subagents' calls (sidechain lines) and Codex rollouts are left out (Codex's
-  `update_plan` may follow later).
+  when done, total or current change. Subagents' sidechain calls are excluded. Codex rollout parsing also accepts a native `plan_update` event or a
+  successful `update_plan` response. It emits the same todo snapshot and coalesces the two records when they describe
+  the same revision.
 - **node**: a `TodoWrite` is often far back in a long turn, so the plan is read by the same `bgScan` as the goal. Its
   markers are the call lines (`"name":"TodoWrite"`, `"TaskCreate"`, `"TaskUpdate"`, `"TaskList"`); a result line does
   not name its tool, so the scan also parses lines holding the id of a call still waiting for its result
@@ -84,6 +85,66 @@ one, is more specific).
   `supervision.progress` stands; an agent row (sidebar, Agents page) has the same line while the agent works or items
   are left. iOS and Android follow separately.
 - Not persisted: it is read from the transcript on each scan, and after a node restart by the first full scan.
+
+## A goal set at the start
+
+A new Claude Code session can begin with a goal of its own: `session.start` carries `goal`, a one-line condition the
+node types as `/goal <condition>` right **after** the first message is in the transcript, while the agent works
+([protocol.md](../protocol/protocol.md), "A goal set at the start"). Claude Code runs `/goal` at once even mid-turn. It
+goes after the task, and on its own, because `/goal` answers `Goal set: …` and then starts a turn toward its condition:
+typed first, the agent would begin from the criteria alone, without the task (checked 2026-11-15 with Claude Code
+2.1.325 through a relay launcher: with `/goal` first the agent acted on the condition before the task arrived; with the
+task first and `/goal` mid-turn, the goal was set at once, the agent did the task, and the Stop hook found it met). The
+node confirms `Goal set:` on the screen with a bounded wait; a refusal (an untrusted workspace, restricted hooks, a
+policy not read yet, an empty or too-long condition, a CLI without `/goal`) or no answer never stops the work, and a
+first message that never reaches the transcript gets no goal.
+
+The assistant attaches such a goal when the task's `done_when` gives it something checkable, rendered as one sentence
+(`prompts/assistant/task_goal.md`), and either a start-defaults rule asks for one (`goal: "done_when"`,
+[assistant.md](../assistant/assistant.md) "Start defaults") or the Agent is Codex and no rule decides the goal: a new
+Codex task Agent whose task has acceptance criteria gets them as its goal by default, since Codex has no Stop hook to
+keep it going. The first fitting rule that names `goal` decides it, so a rule with `goal: "off"` turns that default off
+for the tasks it matches even after an earlier rule that is silent on the goal. The default is not sent to a start that
+cannot take it (an engine runtime, an app launcher), and a refused default is only logged. Claude Code gets a start
+goal only from a rule. Tasks without criteria start without one, and only brand-new Claude Code and Codex sessions
+take one. Its transcript lines, `goal_status` attachment, `Session.goal` and the goal bar are the ordinary goal's
+below; nothing else about goals changes.
+
+### Codex
+
+A brand-new Codex start (`codex_start.go`, the terminal route) takes a goal the same way: the start passes the task as
+Codex's first message, waits until the rollout has it, and then the node types Codex's own `/goal <objective>` into the
+Codex terminal (`node/codex_start_goal.go`). Before typing, it checks the Codex screen as a send does (no draft in the
+box, no approval or question open) and holds the session's typing lock until the command is in, so a message sent
+right after the start comes behind it. Codex takes `/goal` at once, also mid-turn, and records it in the rollout:
+
+```json
+{"type":"event_msg","payload":{"type":"thread_goal_updated","threadId":"<thread>","goal":{"threadId":"<thread>","objective":"<objective>","status":"active","tokensUsed":0,"timeUsedSeconds":0,"createdAt":1795002728,"updatedAt":1795002728}}}
+```
+
+The node confirms the goal from that line with a bounded wait, not from the screen: the thread is new, so a goal updated
+after `/goal` went in is this one. Its objective is usually the typed text; a long one (the cap is 2000 characters) goes
+in as a paste, and Codex may keep it as a paste placeholder or a file reference instead, which the node logs. Only short
+objectives were checked by hand. When a turn ends with the goal still active, Codex starts the next one itself
+(`task_started` with `turn_attribution.turn_trigger: "goal"`). Checked 2026-11-18 with Codex 0.169 in a herdr pane:
+`/goal` typed while the first turn ran was recorded within a second, and a goal turn followed the first turn without a
+new message. Only a Codex whose rollout names version 0.169 or later gets the command (`goals` is stable and on by
+default there). A resumed Codex thread takes no start goal: it would replace the thread's own.
+
+When the command cannot set the goal — an older Codex, a screen not ready for it, a clean refusal that typed nothing,
+or a goal the rollout never confirms — the node delivers the same condition as an ordinary message instead
+(`codexTextGoal`): the goal's text on its own, after the task's first message, under the same screen checks and typing
+lock a send uses, confirmed by reading the rollout's `item_completed` / `UserMessage` lines back (a message at or after
+the send, also inside Codex's own wrapper). The task's own first message never counts, even when it has the same words
+as the goal. It is a delivery fallback, not a native goal: no `thread_goal_updated` is invented, and `Session.goal` only
+ever shows a goal Codex itself recorded. Before the text is typed the pane is checked to still hold this session (an
+engine switch leaves the goal with the old thread), and the rollout itself is read once more for a native goal, so a
+confirmation the background scan has not caught up with still suppresses the fallback; a goal that starts with `/` is
+left alone, since Codex would run it as a command. There is no text fallback when the `/goal` command may still sit in the
+input box (the two would go as one message), when the thread's rollout is unknown, or on a screenless host — those
+stay log-only, and a fallback that cannot be delivered or read back is logged too. No outcome ever fails the start.
+The confirmation recheck and the text send are not atomic: a native goal recorded in the small gap between them leaves
+both the goal and the same condition as a message, never two commands, which does not change what the Agent is asked.
 
 ## Screenshots
 

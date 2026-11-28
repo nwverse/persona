@@ -302,6 +302,22 @@ class InboxAssistantTransportTest {
         }
     }
 
+    @Test fun conversationProvenanceIsExplicitAndTypedCreationOmitsIt() = runBlocking {
+        MockWebServer().use { server ->
+            val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())
+            for (via in listOf("share", "intent", "card")) {
+                server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"mac","session_id":"c"}}"""))
+                transport.createConversationOf(null, true, null, via)
+                val request = server.takeRequest()
+                assertEquals("/api/v1/assistant/conversations", request.requestUrl?.encodedPath)
+                assertEquals("""{"prompt":"","main":true,"via":"$via"}""", request.body.readUtf8())
+            }
+            server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"mac","session_id":"c"}}"""))
+            transport.createConversationOf(null, true, null, null)
+            assertEquals("""{"prompt":"","main":true}""", server.takeRequest().body.readUtf8())
+        }
+    }
+
     @Test fun aConversationOnALauncherNamesItInThePost() = runBlocking {
         MockWebServer().use { server ->
             val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", OkHttpClient())
@@ -312,8 +328,27 @@ class InboxAssistantTransportTest {
             assertEquals("/api/v1/assistant/conversations", launched.path)
             assertEquals("""{"prompt":"","main":false,"launcher":"cc_x"}""", launched.body.readUtf8())
             server.enqueue(MockResponse().setBody("{\"session\":{\"machine_id\":\"mac\",\"session_id\":\"d\"}}"))
-            transport.createConversation(true)
+            val createdMain = transport.createConversation(true)
+            assertEquals("d", createdMain["session"]?.jsonObject?.get("session_id")?.jsonPrimitive?.content)
             assertEquals("""{"prompt":"","main":true}""", server.takeRequest().body.readUtf8())
+        }
+    }
+
+    @Test fun createConversationExtendsReadTimeoutBeyondBaseClient() = runBlocking {
+        assertTrue(HttpInboxAssistantTransport.CREATE_CONVERSATION_TIMEOUT_SECONDS >= 45L)
+        MockWebServer().use { server ->
+            val shortClient = OkHttpClient.Builder().readTimeout(150, java.util.concurrent.TimeUnit.MILLISECONDS).build()
+            val transport = HttpInboxAssistantTransport("scope", server.url("/").toString(), "test-token", shortClient)
+            server.enqueue(
+                MockResponse()
+                    .setHeadersDelay(350, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .setBody("""{"session":{"machine_id":"mac","session_id":"main-slow"}}"""),
+            )
+            val created = transport.createConversationOf(null, true, persona.core.contracts.ModelPick("gemini", "gemini-2.5-flash"))
+            assertEquals("main-slow", created["session"]?.jsonObject?.get("session_id")?.jsonPrimitive?.content)
+            val post = server.takeRequest()
+            assertEquals("POST", post.method)
+            assertEquals("/api/v1/assistant/conversations", post.requestUrl?.encodedPath)
         }
     }
 }

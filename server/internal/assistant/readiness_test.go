@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -177,6 +178,77 @@ func TestReadinessClaudeUnanswered(t *testing.T) {
 	}
 }
 
+// The node found Claude Code when it connected, and a later self-check finds none: Claude Code updating itself through
+// npm removes and relinks its package, and a check caught then must not block the main conversation. A start refused
+// because claude is missing still says so.
+func TestReadinessClaudeMissingWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	f.doctor["server"] = "读不到 claude 的版本"
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepUnknown || cl.Code == proto.CodeClaudeMissing || r.Mode != ReadinessFull {
+		t.Fatalf("claude = %+v (%s)", cl, r.Mode)
+	}
+	data, _ := json.Marshal(map[string]string{"delivered": "none", "launcher": "claude"})
+	f.mu.Lock()
+	f.failAssistant = &rpc.Error{Code: proto.CodeClaudeMissing, Message: "zsh:1: command not found: claude", Data: data}
+	f.mu.Unlock()
+	if status, _ := serveJSON(t, s, "POST", "/api/v1/assistant/conversations", "", `{"prompt":"你好","main":true}`); status != 409 {
+		t.Fatalf("start: %d", status)
+	}
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("after a refused start: %+v", cl)
+	}
+}
+
+// A launcher health check caught in the same self-update records "command not found: claude" once: the node's
+// self-check decides, so Send stays on. A second miss in a row stands.
+func TestReadinessClaudeHealthMissWhileUpdating(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	record := LauncherHealth{Machine: "server", Launcher: "claude", State: healthFailing, Kind: classifyLauncherError("zsh:1: command not found: claude"),
+		Error: "zsh:1: command not found: claude", CheckedAt: time.Now(), Source: healthSourceCheck, Fails: 1, MissingFails: 1}
+	s.health.loaded = true
+	s.health.recs = map[string]*LauncherHealth{healthKey("server", "claude"): &record}
+	r := getReadiness(t, s, "", "")
+	if cl := readinessStep(t, r, StepClaude); cl.State != StepOK || r.Mode != ReadinessFull {
+		t.Fatalf("one miss: claude = %+v (%s)", cl, r.Mode)
+	}
+	record.Fails, record.MissingFails = 2, 2
+	if cl := readinessStep(t, getReadiness(t, s, "", ""), StepClaude); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
+// An earlier failure of another kind is not a miss (#7670 review): after an auth failure, the first "command not found:
+// claude" of a self-update still defers to the self-check; a second miss in a row stands, and anything else in between
+// starts the count again.
+func TestReadinessClaudeHealthMissAfterAnotherFailure(t *testing.T) {
+	f, s, _ := readyMachine(t)
+	f.devices = []Device{{ID: "server", Name: "server", Online: true, Reachable: true, ClaudeVersion: "2.1.308"}}
+	ctx := context.Background()
+	fail := func(err string) LauncherHealth {
+		return s.recordHealth(ctx, "server", "claude", healthResult{agent: "claude", err: err, source: healthSourceCheck})
+	}
+	claude := func() ReadinessStep { return readinessStep(t, getReadiness(t, s, "", ""), StepClaude) }
+	fail("401 unauthorized")
+	if h := fail("zsh:1: command not found: claude"); h.Fails != 2 || h.MissingFails != 1 {
+		t.Fatalf("record = %+v", h)
+	}
+	if cl := claude(); cl.Code == proto.CodeClaudeMissing {
+		t.Fatalf("auth failure, then one miss: %+v", cl)
+	}
+	fail("timed out waiting for the model")
+	fail("zsh:1: command not found: claude")
+	if cl := claude(); cl.Code == proto.CodeClaudeMissing {
+		t.Fatalf("a timeout between two misses: %+v", cl)
+	}
+	fail("zsh:1: command not found: claude")
+	if cl := claude(); cl.Code != proto.CodeClaudeMissing || cl.Action.ID != "install_claude" {
+		t.Fatalf("two misses in a row: %+v", cl)
+	}
+}
+
 // A node with no self-check (an old one) leaves Claude Code unknown, which does not stop the main conversation.
 func TestReadinessOldNodeUnknown(t *testing.T) {
 	f, s, _ := readyMachine(t)
@@ -250,9 +322,76 @@ func TestReadinessNotLoggedIn(t *testing.T) {
 	m, first := readinessStep(t, r, StepModel), readinessStep(t, r, StepFirstMessage)
 	if r.Mode != ReadinessSetup || nextOf(r) != StepModel || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn ||
 		m.Action.ID != "connect_model" || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" ||
-		m.Title != "Claude Code 还没登录" || m.Detail != "在 server 上登录一次，或者改用 API Key。" || m.Launcher != "claude" ||
-		first.State != StepProblem || first.Code != proto.TurnErrorNotLoggedIn {
+		m.Title != "模型没接好：claude 没登录" || m.Detail != notLoggedInZh || m.Launcher != "claude" ||
+		first.State != StepProblem || first.Code != proto.TurnErrorNotLoggedIn || first.Detail != notLoggedInZh {
 		t.Fatalf("readiness = %+v", r)
+	}
+}
+
+const (
+	notLoggedInZh       = "主对话用的是 Claude Code 命令行，Claude 桌面版登录了也不算。在 server 的终端里运行 claude auth login，或者改用 API Key。"
+	notLoggedInSwitchZh = "主对话用的是 Claude Code 命令行，Claude 桌面版登录了也不算。在 server 的终端里运行 claude auth login，改用 API Key，或在设置 › 模型中选择此电脑上运行主对话的其他应用或配置。"
+	desktopAgentZh      = "想用桌面版的登录，新建 Agent 时选 claude-desktop，会话会在 Claude 桌面版里运行。"
+)
+
+// Claude Code's CLI signed out on a Mac whose Claude desktop app keeps sessions (#9366): the app's sign-in is not the
+// CLI's, and its launcher runs no main chat, so it is no main chat to switch to; the words say an Agent started with
+// it runs in the app. The Codex App's launcher runs none either. A launcher that does run the main chat is still the
+// switch (#4355), with the desktop app's word after it.
+func TestReadinessNotLoggedInDesktopLauncher(t *testing.T) {
+	f, s, _ := readyMachine(t, proto.Session{SessionID: "m1", State: proto.StateIdle, LastText: "Not logged in · Please run /login",
+		UpdatedAt: time.Now()})
+	desktop := proto.Launcher{Name: "claude-desktop", Source: proto.SourceClaudeDesktop, Agent: "claude"}
+	codexApp := proto.Launcher{Name: "codex-app", Source: "codex_app", Agent: "codex"}
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {desktop, codexApp}}
+	f.mu.Unlock()
+	m := readinessStep(t, getReadiness(t, s, "", ""), StepModel)
+	if m.Code != proto.TurnErrorNotLoggedIn || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" ||
+		m.Title != "模型没接好：claude 没登录" || m.Detail != notLoggedInZh+desktopAgentZh {
+		t.Fatalf("desktop app only: %+v", m)
+	}
+	en := readinessStep(t, getReadiness(t, s, "", "en"), StepModel)
+	if en.Title != "Model not connected: claude isn't signed in" || !strings.Contains(en.Detail, "the Claude desktop app's sign-in doesn't count") ||
+		!strings.Contains(en.Detail, "Run claude auth login in a terminal on server") || !strings.Contains(en.Detail, "start an agent with claude-desktop") {
+		t.Fatalf("en: %+v", en)
+	}
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {desktop, codexApp, {Name: "cx", Agent: "codex"}}}
+	f.mu.Unlock()
+	s.invalidateLauncherListCache("server")
+	m = readinessStep(t, getReadiness(t, s, "", ""), StepModel)
+	if len(m.AltActions) != 2 || m.AltActions[0].ID != "login_claude" || m.AltActions[1].ID != "main_chat_model" ||
+		m.Detail != notLoggedInSwitchZh+desktopAgentZh {
+		t.Fatalf("with a Codex launcher too: %+v", m)
+	}
+	f.mu.Lock()
+	f.zshrc = map[string][]proto.Launcher{"server": {{Name: "cx", Agent: "codex"}}}
+	f.mu.Unlock()
+	s.invalidateLauncherListCache("server")
+	if m = readinessStep(t, getReadiness(t, s, "", ""), StepModel); len(m.AltActions) != 2 || m.Detail != notLoggedInSwitchZh {
+		t.Fatalf("no desktop app: %+v", m)
+	}
+}
+
+// The model step names the launcher that needs repair; first_message keeps its launcher-free wording because that
+// step deliberately carries no launcher identity.
+func TestReadinessModelErrorNamesLauncher(t *testing.T) {
+	for _, tc := range []struct {
+		code, text, title, firstTitle string
+	}{
+		{proto.TurnErrorNotLoggedIn, "Not logged in · Please run /login", "Model not connected: claude isn't signed in", "Claude Code CLI isn't signed in"},
+		{proto.TurnErrorAuthFailed, "Invalid API key · Please run /login", "Model not connected: the key for claude is wrong", "The model's key doesn't work"},
+		{proto.TurnErrorModelRoute, "There's an issue with the selected model (example-model). It may not exist or you may not have access to it.", "Model not connected: this model isn't available on claude", "This model isn't available"},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			_, s, _ := readyMachine(t, proto.Session{SessionID: "m1", State: proto.StateIdle, LastText: tc.text, UpdatedAt: time.Now()})
+			r := getReadiness(t, s, "", "en")
+			m, first := readinessStep(t, r, StepModel), readinessStep(t, r, StepFirstMessage)
+			if m.Code != tc.code || m.Launcher != "claude" || m.Title != tc.title || first.Title != tc.firstTitle || first.Launcher != "" {
+				t.Fatalf("model = %+v; first message = %+v", m, first)
+			}
+		})
 	}
 }
 
@@ -458,10 +597,10 @@ func TestReadinessDismiss(t *testing.T) {
 		t.Fatalf("after a restart: %+v", r)
 	}
 	// The same result again is not written again.
-	puts := st.puts
+	puts := st.putCount()
 	getReadiness(t, s, "", "")
-	if st.puts != puts {
-		t.Fatalf("written again: %d → %d", puts, st.puts)
+	if after := st.putCount(); after != puts {
+		t.Fatalf("written again: %d → %d", puts, after)
 	}
 	if status, _ := serveJSON(t, s, "POST", "/api/v1/assistant/readiness/dismiss", "", `{"dismissed":false}`); status != 200 {
 		t.Fatal(status)
@@ -543,7 +682,7 @@ func TestReadinessSignedOutStatus(t *testing.T) {
 	r := getReadiness(t, s, "", "")
 	m := readinessStep(t, r, StepModel)
 	if r.Mode != ReadinessSetup || nextOf(r) != StepModel || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn ||
-		m.Action.ID != "connect_model" || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" || m.Title != "Claude Code 还没登录" {
+		m.Action.ID != "connect_model" || len(m.AltActions) != 1 || m.AltActions[0].ID != "login_claude" || m.Title != "模型没接好：claude 没登录" {
 		t.Fatalf("readiness = %+v", r)
 	}
 	getReadiness(t, s, "", "")
@@ -733,8 +872,9 @@ func TestReadinessAuthStatusRetry(t *testing.T) {
 		defer f.mu.Unlock()
 		return len(f.authAsked)
 	}
-	// The second ask is not waited for (TestReadinessUnknownStatusNotWaitedFor): it lands a moment later.
-	waitFor(t, "the timeout asked again", func() bool { return authAsked(f) == 2 })
+	// The second ask is not waited for (TestReadinessUnknownStatusNotWaitedFor): it lands a moment later. Prefetch and
+	// the two readiness reads can legitimately start a third first, so require the retry rather than an exact total.
+	waitFor(t, "the timeout asked again", func() bool { return authAsked(f) >= 2 })
 	f2, s2, _ := readyMachine(t) // f2.auth nil: unknown method
 	getReadiness(t, s2, "", "")
 	getReadiness(t, s2, "", "")
@@ -757,7 +897,15 @@ func TestReadinessUnknownStatusNotWaitedFor(t *testing.T) {
 		t.Fatalf("first: model = %+v", m)
 	}
 	hold := make(chan struct{})
+	// With no retry delay, the first readiness's prefetch and its waited read can each finish an ask. Let both finish
+	// before holding the next one, so the assertion counts this readiness's new ask rather than assuming a global total.
+	waitFor(t, "the first status asks to finish", func() bool {
+		s.ready.mu.Lock()
+		defer s.ready.mu.Unlock()
+		return len(s.ready.authIn) == 0
+	})
 	f.mu.Lock()
+	asksBefore := len(f.authAsked)
 	f.authHold = hold
 	f.auth["server/claude"] = proto.ClaudeAuthStatus{State: proto.ClaudeLoggedIn, AuthMethod: "claude.ai"}
 	f.mu.Unlock()
@@ -780,11 +928,279 @@ func TestReadinessUnknownStatusNotWaitedFor(t *testing.T) {
 	waitFor(t, "the second ask on its way", func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		return len(f.authAsked) == 2
+		return len(f.authAsked) == asksBefore+1
 	})
 	release()
 	readinessClaudeRetry = time.Hour // the new answer is the one kept
 	waitFor(t, "the new status", func() bool {
 		return readinessStep(t, getReadiness(t, s, "", ""), StepModel).State == StepOK
+	})
+}
+
+func authCalls(f *fakeHub) []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]any(nil), f.authParams...)
+}
+
+func lastAuthCall(t *testing.T, f *fakeHub) map[string]any {
+	t.Helper()
+	calls := authCalls(f)
+	if len(calls) == 0 {
+		t.Fatal("no claude.auth_status call")
+	}
+	return calls[len(calls)-1]
+}
+
+// profileAuth simulates a node whose private assistant profile and legacy/machine-default profile have independent
+// sign-in states: plain calls (without purpose "assistant") and explicit legacy calls inspect legacySignedIn, while
+// default assistant calls inspect privateSignedIn.
+func profileAuth(privateSignedIn, legacySignedIn bool) func(string, map[string]any) proto.ClaudeAuthStatus {
+	return func(_ string, params map[string]any) proto.ClaudeAuthStatus {
+		signedIn := legacySignedIn
+		if params["purpose"] == "assistant" && params["config_dir"] != assistantConfigDirLegacy {
+			signedIn = privateSignedIn
+		}
+		if signedIn {
+			return proto.ClaudeAuthStatus{State: proto.ClaudeLoggedIn, AuthMethod: "claude.ai"}
+		}
+		return proto.ClaudeAuthStatus{State: proto.ClaudeNotLoggedIn, AuthMethod: "none"}
+	}
+}
+
+// Readiness passes assistant profile context to claude.auth_status using the same wire fields launchers.check sends:
+// purpose "assistant", optional config_dir (omitted for Persona's default private profile), and optional conversation.
+func TestReadinessAuthStatusPassesAssistantContext(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mainID    string
+		configDir string
+	}{
+		{name: "default-private-with-main", mainID: "m1"},
+		{name: "default-private-without-main"},
+		{name: "legacy-with-main", mainID: "m1", configDir: assistantConfigDirLegacy},
+		{name: "legacy-without-main", configDir: assistantConfigDirLegacy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, _ := readyMachine(t)
+			setSettings(t, s, func(v *Settings) { v.Main = tc.mainID })
+			if tc.configDir != "" {
+				setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", ConfigDir: tc.configDir})
+			}
+			f.mu.Lock()
+			f.authBy = func(_ string, _ map[string]any) proto.ClaudeAuthStatus {
+				return proto.ClaudeAuthStatus{State: proto.ClaudeLoggedIn, AuthMethod: "claude.ai"}
+			}
+			f.mu.Unlock()
+
+			getReadiness(t, s, "", "en")
+			p := lastAuthCall(t, f)
+			if p["name"] != "claude" || p["purpose"] != "assistant" {
+				t.Fatalf("claude.auth_status params = %v, want name=claude purpose=assistant", p)
+			}
+			if tc.mainID == "" {
+				if v, ok := p["conversation"]; ok {
+					t.Fatalf("claude.auth_status sent unexpected conversation=%v (%v)", v, p)
+				}
+			} else if p["conversation"] != tc.mainID {
+				t.Fatalf("claude.auth_status conversation = %v, want %q (%v)", p["conversation"], tc.mainID, p)
+			}
+			if tc.configDir == "" {
+				if v, ok := p["config_dir"]; ok {
+					t.Fatalf("claude.auth_status sent unexpected config_dir=%v for default private profile (%v)", v, p)
+				}
+			} else if p["config_dir"] != tc.configDir {
+				t.Fatalf("claude.auth_status config_dir = %v, want %q (%v)", p["config_dir"], tc.configDir, p)
+			}
+		})
+	}
+}
+
+// Readiness reflects the sign-in state of the profile the main chat actually runs in: a signed-out machine-default
+// ~/.claude must not force setup mode when Persona's private profile is signed in, and a signed-in ~/.claude must not
+// mask a signed-out private profile.
+func TestReadinessAuthStatusUsesAssistantProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		configDir       string
+		privateSignedIn bool
+		legacySignedIn  bool
+		wantMode        string
+		wantModelState  string
+		wantModelCode   string
+	}{
+		{
+			name:            "private-signed-in-default-signed-out",
+			privateSignedIn: true,
+			legacySignedIn:  false,
+			wantMode:        ReadinessFull,
+			wantModelState:  StepOK,
+		},
+		{
+			name:            "private-signed-out-default-signed-in",
+			privateSignedIn: false,
+			legacySignedIn:  true,
+			wantMode:        ReadinessSetup,
+			wantModelState:  StepProblem,
+			wantModelCode:   proto.TurnErrorNotLoggedIn,
+		},
+		{
+			name:            "legacy-signed-in-private-signed-out",
+			configDir:       assistantConfigDirLegacy,
+			privateSignedIn: false,
+			legacySignedIn:  true,
+			wantMode:        ReadinessFull,
+			wantModelState:  StepOK,
+		},
+		{
+			name:            "legacy-signed-out-private-signed-in",
+			configDir:       assistantConfigDirLegacy,
+			privateSignedIn: true,
+			legacySignedIn:  false,
+			wantMode:        ReadinessSetup,
+			wantModelState:  StepProblem,
+			wantModelCode:   proto.TurnErrorNotLoggedIn,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, s, _ := readyMachine(t)
+			if tc.configDir != "" {
+				setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", ConfigDir: tc.configDir})
+			}
+			f.mu.Lock()
+			f.authBy = profileAuth(tc.privateSignedIn, tc.legacySignedIn)
+			f.mu.Unlock()
+
+			r := getReadiness(t, s, "", "en")
+			m := readinessStep(t, r, StepModel)
+			if r.Mode != tc.wantMode || r.Ready != (tc.wantMode == ReadinessFull) ||
+				m.State != tc.wantModelState || m.Code != tc.wantModelCode {
+				t.Fatalf("readiness mode=%s ready=%v model=%+v, want mode=%s state=%s code=%q (auth params=%v)",
+					r.Mode, r.Ready, m, tc.wantMode, tc.wantModelState, tc.wantModelCode, authCalls(f))
+			}
+		})
+	}
+}
+
+// Switching Main chat's config_dir between private and legacy, or changing the main conversation, must not serve a
+// stale cached claude.auth_status from the previous profile within the 10-minute cache TTL.
+func TestReadinessAuthCacheSeparatesProfilesAndConversations(t *testing.T) {
+	t.Run("switch-private-to-legacy", func(t *testing.T) {
+		f, s, _ := readyMachine(t)
+		f.mu.Lock()
+		f.authBy = profileAuth(true, false)
+		f.mu.Unlock()
+
+		first := getReadiness(t, s, "", "en")
+		if first.Mode != ReadinessFull || readinessStep(t, first, StepModel).State != StepOK {
+			t.Fatalf("initial private readiness = %+v (auth params=%v)", first, authCalls(f))
+		}
+		callsAfterFirst := len(authCalls(f))
+
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", ConfigDir: assistantConfigDirLegacy})
+		second := getReadiness(t, s, "", "en")
+		m := readinessStep(t, second, StepModel)
+		if second.Mode != ReadinessSetup || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn {
+			t.Fatalf("after switching to legacy: mode=%s model=%+v, want setup/not_logged_in (auth params=%v)",
+				second.Mode, m, authCalls(f))
+		}
+		if len(authCalls(f)) <= callsAfterFirst {
+			t.Fatalf("switching config_dir reused stale auth cache: calls=%v", authCalls(f))
+		}
+		if p := lastAuthCall(t, f); p["config_dir"] != assistantConfigDirLegacy {
+			t.Fatalf("after switching to legacy: last auth params = %v", p)
+		}
+	})
+
+	t.Run("switch-legacy-to-private", func(t *testing.T) {
+		f, s, _ := readyMachine(t)
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", ConfigDir: assistantConfigDirLegacy})
+		f.mu.Lock()
+		f.authBy = profileAuth(false, true)
+		f.mu.Unlock()
+
+		first := getReadiness(t, s, "", "en")
+		if first.Mode != ReadinessFull || readinessStep(t, first, StepModel).State != StepOK {
+			t.Fatalf("initial legacy readiness = %+v (auth params=%v)", first, authCalls(f))
+		}
+		callsAfterFirst := len(authCalls(f))
+
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude"})
+		second := getReadiness(t, s, "", "en")
+		m := readinessStep(t, second, StepModel)
+		if second.Mode != ReadinessSetup || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn {
+			t.Fatalf("after switching to private: mode=%s model=%+v, want setup/not_logged_in (auth params=%v)",
+				second.Mode, m, authCalls(f))
+		}
+		if len(authCalls(f)) <= callsAfterFirst {
+			t.Fatalf("switching config_dir reused stale auth cache: calls=%v", authCalls(f))
+		}
+		if p := lastAuthCall(t, f); p["config_dir"] != nil {
+			t.Fatalf("after switching to private: last auth params = %v", p)
+		}
+	})
+
+	t.Run("main-conversation-change", func(t *testing.T) {
+		f, s, _ := readyMachine(t)
+		f.mu.Lock()
+		f.authBy = func(_ string, params map[string]any) proto.ClaudeAuthStatus {
+			if params["purpose"] == "assistant" && params["conversation"] == "m1" {
+				return proto.ClaudeAuthStatus{State: proto.ClaudeLoggedIn, AuthMethod: "claude.ai"}
+			}
+			return proto.ClaudeAuthStatus{State: proto.ClaudeNotLoggedIn, AuthMethod: "none"}
+		}
+		f.mu.Unlock()
+
+		first := getReadiness(t, s, "", "en")
+		if first.Mode != ReadinessFull || readinessStep(t, first, StepModel).State != StepOK {
+			t.Fatalf("initial m1 readiness = %+v (auth params=%v)", first, authCalls(f))
+		}
+		callsAfterFirst := len(authCalls(f))
+
+		setSettings(t, s, func(v *Settings) { v.Main = "m2" })
+		second := getReadiness(t, s, "", "en")
+		m := readinessStep(t, second, StepModel)
+		if second.Mode != ReadinessSetup || m.State != StepProblem || m.Code != proto.TurnErrorNotLoggedIn {
+			t.Fatalf("after changing main conversation: mode=%s model=%+v, want setup/not_logged_in (auth params=%v)",
+				second.Mode, m, authCalls(f))
+		}
+		if len(authCalls(f)) <= callsAfterFirst {
+			t.Fatalf("changing main conversation reused stale auth cache: calls=%v", authCalls(f))
+		}
+		if p := lastAuthCall(t, f); p["conversation"] != "m2" {
+			t.Fatalf("after changing main conversation: last auth params = %v", p)
+		}
+	})
+}
+
+// Older nodes that ignore extra claude.auth_status fields or lack claude.auth_status altogether remain compatible.
+func TestReadinessAuthStatusOlderNodeCompat(t *testing.T) {
+	t.Run("ignores-extra-params", func(t *testing.T) {
+		f, s, _ := readyMachine(t)
+		f.auth = map[string]proto.ClaudeAuthStatus{"server/claude": {State: proto.ClaudeLoggedIn, AuthMethod: "claude.ai"}}
+		r := getReadiness(t, s, "", "en")
+		if r.Mode != ReadinessFull || readinessStep(t, r, StepModel).State != StepOK {
+			t.Fatalf("older node logged_in: %+v", r)
+		}
+
+		f2, s2, _ := readyMachine(t)
+		f2.auth = map[string]proto.ClaudeAuthStatus{"server/claude": {State: proto.ClaudeNotLoggedIn, AuthMethod: "none"}}
+		r2 := getReadiness(t, s2, "", "en")
+		if m := readinessStep(t, r2, StepModel); r2.Mode != ReadinessSetup || m.Code != proto.TurnErrorNotLoggedIn {
+			t.Fatalf("older node not_logged_in: %+v", r2)
+		}
+	})
+
+	t.Run("unknown-method", func(t *testing.T) {
+		f, s, _ := readyMachine(t)
+		setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", ConfigDir: assistantConfigDirLegacy})
+		r := getReadiness(t, s, "", "en")
+		if m := readinessStep(t, r, StepModel); r.Mode != ReadinessFull || m.State != StepUnknown {
+			t.Fatalf("older node without claude.auth_status: %+v", r)
+		}
+		getReadiness(t, s, "", "en")
+		if calls := authCalls(f); len(calls) != 1 {
+			t.Fatalf("older node without claude.auth_status asked %d times, want 1", len(calls))
+		}
 	})
 }

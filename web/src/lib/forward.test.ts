@@ -1,11 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../../spec/fixtures/forward/cases.json";
 import { initI18n, t } from "../i18n";
-import { forwardDraftOf, forwardHeading, forwardMeta, forwardOrigin, forwardSummary, jumpWhenOpen, peekJump, takeJump, type ForwardSource } from "./forward";
+import { forwardHeading, forwardMeta, forwardOrigin, forwardSummary, jumpWhenOpen, peekJump, takeJump, type ForwardSource } from "./forward";
+import { forwardDraftOf } from "./forward-draft";
 import { forwardBody, forwardRef, forwardRoute, forwardURL, FORWARD_LIMIT, isoWithOffset } from "./forward-block";
 import { addContext, contextXML, getContexts, removeContext, withContexts } from "./links";
 import { parseUserText } from "./turns";
 import type { Item, Session } from "./types";
+
+it("keeps inline metadata out of forward previews, including when another transcript block follows the trailer", () => {
+  const body = 'Use Review.\n\n<!-- persona-inline-v1 [[7,6,"opaque-anchor"]] -->';
+  expect(forwardBody(body)).toBe("Use Review.");
+  expect(forwardBody(body + "\nNext step.")).toBe("Use Review.\nNext step.");
+  const oldForward = parseUserText(`<persona-context kind="forward">${body}</persona-context>`);
+  expect(forwardSummary(oldForward.contexts[0].text)).toBe("Use Review.");
+});
 
 // router.ts listens to popstate at load (no window in node); links.ts only needs navigate from it.
 vi.mock("./router", () => ({ navigate: vi.fn() }));
@@ -159,9 +168,15 @@ describe("what a forward carries", () => {
 
 describe("the card and the route", () => {
   beforeEach(() => initI18n("en"));
-  afterEach(() => initI18n("zh-Hans"));
+  afterEach(() => {
+    vi.useRealTimers();
+    return initI18n("zh-Hans");
+  });
 
   it("heads the card with who wrote it and the chat, then the computer and time", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // One minute ago is today at noon; just after midnight it belongs to yesterday and correctly carries a date.
+    vi.setSystemTime(new Date(2026, 10, 18, 12));
     const now = new Date();
     const at = new Date(now.getTime() - 60_000).toISOString();
     const ref = forwardRef("x", source({ time: at }));

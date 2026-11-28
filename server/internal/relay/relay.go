@@ -2,7 +2,8 @@
 // hubs that have none. Phones register their device token and get a grant; a hub pushes with the grant and a payload
 // sealed to the phone's key (pushcrypto), which the relay cannot read. The relay writes the aps envelope itself, so a
 // grant cannot be used to show arbitrary text. Live Activity updates are the exception: iOS reads their content-state
-// directly, so they pass in the clear (a decision recorded in the doc).
+// directly, so they pass in the clear (a decision recorded in the doc). A voip push (an urgent call) carries only the
+// sealed payload: the app opens it and names the call itself.
 package relay
 
 import (
@@ -30,6 +31,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apns"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/pushcrypto"
 	"github.com/nwverse/persona/server/internal/relayproto"
 )
@@ -57,6 +59,9 @@ const (
 	grantAAD   = compat.GrantAAD
 	pushPerMin = 120
 	pushBurst  = 30
+	// A voip push rings the phone, so a device's VoIP token gets far fewer: a hub's own cap is a few calls a day.
+	voipPerMin = 0.2
+	voipBurst  = 6
 	regPerMin  = 20
 	regBurst   = 10
 	// Fallback is what the phone shows when it cannot open the payload (no key yet, timeout, garbage, too old).
@@ -73,7 +78,7 @@ type Server struct {
 	logf        func(string, ...any)
 	now         func() time.Time
 
-	pushLimit, regLimit *limiter
+	pushLimit, regLimit, voipLimit *limiter
 }
 
 // New builds a server around a sender and the grant secret (32 bytes).
@@ -84,10 +89,13 @@ func New(cfg Config, sender Sender, secret []byte, logf func(string, ...any)) (*
 	if len(cfg.Topics) == 0 {
 		return nil, errors.New("relay.json: topics is empty")
 	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	block, _ := aes.NewCipher(secret)
 	aead, _ := cipher.NewGCM(block)
 	s := &Server{apns: sender, aead: aead, topics: map[string]bool{}, proxySecret: cfg.ProxySecret, logf: logf, now: time.Now,
-		pushLimit: newLimiter(pushPerMin, pushBurst), regLimit: newLimiter(regPerMin, regBurst)}
+		pushLimit: newLimiter(pushPerMin, pushBurst), regLimit: newLimiter(regPerMin, regBurst), voipLimit: newLimiter(voipPerMin, voipBurst)}
 	for _, t := range cfg.Topics {
 		if strings.TrimSpace(t) == "" {
 			return nil, errors.New("relay.json: topics has an empty entry")
@@ -95,6 +103,16 @@ func New(cfg Config, sender Sender, secret []byte, logf func(string, ...any)) (*
 		s.topics[t] = true
 	}
 	return s, nil
+}
+
+// served: the relay pushes for this grant topic, a bundle id in topics or its VoIP topic ("<bundle id>.voip").
+func (s *Server) served(topic string) bool {
+	return s.topics[strings.TrimSuffix(topic, relayproto.VoIPTopicSuffix)]
+}
+
+// isVoIP: the topic is a PushKit token's, whose grant carries only voip pushes.
+func isVoIP(topic string) bool {
+	return strings.HasSuffix(topic, relayproto.VoIPTopicSuffix)
 }
 
 // grant is what a grant seals: where to push.
@@ -139,7 +157,7 @@ var hexCollapse = lazyre.New(`^[0-9a-f]{1,64}$`)
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /relay/v1/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true, "apns": s.apns != nil})
+		writeJSON(w, 200, map[string]any{"ok": true, "apns": s.apns != nil, "push_types": relayproto.PushTypes})
 	})
 	mux.HandleFunc("POST /relay/v1/register", s.register)
 	mux.HandleFunc("POST /relay/v1/push", s.push)
@@ -170,7 +188,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "apns_token must be hex")
 	case body.Env != "production" && body.Env != "sandbox":
 		writeErr(w, http.StatusBadRequest, "env must be production or sandbox")
-	case !s.topics[body.Topic]:
+	case !s.served(body.Topic):
 		writeErr(w, http.StatusForbidden, "topic not served by this relay")
 	default:
 		g := grant{Token: strings.ToLower(body.APNSToken), Env: body.Env, Topic: body.Topic, At: s.now().Unix()}
@@ -194,8 +212,12 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	if !s.topics[g.Topic] {
+	if !s.served(g.Topic) {
 		writeErr(w, http.StatusForbidden, "topic not served by this relay")
+		return
+	}
+	if s.apns == nil {
+		writeErr(w, http.StatusServiceUnavailable, "apns not configured")
 		return
 	}
 	if !s.pushLimit.allow("dev:"+g.Token, s.now()) {
@@ -210,6 +232,10 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	out, status, msg := s.envelope(g, req)
 	if msg != "" {
 		writeErr(w, status, msg)
+		return
+	}
+	if req.Type == "voip" && !s.voipLimit.allow("voip:"+g.Token, s.now()) {
+		writeErr(w, http.StatusTooManyRequests, "too many calls for this device")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -256,8 +282,27 @@ func (s *Server) envelope(g grant, req PushRequest) (apns.Request, int, string) 
 		}
 		out.CollapseID = req.CollapseID
 	}
+	// A PushKit token takes only voip pushes, and a voip push only goes to one: APNs would refuse the mix anyway.
+	if isVoIP(g.Topic) != (req.Type == "voip") {
+		return out, 400, "a VoIP grant carries only voip pushes, and voip needs a VoIP grant"
+	}
 	var payload map[string]any
 	switch req.Type {
+	case "voip":
+		raw, err := base64.StdEncoding.DecodeString(req.Sealed)
+		if err != nil || len(raw) < pushcrypto.MinSealed || len(req.Sealed) > relayproto.MaxSealed {
+			return out, 400, fmt.Sprintf("sealed must be a base64 HPKE payload of at most %d characters", relayproto.MaxSealed)
+		}
+		// No aps: PushKit hands the payload to the app, which must report a call at once. A short expiration keeps a
+		// phone that comes back online from ringing for a call that is over.
+		ttl := req.TTL
+		if ttl <= 0 {
+			ttl = relayproto.DefaultVoIPTTL
+		}
+		ttl = min(ttl, relayproto.MaxVoIPTTL)
+		out.Priority = "10"
+		out.Expiration = s.now().Add(time.Duration(ttl) * time.Second).Unix()
+		payload = map[string]any{"e": req.Sealed}
 	case "alert", "background":
 		raw, err := base64.StdEncoding.DecodeString(req.Sealed)
 		if err != nil || len(raw) < pushcrypto.MinSealed || len(req.Sealed) > relayproto.MaxSealed {
@@ -291,7 +336,7 @@ func (s *Server) envelope(g grant, req PushRequest) (apns.Request, int, string) 
 		out.Token = strings.ToLower(req.Token)
 		payload = map[string]any{"aps": req.APS}
 	default:
-		return out, 400, "type must be alert, background or liveactivity"
+		return out, 400, "type must be alert, background, liveactivity or voip"
 	}
 	out.Body, _ = json.Marshal(payload)
 	if len(out.Body) > 4096 {
@@ -332,7 +377,11 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 }
 
 // sweepAbove: past this many keys, a new key first forgets the buckets that have refilled.
-const sweepAbove = 50000
+// maxBuckets: hard ceiling on tracked keys so a flood of distinct IPs or tokens cannot exhaust memory between sweeps.
+const (
+	sweepAbove = 50000
+	maxBuckets = 2 * sweepAbove
+)
 
 // limiter is a token bucket per key.
 type limiter struct {
@@ -340,6 +389,7 @@ type limiter struct {
 	perMin  float64
 	burst   float64
 	refill  time.Duration // an empty bucket is full again after this
+	maxKeys int           // hard ceiling on len(buckets); defaults to maxBuckets when <= 0
 	buckets map[string]*bucket
 	swept   time.Time // last time allow forgot the refilled buckets
 }
@@ -349,9 +399,9 @@ type bucket struct {
 	at     time.Time
 }
 
-func newLimiter(perMin, burst int) *limiter {
-	return &limiter{perMin: float64(perMin), burst: float64(burst),
-		refill: time.Duration(float64(burst) / float64(perMin) * float64(time.Minute)), buckets: map[string]*bucket{}}
+func newLimiter(perMin, burst float64) *limiter {
+	return &limiter{perMin: perMin, burst: burst,
+		refill: time.Duration(burst / perMin * float64(time.Minute)), maxKeys: maxBuckets, buckets: map[string]*bucket{}}
 }
 
 func (l *limiter) allow(key string, now time.Time) bool {
@@ -359,21 +409,39 @@ func (l *limiter) allow(key string, now time.Time) bool {
 	defer l.mu.Unlock()
 	b := l.buckets[key]
 	if b == nil {
+		capKeys := l.maxKeys
+		if capKeys <= 0 {
+			capKeys = maxBuckets
+		}
 		// Forget the buckets that have refilled: a new one starts full, so no answer changes. At most once per refill
 		// time: otherwise every new key of a flood scans the whole table under the lock, usually forgetting nothing.
-		if len(l.buckets) > sweepAbove && now.Sub(l.swept) >= l.refill {
-			l.swept = now
-			for k, v := range l.buckets {
-				if now.Sub(v.at) > l.refill {
-					delete(l.buckets, k)
+		if len(l.buckets) > sweepAbove || len(l.buckets) >= capKeys {
+			if !l.swept.IsZero() && now.Before(l.swept) {
+				l.swept = now
+			}
+			if l.swept.IsZero() || now.Sub(l.swept) >= l.refill {
+				l.swept = now
+				for k, v := range l.buckets {
+					if now.Sub(v.at) > l.refill {
+						delete(l.buckets, k)
+					} else if now.Before(v.at) {
+						v.at = now
+					}
 				}
 			}
+		}
+		if len(l.buckets) >= capKeys {
+			return false
 		}
 		b = &bucket{tokens: l.burst, at: now}
 		l.buckets[key] = b
 	}
-	b.tokens = min(l.burst, b.tokens+now.Sub(b.at).Minutes()*l.perMin)
-	b.at = now
+	if elapsed := now.Sub(b.at); elapsed > 0 {
+		b.tokens = min(l.burst, b.tokens+elapsed.Minutes()*l.perMin)
+		b.at = now
+	} else if elapsed < 0 {
+		b.at = now
+	}
 	if b.tokens < 1 {
 		return false
 	}
@@ -407,7 +475,7 @@ func Run(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	ln, err := net.Listen("tcp", cfg.Listen)
+	ln, err := osproc.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("relay listen: %w", err)
 	}

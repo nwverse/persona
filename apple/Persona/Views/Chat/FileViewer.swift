@@ -2,6 +2,7 @@ import MarkdownUI
 import PDFKit
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 nonisolated struct FileContent: Decodable, Sendable {
     var path: String
@@ -39,7 +40,7 @@ nonisolated struct FileContent: Decodable, Sendable {
     }
 }
 
-extension APIClient {
+nonisolated extension APIClient {
     /// A file or a directory on a machine; a text file bigger than a page from `offset` (the page before's `next`).
     /// `stream`: a binary file without its bytes (hub feature `file_stream`, docs/protocol/protocol.md「File preview」).
     func file(machine: String, path: String, cwd: String?, offset: Int64 = 0, stream: Bool = false) async throws -> FileContent {
@@ -54,7 +55,7 @@ extension APIClient {
 }
 
 /// A file mentioned in a conversation, opened on the machine the session runs on.
-struct FileRef: Identifiable, Hashable {
+nonisolated struct FileRef: Identifiable, Hashable, Sendable {
     /// The group of hubs the machine is in (docs/protocol/multi-hub.md).
     var group: String = ""
     var machineID: String
@@ -174,17 +175,16 @@ struct FileViewer: View {
         NavigationStack {
             content
                 .navigationTitle(page?.file?.name ?? (ref.path as NSString).lastPathComponent)
-                .navigationSubtitle(model.machine(ref.machineRef)?.name ?? ref.machineID)
+                .navigationSubtitleWhenSupported(model.machine(ref.machineRef)?.name ?? ref.machineID)
                 .navigationBarTitleDisplayMode(.inline)
                 .pageToolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        if let back = history.last {
+                    // ‹ after following a file link, else the sheet's ✕ (#9653).
+                    if let back = history.last {
+                        ToolbarItem(placement: .topBarLeading) {
                             Button { history.removeLast(); ref = back } label: { Label("Back [Task Sheets 572cf4]", systemImage: Theme.Icon.back) }
-                        } else {
-                            Button("Done [Extension System Presentation c0b3fb]") { dismiss() }
-                                .lineLimit(1)
-                                .accessibilityIdentifier("file-close")
                         }
+                    } else {
+                        SheetClose(id: "file-close") { dismiss() }
                     }
                     #if os(iOS)
                     if page?.kind != .directory {
@@ -226,23 +226,12 @@ struct FileViewer: View {
         .environment(\.viewImages, nil)
         .environment(\.openURL, OpenURLAction { url in
             guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
-                #if os(macOS)
-                return LinkPolicy.system(url)
-                #else
                 return .systemAction
-                #endif
             }
             openLink(url)
             return .handled
         })
-        #if os(macOS)
-        .macLinkPanel($link, key: key)
-        // Outside the panel: its GeometryReader takes any size, so a minimum inside it never reached the sheet and the
-        // sheet opened at its toolbar's 470 × 80 (#1502). The stack's bars are the sheet window's, still on top of this.
-        .macLargeSheet(bars: true)
-        #else
         .sheet(item: $link) { target in LinkSheet(target: target, key: key) }
-        #endif
     }
 
     private func openLink(_ url: URL) {
@@ -383,7 +372,6 @@ struct FileViewer: View {
         } primaryAction: {
             save(FileSaveKind.defaultTarget(name))
         }
-        .arrowlessMenu()
         .disabled(saver.busy)
         .accessibilityLabel("Download")
         .accessibilityHint("Touch and hold for more ways to save")
@@ -470,7 +458,6 @@ struct FileViewer: View {
                 ShareLink(item: local) { Label("Share", systemImage: Theme.Icon.share) }
             }
         } label: { ThemedIcon(Theme.Icon.moreMenu) }
-        .arrowlessMenu()
         .accessibilityLabel("More")
         .accessibilityIdentifier("file-menu")
     }
@@ -507,6 +494,7 @@ struct FileViewer: View {
         case "xls", "xlsx", "numbers", "csv", "tsv": Theme.Icon.sheet
         case "ppt", "pptx": Theme.Icon.slides
         case "json", "yml", "yaml", "toml", "plist": "curlybraces"
+        case "zip", "gz", "tgz", "tar", "7z", "rar", "xz", "bz2": Theme.Icon.fileArchive
         case "": path.hasSuffix("/") ? Theme.Icon.folder : Theme.Icon.file
         default: Theme.Icon.code
         }
@@ -889,7 +877,6 @@ final class FileViewerModel {
     }
 }
 
-#if os(iOS) || os(visionOS)
 struct PDFKitView: UIViewRepresentable {
     var document: PDFDocument
     func makeUIView(context: Context) -> PDFView {
@@ -900,18 +887,6 @@ struct PDFKitView: UIViewRepresentable {
     }
     func updateUIView(_ v: PDFView, context: Context) {}
 }
-#else
-struct PDFKitView: NSViewRepresentable {
-    var document: PDFDocument
-    func makeNSView(context: Context) -> PDFView {
-        let v = PDFView()
-        v.autoScales = true
-        v.document = document
-        return v
-    }
-    func updateNSView(_ v: PDFView, context: Context) {}
-}
-#endif
 
 /// Images in a markdown file on a computer: relative paths load from that machine, web URLs as usual.
 struct MachineImageProvider: ImageProvider {

@@ -29,6 +29,7 @@ func runRelease(args []string) error {
 		ver := fs.String("version", "", "the version")
 		num := fs.String("build", "", "the build number (UTC YYYYMMDDHHMM)")
 		commit := fs.String("commit", "", "the commit (full id; run in its repository: its ancestors go in too)")
+		channel := fs.String("channel", "release", "release or beta (a beta versioned prerelease)")
 		notes := fs.String("notes", "", "what is new, for the app")
 		minApp := fs.Int("min-app", 0, "the oldest app build that works with it")
 		out := fs.String("out", "", "where to write latest.json")
@@ -57,8 +58,14 @@ func runRelease(args []string) error {
 		// The release's nodes are this build's: they announce its node protocol (managers of other builds check it).
 		m, err := update.BuildManifest(*dir, update.Manifest{Version: *ver, Build: n, Commit: *commit, Released: time.Now().UTC().Truncate(time.Second),
 			MinAppBuild: *minApp, Protocol: proto.Protocol, Notes: *notes, Ancestors: ancestors, NodeProtocol: nodeproto.Version,
-			NodeProtocolMin: nodeproto.MinManagerVersion, NodeCapabilities: nodeproto.Announced})
+			NodeProtocolMin: nodeproto.MinManagerVersion, NodeCapabilities: nodeproto.Announced,
+			// The manifest is this program's edition: publish.sh writes each edition's with that edition's personad.
+			Edition: update.ThisEdition.Marker()})
 		if err != nil {
+			return err
+		}
+		m.Channel = *channel
+		if err := m.ValidateChannel(*channel); err != nil {
 			return err
 		}
 		// What it describes has to be the build it was told: binaries from an earlier run with another build number
@@ -91,6 +98,9 @@ func runRelease(args []string) error {
 		}
 		m, err := update.ParseManifest(b)
 		if err != nil {
+			return err
+		}
+		if err := m.ValidateEdition(update.ThisEdition); err != nil {
 			return err
 		}
 		if err := update.VerifyRelease(context.Background(), *dir, m); err != nil {

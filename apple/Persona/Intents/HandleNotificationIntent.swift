@@ -1,6 +1,7 @@
 import AppIntents
 import CryptoKit
 import Foundation
+import PersonaWire
 
 /// "Handle Notification" (#3848, docs/apple/intents.md "Handle Notification"): hands one item (a title, a body, the app
 /// it came from, an optional link and time) to Persona as this device's Shortcuts source
@@ -15,6 +16,7 @@ struct HandleNotificationIntent: AppIntent {
         categoryName: "Subscriptions",
         searchKeywords: ["Notification", "Inbox", "Subscription"]
     )
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
 
     @Parameter(title: "Title")

@@ -41,7 +41,7 @@ struct SourceMessage: View, Equatable {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
-            .messageActionBar(id: item.id, text: text, isUser: false, date: item.ts, from: source.mention)
+            .messageActionBar(id: item.id, text: text, isUser: false, date: item.ts, from: source.mention, starItem: item)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("message-source-" + item.id)
             .task(id: open) {
@@ -84,9 +84,6 @@ struct SourceMessage: View, Equatable {
                     .markdownTheme(.persona)
                     .readingContent()
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    #if os(macOS)
-                    .textSelection(.enabled)
-                    #endif
                     .accessibilityIdentifier("message-source-body")
             }
             if open, item.fullSize != nil, fullText == nil {

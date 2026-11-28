@@ -46,11 +46,17 @@ export class DeviceLookAvatar {
   optionKey(): string { return this.isBuiltin() ? BUILTIN_KEY : JSON.stringify([this.profileId, this.hubId, this.id, this.rev]); }
 }
 
-/** Device-wide Avatar and Accent preferences with authenticated Hub package thumbnails in private app storage. */
+/** Device-wide Avatar, Accent, and row density preferences with private Hub avatar thumbnails. */
 @ObservedV2
 export class DeviceLook {
   @Trace selectedAvatar: DeviceLookAvatar = new DeviceLookAvatar(BUILTIN_ID, 'Mochi');
   @Trace accentId: string = 'style';
+  @Trace density: string = 'standard';
+  @Trace private agentRowStyle:string='avatar';
+  @Trace private agentCompactList:boolean=false;
+  @Trace phoneNavigation: string = 'separate';
+  @Trace composerGlow: boolean = false;
+  @Trace returnSends: boolean = false;
   @Trace avatars: DeviceLookAvatar[] = [new DeviceLookAvatar(BUILTIN_ID, 'Mochi')];
   @Trace busy: boolean = false;
   @Trace error: string = '';
@@ -92,6 +98,8 @@ export class DeviceLook {
     this.storage = store;
     try { fileIo.statSync(this.cacheRoot); } catch (_) { fileIo.mkdirSync(this.cacheRoot, true); }
     await this.restore();
+    this.composerGlow = await store.get('ui.composerGlow').catch(() => '') === 'true';
+    this.returnSends = await store.get('ui.returnSends').catch(() => '') === 'true';
   }
 
   /** Binds to the current Hub. An older Hub uses its documented `/personas` list after `/looks` returns 404. */
@@ -194,7 +202,7 @@ export class DeviceLook {
   async setAvatar(id: string): Promise<boolean> {
     if (!this.ready || this.busy) return false;
     if (id === BUILTIN_KEY) {
-      return this.commitSelection(new DeviceLookAvatar(BUILTIN_ID, 'Mochi'), undefined);
+      return this.commitSelection(new DeviceLookAvatar(BUILTIN_ID, 'Mochi'), undefined, undefined);
     }
     const option = this.avatars.find((item: DeviceLookAvatar) => item.optionKey() === id && !item.isBuiltin());
     if (!option || !option.packageInfo || !option.file || !option.profileId || !option.hubId) return false;
@@ -225,13 +233,54 @@ export class DeviceLook {
     if (this.cachedSize(path) < 0) { this.error = 'device_look_download_failed'; this.changed(); return false; }
     const selected = new DeviceLookAvatar(option.id, option.name, option.subtitle, path, option.rev,
       option.profileId, option.hubId, option.file, option.infoJSON, option.packageInfo, option.ownerName);
-    return this.commitSelection(selected, undefined);
+    return this.commitSelection(selected, undefined, undefined);
   }
 
   /** Accent selection is independent of the current avatar and interface style. */
   async setAccent(id: string): Promise<boolean> {
     if (!this.ready || !validAccentId(id) || id === 'avatar' && !this.avatarColors && this.accentId !== 'avatar') return false;
-    return this.commitSelection(undefined, id);
+    return this.commitSelection(undefined, id, undefined);
+  }
+
+  /** Row density is device-wide and is committed with the complete look record. */
+  async setDensity(value: string): Promise<boolean> {
+    if (!this.ready || !['standard', 'compact'].includes(value)) return false;
+    return this.commitSelection(undefined, undefined, value);
+  }
+
+  get agentDisplay():string { return this.agentCompactList ? 'list' : this.agentRowStyle; }
+
+  async setAgentDisplay(display:string):Promise<boolean> {
+    if(!this.ready || !['avatar','compact','cards','list'].includes(display))return false;
+    return this.commitSelection(undefined,undefined,undefined,undefined,display);
+  }
+
+  async setChatInteraction(key: string, value: boolean): Promise<boolean> {
+    if (!this.ready || (key!=='ui.composerGlow' && key!=='ui.returnSends')) return false;
+    const task = this.commitTail.then(async (): Promise<boolean> => {
+      const store=this.storage;
+      if (!store) return false;
+      const glow=key==='ui.composerGlow';
+      const prior=glow ? this.composerGlow : this.returnSends;
+      if (prior===value) return true;
+      if (glow) this.composerGlow=value; else this.returnSends=value;
+      try {
+        await store.put(key,String(value));
+        this.error='';
+        return true;
+      } catch (_) {
+        if (glow) this.composerGlow=prior; else this.returnSends=prior;
+        this.error='device_look_storage_failed';
+        return false;
+      }
+    });
+    this.commitTail=task.then(() => {}).catch(() => {});
+    return task;
+  }
+
+  async setPhoneNavigation(value:string):Promise<boolean> {
+    if (!this.ready || !['separate','merged'].includes(value)) return false;
+    return this.commitSelection(undefined,undefined,undefined,value);
   }
 
   accentOptions(): string[] {
@@ -371,6 +420,12 @@ export class DeviceLook {
       const saved = Wire.record(JSON.parse(raw) as Object);
       const accent = Wire.text(saved, 'accentId', 'style');
       this.accentId = validAccentId(accent) ? accent : 'style';
+      this.phoneNavigation = Wire.text(saved,'phoneNavigation') === 'merged' ? 'merged' : 'separate';
+      const rowStyle=Wire.text(saved,'agents.rowStyle','avatar');
+      this.agentRowStyle=['compact','cards'].includes(rowStyle)?rowStyle:'avatar';
+      this.agentCompactList=Wire.bool(saved,'dev.compact');
+      const density = Wire.text(saved, 'density', 'standard');
+      this.density = density === 'compact' ? 'compact' : 'standard';
       const id = Wire.text(saved, 'avatarId', BUILTIN_ID);
       if (id === BUILTIN_ID) return;
       const profileId = Wire.text(saved, 'profileId'), hubId = Wire.text(saved, 'hubId'), rev = Wire.text(saved, 'rev');
@@ -386,12 +441,17 @@ export class DeviceLook {
     } catch (_) { this.selectedAvatar = new DeviceLookAvatar(BUILTIN_ID, 'Mochi'); }
   }
 
-  private selectionJSON(selected: DeviceLookAvatar, accent: string): string {
-    return JSON.stringify(Wire.payload(['version', 'avatarId', 'accentId', 'profileId', 'hubId', 'rev', 'file', 'infoJSON', 'ownerName'],
-      [1, selected.id, accent, selected.profileId, selected.hubId, selected.rev, selected.file, selected.infoJSON, selected.ownerName]));
+  private selectionJSON(selected: DeviceLookAvatar, accent: string, density: string, navigation: string = this.phoneNavigation,
+    agentRowStyle:string=this.agentRowStyle,agentCompactList:boolean=this.agentCompactList): string {
+    const data = Wire.payload(['version', 'avatarId', 'accentId', 'density', 'profileId', 'hubId', 'rev', 'file', 'infoJSON', 'ownerName'],
+      [1, selected.id, accent, density, selected.profileId, selected.hubId, selected.rev, selected.file, selected.infoJSON, selected.ownerName]);
+    if (navigation === 'merged') data['phoneNavigation'] = navigation;
+    if(agentRowStyle!=='avatar')data['agents.rowStyle']=agentRowStyle;
+    if(agentCompactList)data['dev.compact']=true;
+    return JSON.stringify(data);
   }
 
-  private async commitSelection(avatar: DeviceLookAvatar | undefined, accent: string | undefined): Promise<boolean> {
+  private async commitSelection(avatar: DeviceLookAvatar | undefined, accent: string | undefined, density: string | undefined, navigation?:string,display?:string): Promise<boolean> {
     if (!this.ready) return false;
     const ownerKey = avatar && !avatar.isBuiltin() ? JSON.stringify([avatar.profileId, avatar.hubId]) : '';
     const epoch = this.forgetEpochs.get(ownerKey) || 0;
@@ -400,15 +460,20 @@ export class DeviceLook {
       const store = this.storage;
       if (!store) { this.error = 'device_look_storage_failed'; this.changed(); return; }
       const next = avatar || this.selectedAvatar, color = accent === undefined ? this.accentId : accent;
+      const nextDensity = density === undefined ? this.density : density;
+      const nextNavigation = navigation || this.phoneNavigation;
+      const nextRowStyle=!display||display==='list'?this.agentRowStyle:display;
+      const nextList=display===undefined?this.agentCompactList:display==='list';
       const current = (): boolean => !avatar || avatar.isBuiltin() || (this.forgetEpochs.get(ownerKey) || 0) === epoch && this.cachedSize(avatar.imagePath) > 0;
       if (!current()) return;
-      if (next.optionKey() === this.avatarKey && color === this.accentId) { committed = true; return; }
+      if (next.optionKey() === this.avatarKey && color === this.accentId && nextDensity === this.density && nextNavigation === this.phoneNavigation && nextRowStyle===this.agentRowStyle && nextList===this.agentCompactList) { committed = true; return; }
       if (color === 'avatar' && !next.packageInfo?.colors && this.accentId !== 'avatar') return;
-      const previous = this.selectionJSON(this.selectedAvatar, this.accentId);
+      const previous = this.selectionJSON(this.selectedAvatar, this.accentId, this.density);
       try {
-        await store.put(STORAGE_KEY, this.selectionJSON(next, color));
+        await store.put(STORAGE_KEY, this.selectionJSON(next, color, nextDensity,nextNavigation,nextRowStyle,nextList));
         if (!current()) { await store.put(STORAGE_KEY, previous); return; }
-        this.selectedAvatar = next; this.accentId = color; this.error = ''; committed = true;
+        this.selectedAvatar = next; this.accentId = color; this.density = nextDensity; this.phoneNavigation = nextNavigation;
+        this.agentRowStyle=nextRowStyle;this.agentCompactList=nextList;this.error = ''; committed = true;
         this.avatars = this.withSelected(this.avatars); this.changed();
       } catch (_) { this.error = 'device_look_storage_failed'; this.changed(); }
     });

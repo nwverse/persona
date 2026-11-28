@@ -5,6 +5,7 @@
 // as iOS (PendingMessage.arrived / same) and Android (MessageEcho).
 
 import type { Item } from "./types";
+import { timeOrNaN } from "./times";
 
 /** The computer's clock may be behind this one by this much. */
 export const CLOCK_SLACK_MS = 120_000;
@@ -27,6 +28,14 @@ export function normalizeWords(s: string): string {
 export function sameWords(a: string, b: string): boolean {
   const x = normalizeWords(a),
     y = normalizeWords(b);
+  if (!x || !y) return false;
+  return x === y || (Math.min([...x].length, [...y].length) >= 8 && (x.includes(y) || y.includes(x)));
+}
+
+/** Compare the raw texts published by the hub, preserving word boundaries. Short replies must match in full. */
+export function sameMessage(a: string, b: string): boolean {
+  const x = a.replace(/\s+/g, " ").trim();
+  const y = b.replace(/\s+/g, " ").trim();
   if (!x || !y) return false;
   return x === y || (Math.min([...x].length, [...y].length) >= 8 && (x.includes(y) || y.includes(x)));
 }
@@ -66,7 +75,7 @@ export interface Seen {
 export function isEcho(sent: Sent, user: Seen): boolean {
   if (user.client_msg_id && sent.id) return user.client_msg_id === sent.id;
   if (user.source || user.injected || user.from) return false;
-  const at = user.ts ? Date.parse(user.ts) : NaN;
+  const at = timeOrNaN(user.ts);
   if (!Number.isNaN(at) && at < sent.at - (sent.inDoubt ? 5_000 : CLOCK_SLACK_MS)) return false;
   if (user.images.length + (user.photos?.length ?? 0) < sent.images.length) return false;
   const cut = user.text.lastIndexOf(CUT_MARK);

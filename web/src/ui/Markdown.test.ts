@@ -200,21 +200,22 @@ describe("Mermaid blocks", () => {
   it("code and diagram buttons show without hover on a touch screen, with a finger-sized target (#1996)", async () => {
     const { renderToStaticMarkup } = await import("react-dom/server");
     const { createElement } = await import("react");
-    const { Markdown } = await import("./Markdown");
+    const { Markdown, MermaidDiagram } = await import("./Markdown");
+    await MermaidDiagram.preload(); // the diagram's component is its own chunk (Mermaid.lazy.test.tsx)
     // a code block's Copy is in its title bar, always shown (#2984); a diagram's buttons show on a touch screen
     const code = renderToStaticMarkup(createElement(Markdown, { text: "```js\nlet a = 1\n```" }));
-    expect(code).toMatch(/data-code-bar[^]*aria-label="拷贝代码"[^>]*touch-hit/);
+    expect(code).toMatch(/data-code-bar[^]*aria-label="复制代码"[^>]*touch-hit/);
     expect(code).not.toContain("opacity-0");
     const diagram = renderToStaticMarkup(createElement(Markdown, { text: "```mermaid\ngraph TD; A-->B\n```" }));
     expect(diagram).toContain("[@media(hover:none)]:opacity-100");
-    expect(diagram).toMatch(/aria-label="拷贝代码"[^>]*touch-hit/);
+    expect(diagram).toMatch(/aria-label="复制代码"[^>]*touch-hit/);
   });
 
   it("errors read in Chinese with the line, Mermaid's text kept", async () => {
     const { mermaidProblem } = await import("../lib/mermaid");
     const raw = "Parse error on line 3:\nflowchart TD A -->\n--------------^\nExpecting 'NODE', got 'EOF'";
-    expect(mermaidProblem(new Error(raw))).toEqual({ summary: "这张图有语法错误（第 3 行）", detail: raw });
-    expect(mermaidProblem(new Error("No diagram type detected")).summary).toBe("这张图画不出来");
+    expect(mermaidProblem(new Error(raw))).toEqual({ summary: "图表存在语法错误（第 3 行）", detail: raw });
+    expect(mermaidProblem(new Error("No diagram type detected")).summary).toBe("无法渲染此图表");
   });
 });
 
@@ -292,6 +293,91 @@ describe("Markdown tables (#5275)", () => {
   });
 });
 
+// A table on a wide column (#9146): cells wrap at a reading length, not at a phone's 18em, and a short code chip in a
+// cell stays whole.
+describe("Markdown table cells on a wide column (#9146)", () => {
+  it("marks a cell's short code chips, not its long ones nor code outside a table", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const long = "x".repeat(25);
+    const fits = "y".repeat(24);
+    const md = `Outside \`invalid_token\`.\n\n| Item | Result |\n| --- | --- |\n| Service | answers 401 \`invalid_token\`, \`${fits}\` and \`${long}\` |`;
+    const html = renderToStaticMarkup(createElement(Markdown, { text: md }));
+    const chips = [...html.matchAll(/<code [^>]*>([^<]*)<\/code>/g)].map((m) => [m[1], m[0].includes("data-chip")]);
+    expect(chips).toEqual([
+      ["invalid_token", false],
+      ["invalid_token", true],
+      [fits, true],
+      [long, false],
+    ]);
+  });
+
+  it("styles.css: cells wrap at 40em, and a chip in a cell does not wrap", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
+    const rule = (sel: RegExp) => css.match(new RegExp(`(?:^|\\n)${sel.source}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(rule(/\.prose-j th,\s*\.prose-j td/)).toMatch(/max-width:\s*40em;/);
+    expect(css).not.toMatch(/max-width:\s*18em/);
+    expect(rule(/\.prose-j td code\[data-chip\]/)).toMatch(/white-space:\s*nowrap/);
+  });
+});
+
+// A table on a phone (audit item 77): a column is as narrow as its words, and the copy button never sits on header words.
+describe("Markdown table widths and the copy button (audit item 77)", () => {
+  it("marks the cells short enough for one line; long ones keep their minimum and wrap", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const md = "| # | 事项 | 裁定 |\n| --- | --- | --- |\n| 1 | 小组件刷新频率 | 按小时刷新，夜间降到每三小时一次，省电优先 |\n| 2 | **图标** | 换成`描边`版本 |";
+    const html = renderToStaticMarkup(createElement(Markdown, { text: md }));
+    expect(html).toContain('<td data-fit="">1</td>');
+    expect(html).toContain('<td data-fit=""><strong>图标</strong></td>');
+    expect(html).toContain("<td>小组件刷新频率</td>");
+    expect(html).toContain("<td>按小时刷新，夜间降到每三小时一次，省电优先</td>");
+    // the header cells are left as they were (they never wrap)
+    expect(html).toContain("<th>#</th>");
+  });
+
+  it("counts wide characters as wider, and a line break or a picture as never fitting", async () => {
+    const { cellFits } = await import("./Markdown");
+    const text = (value: string) => ({ type: "element", tagName: "td", children: [{ type: "text", value }] });
+    expect(cellFits(text("中国气象局"))).toBe(true);
+    expect(cellFits(text("中国气象局开放平台"))).toBe(false);
+    expect(cellFits(text("1,496 ms"))).toBe(true);
+    expect(cellFits(text("a sentence that wraps"))).toBe(false);
+    expect(cellFits({ type: "element", tagName: "td", children: [{ type: "text", value: "a" }, { type: "element", tagName: "br", children: [] }] })).toBe(false);
+    expect(cellFits({ type: "element", tagName: "td", children: [{ type: "element", tagName: "img", children: [] }] })).toBe(false);
+    expect(cellFits(undefined)).toBe(false);
+  });
+
+  it("styles.css: no minimum for headers or short cells, 7em for long ones, and room for the button in the header row", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
+    const rule = (sel: RegExp) => css.match(new RegExp(`(?:^|\\n)${sel.source}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+    expect(rule(/\.prose-j th,\s*\.prose-j td/)).not.toContain("min-width");
+    expect(rule(/\.prose-j td/)).toMatch(/min-width:\s*7em/);
+    expect(rule(/\.prose-j td\[data-fit\]/)).toMatch(/min-width:\s*0;\s*white-space:\s*nowrap/);
+    expect(rule(/\.prose-j th(?!,)/)).not.toContain("min-width");
+    expect(rule(/\.prose-j \.md-table th:last-child/)).toMatch(/padding-right:\s*2\.25rem/);
+  });
+
+  it("puts the copy button on a cap the header row's color, shown with it", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+    const html = renderToStaticMarkup(createElement(Markdown, { text: "| a | b |\n| --- | --- |\n| 1 | 2 |" }));
+    const cap = /<span data-table-copy="[^"]*" class="([^"]*)"><button[^>]*aria-label="复制表格"/.exec(html);
+    expect(cap).not.toBeNull();
+    expect(cap![1]).toContain("to-inset");
+    expect(cap![1]).toContain("rounded-tr-card");
+    expect(cap![1]).toContain("opacity-0");
+    expect(cap![1]).toContain("[@media(hover:none)]:opacity-100");
+  });
+});
+
 // Finished blocks drawn again from markdown-cache.ts (#2465): a kept tree draws what a fresh one does, and a change of
 // anything a tree is made from (machine, directory, formulas in or out, the path-link set) never draws another's.
 describe("Markdown cache (#2465)", () => {
@@ -317,7 +403,7 @@ describe("Markdown cache (#2465)", () => {
     const { Markdown } = await import("./Markdown");
     const { markdownCache, forgetMarkdown } = await import("./markdown-cache");
     vi.stubGlobal("localStorage", { getItem: () => "test-token" });
-    const html = (props: { text: string; mid?: string; cwd?: string }, cached = true) => {
+    const html = (props: { text: string; mid?: string; cwd?: string; readOnly?: boolean }, cached = true) => {
       markdownCache.on = cached;
       try {
         return renderToStaticMarkup(createElement(Markdown, props));
@@ -390,5 +476,70 @@ describe("Markdown cache (#2465)", () => {
     expect(variants.map((v) => html(v))).toEqual(drawn);
     expect(new Set([before, ...drawn]).size).toBe(variants.length + 1); // each of them changes what is drawn
     forget();
+  });
+
+  it("caches readOnly and default Markdown blocks separately while reusing each mode's own cached tree", async () => {
+    const { html, forgetMarkdown } = await draw();
+    forgetMarkdown();
+    const text = "[Notes](/home/me/Documents/Health/sleep-diary.md)";
+    const before = parses.n;
+    const writable = html({ text, mid: "mac", cwd: "/repo" });
+    expect(parses.n - before).toBe(1);
+    expect(html({ text, mid: "mac", cwd: "/repo" })).toBe(writable);
+    expect(parses.n - before).toBe(1);
+    const readOnly = html({ text, mid: "mac", cwd: "/repo", readOnly: true });
+    expect(parses.n - before).toBe(2);
+    expect(html({ text, mid: "mac", cwd: "/repo", readOnly: true })).toBe(readOnly);
+    expect(parses.n - before).toBe(2);
+  });
+});
+
+describe("CodeBlock header and inline code copy", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("renders language label, wrap toggle, and copy button on fenced code blocks", async () => {
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { createElement } = await import("react");
+    const { Markdown } = await import("./Markdown");
+
+    const tsHtml = renderToStaticMarkup(createElement(Markdown, { text: "```typescript\nconst x = 1\n```" }));
+    expect(tsHtml).toContain("data-code-block=");
+    expect(tsHtml).not.toContain('data-wrap="true"');
+    expect(tsHtml).toContain(">typescript</span>");
+    expect(tsHtml).toContain('title="切换自动换行"');
+    expect(tsHtml).toContain('aria-pressed="false"');
+    expect(tsHtml).toContain('title="复制代码"');
+    expect(tsHtml).toContain("whitespace-nowrap");
+
+    const plainHtml = renderToStaticMarkup(createElement(Markdown, { text: "```\nhello\n```" }));
+    expect(plainHtml).toContain("data-code-bar");
+    expect(plainHtml).toContain('title="切换自动换行"');
+  });
+
+  it("copies inline code on click when selection is collapsed, and skips pre/link or active selection", async () => {
+    const { markdownComponents } = await import("./Markdown");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    let isCollapsed = true;
+    vi.stubGlobal("window", { getSelection: () => ({ isCollapsed }) });
+
+    const codeFn = markdownComponents.code as (props: { children: string; className?: string }) => { props: { onClick?: (e: unknown) => void } };
+    const el = codeFn({ children: "npm test" });
+    const onClick = el.props.onClick!;
+
+    // Inline code with collapsed selection copies text.
+    onClick({ currentTarget: { closest: () => null, textContent: "npm test" } });
+    expect(writeText).toHaveBeenCalledWith("npm test");
+
+    // Non-collapsed text selection does not trigger copy.
+    writeText.mockClear();
+    isCollapsed = false;
+    onClick({ currentTarget: { closest: () => null, textContent: "npm test" } });
+    expect(writeText).not.toHaveBeenCalled();
+
+    // Code inside <pre> or <a> does not trigger inline copy.
+    isCollapsed = true;
+    onClick({ currentTarget: { closest: () => ({}), textContent: "npm test" } });
+    expect(writeText).not.toHaveBeenCalled();
   });
 });

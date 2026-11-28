@@ -4,6 +4,7 @@ import android.content.res.Resources
 import persona.core.contracts.api.*
 import persona.core.designsystem.UiText
 import persona.core.designsystem.failureReasonText
+import persona.core.domain.models.ModelPanel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -61,9 +62,12 @@ internal fun providerOptions(res: Resources, purpose: ModelPurpose, providers: L
             .takeIf { chosen.isNotEmpty() && candidates.none { it.id == chosen } })
 }
 
-/** Effort is a field of launchers and of Responses APIs; a Messages API provider has none to set. */
+/** Effort is a field of launchers, Responses APIs, and Chat APIs marked chat_effort; a Messages API provider has none to set. */
 internal fun showsEffort(purpose: ModelPurpose, provider: ModelProvider?): Boolean =
-    purpose.supports("effort") && (agentsOverride(purpose) || !(provider?.kind == "api" && provider.api != "responses"))
+    purpose.supports("effort") && (
+        agentsOverride(purpose) ||
+            !(provider?.kind == "api" && provider.api != "responses" && !(provider.api == "chat" && provider.chatEffort))
+        )
 
 internal data class ModelCatalogState(
     val catalog: ModelCatalog? = null,
@@ -135,6 +139,25 @@ internal data class ModelPurposeState(
     /** The provider the form talks about: the chosen one, else the one in effect. */
     val provider: ModelProvider? get() = detail?.providers?.firstOrNull { it.id == (draft.provider.ifEmpty { purpose?.effective?.provider }) }
     val changed: Boolean get() = purpose?.let { draft != ModelConfigurationDraft.from(it) } == true
+    val candidateProviders: List<ModelProvider> get() = purpose?.candidateProviders(detail?.providers.orEmpty()).orEmpty()
+    val candidateChanged: Boolean get() = purpose?.let { draft.candidates?.change(it) } != null
+
+    val candidateProblem: ResText? get() {
+        val edit = draft.candidates ?: return null
+        val setting = purpose?.extensionCandidates() ?: return null
+        if (edit.mode != "custom") return null
+        val providers = candidateProviders
+        if (providers.isEmpty()) return ResText.of(R.string.settings_candidate_no_providers)
+        if (edit.custom.size !in 1..setting.most) return ResText.of(R.string.settings_candidate_count, setting.most)
+        val seen = mutableSetOf<Pair<String, String>>()
+        for (row in edit.custom) {
+            if (providers.none { it.id == row.provider }) return ResText.of(R.string.settings_candidate_choose_provider)
+            val model = row.model.trim()
+            if (model.isNotEmpty() && ModelPanel.typedModelId(model) == null) return ResText.of(R.string.settings_candidate_model_id)
+            if (!seen.add(row.provider to model)) return ResText.of(R.string.settings_candidate_duplicate)
+        }
+        return null
+    }
 
     /** The launcher provider whose /model list "Model" picks from; "": an extension's, an API's, none. */
     val listProvider: String get() = provider?.takeIf { it.kind == "launcher" && purpose?.kind != "plugin" && purpose?.supports("model") == true }?.id.orEmpty()
@@ -182,7 +205,11 @@ internal class ModelPurposeModel(private val api: ModelConfiguration, private va
             val detail = api.purpose(id)
             mutable.update { s ->
                 val usable = detail.purpose.providersFrom(detail.providers).any { it.id == providerId }
-                s.copy(detail = detail, draft = if (usable) s.draft.choosingProvider(providerId) else s.draft)
+                val oldPolicyEdited = s.candidateChanged
+                val conflict = s.conflict || oldPolicyEdited && s.purpose?.revision != detail.purpose.revision
+                val refreshed = if (oldPolicyEdited) s.draft else s.draft.copy(candidates = detail.purpose.extensionCandidates()?.draft())
+                s.copy(detail = detail, draft = if (usable) refreshed.choosingProvider(providerId) else refreshed,
+                    conflict = conflict, error = if (conflict) ResText.of(R.string.settings_src_model_conflict) else s.error)
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { mutable.update { it.copy(error = ResText.of(R.string.settings_src_read_failed, failureReasonText(error))) } }
@@ -209,7 +236,7 @@ internal class ModelPurposeModel(private val api: ModelConfiguration, private va
     suspend fun save(restore: Boolean = false): ResText? {
         val current = state.value
         val purpose = current.purpose ?: return null
-        if (current.busy || current.conflict) return null
+        if (current.busy || current.conflict || current.candidateChanged && (restore || current.candidateProblem != null)) return null
         mutable.update { it.copy(busy = true, error = null) }
         return try {
             when (val result = api.save(purpose, if (restore) ModelConfigurationDraft.Restore else current.draft)) {

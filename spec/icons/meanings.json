@@ -45,9 +45,17 @@
       "sf": "chevron.left",
       "phosphor": "caret-left"
     },
+    "backgroundMonitor": {
+      "sf": "display",
+      "phosphor": "monitor"
+    },
     "backgroundTask": {
       "sf": "gearshape.2",
       "phosphor": "gear-six"
+    },
+    "backgroundTasks": {
+      "sf": "list.clipboard",
+      "phosphor": "list-checks"
     },
     "backgroundWaiting": {
       "sf": "clock.fill",
@@ -56,6 +64,10 @@
     "byApp": {
       "sf": "macwindow",
       "phosphor": "app-window"
+    },
+    "recent": {
+      "sf": "clock.arrow.circlepath",
+      "phosphor": "arrow-counter-clockwise"
     },
     "calendarView": {
       "sf": "calendar",
@@ -229,6 +241,10 @@
       "sf": "folder.fill",
       "phosphor": "folder"
     },
+    "followOn": {
+      "sf": "arrow.turn.down.right",
+      "phosphor": "arrow-bend-down-right"
+    },
     "forkChat": {
       "sf": "arrow.branch",
       "phosphor": "git-branch"
@@ -236,6 +252,10 @@
     "forward": {
       "sf": "chevron.forward",
       "phosphor": "caret-right"
+    },
+    "forwardMessage": {
+      "sf": "arrowshape.turn.up.right",
+      "phosphor": "arrow-bend-up-right"
     },
     "gitBranch": {
       "sf": "arrow.triangle.branch",
@@ -337,6 +357,10 @@
       "sf": "books.vertical",
       "phosphor": "book-open"
     },
+    "knowledgeMap": {
+      "sf": "map",
+      "phosphor": "tree-structure"
+    },
     "laptop": {
       "sf": "laptopcomputer",
       "phosphor": "laptop"
@@ -405,6 +429,10 @@
       "sf": "music.note",
       "phosphor": "music-note"
     },
+    "muted": {
+      "sf": "bell.slash.fill",
+      "phosphor": "prohibit"
+    },
     "newConversation": {
       "sf": "plus.bubble",
       "phosphor": "chat-circle-dots"
@@ -424,6 +452,10 @@
     "offline": {
       "sf": "wifi.exclamationmark",
       "phosphor": "wifi-slash"
+    },
+    "open": {
+      "sf": "arrow.up.right",
+      "phosphor": "arrow-up-right"
     },
     "openDocument": {
       "sf": "arrow.up.forward.square",
@@ -549,6 +581,10 @@
       "sf": "safari",
       "phosphor": "globe-simple"
     },
+    "scanCode": {
+      "sf": "qrcode.viewfinder",
+      "phosphor": "qr-code"
+    },
     "screen": {
       "sf": "display",
       "phosphor": "monitor"
@@ -593,9 +629,17 @@
       "sf": "sidebar.left",
       "phosphor": "sidebar-simple"
     },
+    "sideSessions": {
+      "sf": "rectangle.portrait.on.rectangle.portrait",
+      "phosphor": "stack"
+    },
     "skills": {
       "sf": "puzzlepiece.extension",
       "phosphor": "puzzle-piece"
+    },
+    "someday": {
+      "sf": "moon.stars.fill",
+      "phosphor": "couch"
     },
     "space": {
       "sf": "square.stack.3d.up",
@@ -645,6 +689,10 @@
       "sf": "clock",
       "phosphor": "clock"
     },
+    "topic": {
+      "sf": "lightbulb.2",
+      "phosphor": "lightbulb"
+    },
     "today": {
       "sf": "sun.max.fill",
       "phosphor": "sun"
@@ -682,8 +730,8 @@
       "phosphor": "eye"
     },
     "voiceChannel": {
-      "sf": "waveform.and.mic",
-      "phosphor": "waveform"
+      "sf": "phone.fill",
+      "phosphor": "phone"
     },
     "voiceConnecting": {
       "sf": "antenna.radiowaves.left.and.right",

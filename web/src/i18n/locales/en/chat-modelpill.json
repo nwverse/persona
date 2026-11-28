@@ -7,7 +7,6 @@
   "loading": "Loading model…",
   "failed": "Model loading failed",
   "default_model": "Default model",
-  "effort_xhigh_short": "Extra",
   "header_default": "Following the default · {setup}",
   "header_own": "Same as when this chat started · {setup}",
   "header_picked": "Picked for this chat · {setup}",
@@ -16,5 +15,6 @@
   "follow_default": "Follow default",
   "undo_pick": "Undo pick",
   "provider_gone": "This provider isn't on this computer anymore",
-  "pick_dropped": "{launcher} can't run Persona chats, so this chat is back on the default"
+  "pick_dropped": "{launcher} can't run Persona chats, so this chat is back on the default",
+  "restore_last_good": "Restore last working setup"
 }

@@ -1,4 +1,5 @@
 import { canonicalAppURL } from "./compatibility";
+import { parse as parseRoute, type Route } from "./router";
 // An extension's declarative UI (docs/extensions/extensions.md "Declarative UI"): the extension sends a View (a few fixed kinds of items), the
 // web draws it with its own design system, and buttons go back to the extension. No extension code runs here, no extension
 // colors, sizes or icons: a tone becomes one of the theme's role colors. The checks match server/internal/extension/ui.go
@@ -11,15 +12,22 @@ import { itemHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
 import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
+import { decodeSettingsPrefill } from "./settings-prefill";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
+import { HEALTH_INTAKE_UI } from "./health-intake-ui";
 import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
+import type { SceneCamera, SceneLabel, ScenePin, SceneShape } from "./extension-wire";
 
 export { isHttps };
 
-/** The UI version the web draws (context.ui_version). */
-export const UI_VERSION = 6;
+/**
+ * The UI version the web draws (context.ui_version): all of 13, including a code's navigate (CodeViews.tsx), the map
+ * canvas (ViewBody12.tsx), the lazy 3D scene (ViewBody11.tsx), the graph canvas (ViewBody10.tsx), the columns layout
+ * (ViewBody8.tsx) and a tile's gauge (ViewBody9.tsx).
+ */
+export const UI_VERSION = 13;
 
 export type UITone = "neutral" | "positive" | "caution" | "danger";
 
@@ -29,6 +37,8 @@ export interface UIAction {
   confirm?: string;
   /** Send every field's value along. */
   submit?: boolean;
+  /** A full extension page may open an https URL or a persona session/task target in the app (#14617). */
+  open?: string;
   /** UI version 3: open another page of the extension on top of this one, without asking the extension first. */
   push?: UIPush;
   /** UI version 4: values the action carries, sent with the fields' and the component's (these win on a name). */
@@ -50,7 +60,7 @@ export interface UIChoice {
 
 /** One item of a section; which fields it has depends on `type`. */
 export interface UIItem {
-  type: "text" | "metric" | "progress" | "row" | "button" | "link" | "field" | "divider" | "chart" | "stat_grid" | "segmented" | string;
+  type: "text" | "metric" | "progress" | "row" | "button" | "link" | "field" | "divider" | "chart" | "stat_grid" | "segmented" | "graph" | "map" | string;
   text?: string;
   /** text: body | secondary | caption | code */
   style?: string;
@@ -132,6 +142,8 @@ export interface UIItem {
   suggestions?: boolean;
   /** code: a link to lines on the site, {start} and {end} filled in */
   line_url?: string;
+  /** UI version 13, code: go to definition, find usages and back (values path, line, column, word, intent) */
+  navigate?: UIAction;
   /** UI version 6: image */
   src?: UIImageSource;
   alt?: string;
@@ -156,6 +168,24 @@ export interface UIItem {
   /** field: date, time, datetime limits */
   earliest?: string;
   latest?: string;
+  /** UI version 10 (#9727), graph: its nodes, edges, folds, layout, direction and the node drawn as selected (its id) */
+  nodes?: UIGraphNode[];
+  edges?: { from: string; to: string }[];
+  folded?: string[];
+  layout?: UIGraph["layout"];
+  direction?: UIGraph["direction"];
+  /** UI version 11: an orthographic 3D scene, drawn by ViewBody11.tsx. */
+  camera?: SceneCamera;
+  shapes?: SceneShape[];
+  labels?: SceneLabel[];
+  pins?: ScenePin[];
+  /** UI version 12 (#14730, #14998), map: viewport framing, markers, routes, verified https links, static flag and stop list toggle */
+  viewport?: UIMapViewport;
+  markers?: UIMapMarker[];
+  routes?: UIMapRoute[];
+  links?: UIMapLink[];
+  static?: boolean;
+  show_list?: boolean;
 }
 
 /** A view's tabs on top (UI version 4): choosing one sends {name: value} (with the search's q) at once. */
@@ -220,6 +250,134 @@ export interface UIStat {
   spark?: UISpark;
 }
 
+// ── UI version 10: a graph ───────────────────────────────
+
+/** One label/value reading of a node's inspector (UI version 10). */
+export interface UIFact {
+  label?: string;
+  value: string;
+  icon?: string;
+}
+
+/** One https link of a node's inspector (UI version 10): a title and a credential-free https url. */
+export interface UIGraphNodeLink {
+  title: string;
+  url: string;
+}
+
+/** Only a credential-free https url opens from a node's inspector. */
+export const isGraphLink = isHttps;
+
+/** One node of a graph (UI version 10, #9727): a box with a title, a state line, a badge, an icon and a progress bar. */
+export interface UIGraphNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  badge?: { text: string; tone?: UITone; color?: UIColor };
+  /** A role color (never with color): colors the node's edge bar and state dot, never its text. */
+  tone?: UITone;
+  /** A named color (never with tone). */
+  color?: UIColor;
+  icon?: string;
+  /** A thin bar along the node's foot, 0 to 1. */
+  progress?: number;
+  group?: string;
+  action?: UIAction;
+  /** Unix seconds when the node started and ended; ended is omitted while it is still running. */
+  started_at?: number;
+  ended_at?: number;
+  /** Short label/value readings shown in the node's inspector. */
+  facts?: UIFact[];
+  /** A plain-text summary, verifier feedback or an error, shown in the node's inspector. */
+  detail?: string;
+  /** Session and verifier links shown in the node's inspector. */
+  links?: UIGraphNodeLink[];
+}
+
+/** A graph component (UI version 10): nodes joined by edges, laid out by the app (lib/graph-layout.ts). */
+export interface UIGraph {
+  /** Keeps the person's pan, zoom and folding across redraws of the page. */
+  key?: string;
+  nodes: UIGraphNode[];
+  edges: { from: string; to: string }[];
+  layout?: "tree" | "layered" | string;
+  direction?: "right" | "down" | string;
+  /** A node's id: drawn as selected, and the canvas opens centred on it. */
+  selected?: string;
+  /** The ids of nodes whose children start folded; the person's own folds for this key take over. */
+  folded?: string[];
+}
+
+// ── UI version 12: a map ────────────────────────────────
+
+export const MAP_MARKER_CAP = 100;
+export const MAP_ROUTE_CAP = 8;
+export const MAP_POINT_CAP = 2000;
+export const MAP_LINK_CAP = 6;
+
+const MAP_MARKER_KINDS: readonly string[] = ["origin", "destination", "waypoint", "pin", "user"];
+const MAP_TRAVEL_MODES: readonly string[] = ["driving", "walking", "transit", "cycling"];
+
+export type UIMapMarkerKind = "origin" | "destination" | "waypoint" | "pin" | "user";
+export type UIMapTravelMode = "driving" | "walking" | "transit" | "cycling";
+
+export interface UIMapCoordinate {
+  lat: number;
+  lon: number;
+}
+
+export interface UIMapViewport {
+  center: UIMapCoordinate;
+  span_lat?: number;
+  span_lon?: number;
+}
+
+export interface UIMapMarker {
+  id: string;
+  lat: number;
+  lon: number;
+  kind?: UIMapMarkerKind;
+  label: string;
+  subtitle?: string;
+  detail?: string;
+  icon?: string;
+  tone?: UITone;
+  color?: UIColor;
+  action?: UIAction;
+}
+
+export interface UIMapRoute {
+  id: string;
+  label?: string;
+  mode?: UIMapTravelMode;
+  distance_meters?: number;
+  duration_seconds?: number;
+  summary?: string;
+  selected?: boolean;
+  tone?: UITone;
+  color?: UIColor;
+  points: UIMapCoordinate[];
+}
+
+export interface UIMapLink {
+  title: string;
+  url: string;
+}
+
+export interface UIMap {
+  key?: string;
+  title?: string;
+  alt: string;
+  caption?: string;
+  aspect?: string;
+  viewport?: UIMapViewport;
+  markers?: UIMapMarker[];
+  routes?: UIMapRoute[];
+  links?: UIMapLink[];
+  static?: boolean;
+  show_list?: boolean;
+}
+
 export interface UISection {
   title?: string;
   footer?: string;
@@ -228,6 +386,21 @@ export interface UISection {
   more?: UIMore;
   /** UI version 4: in a split view, side is the column at the start (the file tree) */
   pane?: "main" | "side" | string;
+  /** UI version 8: in a columns view, full takes the whole row */
+  span?: "full" | string;
+  /** UI version 8: an icon before the title (from the row icons), in its color */
+  icon?: string;
+  icon_color?: UIColor;
+  /** UI version 8: a link beside the title */
+  link?: UISectionLink;
+  /** UI version 8: how many rows sit side by side on a wide screen (2 or 3; absent, one) */
+  columns?: number;
+}
+
+/** A link beside a section's title (UI version 8): pressed, it does its action like a row's. */
+export interface UISectionLink {
+  title: string;
+  action: UIAction;
 }
 
 export interface UIView {
@@ -241,7 +414,8 @@ export interface UIView {
   filter?: UIFilter;
   /** UI version 4 */
   tabs?: UITabs;
-  layout?: "stack" | "split" | string;
+  /** UI version 4: split; 8: columns */
+  layout?: "stack" | "split" | "columns" | string;
   /** UI version 5: the pending review's bar */
   review?: UIReview;
 }
@@ -267,7 +441,7 @@ export interface UIPlace {
   placement: "plugin_page" | "launcher_section" | "nav_page" | "overview_card" | "machine_section" | "inbox_item" | string;
   /** compact (a card) or full (a page, a section). */
   size?: "compact" | "full" | string;
-  /** A nav_page's icon, from UI_ICONS. */
+  /** A nav_page's icon, from UI_ICONS (the row icons). */
   icon?: string;
   /** The page (nav_page or plugin_page of the same extension) an overview_card opens. */
   opens?: string;
@@ -275,6 +449,10 @@ export interface UIPlace {
   badge?: UIBadge | null;
   /** The connector whose inbox items an inbox_item draws (the items' `source`). */
   connector?: string;
+  /** The sidebar group a nav_page goes in unless the user put it elsewhere (#9071), its title in the app's language. */
+  group?: { id: string; title: string };
+  /** A nav_page's icon color (a named Color), drawn only with Colored sidebar icons (#10822); colorOf reads it. */
+  icon_color?: string;
 }
 
 export interface UIBadge {
@@ -310,8 +488,10 @@ export interface UIContext {
 export interface UIContextSent extends UIContext {
   tz?: string;
   locale?: string;
-  platform: "web";
+  platform: "web" | "desktop";
   ui_version: number;
+  /** Component types in the current UI version that the web client does not render. */
+  unsupported?: string[];
 }
 
 /** The context sent: the place's, with the browser's time zone and language. */
@@ -323,7 +503,8 @@ export function uiContext(context?: UIContext): UIContextSent {
     tz = undefined;
   }
   const locale = typeof navigator !== "undefined" ? navigator.language || undefined : undefined;
-  const out: UIContextSent = { platform: "web", ui_version: UI_VERSION };
+  const platform = typeof window !== "undefined" && window.personaDesktop ? "desktop" : "web";
+  const out: UIContextSent = { platform, ui_version: UI_VERSION };
   if (tz) out.tz = tz;
   if (locale) out.locale = locale;
   if (context?.launcher) out.launcher = context.launcher;
@@ -337,9 +518,12 @@ export function uiContext(context?: UIContext): UIContextSent {
 // ── the hub ─────────────────────────────────────────────
 
 /** The extensions' places of a placement; no placement: every slot's but launcher sections' (nav, overview, machines).
+ *  Asks with `pages_overview=1` when Overview cards are in scope so Dashboards watch cards (`-pages`, `g_<hex>`) are
+ *  listed for Overview (docs/assistant/dashboards.md "Overview (web)").
  *  `manager`: whose extensions (several managers, docs/assistant/managers.md "Clients"); none: the default's. */
 export function uiPlaces(placement: string, launcher?: string, machine?: string, manager?: string): Promise<UIPlace[]> {
   const q = new URLSearchParams(placement ? { placement } : {});
+  if (!placement || placement === "overview_card") q.set("pages_overview", "1");
   if (launcher) q.set("launcher", launcher);
   if (machine) q.set("machine", machine);
   return api<{ ui?: UIPlace[] }>(`${extRoot()}/-/ui${q.size ? `?${q}` : ""}`, { headers: itemHeaders(manager) }).then((r) => (Array.isArray(r.ui) ? r.ui.map(placeOf) : []));
@@ -352,9 +536,28 @@ export function placeOf(u: UIPlace & { plugin?: string; plugin_name?: string }):
   return { ...rest, extension: u.extension ?? plugin ?? "", ...((u.extension_name ?? plugin_name) ? { extension_name: u.extension_name ?? plugin_name } : {}) };
 }
 
-// The subscription pages (#2041) are the manager's own, drawn and pressed like an extension's page under a reserved id.
-const uiPath = (extension: string, ui: string) =>
-  extension === SUBSCRIPTIONS_UI ? "/subscriptions/-/ui" : `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
+// The manager's own pages are drawn and pressed like an extension's page under a reserved id (ids never start with "-"):
+// where each is asked. The health pages (#13176) name the health space, which stays the default manager's whichever
+// assistant the Persona page shows (lib/manager-choice.ts `managerHeaderFor` adds none to a request with `space=`).
+const RESERVED_UI_PATHS: Record<string, string> = {
+  [SUBSCRIPTIONS_UI]: "/subscriptions/-/ui",
+  [HEALTH_INTAKE_UI]: "/assistant/health/intake/ui?space=health",
+};
+/** Whether `extension` is one of the manager's own pages: drawn over HTTP only, never as an extension's. */
+export const isReservedUI = (extension: string): boolean => Object.hasOwn(RESERVED_UI_PATHS, extension);
+/** Whether `extension` is a manager's own id (it starts with "-", which no extension's can): its pages are drawn over
+ *  HTTP only and never open the native UI stream, the reserved ids above and those asked at the extensions' own path
+ *  alike (Dashboards' `-pages`, #15017; the hub answers the stream's open for them with `negotiation`). */
+export const httpOnlyUI = (extension: string): boolean => extension.startsWith("-");
+/** Dashboards' reserved id (#15017): the pages the assistant keeps, listed among the extensions' places and drawn at
+ *  their path (/api/v1/extensions/-pages/-/ui/{index|pg_…}) by the default manager. */
+export const PAGES_UI = "-pages";
+/** The Dashboards place itself, the list of pages; every other id of `-pages` is one page (`pg_` and 16 hex). */
+export const PAGES_INDEX = "index";
+/** The hello feature of a hub whose default manager has Dashboards: Settings › Assistant shows their switch. */
+export const ASSISTANT_PAGES_FEATURE = "assistant_pages";
+export const uiPath = (extension: string, ui: string) =>
+  (isReservedUI(extension) ? RESERVED_UI_PATHS[extension] : undefined) ?? `${extRoot()}/${enc(extension)}/-/ui/${enc(ui)}`;
 
 /** Draws the view (no action). A view that does not read at all is an error; unknown items are left out. `manager`:
  *  whose extension it is (another manager's inbox item, or computer); none: the default's. */
@@ -448,17 +651,21 @@ export function blocks(items: UIItem[]): UIBlock[] {
  * open the inbox item's own source page (an inbox_item's open_url persona://inbox/<item>/source, for the item it is
  * drawn for); `settings`: the in-app path of an extension's own settings (open_url persona://settings/extensions/<id>);
  * `ask`: the text for the assistant's main conversation (open_url persona://ask?text=…), taken only from the manager's
- * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages").
+ * own subscription pages (`extension` SUBSCRIPTIONS_UI, docs/extensions/subscriptions.md "Pages"); `compose`: the text
+ * of one of this extension's own quick prompts, to put in the main conversation's composer without sending it
+ * (open_url persona://compose?prompt=<id>&text=<text>, docs/extensions/extensions.md "Declarative UI").
  */
 export function outcome(
   r: UIActionResult,
   item?: string,
   extension?: string,
-): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; push?: UIPush; pop?: true } {
+): { view?: UIView; items?: UIItem[]; reload: boolean; toast?: string; url?: string; source?: true; settings?: string; ask?: string; compose?: string; track?: Route; push?: UIPush; pop?: true } {
   const url = r.open_url && isHttps(r.open_url) ? r.open_url : undefined;
+  const track = r.open_url ? extensionTrackRoute(r.open_url) : undefined;
   const source = !!item && !!r.open_url && inboxSourceItem(r.open_url) === item;
   const settings = r.open_url ? extensionSettingsHref(r.open_url) : undefined;
   const ask = extension === SUBSCRIPTIONS_UI && r.open_url ? askText(r.open_url) : undefined;
+  const compose = r.open_url ? composeText(r.open_url) : undefined;
   const push = readPush(r.push);
   const pop = r.pop === true && !push;
   return {
@@ -471,9 +678,22 @@ export function outcome(
     ...(source ? { source: true as const } : {}),
     ...(settings ? { settings } : {}),
     ...(ask ? { ask } : {}),
+    ...(compose ? { compose } : {}),
+    ...(track ? { track } : {}),
     ...(push ? { push } : {}),
     ...(pop ? { pop: true as const } : {}),
   };
+}
+
+/** A space conversation handed back to the app. Only this narrow, read-only
+ * navigation contract is accepted; an extension cannot choose another route. */
+export function extensionTrackRoute(link: string): Route | undefined {
+  const match = /^persona:\/\/tracks\/([^/?#]+)\/([^/?#]+)\/([^/?#]+)$/.exec(canonicalAppURL(link));
+  if (!match) return undefined;
+  const parts = match.slice(1);
+  if (parts[1] === "health") return undefined;
+  const route = parseRoute(`persona/${encodeURIComponent(parts[2])}`, `?machine=${encodeURIComponent(parts[0])}`);
+  return route.name === "persona" && route.sid && route.mid ? route : undefined;
 }
 
 /** The text of a persona://ask?text=… link (an older name's scheme too, as other in-app links); undefined for any other
@@ -483,6 +703,24 @@ export function askText(link: string): string | undefined {
   if (!c.startsWith("persona://ask?")) return undefined;
   const text = new URLSearchParams(c.slice("persona://ask?".length)).get("text") ?? "";
   return text.trim() && text.length <= 8000 ? text : undefined;
+}
+
+/** The text of a persona://compose?prompt=<id>&text=<text> link (an older name's scheme too), or undefined. The hub
+ *  has already checked that both match one of this extension's own quick prompts; the page only reads the text. */
+export function composeText(link: string): string | undefined {
+  const c = canonicalAppURL(link);
+  let u: URL;
+  try {
+    u = new URL(c);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== "persona:" || u.username || u.password || u.host.toLowerCase() !== "compose" || (u.pathname !== "" && u.pathname !== "/") || u.hash) return undefined;
+  const params = u.searchParams;
+  if ([...params.keys()].sort().join(",") !== "prompt,text") return undefined;
+  const id = params.get("prompt") ?? "", text = params.get("text") ?? "";
+  if (!id.trim() || id.length > 64 || /\s/.test(id)) return undefined;
+  return text.trim() && [...text].length <= 8000 ? text : undefined;
 }
 
 /** How deep the pages pushed on one another go (docs/extensions/extensions.md "Page navigation"): a push past it replaces the top one. */
@@ -555,11 +793,12 @@ export function inboxSourceItem(url: string): string | undefined {
 
 /**
  * The in-app path of an extension's settings page that persona://settings/extensions/<id> names (the id escaped as one
- * path segment): /settings?tab=extensions&extension=<id>. undefined for any other link, and for an id the hub keeps for
- * itself (one starting with "-") or one with a "/".
+ * path segment): /settings?tab=extensions&extension=<id>. A bounded ?set=<url-encoded JSON object> proposes ordinary
+ * values for that same page and is preserved. undefined for any other link, and for an id the hub keeps for itself (one
+ * starting with "-") or one with a "/".
  */
 export function extensionSettingsHref(url: string): string | undefined {
-  const m = /^persona:\/\/settings\/extensions\/([^/?#]+)$/.exec(canonicalAppURL(url));
+  const m = /^persona:\/\/settings\/extensions\/([^/?#]+)(?:\?([^#]*))?$/.exec(canonicalAppURL(url));
   if (!m) return undefined;
   let id: string;
   try {
@@ -568,7 +807,11 @@ export function extensionSettingsHref(url: string): string | undefined {
     return undefined;
   }
   if (!id || id.startsWith("-") || id.includes("/")) return undefined;
-  return `/settings?tab=extensions&extension=${encodeURIComponent(id)}`;
+  const href = `/settings?tab=extensions&extension=${encodeURIComponent(id)}`;
+  if (m[2] === undefined || m[2] === "") return href;
+  if (!m[2].startsWith("set=") || /[&;#]/.test(m[2])) return undefined;
+  const set = new URLSearchParams(m[2]).get("set");
+  return decodeSettingsPrefill(set) ? `${href}&set=${encodeURIComponent(set!)}` : undefined;
 }
 
 // ── reading what the hub sent (UI version 2) ─────────────
@@ -579,6 +822,9 @@ export const KNOWN_ITEMS: readonly string[] = [
   "markdown", "table", "empty", "loading", // UI version 3
   "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", // UI version 4
   "image", "grid", "carousel", // UI version 6
+  "graph", // UI version 10
+  "scene", // UI version 11
+  "map", // UI version 12
 ];
 
 /** An item the web can draw: a known type with what it needs to be drawn at all (a chart with points, a grid with stats). */
@@ -618,6 +864,15 @@ function drawable(it: unknown): it is UIItem {
     case "grid":
     case "carousel":
       return Array.isArray(it.tiles) && it.tiles.some((t) => isObject(t) && typeof t.title === "string" && !!t.title);
+    // UI version 10: a graph with nodes that read at all; the rest of the reading is readGraph's
+    case "graph":
+      return Array.isArray(it.nodes) && it.nodes.some((n: Record<string, unknown>) => isObject(n) && typeof n.id === "string" && typeof n.title === "string" && !!n.title);
+    // UI version 11: a scene with a description and shapes that can be drawn
+    case "scene":
+      return typeof it.alt === "string" && !!it.alt && Array.isArray(it.shapes) && it.shapes.length > 0;
+    // UI version 12: an interactive map with required alt text and valid geometry
+    case "map":
+      return Boolean(readMap(it));
     default:
       return true;
   }
@@ -647,6 +902,7 @@ export function readView(raw: unknown, opts: { html?: boolean } = {}): UIView {
       ...(typeof s.key === "string" && s.key ? { key: s.key } : {}),
       ...(more ? { more } : {}),
       ...(s.pane === "side" ? { pane: "side" } : {}),
+      ...readSection8(s),
     });
   }
   const view: UIView = { sections };
@@ -660,7 +916,7 @@ export function readView(raw: unknown, opts: { html?: boolean } = {}): UIView {
       ...(typeof raw.search.value === "string" ? { value: raw.search.value } : {}),
     };
   }
-  if (raw.layout === "split") view.layout = "split";
+  if (raw.layout === "split" || raw.layout === "columns") view.layout = raw.layout;
   const tb = raw.tabs;
   if (isObject(tb) && typeof tb.name === "string" && tb.name && readAction(tb.action) && Array.isArray(tb.items)) {
     const items = tb.items.flatMap((i) =>
@@ -699,6 +955,198 @@ export function readView(raw: unknown, opts: { html?: boolean } = {}): UIView {
   return view;
 }
 
+/** A section's fields of UI version 8 (views/extensions/ViewBody8.tsx draws them): its span, icon and icon color, link, and columns. */
+function readSection8(s: Record<string, unknown>): Partial<UISection> {
+  const out: Partial<UISection> = {};
+  for (const k of ["span", "icon", "icon_color"]) if (typeof s[k] === "string" && s[k]) (out as Record<string, unknown>)[k] = s[k];
+  if (typeof s.columns === "number" && s.columns > 1) out.columns = Math.min(3, Math.floor(s.columns));
+  const l = s.link;
+  if (isObject(l) && typeof l.title === "string" && l.title && readAction(l.action)) out.link = { title: l.title, action: readAction(l.action)! };
+  return out;
+}
+
+/**
+ * A graph as the web draws it (UI version 10, #9727): the hub has already checked the ids, edges and folds; what does
+ * not read here is left out node by node, never drawn half. An edge whose ends are both kept stays; a `selected` or a
+ * `folded` id that is gone is dropped. The tone and the color are kept as sent (never both; the drawing holds a
+ * progress to 0–1 and leaves an unknown color or icon out).
+ */
+export function readGraph(raw: unknown): UIGraph | undefined {
+  if (!isObject(raw) || !Array.isArray(raw.nodes)) return undefined;
+  const byId = new Map<string, UIGraphNode>();
+  for (const n of raw.nodes) {
+    if (!isObject(n) || typeof n.id !== "string" || !n.id || typeof n.title !== "string" || !n.title) continue;
+    const node: UIGraphNode = { id: n.id, title: n.title };
+    if (typeof n.subtitle === "string") node.subtitle = n.subtitle;
+    if (isObject(n.badge) && typeof n.badge.text === "string" && n.badge.text)
+      node.badge = { text: n.badge.text, ...(typeof n.badge.tone === "string" ? { tone: toneOf(n.badge.tone as string) } : {}), ...(colorOf(n.badge.color as string) ? { color: colorOf(n.badge.color as string)! } : {}) };
+    if (TONES.includes(n.tone as string)) node.tone = n.tone as UITone;
+    if (colorOf(n.color as string)) node.color = colorOf(n.color as string)!;
+    if (typeof n.icon === "string") node.icon = n.icon;
+    if (typeof n.progress === "number" && Number.isFinite(n.progress)) node.progress = n.progress;
+    if (typeof n.group === "string" && n.group) node.group = n.group;
+    // UI version 10's inspector fields: the timing, the readings, the summary and the links, each as it reads.
+    // Character bounds count Unicode code points (Array.from), matching the hub's utf8.RuneCountInString.
+    const runeLen = (s: string) => Array.from(s).length;
+    const runeSlice = (s: string, max: number) => Array.from(s).slice(0, max).join("");
+    if (typeof n.started_at === "number" && Number.isFinite(n.started_at) && n.started_at >= 0) node.started_at = n.started_at;
+    if (typeof n.ended_at === "number" && Number.isFinite(n.ended_at) && n.ended_at >= 0 && (node.started_at === undefined || n.ended_at >= node.started_at)) node.ended_at = n.ended_at;
+    if (Array.isArray(n.facts)) {
+      const facts = n.facts
+        .filter((f): f is Record<string, unknown> => isObject(f) && typeof f.value === "string" && !!f.value && runeLen(f.value) <= 2000)
+        .slice(0, 8)
+        .map((f) => ({
+          ...(typeof f.label === "string" && runeLen(f.label) <= 200 ? { label: f.label } : {}),
+          value: f.value as string,
+          ...(typeof f.icon === "string" ? { icon: f.icon } : {}),
+        }));
+      if (facts.length) node.facts = facts;
+    }
+    if (typeof n.detail === "string" && n.detail.length > 0) node.detail = runeSlice(n.detail, 2000);
+    if (Array.isArray(n.links)) {
+      const links = n.links
+        .filter(
+          (l): l is Record<string, unknown> =>
+            isObject(l) && typeof l.title === "string" && !!l.title && runeLen(l.title) <= 80 && typeof l.url === "string" && runeLen(l.url) <= 2000 && isGraphLink(l.url),
+        )
+        .slice(0, 8)
+        .map((l) => ({ title: l.title as string, url: l.url as string }));
+      if (links.length) node.links = links;
+    }
+    const action = readAction(n.action);
+    if (action) node.action = action;
+    byId.set(node.id, node);
+  }
+  if (!byId.size) return undefined;
+  const edges: { from: string; to: string }[] = [];
+  for (const e of Array.isArray(raw.edges) ? raw.edges : []) {
+    if (!isObject(e) || typeof e.from !== "string" || typeof e.to !== "string") continue;
+    if (e.from === e.to || !byId.has(e.from) || !byId.has(e.to)) continue;
+    if (edges.some((x) => x.from === e.from && x.to === e.to)) continue;
+    edges.push({ from: e.from, to: e.to });
+  }
+  const out: UIGraph = { nodes: [...byId.values()], edges };
+  if (typeof raw.key === "string" && raw.key) out.key = raw.key;
+  if (raw.layout === "tree" || raw.layout === "layered") out.layout = raw.layout;
+  if (raw.direction === "right" || raw.direction === "down") out.direction = raw.direction;
+  if (typeof raw.selected === "string" && byId.has(raw.selected)) out.selected = raw.selected;
+  if (Array.isArray(raw.folded)) out.folded = raw.folded.filter((f) => typeof f === "string" && byId.has(f));
+  return out;
+}
+
+const isMapCoord = (c: unknown): c is UIMapCoordinate =>
+  isObject(c) &&
+  typeof c.lat === "number" && Number.isFinite(c.lat) && c.lat >= -90 && c.lat <= 90 &&
+  typeof c.lon === "number" && Number.isFinite(c.lon) && c.lon >= -180 && c.lon <= 180;
+
+/**
+ * Validates and normalizes a UI version 12 `map` component matching sdk/go/wire/viewcheck12.go:
+ * required `alt`, at least one valid geometry source (`viewport`, `markers`, or `routes`), WGS-84 bounds,
+ * unique IDs, mutually exclusive `tone` / `color`, route point caps, and credential-free https links.
+ */
+export function readMap(raw: unknown): UIMap | undefined {
+  if (!isObject(raw) || typeof raw.alt !== "string" || !raw.alt.trim()) return undefined;
+  const runeLen = (s: string) => Array.from(s).length;
+  const runeSlice = (s: string, max: number) => Array.from(s).slice(0, max).join("");
+
+  let viewport: UIMapViewport | undefined;
+  if (isObject(raw.viewport) && isMapCoord(raw.viewport.center)) {
+    const vp: UIMapViewport = { center: { lat: raw.viewport.center.lat, lon: raw.viewport.center.lon } };
+    if (typeof raw.viewport.span_lat === "number" && Number.isFinite(raw.viewport.span_lat) && raw.viewport.span_lat >= 0.0001 && raw.viewport.span_lat <= 180) {
+      vp.span_lat = raw.viewport.span_lat;
+    }
+    if (typeof raw.viewport.span_lon === "number" && Number.isFinite(raw.viewport.span_lon) && raw.viewport.span_lon >= 0.0001 && raw.viewport.span_lon <= 360) {
+      vp.span_lon = raw.viewport.span_lon;
+    }
+    viewport = vp;
+  }
+
+  const markers: UIMapMarker[] = [];
+  const markerIds = new Set<string>();
+  for (const m of Array.isArray(raw.markers) ? raw.markers : []) {
+    if (markers.length >= MAP_MARKER_CAP) break;
+    if (!isObject(m) || typeof m.id !== "string" || !m.id || runeLen(m.id) > 128 || markerIds.has(m.id)) continue;
+    if (!isMapCoord(m) || typeof m.label !== "string" || !m.label.trim()) continue;
+    markerIds.add(m.id);
+    const tone = typeof m.tone === "string" && TONES.includes(m.tone) ? (m.tone as UITone) : undefined;
+    const color = !tone ? colorOf(m.color as string) : undefined;
+    const marker: UIMapMarker = {
+      id: m.id,
+      lat: m.lat,
+      lon: m.lon,
+      label: runeSlice(m.label, 200),
+      ...(typeof m.kind === "string" && MAP_MARKER_KINDS.includes(m.kind) ? { kind: m.kind as UIMapMarkerKind } : {}),
+      ...(typeof m.subtitle === "string" && m.subtitle ? { subtitle: runeSlice(m.subtitle, 200) } : {}),
+      ...(typeof m.detail === "string" && m.detail ? { detail: runeSlice(m.detail, 2000) } : {}),
+      ...(typeof m.icon === "string" && m.icon ? { icon: m.icon } : {}),
+      ...(tone ? { tone } : {}),
+      ...(color ? { color } : {}),
+      ...(readAction(m.action) ? { action: readAction(m.action) } : {}),
+    };
+    markers.push(marker);
+  }
+
+  const routes: UIMapRoute[] = [];
+  const routeIds = new Set<string>();
+  let totalPoints = 0;
+  for (const r of Array.isArray(raw.routes) ? raw.routes : []) {
+    if (routes.length >= MAP_ROUTE_CAP) break;
+    if (!isObject(r) || typeof r.id !== "string" || !r.id || runeLen(r.id) > 128 || routeIds.has(r.id)) continue;
+    if (!Array.isArray(r.points) || r.points.length < 2 || !r.points.every(isMapCoord)) continue;
+    if (totalPoints + r.points.length > MAP_POINT_CAP) continue;
+    routeIds.add(r.id);
+    totalPoints += r.points.length;
+    const tone = typeof r.tone === "string" && TONES.includes(r.tone) ? (r.tone as UITone) : undefined;
+    const color = !tone ? colorOf(r.color as string) : undefined;
+    const route: UIMapRoute = {
+      id: r.id,
+      points: r.points.map((p) => ({ lat: p.lat, lon: p.lon })),
+      ...(typeof r.label === "string" && r.label ? { label: runeSlice(r.label, 200) } : {}),
+      ...(typeof r.mode === "string" && MAP_TRAVEL_MODES.includes(r.mode) ? { mode: r.mode as UIMapTravelMode } : {}),
+      ...(typeof r.distance_meters === "number" && Number.isFinite(r.distance_meters) && r.distance_meters >= 0 && r.distance_meters <= 100_000_000
+        ? { distance_meters: Math.round(r.distance_meters) } : {}),
+      ...(typeof r.duration_seconds === "number" && Number.isFinite(r.duration_seconds) && r.duration_seconds >= 0 && r.duration_seconds <= 100_000_000
+        ? { duration_seconds: Math.round(r.duration_seconds) } : {}),
+      ...(typeof r.summary === "string" && r.summary ? { summary: runeSlice(r.summary, 200) } : {}),
+      ...(r.selected === true ? { selected: true } : {}),
+      ...(tone ? { tone } : {}),
+      ...(color ? { color } : {}),
+    };
+    routes.push(route);
+  }
+
+  if (!viewport && !markers.length && !routes.length) return undefined;
+
+  const links: UIMapLink[] = [];
+  if (Array.isArray(raw.links)) {
+    for (const l of raw.links) {
+      if (links.length >= MAP_LINK_CAP) break;
+      if (
+        isObject(l) &&
+        typeof l.title === "string" && runeLen(l.title.trim()) >= 1 && runeLen(l.title) <= 80 &&
+        typeof l.url === "string" && runeLen(l.url) >= 1 && runeLen(l.url) <= 2000 &&
+        l.url.trim() === l.url && isGraphLink(l.url)
+      ) {
+        links.push({ title: l.title, url: l.url });
+      }
+    }
+  }
+
+  return {
+    alt: runeSlice(raw.alt, 500),
+    ...(typeof raw.key === "string" && raw.key ? { key: runeSlice(raw.key, 128) } : {}),
+    ...(typeof raw.title === "string" && raw.title ? { title: runeSlice(raw.title, 2000) } : {}),
+    ...(typeof raw.caption === "string" && raw.caption ? { caption: runeSlice(raw.caption, 2000) } : {}),
+    ...(typeof raw.aspect === "string" && raw.aspect ? { aspect: raw.aspect } : {}),
+    ...(viewport ? { viewport } : {}),
+    ...(markers.length ? { markers } : {}),
+    ...(routes.length ? { routes } : {}),
+    ...(links.length ? { links } : {}),
+    ...(typeof raw.static === "boolean" ? { static: raw.static } : {}),
+    ...(typeof raw.show_list === "boolean" ? { show_list: raw.show_list } : {}),
+  };
+}
+
 /** An item with its actions read; an empty's button (`action: {title, action}`) under `button`. */
 function readItem(it: UIItem): UIItem {
   const raw = it as unknown as Record<string, unknown>;
@@ -710,8 +1158,42 @@ function readItem(it: UIItem): UIItem {
   }
   const out: UIItem = { ...it };
   if (isObject(raw.action)) out.action = readAction(raw.action);
+  // UI version 10: a graph's nodes, edges and folds, read as a view's actions are
+  if (it.type === "graph") {
+    const graph = readGraph(raw);
+    if (graph) out.nodes = graph.nodes as unknown as UIItem["nodes"];
+    else delete out.nodes;
+    out.edges = graph?.edges as unknown as UIItem["edges"];
+    out.folded = graph?.folded as unknown as UIItem["folded"];
+    if (graph?.layout) out.layout = graph.layout as UIItem["layout"];
+    else delete out.layout;
+    if (graph?.direction) out.direction = graph.direction as unknown as UIItem["direction"];
+    else delete out.direction;
+    if (graph?.selected) out.selected = graph.selected;
+    else delete out.selected;
+  }
+  // UI version 11: a scene's pins carry the same checked actions as rows and tiles.
+  if (it.type === "scene" && Array.isArray(raw.pins)) {
+    out.pins = raw.pins.filter(isObject).map((pin) => ({ ...pin, action: readAction(pin.action) })) as ScenePin[];
+  }
+  if (it.type === "map") {
+    const map = readMap(raw);
+    if (map) {
+      out.alt = map.alt;
+      if (map.key !== undefined) out.key = map.key; else delete out.key;
+      if (map.title !== undefined) out.title = map.title; else delete out.title;
+      if (map.caption !== undefined) out.caption = map.caption; else delete out.caption;
+      if (map.aspect !== undefined) out.aspect = map.aspect; else delete out.aspect;
+      if (map.viewport !== undefined) out.viewport = map.viewport; else delete out.viewport;
+      if (map.markers !== undefined) out.markers = map.markers; else delete out.markers;
+      if (map.routes !== undefined) out.routes = map.routes; else delete out.routes;
+      if (map.links !== undefined) out.links = map.links; else delete out.links;
+      if (map.static !== undefined) out.static = map.static; else delete out.static;
+      if (map.show_list !== undefined) out.show_list = map.show_list; else delete out.show_list;
+    }
+  }
   // UI version 4: the other places an action sits, each read the same way
-  for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft"] as const) if (k in raw) out[k] = readAction(raw[k]);
+  for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft", "navigate"] as const) if (k in raw) out[k] = readAction(raw[k]);
   // UI version 6: a row's control and extra actions, a grid's or a carousel's tiles
   readV6(out as unknown as Record<string, unknown>, raw);
   if ("line_url" in raw && !isHttps(String(raw.line_url).replaceAll("{start}", "1").replaceAll("{end}", "1"))) delete out.line_url;
@@ -732,9 +1214,9 @@ export function refreshDelay(view: UIView | null | undefined): number {
 
 // ── slots ───────────────────────────────────────────────
 
-/** A nav_page's icons (docs/extensions/extensions.md "UI slots"); each app draws its own. `plugin` is `extension` under its name
- *  before #1844 (the hub still sends it). */
-export const UI_ICONS = ["extension", "plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "branch", "code", "pull_request", "merge", ...NEW_ICONS_6] as const;
+/** A nav_page's icons (docs/extensions/extensions.md "UI slots"): a row's whole set, the schema's NavIcon (#16281), and `map`;
+ *  each app draws its own. `plugin` is `extension` under its name before #1844 (the hub still sends it). */
+export const UI_ICONS = [...ROW_ICONS, "map"] as const;
 export type UIIcon = (typeof UI_ICONS)[number];
 
 /** An icon the web knows, else extension. */
@@ -947,5 +1429,7 @@ export function stackedShare(item: Pick<UIItem, "kind" | "stacked" | "series">):
   if (values.some((v) => !Number.isFinite(v) || v < 0)) return null;
   const total = values.reduce((a, b) => a + b, 0);
   if (total <= 0) return null;
-  return values.map((value, i) => ({ series: i, value, ratio: value / total }));
+  const scale = Number.isFinite(total) ? 1 : Math.max(...values);
+  const scaledTotal = values.reduce((a, b) => a + b / scale, 0);
+  return values.map((value, i) => ({ series: i, value, ratio: value / scale / scaledTotal }));
 }

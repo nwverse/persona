@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,8 +40,9 @@ type delegateFleet struct {
 func newDelegateFleet(t *testing.T, decide func(DelegateParams) (DelegateResult, error)) *delegateFleet {
 	t.Helper()
 	ft := newFleetTest(t)
+	setSettings(t, ft.s, func(v *Settings) { v.Main = "" }) // exercise the manual node-question fallback
 	on := true
-	ft.f.hello.Agents.Delegate.Enabled = &on // off by default
+	ft.f.setHello(func(h *Hello) { h.Agents.Delegate.Enabled = &on }) // off by default
 	list := []proto.Session{{SessionID: "s1", Title: "修登录", Cwd: "/code/app", Status: proto.StatusBlocked, UpdatedAt: time.Now().UTC()}}
 	ft.d.setSessions("mac", list)
 	ft.f.setSessions("mac", list...) // where messages to agents go (session.send through the hub)
@@ -194,7 +196,7 @@ func TestDelegateTimesOut(t *testing.T) {
 		<-release
 		return DelegateResult{}, nil
 	})
-	df.f.hello.Agents.Delegate.TimeoutSeconds = 1
+	df.f.setHello(func(h *Hello) { h.Agents.Delegate.TimeoutSeconds = 1 })
 	ix := delegateQuestion("ix_d3")
 	df.ask(ix)
 	time.Sleep(300 * time.Millisecond)
@@ -240,12 +242,13 @@ func TestDelegateUserAnswersFirst(t *testing.T) {
 // assistant not asked. With agents.delegate off, or unset (the default), a question is pushed at once too.
 func TestDelegateOnlyQuestions(t *testing.T) {
 	df := newDelegateFleet(t, func(DelegateParams) (DelegateResult, error) { return DelegateResult{Answer: true}, nil })
-	perm := proto.Interaction{ID: "ix_p", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, ToolName: "Bash",
+	perm := proto.Interaction{ID: "ix_p", MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 	plan := proto.Interaction{ID: "ix_plan", MachineID: "mac", SessionID: "s1", Kind: proto.IxPlan, Plan: "1. 改",
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 	own := delegateQuestion("ix_own")
 	own.ToolName = "ask_user"
+	own.ToolInput = json.RawMessage(`{"why_owner":"priority"}`)
 	form := delegateQuestion("ix_form")
 	form.Fields = []proto.Field{{Key: "pw", Label: "密码", Secret: true}}
 	for _, ix := range []proto.Interaction{perm, plan, own, form} {
@@ -253,10 +256,10 @@ func TestDelegateOnlyQuestions(t *testing.T) {
 		waitDelegate(t, ix.ID+" pushed", func() bool { return df.pushedFor(ix.ID) != nil })
 	}
 	off := false
-	df.f.hello.Agents.Delegate.Enabled = &off
+	df.f.setHello(func(h *Hello) { h.Agents.Delegate.Enabled = &off })
 	df.ask(delegateQuestion("ix_off"))
 	waitDelegate(t, "pushed with delegate off", func() bool { return df.pushedFor("ix_off") != nil })
-	df.f.hello.Agents.Delegate.Enabled = nil
+	df.f.setHello(func(h *Hello) { h.Agents.Delegate.Enabled = nil })
 	df.ask(delegateQuestion("ix_unset"))
 	waitDelegate(t, "pushed with delegate unset", func() bool { return df.pushedFor("ix_unset") != nil })
 	if got := df.delegateCalls(); got != 0 {
@@ -295,7 +298,7 @@ func TestReanswer(t *testing.T) {
 	}
 
 	off := false
-	df.f.hello.Agents.Delegate.Enabled = &off
+	df.f.setHello(func(h *Hello) { h.Agents.Delegate.Enabled = &off })
 	mine := delegateQuestion("ix_mine")
 	answered := df.ask(mine)
 	df.waitPending(1)
@@ -431,8 +434,35 @@ func TestDelegateFailedCallForgets(t *testing.T) {
 		return DelegateResult{Answer: true, Answers: map[string]string{q.Question: q.Options[0].Label}}, nil
 	})
 	first := delegateQuestion("ix_f1")
+	// The app can receive the escalated card before the goroutine that sent it returns.
+	// Check the failed claim at that handoff as well as actually submitting the next question.
+	claimedAtHandoff := make(chan bool, 1)
+	df.f.mu.Lock()
+	df.f.onTell = func() {
+		shown := df.shownAs(first.ID)
+		if len(shown) == 0 || shown[len(shown)-1].Delegating {
+			return
+		}
+		df.s.work.mu.Lock()
+		claimed := slices.ContainsFunc(df.s.work.delegated[[2]string{first.MachineID, first.SessionID}],
+			func(ask delegatedAsk) bool { return ask.id == first.ID })
+		df.s.work.mu.Unlock()
+		select {
+		case claimedAtHandoff <- claimed:
+		default:
+		}
+	}
+	df.f.mu.Unlock()
 	firstAnswered := df.ask(first)
 	waitDelegate(t, "the push", func() bool { return df.pushedFor(first.ID) != nil })
+	select {
+	case claimed := <-claimedAtHandoff:
+		if claimed {
+			t.Error("the failed call still owns the question as the app receives its escalation")
+		}
+	default:
+		t.Error("the app was not told the question had escalated")
+	}
 	if res := answerOf(t, df.ask(delegateQuestion("ix_f2"))); res.AnsweredBy != proto.AnsweredByAssistant {
 		t.Fatalf("after a failed call: %+v", res)
 	}

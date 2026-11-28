@@ -3,6 +3,7 @@
 // hidden between hunks and those shown of them, viewed marks kept in this browser, ```suggestion blocks in a comment,
 // a range of lines picked for a comment, and the keys of a page of diffs. Drawn by views/extensions/DiffReview.tsx.
 import { hunkRows, type DiffRow, type Hunk } from "./code-view";
+import { safeWebURL } from "./format";
 
 // ── words that changed ────────────────────────────────
 
@@ -362,20 +363,58 @@ export function setViewedHere(id: string, viewed: boolean) {
 
 export type BodyPart = { kind: "text"; text: string } | { kind: "suggestion"; lines: string[] };
 
-const SUGGESTION = /^```suggestion[^\S\n]*\n([\s\S]*?)^```[^\S\n]*$/gm;
+const SUGGESTION_OPEN = /^ {0,3}(`{3,})suggestion[ \t]*$/;
+const SUGGESTION_CLOSE = /^ {0,3}(`{3,})[ \t]*$/;
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
 
 /** A comment's body cut at its ```suggestion blocks: the text around them, and each block's lines. */
 export function splitSuggestions(body: string): BodyPart[] {
   const out: BodyPart[] = [];
-  let at = 0;
-  for (const m of body.matchAll(SUGGESTION)) {
-    const before = body.slice(at, m.index);
-    if (before.trim()) out.push({ kind: "text", text: before });
-    const text = m[1].replace(/\n$/, "");
-    out.push({ kind: "suggestion", lines: text ? text.split("\n") : [] });
-    at = m.index! + m[0].length;
+  let textStart = 0;
+  let outerFence: { ch: string; len: number } | null = null;
+  let sugg: { len: number; openStart: number; lines: string[] } | null = null;
+
+  let pos = 0;
+  while (pos < body.length) {
+    const nl = body.indexOf("\n", pos);
+    const lineEnd = nl === -1 ? body.length : nl + 1;
+    const contentEnd = nl === -1 ? body.length : nl;
+    const rawEnd = contentEnd > pos && body[contentEnd - 1] === "\r" ? contentEnd - 1 : contentEnd;
+    const raw = body.slice(pos, rawEnd);
+
+    if (sugg !== null) {
+      const close = SUGGESTION_CLOSE.exec(raw);
+      if (close && close[1].length >= sugg.len) {
+        const before = body.slice(textStart, sugg.openStart);
+        if (before.trim()) out.push({ kind: "text", text: before });
+        out.push({ kind: "suggestion", lines: sugg.lines });
+        textStart = rawEnd;
+        sugg = null;
+      } else {
+        sugg.lines.push(raw);
+      }
+    } else if (outerFence !== null) {
+      const close = FENCE_CLOSE.exec(raw);
+      if (close && close[1][0] === outerFence.ch && close[1].length >= outerFence.len) {
+        outerFence = null;
+      }
+    } else {
+      const openSugg = nl !== -1 ? SUGGESTION_OPEN.exec(raw) : null;
+      if (openSugg) {
+        sugg = { len: openSugg[1].length, openStart: pos, lines: [] };
+      } else {
+        const openFence = FENCE_OPEN.exec(raw);
+        if (openFence && !(openFence[1][0] === "`" && openFence[2].includes("`"))) {
+          outerFence = { ch: openFence[1][0], len: openFence[1].length };
+        }
+      }
+    }
+
+    pos = lineEnd;
   }
-  const rest = body.slice(at);
+
+  const rest = body.slice(textStart);
   if (rest.trim() || !out.length) out.push({ kind: "text", text: rest });
   return out;
 }
@@ -403,11 +442,7 @@ export function pickRange(anchor: Spot | null, to: Spot): { side: "old" | "new";
 export function lineLink(template: string | undefined, start: number, end = start): string | undefined {
   if (!template) return undefined;
   const url = template.replaceAll("{start}", String(start)).replaceAll("{end}", String(end));
-  try {
-    return new URL(url).protocol === "https:" ? url : undefined;
-  } catch {
-    return undefined;
-  }
+  return safeWebURL(url, true);
 }
 
 // ── keys ──────────────────────────────────────────────
@@ -422,8 +457,10 @@ const KEYS: Record<string, ReviewCommand> = {
 };
 
 /** What a key pressed on a page of diffs does; nothing while typing, or with a modifier (the browser's own). */
-export function reviewCommand(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; target?: EventTarget | null }): ReviewCommand | null {
-  if (e.ctrlKey || e.metaKey || e.altKey) return null;
+export function reviewCommand(e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; target?: EventTarget | null; getModifierState?: (key: string) => boolean }): ReviewCommand | null {
+  // AltGr (reported as Ctrl+Alt on Windows) types the character: "[" and "]" on a German or French keyboard
+  const altGr = e.getModifierState?.("AltGraph") ?? false;
+  if (e.metaKey || (!altGr && (e.ctrlKey || e.altKey))) return null;
   const el = e.target as HTMLElement | null;
   if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName ?? ""))) return null;
   return KEYS[e.key] ?? null;

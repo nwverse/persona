@@ -62,7 +62,11 @@ func newFleetTestOn(t *testing.T, st Store) *fleetTest {
 	d := newFleetDevs()
 	d.add("mac", "Mac")
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: t.Logf, Devices: d})
-	return &fleetTest{t: t, s: s, d: d, f: f}
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.running.Store(&runCtx)
+	ft := &fleetTest{t: t, s: s, d: d, f: f, cancel: cancel}
+	t.Cleanup(func() { drainFleetBackground(t, ft.s, cancel) })
+	return ft
 }
 
 // waitShown waits for the apps to be told about interaction id (through the hub).
@@ -84,7 +88,7 @@ func (ft *fleetTest) waitShown(id string, within time.Duration) {
 }
 
 func permission(id string) proto.Interaction {
-	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission,
+	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Kind: proto.IxPermission, OutwardWrite: true,
 		ExpiresAt: time.Now().Add(time.Hour)}
 }
 
@@ -162,7 +166,7 @@ func TestWriteEndedStuckDatabase(t *testing.T) {
 
 	start := time.Now()
 	w := httptest.NewRecorder()
-	s.writeEnded(context.Background(), w, "ix_gone", proto.Resolution{}, errNotPending)
+	s.writeEnded(context.Background(), w, "ix_gone", proto.Resolution{}, errNotPending, false)
 	if w.Code != http.StatusGone || time.Since(start) > 2*time.Second {
 		t.Fatalf("status %d after %v", w.Code, time.Since(start))
 	}
@@ -171,7 +175,7 @@ func TestWriteEndedStuckDatabase(t *testing.T) {
 	cancel()
 	start = time.Now()
 	w = httptest.NewRecorder()
-	s.writeEnded(ctx, w, "ix_gone", proto.Resolution{}, errNotPending)
+	s.writeEnded(ctx, w, "ix_gone", proto.Resolution{}, errNotPending, false)
 	if w.Code != http.StatusGone || time.Since(start) >= historyTimeout {
 		t.Fatalf("status %d after %v with the request gone", w.Code, time.Since(start))
 	}
@@ -183,20 +187,40 @@ func TestInteractionResolveRowLockedPostgres(t *testing.T) {
 	if url == "" {
 		t.Skip("PERSONA_TEST_DATABASE_URL not set")
 	}
-	ctx := context.Background()
-	database, err := db.Open(ctx, url, db.ManagerSet)
+	database, err := db.Open(t.Context(), url, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(database.Close)
-	shortHistoryTimeout(t, 300*time.Millisecond)
 	ft := newFleetTestOn(t, database)
 	s := ft.s
 
+	// The normal history timeout also applies to the insert. Let it complete
+	// before locking the row, and keep the row locked until both calls return.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
 	ix := permission("ix_lock_" + randomHex(6))
-	got := make(chan proto.Resolution, 1)
-	go func() { r, _ := s.waitInteraction(ctx, ix); got <- r }()
-	ft.waitShown(ix.ID, 5*time.Second) // shown after the history has its row
+	ready, done := make(chan error, 1), make(chan struct{})
+	var got proto.Resolution
+	var waitErr error
+	go func() {
+		defer close(done)
+		got, waitErr = s.waitInteractionReadyResult(ctx, ix, nil, ready)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("interaction registration failed: %v", err)
+		}
+	case <-done:
+		t.Fatalf("interaction ended before registration: %+v, %v", got, waitErr)
+	case <-ctx.Done():
+		t.Fatal("the interaction was not registered")
+	}
 
 	locker, err := pgx.Connect(ctx, url)
 	if err != nil {
@@ -207,7 +231,9 @@ func TestInteractionResolveRowLockedPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	// On failure the deferred rollback releases the lock before the cleanup
+	// joins the resolver, while the store is still open.
+	defer tx.Rollback(context.Background())
 	var one int
 	if err := tx.QueryRow(ctx, `SELECT 1 FROM interactions WHERE id = $1 FOR UPDATE`, ix.ID).Scan(&one); err != nil {
 		t.Fatalf("lock the row: %v", err)
@@ -215,18 +241,28 @@ func TestInteractionResolveRowLockedPostgres(t *testing.T) {
 
 	yes := true
 	start := time.Now()
-	resolved := make(chan error, 1)
-	go func() { resolved <- s.resolve(ix.ID, proto.Resolution{Allow: &yes}) }()
+	resolved := make(chan struct{})
+	var resolveErr error
+	go func() {
+		defer close(resolved)
+		resolveErr = s.resolve(ix.ID, proto.Resolution{Allow: &yes})
+	}()
+	t.Cleanup(func() { <-resolved })
 	select {
-	case r := <-got:
-		if r.Allow == nil || !*r.Allow {
-			t.Fatalf("hook got %+v", r)
+	case <-done:
+		if waitErr != nil || got.Allow == nil || !*got.Allow {
+			t.Fatalf("hook got %+v, %v", got, waitErr)
 		}
-	case <-time.After(5 * time.Second):
+	case <-ctx.Done():
 		t.Fatal("the hook never got the answer while the row was locked")
 	}
-	if err := <-resolved; err != nil {
-		t.Fatal(err)
+	select {
+	case <-resolved:
+		if resolveErr != nil {
+			t.Fatal(resolveErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("resolve did not return while the row was locked")
 	}
 	t.Logf("answer delivered after %v with the row locked", time.Since(start))
 }

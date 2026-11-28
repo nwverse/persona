@@ -321,7 +321,14 @@ func (h *Hub) expirePending(ctx context.Context, now time.Time) {
 	t.mu.Unlock()
 	slices.Sort(due)
 	for _, id := range due {
-		if err := h.rejectMachine(ctx, id, "hub", "expire"); err != nil && !errors.Is(err, errNotPending) {
+		// Rejecting a computer writes the trust rows; its audit, and hub.json's
+		// machine entry: left for the next sweep while a snapshot pauses writes.
+		if !h.quiesce.begin() {
+			return
+		}
+		err := h.rejectMachine(ctx, id, "hub", "expire")
+		h.quiesce.end()
+		if err != nil && !errors.Is(err, errNotPending) {
 			h.logf("[%s] remove after waiting a day to be confirmed: %v", id, err)
 		}
 	}
@@ -334,6 +341,9 @@ func (h *Hub) machineTrustLoop(ctx context.Context) {
 			wait = trustRetryEvery
 		} else {
 			h.expirePending(ctx, time.Now())
+		}
+		if !h.retryMachineAssignments(ctx) {
+			wait = trustRetryEvery
 		}
 		select {
 		case <-ctx.Done():
@@ -418,7 +428,9 @@ const (
 // machineErrorCode is the code for what s shows (kind is its hub.json entry's): "" when none fits.
 func machineErrorCode(s proto.Machine, kind string) string {
 	if s.Online {
-		if s.NodeMismatch && kind != "local" && s.CanDeploy != nil && !*s.CanDeploy {
+		// A compatible node that could take an update but for which the hub has no build now is not outdated:
+		// deploy_reason says what to supply (#10566). One this hub cannot drive still needs its own upgrade.
+		if s.NodeMismatch && kind != "local" && s.CanDeploy != nil && !*s.CanDeploy && (!s.DeployNoPackage || s.NodeIncompatible != "") {
 			return errCodeNodeOutdated
 		}
 		return ""

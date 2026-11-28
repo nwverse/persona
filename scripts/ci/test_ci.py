@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 from pathlib import Path
@@ -7,12 +8,45 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths
 import required
+import run
+
+
+class TrustedSourceRootTests(unittest.TestCase):
+    def test_ci_implementation_can_target_an_explicit_source_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            implementation = root / "implementation"
+            target = root / "target"
+            (implementation / "scripts/ci").mkdir(parents=True)
+            (implementation / "scripts/test").mkdir(parents=True)
+            target.mkdir()
+            (implementation / "scripts/ci/run.py").write_bytes(Path(__file__).with_name("run.py").read_bytes())
+            (implementation / "scripts/ci/common.sh").write_bytes(Path(__file__).with_name("common.sh").read_bytes())
+            (implementation / "scripts/test/target.py").write_text("print('implementation-target=' + __import__('pathlib').Path.cwd().name)\n")
+            (target / "scripts").mkdir()
+            (target / "scripts/test").mkdir()
+            (target / "scripts/test/target.py").write_text("raise RuntimeError('worker modified the checker')\n")
+            (implementation / "scripts/ci/guards.sh").write_text(
+                "#!/bin/bash\nsource \"$(dirname \"$0\")/common.sh\"\nci_run Target 10 ci_python scripts/test/target.py\n")
+            (implementation / "scripts/ci/guards.sh").chmod(0o755)
+            environment = dict(os.environ, PERSONA_CI_SOURCE_ROOT=str(target))
+            result = subprocess.run(["bash", str(implementation / "scripts/ci/guards.sh")],
+                                    cwd=implementation, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("implementation-target=target", result.stdout)
+            self.assertNotIn("target=implementation", result.stdout)
+            environment.pop("PERSONA_CI_SOURCE_ROOT")
+            result = subprocess.run(["bash", str(implementation / "scripts/ci/guards.sh")],
+                                    cwd=implementation, env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("implementation-target=implementation", result.stdout)
 
 
 class PathTests(unittest.TestCase):
@@ -32,15 +66,37 @@ class PathTests(unittest.TestCase):
         self.assertTrue(paths.select(["scripts/mock/inbox_events.json"])["web"])
         self.assertTrue(paths.select(["schema/extension/example.json"])["apple"])
 
+    def test_desktop_inputs_select_the_desktop_lane(self):
+        for filename in ["desktop/src/main.ts", "web/src/main.tsx", "scripts/mock/mock_hub.py", "scripts/mock/mock_domains.py",
+                         "scripts/mock/desktops_mock.py", "scripts/mock/github_mock.py", "scripts/mock/kb_selection_mock.py",
+                         "scripts/mock/mail_mock.py", "scripts/mock/hub_update_mock.py", "scripts/mock/imessage_mock.py",
+                         "scripts/mock/saved_prompts_mock.py", "scripts/mock/test_desktops_mock.py", "scripts/mock/stream_trace.py",
+                         "spec/desktop-bridge.d.ts",
+                         "server/cmd/password-wasm/main.go", "server/internal/passwordpake/pake.go", "server/go.mod", "server/go.sum"]:
+            self.assertTrue(paths.select([filename])["desktop"], filename)
+        self.assertFalse(paths.select(["server/internal/hub/hub.go"])["desktop"])
+        # The synthetic hub loads every module of mock_domains.DOMAINS as it starts, so each one is a lane input too.
+        registry = ast.parse((Path(paths.ROOT) / "scripts/mock/mock_domains.py").read_text())
+        domains = next(ast.literal_eval(node.value) for node in registry.body if isinstance(node, ast.Assign)
+                       and [getattr(t, "id", None) for t in node.targets] == ["DOMAINS"])
+        self.assertIn("desktops_mock", domains)
+        for name in domains:
+            self.assertTrue(paths.select(["scripts/mock/%s.py" % name])["desktop"], name)
+
     def test_sdk_ts_sources_also_select_the_server_lane(self):
         # The trusted Deno adapter and the extension page tests bundle sdk/ts/src (#4221); the rest of sdk/ts is not.
         self.assertTrue(paths.select(["sdk/ts/src/wire.ts"])["server"])
         self.assertTrue(paths.select(["sdk/ts/src/wire.ts"])["runtimes"])
         # The shared Rust core: its own lane, and Android, whose tests load it.
         for filename in ["native/app-core/crates/persona-core/src/lib.rs", "spec/fixtures/continuity/append_and_gaps.json",
-                         "scripts/ci/core.sh"]:
+                         "spec/fixtures/sync-driver/lifecycle.json", "scripts/ci/core.sh"]:
             self.assertTrue(paths.select([filename])["core"], filename)
         self.assertTrue(paths.select(["native/app-core/Cargo.lock"])["android"])
+        # The generated ArkTS codec and its host tests run in the same lane as the core they encode for (#7450).
+        for filename in ["harmony/entry/src/main/ets/core/rustcore/Wire.ts", "harmony/entry/src/main/ets/core/PersonaCore.ts",
+                         "harmony/entry/src/main/cpp/types/libpersona_core/index.d.ts", "harmony/tests/rustcore-wire.test.mjs",
+                         "harmony/tests/core-host/replay.test.mjs"]:
+            self.assertTrue(paths.select([filename])["core"], filename)
         self.assertFalse(paths.select(["web/src/App.tsx"])["core"])
         self.assertFalse(paths.select(["sdk/ts/README.md"])["server"])
 
@@ -93,7 +149,14 @@ class PathTests(unittest.TestCase):
 
     def test_shard_implementation_changes_select_their_lane(self):
         self.assertTrue(paths.select(["scripts/ci/server-shards.py"])["server"])
+        # server.sh composes every Go step's GOFLAGS with this helper (#10614).
+        self.assertTrue(paths.select(["scripts/test/go_trimpath.sh"])["server"])
         self.assertTrue(paths.select(["scripts/ci/android-shards.py"])["android"])
+
+    def test_the_callkit_guards_select_the_apple_lane(self):
+        # The Apple lane runs both against real builds (#9290).
+        for filename in ("scripts/release/check_no_callkit.py", "scripts/test/test_apple_no_callkit.py"):
+            self.assertTrue(paths.select([filename])["apple"], filename)
 
     def test_deleted_and_renamed_old_paths_are_relevant(self):
         self.assertTrue(paths.select(["apple/Old.swift", "docs/archive/new.md"])["apple"])
@@ -191,28 +254,31 @@ class ManualWorkflowTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         workflows = sorted((root / '.github/workflows').glob('*.yml'))
         self.assertTrue(workflows)
+        release_triggers = {
+            'release.yml': {'push': {'tags': ['v*']}},
+            'release-publish.yml': {'workflow_run': {'workflows': ['release-pr'], 'types': ['completed']}},
+            'release-schedule.yml': {'schedule': [{'cron': '0 4 * * *'}, {'cron': '0 */2 * * *'}]},
+        }
         for workflow in workflows:
-            text = workflow.read_text()
-            trigger = text.split('\non:\n', 1)[1].split('\npermissions:', 1)[0]
-            self.assertNotIn('    branches:', trigger, workflow.name)
-            self.assertNotIn('    branch:', trigger, workflow.name)
-            if workflow.name == 'release.yml':
-                self.assertIn("    tags: ['v*']", trigger)
-                self.assertIn('  push:', trigger, workflow.name)
-            else:
-                self.assertNotIn('  push:', trigger, workflow.name)
-            triggers = {name for name in ('merge_group', 'pull_request', 'pull_request_target',
-                                          'schedule', 'workflow_dispatch', 'workflow_run')
-                        if f'  {name}:' in trigger}
-            for name in ('merge_group', 'pull_request', 'pull_request_target', 'schedule', 'workflow_run'):
-                self.assertNotIn(name, triggers, workflow.name)
-            self.assertIn('workflow_dispatch', triggers, workflow.name)
+            with self.subTest(workflow=workflow.name):
+                triggers = yaml.load(workflow.read_text(), Loader=yaml.BaseLoader)['on']
+                if workflow.name == 'release-pr.yml':
+                    self.assertEqual(set(triggers), {'pull_request', 'push'})
+                    self.assertEqual(triggers['push'], {'branches': ['main']})
+                    self.assertEqual(set(triggers['pull_request']), {'types'})
+                    self.assertCountEqual(triggers['pull_request']['types'],
+                                          ['opened', 'synchronize', 'reopened', 'ready_for_review', 'edited'])
+                else:
+                    self.assertIn('workflow_dispatch', triggers)
+                    automatic = {event: value for event, value in triggers.items()
+                                 if event not in ('workflow_dispatch', 'workflow_call')}
+                    self.assertEqual(automatic, release_triggers.get(workflow.name, {}))
         ci = (root / '.github/workflows/ci.yml').read_text()
         self.assertNotIn('pull_request:', ci)
         full = ci.split('      full:\n', 1)[1].split('      lanes:\n', 1)[0]
         self.assertIn('type: boolean', full)
         self.assertIn('default: true', full)
-        selection = ci.split('      - id: paths\n', 1)[1].split('\n  server:\n', 1)[0]
+        selection = ci.split('      - id: paths\n', 1)[1].split('\n  guards:\n', 1)[0]
         self.assertIn('CI_FULL: ${{ inputs.full }}', selection)
         self.assertIn('if [ "$CI_FULL" = true ]; then', selection)
         self.assertIn('python3 scripts/ci/paths.py --all', selection)
@@ -225,6 +291,65 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('run: python3 scripts/ci/required.py', gate)
         self.assertNotIn('continue-on-error:', ci)
         self.assertNotIn('pull_request', ci)
+
+    def test_a_guard_failure_never_skips_a_platform_lane(self):
+        root = Path(__file__).resolve().parents[2]
+        jobs = yaml.load((root / '.github/workflows/ci.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
+        platforms = ('server', 'web', 'android', 'apple', 'core', 'runtimes', 'desktop', 'scripts')
+        # Display names other tools and people look for stay as they were; the old combined job is split in two.
+        self.assertEqual({name: jobs[name].get('name') for name in ('changes', 'guards', 'apple', 'required')},
+                         {'changes': 'Manual path selection', 'guards': 'Manual repository guards',
+                          'apple': 'iOS and Watch', 'required': 'CI required'})
+        guards = jobs['guards']
+        self.assertEqual(guards['needs'], 'changes')
+        self.assertNotIn('if', guards)
+        run = [step for step in guards['steps'] if step.get('run') == 'scripts/ci/guards.sh']
+        self.assertEqual(len(run), 1)
+        self.assertEqual(run[0]['name'], 'Repository guards')
+        # One base per run: the guards check the commit path selection resolved, not a second origin/main.
+        self.assertEqual(run[0]['env'], {'CI_BASE_SHA': '${{ needs.changes.outputs.base }}'})
+        self.assertEqual(jobs['changes']['outputs']['base'], '${{ steps.base.outputs.base }}')
+        self.assertNotIn('guards.sh', str(jobs['changes']['steps']))
+        for name in platforms:
+            with self.subTest(platform=name):
+                self.assertEqual(jobs[name]['needs'], 'changes')
+        needs = {name: [job['needs']] if isinstance(job.get('needs'), str) else job.get('needs', [])
+                 for name, job in jobs.items()}
+        dependents = sorted(name for name, needed in needs.items() if 'guards' in needed)
+        self.assertEqual(dependents, ['required'])
+        self.assertEqual(jobs['required']['needs'], ['changes', 'guards', *platforms])
+
+    def test_required_reads_only_needs_from_a_shallow_checkout(self):
+        root = Path(__file__).resolve().parents[2]
+        required_job = yaml.load((root / '.github/workflows/ci.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['required']
+        checkout = next(step for step in required_job['steps'] if step.get('uses') == 'actions/checkout@v4')
+        self.assertEqual(checkout['with'], {'persist-credentials': 'false'},
+                         'the default depth fetches one commit instead of every branch')
+        tree = ast.parse((root / 'scripts/ci/required.py').read_text())
+        imported = {alias.name for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+                    for alias in node.names}
+        self.assertEqual(imported, {'json', 'os', 'sys'}, 'a shallow checkout has no history for git or subprocesses')
+
+    def test_history_checkouts_fetch_file_contents_only_at_the_tip(self):
+        # Path selection, the guards (commit privacy range, migration freeze, ratchets) and the scripts shards read
+        # history and the base, but only a few files at the base: a blobless clone of every branch and tag, with each
+        # blob a check reads at the base fetched on demand, skips the screenshot branches' contents (#12753).
+        root = Path(__file__).resolve().parents[2]
+        ci = yaml.load((root / '.github/workflows/ci.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
+        scripts = yaml.load((root / '.github/workflows/scripts-tests.yml').read_text(), Loader=yaml.BaseLoader)['jobs']
+        for name, job in (('changes', ci['changes']), ('guards', ci['guards']), ('scripts', scripts['scripts'])):
+            with self.subTest(job=name):
+                checkout = next(step for step in job['steps'] if step.get('uses') == 'actions/checkout@v4')
+                self.assertEqual(checkout['with'],
+                                 {'fetch-depth': '0', 'filter': 'blob:none', 'persist-credentials': 'false'})
+
+    def test_standalone_scripts_checkout_can_merge_base_origin_main(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.load((root / '.github/workflows/scripts-tests.yml').read_text(), Loader=yaml.BaseLoader)
+        checkout = next(step for step in workflow['jobs']['scripts']['steps']
+                        if step.get('uses') == 'actions/checkout@v4')
+        self.assertEqual(checkout.get('with', {}).get('fetch-depth'), '0',
+                         'standalone non-main dispatches need origin/main and shared history for git merge-base')
 
     def test_version_tag_publishes_a_release_after_the_image(self):
         root = Path(__file__).resolve().parents[2]
@@ -250,6 +375,108 @@ class ManualWorkflowTests(unittest.TestCase):
         self.assertIn('gh release create "$RELEASE_TAG" "${args[@]}"', script)
         self.assertNotIn('--target', script)
 
+    def test_stable_release_is_not_latest_before_complete_hub_publication(self):
+        root = Path(__file__).resolve().parents[2]
+        release = yaml.load((root / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+        # When Darwin signing is enabled, its CI job is the complete hub artifact producer. Neither it nor desktop
+        # package attachment owns the stable Latest pointer; verified hub coordination owns that after reuse.
+        for job in ('darwin-cli-sign', 'desktop-publish'):
+            text = yaml.dump(release['jobs'][job])
+            self.assertNotIn('release edit', text)
+            self.assertNotIn('--latest', text)
+        upload = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                      if step.get('name') == 'Upload signed Darwin downloads')
+        for required in ('build-publish/bin/*.gz', 'build-publish/install.sh',
+                         'build-publish/bin/VERSION', 'build-publish/bin/ci-latest.json', 'build-publish/bin/ci-SHA256SUMS'):
+            self.assertIn(required, upload['run'])
+        self.assertNotIn('build-publish/bin/latest.json', upload['run'])
+        self.assertNotIn('build-publish/bin/SHA256SUMS', upload['run'])
+        self.assertNotIn('--clobber', upload['run'])
+        self.assertIn('*.exe.gz)', upload['run'])
+        darwin = yaml.dump(release['jobs']['darwin-cli-sign'])
+        self.assertIn('resume_github_release.py prepare', darwin)
+        self.assertIn('resume_github_release.py restore', darwin)
+        self.assertIn('PERSONA_RELEASE_BUILD', darwin)
+        resume = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                      if step.get('name') == 'Select reusable Release build')
+        self.assertEqual(resume['if'], "steps.owner.outputs.release_pr == 'false'")
+        for name in ('Build release command-line programs', 'Install the existing signing certificate',
+                     'Sign and verify fixed-identifier binaries', 'Rebuild the manifest from the signed downloads',
+                     'Upload signed Darwin downloads'):
+            step = next(step for step in release['jobs']['darwin-cli-sign']['steps'] if step.get('name') == name)
+            self.assertIn('steps.resume.outputs.coordinated', step['if'], name)
+        create = release['jobs']['publish']['steps'][-1]
+        self.assertEqual(create['name'], 'Create GitHub Release')
+        self.assertIn('args=(--latest=false ', create['run'])
+    def test_darwin_upload_reruns_verify_identical_assets_and_reject_conflicts(self):
+        root = Path(__file__).resolve().parents[2]
+        release = yaml.load((root / '.github/workflows/release.yml').read_text(), Loader=yaml.BaseLoader)
+        upload = next(step for step in release['jobs']['darwin-cli-sign']['steps']
+                      if step.get('name') == 'Upload signed Darwin downloads')
+
+        def exercise(existing):
+            with tempfile.TemporaryDirectory() as directory:
+                fixture = Path(directory)
+                binaries = fixture / 'build-publish/bin'
+                binaries.mkdir(parents=True)
+                payloads = {'personad-darwin-amd64.gz': b'amd64', 'personad-darwin-arm64.gz': b'arm64'}
+                for name, body in payloads.items():
+                    (binaries / name).write_bytes(body)
+                remote = fixture / 'remote.json'
+                remote.write_text(json.dumps(existing))
+                fake_bin = fixture / 'bin'
+                fake_bin.mkdir()
+                gh = fake_bin / 'gh'
+                gh.write_text('''#!/usr/bin/env python3
+import hashlib, json, os, re, sys
+from pathlib import Path
+root = Path(os.environ["FIXTURE"])
+remote_path = root / "remote.json"
+assets = json.loads(remote_path.read_text())
+args = sys.argv[1:]
+if args[0] == "api":
+    match = re.search(r'\\.name == "([^"]+)"', args[-1])
+    for asset in assets:
+        if asset["name"] == match.group(1):
+            print(asset["digest"])
+    raise SystemExit(0)
+if args[:2] == ["release", "upload"]:
+    path = Path(args[3])
+    name = path.name
+    with (root / "uploads.log").open("a") as log:
+        log.write(name + "\\n")
+    if any(asset["name"] == name for asset in assets):
+        print("asset already exists", file=sys.stderr)
+        raise SystemExit(1)
+    assets.append({"name": name, "digest": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()})
+    remote_path.write_text(json.dumps(assets))
+    raise SystemExit(0)
+raise SystemExit(2)
+''')
+                gh.chmod(0o755)
+                result = subprocess.run(['bash', '-c', upload['run']], cwd=fixture,
+                                        env={'PATH': str(fake_bin) + ':/usr/bin:/bin', 'FIXTURE': str(fixture),
+                                             'GH_REPO': 'example/project', 'RELEASE_TAG': 'v1.2.3', 'GH_TOKEN': 'fixture'},
+                                        capture_output=True, text=True, timeout=20)
+                attempts = (fixture / 'uploads.log').read_text().splitlines() if (fixture / 'uploads.log').exists() else []
+                return result, attempts
+
+        import hashlib
+        def asset(name, body):
+            return {'name': name, 'digest': 'sha256:' + hashlib.sha256(body).hexdigest()}
+
+        both = [asset('personad-darwin-amd64.gz', b'amd64'), asset('personad-darwin-arm64.gz', b'arm64')]
+        result, attempts = exercise(both)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(attempts, [])
+        result, attempts = exercise(both[:1])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(attempts, ['personad-darwin-arm64.gz'])
+        result, attempts = exercise([asset('personad-darwin-amd64.gz', b'changed'), both[1]])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('conflicting Release asset', result.stderr)
+        self.assertEqual(attempts, [])
+
 
 class RequiredTests(unittest.TestCase):
     def needs(self):
@@ -258,6 +485,7 @@ class RequiredTests(unittest.TestCase):
         needs = {name: {"result": "skipped"} for name in outputs}
         needs["scripts"] = {"result": "success"}
         needs["changes"] = {"result": "success", "outputs": outputs}
+        needs["guards"] = {"result": "success"}
         return needs
 
     def test_only_unselected_checks_can_skip(self):
@@ -284,10 +512,27 @@ class RequiredTests(unittest.TestCase):
             needs['apple']['result'] = ios_result
             self.assertTrue(required.failures(needs))
 
-    def test_guard_failure_never_passes(self):
+    def test_path_selection_failure_never_passes(self):
         needs = self.needs()
         needs["changes"]["result"] = "failure"
-        self.assertTrue(required.failures(needs))
+        self.assertIn("path selection did not succeed: failure", required.failures(needs))
+
+    def test_guard_failure_never_passes(self):
+        for result in ("failure", "cancelled", "skipped", None):
+            with self.subTest(result=result):
+                needs = self.needs()
+                needs["guards"]["result"] = result
+                self.assertEqual(required.failures(needs), [f"repository guards did not succeed: {result}"])
+        needs = self.needs()
+        del needs["guards"]
+        self.assertEqual(required.failures(needs), ["repository guards did not succeed: None"])
+
+    def test_a_guard_failure_and_a_lane_failure_are_both_reported(self):
+        needs = self.needs()
+        needs["guards"]["result"] = "failure"
+        needs["scripts"]["result"] = "failure"
+        self.assertEqual(required.failures(needs),
+                         ["repository guards did not succeed: failure", "scripts: selected but failure"])
 
 
 class DesktopWorkflowTests(unittest.TestCase):
@@ -296,11 +541,14 @@ class DesktopWorkflowTests(unittest.TestCase):
         ci = (root / '.github/workflows/ci.yml').read_text()
         self.assertIn('uses: ./.github/workflows/desktop-test.yml', ci)
         self.assertIn('desktop: ${{ steps.paths.outputs.desktop }}', ci)
-        self.assertIn('needs: [changes, server, web, android, apple, core, runtimes, desktop, scripts]', ci)
+        self.assertIn('needs: [changes, guards, server, web, android, apple, core, runtimes, desktop, scripts]', ci)
         workflow = yaml.load((root / '.github/workflows/desktop-test.yml').read_text(), Loader=yaml.BaseLoader)
-        self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows'})
-        self.assertEqual(workflow['on']['workflow_call']['inputs']['signed']['default'], 'false')
-        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['signed']['default'], 'false')
+        self.assertEqual(set(workflow['jobs']), {'linux', 'macos', 'windows', 'update'})
+        self.assertEqual(workflow['on']['workflow_call'], '')
+        self.assertEqual(workflow['on']['workflow_dispatch'], '')
+        text = (root / '.github/workflows/desktop-test.yml').read_text()
+        self.assertNotIn('inputs.signed', text)
+        self.assertNotIn('CSC_LINK', text)
         unsigned = yaml.load((root / 'desktop/electron-builder.unsigned.yml').read_text(), Loader=yaml.BaseLoader)
         self.assertEqual(unsigned['appId'], 'com.example.persona.desktop')
         self.assertEqual(unsigned['mac']['identity'], 'null')
@@ -329,14 +577,19 @@ class AppleWorkflowTests(unittest.TestCase):
         self.assertIn('      lane: ios', ios)
         self.assertNotIn('apple_macos', workflow)
         gate = workflow.split('\n  required:\n', 1)[1]
-        self.assertIn('needs: [changes, server, web, android, apple, core, runtimes, desktop, scripts]', gate)
+        self.assertIn('needs: [changes, guards, server, web, android, apple, core, runtimes, desktop, scripts]', gate)
         self.assertNotIn('apple_macos', gate)
         self.assertNotIn('continue-on-error:', workflow)
 
     def test_reusable_lane_uses_quoted_environment_not_script_interpolation(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/apple-test.yml').read_text()
-        self.assertIn('options: [ios]', workflow)
+        self.assertIn('options: [ios, ios18, ios-build, ios-core-only, packages, ios-focused, ios-regressions, ios-model-picker, ios-ipad-diagnostic]', workflow)
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.lane == 'ios18'", workflow)
+        floor = workflow.split('\n  ios18:\n', 1)[1]
+        for required in ('runs-on: macos-15', '/Applications/Xcode_26.3.app/Contents/Developer',
+                         'run: scripts/ci/apple.sh ios18', 'timeout-minutes: 150'):
+            self.assertIn(required, floor)
         self.assertIn('APPLE_CI_LANE: ${{ inputs.lane }}', workflow)
         self.assertIn('run: scripts/ci/apple.sh "$APPLE_CI_LANE"', workflow)
         self.assertNotIn('continue-on-error:', workflow)
@@ -348,6 +601,121 @@ class AppleWorkflowTests(unittest.TestCase):
                                'iOS HTML card tests (separate batch)',
                                'iOS bounded HTML security tests (separate batch)'):
             self.assertIn(required_batch, script)
+
+    def test_resolved_variant_is_staged_only_in_the_disposable_source(self):
+        root = Path(__file__).resolve().parents[2]
+        script = (root / 'scripts/ci/apple.sh').read_text()
+        for required in ('scripts/ci/apple_resolved.py',
+                         '--tracked "$CI_ROOT/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--staged "$SOURCE/apple/Packages/PersonaSSH/Package.resolved"',
+                         '--meta "$PERSONA_META_WEARABLES"'):
+            self.assertIn(required, script)
+
+
+class PostgresCleanupTests(unittest.TestCase):
+    def test_server_fixture_removes_its_volume_on_success_and_failure(self):
+        for run_status, ready_status in ((0, 0), (23, 0), (0, 19)):
+            with self.subTest(run_status=run_status, ready_status=ready_status), \
+                    tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixtures = root / "fixtures"
+                fixtures.mkdir()
+                shutil.copyfile(Path(__file__).with_name("server.sh"), root / "server.sh")
+                copy_go_trimpath(root)
+                # Run the real entrypoint and EXIT trap without starting Docker or Go tests.
+                (root / "common.sh").write_text("""ci_run() { ci_run_step "$@"; }
+ci_run_step() {
+  local label="$1"
+  shift 2
+  case "$label" in
+    'Postgres 18 fixture') "$@" ;;
+    'Postgres readiness') return "$FIXTURE_READY_STATUS" ;;
+    *) return 0 ;;
+  esac
+}
+""")
+                docker = root / "docker"
+                docker.write_text("""#!/bin/sh
+printf '%s\\n' "$*" >> "$FIXTURE_DOCKER_CALLS"
+if [ "$1" = run ]; then exit "$FIXTURE_RUN_STATUS"; fi
+""")
+                docker.chmod(0o755)
+                log = root / "docker-calls"
+                environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                                   TMPDIR=str(fixtures), FIXTURE_DOCKER_CALLS=str(log),
+                                   FIXTURE_RUN_STATUS=str(run_status), FIXTURE_READY_STATUS=str(ready_status))
+                result = subprocess.run(["bash", str(root / "server.sh"), "managers"], cwd=root,
+                                        env=environment, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, run_status or ready_status, result.stderr)
+                calls = [line.split() for line in log.read_text().splitlines()]
+                self.assertEqual(len(calls), 2, calls)
+                self.assertEqual(calls[0][:2], ["run", "--detach"])
+                container = calls[0][calls[0].index("--name") + 1]
+                self.assertEqual(calls[1], ["rm", "-fv", container])
+                self.assertEqual(list(fixtures.iterdir()), [])
+
+
+class ServerShardBudgetTests(unittest.TestCase):
+    def test_isolated_lanes_initialize_ordinary_and_core_budgets(self):
+        cases = [(lane, lane.removeprefix("core-"), "900" if "managers" in lane else "600", lane.startswith("core-"))
+                 for lane in ("node", "managers", "other", "core-node", "core-managers", "core-other")]
+        for lane, shard, seconds, core in cases:
+            with self.subTest(lane=lane), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixtures = root / "fixtures"
+                fixtures.mkdir()
+                shutil.copyfile(Path(__file__).with_name("server.sh"), root / "server.sh")
+                copy_go_trimpath(root)
+                log = root / "steps"
+                (root / "common.sh").write_text("""ci_run() {
+  printf '%s|%s|%s\n' "$1" "$2" "$GOFLAGS" >> "$FIXTURE_STEPS"
+}
+""")
+                docker = root / "docker"
+                docker.write_text("#!/bin/sh\nexit 0\n")
+                docker.chmod(0o755)
+                environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                                   TMPDIR=str(fixtures), FIXTURE_STEPS=str(log), GOFLAGS="-mod=readonly")
+                result = subprocess.run(["bash", str(root / "server.sh"), lane], cwd=root,
+                                        env=environment, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                label = f"Server {shard} tests with Postgres" + (", core only" if core else "")
+                steps = [line.split("|", 2) for line in log.read_text().splitlines()]
+                flags = "-mod=readonly -trimpath" + (" -tags=persona_core_only" if core else "")
+                self.assertEqual([step for step in steps if step[0] == label], [[label, seconds, flags]])
+
+
+def copy_go_trimpath(root):
+    """server.sh composes GOFLAGS with scripts/test/go_trimpath.sh, relative to the repository root it runs from."""
+    (root / "scripts/test").mkdir(parents=True)
+    shutil.copyfile(Path(__file__).resolve().parents[1] / "test/go_trimpath.sh", root / "scripts/test/go_trimpath.sh")
+
+
+class ServerGoFlagsTests(unittest.TestCase):
+    def test_every_go_step_gets_trimpath_and_keeps_the_callers_flags(self):
+        # Checkouts share compiled packages only under -trimpath (#10614). No step may replace GOFLAGS: vet clears
+        # -ldflags on its command line instead, so the caller's flags and -trimpath reach it too.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copyfile(Path(__file__).with_name("server.sh"), root / "server.sh")
+            copy_go_trimpath(root)
+            log = root / "steps"
+            (root / "common.sh").write_text("""ci_run() { ci_run_step "$@"; }
+ci_run_step() {
+  printf '%s|%s|%s\\n' "$1" "$GOFLAGS" "$*" >> "$FIXTURE_STEPS"
+}
+""")
+            environment = dict(os.environ, GOFLAGS="-mod=readonly", FIXTURE_STEPS=str(log))
+            result = subprocess.run(["bash", str(root / "server.sh"), "build"], cwd=root, env=environment,
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            steps = [line.split("|", 2) for line in log.read_text().splitlines()]
+            go_steps = [step for step in steps if " go " in step[2]]
+            self.assertTrue(any("go vet -ldflags=" in step[2] for step in go_steps), steps)
+            for label, goflags, command in go_steps:
+                with self.subTest(step=label):
+                    self.assertEqual(goflags, "-mod=readonly -trimpath")
+                    self.assertNotIn("GOFLAGS=", command)
 
 
 class RunnerTests(unittest.TestCase):
@@ -364,6 +732,40 @@ class RunnerTests(unittest.TestCase):
         result = self.invoke("import time; time.sleep(3)", 0.1)
         self.assertEqual(result.returncode, 124)
         self.assertIn("TIMEOUT fixture", result.stdout)
+
+    def test_windows_termination_preserves_process_tree_cleanup_and_bounded_wait(self):
+        for taskkill_code in (0, 1):
+            with self.subTest(taskkill_code=taskkill_code):
+                process = mock.Mock(pid=321)
+                process.wait.return_value = 0
+                with mock.patch.object(run, "WINDOWS", True), mock.patch.object(run.subprocess, "run", return_value=mock.Mock(returncode=taskkill_code)) as taskkill:
+                    run.terminate(process)
+                self.assertEqual(process.wait.call_args, mock.call(timeout=5))
+                taskkill.assert_called_once_with(["taskkill", "/T", "/F", "/PID", "321"], capture_output=True, check=False)
+
+    def test_failed_windows_termination_still_prints_timeout_verdict(self):
+        process = mock.Mock(pid=321)
+        process.wait.side_effect = [run.subprocess.TimeoutExpired("fixture", 0.1), run.subprocess.TimeoutExpired("fixture", 5)]
+        process.kill.side_effect = OSError("already gone")
+        with mock.patch.object(run, "WINDOWS", True), \
+                mock.patch.object(run.subprocess, "Popen", return_value=process), \
+                mock.patch.object(run.subprocess, "run", return_value=mock.Mock(returncode=1)) as taskkill, \
+                mock.patch.object(run.signal, "signal"), \
+                mock.patch("builtins.print") as output:
+            result = run.run("fixture", 0.1, ["fixture"])
+        self.assertEqual(result, 124)
+        self.assertEqual(process.wait.call_args_list, [mock.call(timeout=0.1), mock.call(timeout=5)])
+        process.kill.assert_called_once_with()
+        taskkill.assert_called_once_with(["taskkill", "/T", "/F", "/PID", "321"], capture_output=True, check=False)
+        self.assertEqual(output.call_args_list[-1], mock.call("::endgroup::\nTIMEOUT fixture (0.0s, exit 124)", flush=True))
+
+    def test_posix_termination_uses_process_group_and_grace(self):
+        process = mock.Mock(pid=321)
+        process.wait.return_value = 0
+        with mock.patch.object(run, "WINDOWS", False), mock.patch.object(run.os, "killpg") as killpg:
+            run.terminate(process)
+        killpg.assert_called_once_with(321, run.signal.SIGTERM)
+        self.assertEqual(process.wait.call_args, mock.call(timeout=5))
 
 
 if __name__ == "__main__":

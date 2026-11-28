@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// MCP forms and links on the iPhone (#2322, docs/protocol/protocol.md "MCP elicitation"): the same rules as
 /// web/src/lib/elicitation.test.ts, the wire samples, the receipts, the fields' order, the hello that asks the hub for
@@ -270,6 +271,17 @@ struct ElicitationTests {
         }
         for other in [RequestClientMetadata(platform: .watchOS, surface: .app, version: "1"), RequestClientMetadata(platform: .iOS, surface: .systemExtension, version: "1")] {
             #expect(!LiveConnection.helloFeatures(other).contains("persona_card_ring"), "\(other.value)")
+        }
+    }
+
+    @Test func onlyAggregateAwareChatAppsDeclareApprovalMirrors() {
+        for app in [RequestClientMetadata(platform: .iOS, surface: .app, version: "1"), RequestClientMetadata(platform: .macOS, surface: .app, version: "1"),
+                    RequestClientMetadata(platform: .visionOS, surface: .app, version: "1")] {
+            #expect(LiveConnection.helloFeatures(app).contains("approval_mirrors"), "\(app.value)")
+        }
+        for other in [RequestClientMetadata(platform: .watchOS, surface: .app, version: "1"), RequestClientMetadata(platform: .iOS, surface: .systemExtension, version: "1"),
+                      RequestClientMetadata(platform: .iOS, surface: .intent, version: "1")] {
+            #expect(!LiveConnection.helloFeatures(other).contains("approval_mirrors"), "\(other.value)")
         }
     }
 

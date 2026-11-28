@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct FleetStateTests {
     /// Exactly what hub/liveactivity_test.go pins as the FleetState JSON, read the way ActivityKit reads a push:
@@ -14,6 +15,17 @@ struct FleetStateTests {
         #expect(s.workingSinceDate == Date(timeIntervalSince1970: 1761700000))
         #expect(s.items.first?.key?.machine == "m")
         #expect(s.items.first?.key?.session == "s")
+    }
+
+    @Test func decodesTheExactInteractionOccurrence() throws {
+        let occurrence = "2026-01-02T03:04:05.000000001Z"
+        let item = try JSONDecoder().decode(FleetState.Item.self, from: Data(
+            #"{"id":"m/s","kind":"permission","interaction":"ix","interactionCreatedAt":"2026-01-02T03:04:05.000000001Z"}"#.utf8))
+        #expect(item.interactionCreatedAt == occurrence)
+        #expect(try JSONDecoder().decode(FleetState.Item.self, from: JSONEncoder().encode(item)).interactionCreatedAt == occurrence)
+        let legacy = try JSONDecoder().decode(FleetState.Item.self, from: Data(
+            #"{"id":"m/s","kind":"permission","interaction":"ix"}"#.utf8))
+        #expect(legacy.interactionCreatedAt == nil)
     }
 
     /// A newer hub must never kill the activity: unknown phases / kinds and missing fields decode to something.
@@ -218,6 +230,33 @@ struct FleetStateTests {
         #expect(FleetText.stat(.tokens(42_000_000)) == "今日 42M")
     }
 
+    /// The island's load is load per core, in Machines' words (#12519): the hub's percent (load ÷ cores × 100) read as a
+    /// CPU percentage, and past 100 it looked broken. On the main actor for the compact island's `IslandPair`.
+    @Test @MainActor func loadReadsPerCore() throws {
+        #expect(FleetText.perCore(percent: 110) == "1.1")
+        #expect(FleetText.perCore(percent: 0) == "0.0")
+        #expect(FleetText.perCore(percent: 650) == "6.5") // not capped: threads wait for a core
+        // An older hub's steps of 5 round one way, not by how a Double stores 1.35 or 1.45.
+        #expect(FleetText.perCore(percent: 135) == "1.4")
+        #expect(FleetText.perCore(percent: 145) == "1.5")
+        #expect(FleetText.stat(.load(name: "", percent: 110)) == "负载 每核 1.1")
+        #expect(FleetText.stat(.load(name: "Studio", percent: 110)) == "Studio 每核 1.1")
+        let pair = try #require(IslandPair(.load(name: "", percent: 110)))
+        #expect(pair.text == "1.1")
+        // VoiceOver reads the compact island's "1.1" beside the CPU symbol as its words, not "CPU, 1.1".
+        #expect(pair.spoken == "负载 每核 1.1")
+        let count = try #require(IslandPair(.working(3)))
+        #expect(count.spoken == nil) // a count reads as drawn
+        // The island draws the figure Machines draws for the same raw load (MetricFormat.perCore): the hub rounds load
+        // per core to tenths (fleet_live.go loadPercent). Exact ties (1.45) are left out: a Double holds them just
+        // below or above, and a real load average is never one.
+        for hundredths in 0...400 where hundredths % 10 != 5 {
+            let load = Double(hundredths) / 100
+            let percent = Int((load * 10).rounded()) * 10
+            #expect(FleetText.perCore(percent: percent) == MetricFormat.perCore(load), "\(load) per core")
+        }
+    }
+
     /// The app sends every island field (empty when unset): the hub merges, so a left-out field would keep its old value.
     @Test func islandPrefsCoding() throws {
         let json = String(decoding: try JSONEncoder().encode(IslandPrefs(preset: .b)), as: UTF8.self)
@@ -225,5 +264,20 @@ struct FleetStateTests {
         let p = try JSONDecoder().decode(NotifyPrefs.self, from: Data(#"{"input":true,"done":"long","island":{"preset":"custom","left":"assistant","right":"load","machine":""}}"#.utf8))
         #expect(p.island.sides == (.assistant, .load) && p.island.machine == nil)
         #expect(try JSONDecoder().decode(NotifyPrefs.self, from: Data("{}".utf8)).island.preset == .a)
+    }
+
+    /// #12982: without names on the Lock Screen a request has no Allow / Deny (as the hub's forDevice): nobody can tell
+    /// who asks or what approving does. With names the buttons stay.
+    @Test func noButtonsWithoutDetails() {
+        let ask = FleetState.Item(id: "m/s", title: "Infra lead", kind: .permission, detail: "Mark the to-do done",
+                                  interaction: "ix_1", interactionCreatedAt: "2026-01-02T03:04:05.000000001Z")
+        let s = FleetState(phase: .needsYou, needsYou: 1, items: [ask])
+        let hidden = s.tailored(island: IslandPrefs(), details: false)
+        #expect(hidden.firstActionable == nil)
+        #expect(hidden.items.first?.interactionCreatedAt == nil)
+        #expect(hidden.needsYou == 1 && hidden.items.count == 1)
+        #expect(FleetLink.lockScreen(hidden, stale: false) == FleetLink.url(ask)) // a tap opens the request in the app
+        #expect(s.tailored(island: IslandPrefs(), details: true).firstActionable?.interaction == "ix_1")
+        #expect(s.tailored(island: IslandPrefs(), details: true).firstActionable?.interactionCreatedAt == ask.interactionCreatedAt)
     }
 }

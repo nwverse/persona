@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Interaction, Item, Session } from "../../lib/types";
+import { loadPages } from "../../lib/lazy-page";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -22,8 +23,12 @@ vi.mock("../../lib/panel", async (importOriginal) => ({ ...await importOriginal<
 
 const { ChatView } = await import("./ChatView");
 const { getState, reset, upsertSession } = await import("../../lib/store");
-const { followChildSession, useSubagentLink } = await import("../../lib/subagent-link");
+const { askSubagentPanel, followChildSession, useSubagentLink } = await import("../../lib/subagent-link");
+const { backgroundChat } = await import("../../lib/background-panel");
+const { closePanel, getPanel } = await import("../../lib/panel");
 const { forgetExpanded } = await import("./expanded");
+// The cards' chunks are loaded before the first synchronous render.
+await loadPages();
 // the cards' own chunk (lazy, like a subagent's): in before the first chat opens its work
 await import("./ChildSessionCard");
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -158,8 +163,13 @@ describe("the children's requests on the parent's page", () => {
     Object.assign(getState(), { interactions: [own, ask, approve, { ...ask, id: "ix_elsewhere", folded_under: "q", session_id: "k9" }] });
     act(() => root.render(<ChatView mid="m" sid="p" onToggleSidebar={() => {}} />));
     await flush();
-    const cards = [...host.querySelectorAll("[data-card]")].map((c) => c.getAttribute("data-card"));
-    expect(cards).toEqual(["ix_own", "ix_kid", "ix_kid2"]);
+    const ids = () => [...host.querySelectorAll("[data-card]")].map((c) => c.getAttribute("data-card"));
+    // the slot shows the first waiting card; its "1 / 3" chip opens the rest (oldest first)
+    expect(ids()).toEqual(["ix_own"]);
+    const chip = host.querySelector<HTMLButtonElement>("[data-chat-cards-position]")!;
+    expect(chip.textContent).toBe("1 / 3");
+    act(() => chip.click());
+    expect(ids()).toEqual(["ix_own", "ix_kid", "ix_kid2"]);
     const from = (id: string) => host.querySelector(`[data-card="${id}"] [data-permission-from]`)?.textContent;
     expect(from("ix_kid")).toBe("来自子 Agent · Write the regression tests");
     expect(from("ix_kid2")).toBe("来自子 Agent · Check the CI config");
@@ -199,5 +209,59 @@ describe("a link to a child's own conversation", () => {
     await flush();
     expect(asked).toBeUndefined();
     expect(host.querySelectorAll("[data-child-card]").length).toBe(0);
+  });
+});
+
+describe("embedded subagent ChatView read-only vs interactive gate (#14323)", () => {
+  it("renders a read-only bar (no composer) for embedded <parent>@<agent> without showing Not found", async () => {
+    upsertSession({
+      ...parent,
+      subagents: [{ id: "sa1", session_id: "p@sa1", description: "Check auth", running: false }],
+    });
+    act(() => root.render(<ChatView mid="m" sid="p@sa1" embedded />));
+    await flush();
+    expect(host.querySelector("[data-subagent-readonly-line]")).not.toBeNull();
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.textContent).not.toContain("找不到这条对话");
+  });
+
+  it("gates embedded child composer strictly on sessionCan(child, 'send')", async () => {
+    upsertSession(child("ro-kid", 20, { capabilities: { read: true, send: false } }));
+    act(() => root.render(<ChatView mid="m" sid="ro-kid" embedded />));
+    await flush();
+    expect(host.querySelector("[data-subagent-readonly-line]")).not.toBeNull();
+    expect(host.querySelector("textarea")).toBeNull();
+
+    upsertSession(child("rw-kid", 25, { capabilities: { read: true, send: true } }));
+    act(() => root.render(<ChatView mid="m" sid="rw-kid" embedded />));
+    await flush();
+    expect(host.querySelector("[data-subagent-readonly-line]")).toBeNull();
+    expect(host.querySelector("textarea")).not.toBeNull();
+  });
+
+  it("opens queued subagent panel on assistant parent conversations and limits hasCall to real launching tool calls", async () => {
+    // 1. Assistant conversation consumes queued subagent panel ask
+    upsertSession({ ...parent, session_id: "asst-1", assistant: true });
+    act(() => askSubagentPanel("m", "asst-1", { mid: "box", sid: "remote-kid", from: "link" }));
+    act(() => root.render(<ChatView mid="m" sid="asst-1" assistant onToggleSidebar={() => {}} />));
+    await flush();
+    expect(getPanel()).toEqual({
+      kind: "subagent",
+      mid: "box",
+      sid: "remote-kid",
+      parentMid: "m",
+      parentSid: "asst-1",
+      call: undefined,
+      from: "link",
+    });
+    closePanel();
+
+    // 2. Agent chat hasCall returns true only for real tool_use calls, never synthetic child: cards
+    upsertSession(child("k1", 10));
+    act(() => root.render(<ChatView mid="m" sid="p" onToggleSidebar={() => {}} />));
+    await flush();
+    const bg = backgroundChat("m", "p");
+    expect(bg?.hasCall?.("c2")).toBe(true);
+    expect(bg?.hasCall?.("child:k1")).toBe(false);
   });
 });

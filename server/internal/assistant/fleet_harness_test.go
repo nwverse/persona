@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"net/http"
 	"slices"
 	"sort"
@@ -25,11 +26,14 @@ import (
 // fleetDevs is the manager's device layer for the fleet's tests: machines with the sessions their nodes list, and a
 // node whose calls a test answers.
 type fleetDevs struct {
-	mu       sync.Mutex
-	machines map[string]*fleetNode
-	order    []string
-	usage    assistantwire.UsageSummary
-	capacity proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
+	mu           sync.Mutex
+	machines     map[string]*fleetNode
+	order        []string
+	usage        assistantwire.UsageSummary
+	capacity     proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
+	accounts     []proto.UsageAccount   // what UsageAccounts answers (candidate_headroom_test.go)
+	gatewayRetry func(source, provider string, now time.Time) time.Time
+	gateways     proto.GatewayAccounts
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
 	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
@@ -38,14 +42,33 @@ type fleetDevs struct {
 	confirmed   map[string]bool
 	// watched: the sessions an app has open (Watched), by machine and session.
 	watched map[[2]string]bool
+	// held: the owner's messages held for machines' Agents while their computer is away (HeldMessages), by machine and
+	// session; heldAsked and heldLang: how many times HeldMessages was called for a machine and in what language last
+	// (counted, not listed: the allocation tests decorate through it); heldActs: every HeldRetry / HeldDelete
+	// ("retry <session>/<message>"); heldErr: what those answer for a message they find.
+	held      map[string]map[string][]proto.UndeliveredMessage
+	heldAsked map[string]int
+	heldLang  map[string]i18n.Lang
+	heldActs  []string
+	heldErr   error
+	// transfers: every AgentTransfer asked for, in order; transfer answers them (nil: done, with the paths asked).
+	transfers []devices.AgentTransfer
+	transfer  func(devices.AgentTransfer) (devices.AgentTransferResult, error)
 }
 
 type fleetNode struct {
 	name, home, trust string
+	homeReal          string // home with its links followed, when the node says it is another path
+	executable        string // the file its node said it runs from when its connection began ("": it did not say)
 	sessions          []proto.Session
+	lists             int // how many times its whole list was read (Sessions)
 	connected         time.Time
 	// away: its node is not connected (Summary and List say not reachable); its sessions stay as last listed.
 	away bool
+	// shownUntil: shown as before until then while its node is away (Shown, devices.Shown.Until); unlisted: its node
+	// has given no list on this connection yet (Shown's Listed false).
+	shownUntil time.Time
+	unlisted   bool
 	// call answers the node's methods (nil: {}); calls are the ones it got.
 	call  func(method string, params json.RawMessage) (any, error)
 	calls []fleetCall
@@ -130,7 +153,8 @@ func (d *fleetDevs) List() []devices.Summary {
 	var out []devices.Summary
 	for _, id := range d.order {
 		n := d.machines[id]
-		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: !n.away, Reachable: !n.away})
+		out = append(out, devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+			Online: !n.away, Reachable: !n.away})
 	}
 	return out
 }
@@ -149,7 +173,19 @@ func (d *fleetDevs) Summary(id string) (devices.Summary, bool) {
 	if n == nil || !slices.Contains(d.order, id) {
 		return devices.Summary{}, false
 	}
-	return devices.Summary{ID: id, Name: n.name, Home: n.home, Trust: n.trust, Online: !n.away, Reachable: !n.away}, true
+	return devices.Summary{ID: id, Name: n.name, Home: n.home, HomeReal: n.homeReal, Executable: n.executable, Trust: n.trust,
+		Online: !n.away, Reachable: !n.away}, true
+}
+
+// Shown is the node's shownUntil and unlisted, as the devices say them.
+func (d *fleetDevs) Shown(id string) (devices.Shown, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil {
+		return devices.Shown{}, false
+	}
+	return devices.Shown{Listed: !n.unlisted, Until: n.shownUntil}, true
 }
 
 func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
@@ -159,7 +195,19 @@ func (d *fleetDevs) Sessions(id string) ([]proto.Session, bool) {
 	if n == nil {
 		return nil, false
 	}
+	n.lists++
 	return append([]proto.Session(nil), n.sessions...), true
+}
+
+// AppendSessions copies the list into dst's array, as the devices do.
+func (d *fleetDevs) AppendSessions(dst []proto.Session, id string) ([]proto.Session, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	n := d.machines[id]
+	if n == nil {
+		return dst, false
+	}
+	return append(dst, n.sessions...), true
 }
 
 // SessionsWhere copies out only what keep accepts, as the devices do: a benchmark of a view then counts no copy of the
@@ -221,6 +269,25 @@ func (d *fleetDevs) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
 	return d.capacity
 }
 
+func (d *fleetDevs) UsageAccounts(context.Context) []proto.UsageAccount {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]proto.UsageAccount(nil), d.accounts...)
+}
+
+func (d *fleetDevs) UsageGatewayAccounts() proto.GatewayAccounts {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.gateways
+}
+
+func (d *fleetDevs) GatewayRetryAt(source, provider string, now time.Time) time.Time {
+	if d.gatewayRetry != nil {
+		return d.gatewayRetry(source, provider, now)
+	}
+	return time.Time{}
+}
+
 func (d *fleetDevs) SetAttention(a link.Attention) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -274,10 +341,18 @@ type fleetMem struct {
 	status map[string]string
 	res    map[string]*proto.Resolution
 	recs   []db.InteractionRecord
-	always map[string]map[string]bool // session → keys
-	seen   map[[2]string]time.Time
+	// endedBy is who or what ended each interaction, as the history's ended_by keeps it (db.WithEndedBy).
+	endedBy map[string]string
+	always  map[string]map[string]bool // session → keys
+	seen    map[[2]string]time.Time
 	// insertGate, when set before the cards come, holds each interaction write until it is closed (a slow database).
 	insertGate chan struct{}
+	// resolvedInsert* controls the one-statement reversible-setting decision history write in failure and race tests.
+	resolvedInsertErr     error
+	resolvedInsertGate    chan struct{}
+	resolvedInsertStarted chan struct{}
+	resolvedOutcomeErr    error
+	deadlineErr           error
 }
 
 func newFleetMem() *fleetMem {
@@ -295,11 +370,105 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 	}
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
-	if _, ok := m.status[ix.ID]; !ok {
-		m.status[ix.ID] = "pending"
-		m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != ix.ID {
+			continue
+		}
+		same := sameDurableApprovalOccurrence(ix, m.recs[i].Interaction)
+		startupRelist := same && !ix.Resumable && m.recs[i].Status == "cancelled" && m.recs[i].Resolution == nil
+		if ix.CreatedAt.After(m.recs[i].Interaction.CreatedAt) || startupRelist {
+			m.recs[i] = db.InteractionRecord{Interaction: ix, Status: "pending"}
+			m.status[ix.ID], m.res[ix.ID] = "pending", nil
+			delete(m.endedBy, ix.ID)
+		}
+		return nil
 	}
+	m.status[ix.ID] = "pending"
+	m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
 	return nil
+}
+
+func (m *fleetMem) UpdateInteractionDeadline(_ context.Context, id string, created, expires time.Time) error {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.deadlineErr != nil {
+		return m.deadlineErr
+	}
+	if m.status[id] != "pending" {
+		return errors.New("interaction deadline was not recorded")
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id && m.recs[i].Interaction.CreatedAt.Equal(created) {
+			m.recs[i].Interaction.ExpiresAt = expires
+			return nil
+		}
+	}
+	return errors.New("interaction deadline was not recorded")
+}
+
+func (m *fleetMem) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error {
+	m.fmu.Lock()
+	started, gate, insertErr := m.resolvedInsertStarted, m.resolvedInsertGate, m.resolvedInsertErr
+	m.resolvedInsertStarted = nil
+	m.fmu.Unlock()
+	if started != nil {
+		close(started)
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if insertErr != nil {
+		return insertErr
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if _, exists := m.status[ix.ID]; exists {
+		return errors.New("duplicate interaction id")
+	}
+	now := time.Now().UTC()
+	m.status[ix.ID], m.res[ix.ID] = "resolved", res
+	if m.endedBy == nil {
+		m.endedBy = map[string]string{}
+	}
+	m.endedBy[ix.ID] = db.EndedBy(ctx)
+	m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "resolved", Resolution: res, ResolvedAt: &now})
+	return nil
+}
+
+func (m *fleetMem) MarkResolvedInteractionOutcome(_ context.Context, id string, created time.Time, outcome string, _ time.Time) error {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.resolvedOutcomeErr != nil {
+		return m.resolvedOutcomeErr
+	}
+	if outcome != "saved" && outcome != "not_saved" {
+		return errors.New("unknown resolved-interaction outcome")
+	}
+	if m.status[id] != "resolved" {
+		return errors.New("resolved-interaction outcome was not recorded")
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != id || !m.recs[i].Interaction.CreatedAt.Equal(created) {
+			continue
+		}
+		var input map[string]json.RawMessage
+		if err := json.Unmarshal(m.recs[i].Interaction.ToolInput, &input); err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(outcome)
+		input["outcome"] = raw
+		updated, err := json.Marshal(input)
+		if err != nil {
+			return err
+		}
+		m.recs[i].Interaction.ToolInput = updated
+		return nil
+	}
+	return errors.New("resolved-interaction outcome was not recorded")
 }
 
 func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool, error) {
@@ -316,11 +485,15 @@ func (m *fleetMem) MarkInteractionResumable(_ context.Context, id string) (bool,
 	return true, nil
 }
 
-func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *proto.Resolution) error {
+func (m *fleetMem) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
 	if m.status[id] == "pending" {
 		m.status[id], m.res[id] = status, res
+		if m.endedBy == nil {
+			m.endedBy = map[string]string{}
+		}
+		m.endedBy[id] = db.EndedBy(ctx)
 		for i := range m.recs {
 			if m.recs[i].Interaction.ID == id {
 				m.recs[i].Status = status
@@ -328,6 +501,42 @@ func (m *fleetMem) FinishInteraction(_ context.Context, id, status string, res *
 		}
 	}
 	return nil
+}
+
+func (m *fleetMem) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (bool, bool, error) {
+	if err := m.InsertInteraction(ctx, ix); err != nil {
+		return false, false, err
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID != ix.ID {
+			continue
+		}
+		if !sameDurableApprovalOccurrence(ix, m.recs[i].Interaction) {
+			return false, m.status[ix.ID] != "pending", nil
+		}
+		if m.status[ix.ID] == "pending" {
+			m.status[ix.ID], m.res[ix.ID] = status, res
+			if m.endedBy == nil {
+				m.endedBy = map[string]string{}
+			}
+			m.endedBy[ix.ID] = db.EndedBy(ctx)
+			m.recs[i].Status, m.recs[i].Resolution = status, res
+		}
+		if m.status[ix.ID] != status {
+			return false, true, errors.New("interaction occurrence already has a different terminal status")
+		}
+		return true, true, nil
+	}
+	return false, false, errors.New("interaction occurrence is missing after its insert")
+}
+
+// endedAs is who or what ended interaction id, as the history keeps it.
+func (m *fleetMem) endedAs(id string) string {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	return m.endedBy[id]
 }
 
 func (m *fleetMem) InteractionOutcome(_ context.Context, id string) (string, *proto.Resolution, error) {
@@ -405,6 +614,29 @@ func (m *fleetMem) AlwaysAllowed(_ context.Context, session string, keys []strin
 	return len(keys) > 0, nil
 }
 
+func (m *fleetMem) CopyAlways(_ context.Context, fromSession, toSession string) (int, error) {
+	if fromSession == "" || toSession == "" || fromSession == toSession {
+		return 0, nil
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	src := m.always[fromSession]
+	if len(src) == 0 {
+		return 0, nil
+	}
+	if m.always[toSession] == nil {
+		m.always[toSession] = map[string]bool{}
+	}
+	copied := 0
+	for k := range src {
+		if !m.always[toSession][k] {
+			m.always[toSession][k] = true
+			copied++
+		}
+	}
+	return copied, nil
+}
+
 func (m *fleetMem) MarkSeen(_ context.Context, machine, session string, at time.Time) error {
 	m.fmu.Lock()
 	defer m.fmu.Unlock()
@@ -426,11 +658,12 @@ var _ fleetStore = (*fleetMem)(nil)
 
 // fleetTest is a manager with the fleet on: s, its devices d, its hub f, its store st.
 type fleetTest struct {
-	t  *testing.T
-	s  *Service
-	d  *fleetDevs
-	f  *fakeHub
-	st *fleetMem
+	t      *testing.T
+	s      *Service
+	d      *fleetDevs
+	f      *fakeHub
+	st     *fleetMem
+	cancel context.CancelFunc
 }
 
 // newFleetTest is a manager carrying the machine "mac" (named "Mac") with a store, on a fake hub.
@@ -557,4 +790,62 @@ func (d *fleetDevs) watch(id, session string, on bool) {
 		d.watched = map[[2]string]bool{}
 	}
 	d.watched[[2]string{id, session}] = on
+}
+
+// HeldMessages are the messages the test holds for machine's Agents (held), as the devices' index answers them; the
+// calls are counted (heldAsked, heldLang).
+func (d *fleetDevs) HeldMessages(machine string, lang i18n.Lang) map[string][]proto.UndeliveredMessage {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.heldAsked == nil {
+		d.heldAsked, d.heldLang = map[string]int{}, map[string]i18n.Lang{}
+	}
+	d.heldAsked[machine]++
+	d.heldLang[machine] = lang
+	var out map[string][]proto.UndeliveredMessage
+	for sid, list := range d.held[machine] {
+		if out == nil {
+			out = map[string][]proto.UndeliveredMessage{}
+		}
+		out[sid] = slices.Clone(list)
+	}
+	return out
+}
+
+func (d *fleetDevs) HeldRetry(_ context.Context, sid, msg string) (bool, error) {
+	return d.heldAct("retry", sid, msg)
+}
+
+func (d *fleetDevs) HeldDelete(_ context.Context, sid, msg string) (bool, error) {
+	return d.heldAct("delete", sid, msg)
+}
+
+// AgentTransfer notes t and answers it with transfer (a done file at the path asked when that is nil).
+func (d *fleetDevs) AgentTransfer(_ context.Context, t devices.AgentTransfer) (devices.AgentTransferResult, error) {
+	d.mu.Lock()
+	d.transfers = append(d.transfers, t)
+	answer := d.transfer
+	d.mu.Unlock()
+	if answer != nil {
+		return answer(t)
+	}
+	return devices.AgentTransferResult{ID: "t1", Kind: proto.FilePackFile, Name: "report.pdf", Source: t.Path,
+		ResultPath: "/home/me/Downloads/Persona/report.pdf", Size: 2048, SHA256: "abababababababababababababababababababababababababababababababab"}, nil
+}
+
+// heldAct notes Retry or Delete (what) on held message msg of session sid, found on any machine or not; one found is
+// answered heldErr, and a Delete that succeeds takes it away.
+func (d *fleetDevs) heldAct(what, sid, msg string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.heldActs = append(d.heldActs, what+" "+sid+"/"+msg)
+	for _, bySession := range d.held {
+		if i := slices.IndexFunc(bySession[sid], func(m proto.UndeliveredMessage) bool { return m.ID == msg }); i >= 0 {
+			if what == "delete" && d.heldErr == nil {
+				bySession[sid] = slices.Delete(slices.Clone(bySession[sid]), i, i+1)
+			}
+			return true, d.heldErr
+		}
+	}
+	return false, nil
 }

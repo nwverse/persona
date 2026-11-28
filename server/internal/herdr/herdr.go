@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -256,13 +257,27 @@ func (c *Client) rpcOnce(ctx context.Context, method string, params any, out any
 	if c.Socket == "" {
 		return errNoSocket
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeoutOf(method))
+	dctx, cancel := context.WithTimeout(ctx, timeoutOf(method))
 	defer cancel()
-	conn, err := dialSocket(ctx, c.Socket)
+	conn, err := dialSocket(dctx, c.Socket)
 	if err != nil {
-		return fmt.Errorf("%w: %v", errNoSocket, err)
+		// A caller that gave up while connecting gets its own error, not "no socket": the CLI fallback would only
+		// start herdr under a context that has already ended and report that failure instead (#16008).
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("herdr %s: %w", method, cerr)
+		}
+		// A dial timeout indicates a busy/overloaded herdr rather than a missing socket (#13578).
+		var ne net.Error
+		if dctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+			return fmt.Errorf("herdr %s: %w", method, err)
+		}
+		return fmt.Errorf("%w: %w", errNoSocket, err)
 	}
 	defer conn.Close()
+	return c.rpcConn(dctx, conn, method, params, out)
+}
+
+func (c *Client) rpcConn(ctx context.Context, conn net.Conn, method string, params any, out any) error {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
@@ -396,10 +411,13 @@ func IsBlocked(err error) bool {
 	return errors.As(err, &he) && he.Code == "agent_blocked"
 }
 
-// AgentSession is what an agent integration reported about its session ({kind: "id", value: <session id>}).
+// AgentSession is what an agent integration reported about its session. Source identifies the reporting integration,
+// Agent names the agent, and Kind describes Value (for example, kind "id" carries a session ID).
 type AgentSession struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
+	Source string `json:"source"`
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
 }
 
 type Agent struct {
@@ -423,8 +441,10 @@ type Process struct {
 	PID  int    `json:"pid"`
 	Name string `json:"name"`
 	// Argv0 is what it was started as: Claude Code renames its process to its version ("2.1.312"), argv0 still says
-	// claude; a login shell's starts with "-".
+	// claude; a login shell's starts with "-". herdr 0.9.5 reports Argv instead.
 	Argv0 string `json:"argv0"`
+	// Argv is its command line, what herdr 0.9.5 reports in place of argv0.
+	Argv []string `json:"argv"`
 }
 
 // PaneForeground returns a pane's foreground processes.
@@ -441,22 +461,52 @@ func (c *Client) PaneForeground(ctx context.Context, pane string) ([]Process, er
 	return out.ProcessInfo.Foreground, nil
 }
 
-// PaneProcesses returns the pids of a pane's foreground processes, claude first.
+// PaneProcesses returns the pids of a pane's foreground processes, Claude Code's own first (claudeRank). herdr lists
+// the foreground group's leader first: a wrapper when the launcher runs claude under one ("<wrapper> run -- <claude
+// arguments>"), and the port scan takes the first pid for the agent itself, whose own listeners are no server it runs
+// (node ports.go).
 func (c *Client) PaneProcesses(ctx context.Context, pane string) ([]int, error) {
 	procs, err := c.PaneForeground(ctx, pane)
 	if err != nil {
 		return nil, err
 	}
-	var claude, other []int
-	for _, p := range procs {
-		// Claude Code renames its process to its version ("2.1.312"); argv0 still says claude.
-		if strings.Contains(p.Name, "claude") || strings.Contains(p.Argv0, "claude") {
-			claude = append(claude, p.PID)
-		} else {
-			other = append(other, p.PID)
+	slices.SortStableFunc(procs, func(a, b Process) int { return claudeRank(a) - claudeRank(b) })
+	pids := make([]int, len(procs))
+	for i, p := range procs {
+		pids[i] = p.PID
+	}
+	return pids, nil
+}
+
+// claudeRank is how surely p is Claude Code itself, 0 surest: a process named after a version, as Claude Code names
+// itself ("2.1.312"); then one whose name or program file says claude, not a folder on the way to it (a wrapper may
+// live in one named after claude); then anything else.
+func claudeRank(p Process) int {
+	if versionName(p.Name) {
+		return 0
+	}
+	started := p.Argv0
+	if started == "" && len(p.Argv) > 0 {
+		started = p.Argv[0]
+	}
+	if strings.Contains(p.Name, "claude") || strings.Contains(filepath.Base(started), "claude") {
+		return 1
+	}
+	return 2
+}
+
+// versionName: name is a version number, three or more dot-separated runs of digits ("2.1.312").
+func versionName(name string) bool {
+	parts := strings.Split(name, ".")
+	if len(parts) < 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, "0123456789") != "" {
+			return false
 		}
 	}
-	return append(claude, other...), nil
+	return true
 }
 
 func (a Agent) SessionID() string {
@@ -466,18 +516,29 @@ func (a Agent) SessionID() string {
 	return ""
 }
 
+// Version is the running server's version (ServerVersion), else the CLI's (`herdr --version`).
 func (c *Client) Version(ctx context.Context) string {
-	var pong struct {
-		Version string `json:"version"`
-	}
-	if c.rpc(ctx, "ping", nil, &pong) == nil && pong.Version != "" {
-		return pong.Version
+	if v := c.ServerVersion(ctx); v != "" {
+		return v
 	}
 	out, err := exec.CommandContext(ctx, c.Bin, "--version").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "herdr"))
+}
+
+// ServerVersion is the version the server on c's socket answers ping with ("0.9.5"), "" when it does not answer or
+// names none. It never falls back to the CLI's: a binary upgraded in place says the new version while the server that
+// was started from the old one still runs.
+func (c *Client) ServerVersion(ctx context.Context) string {
+	var pong struct {
+		Version string `json:"version"`
+	}
+	if c.rpc(ctx, "ping", nil, &pong) != nil {
+		return ""
+	}
+	return pong.Version
 }
 
 func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
@@ -522,9 +583,13 @@ type Tab struct {
 
 // Snapshot is the whole live layout: workspaces, tabs, panes, agents and focus.
 type Snapshot struct {
-	Workspaces []Workspace `json:"workspaces"`
-	Tabs       []Tab       `json:"tabs"`
-	Agents     []Agent     `json:"agents"`
+	// InventoryIncomplete means a successful reply omitted the pane or agent inventory
+	// (or a list needed to reconstruct it). Display callers can still use its fields,
+	// but destructive callers must not treat missing data as confirmed absence.
+	InventoryIncomplete bool        `json:"-"`
+	Workspaces          []Workspace `json:"workspaces"`
+	Tabs                []Tab       `json:"tabs"`
+	Agents              []Agent     `json:"agents"`
 	// Panes is every pane, agent or not (agent empty): where agents herdr does not detect, such as a compatible CLI, are found.
 	Panes []Agent `json:"panes"`
 	// Layouts are the tabs' split layouts: where each pane sits in its tab (layout.go).
@@ -554,11 +619,53 @@ type Created struct {
 	} `json:"root_pane"`
 }
 
-func (c *Client) WorkspaceCreate(ctx context.Context, cwd, label string) (*Created, error) {
+// WorkspaceCreate opens a workspace in cwd without moving the computer's focus; env ("KEY=VALUE") is added to the
+// environment its first pane's shell starts with.
+func (c *Client) WorkspaceCreate(ctx context.Context, cwd, label string, env ...string) (*Created, error) {
+	return c.createWithEnv(ctx, "workspace.create", map[string]any{"cwd": cwd, "label": label, "focus": false},
+		[]string{"workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"}, env)
+}
+
+// createWithEnv is workspace.create / tab.create with env ("KEY=VALUE", herdr's `env` object and `--env`). A herdr
+// that refuses the request because it has no `env` (one before environment support) is asked again without it: the
+// shell then starts without those variables, as before, rather than no terminal opening.
+func (c *Client) createWithEnv(ctx context.Context, method string, params map[string]any, cli []string, env []string) (*Created, error) {
+	vars := map[string]string{}
+	var flags []string
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "" {
+			vars[k] = v
+			flags = append(flags, "--env", kv)
+		}
+	}
 	var res Created
-	err := c.call(ctx, "workspace.create", map[string]any{"cwd": cwd, "label": label, "focus": false}, &res,
-		"workspace", "create", "--cwd", cwd, "--label", label, "--no-focus")
+	if len(vars) == 0 {
+		err := c.call(ctx, method, params, &res, cli...)
+		return &res, err
+	}
+	with := map[string]any{"env": vars}
+	for k, v := range params {
+		with[k] = v
+	}
+	err := c.call(ctx, method, with, &res, append(slices.Clone(cli), flags...)...)
+	if err == nil || !envRefused(err) {
+		return &res, err
+	}
+	res = Created{}
+	err = c.call(ctx, method, params, &res, cli...)
 	return &res, err
+}
+
+// envRefused: herdr answered that it does not take the request as given (an unknown `env` field or `--env` flag),
+// so nothing was created.
+func envRefused(err error) bool {
+	var he *Error
+	if errors.As(err, &he) {
+		return strings.Contains(strings.ToLower(he.Code+" "+he.Message), "env") ||
+			strings.Contains(strings.ToLower(he.Message), "unknown field")
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "--env") || strings.Contains(msg, "unexpected argument")
 }
 
 // WorktreeCreated is what worktree.create opened: the new workspace (with its first tab and pane) and the checkout.
@@ -599,11 +706,11 @@ func (c *Client) WorktreeCreateFromCwd(ctx context.Context, cwd, branch, path st
 	return &res, err
 }
 
-func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string) (*Created, error) {
-	var res Created
-	err := c.call(ctx, "tab.create", map[string]any{"workspace_id": workspace, "cwd": cwd, "label": label, "focus": false}, &res,
-		"tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus")
-	return &res, err
+// TabCreate opens a tab in a workspace without moving the computer's focus; env ("KEY=VALUE") is added to the
+// environment its shell starts with.
+func (c *Client) TabCreate(ctx context.Context, workspace, cwd, label string, env ...string) (*Created, error) {
+	return c.createWithEnv(ctx, "tab.create", map[string]any{"workspace_id": workspace, "cwd": cwd, "label": label, "focus": false},
+		[]string{"tab", "create", "--workspace", workspace, "--cwd", cwd, "--label", label, "--no-focus"}, env)
 }
 
 func (c *Client) TabRename(ctx context.Context, tab, label string) error {
@@ -633,6 +740,26 @@ func (c *Client) TabClose(ctx context.Context, tab string) error {
 
 func (c *Client) PaneClose(ctx context.Context, pane string) error {
 	return c.call(ctx, "pane.close", map[string]any{"pane_id": pane}, nil, "pane", "close", pane)
+}
+
+// PaneCloseIf pins the close connection before the final check. A server
+// replacement between the check and the write cannot receive the close.
+// Attempted is true once the request may have reached the original server.
+func (c *Client) PaneCloseIf(ctx context.Context, pane string, check func() bool) (attempted bool, err error) {
+	if c.Socket == "" {
+		return false, errNoSocket
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeoutOf("session.snapshot")+timeoutOf("pane.close"))
+	defer cancel()
+	conn, err := dialSocket(ctx, c.Socket)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	if !check() || ctx.Err() != nil {
+		return false, nil
+	}
+	return true, c.rpcConn(ctx, conn, "pane.close", map[string]any{"pane_id": pane}, nil)
 }
 
 // PaneSplit splits a pane (direction "right" or "down") without moving the computer's focus, the new pane starting
@@ -848,7 +975,8 @@ func (c *Client) PaneReportMetadata(ctx context.Context, paneID, source string, 
 // authority an older node left for source without clearing another integration's (such as herdr:pi). Only when herdr
 // rejects the session report with resume_not_accepted (an agent process herdr does not detect natively, such as a
 // compatible CLI) does it claim the pane with pane.report_agent first. herdr types argv into the restored pane's
-// shell, quoting elements that need it; no element may contain an apostrophe. Older herdr ignores resume_argv.
+// shell, quoting elements that need it; no element may contain an apostrophe. herdr before 0.9.2 answers ok and drops
+// resume_argv: callers check ServerVersion first (node/herdrresume.go herdrDropsResume).
 func (c *Client) PaneReportResume(ctx context.Context, pane, source, agent, sessionID string, argv []string) error {
 	seq := ReportSeq()
 	_ = c.rpc(ctx, "pane.clear_agent_authority", map[string]any{
@@ -898,4 +1026,21 @@ func (c *Client) Panes(ctx context.Context, workspace string) ([]Agent, error) {
 	}
 	err := c.call(ctx, "pane.list", map[string]any{"workspace_id": workspace}, &res, "pane", "list", "--workspace", workspace)
 	return res.Panes, err
+}
+
+// PaneCount is how many panes the server has, in every workspace (socket only: no CLI fallback, which could reach
+// another server).
+func (c *Client) PaneCount(ctx context.Context) (int, error) {
+	var res struct {
+		Panes []json.RawMessage `json:"panes"`
+	}
+	if err := c.rpc(ctx, "pane.list", map[string]any{}, &res); err != nil {
+		return 0, err
+	}
+	return len(res.Panes), nil
+}
+
+// ServerStop stops the server listening on c's socket (socket only, like PaneCount).
+func (c *Client) ServerStop(ctx context.Context) error {
+	return c.rpc(ctx, "server.stop", map[string]any{}, nil)
 }

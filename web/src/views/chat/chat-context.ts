@@ -24,14 +24,24 @@ export interface ChatContextValue {
   workflowCalls?: WorkflowCalls;
   /** Conversation identity; both styles share the collapsed work-line default (#2602). */
   lineStyle?: WorkLineStyle;
-  /** The message an extension opened this conversation with and where it came from (#3758, `externalOpening`). */
-  opening?: { id: string; origin: ExternalOrigin };
+  /** What runs the chat's subagents, as its agent is called ("Claude Code", "Codex", a Paseo provider's label, #8142);
+   *  unset: Claude Code. */
+  harness?: string;
+  /** The message an extension opened this conversation with and where it came from (#3758, `externalOpening`), with
+   *  the extension that opened it (`openerOf`) and the conversation's manager, so its mark is the rows' (#10358). */
+  opening?: { id: string; origin: ExternalOrigin; opened_by?: string; manager?: string };
   /** The exchange whose last words carried the closeout the card above the transcript shows (#3612): they are drawn
    *  without the raw block. Unset while no card is shown. */
   closeoutSegment?: string;
   /** The child sessions drawn as cards in this chat (#5120, lib/child-cards.ts), by the exchange each sits in. The same
    *  map while none moved: a child's own updates redraw only its card. */
   children?: ReadonlyMap<string, ChildPlace[]>;
+  /** A long chat mounts its finished off-screen exchanges near the viewport instead of all at once. Live exchanges and
+   *  the final two never get ChatView's `offscreen` watcher, so their immediate rendering path is unchanged. */
+  windowHistory?: boolean;
+  /** A deferred body just replaced its estimated placeholder. ChatView compensates it now and advances its observer
+   *  baseline; the old height was read before that commit. */
+  windowDrawn?: (section: HTMLElement, was: number) => void;
   /** The chat is drawn inside another page's panel (the Team panel's worker, ChatView `embedded`): what would open in
    *  the side panel opens in place instead, since that panel is the one it is drawn in (a workflow card, #5421). */
   embedded?: boolean;
@@ -46,4 +56,3 @@ export const LiveClockContext = createContext<((delta: 1 | -1) => void) | null>(
 export function useChatContext() {
   return useContext(ChatContext);
 }
-

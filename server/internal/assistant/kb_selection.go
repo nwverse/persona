@@ -189,13 +189,21 @@ func (s *Service) updateKBSelection(ctx context.Context, f func(*kb.Selection) (
 	return s.putKBSelectionLocked(ctx, next)
 }
 
+// historyFiling is the source chat c of the connector is filed under: the source its per-item setting names too.
+func historyFiling(c connectorwire.HistoryChat, connector string) string {
+	if c.Source != "" {
+		return c.Source
+	}
+	return connector
+}
+
 // refreshSelectionNames takes the names the source lists now into the per-item settings of its chats (by their
 // stable ids), so a renamed chat keeps its setting and shows its new name.
 func (s *Service) refreshSelectionNames(ctx context.Context, connector string, chats []connectorwire.HistoryChat) {
 	names := map[[2]string]string{}
 	for _, c := range chats {
 		if c.ID != "" && c.Name != "" {
-			names[[2]string{historyPlanChat{FiledAs: c.Source}.filing(connector), c.ID}] = c.Name
+			names[[2]string{historyFiling(c, connector), c.ID}] = c.Name
 		}
 	}
 	cur, err := s.kbSelection(ctx)
@@ -331,48 +339,39 @@ func (s *Service) getKBSelectionCandidates(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	out := kbSelectionCandidates{Source: source, Chats: []kbSelectionCandidate{}}
-	var chats []historyPlanChat
-	data := e.Store.Dir
-	_, stopped := readHistoryStop(data)
-	if stopped || s.historyBusyElsewhere(data) {
-		// The import's calls are paced: the list is not asked for between them, nor while it is stopped.
-		if p, ok, err := loadHistoryPlan(data, source); err == nil && ok {
-			chats, out.ListedAt = p.Chats, p.GeneratedAt
-		}
-		out.Cached = true
-	} else {
-		list, err := s.historyListChats(ctx, data, source)
-		var h *historyHalt
-		switch {
-		case errors.Is(err, errHistoryUnavailable):
+	if s.ui == nil { // without the knowledge-ui module no source offers its history here
+		apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-kb_selection.no_history", i18n.Args{"source": source}))
+		return
+	}
+	chats, listedAt, cached, err := s.ui.Chats(ctx, e.Store.Dir, source)
+	if err != nil {
+		switch problem, text := s.ui.ChatsProblem(err, s.requestCtxLang(ctx)); problem {
+		case "no_history":
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-kb_selection.no_history", i18n.Args{"source": source}))
-			return
-		case errors.As(err, &h):
-			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("assistant-kb_selection.list_stopped", i18n.Args{"reason": historyReasonText(s.requestCtxLang(ctx), h.why)}))
-			return
-		case err != nil:
-			apierr.Write(w, http.StatusBadGateway, i18n.Err("assistant-kb_selection.list_failed", i18n.Args{"code": historyErrCode(err)}))
-			return
+		case "stopped":
+			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("assistant-kb_selection.list_stopped", i18n.Args{"reason": text}))
+		default:
+			apierr.Write(w, http.StatusBadGateway, i18n.Err("assistant-kb_selection.list_failed", i18n.Args{"code": text}))
 		}
-		s.refreshSelectionNames(ctx, source, list)
+		return
+	}
+	out.Cached, out.ListedAt = cached, listedAt
+	if !cached { // the source was asked: its names went into the selection (refreshSelectionNames)
 		if sel, err = s.kbSelection(ctx); err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, kbSelectionErr(err))
 			return
 		}
-		p := &historyPlan{Source: source}
-		p.regenerate(list, time.Now())
-		chats, out.ListedAt = p.Chats, p.GeneratedAt
 	}
 	ret := e.Retention()
 	for _, c := range chats {
-		filing := c.filing(source)
+		filing := historyFiling(c, source)
 		cand := kbSelectionCandidate{ID: c.ID, Name: c.Name, Kind: c.Kind, Source: filing, Bot: c.Bot, Muted: c.Muted, Collapsed: c.Collapsed,
 			Done: c.Done, Estimate: c.Estimate, Read: "none"}
 		if it := sel.Item(filing, kb.ItemChat, c.ID); it != nil {
 			cp := *it
 			cand.Item = &cp
 		}
-		switch need := historyNeed(sel, ret, source, c); {
+		switch need := s.ui.Need(sel, ret, source, c); {
 		case need.Whole:
 			cand.Read, cand.Days = "whole", need.Days
 		case need.Read:

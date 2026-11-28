@@ -4,6 +4,8 @@
 // Catalogs are locales/<lang>/<namespace>.json, flat "name": "text", embedded in the binary; a key is
 // "<namespace>.<name>". Placeholders are {name}; a numeric "count" picks <key>_one / <key>_other when those exist.
 // A key missing in a language falls back to en, then zh-Hans, then the key itself (the catalog test keeps them equal).
+//
+//persona:layer library
 package i18n
 
 import (
@@ -20,6 +22,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/feature/plural"
 	"golang.org/x/text/language"
@@ -242,6 +246,9 @@ func loadLang(l Lang) map[string]string {
 // Args are a text's placeholder values.
 type Args map[string]any
 
+// Verbatim is a source value whose punctuation must survive insertion, such as a quoted name or message.
+type Verbatim string
+
 func lookup(l Lang, key string, args Args) (string, bool) {
 	cat := catalog(l)
 	if n, ok := count(args); ok {
@@ -313,7 +320,9 @@ func T(l Lang, key string, args ...Args) string {
 
 // fill replaces each {name} in s (name an ASCII word, [0-9A-Za-z_]+) with a[name]; an unknown name or a brace
 // that does not close such a word stays as written. It is the byte-scan form of a `\{(\w+)\}` regexp replace,
-// which T runs on every call with args.
+// which T runs on every call with args. A value that ends a sentence, filled in right before the text's own
+// punctuation ("（{reason}），", "{error}。"), loses its full stop, so the text never reads "。），" or "。。" (#6822);
+// the web's interpolate does the same (web/src/i18n/index.ts).
 func fill(s string, a Args) string {
 	i := strings.IndexByte(s, '{')
 	if i < 0 {
@@ -329,6 +338,9 @@ func fill(s string, a Args) string {
 		if j > i+1 && j < len(s) && s[j] == '}' {
 			if v, ok := a[s[i+1:j]]; ok {
 				val := argText(v)
+				if _, source := v.(Verbatim); !source && markAfter(s[j+1:]) {
+					val = withoutFullStop(val)
+				}
 				if done == 0 {
 					b.Grow(len(s) + len(val)) // one allocation for the common one-placeholder text
 				}
@@ -352,6 +364,28 @@ func fill(s string, a Args) string {
 	return b.String()
 }
 
+// markAfter: rest (the text after a placeholder) starts with punctuation that makes a value's own full stop a second one.
+func markAfter(rest string) bool {
+	r, _ := utf8.DecodeRuneInString(rest)
+	return strings.ContainsRune("）)，,。．.：:；;、", r)
+}
+
+// withoutFullStop is v without the full stop it ends with (and space after it); an ellipsis ("...", "。。") keeps its
+// dots, and a value that ends otherwise is v.
+func withoutFullStop(v string) string {
+	t := strings.TrimRightFunc(v, unicode.IsSpace)
+	last, n := utf8.DecodeLastRuneInString(t)
+	if n == 0 || !isFullStop(last) {
+		return v
+	}
+	if prev, _ := utf8.DecodeLastRuneInString(t[:len(t)-n]); isFullStop(prev) {
+		return v
+	}
+	return t[:len(t)-n]
+}
+
+func isFullStop(r rune) bool { return r == '。' || r == '．' || r == '.' }
+
 func isWordByte(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c == '_'
 }
@@ -360,6 +394,8 @@ func argText(v any) string {
 	switch v := v.(type) {
 	case string:
 		return v
+	case Verbatim:
+		return string(v)
 	case int:
 		return strconv.Itoa(v)
 	case int64:

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"crypto/rand"
 	"strings"
 	"sync"
 	"time"
@@ -29,10 +30,18 @@ type inboxNote struct {
 	Who     string `json:"who,omitempty"`
 	Next    string `json:"next,omitempty"`
 	Checks  int    `json:"checks,omitempty"`
+	// Deferred holds this programmatic wake out of every direct delivery path until the unified scheduler admits it.
+	// Pending is persisted but never listed, so this is durable internal bookkeeping rather than client wire state.
+	Deferred bool `json:"deferred,omitempty"`
+	Retry    bool `json:"retry,omitempty"` // held while the retry waits for its linked Agent
 }
 
 func renderNote(n inboxNote, owner string) string {
-	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Owner: owner, Text: n.Text, Edited: n.Edited, Failed: n.Failed,
+	return renderNoteIn(n, owner, "")
+}
+
+func renderNoteIn(n inboxNote, owner, language string) string {
+	return prompts.RenderInboxHandlingNote(n.Name, prompts.InboxHandlingNote{Language: language, Owner: owner, Text: n.Text, Edited: n.Edited, Failed: n.Failed,
 		Context: n.Context, Machine: n.Machine, Session: n.Session, Who: n.Who, Next: n.Next, Checks: n.Checks})
 }
 
@@ -56,7 +65,15 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	if !wake {
 		return
 	}
+	b.wakeInboxConversation(it, now)
+}
+
+// wakeInboxConversation applies tell's wake bookkeeping without adding another note. A wake also consumes an
+// off-transition interruption: this turn, rather than another escalation for the same Last, owns the recovery. Under b.mu.
+func (b *inboxBook) wakeInboxConversation(it *InboxItem, now time.Time) {
+	a := it.Agent
 	a.Wake = true
+	a.InterruptedByDisable = false
 	if h := it.Handling; h != nil && h.State != HandlingLooking {
 		a.Back = h.State
 	}
@@ -65,6 +82,139 @@ func (b *inboxBook) tell(it *InboxItem, n inboxNote, wake bool, now time.Time) {
 	if a.SessionID == "" {
 		a.State, a.Attempts, a.RetryAfter, a.Error = AgentQueued, 0, nil, ""
 	}
+}
+
+// queueInboxWake records a capped source notification immediately. An item already occupying a processing slot reuses
+// it; otherwise the note is held at the item's original first-deferred time until admitInboxSourceWake. Under b.mu.
+func (b *inboxBook) queueInboxWake(it *InboxItem, n inboxNote, reuseSlot bool, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	n.Deferred = true
+	a.queueNote(n)
+	if reuseSlot || inboxConversationRunning(it) {
+		b.admitInboxSourceWake(it, now)
+		return
+	}
+	if a.DeferredAt == nil {
+		t := now.UTC()
+		a.DeferredAt = &t
+	}
+}
+
+// admitInboxSourceWake releases every held note on one item in its original order and applies the same handling and
+// restoration transitions as the former immediate paths. The caller has already reserved a slot, or the item is
+// reusing its own active slot. Under b.mu.
+func (b *inboxBook) admitInboxSourceWake(it *InboxItem, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	for i := range a.Pending {
+		if !a.Pending[i].Deferred {
+			continue
+		}
+		n := a.Pending[i]
+		switch n.Name {
+		case prompts.NoteAgentStopped:
+			// Only a current Agent's stop is a capped wake. Older stops remain non-waking informational notes.
+			if inboxCurrentAgentStopNote(it, n) {
+				if it.Handling != nil {
+					switch it.Handling.State {
+					case HandlingAgent:
+						if a.Back == HandlingAgent {
+							a.Back = ""
+						}
+						b.setHandling(it, HandlingLooking, "", now)
+					case HandlingWaiting:
+						a.Back = HandlingWaiting
+						b.setHandling(it, HandlingLooking, "", now)
+					}
+				}
+				b.wakeInboxConversation(it, now)
+			}
+		case prompts.NoteSelfReplied:
+			if it.Handling != nil && it.Handling.State == HandlingAgent {
+				// The current Agent keeps its state and timeout clock. Back remembers a pre-existing wait exactly as
+				// the existing immediate path did; WakeSlot below accounts for this otherwise invisible processing turn.
+				restoreWaiting := a.Back == HandlingWaiting
+				startedAt := a.StartedAt
+				b.wakeInboxConversation(it, now)
+				if restoreWaiting {
+					a.Back = HandlingWaiting
+				}
+				a.StartedAt = startedAt
+			} else {
+				// The immediate path records a reply outside Agent work as waiting before waking. Reproduce that transition
+				// here even when an earlier held stop or read already moved this replay through looking.
+				b.setHandling(it, HandlingWaiting, "", now)
+				b.wakeInboxConversation(it, now)
+				b.setHandling(it, HandlingLooking, "", now)
+			}
+		case prompts.NoteSelfRead:
+			b.wakeInboxConversation(it, now)
+			b.setHandling(it, HandlingLooking, "", now)
+		default:
+			b.wakeInboxConversation(it, now)
+		}
+		a.Pending[i].Deferred = false
+	}
+	a.DeferredAt = nil
+	// HandlingAgent does not belong in the ordinary processing-conversation count. Keep an explicit reservation
+	// until a turn outcome changes handling and setHandling releases it.
+	a.WakeSlot = a.Wake && !inboxOrdinaryRunning(it)
+}
+
+// flushInboxWakes is the uncapped user/new-counterpart-message path: replay every held source transition in order,
+// then let the caller's own waking note establish the combined turn's restoration point. No programmatic reservation
+// survives this uncapped path. Under b.mu.
+func (b *inboxBook) flushInboxWakes(it *InboxItem, now time.Time) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	b.admitInboxSourceWake(it, now)
+	a.DeferredAt, a.WakeSlot = nil, false
+}
+
+// inboxCurrentAgentStopNote reports whether a stop belongs to the latest Agent link, rather than an older Agent whose
+// result is informational only. Under b.mu.
+func inboxCurrentAgentStopNote(it *InboxItem, n inboxNote) bool {
+	latest := inboxLatestAgentLink(it)
+	return latest != nil && latest.MachineID == n.Machine && latest.SessionID == n.Session
+}
+
+// inboxDeferredAgentStop reports a settled current-Agent result whose notification is still held for capacity. Only
+// current stops enter the deferred queue; an older Agent's stop is informational and is queued by tell instead.
+// Under b.mu.
+func inboxDeferredAgentStop(it *InboxItem) bool {
+	if it.Agent == nil {
+		return false
+	}
+	for _, n := range it.Agent.Pending {
+		if n.Deferred && n.Name == prompts.NoteAgentStopped && inboxCurrentAgentStopNote(it, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropInboxWakes discards held work when handling fails or closes; informational notes already eligible for delivery
+// keep their existing behavior. Under b.mu.
+func (b *inboxBook) dropInboxWakes(it *InboxItem) {
+	a := it.Agent
+	if a == nil {
+		return
+	}
+	kept := a.Pending[:0]
+	for _, n := range a.Pending {
+		if !n.Deferred && !n.Retry {
+			kept = append(kept, n)
+		}
+	}
+	a.Pending = kept
+	a.DeferredAt, a.WakeSlot = nil, false
 }
 
 // setHandling moves the event's processing state, and mirrors it on Agent for the apps from before (an Agent's
@@ -84,8 +234,12 @@ func (b *inboxBook) setHandling(it *InboxItem, state, errText string, now time.T
 	if a == nil {
 		return
 	}
+	a.InterruptedByDisable = false // a newer handling state supersedes the off-transition interruption
+	if state != HandlingAgent {
+		a.WakeSlot = false
+	}
 	h.MachineID, h.SessionID = a.MachineID, a.SessionID
-	if g := it.Suggestion; g != nil && g.Kind == SuggestReply && !g.Handback {
+	if g := it.Suggestion; g != nil && g.Kind == SuggestReply && !g.Handback && suggestionAttempt(it, g.Version) == nil {
 		at := g.At
 		a.State, a.Draft, a.Note, a.Changes, a.Error, a.DraftedAt = AgentDrafted, g.Text, g.Note, g.Changes, "", &at
 		return
@@ -110,7 +264,9 @@ func (b *inboxBook) failHandling(it *InboxItem, reason string, now time.Time) {
 	it.Suggestion = nil
 	if it.Agent != nil {
 		it.Agent.Wake = false
+		it.Agent.InterruptedByDisable = false // a later genuine failure supersedes an off-transition interruption
 	}
+	b.dropInboxWakes(it)
 	b.setHandling(it, HandlingFailed, reason, now)
 	b.chainAdd(it, InboxChainEntry{Kind: ChainFailed, At: now.UTC(), Text: i18n.T(b.userLang(), "assistant-inbox_chain.failed"), Detail: reason})
 }
@@ -126,6 +282,7 @@ func (b *inboxBook) closeHandling(it *InboxItem, why string, now time.Time) bool
 	active := it.handled() && !(it.Suggestion != nil && it.Suggestion.Kind == SuggestConclusion && it.Handling.State == HandlingDone)
 	it.Suggestion = nil
 	a.Wake, a.Pending = false, nil
+	a.DeferredAt, a.WakeSlot = nil, false
 	b.setHandling(it, HandlingDone, "", now)
 	if !active || a.SessionID == "" {
 		return false
@@ -135,27 +292,36 @@ func (b *inboxBook) closeHandling(it *InboxItem, why string, now time.Time) bool
 }
 
 // ownSend: the source says the newest message of the item is the user's, and it is a reply Persona sent (nothing came
-// in since): not a separate reply the user made in the source. Under b.mu.
+// in since): not a separate reply the user made in the source. SentOf still proves this after a due check or another
+// wake has temporarily moved handling out of waiting. Under b.mu.
 func ownSend(it *InboxItem, last string) bool {
-	a, h := it.Agent, it.Handling
-	return a != nil && h != nil && h.State == HandlingWaiting && a.SentOf != "" && a.SentOf == it.Last && (last == "" || last == it.Last)
+	a := it.Agent
+	return a != nil && it.Handling != nil && a.SentOf != "" && a.SentOf == it.Last && (last == "" || last == it.Last)
 }
 
 // escalate hands the manager its work, under b.mu: a newly triaged Needs you event (recent) gets a processing
 // conversation (queued); new content of an event that has one — being handled, or triaged Needs you again — is sent into
 // that conversation. It returns the items it moved, settled (inbox_rollback.go).
 func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
+	return b.escalateWithPolicy(since, now, replyPolicySpec{})
+}
+
+func (b *inboxBook) escalateWithPolicy(since, now time.Time, policy replyPolicySpec) []*inboxWrite {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var changed []*inboxWrite
 	for _, it := range b.items {
 		a := it.Agent
-		if !it.open() || it.Context == "" || a != nil && a.Of == it.Last {
+		if it.VisibilityExcluded || !it.open() || it.externallyRouted() || it.Context == "" ||
+			a != nil && (a.Of == it.Last && !a.InterruptedByDisable || a.savingRetry) {
 			continue
 		}
 		handled := it.handled()
 		twin := b.policyTwin(it) // the user's policy (inbox_policies.go): first takes what is not Needs you too
-		if !handled && (twin == TwinNever || it.Tier != TierAction && twin != TwinFirst || it.TriagedAt != it.Last) {
+		if !handled && (twin == TwinNever || it.Tier != TierAction && twin != TwinFirst || !it.tiered()) {
+			continue
+		}
+		if !replyPolicyAllowsQueueLocked(it, policy) {
 			continue
 		}
 		// A URL-only link has an Agent record but has never asked the twin to work. It follows the same age
@@ -173,6 +339,7 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 		}
 		a.Of, a.Task, a.Reason = it.Last, it.Summary, it.Reason
 		// (a first message has the item's content: startInboxAgents leaves this one out of it)
+		b.flushInboxWakes(it, now)
 		b.tell(it, inboxNote{Name: prompts.NoteNewMessages, Context: it.Context}, true, now)
 		b.setHandling(it, HandlingLooking, "", now)
 		b.settle(w)
@@ -205,7 +372,7 @@ func (s *Service) deliverPending(ctx context.Context) {
 	b.mu.Lock()
 	var todo []*InboxItem
 	for _, it := range b.items {
-		if a := it.Agent; a != nil && len(a.Pending) > 0 && a.SessionID != "" {
+		if a := it.Agent; !it.VisibilityExcluded && a != nil && len(a.Pending) > 0 && a.SessionID != "" {
 			todo = append(todo, it)
 		}
 	}
@@ -213,6 +380,15 @@ func (s *Service) deliverPending(ctx context.Context) {
 	for _, it := range todo {
 		s.deliverNotes(ctx, it)
 	}
+}
+
+// inboxProcessingPrompt adds the write precondition to each new processing prompt.
+func inboxProcessingPrompt(turn, text string) string {
+	if turn == "" {
+		return text
+	}
+	return text + "\n\n[Persona Inbox processing turn: include processing_turn: \"" + turn +
+		"\" in inbox_suggest or inbox_draft calls for this prompt. If superseded, end this turn.]"
 }
 
 // deliverNotes sends what waits for the event's conversation into it. A conversation found gone is dropped: a note
@@ -224,8 +400,19 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	mu := v.(*sync.Mutex)
 	mu.Lock()
 	defer mu.Unlock()
-	enabled := s.inboxConfig(ctx).Agent.Enabled
-	owner := s.owner(ctx)
+	hello := s.hello(ctx)
+	// Hello is a blocking hub RPC. Authorize only after it returns; the live session and pending batch are then read
+	// under b.mu, so neither a policy activated during preparation nor a replaced session can reuse the old snapshot.
+	fullCfg, configErr := s.inboxConfigFresh(ctx)
+	if configErr != nil {
+		// Pending notes contain the item's full context. An unknown current boundary leaves them queued, never delivered.
+		return
+	}
+	s.quarantineInboxVisibility(ctx, fullCfg.Visibility)
+	enabled := fullCfg.Agent.Enabled
+	replyPolicy := fullCfg.ReplyPolicy
+	policy := compileReplyPolicy(fullCfg.ReplyPolicy)
+	owner, language := inboxPromptOwner(hello), answerLanguage(hello.Locale)
 	b.mu.Lock()
 	if cur := b.items[it.ID]; cur != it {
 		// Forgotten (drop) while this was on its way: nothing goes, and the lock this may have put back goes again. One
@@ -237,7 +424,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		return
 	}
 	if !enabled {
-		w := b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), time.Now())
+		w := b.releaseInboxAgent(it, HandlingFailed, i18n.T(b.userLang(), "assistant-inbox_agent.disabled"), time.Now(), true)
 		b.mu.Unlock()
 		if w != nil {
 			s.saveWrites(ctx, []*inboxWrite{w}, "the disabled AI twin's work")
@@ -245,12 +432,44 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		return
 	}
 	a := it.Agent
-	if a == nil || a.SessionID == "" || len(a.Pending) == 0 {
+	if a == nil || a.SessionID == "" || len(a.Pending) == 0 || a.savingRetry ||
+		it.Handling != nil && it.Handling.State == HandlingAgent && a.hasRetryNote() {
 		b.mu.Unlock()
 		return
 	}
-	machine, sid, wake, told := a.MachineID, a.SessionID, a.Wake, a.told
-	notes := append([]inboxNote(nil), a.Pending...)
+	machine, sid, wake := a.MachineID, a.SessionID, a.Wake
+	pending := append([]inboxNote(nil), a.Pending...)
+	base := a.told - len(pending)
+	delivered := map[int]bool{}
+	notes := make([]inboxNote, 0, len(pending))
+	for i, n := range pending {
+		if !n.Deferred {
+			delivered[base+i+1] = true
+			notes = append(notes, n)
+		}
+	}
+	if len(notes) == 0 {
+		b.mu.Unlock()
+		return
+	}
+	if replyPolicyItemApplies(replyPolicy, it) && (replyPolicyQueueBlocked(it, replyPolicy) || replyPolicyQueuePending(it, replyPolicy)) ||
+		!replyPolicyAllowsQueueLocked(it, policy) {
+		// Work-bearing turns require the same current owner-draft authorization as a new queue start. A terminal closed
+		// notice performs no work and remains deliverable so the existing processing session can shut down cleanly.
+		terminalOnly := !it.open()
+		for _, note := range notes {
+			terminalOnly = terminalOnly && note.Name == prompts.NoteClosed
+		}
+		if !terminalOnly {
+			b.mu.Unlock()
+			return
+		}
+	}
+	turn := ""
+	if it.open() {
+		turn = rand.Text()
+		a.ProcessingTurn = turn
+	}
 	b.mu.Unlock()
 	if s.isWorkMachine(machine) {
 		b.mu.Lock()
@@ -261,38 +480,52 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 		s.saveInbox(ctx, []*InboxItem{it})
 		return
 	}
+	// A failed quarantine write can roll an item back to its former pending notes and session ids. Reauthorize the
+	// current item, including merged members, immediately before those notes can enter an AI conversation.
+	allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, it)
+	if visibilityErr != nil || !allowed {
+		return
+	}
 	texts := make([]string, len(notes))
 	for i, n := range notes {
-		texts[i] = renderNote(n, owner)
+		texts[i] = renderNoteIn(n, owner, language)
 	}
-	err := s.sendToSession(ctx, machine, sid, strings.Join(texts, "\n\n---\n\n"))
+	err := s.sendToSession(ctx, machine, sid, inboxProcessingPrompt(turn, strings.Join(texts, "\n\n---\n\n")))
 	gone := false
 	if err != nil {
 		// Gone only when its machine answers without it (an offline machine is tried again later).
-		if _, known := s.device(ctx, machine); known {
-			_, found := s.session(ctx, machine, sid)
-			gone = !found
-		}
+		_, found, reachable := s.inboxAgentSession(ctx, machine, sid)
+		gone = reachable && !found
 		s.logf("inbox: tell the conversation of %s: %v (gone: %v)", it.ID, err, gone)
 	}
 	now := time.Now()
+	queueRecovery := false
 	b.mu.Lock()
 	if it.Agent == a && a.SessionID == sid {
 		switch {
 		case err == nil:
-			a.keepToldSince(told) // the notes told while it was sent go next time
+			a.keepToldOthers(delivered) // notes queued while it was sent, including held ones, go next time
 			if wake {
-				t := now.UTC()
-				a.Wake, a.StartedAt = false, &t
+				a.Wake = false
+				if it.Handling == nil || it.Handling.State != HandlingAgent {
+					t := now.UTC()
+					a.StartedAt = &t
+				}
 			}
 		case gone:
+			held := a.DeferredAt != nil
+			queueRecovery = wake || held
 			a.Lost = append(a.Lost, sid)
 			a.MachineID, a.SessionID = "", ""
-			if a.Wake {
+			if queueRecovery {
+				// A held wake still needs the replacement conversation. startInboxAgents admits it only after reserving
+				// capacity, so the first message carries both ready and formerly deferred notes in their original order.
 				a.State, a.Attempts, a.RetryAfter = AgentQueued, 0, nil
+				a.Wake = true
 			} else {
 				a.Pending = nil
 			}
+			a.WakeSlot = false
 			if it.Handling != nil {
 				it.Handling.MachineID, it.Handling.SessionID = "", ""
 			}
@@ -302,7 +535,7 @@ func (s *Service) deliverNotes(ctx context.Context, it *InboxItem) {
 	if err == nil || gone {
 		s.saveInbox(ctx, []*InboxItem{it})
 	}
-	if gone && wake {
+	if gone && queueRecovery {
 		s.handInbox(ctx)
 	}
 }
@@ -362,7 +595,7 @@ func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompt
 	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if it.Agent != nil && id != "" && inboxTaskLinkEligible(it) {
+	if it.Agent != nil && id != "" && !it.externallyRouted() && inboxTaskLinkEligible(it) {
 		held := w != nil && b.holds(w)
 		it.Agent.TodoID = id
 		if held {
@@ -388,10 +621,19 @@ func (s *Service) judgeInboxTask(ctx context.Context, it *InboxItem, tasks []pro
 	if tasks = s.scopeInboxTasks(sc, tasks); len(tasks) == 0 {
 		return "", nil
 	}
+	allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, it)
+	if visibilityErr != nil {
+		return "", visibilityErr
+	}
+	if !allowed {
+		return "", nil
+	}
+	hello := s.hello(ctx)
+	language := answerLanguage(hello.Locale)
 	b.mu.Lock()
-	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Summary: it.Summary, Item: b.promptItem(it), Tasks: tasks})
+	input := prompts.RenderInboxJudgeInput(prompts.InboxJudgeInput{Language: language, Summary: it.Summary, Item: b.promptItemIn(it, language), Tasks: tasks})
 	b.mu.Unlock()
-	system := prompts.RenderInboxJudge(prompts.InboxJudge{Owner: s.owner(ctx), Rules: s.inboxConfig(ctx).AgentRules})
+	system := prompts.RenderInboxJudge(prompts.InboxJudge{Language: language, Owner: inboxPromptOwner(hello), Rules: s.inboxConfig(ctx).AgentRules})
 	var out struct {
 		TaskID   string `json:"task_id"`
 		Evidence string `json:"evidence"`

@@ -74,14 +74,22 @@ func TestContributionSwitches(t *testing.T) {
 		t.Fatal("after a restart:", ids)
 	}
 
-	// Another extension cannot take the id of a contribution switched off.
+	// A UI ID belongs to its extension even when switched off; another extension has its own usage page.
 	other := t.TempDir()
 	writePackage(t, other, func(m map[string]any) {
 		m["id"] = "other"
 		m["contributes"] = map[string]any{"ui": []any{map[string]any{"id": "usage", "title": "x", "placement": "extension_page"}}}
 	})
+	if _, err := r.Preview(ctx, "dir:"+other, ""); err != nil {
+		t.Fatal("other/usage is independent of example-notes/usage:", err)
+	}
+	// Other contribution points still reserve their IDs while switched off.
+	writePackage(t, other, func(m map[string]any) {
+		m["id"] = "other-provider"
+		m["contributes"] = map[string]any{"providers": []any{map[string]any{"id": "notes-mini", "name": "Other", "base_url": "https://example.com"}}}
+	})
 	if _, err := r.Preview(ctx, "dir:"+other, ""); err == nil {
-		t.Fatal("ui usage is still example-notes's")
+		t.Fatal("provider notes-mini is still example-notes's")
 	}
 
 	// Back on.
@@ -93,6 +101,37 @@ func TestContributionSwitches(t *testing.T) {
 	}
 	if title := ContributionTitle(r.Get("example-notes").Full, "providers", "notes-mini"); title != "Notes Mini" {
 		t.Fatal(title)
+	}
+}
+
+// Skills, assistant commands and MCP servers carry a display-only title; without one the switch keeps the id.
+func TestContributionTitlesOfAssistantItems(t *testing.T) {
+	m, err := Parse(with(t, func(m map[string]any) {
+		m["contributes"] = map[string]any{
+			"skills": []any{
+				map[string]any{"id": "search", "title": "Search code", "dir": "skills/search"},
+				map[string]any{"id": "plain", "dir": "skills/plain"},
+			},
+			"assistant": []any{map[string]any{
+				"id": "search-command", "title": "Search command", "skills": []any{"skills/search"},
+			}},
+			"mcp_servers": []any{map[string]any{
+				"id": "search-server", "title": "Search server", "command": "search-server",
+			}},
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ point, id, want string }{
+		{"skills", "search", "Search code"},
+		{"skills", "plain", "plain"},
+		{"assistant", "search-command", "Search command"},
+		{"mcp_servers", "search-server", "Search server"},
+	} {
+		if got := ContributionTitle(m, c.point, c.id); got != c.want {
+			t.Errorf("%s/%s: %q, want %q", c.point, c.id, got, c.want)
+		}
 	}
 }
 

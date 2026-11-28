@@ -38,6 +38,9 @@ const (
 	DeviceLaunchersOwnService = "launchers.own_service"
 	// NodeLaunchersPull is the node's request: {name, own_service?} → {launcher: proto.ManagedLauncher}.
 	NodeLaunchersPull = "launchers.pull"
+	// NodeAgentsDefault is the node's request for Model Settings › Agents as pi can use it there: {} →
+	// {launcher?, model?, effort?} (docs/integrations/pi.md "Persona's model providers").
+	NodeAgentsDefault = "launchers.agents_default"
 )
 
 // machineKey is one computer's own key for a provider, sealed like the provider's.
@@ -165,7 +168,14 @@ func (s *Service) managedNamed(ctx context.Context, name string) (storedLauncher
 // before: the node's own pull is the last word). nil for every other launcher.
 func (s *Service) launcherScopeErr(ctx context.Context, machine, name string) error {
 	l, ok := s.managedNamed(ctx, name)
-	if !ok || machine == "" {
+	if !ok {
+		return nil
+	}
+	return s.managedLauncherScopeErr(ctx, machine, l)
+}
+
+func (s *Service) managedLauncherScopeErr(ctx context.Context, machine string, l storedLauncher) error {
+	if machine == "" {
 		return nil
 	}
 	if key := s.scopeReason(l, machine); key != "" {
@@ -208,6 +218,9 @@ type ownSeen struct {
 	at time.Time
 }
 
+// pickerDiscoveryDeadline limits optional own-service probes to the time left after the Assistant picker reads the node.
+type pickerDiscoveryDeadline struct{}
+
 var (
 	ownServiceFresh = 10 * time.Minute
 	ownServiceRetry = time.Minute
@@ -230,15 +243,29 @@ func (s *Service) ownServiceCached(machine, agent string) (proto.OwnServiceState
 }
 
 // ownService asks machine's node whether agent's harness has a usable service of its own there (cached; an older node
-// or one that does not answer: unknown).
+// or one that does not answer: unknown). A picker that runs out of time before a full probe keeps the last answer.
 func (s *Service) ownService(ctx context.Context, machine, agent string) proto.OwnServiceState {
-	if st, ok := s.ownServiceCached(machine, agent); ok {
-		return st
+	previous, fresh := s.ownServiceCached(machine, agent)
+	if fresh {
+		return previous
+	}
+	if previous.Agent == "" {
+		previous.Agent = agent
 	}
 	st := proto.OwnServiceState{Agent: agent}
-	cctx, cancel := context.WithTimeout(ctx, ownServiceWait)
+	wait := ownServiceWait
+	if deadline, ok := ctx.Value(pickerDiscoveryDeadline{}).(time.Time); ok {
+		wait = min(wait, time.Until(deadline))
+		if wait <= 0 {
+			return previous
+		}
+	}
+	cctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	if err := s.call(cctx, machine, DeviceLaunchersOwnService, map[string]any{"agent": agent}, &st); err != nil {
+		if wait < ownServiceWait && cctx.Err() != nil {
+			return previous // a picker giving up early must not replace or renew the cached answer
+		}
 		st = proto.OwnServiceState{Agent: agent}
 	}
 	m := &s.models
@@ -253,15 +280,55 @@ func (s *Service) ownService(ctx context.Context, machine, agent string) proto.O
 
 // usableOn: provider l may be listed on machine's pickers (its scope, and its own-service rule as the node says).
 func (s *Service) usableOn(ctx context.Context, l storedLauncher, machine string) bool {
+	return s.usableOnAsking(ctx, l, machine, true)
+}
+
+// usableOnAsking is usableOn; with ask false its own-service rule goes by what machine's node said before only
+// (ownServiceCached) and the node is not asked: an answer missing or out of date counts as no service of its own, as
+// one the node does not give does. A status that asks no node reads it so (mainChatOffers).
+func (s *Service) usableOnAsking(ctx context.Context, l storedLauncher, machine string, ask bool) bool {
 	if s.scopeReason(l, machine) != "" {
 		return false
 	}
 	if l.SkipsOwnService() {
-		if st := s.ownService(ctx, machine, l.AgentType()); st.Known && st.Own {
+		st, fresh := s.ownServiceCached(machine, l.AgentType())
+		if !fresh {
+			st = proto.OwnServiceState{}
+			if ask {
+				st = s.ownService(ctx, machine, l.AgentType())
+			}
+		}
+		if st.Known && st.Own {
 			return false
 		}
 	}
 	return true
+}
+
+// agentsDefault answers a node's launchers.agents_default: the provider and model Model Settings › Agents names, when
+// that is a Persona-managed provider pi can use and machine (the connection's) is in its scope; empty otherwise, and
+// pi keeps its own choice. Names only: the key still goes through launchers.pull.
+func (s *Service) agentsDefault(ctx context.Context, machine string) map[string]any {
+	b, err := s.resolveModel(ctx, "agent.new")
+	if err != nil {
+		return map[string]any{}
+	}
+	name, ok := strings.CutPrefix(b.Provider, "launcher.")
+	if !ok {
+		return map[string]any{}
+	}
+	l, ok := s.managedNamed(ctx, name)
+	if !ok || l.PiAPI() == "" || s.scopeReason(l, machine) != "" {
+		return map[string]any{}
+	}
+	out := map[string]any{"launcher": name}
+	if b.Model != "" && proto.ValidModelID(b.Model) {
+		out["model"] = b.Model
+	}
+	if b.Effort != "" {
+		out["effort"] = b.Effort
+	}
+	return out
 }
 
 // ---- what the nodes get ----

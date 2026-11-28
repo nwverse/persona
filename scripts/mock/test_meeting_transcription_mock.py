@@ -4,6 +4,7 @@ import json
 import threading
 import unittest
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from test_meeting_attendance_mock import start
@@ -186,6 +187,17 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(final["meta"]["chars"], sum(len(s["text"]) for s in final["segments"][1:]))
         self.assertNotIn(CAP_LINE.rstrip("。"), json.dumps(final["minutes"], ensure_ascii=False))
 
+    def test_the_note_takers_role_frame(self):
+        """A meeting Persona isn't invited to (#8851) sends the role notes: the socket takes it as the hub does, no
+        bad_frame, and keeps it on the timeline."""
+        rid = self.recording()
+        ws = self.socket(rid)
+        ws.send({"type": "role", "at": 0, "attendance": "notes"})
+        self.pcm(ws, 4)
+        self.assertIsNone(ws("error", wait=0.3))
+        self.assertIn({"at": 0, "attendance": "notes"}, self.observed(rid)["timeline"]["roles"])
+        self.end(ws, 4)
+
     def test_echo_is_the_answers_words_not_its_time(self):
         rid = self.recording()
         ws = self.socket(rid)
@@ -197,6 +209,24 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.assertEqual(self.observed(rid)["timeline"]["speaking"], [{"start": 0, "end": 4, "text": "Bo will share the notes tomorrow."}])
         self.assertNotIn("echo", self.detail(rid)["segments"][0])
         self.end(ws, 4)
+
+    def test_final_pass_progress_while_it_runs(self):
+        # #13461: while the pass runs, final_done (0: the mock replays in one step) beside end; neither once final.
+        self.mode(final_seconds=3)
+        rid = self.recording()
+        ws = self.socket(rid)
+        self.pcm(ws, 4)
+        self.assertEqual(ws("line")["start"], 0)
+        self.pcm(ws, 1)
+        self.assertEqual(ws("ack")["at"], 5)
+        self.pcm(ws, 3)
+        self.assertEqual(ws("line")["start"], 4)
+        self.end(ws, 8)
+        self.upload(rid, transcription="hub", complete=True, duration=8)
+        self.assertEqual(self.meta(rid)["transcription"], {"mode": "hub", "state": "finishing", "gaps": [], "final_done": 0, "end": 8})
+        final = self.wait(lambda: (t := self.meta(rid)["transcription"])["state"] == "final" and t, "final")
+        self.assertNotIn("final_done", final)
+        self.assertNotIn("end", final)
 
     def test_gap_upload_before_final_and_duplicate_audio(self):
         rid = self.recording()
@@ -241,6 +271,19 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.mode(fatal="upstream_failed")
         self.assertEqual(ws("error"), {"type": "error", "code": "upstream_failed", "fatal": True})
         self.assertEqual(ws("close")["code"], 1008)
+
+    def test_problem_kinds(self):
+        # #13446: a refused or busy service is its own problem, not upstream_unavailable; no line goes while it stands.
+        rid = self.recording()
+        self.mode(upstream="forbidden")
+        ws = self.socket(rid)
+        self.assertEqual(ws("problem")["code"], "upstream_forbidden")
+        self.pcm(ws, 5)
+        self.assertEqual(self.live(rid)["next"], 0)
+        self.assertEqual(self.live(rid)["transcription"]["problem"], "upstream_forbidden")
+        self.mode(upstream="busy")
+        self.assertEqual(ws("problem")["code"], "upstream_busy")
+        self.assertEqual(self.call("POST", "/mock/meeting_transcription", {"upstream": "made_up"})[0], 400)
 
     def test_upstream_recovery_waits_for_a_hub_sentence(self):
         rid = self.recording()
@@ -404,8 +447,14 @@ class MeetingTranscriptionMockTests(Transcription, unittest.TestCase):
         self.wait(lambda: self.meta(rid)["transcription"]["state"] == "final", "the final pass")
         self.assertEqual([(s["text"], s.get("echo")) for s in self.detail(rid)["segments"]], [(CAP_LINE, True)])
         day = str(uuid.uuid4())
-        out = self.upload(day, kind="day", day="2026-11-10", transcription="hub", timeline={"roles": [{"at": 0, "attendance": "participant"}]})[1]
+        # The shared meeting upload uses a fixed old meeting date. A day
+        # recording has its own retention window, so give this fixture a real
+        # current day instead of turning the response into an expired no-op.
+        started_at = datetime.now(timezone.utc).isoformat()
+        out = self.upload(day, kind="day", day=started_at[:10], started_at=started_at,
+                          transcription="hub", timeline={"roles": [{"at": 0, "attendance": "participant"}]})[1]
         self.assertEqual((out["transcription"], out["transcription_problem"]), ("device", "not_meeting"))
+        self.assertEqual(out["status"], "stored")
         stored = self.call("GET", "/mock/recordings")[1]["recordings"][day]
         self.assertNotIn("timeline", stored)
         self.assertNotIn("transcription", stored)

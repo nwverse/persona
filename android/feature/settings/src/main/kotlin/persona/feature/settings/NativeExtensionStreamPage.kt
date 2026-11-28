@@ -16,6 +16,7 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.ExtensionView
 import persona.core.contracts.api.ExtensionViewAction
 import persona.core.contracts.api.ExtensionViewItem
+import persona.core.contracts.generated.ExtensionComponent
 import persona.core.contracts.stream.*
 import persona.core.designsystem.*
 
@@ -48,10 +49,10 @@ class NativeExtensionStreamAdapter(val session: NativeStreamSession, shown: Bool
         local.rejected = true
     }
     companion object {
-        // Tags are the preview vocabulary, not a claim of every optional field. The profile checks before commit.
-        val Components: Set<String> = setOf("text", "metric", "progress", "button", "link", "field", "divider",
-            "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "header", "breadcrumb",
-            "file_tree", "code", "comment_thread", "composer", "row", "diff", "image", "grid", "carousel")
+        // The hub downgrades these newer component types to rows/images for this native client. They are never
+        // accepted into a native stream directly; keep that contract in one place for every new schema type.
+        private val HubDowngradedComponents = setOf("html", "graph", "scene")
+        val Components: Set<String> = ExtensionComponent.TYPES.filterNot { it in HubDowngradedComponents }.toSet()
     }
 }
 
@@ -80,6 +81,8 @@ internal fun nativeExtensionDisplay(state: NativeStreamState): ExtensionViewStat
 /** Existing native renderer and design system only: no extension JS, effects, fetch or executable state. */
 @Composable
 internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, title: String, onBack: () -> Unit,
+    /** False at a regular-width sidebar root: the shell's sidebar button replaces Back (iOS sidebarRootPage). A stream pop still calls [onBack]. */
+    showBack: Boolean = true,
     onPush: (persona.core.contracts.api.ExtensionViewPush) -> Unit = {},
     presentations: kotlinx.coroutines.flow.Flow<NativeStreamPresentation>? = null) {
     val session = adapter.session
@@ -148,6 +151,8 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
     }
     LaunchedEffect(displayedTree) { displayedTree?.let { local.prune(it.nodes.keys + "root") } }
     val current by rememberUpdatedState(native)
+    // How many columns of cards the page drew (UI version 8), read when a diff is revealed to find its place in the list.
+    val drawnColumns = remember(session) { intArrayOf(1) }
     fun send(key: String, action: ExtensionViewAction, event: String, value: JsonObject, tree: NativeStreamTree,
              draft: NativeStreamDraft?, drafts: Map<String, NativeStreamDraft>, commit: () -> Unit, done: ((persona.core.contracts.api.ExtensionUiResult?) -> Unit)? = null) {
         fun refused() { done?.invoke(null); local.rejected = true }
@@ -164,7 +169,7 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
             commit()
             action.push?.let { push(it); return@launch }
             if (action.pop) { back(); return@launch }
-            action.open?.let { if (ExtensionViewText.isHttps(it)) runCatching { uri.openUri(it) }; return@launch }
+            action.open?.let { if (ExtensionViewText.isHttps(it)) { val _ = runCatching { uri.openUri(it) } }; return@launch }
             if (!session.event(key, action.id, event, value, expectedTree = tree,
                 draftsAtPress = drafts.takeIf { action.submit },
                 onQueued = { queued -> if (done != null && adapter.targets.size < 64) adapter.targets[queued.eventId] = tree to done })) refused()
@@ -202,7 +207,7 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
             press = { item, action -> press(key, item, action) },
             edit = { name, value -> scope.launch { session.edit(name, JsonPrimitive(value), expectedTree = displayedTree) } },
             choose = { item -> displayedTree?.let { choosing = NativeStreamChoice(item, it) } },
-            open = { url -> if (currentShown && ExtensionViewText.isHttps(url)) runCatching { uri.openUri(url) } },
+            open = { url -> if (currentShown && ExtensionViewText.isHttps(url)) { val _ = runCatching { uri.openUri(url) } } },
             segment = { item, value ->
                 if (item.action?.confirm.isNullOrBlank()) scope.launch { session.edit(key, JsonPrimitive(value), expectedTree = displayedTree) }
                 item.action?.let { press(key, item, it, mapOf(item.name.orEmpty() to value), "change") }
@@ -218,7 +223,7 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
                 rootSelection(key, tabs.name, tabs.action, value, own)
             } },
             more = { index, section -> displayedTree?.view?.sections?.getOrNull(index)?.key?.let { node -> section.more?.action?.let { press(node, ExtensionViewItem(type = "button"), it) } } },
-            reveal = { path -> displayedTree?.let { tree -> if (current.tree === tree) nativeDiffIndex(tree, path)?.let { (node, index) ->
+            reveal = { path -> displayedTree?.let { tree -> if (current.tree === tree) nativeDiffIndex(tree, path, drawnColumns[0])?.let { (node, index) ->
                 local.slot(node, "diff-open") { true }.value = true
                 scope.launch { local.list.scrollToItem(index) }
             } } },
@@ -235,10 +240,14 @@ internal fun NativeExtensionStreamPage(adapter: NativeExtensionStreamAdapter, ti
     val pageState = state.copy(values = state.values + local.roots, query = local.query)
     val base = handle(displayedTree?.snapshot?.rootKey.orEmpty())
     key(session.identity) {
-        JListPage(title = view?.title?.takeIf { it.isNotBlank() } ?: title, onBack = onBack, largeTitle = false, state = local.list,
-            refreshing = state.loading && view != null, onRefresh = { scope.launch { session.requestSnapshot() } }) {
-            if (view == null) item("native-loading") { JLoading() }
-            extensionViewItems("native-page", pageState, base, streamSectionKeys = displayedTree?.view?.sections?.map { it.key!! })
+        // UI version 8: a columns view takes the pane's whole width, as many columns of cards as it has room for
+        ExtensionPageWidth(view) { columns, fullWidth ->
+            SideEffect { drawnColumns[0] = columns }
+            JListPage(title = view?.title?.takeIf { it.isNotBlank() } ?: title, onBack = if (showBack) onBack else null, largeTitle = false, state = local.list,
+                refreshing = state.loading && view != null, onRefresh = { scope.launch { session.requestSnapshot() } }, fullWidth = fullWidth) {
+                if (view == null) item("native-loading") { JLoading() }
+                extensionViewItems("native-page", pageState, base, streamSectionKeys = displayedTree?.view?.sections?.map { it.key!! }, columns = columns)
+            }
         }
     }
     confirming?.let { confirmation ->

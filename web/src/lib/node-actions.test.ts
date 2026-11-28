@@ -1,8 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItem } from "../ui/menu-model";
-import { canChangeHost, canRenameIn, gitOutcomeText, machineNode, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
+import { gitOutcomeText, machineNode, nodeAbilities, nodeActions, sessionNode, termPaneNode, termSpaceNode, termTabNode, type MenuNode, type NodeActionDeps } from "./node-actions";
+import { rememberHostAbilities, resetHostAbilities } from "./host-abilities";
 import { buildTerminalTree, shellsOnly, type PanesResponse } from "./terminals";
 import type { Session } from "./types";
+import zhNode from "../i18n/locales/zh-Hans/lib-node-actions.json";
+import enNode from "../i18n/locales/en/lib-node-actions.json";
+import jaNode from "../i18n/locales/ja/lib-node-actions.json";
+import zhWorktree from "../i18n/locales/zh-Hans/worktree-actions.json";
+import enWorktree from "../i18n/locales/en/worktree-actions.json";
+import jaWorktree from "../i18n/locales/ja/worktree-actions.json";
+import zhAgent from "../i18n/locales/zh-Hans/agentmenus.json";
+import enAgent from "../i18n/locales/en/agentmenus.json";
+import jaAgent from "../i18n/locales/ja/agentmenus.json";
+import zhChat from "../i18n/locales/zh-Hans/chat-chatview.json";
+import enChat from "../i18n/locales/en/chat-chatview.json";
+import jaChat from "../i18n/locales/ja/chat-chatview.json";
 
 function deps(over: Partial<NodeActionDeps> = {}): NodeActionDeps {
   return {
@@ -63,7 +76,7 @@ describe("a tab's menu", () => {
 
   it("a failed rename says why", async () => {
     const d = deps({ renameTab: vi.fn(async () => { throw new Error("busy"); }) });
-    await expect(by(nodeActions(tab, d), "node-rename").rename!.commit("x")).rejects.toThrow("没改成：busy");
+    await expect(by(nodeActions(tab, d), "node-rename").rename!.commit("x")).rejects.toThrow("重命名失败：busy");
   });
 });
 
@@ -84,7 +97,7 @@ describe("splitting and running an agent", () => {
     const agent = by(nodeActions(tab, d), "node-agent");
     expect(typeof agent.children).toBe("function");
     const list = await (agent.children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude", "work"]); // a Codex launcher needs a first message
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "work"]); // a Codex launcher needs a first message
     expect(list[1].hint).toBe("m1");
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "work" });
@@ -105,7 +118,7 @@ describe("splitting and running an agent", () => {
       ]),
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude", "codex"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "Codex"]);
     await list[1].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "codex" });
     // its waiting row opens, where the first message goes (docs/integrations/codex.md "Starting without a first message")
@@ -121,7 +134,7 @@ describe("splitting and running an agent", () => {
       ]),
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
-    expect(list.map((i) => i.label)).toEqual(["claude"]);
+    expect(list.map((i) => i.label)).toEqual(["Claude Code"]);
   });
 
   it("names a provider by its display name, its ID before the model at the row's end; an rc alias by its ID (#5029)", async () => {
@@ -130,7 +143,7 @@ describe("splitting and running an agent", () => {
     expect(list.map((i) => [i.label, i.hint])).toEqual([["我的中转 站", "relay-example-com · glm-5"], ["cc_glm", undefined]]);
     await list[0].onSelect();
     expect(d.post).toHaveBeenCalledWith("m1", "panes/agent", { pane: "w1:p2", launcher: "relay-example-com" });
-    expect(d.notify).toHaveBeenCalledWith("已在窗格里启动 我的中转 站", "ok");
+    expect(d.notify).toHaveBeenCalledWith("已在此终端启动 我的中转 站", "ok");
   });
 
   it("stays where it is when the answer names no session", async () => {
@@ -160,8 +173,8 @@ describe("splitting and running an agent", () => {
     });
     const list = await (by(nodeActions(tab, d), "node-agent").children as () => Promise<MenuItem[]>)();
     // usable first (still being retried by the hub counts: offered as before), the blocked one after a line, with why
-    expect(list.map((i) => i.label)).toEqual(["claude", "slow", "work"]);
-    expect(list[2].detail).toBe("这台电脑的终端里用不了");
+    expect(list.map((i) => i.label)).toEqual(["Claude Code", "slow", "work"]);
+    expect(list[2].detail).toBe("无法在该电脑的终端中使用");
     expect(list[2].divider).toBe(true);
     expect(list[0].detail).toBeUndefined();
     expect(list[1].detail).toBeUndefined();
@@ -196,7 +209,7 @@ describe("git", () => {
     const d = deps({ post: vi.fn(async () => ({ outcome: "pushed", message: "Pushed" })) });
     await (by(nodeActions(tab, d), "node-git").children as MenuItem[])[1].onSelect();
     expect(d.notify).toHaveBeenCalledWith("推送：已推送", "ok");
-    expect(gitOutcomeText({ outcome: "nothing_to_push", message: "No commits to push" })).toBe("没有要推送的提交");
+    expect(gitOutcomeText({ outcome: "nothing_to_push", message: "No commits to push" })).toBe("没有可推送的提交");
     expect(gitOutcomeText({ outcome: "a_new_outcome", message: "node words" })).toBe("node words");
     expect(gitOutcomeText(undefined)).toBe("完成");
   });
@@ -205,11 +218,11 @@ describe("git", () => {
     const ops = by(nodeActions(tab, deps()), "node-git").children as MenuItem[];
     const [pull, push, fetch] = ops;
     expect(push.confirm).toBe("确认推送");
-    expect(push.confirmDetail).toBe("main 会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。");
+    expect(push.confirmDetail).toBe("将把 main 推送至其上游分支，不会强制推送。如果远端已有更新的提交，推送会中止并提示原因。");
     expect(pull.confirm).toBeUndefined();
     expect(fetch.confirm).toBeUndefined();
     const noBranch = by(nodeActions({ ...tab, branch: undefined }, deps()), "node-git").children as MenuItem[];
-    expect(noBranch[1].confirmDetail).toBe("当前分支会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。");
+    expect(noBranch[1].confirmDetail).toBe("将把当前分支推送至其上游分支，不会强制推送。如果远端已有更新的提交，推送会中止并提示原因。");
   });
 
   it("a workspace without a pane is named by its id and host", async () => {
@@ -237,6 +250,33 @@ describe("read-only items", () => {
     (by(items, "node-git").children as MenuItem[]).find((i) => i.key === "node-copy-branch")!.onSelect();
     expect(d.copy).toHaveBeenLastCalledWith("feat/x");
   });
+  it("says one verb and ID, and names the id by what it is, never by the engine (herdr) behind it", () => {
+    const d = deps();
+    const space: MenuNode = { kind: "workspace", mid: "m1", host: "herdr", label: "proj", workspaceId: "w1", cwd: "/home/me/proj" };
+    const labels = (node: MenuNode) => nodeActions(node, d).filter((i) => i.icon === "copy").map((i) => i.label);
+    expect(labels(pane)).toEqual(["复制目录路径", "复制会话 ID", "复制终端 ID"]);
+    expect(labels(tab)).toEqual(["复制目录路径", "复制标签页 ID"]);
+    expect(labels(space)).toEqual(["复制目录路径", "复制空间 ID"]);
+    expect(labels({ kind: "machine", mid: "m1" })).toEqual(["复制机器 ID"]);
+    // the same values as before: only the words changed
+    by(nodeActions(tab, d), "node-copy-id").onSelect();
+    expect(d.copy).toHaveBeenLastCalledWith("w1:t2");
+    by(nodeActions(space, d), "node-copy-id").onSelect();
+    expect(d.copy).toHaveBeenLastCalledWith("w1");
+    for (const node of [pane, tab, space]) for (const label of labels(node)) expect(label).not.toMatch(/herdr|拷贝|\bid\b/);
+  });
+  it("copies a folder's path in the same words in every menu of the Agents list and a chat, in every language", () => {
+    const languages = [
+      { node: zhNode, worktree: zhWorktree, agent: zhAgent, chat: zhChat },
+      { node: enNode, worktree: enWorktree, agent: enAgent, chat: enChat },
+      { node: jaNode, worktree: jaWorktree, agent: jaAgent, chat: jaChat },
+    ];
+    for (const { node, worktree, agent, chat } of languages) {
+      expect(new Set([node.copy_path, worktree.copy_path, agent.copy_folder, chat.copy_folder]).size).toBe(1);
+    }
+    // the By repository grouping's worktree menu, beside the node menus, says their verb
+    expect([zhWorktree.copy_name, zhWorktree.copy_path, zhNode.copy_path]).toEqual(["复制工作树名称", "复制目录路径", "复制目录路径"]);
+  });
   it("leaves out what is not known", () => {
     const k = keys(nodeActions({ kind: "pane", mid: "m1", paneId: "w1:p3", agent: "" }, deps()));
     expect(k).not.toContain("node-copy-path");
@@ -245,7 +285,7 @@ describe("read-only items", () => {
     expect(k).toContain("node-copy-id");
   });
   it("copies the branch from the top level when there is no Git menu to hold it", () => {
-    expect(keys(nodeActions({ ...tab, host: "orca" }, deps()))).toContain("node-copy-branch");
+    expect(keys(nodeActions({ ...tab, host: "tern" }, deps()))).toContain("node-copy-branch");
   });
   it("leaves out what the row's own menu has", () => {
     expect(keys(nodeActions(pane, deps(), { omit: ["node-copy-path", "node-rename"] }))).not.toContain("node-copy-path");
@@ -296,20 +336,65 @@ describe("closing a pane (#7125)", () => {
 });
 
 describe("what a computer that cannot be changed is offered", () => {
-  it("an offline machine or another host's node only copies", () => {
-    for (const node of [{ ...tab, online: false }, { ...tab, host: "orca" }, { ...tab, host: "botmux" }]) {
+  it("an offline machine or a host that does none of it only copies", () => {
+    for (const node of [{ ...tab, online: false }, { ...tab, host: "orca", online: false }, { ...tab, host: "botmux" }, { ...tab, host: "herdr-core" }]) {
       const k = keys(nodeActions(node, deps()));
       expect(k).toEqual(["node-copy-path", "node-copy-id", "node-copy-branch"]);
     }
-    expect(canChangeHost(undefined)).toBe(true);
-    expect(canChangeHost("herdr")).toBe(true);
-    expect(canChangeHost("herdr-core")).toBe(false);
+    expect(nodeAbilities({ mid: "m1" })).toMatchObject({ rename: true, split: true, closeTab: true, git: true, runHere: true });
+    expect(nodeAbilities({ mid: "m1", host: "herdr-core" })).toMatchObject({ rename: false, split: false, git: false });
+  });
+});
+
+// #17053: the menus follow what the host can do, never its name. An older node reports nothing: Orca then gets what the
+// node has done for it all along (rename, Git, New worktree, close pane), and no split or close tab.
+describe("an Orca node", () => {
+  const orcaTab: MenuNode = { ...tab, host: "orca", workspaceId: "repo::/home/me/proj", tabId: "tab1", paneId: "orca:tab1:leaf1" };
+  const orcaPane: MenuNode = { ...orcaTab, kind: "pane", agent: "claude", sessionId: "s1" };
+  const orcaSpace: MenuNode = { kind: "workspace", mid: "m1", host: "orca", label: "proj", workspaceId: "repo::/home/me/proj", cwd: "/home/me/proj", branch: "main", canWorktree: true };
+
+  it("renames, runs Git, makes worktrees and closes a pane, and is not asked to split or close a tab", async () => {
+    const d = deps({ newWorktree: vi.fn() });
+    expect(keys(nodeActions(orcaTab, d))).toEqual(["node-rename", "node-git", "node-copy-path", "node-copy-id"]);
+    expect(keys(nodeActions(orcaPane, d))).toEqual(["node-close-pane", "node-git", "node-copy-path", "node-copy-session", "node-copy-id"]);
+    expect(keys(nodeActions(orcaSpace, d))).toEqual(["node-new-agent", "node-rename", "node-worktree", "node-git", "node-copy-path", "node-copy-id"]);
+    await by(nodeActions(orcaTab, d), "node-rename").rename!.commit("deploy");
+    expect(d.renameTab).toHaveBeenCalledWith(orcaTab, "deploy");
+    await by(nodeActions(orcaSpace, d), "node-rename").rename!.commit("docs");
+    expect(d.renameWorkspace).toHaveBeenCalledWith(orcaSpace, "docs");
+    await by(by(nodeActions(orcaSpace, d), "node-git").children as MenuItem[], "node-git-fetch").onSelect();
+    expect(d.post).toHaveBeenCalledWith("m1", "panes/git", { op: "fetch", workspace_id: "repo::/home/me/proj", kind: "orca" });
+  });
+
+  it("follows what the node reports for the host: split and close tab once Orca does them, nothing it says it can't", () => {
+    const d = deps();
+    const all = { rename: true, closePane: true, split: true, closeTab: true, git: true, runHere: false };
+    expect(keys(nodeActions({ ...orcaTab, abilities: all }, d))).toEqual(["node-rename", "node-split", "node-git", "node-copy-path", "node-copy-id", "node-close-tab"]);
+    const none = { rename: false, closePane: false, split: false, closeTab: false, git: false, runHere: false };
+    expect(keys(nodeActions({ ...orcaTab, abilities: none }, d))).toEqual(["node-copy-path", "node-copy-id", "node-copy-branch"]);
+  });
+
+  it("a session's menu, which never reads the panes list, follows what its computer last reported", () => {
+    try {
+      rememberHostAbilities("m1", { hosts: [{ kind: "orca", stream: false, control: false, new_tab: true, workspaces: [], tabs: [], panes: [],
+        abilities: { rename: true, close_pane: true, split: true, close_tab: true, git: true, run_here: false } }] });
+      expect(keys(nodeActions(orcaTab, deps()))).toContain("node-split");
+      expect(keys(nodeActions(orcaTab, deps()))).toContain("node-close-tab");
+      // another computer's Orca is still read from the table
+      expect(keys(nodeActions({ ...orcaTab, mid: "m2" }, deps()))).not.toContain("node-split");
+      // a list that no longer has the host forgets it
+      rememberHostAbilities("m1", { hosts: [] });
+      expect(keys(nodeActions(orcaTab, deps()))).not.toContain("node-split");
+    } finally {
+      resetHostAbilities();
+    }
   });
 });
 
 describe("a Tern node (#2154)", () => {
   const ternTab: MenuNode = { ...tab, host: "tern", workspaceId: "s1", tabId: "t2", paneId: "tern:5" };
-  const ternSpace: MenuNode = { kind: "workspace", mid: "m1", host: "tern", label: "proj", workspaceId: "s1", cwd: "/home/me/proj", branch: "main", canWorktree: true };
+  // New worktree follows the node's own `worktree` flag, which Tern's host does not set
+  const ternSpace: MenuNode = { kind: "workspace", mid: "m1", host: "tern", label: "proj", workspaceId: "s1", cwd: "/home/me/proj", branch: "main", canWorktree: false };
 
   it("renames its tabs and workspaces, and is not asked to split, run an agent, git, close or make a worktree", async () => {
     const d = deps({ newWorktree: vi.fn() });
@@ -321,12 +406,11 @@ describe("a Tern node (#2154)", () => {
     expect(d.renameWorkspace).toHaveBeenCalledWith(ternSpace, "docs");
   });
 
-  it("renames nothing while its machine is offline; the other hosts still rename nothing", () => {
+  it("renames nothing while its machine is offline; hosts an older node renames nothing in still rename nothing", () => {
     expect(keys(nodeActions({ ...ternTab, online: false }, deps()))).not.toContain("node-rename");
-    for (const host of ["orca", "herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
-    expect(canRenameIn("tern")).toBe(true);
-    expect(canRenameIn(undefined)).toBe(true);
-    expect(canChangeHost("tern")).toBe(false);
+    for (const host of ["herdr-core", "botmux"]) expect(keys(nodeActions({ ...ternTab, host }, deps()))).not.toContain("node-rename");
+    for (const host of ["tern", "rex", "orca", undefined]) expect(nodeAbilities({ mid: "m1", host }).rename).toBe(true);
+    for (const host of ["tern", "rex"]) expect(nodeAbilities({ mid: "m1", host })).toMatchObject({ split: false, closeTab: false, git: false, runHere: false });
   });
 });
 
@@ -374,7 +458,7 @@ describe("新建 worktree… (#2431)", () => {
     expect(keys(nodeActions({ ...ws, canWorktree: false }, d))).not.toContain("node-worktree");
     expect(keys(nodeActions({ ...ws, canWorktree: undefined }, d))).not.toContain("node-worktree");
     expect(keys(nodeActions({ ...ws, online: false }, d))).not.toContain("node-worktree");
-    expect(keys(nodeActions({ ...ws, host: "orca" }, d))).not.toContain("node-worktree");
+    expect(keys(nodeActions({ ...ws, host: "orca", canWorktree: false }, d))).not.toContain("node-worktree");
     expect(keys(nodeActions({ ...ws, workspaceId: undefined }, d))).not.toContain("node-worktree");
     expect(keys(nodeActions({ ...ws, kind: "tab", tabId: "w1:t1", paneId: "w1:p1" }, d))).not.toContain("node-worktree");
     expect(keys(nodeActions(ws, deps()))).not.toContain("node-worktree");
@@ -430,5 +514,17 @@ describe("the nodes of the two trees", () => {
     expect(shells[0].tabs.map((t) => t.label)).toEqual(["shell", "split"]);
     expect(shells[0].tabs.flatMap((t) => t.panes.map((p) => p.pane))).toEqual(["w1:p2", "w1:p3", "w1:p4"]);
     expect(shellsOnly([{ ...sp, tabs: [sp.tabs[0]] }])).toEqual([]);
+  });
+});
+
+
+describe("session menus keep pane operations in the terminal toolbar (#10239)", () => {
+  it.each(["herdr", "orca", "tern", "botmux"])("removes pane controls for a %s session", (host) => {
+    const node = sessionNode({ machine_id: "m1", session_id: "s1", pane_id: "w1:p1", space_kind: host, cwd: "/project" } as Session, true);
+    const items = keys(nodeActions(node, deps()));
+    for (const key of ["node-split", "node-close-pane", "node-copy-id"]) expect(items).not.toContain(key);
+    expect(items).toContain("node-copy-session");
+    if (host === "herdr") expect(items).toContain("node-git");
+    expect(keys(nodeActions({ ...node, paneId: undefined }, deps()))).not.toContain("node-split");
   });
 });

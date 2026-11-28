@@ -96,6 +96,7 @@ struct AgentAvatar: View {
     var dense = false
     /// Off where something else beside the row says the state (`SlotRow.dot`).
     var dot = true
+    var muted = false
 
     var body: some View {
         let side = dense ? Theme.Size.wellS : Theme.Size.wellL
@@ -104,7 +105,7 @@ struct AgentAvatar: View {
             .background(Theme.Fill.well, in: Circle())
             .overlay(alignment: .bottomTrailing) {
                 if dot {
-                    StatusDot(state: session.state, size: dense ? Theme.Size.dot : Theme.Size.dotXL, waiting: session.waitsInBackground)
+                    StatusDot(state: session.state, size: dense ? Theme.Size.dot : Theme.Size.dotXL, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
                         .padding(Theme.Size.rule)
                         .background(Theme.card, in: Circle())
                         .offset(x: Theme.Size.rule, y: Theme.Size.rule)
@@ -132,7 +133,7 @@ extension SlotRow {
     }
 
     @MainActor private var titleText: some View {
-        UltracodeMark.after(session.displayTitle, on: ultracodeMark)
+        UltracodeMark.after(rowTitle, on: ultracodeMark)
             .font(session.state == .unread ? Theme.Font.bodyHeavy : Theme.Font.bodyStrong)
             .lineLimit(1)
             .animation(UltracodeMark.motion, value: ultracodeMark)
@@ -183,14 +184,14 @@ extension SlotRow {
 
     @MainActor private func avatarRow(dense: Bool) -> some View {
         HStack(alignment: .top, spacing: dense ? Theme.Space.s : Theme.Space.m) {
-            AgentAvatar(session: session, dense: dense, dot: dot)
+            AgentAvatar(session: session, dense: dense, dot: dot, muted: muted)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 TimeBesideOrUnder {
                     titleText.frame(maxWidth: .infinity, alignment: .leading)
                 } time: {
                     timeText
                 }
-                if let words = session.listPreview(muted: muted) {
+                if let words = rowPreview {
                     HStack(alignment: .top, spacing: Theme.Space.s) {
                         Text(words)
                             .font(dense ? Theme.Font.caption : Theme.Font.secondary)
@@ -202,7 +203,9 @@ extension SlotRow {
                 } else if needsYouPill {
                     needsYouChip
                 }
+                if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                 if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
+                RunningChildrenCaption(session: session)
                 if hasPlaceLine { placeLine().padding(.top, Theme.Space.xxs) }
             }
         }
@@ -213,7 +216,7 @@ extension SlotRow {
 
     @MainActor private var twoLineRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
-            if dot { StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground) }
+            if dot { StatusDot(state: session.state, size: Theme.Size.dot, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)) }
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 TimeBesideOrUnder {
                     HStack(spacing: Theme.Space.xs) {
@@ -224,20 +227,27 @@ extension SlotRow {
                 } time: {
                     timeText
                 }
-                HStack(spacing: Theme.Space.xs) {
-                    if needsYouPill { needsYouChip }
-                    let words = Text(session.listPreview(muted: muted) ?? placeString)
-                    (stateWords.map { $0 + Text(verbatim: " · ") + words } ?? words)
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if muted {
-                        ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
+                if sideUnread?.replacesPreview != true || needsYouPill || stateWords != nil || muted || rowSource != nil {
+                    HStack(spacing: Theme.Space.xs) {
+                        if needsYouPill { needsYouChip }
+                        let detailLine = rowPreview.map { preview in
+                            titleDetail.map { "\($0) · \(preview)" } ?? preview
+                        } ?? placeString
+                        let words = Text(detailLine)
+                        (stateWords.map { $0 + Text(verbatim: " · ") + words } ?? words)
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if muted {
+                            ThemedIcon(Theme.Icon.muted).font(Theme.Font.label).foregroundStyle(.secondary).accessibilityLabel("Notifications muted")
+                        }
+                        sourceLabel
                     }
-                    sourceLabel
                 }
+                if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                 if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
+                RunningChildrenCaption(session: session)
             }
         }
         .padding(.vertical, Theme.Space.xxs)
@@ -249,7 +259,7 @@ extension SlotRow {
         let tone = session.stateTone(muted: muted)
         let waits = session.state == .needsYou && !muted
         // Its state in words, but not a quiet one's (Seen) nor where the section says it.
-        let word = hideState || muted || (session.state == .idle && !session.awaitsYourReply(muted: muted)) ? nil : session.stateLabel(muted: muted)
+        let word = hideState || muted || (session.state == .idle && !showsReviewWord) ? nil : session.stateLabel(muted: muted)
         return VStack(alignment: .leading, spacing: Theme.Space.xs) {
             TimeBesideOrUnder {
                 HStack(spacing: Theme.Space.xs) {
@@ -260,11 +270,13 @@ extension SlotRow {
             } time: {
                 timeText
             }
-            if let words = session.listPreview(muted: muted) {
+            if let words = rowPreview {
                 Text(words).font(Theme.Font.secondary).foregroundStyle(.secondary).lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
             if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
+            RunningChildrenCaption(session: session)
             HStack(spacing: Theme.Space.s) {
                 if dot, let word {
                     Text(word).font(Theme.Font.captionMedium).foregroundStyle(tone.text).lineLimit(1).fixedSize()

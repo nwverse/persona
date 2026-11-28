@@ -2,16 +2,19 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("../styles.css?raw", () => ({ default: "" }));
-import { contrast, meetContrast, MIN_TEXT_CONTRAST } from "./extension-theme";
+import { contrast, extensionThemeTokens, meetContrast, MIN_ROLE_CONTRAST, MIN_TEXT_CONTRAST } from "./extension-theme";
 import { ACCENT_PRESETS, accentTokens, PRESET_COLORS } from "./look";
+import { COLORS } from "../lib/extension-ui-v6";
+import { BUILTIN_PAGE_COLORS } from "../lib/sidebar-icons";
+import { MODULES } from "../modules";
 
 // The default palette's text tokens must stay readable as small text (WCAG AA 4.5:1) on every background token
 // (#2804); the same backgrounds extension themes are checked against (extension-theme.ts).
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 // The minutes' summary card's own tokens load with the Knowledge page (#6563).
-const minutesCss = readFileSync(new URL("../views/knowledge/minutes-overview.css", import.meta.url), "utf8");
+const minutesCss = readFileSync(new URL("../modules/recording/minutes-overview.css", import.meta.url), "utf8");
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
-const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-terminal", "source-desktop"];
+const TEXT = ["ink", "ink-2", "ink-3", "accent-ink", "attention", "green", "orange", "red", "ai", "source-desktop"];
 
 // A color laid over another (#rrggbbaa over #rrggbb), and `color-mix(in srgb, a (1 - p), b p)`, as the browser paints them.
 const channels = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -132,8 +135,69 @@ describe("default palette contrast", () => {
       // Unadjusted, the built-in theme colors fall short on the dark AI tint: the rule above is what keeps them.
       if (scheme === "dark") expect(contrast(accentTokens(PRESET_COLORS.blue.accent).dark["--accent-ink"], ai)).toBeLessThan(4.5);
     });
+    it(`${scheme}: inline code's ink (--ink and --ink-2 mixed, #9477) reads on every background, between the two`, () => {
+      expect(css).toContain("color: color-mix(in srgb, var(--ink) 55%, var(--ink-2))");
+      const ink = mix(t.ink, t["ink-2"], 0.45);
+      for (const bg of BACKGROUNDS) expect(contrast(ink, t[bg]), `on --${bg}`).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(ink, t.surface)).toBeLessThan(contrast(t.ink, t.surface));
+      expect(contrast(ink, t.surface)).toBeGreaterThan(contrast(t["ink-2"], t.surface));
+    });
+    // #10822, Colored sidebar icons: a page's icon in a named color (--hue-*, lib/sidebar-icons.ts) lies on the sidebar's
+    // --canvas, and on --hover under the pointer and the gliding highlight; the open page's icon is --ink on --hover-2, as
+    // in Monochrome. An icon is a graphic, so 3:1. Every named color, since an extension's nav_page may name any of them.
+    const hueOf = (name: string) => [...css.matchAll(new RegExp(`--hue-${name}:\\s*(#[0-9a-f]{6})\\b`, "gi"))][scheme === "light" ? 0 : 1]?.[1] ?? "";
+    it(`${scheme}: every named color reads at 3:1 as a sidebar page's icon on the canvas and the hover fill`, () => {
+      const short = COLORS.flatMap((name) => ["canvas", "hover"].map((bg) => {
+        expect(hueOf(name), `--hue-${name}`).toMatch(/^#[0-9a-f]{6}$/i);
+        const ratio = contrast(hueOf(name), t[bg]);
+        return ratio < MIN_ROLE_CONTRAST ? `--hue-${name} on --${bg}: ${ratio.toFixed(2)}` : "";
+      })).filter(Boolean);
+      expect(short).toEqual([]);
+      for (const name of Object.values(BUILTIN_PAGE_COLORS)) expect(COLORS, name).toContain(name);
+      // a feature module's sidebar entry names its own color (core/module-host.ts ModuleNavItem.color): the same rules
+      const moduleColors = MODULES.flatMap((m) => (m.navItems ?? []).flatMap((n) => (n.color ? [[`${m.id}/${n.key}`, n.color] as const] : [])));
+      // (the core-only lane, #13932, has no module and so none to check)
+      if (MODULES.length) expect(moduleColors.length).toBeGreaterThan(0);
+      for (const [entry, name] of moduleColors) {
+        expect(COLORS, entry).toContain(name);
+        for (const bg of ["canvas", "hover"]) expect(contrast(hueOf(name), t[bg]), `${entry} --hue-${name} on --${bg}`).toBeGreaterThanOrEqual(MIN_ROLE_CONTRAST);
+      }
+      expect(contrast(t.ink, t["hover-2"])).toBeGreaterThanOrEqual(4.5);
+    });
+    it(`${scheme}: usage timeline hues (--hue-teal, --hue-blue) keep >= 3:1 contrast on surface and inset`, () => {
+      for (const name of ["teal", "blue"]) {
+        for (const bg of ["surface", "inset"]) {
+          expect(contrast(hueOf(name), t[bg]), `--hue-${name} on --${bg}`).toBeGreaterThanOrEqual(MIN_ROLE_CONTRAST);
+        }
+      }
+    });
+    it(`${scheme}: fresh tiered and stale neutral usage percentage tokens keep >= 4.5:1 contrast on surface and inset`, () => {
+      for (const role of ["green", "orange", "red", "ink-2"]) {
+        for (const bg of ["surface", "inset"]) {
+          expect(contrast(t[role], t[bg]), `--${role} on --${bg}`).toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
+    it(`${scheme}: no theme color or extension theme moves the named colors or the sidebar's backgrounds`, () => {
+      const theme = { extension: "example-theme", extension_name: "Example Theme", id: "sea", name: "Sea", light: { accent: "#1d4ed8" }, dark: { accent: "#8ab4ff" } };
+      const sets = [...ACCENT_PRESETS.map((p) => accentTokens(PRESET_COLORS[p].accent)[scheme]), extensionThemeTokens(theme, scheme)];
+      expect(Object.keys(sets.at(-1)!)).toContain("--accent");
+      const moved = sets.flatMap((tokens) => Object.keys(tokens)).filter((k) => k.startsWith("--hue-") || ["--canvas", "--hover", "--hover-2", "--ink"].includes(k));
+      expect(moved).toEqual([]);
+    });
     it(`${scheme}: --ink-3 stays a step quieter than --ink-2`, () => {
       expect(contrast(t["ink-3"], t.surface)).toBeLessThan(contrast(t["ink-2"], t.surface));
+    });
+    it(`${scheme}: shell/sidebar --canvas sits deeper than main card --page and elevated --surface (#14696)`, () => {
+      // Lower luminance than --page in both schemes: darker neutral shell in light, deeper charcoal backdrop in dark.
+      const lum = (hex: string) => {
+        const full = hex.length === 4 ? `#${[...hex.slice(1)].map((c) => c + c).join("")}` : hex;
+        return channels(full).map((c) => c / 255).map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+          .reduce((n, c, i) => n + c * [0.2126, 0.7152, 0.0722][i], 0);
+      };
+      expect(lum(t.canvas)).toBeLessThan(lum(t.page));
+      expect(lum(t.page)).toBeLessThan(lum(t.surface));
+      if (scheme === "dark") expect(lum(t.canvas)).toBeLessThan(lum(t.inset));
     });
   }
 });

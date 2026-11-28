@@ -1,5 +1,6 @@
 // i18n-ignore-file: demo mode's made-up hub data (model settings)
 import Foundation
+import PersonaWire
 
 /// Made-up model settings for Demo Mode; they never reach a provider or a computer.
 enum DemoModelCatalog {
@@ -42,11 +43,14 @@ enum DemoModelCatalog {
             let providerID = kind == "api" ? "legacy.ai" : "launcher.demo"
             var effective: [String: JSONValue] = ["provider": .string(providerID), "model": .string(kind == "api" ? "model-fast" : "model-chat")]
             effective.merge(binding) { _, new in new }
+            if id == "inbox.agent" && binding["permission_mode"] == nil {
+                effective["permission_mode"] = "default"
+            }
             var purpose: [String: JSONValue] = [
                 "id": .string(id), "name": .string(name), "group": .string(group), "kind": .string(kind),
                 "override": .object(binding), "effective": .object(effective), "revision": saved?["revision"] ?? 0,
                 "inherited_from": .string(binding.isEmpty ? "现有默认" : "此用途"), "status": "体验模式 · 不会调用模型",
-                "fields": kind == "api" ? ["provider", "model"] : ["provider", "model", "effort"],
+                "fields": kind == "api" ? ["provider", "model"] : ["provider", "model", "effort", "permission_mode"],
                 "provider_ids": .array(providers.filter { $0["kind"]?.string == kind }.compactMap { $0["id"] })]
             // The four categories the hub edits (docs/assistant/model-config.md); every other use is set through its category.
             if let uses = categories[id] {
@@ -55,11 +59,7 @@ enum DemoModelCatalog {
             } else {
                 purpose["category_id"] = .string(Self.category(id))
             }
-            // Main Chat alone picks its How It Runs (#2455).
-            if id == "assistant" {
-                purpose["fields"] = ["provider", "model", "effort", "runtime"]
-                purpose["runtimes"] = ["cli", "agentsdk"]
-            }
+            // No runtime or runtimes, as the hub since #9799: How It Runs is no longer a setting (docs/assistant/model-config.md).
             return .object(purpose)
         }
         return ["purposes": .array(purposes), "providers": .array(providers)]

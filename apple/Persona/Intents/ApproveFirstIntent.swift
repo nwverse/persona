@@ -12,6 +12,7 @@ struct ApproveFirstIntent: AppIntent {
         categoryName: "Status",
         searchKeywords: ["Approve [Notification Actions 8cbe69]", "Allow [Notification Actions ce7ef2]", "Permission", "plan"]
     )
+    @available(iOS 26.0, *)
     nonisolated static var supportedModes: IntentModes { .background }
     nonisolated static var authenticationPolicy: IntentAuthenticationPolicy { .requiresAuthentication }
 
@@ -39,7 +40,7 @@ struct ApproveFirstIntent: AppIntent {
                 let hint = String(localized: "This session can't be approved from here. Open the app to check it.")
                 return .result(value: hint, dialog: IntentSupport.dialog(hint))
             }
-            try await api.resolve(first.id, resolution)
+            try await api.resolve(first.id, resolution, occurrence: first.createdAtWire)
             let text = Self.doneText(for: first)
             return .result(value: text, dialog: IntentSupport.dialog(text))
         } catch {

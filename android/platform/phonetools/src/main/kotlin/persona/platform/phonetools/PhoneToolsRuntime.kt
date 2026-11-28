@@ -27,6 +27,7 @@ class PhoneToolsRuntime(
     /** Test seam: replaces the platform backend so the runtime's concurrency can be exercised without Android
      * system providers. Defaults to the real `AndroidPhoneTools.execute`. */
     executeOverride: (suspend (String, kotlinx.serialization.json.JsonObject) -> PhoneToolResult)? = null,
+    prepareConfirmationOverride: (suspend (String, kotlinx.serialization.json.JsonObject) -> PhonePreparedConfirmation)? = null,
 ) : AutoCloseable {
     private val job = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + job + Dispatchers.Main.immediate)
@@ -41,7 +42,7 @@ class PhoneToolsRuntime(
     private val inFlight = Semaphore(MAX_IN_FLIGHT)
     private fun available() = !automation && connection.state.value == ConnectionState.Online && (visibility.value || resident.value)
     val registry = PhoneToolRegistry({ settings.enabled.value }, ::available, { visibility.value }, permissions::allowed,
-        confirmations::confirm, executeOverride ?: backend::execute)
+        confirmations::confirm, executeOverride ?: backend::execute, prepareConfirmationOverride ?: backend::prepareConfirmation)
 
     init {
         require(deviceId.isNotBlank())

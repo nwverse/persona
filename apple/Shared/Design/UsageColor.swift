@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// The token usage charts' colors (docs/server/machines.md "Token usage", #4973): one per kind, light and dark steps of the
 /// charts' categorical palette, in the stacking order (input, output, cache write, cache read) validated as a set
@@ -11,6 +12,10 @@ nonisolated enum UsageColor {
     static let cacheRead = Color(light: 0x1BAF7A, dark: 0x199E70)
     /// The cache hit rate's one line.
     static let hitRate = cacheRead
+    /// Token usage by project (#16530): non-development projects (folders, the home folder, the assistant), apart from
+    /// the kinds' teal; development ones take the accent. At least 3:1 on a card in both schemes; the web's
+    /// `--project-other`.
+    static let projectOther = Color(light: 0x0F7F8F, dark: 0x4BBFCC)
     /// A card's sparkline of all tokens.
     static let total = input
 

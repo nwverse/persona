@@ -18,10 +18,11 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/voice"
-	"github.com/nwverse/persona/server/internal/voice/voicetest"
+	"github.com/nwverse/persona/server/internal/modules/voice/voicetest"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
 
 // Hub transcription end to end (docs/assistant/meeting-minutes.md "Phase 5: hub transcription"): the phone's audio
@@ -53,11 +54,14 @@ var e2eTimeline = map[string]any{
 
 // adapterTranscribers reaches the voice extension's transcription contribution over HTTP, as the extensions layer
 // does over the extension's socket.
-type adapterTranscribers struct{ srv *httptest.Server }
+type adapterTranscribers struct {
+	srv *httptest.Server
+	cid string // the voice extension's transcription contribution
+}
 
 func (a adapterTranscribers) TranscriptionInfo(ctx context.Context, ref string) (extwire.TranscriptionInfo, error) {
 	var info extwire.TranscriptionInfo
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.srv.URL+"/transcription/"+voice.TranscriptionContribution+"/info", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, a.srv.URL+"/transcription/"+a.cid+"/info", nil)
 	res, err := a.srv.Client().Do(req)
 	if err != nil {
 		return info, err
@@ -70,7 +74,7 @@ func (a adapterTranscribers) TranscriptionInfo(ctx context.Context, ref string) 
 }
 
 func (a adapterTranscribers) TranscriptionDial(ctx context.Context, ref string) (*websocket.Conn, func(), error) {
-	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(a.srv.URL, "http")+"/transcription/"+voice.TranscriptionContribution+"/ws", nil)
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(a.srv.URL, "http")+"/transcription/"+a.cid+"/ws", nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -127,12 +131,20 @@ type e2eFixture struct {
 func newE2EFixture(t *testing.T, s voicetest.Script) *e2eFixture {
 	t.Helper()
 	shortHubTimes(t)
-	jobReadyWait, audioEndWait, jobDoneWait = 20*time.Second, 25*time.Second, time.Minute
+	jobReadyWait, jobDoneWait = 20*time.Second, time.Minute // and the recording module's below (recTimings)
+	voice, ok := builtinext.VoiceExtension(moduleswitch.Set{})
+	if !ok {
+		t.Skip("the voice module, the built-in transcription these tests run, is not in this build")
+	}
 	live := voicetest.NewLive(t, s)
 	adapterLog := &lockedBuf{}
-	pl := voice.New(voice.Config{Providers: []voice.Provider{{ID: "t", URL: live.URL(), Dialect: voice.DialectLive, Key: "k",
-		DefaultModel: "m1"}}, Default: "t/m1"}, "http://127.0.0.1:1", "hubtoken", log.New(adapterLog, "", 0))
-	ext := httptest.NewServer(pl.Handler())
+	cfg, _ := json.Marshal(map[string]any{"providers": []map[string]any{{"id": "t", "url": live.URL(), "dialect": "live", "key": "k",
+		"default_model": "m1"}}, "default": "t/m1"})
+	handler, err := voice.Handler(cfg, "http://127.0.0.1:1", "hubtoken", log.New(adapterLog, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext := httptest.NewServer(handler)
 	t.Cleanup(ext.Close)
 
 	managerLog := &lockedBuf{}
@@ -140,6 +152,9 @@ func newE2EFixture(t *testing.T, s voicetest.Script) *e2eFixture {
 	s2 := kbServiceOn(t, f, newKBStore(), t.TempDir(), func(format string, args ...any) {
 		fmt.Fprintf(managerLog, format+"\n", args...)
 	})
+	needsRecordingModule(t)
+	applyShortRec(t, s2)
+	recTimings(t, s2, map[string]time.Duration{"jobReadyWait": 20 * time.Second, "audioEndWait": 25 * time.Second, "jobDoneWait": time.Minute}, nil)
 	setSettings(t, s2, func(v *Settings) { v.Main = "c-main" })
 	s2.meetingModel = &meetingModelFake{reply: `{"question":"","answer":"We kept the cap.","sources":[]}`}
 	feed := trackAttendFeed(s2)
@@ -149,7 +164,7 @@ func newE2EFixture(t *testing.T, s voicetest.Script) *e2eFixture {
 		srv.Close()
 		feed.stop()
 	})
-	s2.trans = adapterTranscribers{srv: ext}
+	s2.trans = adapterTranscribers{srv: ext, cid: voice.TranscriptionContribution}
 	s2.transcriptionReadinessChanged()
 	sockets := httptest.NewServer(http.HandlerFunc(s2.ServeSocket))
 	h := &hubFixture{meetingFixture: m, sockets: sockets}
@@ -165,9 +180,10 @@ func newE2EFixture(t *testing.T, s voicetest.Script) *e2eFixture {
 	return e
 }
 
-// stream sends the script's audio in 100 ms frames at ten times real time, with the role and speaking frames at their
-// moments (speaking ahead of the audio, as playback starts), then end.
-func (e *e2eFixture) stream(p *testPhone, s voicetest.Script, total float64) {
+// stream sends 100 ms frames at at most ten times real time, with role and speaking frames at their moments,
+// then end. The normal caption case waits for the independent fake peer to consume each frame; scheduler delays
+// must not turn this content check into the adapter's separately tested backlog/skip scenario.
+func (e *e2eFixture) stream(p *testPhone, s voicetest.Script, total float64, paceCaptions bool) {
 	e.t.Helper()
 	pcm := voicetest.PCM(s, total)
 	controls := []struct {
@@ -189,8 +205,20 @@ func (e *e2eFixture) stream(p *testPhone, s voicetest.Script, total float64) {
 			controls = controls[1:]
 		}
 		<-tick.C
-		if err := p.c.Write(context.Background(), websocket.MessageBinary, pcm[off:min(off+frame, len(pcm))]); err != nil {
+		var consumed int64
+		if paceCaptions {
+			consumed, _ = e.live.CaptionSamples() // the first frame may start the upstream job
+		}
+		end := min(off+frame, len(pcm))
+		if err := p.c.Write(context.Background(), websocket.MessageBinary, pcm[off:end]); err != nil {
 			e.t.Fatalf("audio: %v", err)
+		}
+		if paceCaptions {
+			want := consumed + int64((end-off)/2)
+			waitLong(e.t, "the caption peer to consume audio", 5*time.Second, func() bool {
+				heard, ready := e.live.CaptionSamples()
+				return ready && heard >= want
+			})
 		}
 	}
 	p.send(map[string]any{"type": "end", "at": total})
@@ -222,7 +250,7 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 	if ready["from"] != 0.0 {
 		t.Fatalf("ready %v", ready)
 	}
-	e.stream(p, script, e2eLength)
+	e.stream(p, script, e2eLength, true)
 	waitLong(t, "the socket's end", 40*time.Second, func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -276,10 +304,12 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 
 	e.upload(id, 2, map[string]any{"transcription": "hub", "attendance": "listener", "language": "zh-CN", "title": "Design review",
 		"complete": true, "duration": e2eLength, "ended_at": time.Now().UTC().Format(time.RFC3339), "timeline": e2eTimeline})
-	waitLong(t, "the final pass", time.Minute, func() bool {
-		e.s.finalRound(context.Background())
-		return e.transcription(id)["state"] == "final"
-	})
+	// The final passes' loop, looking every 100 ms (finalEvery): as the manager runs it.
+	recTimings(t, e.s, map[string]time.Duration{"finalEvery": 100 * time.Millisecond}, nil)
+	fctx, stop := context.WithCancel(context.Background())
+	t.Cleanup(stop)
+	go e.s.finalPasses(fctx)
+	waitLong(t, "the final pass", time.Minute, func() bool { return e.transcription(id)["state"] == "final" })
 	wantFinal := e.sentence // Persona's echo (the fifth) among them, marked
 	d, err := e.engine().Get(kb.KindRecording, id, 0)
 	if err != nil {
@@ -309,7 +339,7 @@ func TestHubTranscriptionEndToEnd(t *testing.T) {
 
 	eng := e.engine()
 	eng.Model, eng.ModelFor = e.minutes, func(string) kb.Model { return e.minutes }
-	if n := eng.WriteMinutes(context.Background(), 5); n < 1 {
+	if n := eng.RecordingProvider().WriteMinutes(context.Background(), 5); n < 1 {
 		t.Fatal("no minutes")
 	}
 	e.minutes.mu.Lock()
@@ -340,7 +370,7 @@ func TestHubTranscriptionEndToEndWithoutCaptions(t *testing.T) {
 	e := newE2EFixture(t, script)
 	e.upload(meetingRec, 1, map[string]any{"transcription": "hub", "attendance": "listener", "language": "zh-CN"})
 	p, _ := e.open(meetingRec, 0, nil)
-	e.stream(p, script, 10)
+	e.stream(p, script, 10, false)
 	waitLong(t, "the socket's end", 40*time.Second, func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()

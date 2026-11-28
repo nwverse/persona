@@ -3,23 +3,27 @@
 // bind step, #5818); the status and the on / off switch, pairing with a code sent to the bot, what the bot may do and the
 // agents driven there; and, folded under Advanced, the app's credentials and how to make one by hand.
 // Each change goes to the hub at once and the page shows what the hub answered; a failed one leaves it as it was.
+import { sameManager } from "../../lib/manager-choice";
 import { BindSteps, ChannelLink } from "./Channels";
 import { Disclosure } from "./ProviderFields";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
 import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
-  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus,
+  featureEdit, testBot, unpairBot, updateBot, type BotCredentials, type BotFeatures, type FeishuBotStatus, type BotTopicChat, type TopicTodoMode,
 } from "../../lib/feishu-bot";
 import { Button, copyText, cx, Dialog, IconButton, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
-import { Group, Pill, Row, Switch } from "./SettingsParts";
+import { Group, Pill, Row, Switch, settingsInputClass } from "./SettingsParts";
 import { SignInSteps } from "./HubConnector";
+import { LarkSyncSection } from "./LarkSyncSection";
+
+export const SOURCE_REPORT_DELAYS = [0, 1, 2, 5, 10, 15, 30, 60];
 
 const controlClass = "h-8 rounded-control bg-field px-2.5 text-[12.5px] text-ink shadow-inset-field outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]";
 const dotClass = { green: "bg-green", red: "bg-red", orange: "bg-orange" } as const;
@@ -45,7 +49,7 @@ function missingScopes(c: HubConnector): string[] {
 
 /** The open-platform page for the missing permissions: the hub's guide_url, or a permission_url. */
 function permissionLink(c: HubConnector): string {
-  return c.guide_url || c.permission_url || "";
+  return safeWebURL(c.guide_url, true) || safeWebURL(c.permission_url, true) || "";
 }
 
 function combinedLarkState(bot: FeishuBotStatus | null, loading: boolean, c: HubConnector): { label: string; tone?: ConnectorTone } {
@@ -55,12 +59,17 @@ function combinedLarkState(bot: FeishuBotStatus | null, loading: boolean, c: Hub
   return { label: botSummary(bot), tone: botTone(bot) };
 }
 
-const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail: string }[] = [
+export const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail: string }[] = [
   { key: "main", icon: "spark", title: t("settings-feishubot.feature_main_title"), detail: t("settings-feishubot.feature_main_detail") },
   { key: "cards", icon: "hand", title: t("settings-feishubot.feature_cards_title"), detail: t("settings-feishubot.feature_cards_detail") },
   { key: "all_cards", icon: "bell", title: t("settings-feishubot.feature_all_cards_title"), detail: t("settings-feishubot.feature_all_cards_detail") },
   { key: "pushes", icon: "send", title: t("settings-feishubot.feature_pushes_title"), detail: t("settings-feishubot.feature_pushes_detail") },
   { key: "answer_new_card", icon: "bell", title: t("settings-feishubot.feature_answer_new_card_title"), detail: t("settings-feishubot.feature_answer_new_card_detail") },
+  { key: "read_group", icon: "search", title: t("settings-feishubot.feature_read_group_title"), detail: t("settings-feishubot.feature_read_group_detail") },
+  { key: "read_group_direct", icon: "chat", title: t("settings-feishubot.feature_read_group_direct_title"), detail: t("settings-feishubot.feature_read_group_direct_detail") },
+  { key: "topic_cot", icon: "spark", title: t("settings-feishubot.feature_topic_cot_title"), detail: t("settings-feishubot.feature_topic_cot_detail") },
+  { key: "dm_cot", icon: "spark", title: t("settings-feishubot.feature_dm_cot_title"), detail: t("settings-feishubot.feature_dm_cot_detail") },
+  { key: "cot_answer", icon: "spark", title: t("settings-feishubot.feature_cot_answer_title"), detail: t("settings-feishubot.feature_cot_answer_detail") },
   { key: "sync", icon: "loop", title: t("settings-feishubot.feature_sync_title"), detail: t("settings-feishubot.feature_sync_detail") },
   { key: "reports", icon: "list", title: t("settings-feishubot.feature_reports_title"), detail: t("settings-feishubot.feature_reports_detail") },
   { key: "board", icon: "pin", title: t("settings-feishubot.feature_board_title"), detail: t("settings-feishubot.feature_board_detail") },
@@ -70,32 +79,62 @@ const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; detail:
   { key: "agents", icon: "agent", title: t("settings-feishubot.feature_agents_title"), detail: t("settings-feishubot.feature_agents_detail") },
 ];
 
-const STEPS = [
+export const STEPS = [
   t("settings-feishubot.step_create_app"),
   t("settings-feishubot.step_permissions"),
+  t("settings-feishubot.step_sync_permissions"),
   t("settings-feishubot.step_events"),
   t("settings-feishubot.step_publish"),
 ];
 
 /** The bot's state, kept by whoever shows it (the row and its page share one). */
-function useBot() {
+export function useBot() {
   const [status, setStatus] = useState<FeishuBotStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const load = useCallback(() => {
-    setLoading(true);
-    return botStatus()
-      .then((s) => (setStatus(s), setError("")))
-      .catch((e) => setError(t("settings-feishubot.status_error", { error: errorText(e) })))
-      .finally(() => setLoading(false));
+  const requests = useRef({ issued: 0, confirmed: 0, loading: 0, live: false });
+  // Reads are ordered by when they started, but only successful responses advance the confirmed state.
+  // A confirmed write takes a new position at receipt time, fencing every read already in flight.
+  const accept = useCallback((next: FeishuBotStatus, sequence = ++requests.current.issued) => {
+    const state = requests.current;
+    if (!state.live || sequence < state.confirmed) return false;
+    state.confirmed = sequence;
+    setStatus(next);
+    setError("");
+    if (sequence >= state.loading) setLoading(false);
+    return true;
   }, []);
-  useEffect(() => void load(), [load]);
-  return { status, setStatus, loading, error, setError, load };
+  const readStatus = useCallback(async (feedback = false) => {
+    const sequence = ++requests.current.issued;
+    if (feedback) {
+      requests.current.loading = sequence;
+      setLoading(true);
+    }
+    try {
+      const next = await botStatus();
+      if (!accept(next, sequence)) return;
+      return { status: next, current: () => requests.current.live && requests.current.confirmed === sequence };
+    } catch (e) {
+      if (feedback && requests.current.live && sequence >= requests.current.confirmed) {
+        setError(t("settings-feishubot.status_error", { error: errorText(e) }));
+      }
+      throw e;
+    } finally {
+      if (feedback && requests.current.live && requests.current.loading === sequence) setLoading(false);
+    }
+  }, [accept]);
+  const load = useCallback(() => readStatus(true).then(() => {}, () => {}), [readStatus]);
+  useEffect(() => {
+    requests.current.live = true;
+    void load();
+    return () => { requests.current.live = false; };
+  }, [load]);
+  return { status, accept, readStatus, loading, error, setError, load };
 }
 
-export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: string) => void; larkcli?: HubConnector | null; onOpen?: (id: string) => void } = {}) {
+export function FeishuBot({ onChannel, larkcli, onOpen, manager, onRouteClose }: { manager?: string; onRouteClose?: () => void; onChannel?: (id: string, manager?: string) => void; larkcli?: HubConnector | null; onOpen?: (id: string) => void } = {}) {
   const bot = useBot();
-  const [open, setOpen] = useState(() => new URLSearchParams(location.search).get("connector") === "feishu-bot");
+  const [open, setOpen] = useState(false);
   const tone = botTone(bot.status);
   return (
     <>
@@ -121,8 +160,8 @@ export function FeishuBot({ onChannel, larkcli, onOpen }: { onChannel?: (id: str
           </button>
         </Group>
       )}
-      {onChannel && <ChannelLink id="feishu" onOpen={onChannel} />}
-      {open && <FeishuBotDialog bot={bot} larkcli={larkcli} onClose={() => setOpen(false)} onOpen={onOpen} />}
+      {onChannel && <ChannelLink id="feishu" manager={manager} onOpen={onChannel} />}
+      {(open || onRouteClose) && <FeishuBotDialog bot={bot} manager={manager} larkcli={larkcli} onClose={onRouteClose ?? (() => setOpen(false))} onOpen={onOpen} />}
     </>
   );
 }
@@ -145,8 +184,8 @@ function CombinedLarkRow({ bot, connector, onOpen }: { bot: ReturnType<typeof us
   );
 }
 
-function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<typeof useBot>; larkcli?: HubConnector | null; onClose: () => void; onOpen?: (id: string) => void }) {
-  const { status, setStatus, loading, error, setError, load } = bot;
+function FeishuBotDialog({ bot, manager, larkcli, onClose, onOpen }: { manager?: string; bot: ReturnType<typeof useBot>; larkcli?: HubConnector | null; onClose: () => void; onOpen?: (id: string) => void }) {
+  const { status, accept, readStatus, loading, error, setError, load } = bot;
   const [dialogLarkcli, setDialogLarkcli] = useState<HubConnector | null | undefined>(larkcli);
   const [form, setForm] = useState<BotCredentials>(() => (status ? credentialsOf(status) : { appID: "", appSecret: "", domain: "feishu" }));
   const [saving, setSaving] = useState(false);
@@ -160,6 +199,9 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   const pairing = livePairing(status, now);
   const features = status?.features ?? DEFAULT_FEATURES;
   const nudgeAfter = status?.nudge_after ?? DEFAULT_NUDGE_AFTER;
+  const reportDelay = status?.source_report_delay_minutes;
+  const fullReply = status?.source_report_full_reply;
+  const fullReplyDetail = useId();
   // Read at answer time, not when the request (or the pairing poll) started: typing meanwhile must count.
   const changedRef = useRef(changed);
   changedRef.current = changed;
@@ -173,10 +215,10 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
 
   const fetchLarkcli = useCallback(async () => {
     const all = await listConnectors();
-    const found = all.find((connector) => connector.id === "larkcli");
+    const found = all.find((connector) => connector.id === "larkcli" && sameManager(connector.manager, manager));
     // A re-read that no longer lists it keeps what the page showed; only a first read may conclude "none".
     setDialogLarkcli((prev) => found ?? (prev === undefined ? null : prev));
-  }, []);
+  }, [manager]);
 
   useEffect(() => {
     if (larkcli !== undefined) {
@@ -196,18 +238,22 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   }, [fetchLarkcli, larkcli]);
 
   // A newer status: fill the form unless something is being typed (replace: the answer to saving the credentials).
-  const adopt = (s: FeishuBotStatus, replace = false) => {
+  const adoptForm = (s: FeishuBotStatus, replace = false) => {
     if (replace || !editedRef.current || !changedRef.current) {
       editedRef.current = false;
       setForm(credentialsOf(s));
     }
-    setStatus(s);
   };
 
-  const reloadAll = useCallback(async () => {
-    const [next] = await Promise.all([botStatus(), fetchLarkcli()]);
-    adopt(next);
-  }, [fetchLarkcli, changed]);
+  const reloadAll = useCallback(async (afterCreate = false) => {
+    // Keep the bot's successful response even if the optional connector read fails, but only start authorization
+    // after both reads succeed and no newer confirmed status or write has superseded this setup.
+    const [next] = await Promise.all([readStatus().then((result) => {
+      if (result?.current()) adoptForm(result.status);
+      return result;
+    }), fetchLarkcli()]);
+    if (afterCreate && next?.current()) setCreated(true);
+  }, [readStatus, fetchLarkcli, changed]);
   useEffect(() => {
     if (status && (!editedRef.current || !changed)) setForm(credentialsOf(status));
     // only when the hub's credentials change, not on each keystroke
@@ -220,7 +266,7 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
     if (!pairing || status?.owner) return;
     const tick = setInterval(() => setNow(Date.now()), 1000);
     let started = false;
-    const stop = visiblePoll(() => { if (started) void botStatus().then((s) => adopt(s), () => {}); }, 3000, documentPage);
+    const stop = visiblePoll(() => { if (started) void readStatus().then((result) => { if (result?.current()) adoptForm(result.status); }, () => {}); }, 3000, documentPage);
     started = true;
     return () => (clearInterval(tick), stop());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -229,7 +275,8 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   const run = async (what: string, call: () => Promise<FeishuBotStatus>, done?: string, replace = false) => {
     setSaving(true);
     try {
-      adopt(await call(), replace);
+      const next = await call();
+      if (accept(next)) adoptForm(next, replace);
       setError("");
       if (done) toast(done, "ok");
       return true;
@@ -267,10 +314,7 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
           title={t("settings-feishubot.create_title")}
           footer={t(dialogLarkcli ? "settings-feishubot.create_footer_shared" : "settings-feishubot.create_footer")}
           startLabel={t("settings-feishubot.create_start")}
-          onDone={async () => {
-            await reloadAll();
-            setCreated(true);
-          }}
+          onDone={() => reloadAll(true)}
         />
       )}
 
@@ -288,6 +332,9 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
           }}
         />
       )}
+
+      {/* reading Feishu as you every day, into the knowledge base: absent on a hub without it */}
+      <LarkSyncSection appID={status?.app_id} />
 
       <Group title={dialogLarkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
         <div className="flex items-center gap-3 px-4 py-3">
@@ -359,16 +406,22 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
             )}
           </Group>
 
+          {status.owner && <TopicGroups status={status} saving={saving} save={(topic_chats) => run(t("settings-feishubot.save_failed"), () => updateBot({ topic_chats }))} />}
+
           <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
-            {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card") || features[f.key] !== undefined).map((f) => {
+            {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card" && f.key !== "topic_cot" && f.key !== "dm_cot" && f.key !== "cot_answer" && f.key !== "read_group" && f.key !== "read_group_direct") || features[f.key] !== undefined).map((f) => {
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either,
               // and trims only the execution steps, which a current hub pushes only with "report_steps" on (#3218).
               // "report_steps" needs task progress too; a hub from before it leaves the key out and the switch is hidden,
-              // as is "answer_new_card" on a hub from before it.
+              // as are "answer_new_card", "topic_cot", "dm_cot", "cot_answer", "read_group" and "read_group_direct" on hubs from before them.
+              // "read_group_direct" only says where a /read's answer goes, so it waits dimmed while /read is off (#14437).
+              // "cot_answer" only applies to a turn that gets a native agent message, so it waits dimmed while neither dm_cot nor topic_cot is on.
               const off =
                 (f.key === "all_cards" && !features.cards) ||
                 (f.key === "only_conclusions" && (features.reports === false || (features.report_steps === false && !features.only_conclusions))) ||
-                (f.key === "report_steps" && features.reports === false);
+                (f.key === "report_steps" && features.reports === false) ||
+                (f.key === "read_group_direct" && !features.read_group) ||
+                (f.key === "cot_answer" && !features.dm_cot && features.topic_cot === false);
               return (
                 <div key={f.key} className={cx("flex items-start gap-3 px-4 py-2.5", off && "opacity-50")}>
                   <Icon name={f.icon} size={15} className="mt-0.5 shrink-0 text-accent" />
@@ -400,6 +453,38 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
                 ))}
               </select>
             </div>
+            {fullReply !== undefined && (
+              <div className="flex items-start gap-3 px-4 py-2.5">
+                <Icon name="chat" size={15} className="mt-0.5 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-ink">{t("settings-feishubot.source_report_full_title")}</div>
+                  <div id={fullReplyDetail} className="mt-0.5 text-xs leading-snug text-ink-3">{t("settings-feishubot.source_report_full_detail")}</div>
+                </div>
+                <Switch on={fullReply} disabled={saving} describedBy={fullReplyDetail} label={t("settings-feishubot.source_report_full_title")} onChange={(on) => void run(t("settings-feishubot.save_failed"), () => updateBot({ source_report_full_reply: on }))} />
+              </div>
+            )}
+            {reportDelay !== undefined && (
+              <div className="flex items-start gap-3 px-4 py-2.5">
+                <Icon name="clock" size={15} className="mt-0.5 shrink-0 text-accent" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-ink">{t("settings-feishubot.source_report_delay_title")}</div>
+                  <div className="mt-0.5 text-xs leading-snug text-ink-3">{t("settings-feishubot.source_report_delay_detail")}</div>
+                </div>
+                <select
+                  value={reportDelay}
+                  disabled={saving}
+                  aria-label={t("settings-feishubot.source_report_delay_title")}
+                  onChange={(e) => void run(t("settings-feishubot.save_failed"), () => updateBot({ source_report_delay_minutes: Number(e.target.value) }))}
+                  className={cx(controlClass, "min-h-11 shrink-0")}
+                >
+                  {[...new Set([...SOURCE_REPORT_DELAYS, reportDelay])].sort((a, b) => a - b).map((minutes) => (
+                    <option key={minutes} value={minutes}>
+                      {minutes === 0 ? t("settings-feishubot.source_report_delay_now") : t("settings-feishubot.source_report_delay_minutes", { minutes })}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </Group>
         </>
       )}
@@ -468,7 +553,7 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
   );
 }
 
-function LarkReadSection({ connector, status, waitsForApp, autoStart, reload, onOpen }: {
+export function LarkReadSection({ connector, status, waitsForApp, autoStart, reload, onOpen }: {
   connector: HubConnector;
   status: FeishuBotStatus | null;
   waitsForApp?: boolean;
@@ -613,6 +698,76 @@ function LarkReadSection({ connector, status, waitsForApp, autoStart, reload, on
         </Row>
       )}
       <Row label={t("settings-feishubot.read_more")} hint={t("settings-feishubot.read_more_hint")} onClick={onOpen} />
+    </Group>
+  );
+}
+
+
+/** Group policies use the same acknowledged save as the other bot settings. */
+export function TopicGroups({ status, saving, save }: { status: FeishuBotStatus; saving: boolean; save: (groups: BotTopicChat[]) => Promise<boolean> }) {
+  const groups = status.topic_chats ?? [];
+  const [adding, setAdding] = useState(false);
+  const [chatID, setChatID] = useState("");
+  const [name, setName] = useState("");
+  const [strict, setStrict] = useState(false);
+  const add = async () => {
+    if (await save([...groups, { chat_id: chatID.trim(), name: name.trim(), require_owner_mention: strict }])) {
+      setAdding(false);
+      setChatID("");
+      setName("");
+      setStrict(false);
+    }
+  };
+  return (
+    <Group title={t("settings-feishubot.topic_groups")} footer={t("settings-feishubot.topic_policy_footer")} anchor="topic-groups">
+      <Row label={t("settings-feishubot.topic_home")} hint={t("settings-feishubot.topic_home_hint")} wrapHint stackOnNarrow>
+        <select aria-label={t("settings-feishubot.topic_home")} className={settingsInputClass} disabled={saving || !groups.length} value={groups.find((g) => g.home)?.chat_id ?? ""}
+          onChange={(e) => void save(groups.map((g) => ({ ...g, home: g.chat_id === e.target.value })))}>
+          <option value="">{t(groups.some((g) => g.home) ? "settings-feishubot.topic_home_default" : "settings-feishubot.topic_home_none")}</option>
+          {groups.map((g) => <option key={g.chat_id} value={g.chat_id}>{g.name || g.chat_id}</option>)}
+        </select>
+      </Row>
+      {groups.map((g) => {
+        const group = g.name || g.chat_id;
+        return (
+          <Fragment key={g.chat_id}>
+            <Row label={group} hint={t("settings-feishubot.topic_owner_mention")} wrapHint>
+              <Switch on={g.require_owner_mention ?? false} disabled={saving} label={t("settings-feishubot.topic_mention_for", { name: group })}
+                onChange={(required) => void save(groups.map((item) => item.chat_id === g.chat_id ? { ...item, require_owner_mention: required } : item))} />
+            </Row>
+            {g.todo_mode !== undefined && (
+              <Row label={t("settings-feishubot.topic_todo_for", { name: group })} wrapHint stackOnNarrow>
+                <select aria-label={t("settings-feishubot.topic_todo_for", { name: group })} className={`${settingsInputClass} min-h-11`} disabled={saving} value={g.todo_mode}
+                  onChange={(e) => {
+                    const mode = e.target.value as TopicTodoMode;
+                    void save(groups.map((item) => ({
+                      ...item,
+                      home: undefined,
+                      todo_mode: item.chat_id === g.chat_id ? mode : undefined,
+                    })));
+                  }}>
+                  <option value="answer_only">{t("settings-feishubot.topic_todo_answer_only")}</option>
+                  <option value="main_decides">{t("settings-feishubot.topic_todo_main_decides")}</option>
+                  <option value="always_todo">{t("settings-feishubot.topic_todo_always")}</option>
+                </select>
+              </Row>
+            )}
+          </Fragment>
+        );
+      })}
+      {adding ? (
+        <div className="space-y-3 px-4 py-3">
+          <label className="block text-label text-ink">{t("settings-feishubot.topic_group_id")}<input className={settingsInputClass} value={chatID} disabled={saving} onChange={(e) => setChatID(e.target.value)} /></label>
+          <label className="block text-label text-ink">{t("settings-feishubot.topic_group_name")}<input className={settingsInputClass} value={name} disabled={saving} onChange={(e) => setName(e.target.value)} /></label>
+          <Row label={t("settings-feishubot.topic_owner_mention")} wrapHint>
+            <Switch on={strict} disabled={saving} label={t("settings-feishubot.topic_owner_mention")} onChange={setStrict} />
+          </Row>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button disabled={saving} onClick={() => setAdding(false)}>{t("common.cancel")}</Button>
+            <Button tone="accent" busy={saving} disabled={saving || !chatID.trim() || groups.some((g) => g.chat_id === chatID.trim())} onClick={() => void add()}>{t("settings-feishubot.topic_add")}</Button>
+          </div>
+        </div>
+      ) : <div className="flex justify-end px-4 py-2.5"><Button disabled={saving || groups.length >= 50} onClick={() => setAdding(true)}>{t("settings-feishubot.topic_add")}</Button></div>}
     </Group>
   );
 }

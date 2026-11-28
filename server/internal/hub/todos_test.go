@@ -209,6 +209,58 @@ func TestStartSessionAndSendMessageWithTodoID(t *testing.T) {
 	}
 }
 
+func TestContinueCodexAppInNewSessionPreservesLinkedTodo(t *testing.T) {
+	h := newTestHub(t)
+	var gotStart map[string]any
+	m := capturingNode(t, h, "macbook", func(method string, params json.RawMessage) any {
+		switch method {
+		case "session.start":
+			_ = json.Unmarshal(params, &gotStart)
+			return map[string]any{"session": proto.Session{
+				MachineID: "macbook", SessionID: "codex_cont_new", Agent: "codex", Title: "Continue MR follow-up",
+				Cwd: "/code/repo", Status: proto.StatusWorking,
+			}}
+		default:
+			return map[string]any{"ok": true}
+		}
+	})
+	connectAssistant(t, h)
+	todo := plainTodo(t, h, "Un-draft MR and verify")
+	if _, err := h.asst().TodoLink(context.Background(), assistantwire.TodoLinkParams{
+		TodoID: todo.ID, MachineID: "macbook", SessionID: "codex_app_old",
+		Title: "Codex App thread", Cwd: "/code/repo", Agent: "codex",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{
+		"machine_id": "macbook",
+		"cwd":        "/code/repo",
+		"launcher":   "codex",
+		"prompt":     "Continue the work from another Codex conversation in this new, independent session.",
+		"todo_id":    todo.ID,
+	})
+	w := hubCall(h, http.MethodPost, "/api/v1/sessions", string(body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("continue start = %d %s", w.Code, w.Body)
+	}
+	var res struct{ Session proto.Session }
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Session.SessionID != "codex_cont_new" || res.Session.Todo == nil || res.Session.Todo.ID != todo.ID {
+		t.Fatalf("continued session = %+v, want linked todo %s", res.Session, todo.ID)
+	}
+	if gotStart["cwd"] != "/code/repo" || gotStart["launcher"] != "codex" {
+		t.Fatalf("session.start params = %v", gotStart)
+	}
+	m.mu.Lock()
+	m.sessions = append(m.sessions, res.Session)
+	m.mu.Unlock()
+	if linked := sessionOf(h, m, "codex_cont_new"); linked.Todo == nil || linked.Todo.ID != todo.ID {
+		t.Fatalf("listed continued session lost todo link: %+v", linked.Todo)
+	}
+}
+
 // A read-only device (the watch) cannot hand an agent work for a todo, nor write one (the assistant gets its role).
 func TestTodoHandoffReadOnlyForbidden(t *testing.T) {
 	database := setupTestDB(t)
@@ -498,8 +550,7 @@ func capturingNode(t *testing.T, h *Hub, id string, answer func(method string, p
 	return m
 }
 
-// A message to a done task whose agent was closed (the assistant's tasks_close.go) goes to that agent through the
-// hub (the node resumes it before typing).
+// A task-card message with an unknown stopped agent starts a successor through the existing route.
 func TestRouteToClosedTaskAgent(t *testing.T) {
 	h, tn := newTaskHub(t)
 	todo := startedTask(t, h)
@@ -512,8 +563,12 @@ func TestRouteToClosedTaskAgent(t *testing.T) {
 	if w := hubCall(h, "POST", "/api/v1/assistant/conversations/conv1/route", string(body)); w.Code != http.StatusOK {
 		t.Fatalf("route: %d %s", w.Code, w.Body)
 	}
-	_, sends := tn.calls()
-	if len(sends) != 1 || sends[0]["session_id"] != "s1" || sends[0]["text"] != "再补一个测试" {
-		t.Fatalf("sends = %v", sends)
+	starts, sends := tn.calls()
+	if len(sends) != 0 || len(starts) != 2 {
+		t.Fatalf("unknown stop resumed or lost the user's message: starts=%v, sends=%v", starts, sends)
+	}
+	prompt, _ := starts[1]["prompt"].(string)
+	if starts[1]["resume_session_id"] != nil || !strings.HasSuffix(prompt, "再补一个测试") {
+		t.Fatalf("unknown stop resumed or lost the user's message: starts=%v, sends=%v", starts, sends)
 	}
 }

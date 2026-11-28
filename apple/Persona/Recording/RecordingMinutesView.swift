@@ -1,4 +1,3 @@
-#if os(iOS) || os(visionOS)
 import SwiftUI
 import UIKit
 
@@ -18,24 +17,39 @@ import UIKit
         case failed
         /// A meeting, synced, and the hub says nothing about minutes: it doesn't write them yet (an older hub).
         case unsupported
+        /// Held back while the hub's recording module is off (#15214): none are written until it is back, and nothing
+        /// is asked again meanwhile.
+        case paused
     }
 
     private(set) var state: State = .none
     /// `minutes_state` behind what is shown: `pending` over shown minutes while newer ones are written (Updating), `failed`
     /// when those didn't come (the shown ones stay).
     private(set) var status: String?
+    /// Why the hub holds the recording's in-flight state back (`detail.paused`, #15214); nil when it doesn't.
+    private(set) var pause: RecordingPause?
     /// The transcript expired on the hub (`trimmed_at`): its minutes stay, and none can be written again.
     private(set) var trimmed = false
     /// How the hub transcribed it (#3862 phase 5, `detail.meta.transcription`): the mode, and in hub mode how far the hub
     /// is (the page says "being finished" until `final`) and the stretches it has no audio for. nil: no mode decided.
     private(set) var transcription: MeetingTranscriptionView?
+    /// The meeting imported from a connected app it stands for too (#8872), with its notes' link; nil without one.
+    private(set) var imported: KBImportedMeeting?
+    /// Its latest hand-off to an Agent (#8852, `detail.meta.handoffs`): where it went, or why it didn't; nil without one.
+    private(set) var handoff: MeetingHandoff?
     /// A write (Regenerate, Add to To-Dos) or the read-back after it is on its way: no other one starts meanwhile.
     private(set) var asking = false
     /// Bumped by Try Again: the page's polling starts over (its task is keyed on it).
     private(set) var round = 0
     @ObservationIgnored private let api: () -> APIClient?
+    /// Whether the hub's recording module is on (`RecordingModule.allowance`).
+    @ObservationIgnored private let recording: () -> RecordingAllowance
 
-    init(api: @escaping () -> APIClient? = { AppModel.shared.api }) { self.api = api }
+    init(api: @escaping () -> APIClient? = { AppModel.shared.api },
+         recording: @escaping () -> RecordingAllowance = { RecordingModule.allowance }) {
+        self.api = api
+        self.recording = recording
+    }
 
     /// `detail.minutes`, and `detail.meta.minutes_state`: pending, ready, failed, or absent for a note.
     nonisolated struct Answer: Decodable, Sendable {
@@ -43,12 +57,28 @@ import UIKit
             var state: String?
             var trimmedAt: String?
             var transcription: MeetingTranscriptionView?
-            enum CodingKeys: String, CodingKey { case state = "minutes_state", trimmedAt = "trimmed_at", transcription }
+            /// What the hub calls it and why (#8873).
+            var name: String?
+            var nameSource: String?
+            /// Its imported meeting's id (#8872): `links` has its notes' link.
+            var importedMeetingID: String?
+            /// Its latest hand-off to an Agent (#8852).
+            var handoff: MeetingHandoff?
+            struct Ref: Decodable { var id: String }
+            enum CodingKeys: String, CodingKey {
+                case state = "minutes_state", trimmedAt = "trimmed_at", transcription, name, nameSource = "name_source"
+                case importedMeeting = "imported_meeting", handoffs
+            }
 
             init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
                 state = try? c.decodeIfPresent(String.self, forKey: .state)
                 trimmedAt = try? c.decodeIfPresent(String.self, forKey: .trimmedAt)
+                name = try? c.decodeIfPresent(String.self, forKey: .name)
+                nameSource = try? c.decodeIfPresent(String.self, forKey: .nameSource)
+                importedMeetingID = (try? c.decodeIfPresent(Ref.self, forKey: .importedMeeting))?.id
+                // Read leniently: hand-offs this app can't read leave the rest as it was.
+                handoff = MeetingHandoff.latest(try? c.decodeIfPresent([Lossy<MeetingHandoff>].self, forKey: .handoffs))
                 // Read leniently: a `transcription` this app can't read leaves the rest of the page as it was.
                 transcription = MeetingTranscriptionView(try? c.decodeIfPresent(JSONValue.self, forKey: .transcription))
             }
@@ -56,13 +86,59 @@ import UIKit
         struct Detail: Decodable {
             var minutes: RecordingMinutes?
             var meta: Meta?
+            /// What it links to: its imported meeting among them, with its notes' link and connector (#8872).
+            var links: [KBEntry]?
+            /// Why its in-flight state is held back (#15214); nil when it isn't.
+            var paused: RecordingPause?
+            enum CodingKeys: String, CodingKey { case minutes, meta, links, paused }
+
+            init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                minutes = try c.decodeIfPresent(RecordingMinutes.self, forKey: .minutes)
+                meta = try c.decodeIfPresent(Meta.self, forKey: .meta)
+                // Read leniently: links this app can't read leave the minutes as they were.
+                links = try? c.decodeIfPresent([KBEntry].self, forKey: .links)
+                // Read leniently: absent, empty or unreadable is "not paused".
+                paused = RecordingPause(wire: try? c.decodeIfPresent(String.self, forKey: .paused))
+            }
+
+            /// The imported meeting, when the hub named one and linked it with a link to open.
+            var imported: KBImportedMeeting? { KBImportedMeeting.of(id: meta?.importedMeetingID, links: links) }
         }
         var detail: Detail
     }
 
-    /// Where `entry`'s minutes are now. `synced`: the hub has this revision of its text.
+    /// Where `entry`'s minutes are now. `synced`: the hub has this revision of its text. With the hub's recording module
+    /// off, minutes that would still be on their way are paused instead (`held`).
     func load(_ entry: RecordingEntry, synced: Bool) async {
+        await read(entry, synced: synced)
+        let next = Self.held(state, recording: recording())
+        if next != state { state = next }
+    }
+
+    /// What a state reads as while the recording module is off: nothing writes minutes, takes the text or finishes a
+    /// transcript then, so every "on their way" is paused. Minutes there, a failure and "none" stay as they are.
+    nonisolated static func held(_ state: State, recording: RecordingAllowance) -> State {
+        guard recording == .off else { return state }
+        switch state {
+        case .waitingForText, .waitingForSync, .writing: return .paused
+        case .none, .ready, .failed, .unsupported, .paused: return state
+        }
+    }
+
+    private func read(_ entry: RecordingEntry, synced: Bool) async {
         let meeting = entry.isMeeting
+        // A replayed meeting (`ReplayedMeeting`, #9417, #10589): its tape's minutes once it ended, none before; never the
+        // hub's.
+        if ReplayedMeeting.holds(entry.id) {
+            #if os(iOS)
+            let tape = MeetingReplay.minutes(for: entry.id)
+            #else
+            let tape: RecordingMinutes? = nil
+            #endif
+            state = entry.active ? .waitingForText : tape.map { .ready($0) } ?? .waitingForSync
+            return
+        }
         if entry.active || !entry.transcribedAll {
             if case .ready = state { return } // a re-transcription keeps showing the minutes it has
             state = meeting ? .waitingForText : .none
@@ -73,12 +149,18 @@ import UIKit
         guard let api = api(), !api.config.isDemo else { state = meeting ? .waitingForSync : .none; return }
         do {
             let answer = try await Self.fetch(entry.id, api)
-            state = Self.state(minutes: answer.detail.minutes, status: answer.detail.meta?.state, meeting: meeting, synced: synced)
+            state = Self.state(minutes: answer.detail.minutes, status: answer.detail.meta?.state, meeting: meeting, synced: synced,
+                               pause: answer.detail.paused)
             status = answer.detail.meta?.state
+            if pause != answer.detail.paused { pause = answer.detail.paused }
             trimmed = answer.detail.meta?.trimmedAt?.isEmpty == false
             if transcription != answer.detail.meta?.transcription { transcription = answer.detail.meta?.transcription }
+            if imported != answer.detail.imported { imported = answer.detail.imported }
+            if handoff != answer.detail.meta?.handoff { handoff = answer.detail.meta?.handoff }
+            // The minutes' title names it from now on (#8873): read here, where the page waits for them.
+            if let meta = answer.detail.meta { RecordingSync.shared.hubNamed(entry.id, name: meta.name, source: meta.nameSource) }
             #if os(iOS)
-            MinutesRelay.shared.note(entry, state: state)
+            MinutesRelay.shared.note(RecordingLibrary.shared.entry(entry.id) ?? entry, state: state) // the watch gets the name too
             #endif
         } catch let error as APIError where error.status == 404 {
             state = meeting ? .waitingForSync : .none
@@ -96,12 +178,15 @@ import UIKit
 
     /// The hub's answer as a state: its minutes (`ready`, even with nothing to note); else what `minutes_state` says. A
     /// meeting it says nothing about waits for its text to get there, and once there is from a hub that writes no
-    /// minutes (the contract sets `pending` as soon as a meeting is stored).
-    nonisolated static func state(minutes: RecordingMinutes?, status: String?, meeting: Bool, synced: Bool) -> State {
+    /// minutes (the contract sets `pending` as soon as a meeting is stored). Pending minutes the hub holds back because
+    /// its recording module is off (`pause`, #15214) are paused, not being written; a reason this app doesn't know
+    /// changes nothing.
+    nonisolated static func state(minutes: RecordingMinutes?, status: String?, meeting: Bool, synced: Bool,
+                                  pause: RecordingPause? = nil) -> State {
         if let minutes, status == "ready" || !minutes.isEmpty { return .ready(minutes) }
         switch status {
         case "failed": return .failed
-        case "pending": return .writing
+        case "pending": return pause?.isModuleOff == true ? .paused : .writing
         default: return meeting ? (synced ? .unsupported : .waitingForSync) : .none
         }
     }
@@ -109,7 +194,7 @@ import UIKit
     /// Writes them again (`POST /api/v1/recordings/{id}/minutes`): after a failure, or when they missed something. Minutes
     /// shown stay while the new ones are written (Updating), as the hub keeps them.
     func regenerate(_ id: UUID) async {
-        guard let api = api(), !asking else { return }
+        guard !ReplayedMeeting.holds(id), let api = api(), !asking else { return }
         asking = true
         defer { asking = false }
         do {
@@ -131,13 +216,20 @@ import UIKit
     /// Whether Regenerate goes with the minutes shown: the whole transcript is on the hub, nothing is being written, and
     /// it hasn't expired (#4062, as the web and Android offer it).
     func canRegenerate(_ entry: RecordingEntry, synced: Bool) -> Bool {
-        guard case .ready = state else { return false }
+        guard offersWrites, case .ready = state else { return false }
         return synced && !trimmed && status != "pending" && !entry.active && entry.transcribedAll
     }
 
+    /// What writes through the recording module's routes is offered (Retry, Regenerate, Add to To-Dos): only while the
+    /// hub's recording module is on (#15214). Reading, Copy and Share never depend on it.
+    var offersWrites: Bool { recording().offersWrites }
+
+    /// The recording module is off, by the hub's word on this recording or by its hello: nothing is on its way.
+    private var onHold: Bool { pause?.isModuleOff == true || !offersWrites }
+
     /// Newer minutes are being written over the ones shown.
     var updating: Bool {
-        if case .ready = state { return status == "pending" }
+        if case .ready = state { return status == "pending" && !onHold }
         return false
     }
 
@@ -148,7 +240,8 @@ import UIKit
     /// reads the recording back before anything else is sent. Minutes rewritten since they were shown (`409
     /// minutes_stale`) are shown as they are now, and nothing is sent again: the user sees the new ones first.
     func add(_ ids: [String], to entry: RecordingEntry, synced: Bool) async {
-        guard case .ready(let minutes) = state, let version = minutes.version, !ids.isEmpty, let api = api(), !asking else { return }
+        guard !ReplayedMeeting.holds(entry.id), case .ready(let minutes) = state, let version = minutes.version, !ids.isEmpty,
+              let api = api(), !asking else { return }
         asking = true
         defer { asking = false }
         struct Body: Encodable { var version: Int; var actions: [String] }
@@ -174,12 +267,14 @@ import UIKit
 
     /// Whether to ask again soon: while they are on their way, or newer ones are.
     var waiting: Bool {
+        // Paused with the recording module off (#15214): asking again changes nothing until the module is back.
+        if onHold { return false }
         // The hub is still finishing a hub-mode transcript (#3862 phase 5): the page says so until it is final.
         if let transcription, transcription.mode == .hub, !transcription.settled { return true }
         switch state {
         case .writing, .waitingForSync, .waitingForText: return true
         case .ready: return status == "pending"
-        default: return false
+        case .none, .failed, .unsupported, .paused: return false
         }
     }
 }
@@ -207,33 +302,42 @@ struct RecordingMinutesSections: View {
         case .waitingForSync:
             waiting(String(localized: "Minutes are written once the text reaches the hub."), busy: false)
         case .writing:
-            waiting(String(localized: "The hub is turning the transcript into key points, decisions, action items and open questions."), busy: true)
+            // The hub may check the whole recording first (#13461): the line says so, with how far it is.
+            let line = MinutesWaitLine.of(model.transcription)
+            waiting(line == .writing
+                    ? String(localized: "The hub is turning the transcript into key points, decisions, action items and open questions.")
+                    : String(localized: "For a more accurate transcript, the hub is listening to the whole recording again. The minutes come right after."),
+                    busy: true, title: line.title)
         case .unsupported:
             Section("Minutes") {
                 Text("This hub doesn't write meeting minutes yet. They come after it's updated.")
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
             }
+        case .paused:
+            Section("Minutes") { RecordingPausedNote() }
         case .failed:
             Section("Minutes") {
                 Label("The minutes couldn't be written.", systemImage: Theme.Icon.error).foregroundStyle(Theme.danger)
                     .accessibilityIdentifier("minutes-failed")
-                Button { Task { await model.regenerate(entry.id) } } label: {
-                    Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1)
+                if model.offersWrites {
+                    Button { Task { await model.regenerate(entry.id) } } label: {
+                        Label("Retry", systemImage: Theme.Icon.retry).lineLimit(1)
+                    }
+                    .themedButton()
+                    .disabled(model.asking)
+                    .accessibilityIdentifier("minutes-retry")
                 }
-                .themedButton()
-                .disabled(model.asking)
-                .accessibilityIdentifier("minutes-retry")
             }
         case .ready(let minutes):
             ready(minutes)
         }
     }
 
-    private func waiting(_ detail: String, busy: Bool) -> some View {
+    private func waiting(_ detail: String, busy: Bool, title: String? = nil) -> some View {
         Section("Minutes") {
             HStack(spacing: Theme.Space.s) {
                 if busy { ProgressView() }
-                Text(busy ? String(localized: "Writing the minutes…") : String(localized: "Minutes come next")).font(Theme.Font.bodyStrong)
+                Text(title ?? (busy ? String(localized: "Writing the minutes…") : String(localized: "Minutes come next"))).font(Theme.Font.bodyStrong)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("minutes-waiting")
@@ -282,7 +386,7 @@ struct RecordingMinutesSections: View {
     /// or Added once it is one; Add All when more than one is left. A hub that doesn't name its actions offers neither.
     @ViewBuilder private func actions(_ minutes: RecordingMinutes) -> some View {
         if !minutes.actions.isEmpty {
-            let offered = minutes.version != nil
+            let offered = minutes.version != nil && model.offersWrites
             let left = minutes.actions.filter { !$0.added }.compactMap(\.id)
             Section(String(localized: "Action Items")) {
                 ForEach(Array(minutes.actions.enumerated()), id: \.offset) { _, item in
@@ -348,6 +452,21 @@ struct RecordingMinutesSections: View {
             .accessibilityLabel(String(localized: "Show in transcript at \(RecordingFormat.clock(at))"))
             .accessibilityIdentifier("minutes-time")
         }
+    }
+}
+
+/// The minutes held back while the hub's recording module is off (#15214): said calmly, in the place of "Writing the
+/// minutes…", with nothing to tap. Rows of the minutes' section; the generic knowledge detail shows the same words.
+struct RecordingPausedNote: View {
+    var body: some View {
+        Text("Paused").font(Theme.Font.bodyStrong)
+            .accessibilityIdentifier("minutes-paused")
+        Text(Self.detail).font(Theme.Font.caption).foregroundStyle(.secondary)
+    }
+
+    /// Why, and what it means for what is already there.
+    static var detail: String {
+        String(localized: "Meeting recording is off on this hub, so new minutes aren't written. What's already here stays.")
     }
 }
 
@@ -477,4 +596,4 @@ struct MinutesPhoto: View {
     }
 }
 #endif
-#endif
+import PersonaWire

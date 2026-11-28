@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // UI version 6's tiles (docs/extensions/extensions.md "UI version 6", #827): a `grid` (columns that fit the width, two
 // on a phone, at most `max_columns`) and a `carousel` (one line that scrolls sideways, snapping to a tile, the next one's
@@ -15,6 +16,7 @@ struct ExtensionTileView: View {
     @Environment(\.extensionDisplayedRevision) private var displayed
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.pluginUICompact) private var compact
     /// Its switch asking first (`confirm`): the value it asks about, kept apart from the alert's flag.
     @State private var asking: String?
     @State private var confirming = false
@@ -41,7 +43,8 @@ struct ExtensionTileView: View {
             .onTapGesture { tap() }
             .extensionRowActions(tile.actions, model: model, link: $link)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel(spoken)
+            .accessibilityLabel(tile.gauge == nil ? spoken : tile.title)
+            .accessibilityValue(tile.gauge.map { ExtensionGaugeReading.accessibilityValue(tile, gauge: $0) } ?? "")
             .accessibilityAddTraits(tile.action != nil ? .isButton : [])
             .accessibilityAction { tap() }
             .accessibilityIdentifier("plugin-ui-tile-\(tile.key ?? tile.title)")
@@ -55,7 +58,28 @@ struct ExtensionTileView: View {
             }
     }
 
-    private var content: some View {
+    @ViewBuilder private var content: some View {
+        if let gauge = tile.gauge {
+            GaugeRing(title: tile.title, value: ExtensionGaugeReading.center(tile, gauge: gauge),
+                      unit: tile.value?.isEmpty == false ? gauge.unit : nil, subtitle: tile.subtitle,
+                      ratio: gauge.ratio,
+                      color: ExtensionUIStyle.color(gauge.color) ?? ExtensionUIStyle.color(tile.color) ?? Theme.accent,
+                      compact: compact)
+                .accessibilityHidden(true)
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: Theme.Space.xs) {
+                        if let b = tile.badge, !b.text.isEmpty { Chip(text: b.text, look: ExtensionUIStyle.badge(b)) }
+                        if let c = control { toggle(c) }
+                    }
+                    .padding(Theme.Space.m)
+                }
+        } else {
+            ordinaryContent
+        }
+    }
+
+    private var ordinaryContent: some View {
         VStack(alignment: .leading, spacing: Theme.Space.flush) {
             if let img = tile.image {
                 // As tall as the tile's width makes it: offered only part of the tile's height, a 16:9 shape fits
@@ -150,6 +174,23 @@ struct ExtensionTileView: View {
     }
 }
 
+/// UI version 9's gauge: the numbers and words are kept apart from drawing so the ring, its accessibility value and
+/// their tests all use one rounding rule (the hub's downgrade and the web use it too).
+nonisolated enum ExtensionGaugeReading {
+    static func percent(_ ratio: Double) -> Int { Int((min(max(ratio, 0), 1) * 100).rounded()) }
+
+    static func center(_ tile: ExtensionTile, gauge: ExtensionGauge) -> String {
+        tile.value?.isEmpty == false ? tile.value! : "\(percent(gauge.ratio))%"
+    }
+
+    /// The accessibility value: "4.69 USD, 94%", or just "50%" when the tile has no value of its own.
+    static func accessibilityValue(_ tile: ExtensionTile, gauge: ExtensionGauge) -> String {
+        guard tile.value?.isEmpty == false else { return "\(percent(gauge.ratio))%" }
+        let amount = [tile.value!, gauge.unit ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        return "\(amount), \(percent(gauge.ratio))%"
+    }
+}
+
 /// An extension's `grid`: tiles in as many columns as fit (two on a phone), at most `max_columns` (4 when it does not
 /// say).
 struct ExtensionGridItem: View {
@@ -177,6 +218,23 @@ struct ExtensionGridItem: View {
     }
 }
 
+/// A carousel inside a card (#10233): as wide as the card, its padding outside the content's frame on both sides, and
+/// cut at the card's edges, so a tile scrolled aside never draws over the card's edge or the page; above and below it
+/// stays uncut (an active tile's ring). On the list (inset nil) the section's row cuts it, and it is left as it is.
+private struct CardBleed: ViewModifier {
+    var inset: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let inset {
+            content
+                .mask { Rectangle().padding(.vertical, -Theme.Space.l) }
+                .padding(.horizontal, -inset)
+        } else {
+            content
+        }
+    }
+}
+
 /// An extension's `carousel`: tiles in a line that scrolls sideways, snapping to a tile, the next one's edge showing;
 /// narrow ones for scenes, regular ones for rooms, wide ones (most of the width) for cameras.
 struct ExtensionCarouselItem: View {
@@ -184,12 +242,18 @@ struct ExtensionCarouselItem: View {
     var model: (any ExtensionViewControlling)?
     @Binding var link: LinkTarget?
     @Environment(\.pluginUICompact) private var compact
+    /// Inside a card: its padding (`extensionCardInset`).
+    @Environment(\.extensionCardInset) private var cardInset
+
+    /// Before its first tile: the page's margin on the list, where it spans the section edge to edge; in a card, the
+    /// card's padding, so the first tile lines up with the card's other content.
+    private var margin: CGFloat { cardInset ?? Theme.Space.page }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
             if let t = carousel.title, !t.isEmpty {
                 Text(t).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
-                    .padding(.horizontal, Theme.Space.page)
+                    .padding(.horizontal, cardInset == nil ? Theme.Space.page : Theme.Space.flush)
                     .accessibilityAddTraits(.isHeader)
             }
             ScrollView(.horizontal) {
@@ -202,11 +266,12 @@ struct ExtensionCarouselItem: View {
                     }
                 }
                 .scrollTargetLayout()
-                .padding(.horizontal, Theme.Space.page)
+                .padding(.horizontal, margin)
             }
             .scrollTargetBehavior(.viewAligned)
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
+            .modifier(CardBleed(inset: cardInset))
         }
         .accessibilityElement(children: .contain)
     }
@@ -216,7 +281,7 @@ struct ExtensionCarouselItem: View {
     private func tileWidth(_ visible: CGFloat) -> CGFloat {
         switch carousel.width {
         case ExtensionTileWidth.narrow: Theme.Size.tileNarrow
-        case ExtensionTileWidth.wide: max(Theme.Size.tileRegular, (visible - Theme.Space.page * 2) * Theme.Size.tileWideShare)
+        case ExtensionTileWidth.wide: max(Theme.Size.tileRegular, (visible - margin * 2) * Theme.Size.tileWideShare)
         default: Theme.Size.tileRegular
         }
     }

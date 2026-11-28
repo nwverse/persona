@@ -30,10 +30,11 @@ const (
 )
 
 type loggedEvent struct {
-	Seq         int64     `json:"seq"`
-	At          time.Time `json:"at"`
-	Elicitation bool      `json:"elicitation,omitempty"`
-	Body        []byte    `json:"body"` // as sent, event_seq included
+	Seq            int64     `json:"seq"`
+	At             time.Time `json:"at"`
+	Elicitation    bool      `json:"elicitation,omitempty"`
+	ApprovalMirror bool      `json:"approval_mirror,omitempty"`
+	Body           []byte    `json:"body"` // as sent, event_seq included
 }
 
 // eventLog is guarded by Hub.mu (broadcastTo appends under it).
@@ -119,9 +120,13 @@ func hasEventSeq(b []byte) bool {
 
 // add numbers b, keeps it and returns it as it is to be sent.
 func (l *eventLog) add(b []byte, elicitation bool, now time.Time) []byte {
+	return l.addApprovalMirror(b, elicitation, false, now)
+}
+
+func (l *eventLog) addApprovalMirror(b []byte, elicitation, approvalMirror bool, now time.Time) []byte {
 	l.seq++
 	body := stampEvent(b, l.seq)
-	l.events = append(l.events, loggedEvent{Seq: l.seq, At: now, Elicitation: elicitation, Body: body})
+	l.events = append(l.events, loggedEvent{Seq: l.seq, At: now, Elicitation: elicitation, ApprovalMirror: approvalMirror, Body: body})
 	l.bytes += len(body)
 	l.trim(now)
 	return body
@@ -206,7 +211,7 @@ func resumeOf(r *http.Request) (stream string, after int64, resuming bool) {
 
 // helloLocked queues the hello, which says where the client's stream stands (event_stream, event_seq) and whether it
 // resumes (resumed: what it missed follows at once, it need not refetch), then those events; h.mu is held.
-func (h *Hub) helloLocked(c *client, hello map[string]any, stream string, after int64, resuming bool) {
+func (h *Hub) helloLocked(c *client, hello wsHello, stream string, after int64, resuming bool) {
 	if h.events == nil {
 		h.events = newEventLog()
 	}
@@ -215,15 +220,23 @@ func (h *Hub) helloLocked(c *client, hello map[string]any, stream string, after 
 	if resuming {
 		missed, ok = h.events.since(stream, after)
 	}
-	hello["event_stream"], hello["event_seq"], hello["resumed"] = h.events.stream, h.events.seq, ok
-	b, err := json.Marshal(hello)
+	b, err := json.Marshal(wsStreamHello{
+		wsHello:     hello,
+		EventStream: h.events.stream,
+		EventSeq:    h.events.seq,
+		Resumed:     ok,
+	})
 	if err != nil {
 		return
 	}
 	c.queue(b)
 	for _, e := range missed {
-		if !e.Elicitation { // only for apps that said they answer forms: it has not said so yet; pending ones follow
-			c.queue(i18n.ExtensionEvent(c.lang(), localizedMachineEvent(c.lang(), e.Body)))
+		if e.Elicitation { // only for apps that said they answer forms: it has not said so yet; pending ones follow
+			continue
 		}
+		if e.ApprovalMirror && !c.wants(featureApprovalMirrors) {
+			continue
+		}
+		c.queue(i18n.ExtensionEvent(c.lang(), localizedMachineEvent(c.lang(), e.Body)))
 	}
 }

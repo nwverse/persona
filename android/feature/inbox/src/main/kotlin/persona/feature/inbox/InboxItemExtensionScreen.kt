@@ -23,6 +23,7 @@ import persona.core.navigation.InboxItemUiRoute
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.inbox.*
 
 /** The item's tier for its header (the extension's body does not repeat it); none before triage. */
 internal fun inboxHeaderTier(record: InboxRecord): InboxTier? = record.item.triage.takeIf { record.item.isTriaged }
@@ -91,7 +92,9 @@ fun InboxItemExtensionScreen(
             record.item.summary?.takeIf { it.isNotBlank() }?.let { summary ->
                 item("item-summary") { JNotice(summary, Modifier.padding(bottom = Tokens.Space.s), title = stringResource(R.string.inbox_ai_summary), icon = PhIcons.Sparkle) }
             }
-            item("item-ai") { InboxAiActions(onDraft = { drafting = true }, onHandOff = { handingOff = true }) }
+            item("item-ai") {
+                InboxAiActions(onDraft = { drafting = true }, onHandOff = { handingOff = true }, showHandOff = !record.isAssistantRow)
+            }
             if (!record.item.isDone) item("item-agent-draft") {
                 AgentDraftCard(record, composers, navigator, repository = repository, onEdit = { drafting = true }, keepComposer = true)
             }

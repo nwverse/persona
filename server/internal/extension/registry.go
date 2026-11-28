@@ -31,13 +31,20 @@ type Record struct {
 	StorageID  string   `json:"storage_id,omitempty"`
 	PreviousID string   `json:"previous_id,omitempty"`
 	Aliases    []string `json:"aliases,omitempty"`
-	// ExpectedID and ExpectedVersion are transaction-only compare-and-swap guards.
-	ExpectedID      string `json:"-"`
-	ExpectedVersion string `json:"-"`
-	NewInstallation bool   `json:"-"`
-	Source          string `json:"source"`
-	Origin          string `json:"origin,omitempty"`
-	// MarketKey is the verified official key captured from this installed package's
+	// Transaction-only compare-and-swap guards.
+	ExpectedSource    string          `json:"-"`
+	ExpectedUpdatedAt time.Time       `json:"-"`
+	ExpectedID        string          `json:"-"`
+	ExpectedVersion   string          `json:"-"`
+	ExpectedConfig    json.RawMessage `json:"-"`
+	// BuiltinPredecessor marks state handed to a same-ID official package by the host.
+	BuiltinPredecessor bool `json:"builtin_predecessor,omitempty"`
+	// DeleteSecrets removes these sealed rows in the same transaction as the record write.
+	DeleteSecrets   []string `json:"-"`
+	NewInstallation bool     `json:"-"`
+	Source          string   `json:"source"`
+	Origin          string   `json:"origin,omitempty"`
+	// MarketKey is the verified market key (official, or a private market's owner key) captured from this installed package's
 	// catalog entry, never inferred from the market's current mutable identity.
 	MarketKey       string `json:"market_key,omitempty"`
 	Version         string `json:"version"`
@@ -99,7 +106,8 @@ type Sealer interface {
 
 // Extension is one registered extension.
 type Extension struct {
-	Record Record
+	Record                Record
+	builtinDefaultEnabled bool // the compiled default to restore after explicit uninstall
 	// Manifest is what takes effect: the manifest without the contributions the user switched off (Without). Full is
 	// the manifest as installed: what the extension may do (permissions, the ids it holds) and every contribution the
 	// user can switch.
@@ -120,7 +128,9 @@ type Extension struct {
 }
 
 // ReadOnly: hub.json's, changed there only.
-func (p *Extension) ReadOnly() bool { return p.Record.Source == SourceHubJSON }
+func (p *Extension) ReadOnly() bool {
+	return p.Record.Source == SourceHubJSON || errors.Is(p.problemErr, ErrIdentity)
+}
 
 // ProblemText is the compatibility problem in the client's language, when a translation is available.
 func (p *Extension) ProblemText(l i18n.Lang) string {
@@ -176,18 +186,26 @@ type Registry struct {
 	planProblem error      // while a commit confirmation or package recovery is unresolved, no new writes; wait for a reload
 	mu          sync.Mutex
 	extensions  map[string]*Extension
-	reserved    map[string]map[string]string // point → contribution id → who has it (the hub's own)
-	previews    map[string]*Preview
-	now         func() time.Time
+	// settingsEpoch is odd while a mutation is active and even after its last overlapping mutation finishes.
+	settingsEpoch  map[string]uint64
+	settingsActive map[string]int
+	reserved       map[string]map[string]string // point → contribution id → who has it (the hub's own)
+	previews       map[string]*Preview
+	now            func() time.Time
 	// yields: built-in plugins an installed one of the same id takes the place of (Yields); yielded: those put aside.
-	yields  map[string]bool
-	yielded map[string]*Extension
+	handoffs map[string]bool
+	yields   map[string]bool
+	yielded  map[string]*Extension
 	// devSecrets are the secrets of the extensions being written (SourceDev), in memory only.
 	devSecrets map[string]map[string]string
 	// refSchemes: the schemes each extension's secrets reference, by id (secret_refs.go), noted at each read.
 	refSchemes map[string][]string
 	// keptOff are built-in extensions held off whatever their rows say (KeepOff).
 	keptOff map[string]*keptOff
+	// moduleHolds: the ids of modules an installed extension may supply (HoldModule), each with whether the modules
+	// setting switched it off. dormant: the rows of those ids Load set aside (dormant.go).
+	moduleHolds map[string]bool
+	dormant     map[string]Record
 }
 
 // keptOff is a built-in held off (KeepOff): what switching it on answers, and its row's own switch. The hold is not
@@ -201,7 +219,8 @@ type keptOff struct {
 func NewRegistry(dir string, store Store, seal Sealer, build int64) *Registry {
 	return &Registry{dir: dir, store: store, seal: seal, build: build, platform: runtime.GOOS + "-" + runtime.GOARCH,
 		extensions: map[string]*Extension{}, reserved: map[string]map[string]string{}, previews: map[string]*Preview{}, now: time.Now,
-		yields: map[string]bool{}, yielded: map[string]*Extension{}}
+		handoffs: map[string]bool{}, yields: map[string]bool{}, yielded: map[string]*Extension{},
+		moduleHolds: map[string]bool{}, dormant: map[string]Record{}}
 }
 
 // Yields marks the built-in plugin id as one an installed plugin of the same id takes the place of, while it moves out
@@ -249,8 +268,10 @@ func (r *Registry) AddHubJSON(m *Manifest, legacy any, enabled bool) error {
 		return fmt.Errorf("plugin %q: duplicate id", m.ID)
 	}
 	raw, _ := json.Marshal(m)
+	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceHubJSON, Version: m.Version, Manifest: raw,
 		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Legacy: legacy}
+	mutation.finishLocked()
 	return nil
 }
 
@@ -267,8 +288,10 @@ func (r *Registry) AddBuiltin(m *Manifest, dir string, enabled bool) error {
 		return fmt.Errorf("plugin %q: duplicate id", m.ID)
 	}
 	raw, _ := json.Marshal(m)
+	mutation := r.settingsWriteLocked(m.ID)
 	r.extensions[m.ID] = &Extension{Record: Record{ID: m.ID, Source: SourceBuiltin, Version: m.Version, Manifest: raw,
-		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir}
+		Granted: m.Permissions, GrantedDigest: Digest(m), Enabled: enabled}, Manifest: m, Full: m, Schema: schema, Dir: dir, builtinDefaultEnabled: enabled}
+	mutation.finishLocked()
 	return nil
 }
 
@@ -321,22 +344,45 @@ func (r *Registry) Load(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.dropStalePreviews()
+	clear(r.dormant)
 	for _, row := range rows {
 		cur := r.extensions[row.ID]
+		if r.holdsDormant(row, cur) {
+			r.dormant[row.ID] = row
+			continue
+		}
 		switch {
 		case row.Source == SourceBuiltin && cur != nil && cur.Record.Source == SourceBuiltin:
+			mutation := r.settingsWriteLocked(row.ID)
 			cur.Record.Enabled, cur.Record.Config = row.Enabled, row.Config
 			if k := r.keptOff[row.ID]; k != nil {
 				k.row, cur.Record.Enabled = row.Enabled, false
 			}
+			cur.Record.PackOff = row.PackOff
 			cur.Record.DisabledContributions = row.DisabledContributions
 			cur.Manifest = cur.Full.Without(row.DisabledContributions)
 			cur.Record.InstalledAt, cur.Record.UpdatedAt = row.InstalledAt, row.UpdatedAt
+			mutation.finishLocked()
+		case row.Source == SourceInstalled && cur != nil && cur.Record.Source == SourceBuiltin && r.handoffs[row.ID]:
+			// A pre-existing, unrelated install keeps its own slot. It has no
+			// authority to restore or expose a built-in under its identity.
+			next := r.fromRow(row)
+			r.yielded[row.ID] = cur // uninstalling a conflicting install also restores the compiled default
+			if !row.VerifiedBuiltinPredecessor() || r.keptOff[row.ID] != nil {
+				next.Problem = ErrIdentity.Error()
+				next.problemErr = ErrIdentity
+				next.Record.Enabled = false
+			}
+			r.extensions[row.ID] = next
 		case row.Source == SourceInstalled && cur == nil:
+			mutation := r.settingsWriteLocked(row.ID)
 			r.extensions[row.ID] = r.fromRow(row)
+			mutation.finishLocked()
 		case row.Source == SourceInstalled && r.yielding(cur):
+			mutation := r.settingsWriteLocked(row.ID)
 			r.yielded[row.ID] = cur
 			r.extensions[row.ID] = r.fromRow(row)
+			mutation.finishLocked()
 		}
 	}
 	return nil
@@ -345,6 +391,8 @@ func (r *Registry) Load(ctx context.Context) error {
 // fromRow is an installed plugin as its row says.
 func (r *Registry) fromRow(row Record) *Extension {
 	row.ExpectedID, row.ExpectedVersion, row.NewInstallation = "", "", false
+	row.ExpectedSource, row.ExpectedUpdatedAt = "", time.Time{}
+	row.ExpectedConfig, row.DeleteSecrets = nil, nil
 	p := &Extension{Record: row}
 	m, err := Parse(row.Manifest)
 	if err != nil {
@@ -358,6 +406,10 @@ func (r *Registry) fromRow(row Record) *Extension {
 	}
 	p.Full, p.Manifest = m, m.Without(row.DisabledContributions)
 	p.Schema, _ = ParseSchema(m.Configuration)
+	if err := checkEntrySecretNamespace(m, p.Schema, row.Config); err != nil {
+		p.problemErr = err
+		p.Problem = err.Error()
+	}
 	if row.Remote == nil || row.AttachedPackage() {
 		p.Dir = r.installedDir(row.StorageKey(), row.Version)
 		if !hasManifest(p.Dir) {
@@ -426,6 +478,8 @@ func snapshotExtension(p *Extension) *Extension {
 	out := *p
 	out.Record.Manifest = slices.Clone(p.Record.Manifest)
 	out.Record.Config = slices.Clone(p.Record.Config)
+	out.Record.ExpectedConfig = slices.Clone(p.Record.ExpectedConfig)
+	out.Record.DeleteSecrets = slices.Clone(p.Record.DeleteSecrets)
 	out.Record.Aliases = slices.Clone(p.Record.Aliases)
 	out.Record.Granted.Network = slices.Clone(p.Record.Granted.Network)
 	out.Record.Granted.Hub = slices.Clone(p.Record.Granted.Hub)
@@ -538,9 +592,9 @@ func (r *Registry) logf(format string, args ...any) {
 	}
 }
 
-// put keeps p's row (a built-in one gets its first row here). A built-in held off (KeepOff) is written with its
-// row's own switch, not the hold.
-func (r *Registry) put(ctx context.Context, row Record) error {
+// put keeps p's row (a built-in one gets its first row here) and says its revision, as write does. A built-in held
+// off (KeepOff) is written with its row's own switch, not the hold.
+func (r *Registry) put(ctx context.Context, row Record) (time.Time, error) {
 	r.mu.Lock()
 	if k := r.keptOff[row.ID]; k != nil {
 		row.Enabled = k.row
@@ -549,24 +603,56 @@ func (r *Registry) put(ctx context.Context, row Record) error {
 	return r.write(ctx, row)
 }
 
-// write keeps row as it is.
-func (r *Registry) write(ctx context.Context, row Record) error {
+// write keeps row as it is, at the revision after its own (revisionAfter), and says that revision: the caller puts
+// it in the record with the change, since storage binds an installation by it (#16920).
+func (r *Registry) write(ctx context.Context, row Record) (time.Time, error) {
 	if r.store == nil {
-		return nil // no database: the choice lasts until the hub restarts
+		return row.UpdatedAt, nil // no database: the choice lasts until the hub restarts
 	}
 	if row.InstalledAt.IsZero() {
 		row.InstalledAt = r.now()
 	}
-	row.UpdatedAt = r.now()
+	row.UpdatedAt = r.revisionAfter(row.UpdatedAt)
 	if row.Source == SourceInstalled {
 		row.ExpectedID, row.ExpectedVersion = row.ID, row.Version
 	}
-	err := r.store.PutExtension(ctx, row)
+	row.ExpectedSource = row.Source
+	var err error
+	if len(row.DeleteSecrets) > 0 {
+		store, ok := r.store.(PlanStore)
+		if !ok {
+			return time.Time{}, fmt.Errorf("the store cannot delete secrets with the configuration")
+		}
+		err = store.PutExtensionPlan(ctx, []Record{row})
+	} else {
+		err = r.store.PutExtension(ctx, row)
+	}
 	var unknown *CommitUnknownError
 	if errors.As(err, &unknown) {
 		r.planProblem = err
 	}
-	return err
+	if err == nil && row.Source == SourceBuiltin {
+		r.mu.Lock()
+		if current := r.extensions[row.ID]; current != nil && current.Record.Source == SourceBuiltin && current.Record.InstalledAt.IsZero() {
+			current.Record.InstalledAt = row.InstalledAt
+		}
+		r.mu.Unlock()
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return row.UpdatedAt, nil
+}
+
+// revisionAfter is the revision a write stores over a row at revision current. The database keeps the later of the
+// one it is given and one microsecond past its own (#16754), at microsecond precision. Given the later of now and
+// one microsecond past current, at that precision, it keeps exactly this one, so the record still matches its row.
+func (r *Registry) revisionAfter(current time.Time) time.Time {
+	next := r.now().Truncate(time.Microsecond)
+	if floor := current.Truncate(time.Microsecond).Add(time.Microsecond); next.Before(floor) {
+		return floor
+	}
+	return next
 }
 
 // Audit records what the hub changed about extension id outside the registry (its sandbox).
@@ -585,8 +671,60 @@ func (r *Registry) audit(ctx context.Context, id, action, actor string, detail a
 	_ = r.store.AddExtensionAudit(ctx, id, action, actor, b)
 }
 
-func (r *Registry) changed(c Change) {
-	if r.OnChange != nil {
-		r.OnChange(c)
+// settingsMutation fences one visible registry mutation. Its completion closes the seqlock before OnChange runs.
+type settingsMutation struct {
+	registry *Registry
+	id       string
+	once     sync.Once
+}
+
+func (r *Registry) settingsWrite(id string) *settingsMutation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.settingsWriteLocked(id)
+}
+
+// settingsWriteLocked starts before the first store write or in-memory change. Overlapping operations after their
+// operation lock is released stay in one odd epoch until the last one finishes.
+func (r *Registry) settingsWriteLocked(id string) *settingsMutation {
+	if r.settingsEpoch == nil {
+		r.settingsEpoch = map[string]uint64{}
+	}
+	if r.settingsActive == nil {
+		r.settingsActive = map[string]int{}
+	}
+	if r.settingsActive[id] == 0 {
+		r.settingsEpoch[id]++
+	}
+	r.settingsActive[id]++
+	return &settingsMutation{registry: r, id: id}
+}
+
+func (m *settingsMutation) finishLocked() {
+	if m == nil {
+		return
+	}
+	m.once.Do(func() {
+		r := m.registry
+		r.settingsActive[m.id]--
+		if r.settingsActive[m.id] == 0 {
+			r.settingsEpoch[m.id]++
+		}
+	})
+}
+
+func (m *settingsMutation) finish() {
+	if m == nil {
+		return
+	}
+	m.registry.mu.Lock()
+	m.finishLocked()
+	m.registry.mu.Unlock()
+}
+
+func (m *settingsMutation) changed(c Change) {
+	m.finish()
+	if m.registry.OnChange != nil {
+		m.registry.OnChange(c)
 	}
 }

@@ -1,5 +1,6 @@
 import Foundation
 import PersonaKit
+import PersonaWire
 
 /// The chat as a flat list of lines (`ChatLine`), from the store's blocks: every message of a turn opens its own
 /// exchange — the message, one work line for what the agent did after it, the agent's last words. Open work lines get
@@ -10,8 +11,9 @@ struct ChatLines {
 
     /// Feed cards and messages still arriving are content too, even before transcript history has loaded.
     static func placeholder(lines: [ChatLine], hasTranscript: Bool, hasPending: Bool,
-                            hasLiveText: Bool, loadedOnce: Bool) -> Placeholder {
+                            hasLiveText: Bool, loadedOnce: Bool, historyNotFound: Bool = false) -> Placeholder {
         guard lines.isEmpty, !hasTranscript, !hasPending, !hasLiveText else { return .none }
+        if historyNotFound { return .none } // the error row replaces the first-page loading state
         return loadedOnce ? .empty : .loading
     }
 
@@ -29,7 +31,7 @@ struct ChatLines {
         }
     }
 
-    /// The lines without the raw `<closeout …>…</closeout>` block of the last reply (#3612): the card in the chat's
+    /// The lines without the raw closeout of the last reply (#3612): the card in the chat's
     /// header says it, so the reply does not say it again as text. Exactly that block goes (`Closeout.strip`), from
     /// the last exchange's last words only; a reply that was nothing but the block is not drawn at all. An earlier
     /// turn's block stays as it was written: the card is about the turn that just ended.
@@ -40,8 +42,9 @@ struct ChatLines {
         for index in lines.indices.reversed() {
             switch lines[index].content {
             case .row(.assistant(let item)):
-                guard let text = item.text, Closeout.holdsBlock(text) else { return lines }
-                let stripped = Closeout.strip(text)
+                guard let text = item.text else { return lines }
+                let stripped = Closeout.strip(text, complete: item.fullSize == nil)
+                guard stripped != text else { return lines }
                 var out = lines
                 if stripped.isEmpty, item.fullSize == nil {
                     out.remove(at: index)
@@ -73,14 +76,126 @@ struct ChatLines {
     /// Runs of tool calls the user opened; `openAllRuns` flips them all (DEBUG `-showRunsOpen`).
     var openRuns: Set<String> = []
     var openAllRuns = false
+    /// Display-only: Original keeps every transcript record; decoding never mutates the store.
+    var botmuxMode: BotmuxDisplayMode = .original
+    var botmuxSession = false
     /// BeautifulUI folds two or more tool calls in a row into a line of chips.
     var chipRuns = false
     /// Whether a call can join a run: a call that went to the background stays on its own line.
     var foldsIntoRun: (ToolCall) -> Bool = { _ in true }
 
+    /// Folded children placed into the exchanges that were going on when they started. Empty for every other chat.
+    var childPlaces: [ChildSessions.Place] = []
+    var childSessions: [SessionKey: Session] = [:]
+    /// History has been read back to the start, so a child that started earlier can sit in the first exchange.
+    var historyComplete = false
+    /// Emit a compact Changed Files card after the final answer of each completed Agent exchange (#12016).
+    /// Always false for Assistant conversations and subagent views.
+    var includeTurnChanges = false
+    /// Session working directory used to normalize relative edit paths and relativize displayed file paths.
+    var turnChangesCwd: String? = nil
+
+    /// The two read-only views of the main conversation. A completed silent round is removed before `unfold`, so an
+    /// open work/supervision flag cannot put its tool rows back into the default timeline.
+    enum Presentation {
+        case timeline, backgroundActivity
+    }
+
+    /// A feed card written during one silent round. `end` is the next real input (exclusive), or nil while no later
+    /// real input is loaded; the half-open interval keeps a card at the next input in that next exchange.
+    struct ActivityInterval: Equatable {
+        var start: Date
+        /// Nil while no later real input is loaded: the interval remains open on the right.
+        var end: Date?
+        func contains(_ at: Date) -> Bool { start <= at && (end.map { at < $0 } ?? true) }
+    }
+
+    struct Projection {
+        var timeline: [ChatLine]
+        var activity: [ChatLine]
+        var intervals: [ActivityInterval]
+
+        /// Task hand-offs, routed messages and answered cards produced by a silent round move with it. Plans,
+        /// messages, notices and briefs remain ordinary user-facing content and never leave the default timeline.
+        func feed(_ feed: [FeedItem], for presentation: Presentation) -> [FeedItem] {
+            feed.filter { item in
+                let hidden = Self.movesToActivity(item) && intervals.contains { $0.contains(item.at) }
+                switch presentation {
+                case .timeline: return !hidden
+                case .backgroundActivity: return hidden
+                }
+            }
+        }
+
+        private static func movesToActivity(_ item: FeedItem) -> Bool {
+            switch item.kind {
+            case .task, .routed, .answered: true
+            default: false
+            }
+        }
+    }
+
     /// The lines of these blocks with the open work lines unfolded.
-    func build(_ blocks: [ChatBlock], live: String?, streaming: Bool = false) -> [ChatLine] {
-        unfold(lines(blocks, live: live, streaming: streaming))
+    func build(_ blocks: [ChatBlock], live: String?, streaming: Bool = false,
+               presentation: Presentation = .timeline) -> [ChatLine] {
+        let split = projection(blocks, live: live, streaming: streaming, presentation: presentation)
+        switch presentation {
+        case .timeline: return split.timeline
+        case .backgroundActivity: return split.activity
+        }
+    }
+
+    /// Split only after folded children have been inserted into their rounds, and before either side is unfolded.
+    func projection(_ blocks: [ChatBlock], live: String?, streaming: Bool = false,
+                    presentation: Presentation? = nil) -> Projection {
+        let built = lines(blocks, live: live, streaming: streaming)
+        let placed = childPlaces.isEmpty ? built : ChildSessionLines.insert(built, places: childPlaces, sessions: childSessions, complete: historyComplete)
+        let showTimeline = presentation != .backgroundActivity
+        let showActivity = presentation != .timeline
+        // Agent chats and leader conversations keep their existing renderer; only Main needs a second projection and
+        // the receipt index used to find it. Do not scan another whole transcript for every other chat.
+        guard main else {
+            return Projection(timeline: showTimeline ? unfold(placed) : [], activity: [], intervals: [])
+        }
+        let all = blocks.flatMap(Self.transcriptItems)
+        let results = all.reduce(into: [String: Item]()) { out, item in
+            if item.kind == .toolResult, let id = item.toolUseID { out[id] = item }
+        }
+        let attentionReply = latestReplyNeedsAttention && foldRoutineRelayReplies ? all.last(where: Supervision.isAnswerText)?.id : nil
+        var timeline: [ChatLine] = []
+        var activity: [ChatLine] = []
+        var intervals: [ActivityInterval] = []
+        for line in placed {
+            guard main, case .supervision(_, let trace, let running, let source) = line.content else {
+                timeline.append(line)
+                continue
+            }
+            let quietRelay = foldRoutineRelayReplies && source?.kind == "conversation"
+            guard Supervision.completedSilent(trace.flatMap(Self.lineItems), results: results, live: running, showReply: { item in
+                !quietRelay || item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }, needsAttention: { item in
+                item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }) else {
+                timeline.append(line)
+                continue
+            }
+            activity.append(line)
+            if let interval = Self.activityInterval(trace: trace, all: all) { intervals.append(interval) }
+        }
+        return Projection(timeline: showTimeline ? unfold(timeline) : [],
+                          activity: showActivity ? unfold(activity) : [], intervals: intervals)
+    }
+
+    /// The half-open timestamp span of one silent round in the loaded transcript.
+    private static func activityInterval(trace: [ChatLine], all: [Item]) -> ActivityInterval? {
+        let evidence = trace.flatMap(Self.lineItems)
+        guard let start = evidence.first(where: { $0.ts != nil })?.ts else { return nil }
+        var end: Date?
+        if let last = evidence.max(by: { ($0.seq, $0.part) < ($1.seq, $1.part) }),
+           let next = all.first(where: { ($0.seq, $0.part) > (last.seq, last.part) && $0.isUserInput }) {
+            end = next.ts
+        }
+        return ActivityInterval(start: start, end: end)
     }
 
     /// The lines of these blocks, before open work lines are unfolded. `streaming`: the running turn's next words are
@@ -92,6 +207,11 @@ struct ChatLines {
     /// Background rounds fold too (docs/apple/ios.md "Background rounds"): the main conversation and the leader
     /// conversations (`AssistantInfo.leaders`, #6595), with the hub's `main_background_folded` on. Needs `foldSupervision`.
     var foldBackground = false
+    /// The main Assistant conversation: completed silent rounds have a separate Background activity projection.
+    var main = false
+    /// The main conversation explicitly opted into folding routine relay replies.
+    var foldRoutineRelayReplies = false
+    var latestReplyNeedsAttention = false
     var openSupervision: Set<String> = []
     var openAllSupervision = false
     var active = false
@@ -103,6 +223,14 @@ struct ChatLines {
         guard assistant, on, !conversation.isEmpty else { return false }
         if let main, !main.isEmpty, conversation == main { return true }
         return leaders.contains(conversation)
+    }
+
+    /// A question or a turn that stopped abnormally still needs the owner's attention with quiet relays on.
+    static func needsReplyAttention(_ session: Session?) -> Bool {
+        guard let session else { return false }
+        return session.awaitsReply || session.turnError?.isEmpty == false || session.turnErrorKind?.isEmpty == false ||
+            session.failureReason?.isEmpty == false || session.status == .blocked || session.wasInterrupted ||
+            session.work?.phase == "blocked"
     }
 
     /// The sources whose rounds are background rounds: a supervising conversation's message, a follow-up, a scheduled run.
@@ -144,6 +272,7 @@ struct ChatLines {
     func lines(_ blocks: [ChatBlock], live liveID: String?, streaming: Bool = false) -> [ChatLine] {
         guard foldSupervision else { return flatLines(blocks, live: liveID, streaming: streaming) }
         let all = blocks.flatMap(Self.transcriptItems)
+        let attentionReply = latestReplyNeedsAttention && foldRoutineRelayReplies ? all.last(where: Supervision.isAnswerText)?.id : nil
         let results = all.reduce(into: [String: Item]()) { out, item in
             if item.kind == .toolResult, let id = item.toolUseID { out[id] = item }
         }
@@ -163,7 +292,12 @@ struct ChatLines {
                 entry = nil
             }
             guard let trace = round, let first = trace.first else { return }
-            if Supervision.visible(evidence, results: results, live: running) {
+            let quietRelay = foldRoutineRelayReplies && source?.kind == "conversation"
+            if Supervision.visible(evidence, results: results, live: running, showReply: { item in
+                !quietRelay || item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }, needsAttention: { item in
+                item.id == attentionReply || APIErrorInfo.parse(item.text) != nil
+            }) {
                 out += trace
             } else {
                 out.append(.supervision(id: "sv-" + first.id, lines: trace, live: running, source: source))
@@ -252,7 +386,7 @@ struct ChatLines {
     static func transcriptItems(_ block: ChatBlock) -> [Item] {
         switch block {
         case .row(let row): return transcriptItems(row)
-        case .turn(let turn): return (turn.ordered + turn.tail + turn.trailing).flatMap(transcriptItems)
+        case .turn(let turn): return (turn.ordered + turn.trailing).flatMap(transcriptItems)
         }
     }
 
@@ -273,24 +407,44 @@ struct ChatLines {
         for block in blocks {
             switch block {
             case .row(let r):
+                if botmuxSession, botmuxMode == .decoded, case .assistant(let item) = r,
+                   BotmuxDisplay.hidesSentinel(item.text, role: item.role, mode: botmuxMode) { continue }
                 if !SubagentDelivery.isWake(r) { out.append(.row(r)) }
             case .turn(var t):
-                // Work a background task woke the agent for opens with that notice, where a message would be.
-                var wokeAt: Date?
+                // Work a background task woke the agent for opens with that notice, where a message would be (a
+                // subagent's report that woke it is drawn under its call, so that one opens with the work).
+                var woke: Item?
                 if let first = t.ordered.first, case .notice(let n) = first, n.wake == true {
                     if !SubagentDelivery.isWake(first) { out.append(.row(first)) }
                     t.ordered.removeFirst()
-                    wokeAt = n.ts
+                    woke = n
                 }
-                let segments = Self.segments(t.ordered)
-                for (k, seg) in segments.enumerated() {
-                    // Once the answer is in, its wake continues in the same summary while new words stream.
-                    let afterWake = k > 0 && t.id == liveID && t.hasPendingWake
-                    let live = t.id == liveID && k == segments.count - 1 && (t.tail.isEmpty || afterWake)
+                let wokeAt = woke?.ts
+                var segments = Self.segments(t.ordered)
+                // Woken and at work with nothing of it here yet: its work line.
+                if segments.isEmpty, woke != nil, t.id == liveID { segments = [(nil, [])] }
+                for (k, original) in segments.enumerated() {
+                    var seg = original
+                    let replies = botmuxMode == .decoded ? BotmuxPresentation.replies(seg.rows) : []
+                    if botmuxMode == .decoded, botmuxSession || seg.user?.userInput?.botmux != nil || !replies.isEmpty {
+                        seg.rows.removeAll { row in
+                            guard case .assistant(let item) = row else { return false }
+                            return BotmuxDisplay.hidesSentinel(item.text, role: item.role, mode: botmuxMode)
+                        }
+                    }
+                    let firstLine = out.count
+                    let live = t.id == liveID && k == segments.count - 1
+                    // The work a wake opened is known by the wake: its line keeps its id from before its first step.
+                    let opening = k == 0 && seg.user == nil ? woke?.id : nil
                     // Photos sent with the message (Claude inlines a pasted image path as an image block) sit above
                     // its text, as they did while it was being sent — not in the agent's work.
                     let photos = Self.photos(seg.rows)
-                    if !photos.isEmpty { out.append(.userImages(id: "img-" + photos[0].id, items: photos)) }
+                    if !photos.isEmpty {
+                        var line = ChatLine.userImages(id: "img-" + photos[0].id, items: photos)
+                        // A photo with no text is an input of its own; photos beside text stay before its divider.
+                        line.startsExchange = seg.user == nil
+                        out.append(line)
+                    }
                     if let u = seg.user { out.append(.row(u)) }
                     let last = live && streaming ? nil : seg.rows.lastIndex { if case .assistant = $0 { true } else { false } }
                     // Only an idle compaction with no later work belongs after the answer. A running turn's
@@ -311,7 +465,7 @@ struct ChatLines {
                         // Only compactions (/compact): dividers across the chat, no work line to open.
                         out += work.filter { if case .notice(let i) = $0 { i.compact != nil } else { false } }.map { .row($0) }
                     } else if !items.isEmpty || live {
-                        let id = "w-" + (seg.user?.id ?? seg.rows.first?.id ?? t.id)
+                        let id = "w-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id)
                         // The answer and an interrupt end the exchange too; an idle compaction after it does not.
                         let ending = seg.rows.indices.filter { !after.contains($0) }.map { seg.rows[$0] }
                             + (k == segments.count - 1 ? t.trailing : [])
@@ -319,11 +473,30 @@ struct ChatLines {
                                          start: seg.user?.firstTS ?? (k == 0 ? wokeAt : nil) ?? seg.rows.first?.firstTS ?? t.startedAt,
                                          end: Self.workEnd(ending) ?? seg.rows.last?.lastTS))
                     }
-                    // Between the work and the answer: what the work looked at. Its id stays as pictures come in and
-                    // the answer changes, so the strip grows sideways in place.
-                    out += Self.viewed("vi-" + (seg.user?.id ?? seg.rows.first?.id ?? t.id), items)
-                    if let last { out.append(.row(seg.rows[last])) }
+                    // Between the work and the answer: what the work looked at and out-of-band tool UI views. Its id
+                    // stays as items arrive so the row updates in place while the turn runs.
+                    out += Self.viewed("vi-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
+                    out += Self.toolViews("tv-" + (seg.user?.id ?? opening ?? seg.rows.first?.id ?? t.id), items)
+                    if let last {
+                        out.append(.row(seg.rows[last]))
+                        if includeTurnChanges, !live, idleCompaction,
+                           seg.user != nil || seg.rows.first?.userInput != nil,
+                           !(k == segments.count - 1 && !t.trailing.isEmpty),
+                           case .assistant(let answer) = seg.rows[last],
+                           APIErrorInfo.parse(answer.text) == nil,
+                           let changes = TurnChanges.of(items, cwd: turnChangesCwd) {
+                            let id = "tc-" + (seg.user?.id ?? seg.rows.first?.userInput?.id ?? answer.id)
+                            out.append(.turnChanges(id: id, changes: changes))
+                        }
+                    }
+                    // Match the web: the model's final words precede the messages actually sent to Lark.
+                    out += replies.filter { !BotmuxDisplay.hidesSentinel($0.text, role: $0.role, mode: botmuxMode) }
+                        .map { .row(.assistant($0)) }
                     out += after.sorted().map { .row(seg.rows[$0]) }
+                    if opening != nil, out.count > firstLine {
+                        // A wake opens where a message would be, whether its notice is drawn or only its work/reply is.
+                        out[firstLine].startsExchange = true
+                    }
                 }
                 out += t.trailing.map { .row($0) }
             }
@@ -375,7 +548,7 @@ struct ChatLines {
     }
 
     static func openRecap(_ lines: [ChatLine], pending: Item?) -> OpenRecap? {
-        guard let pending, let last = lines.last else { return nil }
+        guard let pending, let last = lastOfChat(lines) else { return nil }
         switch last.content {
         case .row(.recap(let i)) where i.id == pending.id:
             return OpenRecap(line: last.id, earlier: [], newest: i)
@@ -429,7 +602,11 @@ struct ChatLines {
                         }
                         return child
                     }
-                    out += unfold(raw)
+                    out += unfold(raw).map { child in
+                        var child = child
+                        child.inFoldedRound = true
+                        return child
+                    }
                 }
                 continue
             }
@@ -589,6 +766,11 @@ struct ChatLines {
         return images.isEmpty ? [] : [.viewed(id: id, images: images)]
     }
 
+    static func toolViews(_ id: String, _ work: [WorkItem]) -> [ChatLine] {
+        let views = ToolViews.of(work)
+        return views.isEmpty ? [] : [.toolViews(id: id, views: views)]
+    }
+
     static func photos(_ rows: [ChatRow]) -> [Item] {
         rows.compactMap { r -> Item? in
             if case .image(let i) = r, i.role == "user", i.toolUseID == nil, i.image != nil { return i }
@@ -650,10 +832,17 @@ nonisolated struct ChangedFile: Hashable, Sendable {
 extension ChatLines {
     // MARK: The assistant's feed
 
-    /// What of the feed the cached lines depend on: each item's id, and a receipt's body too, which the hub sends again
-    /// changed (an interrupted receipt resolved or batched, #3834).
+    /// What of the feed the cached lines depend on: each drawn item's id (the cards read the rest from the stores).
     static func feedKey(_ feed: [FeedItem]) -> [String] {
-        feed.map { $0.kind == .receipt ? "\($0.id)#\($0.body.hashValue)" : $0.id }
+        feed.map(\.id)
+    }
+
+    /// The feed items an assistant conversation draws (#8237, docs/assistant/unified-entry.md "Receipts"): a task's card
+    /// comes once, when it is handed out, and updates in place; how it goes on (a receipt for each stretch of work, its
+    /// Agent's reports, its reviews) is its row in Needs You / In Progress, never another card. The hub keeps writing
+    /// them all: the tray reads them, and a hub-side reader (the "Today" card) still does.
+    static func drawnFeed(_ feed: [FeedItem]) -> [FeedItem] {
+        feed.filter { $0.kind != .receipt && $0.kind != .report && $0.kind != .review }
     }
 
     /// The lines with what the hub added to an assistant conversation (docs/assistant/unified-entry.md) among them: an item
@@ -678,6 +867,74 @@ extension ChatLines {
             next += 1
         }
         return out
+    }
+
+    /// The hidden rounds and their feed cards in transcript order. A quiet header has no top-level user input for
+    /// `mergeFeed` to place against, so Background activity compares the round's own first timestamp instead.
+    static func mergeActivityFeed(_ lines: [ChatLine], _ feed: [FeedItem]) -> [ChatLine] {
+        guard !feed.isEmpty else { return lines }
+        func start(_ line: ChatLine) -> Date? {
+            switch line.content {
+            case .supervision(_, let trace, _, _): return trace.flatMap(Self.lineItems).compactMap(\.ts).min()
+            case .feed(let item): return item.at
+            default: return nil
+            }
+        }
+        var out: [ChatLine] = []
+        var next = 0
+        for line in lines {
+            if let at = start(line) {
+                while next < feed.count, feed[next].at < at {
+                    out.append(.feed(feed[next]))
+                    next += 1
+                }
+            }
+            out.append(line)
+        }
+        while next < feed.count {
+            out.append(.feed(feed[next]))
+            next += 1
+        }
+        return out
+    }
+
+    /// The permission mode changes the hub recorded (#10297), each at the end of the exchange it happened in, as the
+    /// assistant's feed items go (`mergeFeed`): before the first message sent after it, the newest after the last line,
+    /// never between a work line and its answer. A change from before `earliest` (the first loaded item, while older
+    /// history is still to load) waits for its page instead of piling up at the top; a chat with no lines yet gets none. Ids come from each change's time,
+    /// kind and mode, numbered within the same moment, so a list that grows or loses its oldest entry keeps the others'.
+    static func mergeModeChanges(_ lines: [ChatLine], _ changes: [APIClient.ModeChange], earliest: Date? = nil) -> [ChatLine] {
+        let known: Set<String> = ["set", "restart_done", "restart_failed", "restart_dropped"]
+        let shown = changes.filter { c in known.contains(c.kind) && (earliest.map { c.at >= $0 } ?? true) }
+            .enumerated().sorted { a, b in a.element.at != b.element.at ? a.element.at < b.element.at : a.offset < b.offset }.map(\.element)
+        // nothing to place them by yet: an empty chat keeps its placeholder
+        guard !shown.isEmpty, !lines.isEmpty else { return lines }
+        var seen: [String: Int] = [:]
+        let keyed: [ChatLine] = shown.map { c in
+            let base = "mode-\(Int(c.at.timeIntervalSince1970 * 1000))-\(c.kind)-\(c.to ?? "")"
+            let n = seen[base, default: 0]
+            seen[base] = n + 1
+            return .modeChange(id: n == 0 ? base : "\(base)-\(n)", c)
+        }
+        var out: [ChatLine] = []
+        out.reserveCapacity(lines.count + keyed.count)
+        var next = 0
+        for line in lines {
+            if let at = inputTime(line) {
+                while next < keyed.count, shown[next].at < at {
+                    out.append(keyed[next])
+                    next += 1
+                }
+            }
+            out.append(line)
+        }
+        out.append(contentsOf: keyed[next...])
+        return out
+    }
+
+    /// The chat's last line that is not a mode change (`mergeModeChanges`): what Retry and the error cards ask about.
+    static func lastOfChat(_ lines: [ChatLine]) -> ChatLine? {
+        lines.last { if case .modeChange = $0.content { false } else { true } }
     }
 
     /// Where messages that failed to send go (#6023): one written before a message sent after it goes right before the
@@ -760,6 +1017,7 @@ extension ChatLines {
         case .userImages(_, let items): return items.first.flatMap(sent)
         case .day(let d): return d
         case .feed(let f): return f.at
+        case .modeChange(_, let c): return c.at
         default: return nil
         }
     }

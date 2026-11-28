@@ -66,8 +66,11 @@ import persona.core.designsystem.JToastHost
 import persona.core.designsystem.JFullScreen
 import persona.core.designsystem.LocalizedFormats
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ReadingContent
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.currentLocale
+import persona.core.designsystem.currentTextDensities
+import persona.core.designsystem.hardwareShortcutDismiss
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.rememberToastState
 import persona.feature.chat.media.MediaShare
@@ -242,7 +245,7 @@ internal fun MessageShareCard(message: MessagePicture, dark: Boolean, modifier: 
                     time?.let { Text(it, maxLines = 1, style = type.micro, color = palette.ink2) }
                 }
                 CompositionLocalProvider(LocalInPicture provides true) {
-                    ChatMarkdown(message.cardText, selectable = false, bodyStyle = type.callout, color = palette.ink)
+                    ReadingContent { ChatMarkdown(message.cardText, selectable = false, bodyStyle = type.callout, color = palette.ink) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm)) {
                     JIcon(PersonaIcons.ai, null, size = Tokens.Size.markXS, tint = palette.ink3)
@@ -277,16 +280,16 @@ private fun ShareCardAvatar(message: MessagePicture) {
 private fun rememberShareCardNatural(text: String): Float {
     val measurer = rememberTextMeasurer()
     val type = PersonaTheme.type
-    val density = LocalDensity.current
+    val density = currentTextDensities().readingDensity ?: LocalDensity.current
     return remember(text, type, density) {
         ShareCardBlocks.wide(text).maxOfOrNull { block ->
             val lines = block.lines()
             val px = if (ShareCardBlocks.fenced(block)) {
-                lines.drop(1).dropLast(1).maxOfOrNull { measurer.measure(it, type.code, softWrap = false, maxLines = 1).size.width } ?: 0
+                lines.drop(1).dropLast(1).maxOfOrNull { measurer.measure(it, type.code, softWrap = false, maxLines = 1, density = density).size.width } ?: 0
             } else {
                 lines.filterNot(ShareCardBlocks::isDelimiter).maxOfOrNull { row ->
                     val cells = row.trim().trim('|').split('|').map(String::trim)
-                    measurer.measure(cells.joinToString(" "), type.callout, softWrap = false, maxLines = 1).size.width +
+                    measurer.measure(cells.joinToString(" "), type.callout, softWrap = false, maxLines = 1, density = density).size.width +
                         with(density) { (Tokens.Space.m * 2 * cells.size).roundToPx() }
                 } ?: 0
             }
@@ -336,7 +339,9 @@ internal fun shareCardPng(picture: Bitmap): ByteArray =
  */
 @Composable
 internal fun MessageSharePage(message: MessagePicture, onDismiss: () -> Unit) {
-    JFullScreen(onDismiss) { MessageShareContent(message, onDismiss) }
+    JFullScreen(onDismiss) {
+        Box(Modifier.fillMaxSize().hardwareShortcutDismiss(onDismiss)) { MessageShareContent(message, onDismiss) }
+    }
 }
 
 /** [MessageSharePage] inside its window; [layer] records the card (a test reads the picture from it). */

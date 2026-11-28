@@ -1,5 +1,8 @@
-import type { AgentState, Interaction, Session, SessionCapabilities } from "./types";
+import { parseAgentPhase, type AgentPhase, type AgentView } from "./agent-view-wire";
+import { inferAgentView } from "./legacy-agent-view";
+import type { AgentState, StatusMarkState, Interaction, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
+import { normalizeTraeCliName, sessionAgentName } from "./agent-kind";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
 import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
@@ -8,7 +11,7 @@ import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
 // to them, as every other source is: a stopped Agent's row says read and terminal only (#4754). A native row without
 // them (every row from an older node) keeps its existing behavior: it may do everything.
 export function sessionCan(s: Session | undefined, operation: keyof SessionCapabilities): boolean {
-  if (!s) return false;
+  if (!s || s.deleted) return false;
   if (operation === "attach") return Boolean(s.source_kind && s.capabilities?.attach === true && !s.attached);
   if (operation === "close") return s.capabilities?.close ?? sessionCan(s, "terminal");
   if (!s.source_kind && !s.capabilities) return true;
@@ -42,6 +45,18 @@ export function interactionCanAnswer(ix: Pick<Interaction, "session_id">, sessio
   return ix.session_id === "" || sessionCan(session, "approve");
 }
 
+/** Why this page can't answer a card (#7497), as iOS (#6868) and Android (`approvalBlockedReason`) say it: null when it
+ *  can; "attach" when linking the session live would let it (a Codex thread Persona hasn't joined yet); else "computer",
+ *  an unknown session included. */
+export function answerBlock(ix: Pick<Interaction, "session_id">, session: Session | undefined): "attach" | "computer" | null {
+  if (interactionCanAnswer(ix, session)) return null;
+  return sessionCan(session, "attach") ? "attach" : "computer";
+}
+
+// The node writes some reasons with their own "View only: " in Chinese, which the subtitle adds already (#7803;
+// Android's READ_ONLY_PREFIX).
+const NODE_READ_ONLY_PREFIX = "仅查看："; // i18n-ignore: the node's prefix it strips
+
 export function sourceSubtitle(s?: Session): string {
   if (!s?.source_kind) return "";
   const label = s.source_kind === "codex_app_server" ? t("lib-format.source_codex_live") : s.source_kind === "codex_history" ? t("lib-format.source_codex_history") : s.source_kind === "identity_conflict" ? t("lib-format.source_identity_conflict")
@@ -49,13 +64,22 @@ export function sourceSubtitle(s?: Session): string {
     // Claude outside Persona's terminals (docs/integrations/claude-integration.md "Claude outside Persona's terminals")
     : s.source_kind === "claude_desktop" ? t("lib-format.source_claude_desktop")
     : s.source_kind === "claude_cli" ? t("lib-format.source_claude_terminal")
-    : s.source_kind === "runtime" ? s.agent_label || s.agent || "runtime" // an agent runtime's session (docs/integrations/runtimes.md): its own name
+    // an agent runtime's session (docs/integrations/runtimes.md): its own name, else its agent's ("Claude Code", a Paseo
+    // provider's), never a raw id (#8142)
+    : s.source_kind === "runtime" ? normalizeTraeCliName(s.agent_label) || sessionAgentName(s)
     : s.source_kind;
-  const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${s.agent_name}` : "";
-  return sessionCan(s, "send") ? label + detail : t("lib-format.read_only", { source: label + detail, reason: s.read_only_reason || t("lib-format.read_only_default_reason") });
+  const detail = s.source_kind !== "identity_conflict" && s.agent_name ? ` · ${normalizeTraeCliName(s.agent_name)}` : "";
+  if (sessionCan(s, "send")) return label + detail;
+  const given = s.read_only_reason ?? "";
+  const reason = (given.startsWith(NODE_READ_ONLY_PREFIX) ? given.slice(NODE_READ_ONLY_PREFIX.length) : given).trim();
+  return t("lib-format.read_only", { source: label + detail, reason: reason || t("lib-format.read_only_default_reason") });
 }
 
+/** The command that resumes the session in a terminal; none ("") for a runtime's session, which its runtime keeps: a
+ *  Paseo provider such as Grok has no such command, an id of the runtime's making (`paseo-…`) is no Claude session's,
+ *  and a Claude Code conversation Paseo runs would get a second writer (#8142). */
 export function resumeCommand(s: Session): string {
+  if (s.source_kind === "runtime") return "";
   const codex = s.agent === "codex" || s.source_kind === "codex_app_server" || s.source_kind === "codex_history";
   const command = codex ? "codex resume" : s.agent === "traex" ? "traex resume" : "claude --resume";
   const resume = `${command} ${s.source_thread_id || s.session_id}`;
@@ -72,11 +96,12 @@ export function shellPath(path: string): string {
 }
 
 export function sessionMenuActions(s: Session): string[] {
+  const foreground = viewOf(s).reason?.kind !== "background" && !s.background_working && !s.background_waiting;
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
-    ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
+    ...(stateOf(s) === "working" && foreground && sessionCan(s, "interrupt") ? ["stop"] : []),
     ...(sessionCan(s, "terminal") ? ["resume"] : []),
-    ...(!s.assistant && stateOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
+    ...(!s.assistant && activityOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
 }
 
@@ -89,33 +114,45 @@ export function sessionDeletable(s: Session): boolean {
   return !s.assistant && DELETABLE_STATUSES.has(s.status) && !s.starting;
 }
 
-// docs/protocol/agent-states.md: needs you → unread → awaiting reply (seen, awaiting the user's reply, #5096) → working → idle → unknown → offline
-const RANK: Record<AgentState, number> = { needs_you: 0, unread: 1, working: 3, idle: 4, unknown: 5, offline: 6 };
+/** A rolling upgrade can mix rows from old and new managers in one response. */
+export function viewOf(s: Session): AgentView {
+  if (!s.view) return inferAgentView(s);
+  if (typeof parseAgentPhase(s.view.phase) === "string") return s.view;
+  return { ...s.view, phase: "idle", reason: { kind: "host_unknown" } };
+}
 
-// A seen agent awaiting the user's reply ranks between unread and working. The comparator has no mutes: a muted one
-// awaiting a reply ranks so here too (the sidebar's By Status sections and folds go by lib/agent-groups.ts awaitsReply).
-const rankOf = (s: Session) => (stateOf(s) === "idle" && s.awaits_reply ? 2 : RANK[stateOf(s)]);
+export function stateOf(s: Session): AgentPhase {
+  return viewOf(s).phase;
+}
 
-export function stateOf(s: Session): AgentState {
-  if (s.state) return s.state;
-  if (s.status === "offline") return "offline";
-  if (s.status === "working") return "working";
-  if (s.status === "blocked" || (s.pending_interactions ?? 0) > 0) return "needs_you";
+/** The older host vocabulary used by read receipts, notification transitions and terminal controls.
+ * Done alone cannot tell these callers whether a reply is unread or a process is running. */
+export function activityOf(s: Session): AgentState {
+  if (!s.view && s.state) return s.state;
+  const { phase, reason } = viewOf(s);
+  if (phase === "working" || phase === "needs_you") return phase;
+  if (phase === "done" && s.locallySeen) return "idle";
+  if (reason?.kind === "unseen" || (reason?.kind === "asks" && reason.unseen)) return "unread";
+  if (reason?.kind === "not_running") return "offline";
+  if (reason?.kind === "host_unknown") return "unknown";
   return "idle";
 }
 
-/** Working only because its background commands wait (#6045, Session.background_waiting): its own state is still
- *  "working" (older apps show that); the web shows it as "Waiting in the background", apart from Working. */
 export function backgroundWaiting(s: Session): boolean {
-  return stateOf(s) === "working" && Boolean(s.background_waiting);
+  if (!s.view && s.background_waiting && s.background_working === undefined) return stateOf(s) === "working";
+  const reason = viewOf(s).reason;
+  return reason?.kind === "background" && reason.waiting === true;
 }
 
-export function stateColor(st: AgentState): string {
+export function stateColor(st: StatusMarkState): string {
   switch (st) {
     case "needs_you":
       return "var(--status-needs)";
     case "working":
       return "var(--status-working)";
+    case "error":
+      return "var(--red)";
+    case "done":
     case "unread":
       return "var(--status-unread)";
     case "offline":
@@ -126,7 +163,7 @@ export function stateColor(st: AgentState): string {
 }
 
 export function byAttention(a: Session, b: Session): number {
-  const d = rankOf(a) - rankOf(b);
+  const d = viewOf(a).rank - viewOf(b).rank;
   if (d) return d;
   const ta = stateOf(a) === "working" ? a.state_since || a.updated_at : a.updated_at;
   const tb = stateOf(b) === "working" ? b.state_since || b.updated_at : b.updated_at;
@@ -170,29 +207,71 @@ export function failureReason(s: Session | undefined): string | undefined {
   return failureText(s.failure_reason) || undefined;
 }
 
-/** "Open in Lark": the session's place outside Persona, a web (https) link only (iOS externalLink). */
-export function externalLink(s?: Pick<Session, "external_url">): string | undefined {
-  const raw = s?.external_url?.trim();
-  if (!raw) return undefined;
+const CTRL_CHARS = /[\u0000-\u001f\u007f]/;
+
+/** Validates a credential-free http(s) URL (https-only when `httpsOnly` is true), rejecting single-slash
+ *  same-origin relative URLs (`https:/admin`), backslash/userinfo authority confusion, and C0/DEL control
+ *  characters. Returns the canonical `URL.href` or undefined. */
+export function safeWebURL(raw?: string, httpsOnly = false): string | undefined {
+  const s = raw?.trim();
+  if (!s || CTRL_CHARS.test(s)) return undefined;
+  const m = httpsOnly ? /^https:\/\//i.exec(s) : /^https?:\/\//i.exec(s);
+  if (!m) return undefined;
+  const auth = s.slice(m[0].length).split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
   try {
-    return new URL(raw).protocol === "https:" ? raw : undefined;
+    const u = new URL(s);
+    if ((httpsOnly ? u.protocol !== "https:" : u.protocol !== "http:" && u.protocol !== "https:") || !u.hostname || u.username || u.password) return undefined;
+    return u.href;
   } catch {
     return undefined;
   }
 }
 
-export function sessionTitle(s: Pick<Session, "title" | "cwd">): string {
-  return s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+/** "Open in Lark": the session's place outside Persona, a web (https) link only (iOS externalLink). */
+export function externalLink(s?: Pick<Session, "external_url">): string | undefined {
+  return safeWebURL(s?.external_url, true);
+}
+
+type SessionNameFields = Pick<Session, "title" | "cwd" | "assistant" | "slot_name" | "slot_id" | "tab_id" | "space_kind" | "host">;
+
+export function herdrTabName(s: SessionNameFields): string {
+  const kind = s.space_kind || s.host;
+  if (s.assistant || !(s.slot_id || s.tab_id) || (kind && kind !== "herdr" && kind !== "herdr-core")) return "";
+  return s.slot_name?.trim() || "";
+}
+
+// Keep the terminal prompt recognizer in sync with server/internal/proto/session_name.go.
+const SHELL_PROMPT_TITLE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*@[A-Za-z0-9_][A-Za-z0-9_.-]*:(?:[ \t]+[^\r\n]+|[~/][^\r\n]*)$/;
+
+export function sessionDisplayTab(s: SessionNameFields, preferTab = false): string {
+  const title = s.title?.trim() || "";
+  return preferTab || !title || SHELL_PROMPT_TITLE.test(title) ? herdrTabName(s) : "";
+}
+
+export function sessionTitle(s: SessionNameFields, preferTab = false): string {
+  return sessionDisplayTab(s, preferTab) || s.title?.trim() || baseName(s.cwd) || t("lib-format.untitled_session");
+}
+
+export function sessionTitleDetail(s: SessionNameFields, preferTab: boolean): string {
+  const tab = preferTab ? herdrTabName(s) : "";
+  const title = s.title?.trim() || "";
+  return tab && tab !== title ? title : "";
 }
 
 // A path from a Windows computer: a drive letter or a UNC share. Only there is a backslash a separator; in any other
 // path it is a character of a name.
-const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\/;
+export const WINDOWS_PATH = /^[A-Za-z]:[\\/]|^\\\\|^\/\/[^\\/]+[\\/]/;
 
 export function baseName(p?: string): string {
   if (!p) return "";
-  const parts = (WINDOWS_PATH.test(p) ? p.replace(/\\/g, "/") : p).replace(/\/+$/, "").split("/");
+  const parts = pathSlashes(p).replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || p;
+}
+
+/** Remote Windows paths use either separator. A backslash inside a POSIX filename stays literal. */
+export function pathSlashes(path: string): string {
+  return WINDOWS_PATH.test(path) ? path.replaceAll("\\", "/") : path;
 }
 
 export function tabLabel(s: Session): string {
@@ -215,10 +294,14 @@ export function ago(iso?: string, now = Date.now(), style: Intl.RelativeTimeForm
   const opts: Intl.RelativeTimeFormatOptions = { numeric: "auto", style };
   // "Just now" rather than Intl's "now" for under a minute
   if (s < 45) return t("lib-format.just_now");
-  if (s < 3600) return formatRelative(-Math.round(s / 60), "minute", opts);
-  if (s < 86400) return formatRelative(-Math.round(s / 3600), "hour", opts);
+  // Rounded, a unit steps up once it reaches the next one: 59.5 minutes is "1 hour ago", not "60 minutes ago".
+  const minutes = Math.round(s / 60);
+  if (minutes < 60) return formatRelative(-minutes, "minute", opts);
+  const hours = Math.round(s / 3600);
+  if (hours < 24) return formatRelative(-hours, "hour", opts);
   // Days by the local calendar, not by 24 h spans: yesterday morning seen late tonight is yesterday, not the day before yesterday (#4281).
-  const days = calendarDays(ts, now);
+  // At least 1: 23.5 hours ago within one calendar day still reads as "yesterday", not "today".
+  const days = Math.max(1, calendarDays(ts, now));
   if (days < 7) return formatRelative(-days, "day", opts);
   return formatDate(ts, { month: "numeric", day: "numeric" });
 }
@@ -261,15 +344,31 @@ export function clock(iso?: string): string {
   return t("lib-format.date_time", { date: formatDate(d, { month: "short", day: "numeric" }), time: hm });
 }
 
+/** 18:20 today, "Yesterday", "Wed" within the week, "Oct 28" this year, else 2025-10-28 (LarkTime.short). */
+export function shortTime(iso?: string, now = new Date()): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "";
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 86400_000);
+  if (days <= 0) return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (days === 1) return t("lib-inbox.yesterday");
+  if (now.getTime() - d.getTime() < 6 * 86400_000) return formatDate(d, { weekday: "short" });
+  if (d.getFullYear() === now.getFullYear()) return formatDate(d, { month: "short", day: "numeric" });
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** "512 B", "1.5 KB", "250 MB". The unit and the decimal follow the figure as it is shown, after rounding, as the
+ *  machine pages' bytesBin does: 1023.5 KB is "1.0 MB", not "1024 KB"; 99.95 KB is "100 KB", not "100.0 KB" (#9969). */
 export function bytes(n?: number): string {
   if (n === undefined || !Number.isFinite(n)) return "—";
   const u = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
-  while (n >= 1024 && i < u.length - 1) {
+  while (n >= 1023.5 && i < u.length - 1) {
     n /= 1024;
     i++;
   }
-  return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
+  return `${n >= 99.95 || i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
 }
 
 /**

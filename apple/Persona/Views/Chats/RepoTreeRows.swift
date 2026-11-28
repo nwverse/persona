@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// Repository browsing keeps one compact line per Agent, without reply previews.
 nonisolated enum WorkspaceList {
@@ -87,6 +88,10 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
                             Text(workspace.name)
                                 .font(workspace.sidebarUnread ? Theme.WorkspaceSidebar.titleUnread : Theme.WorkspaceSidebar.title)
                                 .foregroundStyle(Theme.WorkspaceSidebar.foreground).lineLimit(1)
+                            if workspace.workspace?.pinnedAt != nil {
+                                ThemedIcon(Theme.Icon.pinned).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.accent)
+                                    .accessibilityHidden(true)
+                            }
                             if workspace.main {
                                 Text(String(localized: "workspace.primary", defaultValue: "Primary"))
                                     .font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.foreground.opacity(0.7))
@@ -108,6 +113,7 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
             .accessibilityIdentifier("agents.worktree")
             .accessibilityLabel(workspace.name)
             .accessibilityValue([workspace.main ? String(localized: "workspace.primary", defaultValue: "Primary") : "",
+                                 workspace.workspace?.pinnedAt != nil ? String(localized: "Pinned [Personal Agent List View fb47db]") : "",
                                  workspace.workspace?.branch ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
             if !workspace.sessions.isEmpty || !workspace.children.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Space.sm) {
@@ -166,19 +172,8 @@ struct WorkspaceSidebarCard<AgentContent: View, Actions: View>: View {
         WorkspaceSidebarControl(open: { selectAgent(session.key) }) {
             agent(session)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                #if os(macOS)
-                .background {
-                    if selectedWorkspace == nil && selectedSession == session.key {
-                        RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.Fill.macSelected)
-                    }
-                }
-                #endif
                 .contentShape(.rect)
         } actions: { actions(workspace, session) }
-        .macHoverShade(in: RoundedRectangle(cornerRadius: Theme.Radius.control), outset: 0)
-        #if os(macOS)
-        .macOptionClick { MacShellState.shared.chatWindow = session.key }
-        #endif
         .accessibilityIdentifier(agentIdentifier)
         .id(session.id)
         .onAppear { appeared(session) }
@@ -283,31 +278,57 @@ struct WorkspaceChildrenChip: View {
 
 struct WorkspaceAgentRow: View {
     var session: Session
+    let pendingTitle: String?
     var time: AgentTime?
     var muted: Bool
+    /// Present when a folded side session keeps this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
+    var preferHerdrTabName = false
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
-            title
-            Spacer(minLength: 0)
-            metadata
+        Group {
+            if let sideUnread {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    HStack(spacing: Theme.Space.xs) {
+                        title
+                        Spacer(minLength: 0)
+                        metadata
+                    }
+                    SideUnreadLine(parent: session.key, summary: sideUnread)
+                }
+                .scaledFrame(minHeight: Theme.WorkspaceSidebar.agentHeight)
+            } else {
+                HStack(spacing: Theme.Space.xs) {
+                    title
+                    Spacer(minLength: 0)
+                    metadata
+                }
+                .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
+            }
         }
-        .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
         .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: sideUnread == nil ? .combine : .contain)
         .accessibilityValue(session.stateLabel(muted: muted))
     }
 
     @ViewBuilder private var title: some View {
-        if session.state == .unread || session.state == .idle {
+        if session.showsJustFinished(muted: muted) {
+            StatusDot(state: .idle, size: Theme.Size.dotS, justFinished: true)
+        } else if session.state == .unread || session.state == .idle {
             ThemedIcon(Theme.Icon.success).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.success)
         } else { StatusDot(state: session.state, size: Theme.Size.dotS) }
         AgentMark(session, side: Theme.Size.markXS)
-        Text(session.displayTitle).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
+        Text(pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName)).font(session.state == .unread ? Theme.Font.labelStrong : Theme.WorkspaceSidebar.agent)
             .foregroundStyle(session.state == .unread ? Theme.WorkspaceSidebar.foreground : Theme.WorkspaceSidebar.muted)
             .lineLimit(1).layoutPriority(1)
+        if let detail = session.displayTitleDetail(preferTab: preferHerdrTabName) {
+            Text(detail).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.WorkspaceSidebar.muted).lineLimit(1)
+        }
     }
 
     @ViewBuilder private var metadata: some View {
+        if session.showsJustFinished(muted: muted) {
+            Text(StateName.justFinished.text).font(Theme.WorkspaceSidebar.meta).foregroundStyle(StatusPalette.unread.text)
+        }
         Text(session.model.flatMap { $0.isEmpty ? nil : $0 } ?? session.agentLabel)
             .font(Theme.WorkspaceSidebar.meta.monospaced()).foregroundStyle(Theme.WorkspaceSidebar.muted).lineLimit(1)
             .scaledWidthCap(Theme.WorkspaceSidebar.projectBadgeWidth).fixedSize(horizontal: true, vertical: false)
@@ -431,16 +452,19 @@ struct ChildSpacesRow: View {
 }
 
 /// The ⋯ of a repository whose agents are in more than one space (By Repository): what applies to all of them. Equal while
-/// its unread agents are: the menu held open is not rebuilt by every push.
+/// its agents and its unread ones are: the menu held open is not rebuilt by every push.
 struct RepoMenuItems: View, Equatable {
     @Environment(AppModel.self) private var model
     nonisolated let unread: [SessionKey]
+    /// Every agent of the repository: Mark All as Seen marks the unread ones and lets the ones read during the visit and
+    /// held in place go with them (#12514).
+    nonisolated let all: [SessionKey]
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.unread == b.unread }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.unread == b.unread && a.all == b.all }
 
     var body: some View {
         if !unread.isEmpty {
-            Button { model.markSeen(unread) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
+            Button { model.markSeen(all) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
         }
     }
 }
@@ -476,7 +500,7 @@ struct ButtonRowInsets: ViewModifier {
         } else if let edges {
             content.listRowInsets(EdgeInsets(top: Theme.Space.flush, leading: edges.leading, bottom: Theme.Space.flush, trailing: edges.trailing))
         } else {
-            content.listRowInsets(.vertical, Theme.Space.flush)
+            content.listRowVerticalInsets(Theme.Space.flush)
         }
         #else
         content.listRowInsets(edges)
@@ -575,17 +599,23 @@ struct RepoTreeSelected: View {
 }
 
 /// A repository's header: its folder, its name and the chevron that turns as it folds. Its actions (the space's pin,
-/// mute, rename, to-do; Mark All as Seen) are its long-press menu: no ⋯ or list mark of its own.
+/// mute, rename, to-do; Mark All as Seen) are its long-press menu. A flattened workspace contributes its marks.
 struct RepoCardHeader: View {
     var name: String
     var folded: Bool
+    var workspace: RepoTree.Worktree? = nil
 
     var body: some View {
         RepoTreeLine(level: 0) {
-            ThemedIcon(Theme.Icon.folder).font(Theme.Font.secondary).foregroundStyle(.secondary)
+            ThemedIcon(workspace?.main == true ? Theme.Icon.home : Theme.Icon.folder)
+                .font(Theme.Font.secondary).foregroundStyle(.secondary)
         } content: {
             HStack(spacing: Theme.Space.s) {
-                Text(name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                Text(name).font(Theme.Font.bodyStrong)
+                    .foregroundStyle(workspace?.unavailable == true ? Color.secondary : Color.primary).lineLimit(1)
+                if workspace?.latestPinnedAt != nil {
+                    ThemedIcon(Theme.Icon.pinned).font(Theme.Font.caption).foregroundStyle(Theme.accent).accessibilityHidden(true)
+                }
                 Spacer(minLength: 0)
                 FoldChevron(folded: folded)
             }
@@ -609,6 +639,8 @@ struct RepoWorktreeLine: View {
     /// Its computer is out of reach (a worktree the host lists).
     var offline = false
     var showChevron = true
+    /// Pinned in its engine (Paseo's Pin to top, #9316): the pin mark after its name.
+    var pinned = false
 
     var body: some View {
         RepoTreeLine(level: level) {
@@ -619,6 +651,10 @@ struct RepoWorktreeLine: View {
             HStack(spacing: Theme.Space.s) {
                 Text(name).font(Theme.Font.secondaryMedium).foregroundStyle(quiet || offline ? Color.secondary : Color.primary)
                     .lineLimit(1).layoutPriority(1)
+                if pinned {
+                    ThemedIcon(Theme.Icon.pinned).font(Theme.Font.caption).foregroundStyle(Theme.accent)
+                        .accessibilityHidden(true)
+                }
                 if main {
                     Chip(text: String(localized: "workspace.primary", defaultValue: "Primary"), look: .neutral, compact: true).fixedSize()
                 }
@@ -635,6 +671,7 @@ struct RepoWorktreeLine: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel([main ? String(localized: "Main worktree") : String(localized: "Worktree"), name, detail ?? "",
+                             pinned ? String(localized: "Pinned [Personal Agent List View fb47db]") : "",
                              offline ? String(localized: "This computer is offline") : "", tally ?? "",
                              showChevron ? (open ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]")) : ""]
             .filter { !$0.isEmpty }

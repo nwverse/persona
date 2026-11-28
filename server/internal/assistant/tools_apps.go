@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,8 +16,10 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 // The tools on the knowledge base, which is the assistant's own (kb_*, kb.go), and on what the hub keeps: its
@@ -92,9 +96,12 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			return i18n.T(s.lang(ctx), "assistant-kb_tools.list_empty"), nil
 		}
 		var b strings.Builder
+		lang := s.lang(ctx)
 		for _, x := range items {
-			fmt.Fprintf(&b, "- %s · %s [%s 相关%d] %s %s%s\n", x.ID, x.Name, orDash(x.Importance), x.Relevance,
+			fmt.Fprintf(&b, "- %s · %s [%s 相关%d] %s %s%s", x.ID, x.Name, orDash(x.Importance), x.Relevance,
 				strings.Join(x.Tags, ","), x.Extra, prefix(" — ", x.OneLine))
+			writeProjectReview(&b, lang, x.ProjectMode, x.Freshness, x.Sources, true)
+			b.WriteByte('\n')
 		}
 		return b.String(), nil
 	case "kb_get":
@@ -110,16 +117,34 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		if err != nil {
 			return "", fmt.Errorf("%s/%s: %w", a.Kind, a.ID, err)
 		}
-		// meta.json as the file has it (one edited by hand into something else: its text, as it is).
-		meta := []byte(d.Meta)
+		// The public metadata, with a project's people folded to the first few (kb_get_fit.go).
+		meta, folded := []byte(d.Meta), ""
+		if a.Kind == kb.KindProject {
+			meta, folded = foldPeople(meta, d.Links, filepath.Join(d.Path, "meta.json"))
+		}
 		var indented bytes.Buffer
-		if json.Valid(d.Meta) && json.Indent(&indented, bytes.TrimSpace(d.Meta), "", "  ") == nil {
+		if json.Valid(meta) && json.Indent(&indented, bytes.TrimSpace(meta), "", "  ") == nil {
 			meta = append(indented.Bytes(), '\n')
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s\n", d.Path, meta)
+		var review strings.Builder
+		writeProjectReview(&review, s.lang(ctx), d.ProjectMode, d.Freshness, d.Sources, false)
+		if review.Len() > 0 && estTokens(d.Summary)+estTokens(string(meta))+estTokens(review.String()) > kbGetMaxTokens/2 {
+			b.WriteString(review.String())
+			b.WriteString("\n\n")
+			review.Reset()
+		}
+		fmt.Fprintf(&b, "Path: %s\n\nmeta.json:\n%s%s\n", d.Path, meta, folded)
+		if a.Kind == kb.KindProject {
+			if t, ok := e.ProjectTreeOf(d.ID); ok {
+				b.WriteString(projectTreeText(t))
+			}
+		}
 		if d.Summary != "" {
 			fmt.Fprintf(&b, "\nsummary.md:\n%s\n", d.Summary)
+		}
+		if review.Len() > 0 {
+			fmt.Fprintf(&b, "\n%s\n", review.String())
 		}
 		if len(d.Log) > 0 {
 			fmt.Fprintf(&b, "\nlog.md (latest):\n%s\n", strings.Join(d.Log, "\n"))
@@ -161,10 +186,10 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		switch {
 		case a.Kind != kb.KindRecording || json.Unmarshal(d.Meta, &trimmed) != nil || trimmed.At == nil:
 		case trimmed.Kind == kb.RecordingDay:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the recap above is kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the recap above is kept, until "+
 				"assistant.minutes_days after the day (0 means forever, the default), and it can't be written again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		default:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the minutes above are kept, until "+
 				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		}
 		switch {
@@ -173,7 +198,7 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		case d.Recent != "":
 			fmt.Fprintf(&b, "\nMessages, last 7 days:\n%s\n", d.Recent)
 		}
-		return b.String(), nil
+		return fitKBGet(b.String(), d.Path), nil
 	case "kb_update":
 		if e.Store.ReadOnly() {
 			return "", kb.ErrReadOnly
@@ -183,10 +208,24 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 			ID   string `json:"id"`
 			kb.UserUpdate
 		}
-		if err := json.Unmarshal(args, &a); err != nil {
+		if err := kbDecodeParams(name, args, &a); err != nil {
 			return "", err
 		}
-		ignored := kb.Unsupported(a.Kind, a.Update)
+		if a.LockLists == nil { // a removal keeps out just that link; locking a whole list is the user's choice in the app
+			a.LockLists = new(false)
+		}
+		if check := kbWriteCheckOf(ctx); check != nil {
+			if text := kbUpdateText(args); text != "" {
+				if err := check(text); err != nil {
+					return "", err
+				}
+			}
+		}
+		ignored := kb.UserUnsupported(a.Kind, a.UserUpdate)
+		var undo *kb.UserUpdate
+		if a.Kind == kb.KindProject {
+			undo = e.TreeUndo(a.ID, a.UserUpdate)
+		}
 		id, err := e.ApplyUser(a.Kind, a.ID, a.UserUpdate)
 		if err != nil {
 			return "", err
@@ -198,9 +237,58 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		for _, f := range ignored { // said, so the model does not take a dropped field for written
 			out += "\nNot saved: " + f.Field + " (" + f.Reason + ")."
 		}
+		if a.Kind == kb.KindProject && (a.Parent != nil || a.Milestones != nil || a.Milestone != nil) {
+			out += projectTreeSaved(e, id, undo)
+		}
 		return out, nil
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
+}
+
+// writeProjectReview gives tools the same review state as the wire. The list
+// shows the timeline positions and counts, while detail includes each input revision.
+func writeProjectReview(b *strings.Builder, lang i18n.Lang, mode string, freshness *kbwire.ProjectFreshness, sources []kbwire.ProjectSource, compact bool) {
+	if mode == "" && freshness == nil && len(sources) == 0 {
+		return
+	}
+	if compact {
+		summary := &kbwire.ProjectFreshness{}
+		if freshness != nil {
+			summary.NeedsReview, summary.TimelineEnd = freshness.NeedsReview, freshness.TimelineEnd
+			summary.Fields = make(map[string]kbwire.ProjectFieldFreshness, len(freshness.Fields))
+			for name, field := range freshness.Fields {
+				if field.Cutoff != nil {
+					cutoff := *field.Cutoff
+					cutoff.Sources = nil
+					field.Cutoff = &cutoff
+				}
+				summary.Fields[name] = field
+			}
+			freshness = summary
+		}
+		var linked []kbwire.ProjectSource
+		for _, source := range sources {
+			if source.URL != "" || source.DeliveryState != "" {
+				source.Refs = nil
+				linked = append(linked, source)
+			}
+		}
+		sources = linked
+		if mode == "" && freshness == nil && len(sources) == 0 {
+			return
+		}
+		b.WriteString(" · ")
+	}
+	if freshness != nil && freshness.NeedsReview {
+		b.WriteString(i18n.T(lang, "assistant-kb_tools.needs_review"))
+		b.WriteByte(' ')
+	}
+	raw, _ := json.Marshal(struct {
+		Mode      string                   `json:"project_mode,omitempty"`
+		Freshness *kbwire.ProjectFreshness `json:"freshness,omitempty"`
+		Sources   []kbwire.ProjectSource   `json:"sources,omitempty"`
+	}{mode, freshness, sources})
+	b.Write(raw)
 }
 
 func orDash(s string) string {
@@ -219,18 +307,48 @@ func prefix(p, s string) string {
 
 // ---- interaction_answer (prompts/mcp/agents) ----
 
-// toolInteractionAnswer answers another agent's question for the user (docs/assistant/assistant.md). Only a question may be
-// answered here: a permission, a plan and a terminal dialog are the user's to decide, and an assistant conversation
-// (this one among them) is never answered by the assistant.
+// toolInteractionAnswer answers another agent's question for the user (docs/assistant/assistant.md). A permission or
+// a plan is answered here only by the supervisor it was handed to (ask_route.go): it is the supervisor's call, kept
+// as the assistant's (AnsweredBy), never the user's. For a permission or plan, denial executes nothing; only an
+// affirmative answer that is the user's alone (userApproval) is refused for ask_escalate. A terminal dialog handed to
+// it is answered by answerScreenCard. Any other permission, plan
+// or terminal dialog is the user's to decide, and an assistant conversation (this one among them) is never answered by
+// the assistant.
 func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
 		Machine       string          `json:"machine"`
 		SessionID     string          `json:"session_id"`
 		InteractionID string          `json:"interaction_id"`
 		Answers       json.RawMessage `json:"answers"`
+		Allow         *bool           `json:"allow"`
 		Reason        string          `json:"reason"`
 	}
 	_ = json.Unmarshal(args, &a)
+	if ix, ok := s.pendingIx(strings.TrimSpace(a.InteractionID)); ok && s.activeInternalCard(ix) {
+		todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
+		if !routed || self == ix.SessionID {
+			return "", errors.New("this internal interaction was not handed to you")
+		}
+		if ix.MachineID != a.Machine || ix.SessionID != a.SessionID || !time.Now().Before(ix.ExpiresAt) {
+			return "", errors.New("internal interaction source changed or expired")
+		}
+		if ix.Kind == proto.IxPermission {
+			return s.answerApprovalCard(ctx, self, ix, a.Allow, a.Reason)
+		}
+		if ix.Kind == proto.IxScreen {
+			return s.answerScreenCard(ctx, self, ix, a.Answers, a.Allow, a.Reason)
+		}
+		answers, err := interactionAnswers(ix, a.Answers)
+		if err != nil {
+			return "", err
+		}
+		if err := s.resolveRemembered(ix.ID, proto.Resolution{Answers: answers, AnsweredBy: proto.AnsweredByAssistant, Reason: a.Reason}, false); err != nil {
+			return "", err
+		}
+		s.askAnswered(ctx, todo, self, ix, answers, a.Reason)
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_supervisor_answered", map[string]any{"by": self, "card": ix.ID, "kind": ix.Kind})
+		return "Answered as the designated supervisor.", nil
+	}
 	am, c, err := s.findAgent(ctx, a.Machine, a.SessionID)
 	if err != nil {
 		return "", err
@@ -251,14 +369,21 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		return "", interactionEnded(id, got.Status)
 	}
 	ix := got.Interaction
-	if ix.Kind != proto.IxQuestion {
-		return "", fmt.Errorf("interaction %s is a %s (approval), only the user can answer it in the app", ix.ID, ix.Kind)
+	approval := ix.Kind == proto.IxPermission || ix.Kind == proto.IxPlan
+	if ix.Kind != proto.IxQuestion && ix.Kind != proto.IxScreen && !approval {
+		return "", fmt.Errorf("interaction %s is a %s, only the user can answer it in the app", ix.ID, ix.Kind)
 	}
 	if ix.MachineID != am.ID || ix.SessionID != c.SessionID {
 		return "", fmt.Errorf("interaction %s belongs to another agent: machine=%s session_id=%s", ix.ID, ix.MachineID, ix.SessionID)
 	}
 	if time.Now().After(ix.ExpiresAt) {
 		return "", fmt.Errorf("interaction %s expired", ix.ID)
+	}
+	if approval {
+		return s.answerApprovalCard(ctx, self, ix, a.Allow, a.Reason)
+	}
+	if ix.Kind == proto.IxScreen {
+		return s.answerScreenCard(ctx, self, ix, a.Answers, a.Allow, a.Reason)
 	}
 	answers, err := interactionAnswers(ix, a.Answers)
 	if err != nil {
@@ -286,6 +411,126 @@ func (s *Service) toolInteractionAnswer(ctx context.Context, self string, args j
 		fmt.Fprintf(&b, "- %s → %s\n", q.Question, answers[q.Question])
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+// answerApprovalCard is interaction_answer on permission or plan card ix: only the conversation supervising its task
+// that it was handed to (or the main conversation) may allow or deny it. Denial executes nothing; only allowing one
+// that is the user's alone (userApproval) is refused for ask_escalate.
+func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.Interaction, allow *bool, reason string) (string, error) {
+	todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
+	if !routed {
+		return "", fmt.Errorf("interaction %s is a %s (approval) that was not handed to you as its task's supervisor: only the user can answer it in the app", ix.ID, ix.Kind)
+	}
+	if allow == nil {
+		return "", errors.New("allow is required for a permission or plan card: true allows the tool (approves the plan), false denies it")
+	}
+	if *allow {
+		if why := userApproval(ix); why != "" && !(s.internalCard(ix) && s.inputCardSource(ix, false) == cardConfirmOutbound) {
+			return "", fmt.Errorf("interaction %s %s: only the user decides it; hand it to them with ask_escalate (todo_id %s), with your recommendation", ix.ID, why, todo)
+		}
+	}
+	reason = clip(oneLine(reason), 120)
+	if err := s.answeredApproval(ctx, todo, self, ix, *allow, reason); err != nil {
+		if errors.Is(err, errNotPending) {
+			return "", interactionEnded(ix.ID, s.endedStatus(ctx, ix.ID, err))
+		}
+		return "", err
+	}
+	verb := "Allowed"
+	switch {
+	case ix.Kind == proto.IxPlan && *allow:
+		verb = "Approved the plan"
+	case ix.Kind == proto.IxPlan:
+		verb = "Rejected the plan"
+	case !*allow:
+		verb = "Denied"
+	}
+	if todo == "" {
+		return fmt.Sprintf("%s for the agent. The agent sees that the assistant answered.", verb), nil
+	}
+	return fmt.Sprintf("%s for the agent, as its supervisor: kept as task %s's decision (yours, not the user's), and the agent sees it was not the user's answer.", verb, todo), nil
+}
+
+// answerScreenCard is interaction_answer on terminal dialog ix (a screen card): only the conversation supervising its
+// task that it was handed to (or the main conversation) may pick its option, as it allows a permission
+// (answerApprovalCard), and not one that is the user's (userScreen). The option is named as a question's is (answers:
+// the dialog's question → an option's label, or its number), or with allow for a yes/no dialog (its first option
+// starting "Yes", or "No").
+func (s *Service) answerScreenCard(ctx context.Context, self string, ix proto.Interaction, answers json.RawMessage, allow *bool, reason string) (string, error) {
+	if held, ok := s.pendingIx(ix.ID); ok && held.Dialog != nil {
+		ix.Dialog = held.Dialog // the dialog as the card read it, its revision the node checks before any key
+	}
+	todo, routed := s.routedTo(ix.ID, self, s.isMain(ctx, self))
+	if !routed || !supervisedScreen(ix) {
+		return "", fmt.Errorf("interaction %s is a screen (a terminal dialog) that was not handed to you as its task's supervisor: only the user can answer it in the app", ix.ID)
+	}
+	if why := userScreen(ix); why != "" {
+		return "", fmt.Errorf("interaction %s %s: only the user decides it; hand it to them with ask_escalate (todo_id %s), with your recommendation", ix.ID, why, todo)
+	}
+	picked, err := screenPick(ix, answers, allow)
+	if err != nil {
+		return "", err
+	}
+	reason = clip(oneLine(reason), 120)
+	if err := s.answeredScreen(ctx, todo, self, ix, picked, reason); err != nil {
+		if errors.Is(err, errNotPending) {
+			return "", interactionEnded(ix.ID, s.endedStatus(ctx, ix.ID, err))
+		}
+		return "", err
+	}
+	return fmt.Sprintf("Picked %q in the agent's terminal, as its supervisor: kept as task %s's decision (yours, not the user's).", picked.Label, todo), nil
+}
+
+// screenPick is the option of terminal dialog ix that answers (the dialog's question → a label or a number) or allow
+// name: only an option to pick (not a free-text row, not "Chat about this"), one only.
+func screenPick(ix proto.Interaction, answers json.RawMessage, allow *bool) (screen.Option, error) {
+	d := ix.Dialog
+	var choices []string
+	for _, o := range d.Options {
+		if o.Kind == "" && o.Label != "" {
+			choices = append(choices, o.Key+". "+o.Label)
+		}
+	}
+	list := strings.Join(choices, " / ")
+	if d.Multi {
+		return screen.Option{}, fmt.Errorf("interaction %s is a multi-select terminal question: hand it to the user with ask_escalate, or tell the agent with agent_send", ix.ID)
+	}
+	var want string
+	switch {
+	case len(answers) > 0 && string(answers) != "null":
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(answers, &raw) != nil || len(raw) != 1 {
+			return screen.Option{}, fmt.Errorf("answers takes one entry for a terminal dialog: %q → one of its options (%s)", d.Question, list)
+		}
+		for _, v := range raw {
+			if json.Unmarshal(v, &want) != nil {
+				return screen.Option{}, fmt.Errorf("%q takes one option label or number: %s", d.Question, list)
+			}
+		}
+	case allow != nil:
+		prefix := "no"
+		if *allow {
+			prefix = "yes"
+		}
+		for _, o := range d.Options {
+			if l := strings.ToLower(strings.TrimSpace(o.Label)); o.Kind == "" && (l == prefix || strings.HasPrefix(l, prefix+",") || strings.HasPrefix(l, prefix+" ")) {
+				return o, nil
+			}
+		}
+		return screen.Option{}, fmt.Errorf("interaction %s has no yes/no option for allow: name one in answers (%q → %s)", ix.ID, d.Question, list)
+	default:
+		return screen.Option{}, fmt.Errorf("answers is required for a terminal dialog: %q → one of its options (%s)", d.Question, list)
+	}
+	want = strings.TrimSpace(unquoted(want))
+	for _, o := range d.Options {
+		if o.Kind != "" || o.Label == "" {
+			continue
+		}
+		if want == o.Label || want == o.Key || want == o.Key+". "+o.Label || strings.EqualFold(want, o.Label) {
+			return o, nil
+		}
+	}
+	return screen.Option{}, fmt.Errorf("%q is not one of %q's options: %s", want, d.Question, list)
 }
 
 // interactionEnded says how an interaction that is no longer pending ended (status, from the hub's history), or that
@@ -511,8 +756,9 @@ func draftPlaceholder(text string) string {
 // it waits on the item for the user to send.
 func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		Text, Note string
-		Changes    []DocChange
+		Text, Note     string
+		Changes        []DocChange
+		ProcessingTurn string `json:"processing_turn"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Text) == "" {
 		return "", errors.New("text is required")
@@ -521,7 +767,7 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 	if p := draftPlaceholder(a.Text); p != "" {
 		return "", fmt.Errorf("the draft leaves %s to fill in, and it goes out as it is: leave out what you could not find (say so in note) and submit again", p)
 	}
-	itemID, refused, err := s.inboxDraft(ctx, self, strings.TrimSpace(a.Text), clip(strings.TrimSpace(a.Note), 600), a.Changes)
+	itemID, refused, err := s.inboxDraft(ctx, self, strings.TrimSpace(a.Text), clip(strings.TrimSpace(a.Note), 600), a.Changes, a.ProcessingTurn)
 	if err != nil { // not kept: the event is back where the turn found it, so the draft can be handed in again
 		return "", err
 	}
@@ -536,11 +782,12 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 }
 
 // recordingsAt is what kb_get adds to calendar item kind/id (meetings or events, id as stored): the recordings matched
-// to it by time (kb/minutes.go matchRecordings), which hold its minutes; "" when there are none.
+// to it by time (modules/recording/writers/minutes.go matchRecordings), as their calendar item or their imported meeting (#8872), which hold
+// its minutes; "" when there are none.
 func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id string) string {
 	var at []kb.Entry
 	for _, r := range e.Store.Recordings() {
-		if r.Meeting != nil && r.Meeting.Kind == kind && kb.SafeID(r.Meeting.ID) == id {
+		if matchedAt(r.Meeting, kind, id) || matchedAt(r.ImportedMeeting, kind, id) {
 			at = append(at, kb.Entry{Kind: kb.KindRecording, ID: r.ID, Name: r.Name, Updated: r.StartedAt})
 		}
 	}
@@ -553,6 +800,11 @@ func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id strin
 		fmt.Fprintf(&b, "- %s · %s %s\n", x.ID, x.Name, x.Extra)
 	}
 	return b.String()
+}
+
+// matchedAt says whether ref names calendar item kind/id (id as stored).
+func matchedAt(ref *recordingwire.MeetingRef, kind, id string) bool {
+	return ref != nil && ref.Kind == kind && kb.SafeID(ref.ID) == id
 }
 
 // recordingLines is kb_list's first limit recordings newest first (what "the meeting just now" asks for), each saying

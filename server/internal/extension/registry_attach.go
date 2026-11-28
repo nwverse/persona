@@ -31,6 +31,10 @@ func (r *Registry) Attach(ctx context.Context, id, source, actor string) (*Exten
 	if err != nil {
 		return nil, err
 	}
+	if old.Record.BuiltinPredecessor || errors.Is(old.problemErr, ErrIdentity) {
+		// A matching remote manifest cannot establish that its program is the signed package.
+		return nil, ErrIdentity
+	}
 	id = old.Record.ID
 	if rt := old.Full.Runtime; rt == nil || rt.IsDeno() {
 		return nil, i18n.Err("extension-status.attach_no_program", i18n.Args{"id": id})
@@ -59,13 +63,15 @@ func (r *Registry) Attach(ctx context.Context, id, source, actor string) (*Exten
 	}
 	row := old.Record
 	row.Remote = &remote
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	next, err := r.switchRemote(ctx, old, row)
 	if err != nil {
 		return nil, err
 	}
 	unlock()
 	r.audit(ctx, id, "attach", actor, map[string]any{"version": row.Version, "rpc_socket": remote.RPCSocket, "http_socket": remote.HTTPSocket})
-	r.changed(Change{ID: id, Kind: "attached", Old: old})
+	mutation.changed(Change{ID: id, Kind: "attached", Old: old})
 	return next, nil
 }
 
@@ -86,13 +92,15 @@ func (r *Registry) Detach(ctx context.Context, id, actor string) (*Extension, er
 	}
 	row := old.Record
 	row.Remote = nil
+	mutation := r.settingsWrite(id)
+	defer mutation.finish()
 	next, err := r.switchRemote(ctx, old, row)
 	if err != nil {
 		return nil, err
 	}
 	unlock()
 	r.audit(ctx, id, "detach", actor, map[string]any{"version": row.Version})
-	r.changed(Change{ID: id, Kind: "detached", Old: old})
+	mutation.changed(Change{ID: id, Kind: "detached", Old: old})
 	return next, nil
 }
 
@@ -117,10 +125,11 @@ func (r *Registry) attachable(id string) (*Extension, error) {
 
 // switchRemote saves row, old's record with only Remote changed, and puts it in effect. Called inside an operation.
 func (r *Registry) switchRemote(ctx context.Context, old *Extension, row Record) (*Extension, error) {
-	row.UpdatedAt = r.now()
-	if err := r.write(ctx, row); err != nil {
+	revision, err := r.write(ctx, row)
+	if err != nil {
 		return nil, err
 	}
+	row.UpdatedAt = revision
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := r.fromRow(row)

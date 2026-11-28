@@ -62,26 +62,29 @@ func TestGoldenTabName(t *testing.T) {
 	}
 }
 
-// agents.start_params: what a new Agent runs on is Model Settings › Agents (with what the app picked over it), its tab is
-// named when asked; a resume keeps what it runs on; a refusal is the app's to see.
+// agents.start_params: what a new Agent runs on is Model Settings › Agents (with what the app picked over it), its tab gets
+// a local placeholder without asking the model; a resume keeps what it runs on; a refusal is the app's to see.
 func TestAgentStartParams(t *testing.T) {
 	f := newFakeHub()
-	f.tabReply = "fix-login"
 	s := newTestService(t, f)
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.agents-l"})
 	ctx := context.Background()
 	p, err := s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"cwd": "/code", "launcher": ""},
-		NameFrom: "修登录"})
+		NameFrom: "Fix login"})
 	if err != nil || p["launcher"] != "agents-l" || p["tab_name"] != "fix-login" || p["cwd"] != "/code" {
 		t.Fatalf("new: %v %v", p, err)
 	}
 	p, _ = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"launcher": "mine", "tab_name": "kept"},
-		NameFrom: "修登录"})
+		NameFrom: "Fix login"})
 	if p["launcher"] != "mine" || p["tab_name"] != "kept" {
 		t.Fatalf("picked: %v", p)
 	}
+	p, _ = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{}, NameFrom: "修登录"})
+	if p["tab_name"] != "persona" || len(f.tabAsked) != 0 {
+		t.Fatalf("non-ASCII local placeholder: %v (tab names asked %d)", p, len(f.tabAsked))
+	}
 	p, _ = s.AgentStartParams(ctx, AgentStartParams{MachineID: "box", Params: map[string]any{"resume_session_id": "old"}})
-	if p["launcher"] != nil || p["tab_name"] != nil || len(f.tabAsked) != 1 {
+	if p["launcher"] != nil || p["tab_name"] != nil || len(f.tabAsked) != 0 {
 		t.Fatalf("resume: %v (tab names asked %d)", p, len(f.tabAsked))
 	}
 	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.other-l"})
@@ -107,6 +110,41 @@ func TestAgentStartParams(t *testing.T) {
 	p, err = s2.AgentResumeParams(ctx, AgentResumeParams{MachineID: "box", SessionID: "gone-1", Params: map[string]any{"text": "hi"}})
 	if err != nil || len(p) != 1 || p["text"] != "hi" {
 		t.Fatalf("resume params without a configuration: %v %v", p, err)
+	}
+}
+
+func TestAgentStartParamsResolvesAgyType(t *testing.T) {
+	f := newFakeHub().withMachine()
+	f.launcherList = []proto.Launcher{{Name: "agy-wrapper", Agent: "agy", Source: "zshrc"}}
+	s := newTestService(t, f)
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.agy-wrapper"})
+	got, err := s.AgentStartParams(t.Context(), AgentStartParams{MachineID: "server", Params: map[string]any{"async": true}})
+	if err != nil || got["launcher"] != "agy-wrapper" || got["agent_type"] != "agy" {
+		t.Fatalf("resolved start params = %v, %v", got, err)
+	}
+}
+
+func TestAgentStartParamsExplicitLauncherDefaultEffort(t *testing.T) {
+	s := newTestService(t, newFakeHub())
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.agy", Model: "configured-model", Effort: "xhigh"})
+	for _, tc := range []struct {
+		name       string
+		params     map[string]any
+		wantEffort string
+	}{
+		{"follow model settings", map[string]any{}, "xhigh"},
+		{"existing explicit launcher", map[string]any{"launcher": "agy"}, "xhigh"},
+		{"explicit launcher default", map[string]any{"launcher": "agy", "launcher_default_effort": true}, ""},
+		{"explicit effort wins", map[string]any{"launcher": "agy", "launcher_default_effort": true, "effort": "low"}, "low"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := s.AgentStartParams(t.Context(), AgentStartParams{Params: tc.params})
+			effort, _ := got["effort"].(string)
+			if err != nil || got["launcher"] != "agy" || got["model"] != "configured-model" ||
+				effort != tc.wantEffort || got["launcher_default_effort"] != nil {
+				t.Fatalf("start params = %v, %v, want effort %q", got, err, tc.wantEffort)
+			}
+		})
 	}
 }
 
@@ -159,6 +197,26 @@ func TestAutonameTabs(t *testing.T) {
 	}
 	if f.sent() != 0 {
 		t.Fatal("a dry run renamed")
+	}
+	if w := serve(s, "POST", "/api/v1/tabs/autoname", `{}`); w.Code != 200 || f.sent() != 2 {
+		t.Fatalf("renamed %d: %s", f.sent(), w.Body)
+	}
+}
+
+// Orca's tabs are renamed the same way (#17043): "Terminal", the name Orca gives a tab opened without one, is a name
+// nobody chose; a tab someone named is left as it is.
+func TestAutonameOrcaTabs(t *testing.T) {
+	f := newFakeHub()
+	f.tabReply = "fix-login"
+	f.setSessions("box",
+		proto.Session{SessionID: "a", Title: "Fix the login", SpaceKind: "orca", SpaceID: "repo::/work/app", TabID: "tab1", SlotName: "Terminal", Status: proto.StatusIdle},
+		proto.Session{SessionID: "b", Title: "Review", SpaceKind: "orca", SpaceID: "repo::/work/app", TabID: "tab2", SlotName: "persona", Status: proto.StatusDone},
+		proto.Session{SessionID: "c", Title: "named", SpaceKind: "orca", SpaceID: "repo::/work/app", TabID: "tab3", SlotName: "leader", Status: proto.StatusIdle})
+	s := newTestService(t, f)
+	w := serve(s, "POST", "/api/v1/tabs/autoname", `{"dry_run":true}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"from":"Terminal","to":"fix-login"`) ||
+		!strings.Contains(w.Body.String(), `"from":"persona","to":"fix-login-2"`) || strings.Contains(w.Body.String(), `"leader"`) {
+		t.Fatalf("dry run: %d %s", w.Code, w.Body)
 	}
 	if w := serve(s, "POST", "/api/v1/tabs/autoname", `{}`); w.Code != 200 || f.sent() != 2 {
 		t.Fatalf("renamed %d: %s", f.sent(), w.Body)

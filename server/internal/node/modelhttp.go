@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -25,6 +26,13 @@ const (
 // answered as is, never followed here: Go keeps x-api-key and custom headers on one to another host, and the manager's
 // own client decides about it as it would without the node.
 var modelHTTPClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// An API connection's request sent through this computer; the handler zeroes the params it is handed.
+func init() {
+	nodeRPC(proto.MethodModelHTTP, func(_ *Node, ctx context.Context, params json.RawMessage) (any, error) {
+		return modelHTTP(ctx, params)
+	})
+}
 
 // modelHTTP answers model.http: one request (a reply's POST, or a model list's GET) to a model provider for an API connection that sends through this computer
 // (docs/assistant/model-config.md "Sending through a computer"). The key is in the headers for this call only: it is
@@ -58,7 +66,11 @@ func modelHTTP(ctx context.Context, params json.RawMessage) (any, error) {
 	if err != nil {
 		return nil, errors.New("model.http: bad request")
 	}
-	req.Header = http.Header(p.Header)
+	if p.Header != nil {
+		req.Header = http.Header(p.Header)
+	}
+	modelhttp.SetDefaultUserAgent(req.Header)
+	modelhttp.SetOpenCodeSession(req.Header, u.String(), "")
 	resp, err := modelHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("model.http: %w", err)

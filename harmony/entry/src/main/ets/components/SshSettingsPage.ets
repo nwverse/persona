@@ -1,4 +1,8 @@
-import { SshConfiguration, SshTunnel } from '../models/SshTunnel';
+import { IconActions } from '../design/IconActions';
+import { Colors } from '../design/Colors';
+import { ButtonStyles } from '../design/Controls';
+import { SshConfiguration, SshDestination, SshTunnel } from '../models/SshTunnel';
+import { SshRouteFields } from './SshRouteFields';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 
@@ -11,6 +15,9 @@ export struct SshSettingsPage {
   @Local sshPort: string = '22';
   @Local username: string = '';
   @Local hostKey: string = '';
+  @Local targetHost: string = '';
+  @Local targetPort: string = '';
+  @Local always: boolean = false;
   @Local privateKey: string = '';
   @Local passphrase: string = '';
   @Local busy: boolean = false;
@@ -31,13 +38,33 @@ export struct SshSettingsPage {
     const config = this.tunnel.configuration;
     this.sshHost = config.sshHost; this.sshPort = String(config.sshPort); this.username = config.username;
     this.hostKey = config.hostKey; this.error = ''; this.busy = false;
+    const target: SshDestination = config.enabled ? config.destination(this.tunnel.profileAddress()) : {host:'127.0.0.1',port:18660};
+    this.targetHost = target.host === '127.0.0.1' ? '' : target.host; this.targetPort = target.port === 18660 ? '' : String(target.port);
+    this.always = config.enabled && config.routePolicy !== 'fallback';
+  }
+  private applySettings(config: SshConfiguration): void {
+    const old = this.tunnel.configuration, target = old.destination(this.tunnel.profileAddress());
+    const host = this.targetHost.trim().replace(/^\[|\]$/g,'') || '127.0.0.1', port = this.targetPort.trim() ? Number(this.targetPort) : 18660;
+    if (old.enabled && old.routePolicy === 'legacy' && this.always && target.host === host && target.port === port) return;
+    config.routePolicy = this.always ? 'always' : 'fallback'; config.forwardHost = host; config.forwardPort = port;
+  }
+  private alwaysChanged(value: boolean): void {
+    this.always = value;
+    const old = this.tunnel.configuration;
+    if (this.busy || !old.enabled || old.sshHost !== this.sshHost.trim() || old.sshPort !== Number(this.sshPort) ||
+      old.username !== this.username.trim() || old.hostKey !== this.hostKey.trim() || this.privateKey || this.passphrase) return;
+    const kept = old.destination(this.tunnel.profileAddress()), next = old.copy(); this.applySettings(next);
+    const draft = next.destination(this.tunnel.profileAddress());
+    if (next.routePolicy === old.routePolicy || kept.host !== draft.host || kept.port !== draft.port) return;
+    this.save(next,this.visit,this.tunnel);
   }
   private current(visit: number, tunnel: SshTunnel): boolean { return this.mounted && this.active && this.visit === visit && this.tunnel === tunnel; }
   private confirmSave(): void {
     if (this.busy || !this.tunnel.loaded || !this.mounted || !this.active) return;
     const visit = this.visit, tunnel = this.tunnel;
-    const config = new SshConfiguration(); config.enabled = true; config.sshHost = this.sshHost.trim();
+    const config = tunnel.configuration.copy(); config.enabled = true; config.sshHost = this.sshHost.trim();
     config.sshPort = Number(this.sshPort); config.username = this.username.trim(); config.hostKey = this.hostKey.trim();
+    this.applySettings(config);
     this.getUIContext().showAlertDialog({
       title: tr('ssh_verify_host'),
       message: tr('ssh_verify_message') + '\n\n' + config.sshHost + ':' + String(config.sshPort) + '\n' + config.hostKey,
@@ -65,6 +92,7 @@ export struct SshSettingsPage {
     if (!this.tunnel.loaded) return this.tunnel.error || 'ssh_loading';
     if (this.tunnel.phase === 'connecting') return 'ssh_connecting';
     if (this.tunnel.phase === 'connected') return 'ssh_connected';
+    if (this.tunnel.phase === 'direct') return 'phone_pair_ssh_direct_active';
     if (this.tunnel.phase === 'saving') return 'ssh_saving';
     if (this.tunnel.error) return this.tunnel.error;
     return this.tunnel.configuration.enabled ? 'ssh_enabled' : 'ssh_disabled';
@@ -87,6 +115,9 @@ export struct SshSettingsPage {
           Text(tr('ssh_host_key')).fontSize(Tokens.meta).width('100%')
           TextInput({ text: this.hostKey, placeholder: 'SHA256:' }).maxLength(50)
             .onChange((value: string) => this.hostKey = value).height(Tokens.input)
+          SshRouteFields({host:this.targetHost,port:this.targetPort,always:this.always,
+            onHost:(value: string): void => {this.targetHost=value;},onPort:(value: string): void => {this.targetPort=value;},
+            onAlways:(value: boolean): void => this.alwaysChanged(value)})
           Text(tr(this.tunnel.configuration.keyRef ? 'ssh_replace_key' : 'ssh_private_key')).fontSize(Tokens.meta).width('100%')
           TextArea({ text: this.privateKey, placeholder: tr('ssh_private_key') }).maxLength(32768)
             .onChange((value: string) => this.privateKey = value).height(Tokens.inputExpanded)
@@ -94,10 +125,10 @@ export struct SshSettingsPage {
           TextInput({ text: this.passphrase, placeholder: tr('ssh_passphrase') }).type(InputType.Password).maxLength(4096)
             .onChange((value: string) => this.passphrase = value).height(Tokens.input)
         }.width('100%').enabled(!this.busy && this.tunnel.loaded)
-        Button(tr('ssh_save_enable')).width('100%').constraintSize({ minHeight: Tokens.touch })
+        Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('ssh_save_enable')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('ssh_save_enable', true)]) }.attributeModifier(ButtonStyles.iconPrimary).accessibilityText(tr('ssh_save_enable')).bindTips(tr('ssh_save_enable'))
           .enabled(!this.busy && this.tunnel.loaded && !!this.sshHost.trim() && !!this.username.trim() && !!this.hostKey.trim())
           .onClick(() => this.confirmSave())
-        if (this.tunnel.configuration.enabled) Button(tr('ssh_disable')).width('100%').constraintSize({ minHeight: Tokens.touch })
+        if (this.tunnel.configuration.enabled) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('ssh_disable')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('ssh_disable', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('ssh_disable')).bindTips(tr('ssh_disable'))
           .enabled(!this.busy).onClick(() => this.disable())
       }.padding(Tokens.page).width('100%')
     }.width('100%').height('100%').backgroundColor($r('app.color.persona_canvas'))

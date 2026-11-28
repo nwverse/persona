@@ -188,9 +188,7 @@ struct FolderPicker: View {
     private func level(_ path: String) -> some View {
         FolderPickerList(machineID: machineID, group: group, cwd: cwd, path: path, moving: Set(moving), reload: made) { opened.append($0) }
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(copying ? String(localized: "Copy Here") : String(localized: "Move Here")) {
                         pick(path)
@@ -295,9 +293,7 @@ private struct FolderPickerList: View {
         .listStyle(.plain)
         .themedPage()
         .navigationTitle(title)
-        #if !os(macOS)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
         .accessibilityIdentifier("files.move.list")
         .task(id: "\(path)\u{0}\(reload)") {
             guard let api = model.api(group) else { return }

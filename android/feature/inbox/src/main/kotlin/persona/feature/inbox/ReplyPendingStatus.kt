@@ -2,6 +2,7 @@ package persona.feature.inbox
 
 import persona.core.contracts.api.DeliveryState
 import persona.core.designsystem.PendingStatus
+import persona.core.inbox.*
 
 internal fun DeliveryState.pendingStatus(): PendingStatus? = when (this) {
     DeliveryState.Queued, DeliveryState.WaitingForNetwork -> PendingStatus.Waiting
@@ -10,7 +11,7 @@ internal fun DeliveryState.pendingStatus(): PendingStatus? = when (this) {
     DeliveryState.Verifying -> PendingStatus.Verifying
     DeliveryState.NeedsConfirmation -> PendingStatus.NeedsReview
     DeliveryState.Refused, DeliveryState.Rejected -> PendingStatus.Refused
-    DeliveryState.Sent -> null
+    DeliveryState.Sent, DeliveryState.Held -> null
 }
 
 internal fun ReplyDelivery.pendingStatus(): PendingStatus? = when (this) {

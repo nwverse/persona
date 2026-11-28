@@ -4,7 +4,12 @@ import SwiftUI
 struct SettingsAgentView: View {
     var body: some View {
         SettingsForm {
+            DefaultPermissionsSettingsSection()
             Section {
+                NavigationLink { HiddenAgentDirsView() } label: {
+                    SettingsRow(title: String(localized: "agentDirs.title", defaultValue: "Agent Folders"), symbol: Theme.Icon.options, tint: Theme.ai)
+                }
+                .lineLimit(1)
                 NavigationLink(value: SettingsPage.claude) {
                     SettingsRow(title: String(localized: "Claude Code Settings"), symbol: Theme.Icon.options, tint: Theme.Hue.orange)
                 }
@@ -15,6 +20,11 @@ struct SettingsAgentView: View {
                 }
                 .lineLimit(1)
                 .accessibilityIdentifier("settings-agent-codex")
+                NavigationLink(value: SettingsPage.agy) {
+                    SettingsRow(title: String(localized: "Antigravity Settings"), symbol: Theme.Icon.options, tint: Theme.Hue.blue)
+                }
+                .lineLimit(1)
+                .accessibilityIdentifier("settings-agent-agy")
                 NavigationLink(value: SettingsPage.triage) {
                     SettingsRow(title: String(localized: "Session Triage"), symbol: Theme.Icon.triage, tint: Theme.ai)
                 }
@@ -23,10 +33,68 @@ struct SettingsAgentView: View {
             } footer: {
                 Text("Agent tools and automation for this assistant's computers.")
             }
+            AgentHerdrTabNameSection()
         }
         .themedGroupedPage()
         .detailTitle(String(localized: "Agent"))
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Settings › Agent › "Use the herdr tab name as the session name" (#13899): mirrors Web `AgentsDisplayRow` and
+/// Android `AgentHerdrTabNameSetting`. Hidden on older hubs (when `use_herdr_tab_name` is absent) and in Demo Mode.
+struct AgentHerdrTabNameSection: View {
+    @Environment(AppModel.self) private var model
+
+    private var store: AgentsDisplayStore? {
+        guard !model.isDemo else { return nil }
+        return model.hub?.agentsDisplay
+    }
+
+    var body: some View {
+        Group {
+            if let store, let enabled = store.useHerdrTabName {
+                Section {
+                    SettingsSwitchRow(
+                        title: String(localized: "Use the herdr tab name as the session name"),
+                        symbol: Theme.Icon.terminal,
+                        tint: Theme.accent,
+                        accessibilityID: "settings-use-herdr-tab-name",
+                        isOn: Binding(
+                            get: { enabled },
+                            set: { next in Task { await store.setUseHerdrTabName(next) } }
+                        )
+                    )
+                    .disabled(store.saving)
+                    if store.saving {
+                        HStack(spacing: Theme.Space.s) {
+                            ProgressView()
+                            Text("Saving session naming preference…")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityIdentifier("settings-herdr-tab-name-saving")
+                    }
+                    if let error = store.error {
+                        Label(error, systemImage: Theme.Icon.error)
+                            .font(Theme.Font.caption)
+                            .foregroundStyle(Theme.danger)
+                        Button("Retry [Components b8784c]") {
+                            Task { await store.retry() }
+                        }
+                        .formButton()
+                        .lineLimit(1)
+                        .disabled(store.saving)
+                        .accessibilityIdentifier("settings-herdr-tab-name-retry")
+                    }
+                } footer: {
+                    Text("Shows the tab name first and syncs this preference across devices on this hub.")
+                }
+            }
+        }
+        .task(id: model.hub?.group) {
+            await store?.refresh()
+        }
     }
 }
 

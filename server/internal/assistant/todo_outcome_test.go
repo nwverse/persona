@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +21,8 @@ func outcomeEnv(t *testing.T, st Store, reply string) (*Service, *fakeHub, Todo)
 	t.Helper()
 	f := newFakeHub().withMachine()
 	f.setSessions("box", proto.Session{SessionID: "s1", Title: "修登录", Cwd: "/code/weather/ios"})
+	// The conversation that hands the task out, outside the health space: its outcome goes to a project (todo_scope.go).
+	f.setSessions("server", proto.Session{SessionID: "conv1", Title: "Persona", Assistant: true})
 	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: reply})
 	var s *Service
 	if st == nil {
@@ -32,7 +36,12 @@ func outcomeEnv(t *testing.T, st Store, reply string) (*Service, *fakeHub, Todo)
 	}
 	p, _ := e.Store.Project("天气-app")
 	p.OneLine = "天气 App 的 iOS 和安卓版"
-	if err := e.Store.PutProject(p); err != nil {
+	// Seed an owner-written legacy OneLine. Ordinary PutProject now preserves that field on existing projects.
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.Store.Path(kb.KindProject, p.Slug, "meta.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -101,8 +110,9 @@ func TestTaskOutcomeRecorded(t *testing.T) {
 		t.Fatalf("log again = %v", log)
 	}
 
-	// Handed to an agent for the same todo, the outcome rows are not passed off as the user's own calls.
-	if res, _ := s.TodoHandoff(context.Background(), TodoHandoff{TodoID: todo.ID, Text: "再看看"}); !strings.Contains(res.Text, "Agent 做完时记的，不是用户定的") {
+	// This fixture records an outcome without closing the todo. On handoff, it is an earlier phase's record,
+	// not a current completion or a decision the user made.
+	if res, _ := s.TodoHandoff(context.Background(), TodoHandoff{TodoID: todo.ID, Text: "再看看"}); !strings.Contains(res.Text, "前一阶段的记录，不代表待办当前已完成，也不是用户定的") {
 		t.Fatalf("decisions handed on = %q", res.Text)
 	}
 
@@ -186,8 +196,13 @@ func TestReviewAcceptedRecordsOutcome(t *testing.T) {
 				s, f, todo := outcomeEnv(t, st, outcomeReply)
 				f.outcome = `{"outcome":"修好了","links":[],"decisions":[],"pitfalls":[]}`
 				ctx := context.Background()
+				setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 				s.superviseTodo(ctx, todo.ID, "conv1", []string{"PR 合并"}, 0)
-				raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"})
+				args := map[string]any{"todo_id": todo.ID, "verdict": c.verdict, "note": "看过了"}
+				if c.verdict == reviewAccepted {
+					args["checks"] = completeReviewChecks(todoNow(s, todo.ID))
+				}
+				raw, _ := json.Marshal(args)
 				if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
 					t.Fatalf("%s: %v", c.verdict, err)
 				}
@@ -228,10 +243,15 @@ func TestAgentStartCarriesProjectContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.tabReply = "深色模式"
+	f.startReply = func(_ map[string]any, sess *proto.Session) *proto.StartInstead {
+		sess.SpaceKind, sess.SlotID, sess.SlotName = "herdr", "w1:t1", "agent-1"
+		return nil
+	}
 	args, _ := json.Marshal(map[string]string{"machine": "box", "cwd": "/code/weather", "prompt": "加深色模式"})
 	if _, err := s.runTool(context.Background(), "server", "conv9", "agent_start", args); err != nil {
 		t.Fatal(err)
 	}
+	waitAgentTabNaming(t, s)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.starts) != 1 {
@@ -276,6 +296,127 @@ func TestAgentStartCarriesExtensionProjectContext(t *testing.T) {
 	}
 }
 
+func TestProjectContextMemoryOrderBoundsAndConflicts(t *testing.T) {
+	s, f, _ := outcomeEnv(t, nil, outcomeReply)
+	f.setLocale("en")
+	e := kbEng(t, s)
+	p, _ := e.Store.Project("天气-app")
+	p.Kind = "long"
+	if err := e.Store.PutProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.PutSummary(kb.KindProject, p.Slug, "Bounded project summary"); err != nil {
+		t.Fatal(err)
+	}
+	append := func(record kb.ProjectMemoryRecord) {
+		t.Helper()
+		record.Verification = kb.ProjectMemoryAgentReported
+		if err := e.AppendProjectMemory(p.Slug, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 6; i++ {
+		append(kb.ProjectMemoryRecord{ID: fmt.Sprintf("outcome-id-%d", i), Type: kb.ProjectMemoryOutcome,
+			Conclusion: fmt.Sprintf("outcome-%d", i), RecordedAt: fmt.Sprintf("2026-11-20T02:0%d:00Z", i)})
+	}
+	for i := 0; i < 6; i++ {
+		record := kb.ProjectMemoryRecord{ID: fmt.Sprintf("decision-%d", i), Type: kb.ProjectMemoryDecision,
+			Question: "shared question", Decision: fmt.Sprintf("choice-%d", i), Reason: fmt.Sprintf("reason-%d", i),
+			RecordedAt: fmt.Sprintf("2026-11-20T03:0%d:00Z", i)}
+		if i == 5 {
+			record.SupersedesID = "decision-0"
+		}
+		append(record)
+	}
+	for i := 0; i < 4; i++ {
+		append(kb.ProjectMemoryRecord{ID: fmt.Sprintf("pitfall-%d", i), Type: kb.ProjectMemoryPitfall,
+			Conclusion: fmt.Sprintf("pit-%d", i), RecordedAt: fmt.Sprintf("2026-11-20T04:0%d:00Z", i)})
+	}
+	got := s.projectContext(context.Background(), "box", "/code/weather")
+	for _, want := range []string{"Bounded project summary", "outcome-5", "choice-5", "choice-4", "reason-5",
+		"decision-5", "decision-4", "2026-11-20T03:05:00Z", "2026-11-20T03:04:00Z", "pit-3", "agent_reported", "not supervisor-accepted"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("memory context lacks %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"outcome-0", "decision-0", "pit-0"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("memory context included %q outside its effective bound:\n%s", unwanted, got)
+		}
+	}
+	ordered := []string{"Project summary:", "Recent outcomes", "Effective decisions", "Pitfalls"}
+	at := 0
+	for _, section := range ordered {
+		next := strings.Index(got[at:], section)
+		if next < 0 {
+			t.Fatalf("section %q is missing or out of order:\n%s", section, got)
+		}
+		at += next + len(section)
+	}
+}
+
+func TestProjectContextMemoryFallsBackToOneLineWithoutSummary(t *testing.T) {
+	s, f, _ := outcomeEnv(t, nil, outcomeReply)
+	f.setLocale("en")
+	e := kbEng(t, s)
+	if err := e.AppendProjectMemory("天气-app", kb.ProjectMemoryRecord{ID: "one", Type: kb.ProjectMemoryOutcome, Conclusion: "result"}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.projectContext(context.Background(), "box", "/code/weather")
+	if !strings.Contains(got, "天气 App 的 iOS 和安卓版") || !strings.Contains(got, "result") {
+		t.Fatalf("OneLine fallback = %q", got)
+	}
+}
+
+func TestProjectContextSummaryUsesLongProjectBudget(t *testing.T) {
+	s, f, _ := outcomeEnv(t, nil, outcomeReply)
+	f.setLocale("en")
+	e := kbEng(t, s)
+	p, _ := e.Store.Project("天气-app")
+	p.Kind = "long"
+	if err := e.Store.PutProject(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.PutSummary(kb.KindProject, p.Slug, strings.Repeat("界", projectSummaryLongRunes+100)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.AppendProjectMemory(p.Slug, kb.ProjectMemoryRecord{ID: "one", Type: kb.ProjectMemoryOutcome, Conclusion: "result"}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.projectContext(context.Background(), "box", "/code/weather")
+	start := strings.Index(got, "Project summary:\n")
+	end := strings.Index(got, "\n\nRecent outcomes")
+	if start < 0 || end < 0 || end <= start {
+		t.Fatalf("summary section = %q", got)
+	}
+	summary := strings.TrimSpace(got[start+len("Project summary:\n") : end])
+	if len([]rune(summary)) != projectSummaryLongRunes || !strings.HasSuffix(summary, "…") {
+		t.Fatalf("summary has %d runes, want %d with an ellipsis", len([]rune(summary)), projectSummaryLongRunes)
+	}
+}
+
+func TestProjectContextWithoutMemoryStaysLegacy(t *testing.T) {
+	s, f, todo := outcomeEnv(t, nil, outcomeReply)
+	f.setLocale("en")
+	e := kbEng(t, s)
+	if err := e.Store.PutSummary(kb.KindProject, "天气-app", "Legacy summary must not replace OneLine"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Store.AppendLog("天气-app", time.Now(), kb.TodoLogSource+kb.TodoLogTitle(todo.Title), "结论：legacy outcome"); err != nil {
+		t.Fatal(err)
+	}
+	got := s.projectContext(context.Background(), "box", "/code/weather")
+	if !strings.HasPrefix(got, `<persona-context kind="context" title="Project · 天气 App · Background"`) ||
+		!strings.Contains(got, "Project: 天气 App 的 iOS 和安卓版") || !strings.Contains(got, "legacy outcome") ||
+		strings.Contains(got, "Legacy summary must not replace OneLine") ||
+		strings.Contains(got, "agent_reported") || strings.Contains(got, "Direction memory") {
+		t.Fatalf("legacy context changed: %q", got)
+	}
+	if _, err := os.Stat(e.Store.Path(kb.KindProject, "天气-app", "memory.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("dispatch created memory.jsonl: %v", err)
+	}
+}
+
 // What the model says is kept within bounds: one line, links that are links, at most five of each.
 func TestTidyOutcome(t *testing.T) {
 	var o taskOutcome
@@ -300,5 +441,82 @@ func TestOutcomeLogLineKeepsLinks(t *testing.T) {
 	}
 	if got := outcomeLogLine(taskOutcome{Outcome: "修好了"}); got != "结论：修好了" {
 		t.Fatalf("no links = %q", got)
+	}
+}
+
+type phaseOutcomeStore struct {
+	*ctxAwareLinkStore
+	decisions []db.TodoDecisionRow
+}
+
+func (s *phaseOutcomeStore) ListTodoDecisions(context.Context, string, bool) ([]db.TodoDecisionRow, error) {
+	return append([]db.TodoDecisionRow(nil), s.decisions...), nil
+}
+
+func TestTodoOutcomeAfterReopening(t *testing.T) {
+	ctx := context.Background()
+	store := &phaseOutcomeStore{ctxAwareLinkStore: newCtxAwareLinkStore()}
+	s := newServiceOn(t, newFakeHub(), store)
+	first := time.Date(2026, 11, 14, 1, 0, 0, 0, time.UTC)
+	second := first.Add(time.Hour)
+	todo := db.TodoRow{ID: "td_phases", Title: "Publish the report", Notes: "Keep the original brief", CreatedAt: first.Add(-time.Hour)}
+	store.rows = []db.TodoRow{todo}
+	store.decisions = []db.TodoDecisionRow{{
+		ID: "dec_first", TodoID: todo.ID, Question: "Outcome", Choice: "Ready to begin",
+		Source: db.DecisionOutcome, SourceMachine: "box", SourceSession: "read-only",
+		SourceMessage: outcomeKey(todo.ID, first) + "#o", CreatedAt: second.Add(time.Minute),
+	}}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setDone := func(at *time.Time) {
+		s.todos.mu.Lock()
+		s.todos.todos[todo.ID].DoneAt = at
+		s.todos.mu.Unlock()
+	}
+	read := func() (string, []any) {
+		t.Helper()
+		output, err := s.toolTodoGet(ctx, "", "", json.RawMessage(`{"id":"td_phases"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output, todo.Title) || !strings.Contains(output, todo.Notes) {
+			t.Fatalf("to-do brief lost: %s", output)
+		}
+		status, body := serveJSON(t, s, "GET", "/api/v1/todos/td_phases/decisions", "en", "")
+		if status != 200 {
+			t.Fatalf("decisions: %d, %v", status, body)
+		}
+		return output, body["decisions"].([]any)
+	}
+	setDone(&first)
+	_, rows := read()
+	if d := rows[0].(map[string]any); d["question"] != "Outcome" {
+		t.Fatalf("first completion: %v", d)
+	}
+
+	setDone(nil)
+	out, rows := read()
+	if !strings.Contains(out, "Earlier phase outcome → Ready to begin") || !strings.Contains(out, "read-only") {
+		t.Fatalf("reopened tool result: %s", out)
+	}
+	if d := rows[0].(map[string]any); d["question"] != "Earlier phase outcome" ||
+		d["phase_completed_at"] != first.Format(time.RFC3339) || d["source_session"] != "read-only" || d["source_message"] != store.decisions[0].SourceMessage {
+		t.Fatalf("reopened decisions: %v", d)
+	}
+
+	setDone(&second)
+	store.decisions = append(store.decisions, db.TodoDecisionRow{
+		ID: "dec_second", TodoID: todo.ID, Question: "Outcome", Choice: "Report published",
+		Source: db.DecisionOutcome, SourceMachine: "box", SourceSession: "publish",
+		SourceMessage: outcomeKey(todo.ID, second) + "#o", CreatedAt: second,
+	})
+	out, rows = read()
+	if !strings.Contains(out, "Earlier phase outcome → Ready to begin") ||
+		!strings.Contains(out, "Outcome → Report published") || strings.Contains(out, "Earlier phase outcome → Report published") {
+		t.Fatalf("completed tool result: %s", out)
+	}
+	if rows[0].(map[string]any)["question"] != "Earlier phase outcome" || rows[1].(map[string]any)["question"] != "Outcome" {
+		t.Fatalf("completed decisions: %v", rows)
 	}
 }

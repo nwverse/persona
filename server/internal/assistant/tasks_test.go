@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -22,8 +23,24 @@ import (
 // The hub's end-to-end tests of tasks (real todos, a real node) are hub/tasks_test.go; these need the assistant's own
 // state or timing.
 
-// toolTaskPlan is task_plan from the conversation sessionID on the main machine.
+// toolTaskPlan is task_plan from the conversation sessionID on the main machine. Valid fixtures get the ordinary
+// worker role centrally; the role-contract tests call MCP directly so an omitted role stays omitted.
 func (s *Service) toolTaskPlan(ctx context.Context, sessionID string, args json.RawMessage) (string, error) {
+	var in map[string]any
+	if json.Unmarshal(args, &in) == nil {
+		tasks, _ := in["tasks"].([]any)
+		for _, item := range tasks {
+			task, _ := item.(map[string]any)
+			if task != nil {
+				if _, ok := task["role"]; !ok {
+					task["role"] = "worker"
+				}
+			}
+		}
+		if raw, err := json.Marshal(in); err == nil {
+			args = raw
+		}
+	}
 	return s.toolTaskPlanFrom(ctx, s.mainMachine(ctx), sessionID, args)
 }
 
@@ -34,13 +51,13 @@ func newTaskService(t *testing.T) (*Service, *fakeHub) {
 }
 
 // newTaskServiceOn is newTaskService with st as its database (nil: none).
-func newTaskServiceOn(t *testing.T, st Store) (*Service, *fakeHub) {
+func newTaskServiceOn(t testing.TB, st Store) (*Service, *fakeHub) {
 	t.Helper()
 	f := newFakeHub()
 	f.sessions["box"] = nil
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}
 	if st == nil {
-		return newStorelessService(t, f), f
+		return storelessService(t, f), f
 	}
 	return newServiceOn(t, f, st), f
 }
@@ -52,12 +69,12 @@ func planArgs(readonly bool) json.RawMessage {
 	}
 	raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
-		"readonly": readonly, "why": "这个仓库最近在 box 上", "permission": permission,
+		"role": "worker", "readonly": readonly, "why": "这个仓库最近在 box 上", "permission": permission,
 	}}})
 	return raw
 }
 
-func waitFor(t *testing.T, what string, ok func() bool) {
+func waitFor(t testing.TB, what string, ok func() bool) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 		if ok() {
@@ -149,11 +166,12 @@ func TestTaskReceipt(t *testing.T) {
 	s, f := newTaskService(t)
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor", "fix/login", "fix/login", "abc", "abc")
 	turn := func(status, text string) {
 		f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, LastText: text,
 			UpdatedAt: time.Now()})
 		if status == proto.StatusWorking {
-			s.taskWorking(ctx, "box", "s1")
+			s.taskWorking(ctx, "box", "s1", startRow{})
 		} else {
 			s.taskTurnEnded(ctx, "box", "s1")
 		}
@@ -195,7 +213,7 @@ func TestTaskReceiptWaitsForWorkflow(t *testing.T) {
 	run := proto.Workflow{TaskID: "w1", RunID: "wf_1", Name: "parity-audit", Status: proto.WorkflowRunning, Running: true}
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusWorking,
 		State: proto.StateWorking, UpdatedAt: time.Now()})
-	s.taskWorking(ctx, "box", "s1")
+	s.taskWorking(ctx, "box", "s1", startRow{})
 	f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
 		State: proto.StateWorking, LastText: "审计在后台跑，等它的结果", UpdatedAt: time.Now(), Workflows: []proto.Workflow{run},
 		Background: []proto.BackgroundTask{{ID: "w1", Kind: "workflow", RunID: "wf_1"}}})
@@ -500,29 +518,34 @@ func TestAutoFinishLeavesAReopenedTask(t *testing.T) {
 	if todoNow(s, "todo_r").DoneAt != nil || todoNow(s, "todo_h").DoneAt != nil || f.judged != 0 {
 		t.Fatalf("closed: %+v %+v, %d judgments", todoNow(s, "todo_r"), todoNow(s, "todo_h"), f.judged)
 	}
-	// Work after the reopen is judged, and closes it.
+	// Work after the reopen is judged and delivered for review, not closed again (#5732).
 	s.autoFinishTask(todoNow(s, "todo_r"), time.Now(), true)
-	if got := todoNow(s, "todo_r"); got.DoneAt == nil || got.DoneBy != db.DoneByAuto || f.judged != 1 {
-		t.Fatalf("not closed after new work: %+v, %d judgments", got, f.judged)
+	if got := todoNow(s, "todo_r"); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone || f.judged != 1 {
+		t.Fatalf("not judged after new work: %+v, %d judgments", got, f.judged)
 	}
 }
 
-// The agent of a task the judge closed is sent more (agent_send resumes it) and works again: the task is open again
-// while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
-// finished one, a done receipt and the judge, which may close it again (#5892).
+// The agent of a task the supervisor accepted is sent more on its card and works again: the task is open again while
+// again while it does, and the turn's end is followed as ever — cut off by the model service, an interrupted receipt; a
+// finished one, a done receipt and a new delivery judgment, still without automatic closure (#5892, #5732).
 func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	s, f := newTaskService(t)
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "设计稿写好了", 0)
-	if ok, err := s.autoDoneTodo(ctx, todo.ID, "做完了", time.Now().Add(-time.Minute)); err != nil || !ok {
-		t.Fatalf("auto done: %v %v", ok, err)
+	raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "做完了"})
+	if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
+		t.Fatalf("accept before more work: %v", err)
 	}
 	if _, ok := s.taskOf(ctx, "box", "s1"); ok {
 		t.Fatal("a closed task still follows its agent")
 	}
 	time.Sleep(5 * time.Millisecond)
+	if _, err := s.routeToTask(ctx, "conv1", todo.ID, "Please continue with the remaining cases"); err != nil {
+		t.Fatalf("send more after acceptance: %v", err)
+	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	got := todoNow(s, todo.ID)
 	if got.DoneAt != nil || got.ReopenedAt == nil || got.DoneBy != "" || got.DoneReason != "" {
@@ -562,7 +585,7 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 	if rb := lastReceipt(); rb.State != "done" {
 		t.Fatalf("a finished turn of the reopened task: receipt = %+v", rb)
 	}
-	if got := todoNow(s, todo.ID); got.DoneAt == nil || got.DoneBy != db.DoneByAuto {
+	if got := todoNow(s, todo.ID); got.DoneAt != nil || got.Check == nil || got.Check.Verdict != verdictDone {
 		t.Fatalf("the work after the reopen is not judged: %+v", got)
 	}
 }
@@ -570,8 +593,9 @@ func TestClosedTaskReopensWhenItsAgentWorksAgain(t *testing.T) {
 // Only a task the hub judged done or its supervisor accepted opens again, and only for an agent that still belongs to it: not
 // a cancelled task or one the user closed (done by hand while its agent still started, #2954), not one whose start failed (that goes
 // through Retry), not one the agent was released or dismissed from, and not when the agent works for an open todo now. An
-// accepted one whose agent its plan did not start only when its conversation or supervisor sent the agent more since:
-// any other turn of such an agent is other work (#6726).
+// accepted one only when its conversation or supervisor sent the agent more since, whether or not its plan started the
+// agent: any other turn of it is other work (#6726, #7539). The send goes through noteAgentSend, and its turn starts before
+// the send returns: the task stays closed until the send's answer is in, and reopens then.
 func TestWhichClosedTaskReopens(t *testing.T) {
 	done := time.Now().Add(-time.Hour)
 	released := done.Add(time.Minute)
@@ -589,42 +613,73 @@ func TestWhichClosedTaskReopens(t *testing.T) {
 	handedOn.Supervision = &Supervision{Supervisor: "conv2", State: reviewAccepted}
 	planned := task(db.DoneByReview, s1) // its plan started the agent
 	planned.PlanID, planned.Supervision = "plan_1", &Supervision{State: reviewAccepted}
-	since, before := done.Add(time.Minute), done.Add(-time.Minute)
 	for _, c := range []struct {
-		name    string
-		todos   []Todo
-		sent    *agentSent // the agent's last send for a conversation, if any
+		name  string
+		todos []Todo
+		from  string // the conversation that last sent the agent text ("": none)
+		early bool   // that send went before the acceptance
+		// reopens: the turn opens it again
 		reopens bool
+		owner   string // "view": the owner has the agent's page open; "message": they messaged it just now (#6819)
 	}{
-		{"judged done", []Todo{task(db.DoneByAuto, s1)}, nil, true},
-		{"accepted, its plan started the agent", []Todo{planned}, nil, true},
-		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, nil, false},
-		{"accepted, other work", []Todo{accepted}, nil, false},
-		{"accepted, its conversation sent more", []Todo{accepted}, &agentSent{"conv1", since}, true},
-		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, &agentSent{"conv1", since}, true},
-		{"accepted, its supervisor sent more", []Todo{handedOn}, &agentSent{"conv2", since}, true},
-		{"accepted, another conversation sent", []Todo{accepted}, &agentSent{"conv9", since}, false},
-		{"accepted, sent before the acceptance", []Todo{accepted}, &agentSent{"conv1", before}, false},
-		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, nil, false},
-		{"legacy cancelled", []Todo{legacyCancelled}, nil, false},
-		{"closed by the user", []Todo{task("", s1)}, nil, false},
-		{"start failed", []Todo{failed}, nil, false},
-		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, nil, false},
-		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, nil, false},
-		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, nil, false},
-		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, nil, false},
+		{"judged done", []Todo{task(db.DoneByAuto, s1)}, "", false, true, ""},
+		{"accepted, its plan started the agent", []Todo{planned}, "", false, false, ""},
+		{"accepted, its plan started the agent, its conversation sent more", []Todo{planned}, "conv1", false, true, ""},
+		{"accepted, its plan started the agent, sent before the acceptance", []Todo{planned}, "conv1", true, false, ""},
+		{"accepted, its plan started the agent, the owner chats on its page", []Todo{planned}, "", false, false, "view"},
+		{"accepted, its plan started the agent, the owner just messaged it", []Todo{planned}, "", false, false, "message"},
+		{"accepted, its plan started the agent, its conversation sent more while the owner looks", []Todo{planned}, "conv1", false, true, "view"},
+		{"accepted, its plan started the agent, its conversation sent more while the owner messages it", []Todo{planned}, "conv1", false, true, "message"},
+		{"accepted, the owner chats on its page", []Todo{accepted}, "", false, false, "view"},
+		{"judged done, the owner chats on its page", []Todo{task(db.DoneByAuto, s1)}, "", false, true, "view"},
+		{"reviewed, other work", []Todo{task(db.DoneByReview, s1)}, "", false, false, ""},
+		{"accepted, other work", []Todo{accepted}, "", false, false, ""},
+		{"accepted, its conversation sent more", []Todo{accepted}, "conv1", false, true, ""},
+		{"reviewed, its conversation sent more", []Todo{task(db.DoneByReview, s1)}, "conv1", false, true, ""},
+		{"accepted, its supervisor sent more", []Todo{handedOn}, "conv2", false, true, ""},
+		{"accepted, another conversation sent", []Todo{accepted}, "conv9", false, false, ""},
+		{"accepted, sent before the acceptance", []Todo{accepted}, "conv1", true, false, ""},
+		{"cancelled", []Todo{task(db.DoneByCancelled, s1)}, "", false, false, ""},
+		{"legacy cancelled", []Todo{legacyCancelled}, "", false, false, ""},
+		{"closed by the user", []Todo{task("", s1)}, "", false, false, ""},
+		{"start failed", []Todo{failed}, "", false, false, ""},
+		{"released", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", ReleasedAt: &released})}, "", false, false, ""},
+		{"dismissed", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s1", DismissedAt: &released})}, "", false, false, ""},
+		{"works for an open todo", []Todo{task(db.DoneByAuto, s1), {ID: "todo_h", Title: "自己记的事", CreatedAt: done, Agents: []TodoAgent{s1}}}, "", false, false, ""},
+		{"another agent", []Todo{task(db.DoneByAuto, TodoAgent{MachineID: "box", SessionID: "s2"})}, "", false, false, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
 			s, f := newTaskService(t)
+			var note *agentSendNote
+			noted := func() {
+				var err error
+				if note, err = s.noteAgentSend(ctx, c.from, "box", "s1", "", "More for it"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.from != "" && c.early { // sent while the task was open still
+				noted()
+			}
 			for _, td := range c.todos {
 				putTodo(s, td)
 			}
-			if c.sent != nil {
-				s.tasks.mu.Lock()
-				s.tasks.sentBy[[2]string{"box", "s1"}] = *c.sent
-				s.tasks.mu.Unlock()
+			if c.from != "" && !c.early {
+				noted()
 			}
-			agentTurn(s, f, proto.StatusWorking, "", 0)
+			switch c.owner {
+			case "view":
+				setTaskViewer(t, s, "box", "s1", true)
+			case "message":
+				s.UserSpoke(ctx, SessionRef{MachineID: "box", SessionID: "s1"})
+			}
+			agentTurn(s, f, proto.StatusWorking, "", 0) // its turn starts before the send returns
+			if note != nil {
+				if got := todoNow(s, "todo_a"); got.DoneAt == nil {
+					t.Fatalf("reopened before the send's answer was in: %+v", got)
+				}
+				note.sent(ctx, nil)
+			}
 			got := todoNow(s, "todo_a")
 			if reopened := got.DoneAt == nil && got.ReopenedAt != nil; reopened != c.reopens {
 				t.Fatalf("reopened = %v, want %v: %+v", reopened, c.reopens, got)
@@ -648,7 +703,7 @@ func TestAcceptedTaskReopensOnlyForItsOwnWork(t *testing.T) {
 		f.setSessions("box", proto.Session{SessionID: sid, MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status,
 			State: state, UpdatedAt: time.Now()})
 		if state == proto.StateWorking {
-			s.taskWorking(ctx, "box", sid)
+			s.taskWorking(ctx, "box", sid, startRow{})
 		}
 	}
 	accept := func() {
@@ -731,7 +786,8 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 				SessionID: "c1", State: proto.StateWorking, UpdatedAt: now, Activity: "在读 tasks.go", ActivityAt: &started}}, now),
 			got,
 		}}))
-	// #2935: a run in the background shows on its task and in its own line: the turn ended to wait for it.
+	// #2935, #11261: a run in the background shows on its task row (whose turn ended to wait for it), while the Agents
+	// section keeps only the working count.
 	wfLead := proto.Session{MachineID: "mac-a", SessionID: "d4a7f6ff-4a9b", State: proto.StateWorking, UpdatedAt: now,
 		LastText: "审计在后台跑，等结果", Workflows: []proto.Workflow{
 			{TaskID: "w1", Name: "parity-audit", Running: true, Status: proto.WorkflowRunning, Phases: []string{"Audit", "Verify"},
@@ -742,10 +798,8 @@ func TestSnapshotTaskFollowsTheAgent(t *testing.T) {
 	if len(wfTask.Workflows) != 1 || wfTask.Workflows[0].For != "14 分钟" {
 		t.Fatalf("task workflows: %+v", wfTask.Workflows)
 	}
-	running := runningWorkflows(wfLead, now)
-	running[0].Agent, running[0].Machine, running[0].Session = "各端对齐审计", "mac-a", "d4a7f6ff"
 	golden(t, "assistant_snapshot.workflows", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC",
-		Working: []prompts.SnapshotAgent{{Label: "各端对齐审计"}}, Workflows: running, Tasks: []prompts.SnapshotTask{wfTask}}))
+		Working: []prompts.SnapshotAgent{{Label: "各端对齐审计"}}, Tasks: []prompts.SnapshotTask{wfTask}}))
 	linked := got
 	linked.Link = todoLink("https://hub.example.com", "todo_1")
 	golden(t, "assistant_snapshot.links", prompts.RenderSnapshot(prompts.Snapshot{Now: now, Zone: "UTC",
@@ -823,8 +877,8 @@ func TestSnapshotLinks(t *testing.T) {
 		{sessionLink(web, "mac-a", "b00502b8-82a3", false), web + "/s/mac-a/b00502b8-82a3"},
 		{sessionLink(web, "mac a", "x/y", false), web + "/s/mac%20a/x%2Fy"},
 		{sessionLink(web, "mac-a", "c1", true), web + "/persona/c1"},
-		{todoLink(web, "todo_1"), web + "/todos?id=todo_1"},
-		{todoLink(web, "a&b"), web + "/todos?id=a%26b"},
+		{todoLink(web, "todo_1"), web + "/todos/todo_1"},
+		{todoLink(web, "a b"), web + "/todos/a%20b"},
 		{sessionLink("", "mac-a", "c1", false), ""},
 		{todoLink("", "todo_1"), ""},
 	} {
@@ -841,6 +895,7 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 			"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
 			"readonly": false, "permission": "bypassPermissions", "user_requested": requested, "why": "这个仓库最近在 box 上",
+			"model_aliases": map[string]string{"haiku_model": "vendor/fast"},
 		}}})
 		return raw
 	}
@@ -859,6 +914,12 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	waitFor(t, "the agent to start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
 
 	s2, f2 := newTaskService(t)
+	f.mu.Lock()
+	aliases, _ := json.Marshal(f.starts[0]["model_aliases"])
+	f.mu.Unlock()
+	if string(aliases) != `{"haiku_model":"vendor/fast"}` {
+		t.Fatalf("node aliases: %s", aliases)
+	}
 	if res, err := s2.toolTaskPlan(context.Background(), "conv1", plan(false)); err != nil || !strings.Contains(res, "nothing has started") {
 		t.Fatalf("an inferred task: %q %v", res, err)
 	}
@@ -936,7 +997,7 @@ func TestTaskFinishedWhileItsAgentStarts(t *testing.T) {
 	taskCloseIdle = 0
 	t.Cleanup(func() { taskCloseIdle = old })
 	f.setSessions("box", idleAgent(time.Now().Add(-time.Hour)))
-	s.closeDoneTaskAgents(ctx, taskCloseRefused{})
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
 	if got := f.retires(); len(got) != 1 || got[0] != "s1" {
 		t.Fatalf("the agent that started is not retired: %v", got)
 	}
@@ -1115,6 +1176,25 @@ type startTogetherHub struct {
 	n, came  int
 	all      chan struct{} // closed when n came
 	lastPlan *TaskPlan
+	planSeen chan struct{} // closed again by each task_plan notification
+}
+
+func (h *startTogetherHub) lastTold() *TaskPlan {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lastPlan
+}
+
+func (h *startTogetherHub) planComplete(p *TaskPlan) bool {
+	if p == nil {
+		return false
+	}
+	for _, task := range p.Tasks {
+		if task.Error == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *startTogetherHub) Broadcast(ctx context.Context, b Broadcast) {
@@ -1125,7 +1205,12 @@ func (h *startTogetherHub) Broadcast(ctx context.Context, b Broadcast) {
 	if json.Unmarshal(b.Message, &ev) == nil && ev.Type == "task_plan" {
 		h.mu.Lock()
 		h.lastPlan = ev.Plan
+		seen := h.planSeen
+		h.planSeen = make(chan struct{})
 		h.mu.Unlock()
+		if seen != nil {
+			close(seen)
+		}
 	}
 	h.fakeHub.Broadcast(ctx, b)
 }
@@ -1189,14 +1274,25 @@ func TestPlanTasksFailingTogetherAllKeepTheirError(t *testing.T) {
 	}
 	waitFor(t, "every start's failure to be written", func() bool {
 		done, _ := st.done()
-		return done && s.tasks.planEdits.len() == 0
+		// A launch can have passed the read barrier and still be about to record its start error.
+		return done && s.tasks.planEdits.len() == 0 && s.taskStarting.Load() == 0
 	})
 	if _, timedOut := st.done(); timedOut {
 		t.Fatal("the plan's writers did not all come")
 	}
-	h.mu.Lock()
-	told := h.lastPlan
-	h.mu.Unlock()
+	// The last writer releases the plan lock only after its broadcast returns: wait for that final notification too.
+	var told *TaskPlan
+	for !h.planComplete(h.lastTold()) {
+		h.mu.Lock()
+		seen := h.planSeen
+		h.mu.Unlock()
+		select {
+		case <-seen:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the apps did not receive the complete failed plan: %+v", h.lastTold())
+		}
+	}
+	told = h.lastTold()
 	for what, p := range map[string]*TaskPlan{"stored": storedPlan(t, st), "told to the apps last": told} {
 		if p == nil || len(p.Tasks) != n {
 			t.Fatalf("%s plan: %+v", what, p)
@@ -1426,18 +1522,38 @@ func TestWithdrawnPlanIsNoOwnerAnswer(t *testing.T) {
 	}
 }
 
-// A task opened from a side conversation (not quiet; supervised by the main conversation since #4669) pushes a
-// failure notification when its agent cannot start, with reason and next steps, unless muted (#5081).
+// A task opened from a side conversation that nobody supervises (no main conversation) pushes a failure notification
+// when its agent cannot start, with reason and next steps, unless muted (#5081). One the main conversation supervises
+// pushes nothing: its failed start is the supervisor's to retry or remedy, and the owner hears only what it passes up.
 func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	ctx := context.Background()
+
+	// 0. Supervised by the main conversation: no push.
+	s0, f0 := newTaskService(t)
+	s0.taskRetry = 10 * time.Millisecond
+	f0.hello.Assistant.MachineID = "box"
+	f0.hello.Assistant.Machines = []string{"box"}
+	setSettings(t, s0, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	f0.failStart = errors.New("Failed to authenticate")
+	if _, err := s0.toolTaskPlan(ctx, "side1", planArgs(true)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the supervised task to fail", func() bool { return onlyTodo(s0).StartError != "" })
+	if v := onlyTodo(s0).Supervision; v == nil || v.Supervisor != "main1" {
+		t.Fatalf("the side task is not supervised by main: %+v", v)
+	}
+	if got := f0.pushed(); len(got) != 0 {
+		t.Fatalf("a supervised failed start was pushed to the owner: %+v", got)
+	}
+
 	s, f := newTaskService(t)
 	s.taskRetry = 10 * time.Millisecond
 	f.hello.Assistant.MachineID = "box"
 	f.hello.Assistant.Machines = []string{"box"}
-	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "", "box" })
 	f.failStart = errors.New("Failed to authenticate")
 
-	// 1. Normal failure push from side conversation.
+	// 1. Normal failure push from an unsupervised side conversation.
 	if _, err := s.toolTaskPlan(ctx, "side1", planArgs(true)); err != nil {
 		t.Fatal(err)
 	}
@@ -1451,6 +1567,9 @@ func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	if pushed[0].Title != "「修登录崩溃」没开起来" {
 		t.Fatalf("Title = %q", pushed[0].Title)
 	}
+	if pushed[0].Level == "P0" {
+		t.Fatal("a task failure is P1 (held for the briefing with push tiering on), not P0")
+	}
 	if !strings.Contains(pushed[0].Body, "Failed to authenticate") || !strings.Contains(pushed[0].Body, "打开对话点『重试』，或换一台电脑再派") {
 		t.Fatalf("Body = %q", pushed[0].Body)
 	}
@@ -1459,7 +1578,7 @@ func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	s2, f2 := newTaskService(t)
 	f2.hello.Assistant.MachineID = "box"
 	f2.hello.Assistant.Machines = []string{"box"}
-	setSettings(t, s2, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	setSettings(t, s2, func(v *Settings) { v.Main, v.MachineID = "", "box" })
 	f2.failStart = errors.New("Failed to authenticate")
 	s2.fleet.mutesMu.Lock()
 	s2.fleet.mutes = &Pins{Sessions: []string{"box/side_muted"}}
@@ -1477,7 +1596,7 @@ func TestSideConversationTaskFailedToStartPushes(t *testing.T) {
 	s3, f3 := newTaskService(t)
 	f3.hello.Assistant.MachineID = "box"
 	f3.hello.Assistant.Machines = []string{"box"}
-	setSettings(t, s3, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	setSettings(t, s3, func(v *Settings) { v.Main, v.MachineID = "", "box" })
 	f3.setSessions("box", proto.Session{SessionID: "health1", Space: SpaceHealth})
 	f3.failStart = errors.New("Failed to authenticate")
 	if _, err := s3.toolTaskPlan(ctx, "health1", planArgs(true)); err != nil {
@@ -1535,4 +1654,63 @@ func TestSnapshotShowsTheAgentsPlan(t *testing.T) {
 		Unread:  []prompts.SnapshotAgent{{Label: "整理文档", Machine: "mac-a", Session: "a9b8c7d6", Plan: idle}},
 		Working: []prompts.SnapshotAgent{{Label: "修横屏崩溃", Plan: planned.Plan}, {Label: "没有计划"}},
 		Tasks:   []prompts.SnapshotTask{planned, older, newer, none}}))
+}
+
+// Don't Start on a card that is no longer open (withdrawn by its conversation, or started meanwhile) answers 200 with
+// the plan as it is: a client that missed the event shows what happened. It used to answer 409, and an iOS app that
+// held the card from an old read kept it in Needs You, refusing every tap, until it was restarted.
+func TestTaskPlanDismissOfAPlanNoLongerOpen(t *testing.T) {
+	s, _ := newTaskService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
+	plan := func() string {
+		t.Helper()
+		if _, err := s.toolTaskPlan(ctx, "main1", planArgs(false)); err != nil {
+			t.Fatal(err)
+		}
+		items, _, _ := s.feed(ctx, "main1", time.Time{})
+		return items[len(items)-1].Ref
+	}
+	dismiss := func(id string) (int, TaskPlan) {
+		t.Helper()
+		w := request(s, http.MethodPost, "/api/v1/task-plans/"+id+"/dismiss", "")
+		var out struct {
+			Plan TaskPlan `json:"plan"`
+		}
+		if w.Code == http.StatusOK {
+			if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return w.Code, out.Plan
+	}
+
+	withdrawn := plan()
+	if _, err := runJSON(t, s, "main1", "task_plan_withdraw", map[string]any{"plan_id": withdrawn, "reason": "done elsewhere"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ { // tapped again: the same answer
+		if code, p := dismiss(withdrawn); code != http.StatusOK || p.ID != withdrawn || p.State != planDismissed {
+			t.Fatalf("dismissing a withdrawn plan: %d %+v", code, p)
+		}
+	}
+
+	started := plan()
+	if _, err := s.startPlan(ctx, started, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if code, p := dismiss(started); code != http.StatusOK || p.State != planStarted {
+		t.Fatalf("dismissing a started plan: %d %+v", code, p)
+	}
+	if cur, err := s.loadPlan(ctx, started); err != nil || cur.State != planStarted {
+		t.Fatalf("the started plan moved: %+v %v", cur, err)
+	}
+
+	if code, _ := dismiss("plan_nope"); code != http.StatusNotFound {
+		t.Fatalf("an unknown plan: %d", code)
+	}
+	open := plan()
+	if code, p := dismiss(open); code != http.StatusOK || p.State != planDismissed {
+		t.Fatalf("dismissing an open plan: %d %+v", code, p)
+	}
 }

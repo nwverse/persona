@@ -140,10 +140,13 @@ func restartedOn(t *testing.T, st Store) (*Service, *fakeHub) {
 	t.Helper()
 	s, f := newTaskServiceOn(t, st)
 	shortSupervise(t, s)
+	f.mu.Lock()
 	f.hello.Assistant.MachineID = "server"
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	f.known["conv1"] = true
+	f.mu.Unlock()
+	// Settings changes can deliver a restored digest at once, so list main before they can look it up (#13418).
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 	return s, f
 }
 
@@ -295,7 +298,10 @@ func TestCompletionAcrossRestart(t *testing.T) {
 			s, f, todo := newSupervisedServiceOn(t, database)
 			ctx := context.Background()
 			nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
-			s.superviseWatch(ctx, time.Now()) // the first manager's sweep has run: the turns' ledger is kept from here on
+			// The first manager's sweep has run, its looks too: the turns' ledger is kept from here on. A look of it still
+			// going when the turn below ends could take that end up as a start nobody heard, ahead of the list's start
+			// and end (#13701).
+			sweeps(t, s, todo.ID, 1)
 			done := turnRow(proto.StatusDone, 3, "修好了")
 			page := turnPage("turn-1", "修好了", true)
 			switch at {
@@ -347,6 +353,167 @@ func TestCompletionAcrossRestart(t *testing.T) {
 	}
 }
 
+// The manager loses its pending digest after recording an unsure judgment. A new transcript revision on
+// reconnect can still end on that same native turn. Only its outstanding message should be delivered.
+func TestCompletionDeliveryAfterTranscriptRevision(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	ctx := context.Background()
+	f.judge = `{"verdict":"unsure","reason":"The example needs review."}`
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	nodeListed(s, f, turnRow(proto.StatusWorking, 1, ""))
+	page := turnPage("native-a", "The example result is available.", true)
+	f.setItems(page...)
+	done := turnRow(proto.StatusDone, 2, "The example result is available.")
+	nodeListed(s, f, done)
+	wantTurns(t, "receipt and judgment before delivery", turnCounts{1, 1, 0}, s, todo.ID, f)
+	turnsQuiet(t, s, todo.ID)
+
+	entry, ok := s.turnOf(ctx, todo.ID)
+	if !ok || entry.Signal == nil || entry.Signal.Kind != sigUnjudged || entry.Signal.Told != nil {
+		t.Fatalf("outstanding signal before reconnect: %+v", entry.Signal)
+	}
+
+	// Keep the receipt and the judgment. Only the in-memory digest is lost.
+	s.supervise.mu.Lock()
+	if s.supervise.timer != nil {
+		s.supervise.timer.Stop()
+	}
+	s.supervise.timer, s.supervise.timerAt = nil, time.Time{}
+	clear(s.supervise.pending)
+	s.supervise.mu.Unlock()
+	s.superviseTimes = shortSuperviseTimings
+
+	// An older inventory arrives first. Its turn predates this task and must not consume the signal.
+	old := turnPage("older", "Earlier result.", true)
+	for i := range old {
+		old[i].TS = todo.CreatedAt.Add(-time.Hour)
+	}
+	f.setItems(old...)
+	nodeListed(s, f, turnRow(proto.StatusDone, 1, "Earlier result."))
+	sweeps(t, s, todo.ID, 2)
+	stillTurns(t, "after the older turn", turnCounts{1, 1, 0}, s, todo.ID, f)
+
+	page = append(page, proto.Item{ID: "bookkeeping", Kind: proto.KindNotice, Role: "system"})
+	f.setItems(page...)
+	done.Rev++
+	nodeListed(s, f, done)
+	sweeps(t, s, todo.ID, 1)
+	wantTurns(t, "one delivery of the already judged turn", oneEach, s, todo.ID, f)
+	f.setItems(append(page, proto.Item{ID: "bookkeeping-2", Kind: proto.KindNotice, Role: "system"})...)
+	done.Rev++
+	nodeListed(s, f, done)
+	s.TurnEnded(ctx, SessionRef{MachineID: done.MachineID, SessionID: done.SessionID})
+	sweeps(t, s, todo.ID, 2)
+	stillTurns(t, "after duplicate end events", oneEach, s, todo.ID, f)
+	if entry, _ = s.turnOf(ctx, todo.ID); entry.Key != "native-a" || entry.Signal == nil || entry.Signal.Told == nil {
+		t.Fatalf("delivered turn: %+v", entry)
+	}
+	if now := todoNow(s, todo.ID); now.DoneAt != nil || now.Check == nil || now.Check.Verdict != verdictUnsure {
+		t.Fatalf("delivery changed the task's review: %+v", now.Check)
+	}
+}
+
+// A changed revision after an actual manager reconstruction must still deliver the persisted unsure judgment.
+func TestCompletionDeliveryAfterTranscriptRevisionAcrossRestart(t *testing.T) {
+	database := taskRecoveryDatabase(t)
+	s, f, todo := newSupervisedServiceOn(t, database)
+	ctx := context.Background()
+	f.judge = `{"verdict":"unsure","reason":"The example needs review."}`
+	s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+	nodeListed(s, f, turnRow(proto.StatusWorking, 1, ""))
+	page := turnPage("native-restart", "The example result is available.", true)
+	f.setItems(page...)
+	done := turnRow(proto.StatusDone, 2, "The example result is available.")
+	nodeListed(s, f, done)
+	wantTurns(t, "persisted judgment before restart", turnCounts{1, 1, 0}, s, todo.ID, f)
+	turnsQuiet(t, s, todo.ID)
+	s.supervise.mu.Lock()
+	if s.supervise.timer != nil {
+		s.supervise.timer.Stop()
+	}
+	s.supervise.timer, s.supervise.timerAt = nil, time.Time{}
+	clear(s.supervise.pending)
+	s.supervise.mu.Unlock()
+
+	again, f2 := restartedOn(t, database)
+	if err := again.ensureTodosLoaded(ctx); err != nil {
+		t.Fatal(err)
+	}
+	page = append(page, proto.Item{ID: "bookkeeping", Kind: proto.KindNotice, Role: "system"})
+	f2.setItems(page...)
+	done.Rev++
+	nodeListed(again, f2, done)
+	sweeps(t, again, todo.ID, 1)
+	wantTurns(t, "persisted signal after restart", oneEach, again, todo.ID, f, f2)
+	again.TurnEnded(ctx, SessionRef{MachineID: done.MachineID, SessionID: done.SessionID})
+	sweeps(t, again, todo.ID, 2)
+	stillTurns(t, "no duplicate after restart", oneEach, again, todo.ID, f, f2)
+	if entry, ok := again.turnOf(ctx, todo.ID); !ok || entry.Signal == nil || entry.Signal.Told == nil {
+		t.Fatalf("signal delivery was not persisted: %+v", entry)
+	}
+	if now := todoNow(again, todo.ID); now.DoneAt != nil || now.Check == nil || now.Check.Verdict != verdictUnsure {
+		t.Fatalf("recovery changed the review: %+v", now.Check)
+	}
+}
+
+// A snapshot taken before Inbox I/O is not permission to rewrite or queue a newer turn's signal.
+func TestCompletionReplayRejectsStaleLedger(t *testing.T) {
+	for _, change := range []string{"machine", "session", "native turn", "judgment", "told", "missing", "unchanged"} {
+		t.Run(change, func(t *testing.T) {
+			s, _ := newQuietService(t)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			old := taskTurn{Machine: "box", Session: "session", Key: "turn-a", Seen: time.Now(),
+				Signal: &turnSignal{Kind: sigUnjudged, Key: "signal-a", Machine: "box", Detail: "Needs review"}}
+			current := old
+			sig := *old.Signal
+			current.Signal = &sig
+			switch change {
+			case "machine":
+				current.Machine = "other-box"
+			case "session":
+				current.Session = "other-session"
+			case "native turn":
+				current.Key = "turn-b"
+			case "judgment":
+				current.Signal.Key = "signal-b"
+			case "told":
+				now := time.Now()
+				current.Signal.Told = &now
+			}
+			b := &s.tasks.turns
+			b.mu.Lock()
+			if !s.turnsLocked(context.Background()) {
+				t.Fatal("load ledger")
+			}
+			if change != "missing" {
+				b.doc.Turns["task"] = current
+			}
+			b.mu.Unlock()
+			s.replayTurnSignal("task", old)
+			b.mu.Lock()
+			got, exists := b.doc.Turns["task"]
+			b.mu.Unlock()
+			if change == "missing" {
+				if exists {
+					t.Fatal("replay created a ledger entry")
+				}
+			} else if got.Key != current.Key || got.Machine != current.Machine || got.Session != current.Session || *got.Signal != *current.Signal {
+				t.Fatalf("replay changed the ledger: %+v", got)
+			}
+			s.supervise.mu.Lock()
+			n := len(s.supervise.pending)
+			s.supervise.mu.Unlock()
+			want := 0
+			if change == "unchanged" {
+				want = 1
+			}
+			if n != want {
+				t.Fatalf("queued %d signals, want %d", n, want)
+			}
+		})
+	}
+}
+
 // Nothing is recovered for a task nobody supervises, nor for a closed one: a turn that completes unseen there gets no
 // receipt, no judgment and no message, and a closed task stays closed.
 func TestCompletionUnseenNotSupervisedOrClosed(t *testing.T) {
@@ -376,7 +543,7 @@ func TestCompletionUnseenNotSupervisedOrClosed(t *testing.T) {
 		f.setItems(turnPage("turn-1", "修好了", true)...)
 		nodeListed(s, f, turnRow(proto.StatusDone, 3, "修好了"))
 		wantTurns(t, "the turn", oneEach, s, todo.ID, f)
-		raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "看过了"})
+		raw, _ := json.Marshal(map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "看过了", "checks": completeReviewChecks(todoNow(s, todo.ID))})
 		if _, err := s.runTool(ctx, "server", "conv1", "task_review", raw); err != nil {
 			t.Fatal(err)
 		}
@@ -505,19 +672,24 @@ func TestTaskReceiptReservationIsReleased(t *testing.T) {
 			agentTurn(s, f, proto.StatusWorking, "", 0)
 			f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: proto.StatusDone,
 				State: proto.StateUnread, LastText: "修好了", UpdatedAt: time.Now()})
-			f.mu.Lock()
-			f.onDevicesList = func() { // the node stops answering between the first look and the second
-				f.mu.Lock()
-				f.sessionsFail["box"] = agentReachAttempts
-				f.mu.Unlock()
+			// Drop this turn's second look after it reserved the receipt. The parallel todo-token sync also
+			// lists box's sessions and must not consume the failures meant for this turn.
+			var failures atomic.Int32
+			offline := func(machine string) bool {
+				if machine != "box" {
+					return false
+				}
+				s.tasks.mu.Lock()
+				_, reserved := s.tasks.receipted[todo.ID]
+				s.tasks.mu.Unlock()
+				if reserved {
+					failures.Add(1)
+				}
+				return reserved
 			}
-			f.mu.Unlock()
-			s.taskTurnEnded(ctx, "box", "s1")
-			f.mu.Lock()
-			fails, hook := f.sessionsFail["box"], f.onDevicesList
-			f.mu.Unlock()
-			if hook != nil || fails != 0 {
-				t.Fatalf("the second look did not meet the dropped link: hook left %v, %d failures left", hook != nil, fails)
+			s.taskTurnEnded(context.WithValue(ctx, sessionListOfflineForTest{}, offline), "box", "s1")
+			if got := failures.Load(); int(got) != agentReachAttempts {
+				t.Fatalf("the reserved turn met %d offline reads, want %d", got, agentReachAttempts)
 			}
 			if how == "told again" {
 				if got := len(recoveryReceipts(t, s, todo.ID)); got != 0 {
@@ -526,7 +698,10 @@ func TestTaskReceiptReservationIsReleased(t *testing.T) {
 				s.taskTurnEnded(ctx, "box", "s1") // the node answers again, and the same turn end is told again
 			}
 			waitFor(t, "the receipt", func() bool { return len(recoveryReceipts(t, s, todo.ID)) == 1 })
-			waitFor(t, "the task to close", func() bool { return todoNow(s, todo.ID).DoneAt != nil })
+			waitFor(t, "judge-done delivery to stay open", func() bool {
+				current := todoNow(s, todo.ID)
+				return current.DoneAt == nil && current.Check != nil && current.Check.Verdict == verdictDone
+			})
 			quiet := time.NewTicker(100 * time.Millisecond)
 			defer quiet.Stop()
 			<-quiet.C // a second receipt or judgment would show by now
@@ -547,6 +722,7 @@ func TestTurnEndOf(t *testing.T) {
 	reply := proto.Item{ID: "a1#0", Kind: proto.KindText, Role: "assistant", Text: "修好了"}
 	codexEnd := proto.Item{ID: "line9#0", Kind: "turn_duration", Role: "system", TurnDuration: &proto.TurnDuration{DurationMS: 5, Source: "codex_task_complete", TurnID: "turn-7"}}
 	claudeEnd := proto.Item{ID: "d1#0", Kind: "turn_duration", Role: "system", TurnDuration: &proto.TurnDuration{DurationMS: 5, Source: "claude", ParentUUID: "a1"}}
+	agyEnd := proto.Item{ID: "2@abc123#turn_duration", Kind: "turn_duration", Role: "system", TurnDuration: &proto.TurnDuration{DurationMS: 0, Source: "agy_turn_end", ParentUUID: "2@abc123", UserItemID: "u1#0"}}
 	stopped := proto.Item{ID: "n1#0", Kind: proto.KindNotice, Role: "system", Text: userStoppedNotice}
 	for _, c := range []struct {
 		name  string
@@ -558,6 +734,8 @@ func TestTurnEndOf(t *testing.T) {
 		{"open: a tool runs", []proto.Item{ask, reply, {ID: "t1#0", Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "c"}}, ""},
 		{"Codex task_complete: its turn id", []proto.Item{ask, reply, codexEnd}, "turn-7"},
 		{"Claude Code turn_duration: its item", []proto.Item{ask, reply, claudeEnd}, "d1#0"},
+		{"Antigravity turn_duration: its item", []proto.Item{ask, reply, agyEnd}, "2@abc123#turn_duration"},
+		{"Antigravity turn_duration followed by checkpoint notice", []proto.Item{ask, reply, agyEnd, {ID: "3@abc123#0", Kind: proto.KindNotice, Role: "system", Text: "上下文已压缩"}}, "2@abc123#turn_duration"},
 		{"stopped by the user", []proto.Item{ask, stopped}, "n1#0"},
 		{"an end with nothing to name it", []proto.Item{ask, reply, {Kind: "turn_duration", Role: "system"}}, ""},
 		{"a compaction notice after the end", []proto.Item{ask, reply, codexEnd, {ID: "n2#0", Kind: proto.KindNotice, Role: "system", Text: "compacted", Compact: &proto.Compact{}}}, "turn-7"},
@@ -672,6 +850,7 @@ func TestCompletionUnheardWhileAUsageLimitIsWaitedOut(t *testing.T) {
 		t.Fatalf("the task was changed while its turn waits for the reset: start %v → %v, stage %q → %q, %+v", mark, workMark(s, todo.ID), before.Stage, now.Stage, now.Supervision)
 	}
 	// The reset passed long ago and nothing went on: the same row is now a turn that ended, cut off by the limit.
+	boxReadsBefore := itemReadsOn(f, "box")
 	f.setSessions("box", limited(time.Now().Add(-limitResumeGrace-time.Minute)))
 	sweeps(t, s, todo.ID, 4)
 	waitFor(t, "the interrupted receipt", func() bool { return len(recoveryReceipts(t, s, todo.ID)) == 1 })
@@ -683,9 +862,22 @@ func TestCompletionUnheardWhileAUsageLimitIsWaitedOut(t *testing.T) {
 	if len(receipts) != 1 || receipts[0].State != "interrupted" || f.judged != 0 {
 		t.Fatalf("after the wait: %d receipts %+v, %d judgments, want one interrupted receipt and no judgment", len(receipts), receipts, f.judged)
 	}
-	if got := reads.Load(); got < 1 || got > 2 {
+	// Count the worker agent's own transcript reads on box; direct supervision confirmation reads conv1 on server (#12567).
+	if got := itemReadsOn(f, "box") - boxReadsBefore; got < 1 || got > 2 {
 		t.Fatalf("%d transcript reads to take the turn up, want the sweep's and the end's own", got)
 	}
+}
+
+func itemReadsOn(f *fakeHub, device string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.Device == device && c.Method == DeviceSessionItems {
+			n++
+		}
+	}
+	return n
 }
 
 // A node that lists the session but does not answer the transcript read is not asked on every tick: the next tick,
@@ -738,7 +930,7 @@ func TestCompletionUnnamedThenNamed(t *testing.T) {
 			f.setItems(closed[:len(closed)-1]...) // the prompt and the reply; the runtime's end record is not written yet
 			if how != laterRecord {
 				f.mu.Lock()
-				f.itemsFail = 1 // the end's one read of the transcript
+				f.itemsFailPlain = 1 // the completion read, not the independent next-step suggestion read
 				f.mu.Unlock()
 			}
 			before := workMark(s, todo.ID)
@@ -811,7 +1003,7 @@ func TestCompletionAfterAnUnnamedTurnWithTheNodeClockBehind(t *testing.T) {
 	f.judge = `{"verdict":"not_done","reason":"测试还没补"}`
 	f.setItems(page("turn-1", "修了崩溃，测试还没补")...)
 	f.mu.Lock()
-	f.itemsFail = 1 // the end's one read of the transcript
+	f.itemsFailPlain = 1 // the completion read, not the independent next-step suggestion read
 	f.mu.Unlock()
 	before := workMark(s, todo.ID)
 	nodeListed(s, f, row(proto.StatusWorking, 2, ""))
@@ -840,6 +1032,7 @@ func TestCompletionAfterAnUnnamedTurnWithTheNodeClockBehind(t *testing.T) {
 // A meeting's turn in the task's agent is never the task's completion: found by the sweep with no start heard, it is
 // left alone (no receipt, no start taken), kept as seen and not read again.
 func TestCompletionUnheardMeetingTurn(t *testing.T) {
+	needsRecordingModule(t) // a path of the recording module's
 	s, f, todo := newSupervisedService(t)
 	nodeListed(s, f, turnRow(proto.StatusIdle, 1, ""))
 	sweeps(t, s, todo.ID, 1)
@@ -922,7 +1115,10 @@ func TestCompletionUnknownRowListedAgainWithALaterTime(t *testing.T) {
 	row := turnRow(proto.StatusUnknown, 3, "修好了")
 	nodeListed(s, f, row)
 	var reads atomic.Int32
-	f.hookReads(receiptHooks{before: func(int) {
+	f.hookReads(receiptHooks{beforeCall: func(call DeviceCall) {
+		if call.Device != "box" {
+			return // the main conversation's relay confirmation is not a read of this Agent's transcript
+		}
 		later := row
 		later.UpdatedAt = row.UpdatedAt.Add(time.Duration(reads.Add(1)) * 3 * time.Second) // listed again with a later time, at every read
 		f.setSessions("box", later)
@@ -1107,4 +1303,125 @@ func TestTurnSweepLeavesAComputerThatIsAwayAlone(t *testing.T) {
 	if got := reads.Load(); got != 1 {
 		t.Fatalf("%d transcript reads once it is back, want 1 (the row did not move after it)", got)
 	}
+}
+
+func TestTurnEndForSession(t *testing.T) {
+	at := time.Now().UTC()
+	ask := proto.Item{ID: "1@abc#0", Kind: proto.KindText, Role: "user", Text: "Fix bug", TS: at}
+	reply := proto.Item{ID: "2@abc#0", Kind: proto.KindText, Role: "assistant", Text: "Fixed and verified.", TS: at}
+	agyEnd := proto.Item{ID: "2@abc#turn_duration", Kind: "turn_duration", Role: "system", TS: at,
+		TurnDuration: &proto.TurnDuration{DurationMS: 0, Source: "agy_turn_end", ParentUUID: "2@abc", UserItemID: "1@abc#0"}}
+	checkpoint := proto.Item{ID: "3@abc#0", Kind: proto.KindNotice, Role: "system", Text: "上下文已压缩", TS: at}
+
+	agyDone := proto.Session{Agent: "antigravity", Launcher: "antigravity", Status: proto.StatusDone}
+	agyUnknown := proto.Session{Agent: "antigravity", Launcher: "antigravity", Status: proto.StatusUnknown}
+	agyIdle := proto.Session{Agent: "antigravity", Launcher: "antigravity", Status: proto.StatusIdle}
+	claudeDone := proto.Session{Agent: "claude", Launcher: "claude", Status: proto.StatusDone}
+	codexDone := proto.Session{Agent: "codex", Launcher: "codex", Status: proto.StatusDone}
+
+	for _, tc := range []struct {
+		name  string
+		row   proto.Session
+		items []proto.Item
+		key   string
+	}{
+		{"antigravity turn_duration closes even when status unknown", agyUnknown, []proto.Item{ask, reply, agyEnd}, "2@abc#turn_duration"},
+		{"antigravity turn_duration closes when status done", agyDone, []proto.Item{ask, reply, agyEnd}, "2@abc#turn_duration"},
+		{"older antigravity done transcript without turn_duration falls back to final reply", agyDone, []proto.Item{ask, reply}, "reply:2@abc#0"},
+		{"older antigravity done transcript allows trailing checkpoint notice", agyDone, []proto.Item{ask, reply, checkpoint}, "reply:2@abc#0"},
+		{"older antigravity unknown without turn_duration stays open", agyUnknown, []proto.Item{ask, reply}, ""},
+		{"older antigravity idle without turn_duration stays open", agyIdle, []proto.Item{ask, reply}, ""},
+		{"claude done without turn_duration stays strict", claudeDone, []proto.Item{ask, reply}, ""},
+		{"codex done without turn_duration stays strict", codexDone, []proto.Item{ask, reply}, ""},
+		{"antigravity done ending in narration stays open", agyDone, []proto.Item{ask, {ID: "2@abc#0", Kind: proto.KindText, Role: "assistant", Text: "Working on it", Narration: true, TS: at}}, ""},
+		{"antigravity done ending in tool call stays open", agyDone, []proto.Item{ask, {ID: "2@abc#0", Kind: proto.KindToolUse, Role: "assistant", ToolUseID: "c1", TS: at}}, ""},
+		{"antigravity done with empty reply stays open", agyDone, []proto.Item{ask, {ID: "2@abc#0", Kind: proto.KindText, Role: "assistant", Text: "   ", TS: at}}, ""},
+		{"antigravity done with zero timestamp stays open", agyDone, []proto.Item{ask, {ID: "2@abc#0", Kind: proto.KindText, Role: "assistant", Text: "Done"}}, ""},
+	} {
+		end, closed := turnEndForSession(tc.row, tc.items)
+		if closed != (tc.key != "") || end.Key != tc.key {
+			t.Errorf("%s: closed=%v key=%q, want key=%q", tc.name, closed, end.Key, tc.key)
+		}
+	}
+}
+
+// Antigravity sessions recover missed completions both via structured agy_turn_end turn_duration items and via
+// the StatusDone fallback for historical transcripts without turn_duration, and working -> unknown -> done delivers
+// completion on the live fleet path without waiting for the sweep.
+func TestCompletionAntigravityTurnEndAndRecovery(t *testing.T) {
+	agyRow := func(status string, rev int64, text string) proto.Session {
+		row := turnRow(status, rev, text)
+		row.Agent = "antigravity"
+		row.Launcher = "antigravity"
+		return row
+	}
+	agyPage := func(id, reply string, withTurnDuration bool) []proto.Item {
+		at := time.Now().UTC()
+		items := []proto.Item{
+			{ID: id + "-u#0", Kind: proto.KindText, Role: "user", Text: "Investigate issue", TS: at},
+			{ID: id + "-a#0", Kind: proto.KindText, Role: "assistant", Text: reply, TS: at},
+		}
+		if withTurnDuration {
+			items = append(items, proto.Item{
+				ID: id + "-a#turn_duration", Kind: "turn_duration", Role: "system", TS: at,
+				TurnDuration: &proto.TurnDuration{DurationMS: 0, Source: "agy_turn_end", ParentUUID: id + "-a", UserItemID: id + "-u#0"},
+			})
+		}
+		return items
+	}
+
+	t.Run("recoverTurn with agy_turn_end turn_duration while status unknown", func(t *testing.T) {
+		s, f, todo := newSupervisedService(t)
+		ctx := context.Background()
+		nodeListed(s, f, agyRow(proto.StatusUnknown, 1, ""))
+		sweeps(t, s, todo.ID, 1) // start the turn ledger before the turn finishes
+		f.setItems(agyPage("t1", "Root cause fixed.", true)...)
+		row := agyRow(proto.StatusUnknown, 2, "Root cause fixed.")
+		nodeListed(s, f, row)
+		s.superviseWatch(ctx, time.Now())
+		wantTurns(t, "recoverTurn with agy_turn_end", oneEach, s, todo.ID, f)
+		sweeps(t, s, todo.ID, 2)
+		stillTurns(t, "no duplicate after later sweeps", oneEach, s, todo.ID, f)
+	})
+
+	t.Run("recoverTurn compatibility fallback for legacy StatusDone transcript without turn_duration", func(t *testing.T) {
+		s, f, todo := newSupervisedService(t)
+		ctx := context.Background()
+		nodeListed(s, f, agyRow(proto.StatusIdle, 1, ""))
+		sweeps(t, s, todo.ID, 1) // start the turn ledger before the turn finishes
+		f.setItems(agyPage("legacy1", "Completed on older runtime.", false)...)
+		// StatusUnknown without turn_duration must not falsely recover.
+		nodeListed(s, f, agyRow(proto.StatusUnknown, 2, "Completed on older runtime."))
+		s.superviseWatch(ctx, time.Now())
+		stillTurns(t, "legacy unknown without turn_duration", turnCounts{}, s, todo.ID, f)
+		// Once the runtime explicitly reports StatusDone, recoverTurn accepts the completed assistant reply.
+		done := agyRow(proto.StatusDone, 2, "Completed on older runtime.")
+		nodeListed(s, f, done)
+		s.superviseWatch(ctx, time.Now())
+		wantTurns(t, "legacy done fallback", oneEach, s, todo.ID, f)
+		sweeps(t, s, todo.ID, 2)
+		stillTurns(t, "no duplicate after legacy fallback", oneEach, s, todo.ID, f)
+	})
+
+	t.Run("working -> unknown -> done and working -> unknown -> unknown -> idle trigger supervision completion", func(t *testing.T) {
+		for _, terminal := range []string{proto.StatusDone, proto.StatusIdle} {
+			t.Run(terminal, func(t *testing.T) {
+				s, f, todo := newSupervisedService(t)
+				ctx := context.Background()
+				nodeListed(s, f, agyRow(proto.StatusIdle, 1, ""))
+				before := workMark(s, todo.ID)
+				nodeListed(s, f, agyRow(proto.StatusWorking, 2, ""))
+				startTaken(t, s, todo.ID, before)
+				f.setItems(agyPage("t2-"+terminal, "Completed across transient unknown.", true)...)
+				nodeListed(s, f, agyRow(proto.StatusUnknown, 3, "Completed across transient unknown."))
+				if terminal == proto.StatusIdle {
+					nodeListed(s, f, agyRow(proto.StatusUnknown, 3, "Completed across transient unknown."))
+				}
+				nodeListed(s, f, agyRow(terminal, 3, "Completed across transient unknown."))
+				wantTurns(t, "fleet working -> unknown -> "+terminal, oneEach, s, todo.ID, f)
+				s.superviseWatch(ctx, time.Now())
+				stillTurns(t, "sweep does not duplicate fleet edge", oneEach, s, todo.ID, f)
+			})
+		}
+	})
 }

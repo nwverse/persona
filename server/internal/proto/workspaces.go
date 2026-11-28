@@ -15,19 +15,25 @@ type Workspace struct {
 	ProjectPath    string `json:"project_path,omitempty"`
 	IsMain         *bool  `json:"is_main,omitempty"`
 	Unread         *bool  `json:"unread,omitempty"`
-	SidebarStatus  string `json:"sidebar_status,omitempty"`
-	WorkspaceKind  string `json:"workspace_kind,omitempty"`
-	Head           string `json:"head,omitempty"`
-	Index          int    `json:"index"`
-	Title          string `json:"title"`
-	Cwd            string `json:"cwd"`
-	Branch         string `json:"branch,omitempty"`
-	Online         bool   `json:"online"`
-	Available      bool   `json:"available"`
-	LastSeen       string `json:"last_seen,omitempty"`
+	// PinnedAt is the host's native workspace pin time (RFC3339), absent when unpinned or unsupported. It belongs to
+	// this exact workspace, independently of Persona's session/project pins and Assistant directions.
+	PinnedAt      string `json:"pinned_at,omitempty"`
+	SidebarStatus string `json:"sidebar_status,omitempty"`
+	WorkspaceKind string `json:"workspace_kind,omitempty"`
+	Head          string `json:"head,omitempty"`
+	Index         int    `json:"index"`
+	Title         string `json:"title"`
+	Cwd           string `json:"cwd"`
+	Branch        string `json:"branch,omitempty"`
+	Online        bool   `json:"online"`
+	Available     bool   `json:"available"`
+	LastSeen      string `json:"last_seen,omitempty"`
 	// Owned: an engine runtime's worktree that the runtime made and removes with the workspace (Paseo's, #6297), the
 	// only kind of its rows Delete worktree is offered for. Not set on a terminal host's rows.
 	Owned bool `json:"owned,omitempty"`
+	// HiddenByDirectory is manager-owned visibility from hidden_agent_dirs rules: explicit Workspace Board cards keep
+	// their bindings, while Agents sidebars exclude empty workspaces in hidden folders.
+	HiddenByDirectory bool `json:"hidden_by_directory,omitempty"`
 }
 
 type WorkspacesResponse struct {

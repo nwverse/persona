@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -11,8 +12,8 @@ import (
 // Subscription usage limits (docs/assistant/agent-work.md "Usage limits", #1710): a turn a subscription's 5-hour or
 // weekly limit refused is no failure to report and nothing for the user to fix. It waits for the reset; the CLI goes
 // on by itself when it said so (typing into it would cancel that), otherwise the manager continues it a minute or so
-// after the reset (agents_work_act.go). Only a subscription's limit has a reset time to wait for
-// (proto.Session.TurnErrorResetsAt): a gateway's or an API key's 429 is handled as before.
+// after the reset (agents_work_act.go). Gateway quota errors with an explicit UTC reset use the same wait.
+// Other gateway/API-key errors keep their existing handling.
 
 const (
 	// limitContinueAfter / limitContinueSpread: the manager continues a turn its usage limit stopped this long after
@@ -25,15 +26,22 @@ const (
 	// limitResumeGrace: how long past its reset a usage-limit wait still counts as one: the CLI resumes, or the manager
 	// continues, within it.
 	limitResumeGrace = 10 * time.Minute
+	// maxScheduledRecoveryHorizon bounds provider-advertised recovery timestamps for scheduled-run fallback retries so
+	// malformed far-future timestamps fall back to the bounded fixed delay rather than stranding an occurrence.
+	maxScheduledRecoveryHorizon = 7 * 24 * time.Hour
 )
 
 // decorateLimit completes what the session list says of a usage limit (sess decorated with its turn error): Claude
 // Code's own line for one counts as one when the node did not say (an older node, an older Claude Code), its reset
-// read off its words when they name a time zone. A kind the node gave stands: it read the record, and a gateway's 429
-// without quotaLimits is not a subscription's limit. Without a turn error, or for another kind, nothing of a limit is left.
+// read off its words when they name a time zone. Known gateway quota/capacity wording also completes older nodes
+// that did not classify it. A kind the node gave stands. Other kinds carry no usage-limit metadata.
 func decorateLimit(sess *proto.Session) {
-	if sess.TurnErrorKind == "" && transcript.UsageLimitText(sess.TurnError) {
-		sess.TurnErrorKind = proto.TurnErrorUsageLimit
+	if sess.TurnErrorKind == "" {
+		if kind, _ := transcript.GatewayErrorKind(sess.TurnError, sess.UpdatedAt); kind != "" {
+			sess.TurnErrorKind = kind
+		} else if transcript.UsageLimitText(sess.TurnError) {
+			sess.TurnErrorKind = proto.TurnErrorUsageLimit
+		}
 	}
 	if sess.TurnError == "" || sess.TurnErrorKind != proto.TurnErrorUsageLimit {
 		sess.TurnErrorResetsAt, sess.TurnErrorResumes, sess.TurnErrorAfterWork = nil, false, false
@@ -96,4 +104,60 @@ func limitContinueAt(reset, now time.Time) time.Time {
 		at = now
 	}
 	return at.Add(limitContinueAfter + rand.N(limitContinueSpread)).UTC()
+}
+
+// providerRecoveryEligible reports whether a terminal scheduled-run failure may defer its automatic retry to a
+// provider-advertised recovery time instead of the fixed retry delay. User/client/unrecoverable failures never do.
+func providerRecoveryEligible(sess proto.Session, text string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	switch sess.TurnErrorKind {
+	case proto.TurnErrorUser, proto.TurnErrorUnrecoverable, proto.TurnErrorNoOutput, proto.TurnErrorStopped:
+		return false
+	}
+	if proto.UnrecoverableTurnErrorCode(text) != "" {
+		return false
+	}
+	if code := sessionTurnErrorCode(sess); code == proto.TurnErrorModelFallbackUnavailable ||
+		code == proto.TurnErrorImagesTooLarge || (userTurnError(code) && !transientError(text)) {
+		return false
+	}
+	if sess.TurnErrorKind == "" {
+		t := strings.ToLower(text)
+		if userErrorStatus.MatchString(t) {
+			return false
+		}
+		for _, w := range userErrorWords {
+			if strings.Contains(t, w) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// providerRecoveryAt extracts a trustworthy future recovery time for a terminal scheduled-run provider failure from
+// structured session metadata (before decorateLimit clears non-usage-limit fields) or machine-readable error text.
+// Missing, malformed, past, or far-future metadata returns false so the caller retains its fixed-delay fallback.
+func providerRecoveryAt(raw, decorated proto.Session, text string, anchor, now time.Time) (time.Time, bool) {
+	if !providerRecoveryEligible(decorated, text) {
+		return time.Time{}, false
+	}
+	var at time.Time
+	var has bool
+	switch {
+	case raw.TurnErrorResetsAt != nil && !raw.TurnErrorResetsAt.IsZero():
+		at, has = raw.TurnErrorResetsAt.UTC(), true
+	case raw.ModelFallback != nil && raw.ModelFallback.RecoveryExhausted && raw.ModelFallback.RecoveryReset != nil && !raw.ModelFallback.RecoveryReset.IsZero():
+		at, has = raw.ModelFallback.RecoveryReset.UTC(), true
+	case decorated.ModelFallback != nil && decorated.ModelFallback.RecoveryExhausted && decorated.ModelFallback.RecoveryReset != nil && !decorated.ModelFallback.RecoveryReset.IsZero():
+		at, has = decorated.ModelFallback.RecoveryReset.UTC(), true
+	default:
+		at, has = transcript.ProviderRecoveryAt(text, anchor)
+	}
+	if !has || !at.After(now) || at.Sub(now) > maxScheduledRecoveryHorizon {
+		return time.Time{}, false
+	}
+	return at.UTC(), true
 }

@@ -32,6 +32,42 @@ enum RecordingSamples {
         return id
     }
 
+    #if os(iOS)
+    /// `-showUpcomingSample YES` (#8731): today's calendar meetings on the Meetings home without a calendar (screenshots,
+    /// UI tests): one on now, two later.
+    static func upcomingIfAsked(at date: Date) -> [MeetingCalendar.Candidate]? {
+        guard UserDefaults.standard.bool(forKey: "showUpcomingSample") else { return nil }
+        let hour = 3600.0
+        return [
+            MeetingCalendar.Candidate(id: "sample-1", title: "产品周会", start: date.addingTimeInterval(-0.5 * hour), end: date.addingTimeInterval(0.5 * hour),
+                                      location: "飞书会议", attendees: ["Ada", "Bo", "Cy", "Di", "Ed", "Flo", "Gus", "Hal"]),
+            MeetingCalendar.Candidate(id: "sample-2", title: "设计评审", start: date.addingTimeInterval(3.5 * hour), end: date.addingTimeInterval(4 * hour),
+                                      location: "3 楼会议室", attendees: ["Ada", "Bo", "Cy", "Di"]),
+        ]
+    }
+
+    /// The made-up weekly meeting a reminder is for (#8731 G2, `-showMeetingReminder`), starting in a minute.
+    static func reminderMeeting() -> RecordingMeeting {
+        let start = Date.now.addingTimeInterval(MeetingReminders.lead)
+        return RecordingMeeting(eventID: "sample-weekly", title: "产品周会", start: start, end: start.addingTimeInterval(3600),
+                                location: "3 楼会议室", attendees: ["张三", "李四", "王五"])
+    }
+
+    /// `-showMeetingReminder start`: a reminder's Start with no microphone. The made-up meeting records under the
+    /// reminder's meeting and its name, attended as a real start would be (`MeetingAttendees.startAttendance`: a room
+    /// meeting with the meeting conversation), and its room opens.
+    static func startFromReminder(_ meeting: RecordingMeeting) {
+        RecordingLibrary.shared.restore(liveMeeting)
+        var live = RecordingEntry(id: liveMeeting, createdAt: .now, source: .phone, title: meeting.title ?? "", active: true)
+        live.meeting = meeting
+        let attendance = MeetingAttendees.startAttendance(AppModel.shared)
+        if attendance.room || attendance.sentRole.attends { live.attendance = attendance }
+        try? RecordingLibrary.shared.save(live)
+        RecordingCapture.shared.showSample(liveMeeting, elapsed: 1)
+        MeetingRecorder.openRecordings()
+    }
+    #endif
+
     /// The meeting being recorded (`-showMeetingSample recording|paused|interrupted`).
     static let liveMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
     /// A finished meeting, transcribed (`-showMeetingSample minutes|pending` opens it).
@@ -39,6 +75,12 @@ enum RecordingSamples {
     /// A longer finished meeting for the summary card (#6563, `-showMeetingSample overview` opens it): five minutes with
     /// lines in each, so a hub that makes a topic of each minute has five, in two groups.
     static let overviewMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000006563")!
+    /// Recordings nobody named (#8873, `-showMeetingSample untitled|untitled-page|untitled-live`): a finished meeting and a
+    /// finished note with no title and no calendar event, which a hub names from what was said (the mock hub with
+    /// `MOCK_RECORDING_TITLES=1`); `untitled-page` opens the meeting's page, `untitled-live` adds a meeting being
+    /// recorded, also unnamed.
+    static let untitledMeeting = UUID(uuidString: "00000000-0000-0000-0000-000000008873")!
+    static let untitledNote = UUID(uuidString: "00000000-0000-0000-0000-000000008874")!
 
     #if os(iOS)
     /// The lines the `flow` sample hears, one segment of one sentence each, a few seconds apart.
@@ -124,8 +166,44 @@ enum RecordingSamples {
         try? RecordingLibrary.shared.save(entry)
     }
 
+    /// `-showMeetingSample untitled|untitled-page|untitled-live` (#8873): recordings with no title and no calendar event.
+    /// Each says its subject before a colon in its first line, which the mock hub's made-up title takes; a fresh copy each
+    /// run, so the hub's name comes from this run's uploads.
+    private static func installUntitled(live: Bool) {
+        let start = Date(timeIntervalSince1970: 1_800_177_000)
+        func sentences(_ lines: [(Double, String)]) -> [RecordingSegment] {
+            [RecordingSegment(index: 0, start: 0, duration: 120, sentences: lines.map { RecordingSentence(start: $0.0, end: $0.0 + 10, text: $0.1) })]
+        }
+        for id in [untitledMeeting, untitledNote] {
+            if RecordingLibrary.shared.entry(id) != nil { try? RecordingLibrary.shared.remove(id) }
+            RecordingLibrary.shared.restore(id)
+        }
+        var meeting = RecordingEntry(id: untitledMeeting, createdAt: start, source: .phone, active: false, expectedSegments: 1)
+        meeting.meeting = RecordingMeeting()
+        meeting.segments = sentences([(2, "导出上限评审：大文件导不出来的问题先过一遍。"), (20, "这一版先保留 4 MB 的上限，发版说明里写清楚。"),
+                                      (45, "张三负责周五前补上回归测试。"), (70, "还没定的是上限按条目算还是按录音算。")])
+        try? RecordingLibrary.shared.save(meeting)
+        var note = RecordingEntry(id: untitledNote, createdAt: start.addingTimeInterval(7200), source: .phone, active: false,
+                                  expectedSegments: 1)
+        note.segments = sentences([(3, "周末采购：牛奶、鸡蛋和咖啡豆，顺便看看有没有新的滤纸。"), (25, "周六上午去，中午之前回来做饭。")])
+        try? RecordingLibrary.shared.save(note)
+        #if os(iOS)
+        guard live else { return }
+        RecordingLibrary.shared.restore(liveMeeting)
+        var now = RecordingEntry(id: liveMeeting, createdAt: .now.addingTimeInterval(-754), source: .phone, active: true)
+        now.meeting = RecordingMeeting()
+        now.segments = [RecordingSegment(index: 0, start: 0, duration: 60, sentences: [
+            RecordingSentence(start: 1, end: 9, text: "供应商续约：合同下个月到期，先看最近两次交付。"),
+            RecordingSentence(start: 30, end: 40, text: "最近两次都晚了一周左右，但现在换供应商成本太高。"),
+        ])]
+        try? RecordingLibrary.shared.save(now)
+        RecordingCapture.shared.showSample(liveMeeting, elapsed: 754)
+        #endif
+    }
+
     /// `-showMeetingSample recording|paused|interrupted`: a meeting 12:34 into its recording, as the recording page and its
-    /// Live Activity show it (no microphone); `listening|taking-part|answered`: the same with Persona attending (#2981);
+    /// Live Activity show it (no microphone); `stopped`: `recording` with its activity stale, drawn as after iOS ended the
+    /// app (#9108); `listening|taking-part|answered`: the same with Persona attending (#2981);
     /// `room-listening|room-taking-part`: the same as a room meeting (#3862) started with the live view (phase 2), whose
     /// sheet is the meeting page;
     /// `room-whiteboard`: `room-taking-part` started with photos, which adds a made-up whiteboard photo as the camera
@@ -134,7 +212,8 @@ enum RecordingSamples {
     /// `room-listening` in hub transcription (#3862 phase 5), whose canned audio also goes up the audio socket, so a UI
     /// test checks the uplink against the mock hub's hub mode with no microphone; `room-hub-highlights`: `room-hub`
     /// started with the highlights too, as a hub with both starts it (the Highlights card, the hub's lines on the Full
-    /// Transcript page); `minutes` / `pending`: a finished meeting whose page opens (its minutes from the hub, or still
+    /// Transcript page); `room-hub-phone-cannot` / `room-phone-cannot`: `room-hub` / `room-listening` on an iPhone that
+    /// can't transcribe the meeting's language (#13385), with no lines of its own; `minutes` / `pending`: a finished meeting whose page opens (its minutes from the hub, or still
     /// being written); `overview`: a longer finished meeting whose page opens, for the summary card (#6563,
     /// `installOverviewMeeting`); `room-highlights`: `room-taking-part` started with the highlights too (phase 2b),
     /// 24:20 in, with a line in each of fourteen minutes (`highlightsLines`), so the hub's highlights and the transcript
@@ -143,15 +222,22 @@ enum RecordingSamples {
         #if os(iOS)
         guard let mode = UserDefaults.standard.string(forKey: "showMeetingSample") else {
             // A run without them: an earlier run's made-up meetings go, so other tests see only their own recordings.
-            for id in [liveMeeting, pastMeeting, overviewMeeting] where RecordingLibrary.shared.entry(id) != nil {
+            for id in [liveMeeting, pastMeeting, overviewMeeting, untitledMeeting, untitledNote] where RecordingLibrary.shared.entry(id) != nil {
                 try? RecordingLibrary.shared.remove(id)
             }
             return
         }
-        // The summary card's meeting alone, or the others alone: a run syncs only the made-up meetings it shows.
-        let others = mode == "overview" ? [liveMeeting, pastMeeting] : [overviewMeeting]
+        // The summary card's meeting alone, the unnamed ones alone, or the others alone: a run syncs only the made-up
+        // meetings it shows.
+        let untitled = ["untitled", "untitled-page", "untitled-live"].contains(mode)
+        // `after-…` (#8731 V3): the same made-up meetings, opened after the meeting.
+        // `debates` / `after-debates` (#16728): the five-minute sprint review for disagreements (mock hub `/mock/recording_minutes_debates`).
+        let overview = ["overview", "after-overview", "debates", "after-debates"].contains(mode)
+        let others = overview ? [liveMeeting, pastMeeting, untitledMeeting, untitledNote]
+            : untitled ? [liveMeeting, pastMeeting, overviewMeeting] : [overviewMeeting, untitledMeeting, untitledNote]
         for id in others where RecordingLibrary.shared.entry(id) != nil { try? RecordingLibrary.shared.remove(id) }
-        if mode == "overview" { installOverviewMeeting(); return }
+        if overview { installOverviewMeeting(); return }
+        if untitled { installUntitled(live: mode == "untitled-live"); return }
         let start = Date(timeIntervalSince1970: 1_800_003_600)
         let meeting = RecordingMeeting(eventID: "sample-weekly", title: "产品周会", start: start, end: start.addingTimeInterval(3600),
                                        location: "3 楼会议室", attendees: ["张三", "李四", "王五"])
@@ -172,7 +258,7 @@ enum RecordingSamples {
         ]
         past.marks = [44]
         try? RecordingLibrary.shared.save(past)
-        if mode == "minutes" || mode == "pending" { return }
+        if ["minutes", "pending", "after-minutes", "after-pending"].contains(mode) { return }
         if mode == "flow" { startFlow(meeting); return }
 
         RecordingLibrary.shared.restore(liveMeeting)
@@ -190,8 +276,12 @@ enum RecordingSamples {
         // one just before the tap (12:34). `room-listening` / `room-taking-part`: the meeting's own room conversation
         // attends instead (#3862), not private; `room-whiteboard` takes part and takes photos; `room-highlights` takes part
         // with the highlights (phase 2b) and its own fourteen lines.
-        let hub = mode == "room-hub" || mode == "room-hub-highlights"
-        let room = ["room-listening", "room-taking-part", "room-whiteboard", "room-talk-held", "room-highlights"].contains(mode) || hub
+        // `room-hub-phone-cannot` / `room-phone-cannot` (#13385): `room-hub` / `room-listening` on an iPhone that can't
+        // transcribe the meeting's language, so it has no lines of its own.
+        let phoneCannot = mode == "room-hub-phone-cannot" || mode == "room-phone-cannot"
+        let hub = mode == "room-hub" || mode == "room-hub-highlights" || mode == "room-hub-phone-cannot"
+        let room = ["room-listening", "room-taking-part", "room-whiteboard", "room-talk-held", "room-highlights",
+                    "room-phone-cannot"].contains(mode) || hub
         let photos = mode == "room-whiteboard"
         if ["listening", "taking-part", "answered"].contains(mode) || room {
             if room {
@@ -199,7 +289,7 @@ enum RecordingSamples {
                 // with the highlights, phase 2b, its highlights). `room-hub`: listening in, transcribed by the hub (phase
                 // 5): its uploads ask for `hub`, and once the hub's `200` says so the canned audio (`startTalkAudio`) goes
                 // up the audio socket.
-                live.attendance = RecordingAttendance.room(mode == "room-listening" || hub ? .listener : .participant, private: false,
+                live.attendance = RecordingAttendance.room(["room-listening", "room-phone-cannot"].contains(mode) || hub ? .listener : .participant, private: false,
                                                            photos: photos, liveView: true,
                                                            highlights: highlighted || mode == "room-hub-highlights",
                                                            transcription: hub ? .hub : nil)
@@ -211,12 +301,16 @@ enum RecordingSamples {
                 RecordingSentence(start: 741, end: 748, text: "上周定的长录音测试谁负责？"),
             ]))
             if highlighted { live.segments = highlightsSegments }
+            if phoneCannot { live.segments = live.segments.map { RecordingSegment(index: $0.index, start: $0.start, duration: $0.duration) } }
         }
         if photos {
             // An earlier run's photos not sent yet stay behind: this run's whiteboard is the only one.
             try? FileManager.default.removeItem(at: RecordingLibrary.shared.folder(liveMeeting).appending(path: MeetingPhotos.listFile))
         }
         try? RecordingLibrary.shared.save(live)
+        if phoneCannot { RecordingTranscription.shared.showSampleCannot(liveMeeting, .unsupportedLanguage) }
+        // `stopped` (#9108): `recording` whose Live Activity went stale, as the island draws one after iOS ended the app.
+        if mode == "stopped" { RecordingActivity.sampleStale = true }
         RecordingCapture.shared.showSample(liveMeeting, elapsed: elapsed, paused: mode == "paused", interrupted: mode == "interrupted")
         if photos { Task { await addWhiteboard() } }
         // The room meetings' microphone for Talk (#3862 phase 4): canned audio into the recorder's tap. `room-talk-held`:

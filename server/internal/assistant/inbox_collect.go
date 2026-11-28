@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"maps"
 	"slices"
 	"time"
 
@@ -68,7 +67,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		}
 	}
 	b.srcMu.Unlock()
+	captureExternal := s.externalInboxDB() != nil
 	b.mu.Lock()
+	b.externalCapture = captureExternal
 	b.larkAccount = cfg.LarkAccount
 	b.batch = newInboxBatch()
 	b.mu.Unlock()
@@ -103,6 +104,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	}
 	changed = append(changed, b.roundMuted(b.applyMutes(now))...)
 	changed = b.followMerged(append(changed, b.releaseMembers()...), now)
+	b.mu.Unlock()
+	s.prepareExternalInbox(ctx, changed)
+	b.mu.Lock()
 	changed, todo := b.sortBatch(batch, changed, now)
 	b.applyRuledPolicies(changed)
 	b.settleRound()
@@ -116,7 +120,11 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	if readsChanged && len(changed) == 0 {
 		s.inboxChanged(ctx, nil) // nothing came in, but which sources could be read did (saveInbox tells otherwise)
 	}
+	if s.inboxTodoForwardOn(ctx) {
+		s.forwardInboxSoon(ctx)
+	}
 	s.triageInbox(ctx)
+	s.settleInbox(ctx) // "Needs you" events the owner answered in the source, or that were closed there (inbox_settle.go)
 	s.translateInbox(ctx)
 	s.admitInbox(ctx, batch, todo)
 	return nil
@@ -145,20 +153,8 @@ func (b *inboxBook) recordReads(r assistantwire.InboxRound) bool {
 		changed = changed || b.readErrs[id] != code
 	}
 	b.readErrs = next
-	mail := b.mailReadErrs
-	if _, there := r.Names["mail"]; r.Mail != nil || r.Names != nil && !there {
-		mail = map[string]assistantwire.InboxMailFailed{}
-		if r.Mail != nil {
-			for _, f := range r.Mail.Failed {
-				if f.ID != "" && f.ReadError != "" {
-					mail[f.ID] = f
-				}
-			}
-		}
-	}
-	changed = changed || !maps.Equal(mail, b.mailReadErrs)
-	b.mailReadErrs = mail
-	return changed
+	mailChanged := b.recordMailReads(r)
+	return changed || mailChanged
 }
 
 // ---- the connectors' ----
@@ -193,6 +189,8 @@ func (s *Service) collectSource(ctx context.Context, src assistantwire.InboxSour
 	if len(src.Things) == 0 && !src.Settles {
 		return nil
 	}
+	// The conversations that wrote into a batch's chat as the user hear of it (chat_reply.go); the batch goes on as it is.
+	s.tellChatWriters(ctx, src)
 	// State reports update their existing events; batches of new messages go to the model, not the list.
 	things, changed := s.applyGroupStates(ctx, src, src.Things)
 	things = s.relateBatches(ctx, src, things)

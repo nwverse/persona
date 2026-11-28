@@ -14,11 +14,13 @@ final class DispatchedTaskCardTests: XCTestCase {
         self.hub = hub
     }
 
-    @MainActor private func launch() -> XCUIApplication {
+    @MainActor private func launch(largestText: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
         let url = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
         app.launchArguments = ["-pairURL", url, "-holdChromeOpen", "YES", "-ui.scheme", "system", "-tab", "assistant", "-dev.openChat", "",
-                               "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001"]
+                               "-openAssistant", "server/b2e4d6f8-0000-4000-8000-000000000001",
+                               "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        if largestText { app.launchArguments += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"] }
         app.launchEnvironment["PERSONA_UI_TEST_SESSION"] = "1"
         app.launchPinned()
         XCTAssertTrue(app.buttons["action-bar.running"].waitForExistence(timeout: 20), app.debugDescription)
@@ -47,14 +49,24 @@ final class DispatchedTaskCardTests: XCTestCase {
         try app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "\(dir)/iphone-\(appearance)-\(name).png"))
     }
 
+    /// The first card can sit under the Assistant tabs. `isHittable` is then true while a tap lands on the tab, so
+    /// keep scrolling until the whole card is between the tab bar and the dock. Their frames come from the app.
     @MainActor private func link(_ app: XCUIApplication, _ id: String) -> XCUIElement {
         let link = app.buttons["dispatch.task.\(id)"]
+        let tabs = app.buttons["shell-assistant"]
+        let dock = app.otherElements["action-bar"]
         let deadline = Date.now.addingTimeInterval(30)
-        while !(link.exists && link.isHittable) && Date.now < deadline {
-            usleep(500_000)
-            if !(link.exists && link.isHittable) { app.swipeDown(velocity: .slow) }
+        while Date.now < deadline {
+            if link.exists {
+                let frame = link.frame
+                let top = tabs.exists ? tabs.frame.maxY : app.frame.minY
+                let bottom = dock.exists ? dock.frame.minY : app.frame.maxY
+                if link.isHittable, frame.minY >= top, frame.maxY <= bottom { return link }
+                if frame.minY < top { app.swipeDown(velocity: .slow) } else { app.swipeUp(velocity: .slow) }
+            }
+            usleep(400_000)
         }
-        XCTAssertTrue(link.exists && link.isHittable, "no dispatch link for \(id):\n\(app.debugDescription)")
+        XCTFail("no dispatch link for \(id):\n\(app.debugDescription)")
         return link
     }
 
@@ -82,11 +94,57 @@ final class DispatchedTaskCardTests: XCTestCase {
         XCTAssertFalse(app.buttons["关闭"].exists, "a sheet reopened after Back")
     }
 
+    @MainActor private func taskRow(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        app.trayTasks.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
+    }
+
+    /// todo_create has no dispatch: its one open row is Not started/offline, never Starting or working (#7552). The
+    /// unloaded-plan and live-Agent controls keep their old presentation. Run against light/dark for tray evidence.
+    @MainActor func testPlainTodoIsStillAndPendingDispatchStartsInProgressTray() throws {
+        for largest in [false, true] {
+            let app = launch(largestText: largest)
+            let running = app.openActionTray("running")
+            let plain = taskRow(app, "记录发布决定")
+            let pending = taskRow(app, "检查启动状态")
+            let working = taskRow(app, "修小组件横屏崩溃")
+            XCTAssertTrue(plain.waitForExistence(timeout: 20), app.debugDescription)
+            XCTAssertTrue(pending.waitForExistence(timeout: 20), app.debugDescription)
+            XCTAssertTrue(working.waitForExistence(timeout: 20), app.debugDescription)
+            XCTAssertEqual(app.trayTasks.matching(NSPredicate(format: "label CONTAINS %@", "记录发布决定")).count, 1, app.debugDescription)
+
+            // These assertions are semantically red before the fix: every not-started row says Starting and carries its mark.
+            XCTAssertTrue(plain.label.contains("未开始"), plain.label)
+            XCTAssertTrue(plain.label.contains("未运行"), "the still/offline mark is missing: \(plain.label)")
+            XCTAssertFalse(plain.label.contains("正在开"), plain.label)
+            XCTAssertFalse(plain.label.contains("工作中"), plain.label)
+            XCTAssertEqual(plain.descendants(matching: .any).matching(identifier: "action-tray.starting-mark").count, 0, plain.label)
+            XCTAssertEqual(plain.descendants(matching: .any).matching(identifier: "action-tray.working-mark").count, 0, plain.label)
+
+            // plan_id is enough while its plan has not loaded; no plan_id does not demote a real working Agent.
+            XCTAssertTrue(pending.label.contains("正在开"), pending.label)
+            XCTAssertFalse(pending.label.contains("未开始"), pending.label)
+            XCTAssertEqual(pending.descendants(matching: .any).matching(identifier: "action-tray.starting-mark").count, 1, pending.label)
+            XCTAssertTrue(working.label.contains("工作中"), working.label)
+            XCTAssertEqual(working.descendants(matching: .any).matching(identifier: "action-tray.working-mark").count, 1, working.label)
+
+            // Adding the plain to-do changes neither the tray's definition of open nor its count: the count is its rows.
+            let deadline = Date.now.addingTimeInterval(20)
+            var rows = app.trayTasks.count + app.trayAgents.count
+            while !running.label.contains("\(rows)") && Date.now < deadline {
+                usleep(200_000)
+                rows = app.trayTasks.count + app.trayAgents.count
+            }
+            XCTAssertTrue(running.label.contains("\(rows)"), "\(running.label) does not count its \(rows) rows")
+            try shot(app, "tray-start-in-flight-\(largest ? "largest" : "default")")
+            app.terminate()
+        }
+    }
+
     @MainActor func testStandaloneOpensItsAgentAndBackReturnsToAssistant() throws {
         let app = launch()
         let one = link(app, "todo_task_widget")
         // one card: the title, how the Agent came to it, when it last moved and its state, in one element
-        XCTAssertTrue(one.label.contains("修小组件横屏崩溃"), one.label)
+        XCTAssertTrue(one.label.contains("给天气 App 加主屏幕小组件"), one.label)
         XCTAssertFalse(one.label.contains("派出"), "the old \"Dispatched\" line is back: \(one.label)")
         try shot(app, "one")
         one.tap()

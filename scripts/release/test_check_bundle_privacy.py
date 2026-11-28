@@ -1,10 +1,13 @@
 from contextlib import redirect_stdout
+import datetime
 import gzip
 import hashlib
 import io
 import ipaddress
+import os
 from pathlib import Path
 import plistlib
+import shutil
 import struct
 import subprocess
 import sys
@@ -12,6 +15,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -105,6 +109,22 @@ class BinaryNoiseEmailTests(unittest.TestCase):
                 self.assertIn("email", cbp.text_kinds(local + "@" + domain, ()))
 
 
+class RustBridgeConstantTests(unittest.TestCase):
+    """persona-iphone-bridge's upstream credits are public in their exact context, and only there."""
+
+    def test_aws_lc_credits_are_classified(self):
+        for text in ("SHA256 block transform for ARMv8, CRYPTOGAMS by <" + "appro@" + "openssl.org>",
+                     "AES GCM module for ARMv8, SPDX BSD-3-Clause by <" + "xiaokang.qian@" + "arm.com>"):
+            with self.subTest(text=text):
+                self.assertEqual(cbp.text_kinds(text, ()), set())
+
+    def test_the_same_addresses_elsewhere_still_count(self):
+        for text in ("mail " + "appro@" + "openssl.org", "<" + "xiaokang.qian@" + "arm.com>",
+                     "by <" + "person@" + "openssl.org>", "by <" + "appro@" + "openssl.org.cn>"):
+            with self.subTest(text=text):
+                self.assertIn("email", cbp.text_kinds(text, ()))
+
+
 class PublicConstantTests(unittest.TestCase):
     def kinds(self, text, words=(), dependencies=DEPENDENCIES):
         return cbp.text_kinds(text, words, whole_short=True, dependencies=dependencies)
@@ -168,7 +188,16 @@ class PublicConstantTests(unittest.TestCase):
         self.assertIn("email", self.kinds(field + ".cn"))
         self.assertIn(f"private value ({len(field)} chars)", self.kinds(field, words=(field,)))
 
-    def test_full_rfc1918_networks_are_not_host_addresses(self):
+    def test_gitlab_ssh_identity_is_not_an_email_or_a_domain_exemption(self):
+        identity = "git@" + "gitlab.com"
+        self.assertEqual(self.kinds(identity + "/-/issues/not_member"), set())
+        self.assertEqual(self.kinds("prefix" + identity + "suffix"), set())
+        for text in ("person@" + "gitlab.com", identity + ".cn", "git+owner@" + "gitlab.com",
+                     "prefix-" + identity, identity + "-user"):
+            with self.subTest(text=text):
+                self.assertIn("email", self.kinds(text))
+        self.assertIn(f"private value ({len(identity)} chars)", self.kinds(identity, words=(identity,)))
+
         for network in NETWORKS:
             with self.subTest(network=str(network)):
                 self.assertEqual(self.kinds("constant" + str(network) + "nextConstant"), set())
@@ -218,16 +247,23 @@ class PublicConstantTests(unittest.TestCase):
                          {"email", "private IP", "private value (18 chars)"})
 
     def test_adjacent_go_constants_are_not_a_banned_name_or_email(self):
-        join = "applink.feishu.cn/client/chat/" + "open" + "Lark" + " via lark-cli"
-        self.assertEqual(self.kinds("edit_titlerecipe.other_tool" + join + "devices.reconnect"), set())
-        # The wrong dependency set, other joins and look-alikes still count, and the kind is named truthfully.
-        banned = self.kinds("x" + join + "y", dependencies=())
-        self.assertEqual(len(banned), 1)
-        self.assertTrue(next(iter(banned)).startswith("banned name"))
-        for text in (join.replace("feishu.cn", "example.cn"), join.replace(" via lark-cli", ""),
-                     "chat/open" + "Lark via other", join + " open" + "Lark"):
-            with self.subTest(text=text):
-                self.assertTrue(self.kinds(text))
+        for prefix in ("applink.feishu.cn", "not a typedstream"):
+            join = prefix + "/client/chat/" + "open" + "Lark" + " via lark-cli"
+            with self.subTest(join=join):
+                self.assertEqual(self.kinds("edit_titlerecipe.other_tool" + join + "devices.reconnect"), set())
+                # The wrong dependency set, other joins and look-alikes still count, and the kind is named truthfully.
+                banned = self.kinds("x" + join + "y", dependencies=())
+                self.assertEqual(len(banned), 1)
+                self.assertTrue(next(iter(banned)).startswith("banned name"))
+                altered = [join.replace(" via lark-cli", ""), "chat/open" + "Lark via other", join + " open" + "Lark"]
+                if prefix == "not a typedstream":
+                    altered += [join.replace("not a typedstream", "not another parser")]
+                else:
+                    altered.append(join.replace("feishu.cn", "example.cn"))
+                for text in altered:
+                    with self.subTest(text=text):
+                        self.assertTrue(self.kinds(text))
+                self.assertIn("private value (%d chars)" % len(join), self.kinds(join, words=(join,)))
         # Gmail's source-domain constants next to a field name are not addresses; other domains still are.
         gmail = "title_mail@" + "gmail.com" + "extension. updated" + "@googlemail.com" + "no extension"
         self.assertEqual(self.kinds(gmail), set())
@@ -443,7 +479,28 @@ class GoDependenciesTests(unittest.TestCase):
         self.assertEqual(cbp.go_dependencies("binary", str(self.sums), str(self.tags)), set())
 
 
-class BundleScanIntegrationTests(unittest.TestCase):
+    def test_archive_members_preserve_public_go_context_and_reject_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            exe = root / "personad"
+            exe.write_bytes(b"public binary")
+            with patch.object(cbp, "go_dependencies", return_value={"tailscale.com"}):
+                with tarfile.open(root / "release.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="Persona-0.6.0-linux-amd64/personad")
+                members = list(cbp.archive_members(str(root / "release.tar.gz")))
+                self.assertEqual(members, [("Persona-0.6.0-linux-amd64/personad", b"public binary")])
+                with zipfile.ZipFile(root / "release.zip", "w") as archive:
+                    archive.write(exe, "Persona-0.6.0-windows-amd64/personad.exe")
+                    archive.writestr("Persona-0.6.0-windows-amd64/persona-link-windows-amd64.exe", b"link")
+                self.assertEqual(len(list(cbp.archive_members(str(root / "release.zip")))), 2)
+                with tarfile.open(root / "unsafe.tar.gz", "w:gz") as archive:
+                    archive.add(exe, arcname="../outside")
+                with self.assertRaisesRegex(ValueError, "unsafe path"):
+                    list(cbp.archive_members(str(root / "unsafe.tar.gz")))
+                self.assertEqual(cbp.public_archive_dependencies("personad", True), {"tailscale.com"})
+                self.assertEqual(cbp.public_archive_dependencies("other.exe", True), set())
+                self.assertEqual(cbp.public_archive_dependencies("other", True), set())
+
     def scan(self, text, words=(), public=True, config=None, dependencies=DEPENDENCIES):
         with tempfile.TemporaryDirectory(prefix="bundle-privacy-test-") as directory:
             (Path(directory) / "binary").write_bytes(text if isinstance(text, bytes) else text.encode())
@@ -587,19 +644,38 @@ class BundleScanIntegrationTests(unittest.TestCase):
                 code, _ = self.scan(bad + "/dl", words=(bad + "/dl",), config={"publish": {"site_url": bad}})
                 self.assertNotEqual(code, 0)
 
-    def test_published_binary_accepts_only_the_exact_configured_update_url(self):
-        # publish.update_url (#4522): the binaries carry it instead of <site>/dl, exactly as configured.
+    def test_published_binary_accepts_the_configured_update_url_and_site_feed(self):
+        # publish.update_url (#4522): the binaries carry it, while the site itself still legitimately serves /dl.
         url = "https://releases.example.test/owner/repo/releases/latest/download"
-        words = ("releases.example.test",)
+        words = ("releases.example.test", "site.example.test")
         config = {"publish": {"site_url": "https://site.example.test", "update_url": url + "/"}}
-        code, output = self.scan(url, words=words, config=config)
+        code, output = self.scan(url + "\nhttps://site.example.test/dl", words=words, config=config)
         self.assertEqual(code, 0, output)
         for text in (url + "/private", url + "?token=placeholder", "https://releases.example.test/owner",
-                     "https://site.example.test/dl", "person@releases.example.test"):
+                     "person@releases.example.test"):
             with self.subTest(text=text):
                 code, output = self.scan(text, words=words + ("site.example.test",), config=config)
                 self.assertNotEqual(code, 0)
                 self.assertIn("private value", output)
+
+    def test_published_binary_scan_uses_the_inherited_update_url_override(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        config = {"publish": {"update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override, words=("override.example.test",), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_url(config), (override, "/releases/latest/download"))
+
+    def test_published_binary_scan_allows_override_and_site_dl_feeds(self):
+        configured = "https://configured.example.test/releases/latest/download"
+        override = "https://override.example.test/releases/latest/download"
+        site = "https://site.example.test"
+        config = {"publish": {"site_url": site, "update_url": configured}}
+        with patch.dict(os.environ, {"PERSONA_UPDATE_URL": override}):
+            code, output = self.scan(override + "\n" + site + "/dl", words=("override.example.test", "site.example.test"), config=config)
+            self.assertEqual(code, 0, output)
+            self.assertEqual(cbp.public_download_urls(config), [(override, "/releases/latest/download"), (site + "/dl", "/dl")])
 
     def test_the_app_ssh_algorithm_names_are_not_emails(self):
         names = "\n".join(a + "@" + d for a, d in (("aes256-gcm", "openssh.com"), ("curve25519-sha256", "libssh.org"),
@@ -684,6 +760,84 @@ class MacBundleTests(unittest.TestCase):
         fat = b"\xca\xfe\xba\xbe" + b"\0" * 60 + b"second slice " + value.encode()
         code, output = self.scan({"MacOS/Persona": fat}, (value,))
         self.assertNotEqual(code, 0, output)
+
+
+# Every kind of value `plutil -convert xml1` prints, and the text it prints for them (macOS 27.2), read as text like the
+# scan used to: key order by UTF-16 code unit, reals as %.17g, a UID as CF$UID, data lines of 68 columns at one tab and
+# 12 columns at the 8-tab cap, CR LF read as LF.
+EVERY_VALUE = {
+    "text": "a & b < c > d\r\ne",
+    "\U0001f600": True,
+    "\uffef": False,
+    "numbers": [-1, 2 ** 64 - 1, 0.1, -0.0, float("inf"), 1e300],
+    "date": datetime.datetime(2026, 11, 14, 10, 19, 52, 500000),
+    "data": bytes(range(52)),
+    "deep": [[[[[[[[bytes(range(12))]]]]]]]],
+    "archive": plistlib.UID(7),
+    "empty": [[], {}],
+}
+EVERY_VALUE_XML = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    '<plist version="1.0">\n'
+    "<dict>\n"
+    "\t<key>archive</key>\n"
+    "\t<dict>\n"
+    "\t\t<key>CF$UID</key>\n"
+    "\t\t<integer>7</integer>\n"
+    "\t</dict>\n"
+    "\t<key>data</key>\n"
+    "\t<data>\n"
+    "\tAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4vMDEy\n"
+    "\tMw==\n"
+    "\t</data>\n"
+    "\t<key>date</key>\n"
+    "\t<date>2026-11-14T10:19:52Z</date>\n"
+    "\t<key>deep</key>\n"
+    "\t<array>\n"
+    "\t\t<array>\n"
+    "\t\t\t<array>\n"
+    "\t\t\t\t<array>\n"
+    "\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t\t<array>\n"
+    "\t\t\t\t\t\t\t\t\t<data>\n"
+    "\t\t\t\t\t\t\t\tAAECAwQFBgcI\n"
+    "\t\t\t\t\t\t\t\tCQoL\n"
+    "\t\t\t\t\t\t\t\t\t</data>\n"
+    "\t\t\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t\t</array>\n"
+    "\t\t\t\t\t</array>\n"
+    "\t\t\t\t</array>\n"
+    "\t\t\t</array>\n"
+    "\t\t</array>\n"
+    "\t</array>\n"
+    "\t<key>empty</key>\n"
+    "\t<array>\n"
+    "\t\t<array/>\n"
+    "\t\t<dict/>\n"
+    "\t</array>\n"
+    "\t<key>numbers</key>\n"
+    "\t<array>\n"
+    "\t\t<integer>-1</integer>\n"
+    "\t\t<integer>18446744073709551615</integer>\n"
+    "\t\t<real>0.10000000000000001</real>\n"
+    "\t\t<real>0.0</real>\n"
+    "\t\t<real>+infinity</real>\n"
+    "\t\t<real>1.0000000000000001e+300</real>\n"
+    "\t</array>\n"
+    "\t<key>text</key>\n"
+    "\t<string>a &amp; b &lt; c &gt; d\n"
+    "e</string>\n"
+    "\t<key>\U0001f600</key>\n"
+    "\t<true/>\n"
+    "\t<key>\uffef</key>\n"
+    "\t<false/>\n"
+    "</dict>\n"
+    "</plist>\n"
+)
 
 
 class BinaryPlistTests(unittest.TestCase):
@@ -847,6 +1001,63 @@ class BinaryPlistTests(unittest.TestCase):
             snapshot = self.plist([self.string(self.address, True)])
             self.assertTrue(any("private IP" in cbp.text_kinds(text, ()) for text in cbp.texts(str(path), snapshot)))
 
+    def odd_plists(self):
+        """Plists the scan reads differently: unvalidated object tables, values without printable bytes, empty XML."""
+        unreachable = b"\x7f"  # an unsupported object no reference reaches: the object table doesn't validate
+        return {
+            "integer": self.plist([b"\xd1\x00\x01\x00\x02", self.string("port"), b"\x11\x20\xfb", unreachable]),
+            "UTF-16": self.plist([b"\xd1\x00\x01\x00\x02", self.string("name"), self.string("\u5f20\u4e09", True),
+                                  unreachable]),
+            "float32": self.plist([b"\xa1\x00\x01", b"\x22" + struct.pack(">f", 0.1)]),
+            "16-byte integer": self.plist([b"\xa1\x00\x01", b"\x14" + bytes(15) + b"\x05"]),
+            "shared object": self.plist([b"\xa2\x00\x01\x00\x01", self.string("twice")]),
+            "cycle": self.plist([b"\xa1\x00\x01", b"\xa1\x00\x00"]),
+            "integer key": self.plist([b"\xd1\x00\x01\x00\x02", b"\x10\x05", self.string("value")]),
+            "NUL": self.plist([self.string("a\0b")]),
+            "set": self.plist([b"\xc1\x00\x01", self.string("member")]),
+            "not a plist": b"bplist00" + bytes(40),
+        }
+
+    def test_the_xml_view_is_plutils_text_without_plutil(self):
+        """#7571: plutil is macOS only; the XML view is the text the scan read from `plutil -convert xml1` before."""
+        for sort_keys in (True, False):
+            with self.subTest(sort_keys=sort_keys):
+                data = plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=sort_keys)
+                self.assertEqual(cbp.plist_xml(data), EVERY_VALUE_XML)
+        plists = self.odd_plists()
+        self.assertEqual(cbp.plist_xml(plists["integer"]).count("<integer>8443</integer>"), 1)
+        self.assertEqual(cbp.plist_xml(plists["float32"]).count("<real>0.10000000149011612</real>"), 1)
+        self.assertEqual(cbp.plist_xml(plists["shared object"]).count("<string>twice</string>"), 2)
+        for name in ("cycle", "integer key", "NUL", "set", "not a plist"):
+            with self.subTest(name=name):
+                self.assertEqual(cbp.plist_xml(plists[name]), "")
+
+    # The reference is macOS's plutil: swift-corelibs-foundation's Linux plutil reads a string with NUL and refuses
+    # some values macOS prints.
+    @unittest.skipUnless(sys.platform == "darwin" and shutil.which("plutil"), "plutil is macOS only")
+    def test_the_xml_view_matches_plutil(self):
+        samples = dict(self.odd_plists(), every=plistlib.dumps(EVERY_VALUE, fmt=plistlib.FMT_BINARY, sort_keys=False))
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-plutil-") as directory:
+            for name, data in samples.items():
+                with self.subTest(name=name):
+                    path = Path(directory) / "Info.plist"
+                    path.write_bytes(data)
+                    printed = subprocess.run(["plutil", "-convert", "xml1", "-o", "-", str(path)],
+                                             capture_output=True, text=True).stdout
+                    self.assertEqual(cbp.plist_xml(data), printed)
+
+    def test_values_only_the_xml_view_decodes_still_fail(self):
+        # An integer has no printable bytes, and a UTF-16 value outside ASCII reads only decoded: with an object table
+        # that doesn't validate, the XML view is the one text that holds them.
+        plists = self.odd_plists()
+        for word, name in (("8443", "integer"), ("\u5f20\u4e09", "UTF-16")):
+            with self.subTest(name=name):
+                self.assertEqual(cbp.plist_references(plists[name]), ([], []))
+                code, output = self.scan(plists[name], (word,))
+                self.assertNotEqual(code, 0)
+                self.assertIn("private value (%d chars)" % len(word), output)
+                self.assertNotIn(word, output)
+
 
 class MachOSignatureTests(unittest.TestCase):
     @staticmethod
@@ -949,6 +1160,236 @@ class MachOSignatureTests(unittest.TestCase):
         for length in range(len(data)):
             with self.subTest(length=length):
                 self.assertEqual(cbp.signature_ranges(data[:length]), [])
+
+
+class LzfsePrivacyTests(unittest.TestCase):
+    address = str(ipaddress.ip_address(0x0A63584D))
+
+    @staticmethod
+    def _encode_lzfse(payload: bytes) -> bytes:
+        result = subprocess.run(["compression_tool", "-encode", "-a", "lzfse"], input=payload, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace"))
+        return result.stdout
+
+    def scan(self, data: bytes, words=(), filename="Metadata.actionsdata", *, whole_short=False):
+        with tempfile.TemporaryDirectory(prefix="bundle-privacy-lzfse-") as directory:
+            path = Path(directory) / filename
+            path.write_bytes(data)
+            output = io.StringIO()
+            argv = ["check_bundle_privacy.py"] + (["--whole-short"] if whole_short else []) + [directory]
+            with patch.object(sys, "argv", argv), \
+                    patch.object(cbp.pc, "module_paths", return_value=None), \
+                    patch.object(cbp.pc, "terms", return_value=(words, set())), \
+                    patch.object(cbp.persona_config, "load", return_value={}), redirect_stdout(output):
+                try:
+                    cbp.main()
+                except SystemExit as error:
+                    return error.code, output.getvalue()
+            return 0, output.getvalue()
+
+    def test_non_lzfse_bvx_prefixed_file_is_still_scanned(self):
+        code, output = self.scan(b"bvx_plain " + self.address.encode() + b" " + EMAIL.encode())
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+        self.assertIn("email", output)
+
+        code_clean, output_clean = self.scan(b"bvx_plain totally safe text")
+        self.assertEqual(code_clean, 0, output_clean)
+
+    def test_corrupt_lzfse_magic_file_fails_closed_and_scans_raw_bytes(self):
+        code, output = self.scan(b"bvx2not-valid-lzfse " + self.address.encode())
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+        self.assertIn("unreadable lzfse stream", output)
+
+        code2, output2 = self.scan(b"bvx2" + bytes(range(64)))
+        self.assertNotEqual(code2, 0)
+        self.assertIn("unreadable lzfse stream", output2)
+
+        # Crafted magic flood must not trigger quadratic subprocess spawning.
+        with patch.object(cbp.subprocess, "Popen") as popen:
+            code3, output3 = self.scan(b"bvx-\x00\x00\x00\x00bvx$" + b"bvx2" * 200)
+        self.assertNotEqual(code3, 0)
+        self.assertIn("unreadable lzfse stream", output3)
+        self.assertEqual(popen.call_count, 0)
+
+    @unittest.skipUnless(shutil.which("compression_tool"), "macOS compression_tool required")
+    def test_valid_lzfse_decodes_compressed_and_trailing_and_concatenated_streams(self):
+        # Valid empty LZFSE stream (bvx- with n_raw=0 + bvx$) must pass cleanly without false failure.
+        empty_stream = self._encode_lzfse(b"")
+        code, output = self.scan(empty_stream)
+        self.assertEqual(code, 0, output)
+
+        # Valid stream containing literal b"bvx$bvx2corrupt" inside payload must not false-fail.
+        tricky_stream = self._encode_lzfse(b"harmless prefix bvx$bvx2corrupt suffix")
+        code, output = self.scan(tricky_stream)
+        self.assertEqual(code, 0, output)
+
+        clean_stream = self._encode_lzfse(b"safe public metadata " * 400)
+        self.assertEqual(clean_stream[:4], b"bvx2")
+        code, output = self.scan(clean_stream)
+        self.assertEqual(code, 0, output)
+
+        # Genuinely bvx2-compressed secret where raw bytes do NOT contain the plaintext IP.
+        secret_payload = b"".join(f"entry-{i:04d}: endpoint={self.address} pad={i % 97:02d}\n".encode() for i in range(450))
+        secret_stream = self._encode_lzfse(secret_payload)
+        self.assertEqual(secret_stream[:4], b"bvx2")
+        self.assertNotIn(self.address.encode(), secret_stream)
+        code, output = self.scan(secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Decode once per file in main() (not duplicated across modes=(False, True)).
+        real_popen = cbp.subprocess.Popen
+        with patch.object(cbp.subprocess, "Popen", wraps=real_popen) as popen:
+            code, output = self.scan(clean_stream)
+        self.assertEqual(code, 0, output)
+        self.assertEqual(popen.call_count, 1)
+
+        # Trailing plaintext appended after valid LZFSE bvx$ end-of-stream marker.
+        code, output = self.scan(clean_stream + b"trailing " + self.address.encode())
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Second LZFSE stream concatenated after a clean first stream.
+        code, output = self.scan(clean_stream + secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Padded second LZFSE stream after bvx$ end-of-stream marker.
+        code, output = self.scan(clean_stream + b"X" + secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Corrupt trailing stream (both immediate and padded) fails closed consistently.
+        for suffix in (b"bvx2corrupt", b"X" + b"bvx2corrupt"):
+            with self.subTest(suffix=suffix):
+                code, output = self.scan(clean_stream + suffix)
+                self.assertNotEqual(code, 0)
+                self.assertIn("unreadable lzfse stream", output)
+
+        # Stream starting with empty bvx$ marker followed by a compressed secret stream.
+        code, output = self.scan(b"bvx$" + secret_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Nested LZFSE-in-LZFSE must be decoded recursively (and excessive depth fails closed).
+        nested_stream = self._encode_lzfse(secret_stream)
+        self.assertNotIn(self.address.encode(), nested_stream)
+        code, output = self.scan(nested_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        deep = clean_stream
+        for _ in range(cbp.LZFSE_MAX_DEPTH + 1):
+            deep = self._encode_lzfse(deep)
+        code, output = self.scan(deep)
+        self.assertNotEqual(code, 0)
+        self.assertIn("unreadable lzfse stream", output)
+
+        # Compressed binary plist inside LZFSE (genuinely bvx2-compressed, no plaintext IP in stream).
+        bplist_raw = plistlib.dumps(
+            {f"endpoint_{i:04d}": f"{self.address}:{i}" for i in range(450)},
+            fmt=plistlib.FMT_BINARY,
+        )
+        bplist_stream = self._encode_lzfse(bplist_raw)
+        self.assertEqual(bplist_stream[:4], b"bvx2")
+        self.assertNotIn(self.address.encode(), bplist_stream)
+        code, output = self.scan(bplist_stream)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # LZFSE embedded inside a binary plist <data> value.
+        outer_bplist = plistlib.dumps({"blob": secret_stream}, fmt=plistlib.FMT_BINARY)
+        self.assertNotIn(self.address.encode(), outer_bplist)
+        code, output = self.scan(outer_bplist, filename="Info.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Shared refs to identical LZFSE <data> objects in a bplist must deduplicate and never exhaust stream budget.
+        shared_refs_bplist = plistlib.dumps([clean_stream] * 20, fmt=plistlib.FMT_BINARY)
+        with patch.object(cbp.subprocess, "Popen", wraps=real_popen) as popen:
+            code, output = self.scan(shared_refs_bplist, filename="Shared.plist")
+        self.assertEqual(code, 0, output)
+        self.assertEqual(popen.call_count, 1)
+
+        # Nested bplist-in-bplist containing LZFSE must be decoded (and excessive bplist nesting fails closed).
+        nested_bplist = plistlib.dumps({"inner": outer_bplist}, fmt=plistlib.FMT_BINARY)
+        self.assertNotIn(self.address.encode(), nested_bplist)
+        code, output = self.scan(nested_bplist, filename="Nested.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        deep_bplist = plistlib.dumps({"blob": clean_stream}, fmt=plistlib.FMT_BINARY)
+        for _ in range(cbp.LZFSE_MAX_DEPTH + 1):
+            deep_bplist = plistlib.dumps({"wrap": deep_bplist}, fmt=plistlib.FMT_BINARY)
+        code, output = self.scan(deep_bplist, filename="Deep.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("unreadable lzfse stream", output)
+
+        # Unreferenced <data> object in a bplist00 object table (not reachable from root) must still be decoded.
+        # Object 0 (root): empty string ""; Object 1 (unreferenced): <data> containing secret_stream.
+        length_bytes = len(secret_stream).to_bytes(2, "big")
+        obj0 = b"\x50"
+        obj1 = b"\x4f\x11" + length_bytes + secret_stream
+        body = b"bplist00" + obj0 + obj1
+        off0, off1 = 8, 8 + len(obj0)
+        table_offset = len(body)
+        offset_table = struct.pack(">HH", off0, off1)
+        trailer = struct.pack(">6xBBQQQ", 2, 1, 2, 0, table_offset)
+        unreferenced_bplist = body + offset_table + trailer
+        self.assertNotIn(self.address.encode(), unreferenced_bplist)
+        code, output = self.scan(unreferenced_bplist, filename="Unref.plist")
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # LZFSE embedded inside a --whole-short gzip member.
+        gz_embedded = b"ELF-stub" + gzip.compress(secret_stream)
+        self.assertNotIn(self.address.encode(), gz_embedded)
+        code, output = self.scan(gz_embedded, filename="personad", whole_short=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # --whole-short LZFSE(gzip(secret)) must also be decoded and scanned.
+        lzfse_of_gzip = self._encode_lzfse(gzip.compress(secret_payload))
+        self.assertNotIn(self.address.encode(), lzfse_of_gzip)
+        code, output = self.scan(lzfse_of_gzip, filename="payload.lzfse", whole_short=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("private IP", output)
+
+        # Cumulative byte budget across concatenated streams in one file fails closed.
+        part = self._encode_lzfse(b"B" * 40_000)
+        with patch.object(cbp, "LZFSE_OUTPUT_LIMIT", 64 * 1024):
+            code, output = self.scan(part + part)
+            self.assertNotEqual(code, 0)
+            self.assertIn("unreadable lzfse stream", output)
+
+        # Decompression bomb exceeding LZFSE_OUTPUT_LIMIT fails closed without OOM.
+        bomb = self._encode_lzfse(b"A" * 200_000)
+        with patch.object(cbp, "LZFSE_OUTPUT_LIMIT", 64 * 1024):
+            with self.assertRaises(cbp.LzfseDecodeError):
+                list(cbp.decode_lzfse_streams(bomb, limit=64 * 1024))
+            code, output = self.scan(bomb)
+            self.assertNotEqual(code, 0)
+            self.assertIn("unreadable lzfse stream", output)
+
+        # Runtime stdout cap also catches a deceptive/oversized decoder output stream.
+        with patch.object(cbp, "LZFSE_OUTPUT_LIMIT", 64 * 1024):
+            with self.assertRaises(cbp.LzfseDecodeError):
+                cbp._run_lzfse_decode(bomb, limit=64 * 1024)
+
+        # In-memory snapshot must decode `data` without reading `path` from disk.
+        texts = list(cbp.texts("/nonexistent/archive-member/Metadata.actionsdata", secret_stream))
+        self.assertTrue(any(self.address in t for t in texts))
+
+    def test_missing_compression_tool_fails_closed_on_lzfse_magic(self):
+        # Header-valid non-empty literal stream reaches Popen and fails closed when compression_tool is absent.
+        valid_literal = b"bvx-" + struct.pack("<I", 5) + b"hello" + b"bvx$"
+        with patch.object(cbp.subprocess, "Popen", side_effect=FileNotFoundError("compression_tool")):
+            code, output = self.scan(valid_literal)
+        self.assertNotEqual(code, 0)
+        self.assertIn("unreadable lzfse stream", output)
 
 
 if __name__ == "__main__":

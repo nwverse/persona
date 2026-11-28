@@ -73,7 +73,7 @@ func (s *Service) importHideFacts(ctx context.Context, machine string, rc []zshr
 		return f, err
 	}
 	f.machineKeys = keys
-	ps, _, err := s.readModelProfiles(ctx) // the templates made when none is stored copy the purposes, checked anyway
+	ps, _, err := s.readModelProfiles(ctx)
 	if err != nil {
 		return f, err
 	}
@@ -166,7 +166,7 @@ func (s *Service) aliasUses(ctx context.Context, f importHideFacts, alias string
 			}
 		}
 		for _, tier := range slices.Sorted(maps.Keys(p.Tiers)) {
-			if p.Tiers[tier].Launcher == alias {
+			if slices.ContainsFunc(p.Tiers[tier].list(), func(c TierCandidate) bool { return c.Launcher == alias }) {
 				add(i18n.T(lang, "assistant-models_import.use_tier", i18n.Args{"tier": tier, "profile": name}))
 			}
 		}

@@ -27,21 +27,36 @@ final class FileViewerUITests: XCTestCase {
         try? app.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: "/tmp/persona-files-\(name).png"))
     }
 
+    /// The link in the text that opens `path` in the file viewer. In a chat on the iPhone every code span is a link too,
+    /// one a tap copies (#2984, `CodeCopyMarkdown`): `app.links[path]` finds either. A link in a Text carries its URL
+    /// as its identifier, so the scheme tells them apart: `persona-path:` opens the file (`PathLinkURL`),
+    /// `persona-copy:` copies the code (`CodeCopyURL`).
+    @MainActor private func fileLink(_ app: XCUIApplication, _ path: String) -> XCUIElement {
+        app.links.matching(NSPredicate(format: "label == %@ AND identifier BEGINSWITH %@", path, "persona-path:")).firstMatch
+    }
+
+    @MainActor private func copyLink(_ app: XCUIApplication, _ path: String) -> XCUIElement {
+        app.links.matching(NSPredicate(format: "label == %@ AND identifier BEGINSWITH %@", path, "persona-copy:")).firstMatch
+    }
+
     /// The last message names first one path on another machine and one deleted, then six files that are there, each
-    /// in backticks: the six are links in the text (#1706, no chips for them), the other two plain.
+    /// in backticks: the six are links to their files in the text (#1706, no chips for them), the other two plain
+    /// inline code (a tap copies it, #2984).
     @MainActor func testOnlyPathsThatAreThereAreLinks() throws {
         let app = launch()
-        let link = app.links["Sources/App.swift"]
+        let link = fileLink(app, "Sources/App.swift")
         XCTAssertTrue(link.waitForExistence(timeout: 20), "no link for a file that is there:\n\(app.debugDescription)")
         for p in ["server/handlers.go", "data/forecast.json", "/Users/me/code/weather/README.md", "config/app.yaml", "/Users/me/code/weather/logs/api.log"] {
-            XCTAssertTrue(app.links[p].exists, "no link for \(p)")
+            XCTAssertTrue(fileLink(app, p).exists, "no link for \(p)")
             XCTAssertFalse(app.buttons["file-chip-" + p].exists, "a linked path is a chip too: \(p)")
         }
-        XCTAssertFalse(app.links["~/.persona/personas/doudou"].exists, "another machine's path is linked")
-        XCTAssertFalse(app.links["/Users/me/code/weather/old/Removed.swift"].exists, "a deleted file is linked")
+        for (p, what) in [("~/.persona/personas/doudou", "another machine's path"), ("/Users/me/code/weather/old/Removed.swift", "a deleted file")] {
+            XCTAssertFalse(fileLink(app, p).exists, "\(what) is linked")
+            XCTAssertTrue(copyLink(app, p).exists, "\(what) is not inline code a tap copies:\n\(app.debugDescription)")
+        }
         shot(app, "links")
 
-        app.links["server/handlers.go"].tap()
+        fileLink(app, "server/handlers.go").tap()
         XCTAssertTrue(app.descendants(matching: .any)["file-code"].waitForExistence(timeout: 15), "the code view did not open")
         XCTAssertTrue(app.staticTexts["package server"].waitForExistence(timeout: 5), "the first lines are not there")
         shot(app, "go")

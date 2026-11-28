@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -29,13 +28,14 @@ func (s *Service) closeoutCheck(ctx context.Context, machine string, p assistant
 	if c, ok := s.session(ctx, machine, p.SessionID); ok && c.Assistant {
 		return out
 	}
-	out.Reason = renderCloseoutRequired(answerLanguage(s.hello(ctx).Locale))
+	language := answerLanguage(s.hello(ctx).Locale)
+	out.Reason = renderCloseoutRequired(language, s.closeoutForm(machine, language))
 	s.workEvent(machine, p.SessionID, "closeout_asked", nil)
 	return out
 }
 
-func renderCloseoutRequired(language string) string {
-	return prompts.RenderAgentCloseoutRequired(prompts.AgentCloseoutRequired{Form: closeout.Example, Language: language})
+func renderCloseoutRequired(language, form string) string {
+	return prompts.RenderAgentCloseoutRequired(prompts.AgentCloseoutRequired{Form: form, Language: language})
 }
 
 // closeoutDone is the work state of a turn whose closeout says done: no model is asked. The line is the first thing
@@ -51,16 +51,53 @@ func closeoutDone(c proto.Closeout, artifacts []proto.WorkArtifact, lang i18n.La
 	return w
 }
 
-// withCloseout lays a closeout that is not "done" over what the model read from the same reply. The agent's own word
-// that it is not finished wins over a model that read the reply as done: the state is then unsure, as for any turn
-// nobody can call finished, with the closeout kept for whoever looks.
-func withCloseout(w *proto.WorkState, c proto.Closeout, artifacts []proto.WorkArtifact) *proto.WorkState {
-	if w.Phase == proto.WorkDone {
-		w = &proto.WorkState{Artifacts: w.Artifacts}
+// closeoutAsksOwner identifies a done report with an outstanding owner decision (#14899).
+// Delivery holds reach the owner through delivery.go.
+func closeoutAsksOwner(c proto.Closeout) bool {
+	return c.Status == proto.CloseoutDone && c.Unblock == unblockUser && (c.Waiting != "" || c.Missing != "") &&
+		(c.Delivery == "" || c.Delivery == deliveryNone)
+}
+
+// closeoutWaitsOnPerson: the closeout says its turn stopped on a person, the owner or someone else, not on work of its
+// own still running (#14899).
+func closeoutWaitsOnPerson(c proto.Closeout) bool {
+	switch c.Unblock {
+	case unblockUser:
+		return c.Status != proto.CloseoutDone || closeoutAsksOwner(c)
+	case unblockOther:
+		return c.Status == proto.CloseoutBlocked || c.Status == proto.CloseoutNotDone
 	}
-	w.Closeout = &c
-	if len(w.Artifacts) == 0 {
-		w.Artifacts = workArtifacts(artifacts)
+	return false
+}
+
+// closeoutWork uses the report's status, responsible party and dependency to settle the turn.
+func closeoutWork(c proto.Closeout, artifacts []proto.WorkArtifact, lang i18n.Lang) *proto.WorkState {
+	disproved := closeoutDisproved(c)
+	if !disproved && c.Status == proto.CloseoutDone && !closeoutAsksOwner(c) {
+		return closeoutDone(c, artifacts, lang)
+	}
+	w := &proto.WorkState{Closeout: &c, Artifacts: workArtifacts(artifacts), By: "rule"}
+	if disproved {
+		return unfinished(w, lang)
+	}
+	var wait string
+	switch {
+	case closeoutWaitsOnPerson(c):
+		wait = cmpOr(c.Waiting, c.Missing)
+	case c.Status == proto.CloseoutBlocked:
+		wait = c.Waiting
+	}
+	if wait == "" {
+		return unfinished(w, lang)
+	}
+	w.Phase, w.Line = proto.WorkBlocked, clip(wait, 60)
+	if c.Unblock == unblockUser {
+		w.On = proto.WaitUser
+		w.Questions = []proto.Question{{Question: wait, Options: []proto.QuestionOption{
+			{Label: answerLabel(lang, answerOK)}, {Label: answerLabel(lang, answerSkip)},
+		}}}
+	} else {
+		w.On, w.Wait = proto.WaitExternal, clip(wait, 80)
 	}
 	return w
 }
@@ -84,7 +121,7 @@ func (s *Service) checkCloseout(ctx context.Context, c *proto.Closeout, artifact
 		if a.Kind != "pr" || ciPRURL.FindString(a.Ref) == "" {
 			continue
 		}
-		c.Checked = closeoutChecked(s.checkDeployed(ctx, a.Ref))
+		c.Checked = closeoutChecked(s.checkPRDeployment(ctx, a.Ref, true))
 		return
 	}
 }
@@ -92,17 +129,26 @@ func (s *Service) checkCloseout(ctx context.Context, c *proto.Closeout, artifact
 func closeoutChecked(r deployResult) *proto.CloseoutChecked {
 	switch r.State {
 	case deployIn:
-		return &proto.CloseoutChecked{Merged: proto.CloseoutYes, Deployed: proto.CloseoutYes}
+		checked := &proto.CloseoutChecked{Deployed: proto.CloseoutYes, LocalDeployment: r.Receipt.byHead && !strings.EqualFold(r.Receipt.sha, r.Merge)}
+		if r.Merge != "" {
+			checked.Merged = proto.CloseoutYes
+		} else if r.NotMerged {
+			checked.Merged = proto.CloseoutNo
+		}
+		return checked
 	case deployOut:
 		return &proto.CloseoutChecked{Merged: proto.CloseoutYes, Deployed: proto.CloseoutNo}
 	case deployUnmerged:
 		return &proto.CloseoutChecked{Merged: proto.CloseoutNo, Deployed: proto.CloseoutNo}
 	case deployNotIn:
-		return &proto.CloseoutChecked{Deployed: proto.CloseoutNo}
-	case deployUnverified:
-		if r.Merge != "" { // merged, in a repository the running hub is not built from
-			return &proto.CloseoutChecked{Merged: proto.CloseoutYes}
+		checked := &proto.CloseoutChecked{Deployed: proto.CloseoutNo}
+		if r.Merge != "" {
+			checked.Merged = proto.CloseoutYes
 		}
+		return checked
+	}
+	if r.Merge != "" {
+		return &proto.CloseoutChecked{Merged: proto.CloseoutYes} // upstream merge was found, deployment could not be checked
 	}
 	return nil
 }
@@ -117,7 +163,15 @@ func closeoutDisproved(c proto.Closeout) bool {
 // closeoutDelivery is the delivery a closeout states, for a reply with no delivery line of its own (delivery.go):
 // the same claim in the other form. ok false when the closeout says nothing of merging or deploying and is not done.
 func closeoutDelivery(c proto.Closeout, artifacts []proto.WorkArtifact) (d TodoDelivery, ok bool) {
+	if c.Delivery == deliveryOff && !hasDefaultOffGate(c.Missing+"\n"+c.Waiting) {
+		c.Delivery = ""
+		if c.Merged == "" && c.Deployed == "" {
+			c.Delivery = deliveryMerged
+		}
+	}
 	switch {
+	case c.Delivery == deliveryLive || c.Delivery == deliveryPR || c.Delivery == deliveryMerged || c.Delivery == deliveryOff || c.Delivery == deliveryNone:
+		d.State = c.Delivery
 	case c.Deployed == proto.CloseoutYes:
 		d.State = deliveryLive
 	case c.Merged == proto.CloseoutYes:
@@ -131,6 +185,10 @@ func closeoutDelivery(c proto.Closeout, artifacts []proto.WorkArtifact) (d TodoD
 	}
 	if d.State != deliveryLive && d.State != deliveryNone {
 		d.Gate = cmpOr(c.Missing, c.Waiting)
+		d.Unblock = c.Unblock
+		if d.Unblock == "" && (externalDeliveryWait.MatchString(d.Gate) || externalDeliveryWait.MatchString(c.Waiting)) {
+			d.Unblock = unblockOther
+		}
 	}
 	return d, true
 }

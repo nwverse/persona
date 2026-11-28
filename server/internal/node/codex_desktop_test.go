@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +32,7 @@ type fakeCodexBus struct {
 	// and how it answers an update (an error, not applied, applied but read back unchanged).
 	settings   chan map[string]any
 	mu         sync.Mutex
+	model      string
 	effort     *string
 	refuse     string
 	notApplied bool
@@ -122,8 +125,14 @@ func (b *fakeCodexBus) serve(conn net.Conn) {
 			b.settings <- params
 			b.mu.Lock()
 			refuse, applied := b.refuse, !b.notApplied
-			if e, _ := params["threadSettings"].(map[string]any)["effort"].(string); refuse == "" && applied && !b.unchanged {
-				b.effort = &e
+			ts, _ := params["threadSettings"].(map[string]any)
+			if refuse == "" && applied && !b.unchanged {
+				if mod, _ := ts["model"].(string); mod != "" {
+					b.model = mod
+				}
+				if e, _ := ts["effort"].(string); e != "" {
+					b.effort = &e
+				}
 			}
 			b.mu.Unlock()
 			if refuse != "" {
@@ -133,9 +142,9 @@ func (b *fakeCodexBus) serve(conn net.Conn) {
 			ok(map[string]any{"applied": applied})
 		case method == "thread-follower-read-model-settings" && version == 1 && m["targetClientId"] == "window" && b.holds(params):
 			b.mu.Lock()
-			e := b.effort
+			mod, e := cmp.Or(b.model, "gpt-x"), b.effort
 			b.mu.Unlock()
-			ok(map[string]any{"settings": map[string]any{"model": "gpt-x", "reasoningEffort": e, "modelProvider": "openai"}})
+			ok(map[string]any{"settings": map[string]any{"model": mod, "reasoningEffort": e, "modelProvider": "openai"}})
 		default:
 			fail()
 		}
@@ -226,6 +235,48 @@ func TestCodexDesktopTurnFromRolloutTail(t *testing.T) {
 	}
 }
 
+func TestCodexDesktopLongTurnKeepsItsState(t *testing.T) {
+	n := &Node{}
+	p := filepath.Join(t.TempDir(), "rollout.jsonl")
+	start := "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\"}}\n"
+	work := "{\"type\":\"response_item\",\"payload\":{\"text\":\"" + strings.Repeat("x", 300<<10) + "\"}}\n"
+	if err := os.WriteFile(p, []byte(start+work), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.codexDesktopTurn(p); got != proto.StatusWorking {
+		t.Fatalf("running turn whose start is outside the tail = %s", got)
+	}
+	appendText := func(text string) {
+		t.Helper()
+		f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString(text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendText(work)
+	if got := n.codexDesktopTurn(p); got != proto.StatusWorking {
+		t.Fatalf("appended work lost the running state = %s", got)
+	}
+	appendText(`{"type":"event_msg","payload":{"type":"task_comp`)
+	if got := n.codexDesktopTurn(p); got != proto.StatusWorking {
+		t.Fatalf("partial event changed the running state = %s", got)
+	}
+	appendText("lete\"}}\n" + work)
+	if got := n.codexDesktopTurn(p); got != proto.StatusDone {
+		t.Fatalf("completed turn whose end is outside the tail = %s", got)
+	}
+	if err := os.WriteFile(p, []byte(start), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := n.codexDesktopTurn(p); got != proto.StatusWorking {
+		t.Fatalf("truncated rollout kept the previous state = %s", got)
+	}
+}
+
 func TestCodexDesktopFollowsTheAppsSidebar(t *testing.T) {
 	home := t.TempDir()
 	state := `{
@@ -287,6 +338,49 @@ func TestCodexOriginTellsAppChatsFromCLIAndSubagents(t *testing.T) {
 	}
 	if o := readCodexOrigin(workSub.path); o.parent != "work" || !o.desktop {
 		t.Fatalf("work subagent origin = %+v", o)
+	}
+}
+
+func TestCodexSharedOriginNeedsSidebarMembership(t *testing.T) {
+	home := t.TempDir()
+	state := `{
+		"projectless-thread-ids": ["listed", "cli", "subagent", "parented"],
+		"thread-project-assignments": {"assigned": {"projectKind": "local", "projectId": "p1"}},
+		"local-projects": {"p1": {"name": "Alpha"}}
+	}`
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pass := newCodexListPass()
+	for _, tt := range []struct {
+		name, metadata string
+		spaceID        string
+	}{
+		{"listed", `"source":"vscode"`, "codex-chats:" + home},
+		{"assigned", `"source":"vscode"`, codexDesktopProjectID(home, "p1")},
+		{"unlisted", `"source":"vscode"`, ""},
+		{"cli", `"source":"cli"`, ""},
+		{"subagent", `"source":"vscode","thread_source":"subagent"`, ""},
+		{"parented", `"source":"vscode","parent_thread_id":"listed"`, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(home, tt.name+".jsonl")
+			line := `{"type":"session_meta","payload":{"originator":"persona",` + tt.metadata + "}}\n"
+			if err := os.WriteFile(p, []byte(line), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			src := codexSource{home: home, thread: tt.name, path: p}
+			wantDesktop := tt.spaceID != ""
+			if got := codexDesktopChatIn(src, pass); got != wantDesktop {
+				t.Fatalf("desktop chat = %t, want %t", got, wantDesktop)
+			}
+			n := &Node{}
+			s := proto.Session{SessionID: tt.name, Capabilities: &proto.SessionCapabilities{}}
+			n.decorateCodexSessionIn(&s, src, home, map[string]string{}, pass)
+			if s.SpaceID != tt.spaceID {
+				t.Fatalf("space ID = %q, want %q", s.SpaceID, tt.spaceID)
+			}
+		})
 	}
 }
 

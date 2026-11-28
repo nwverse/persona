@@ -5,7 +5,7 @@
 // a link with no key unless one is typed behind its warning, and forgets the key when it closes.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.hoisted(() => {
   window.matchMedia = ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -44,6 +44,7 @@ vi.mock("../lib/api", async (original) => ({
 import { t } from "../i18n";
 import { dropImportLink, holdImportLink, importLinkHeld } from "../lib/import-link";
 import type { FoundAlias } from "../lib/provider-paste";
+import { loadPages } from "../lib/lazy-page";
 import { Settings } from "./Settings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -53,6 +54,8 @@ let root: Root;
 let copied: string[];
 const flush = async () => { for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); }); };
 const wizard = () => seen.wizard as WizardProps;
+// the wizard mounts on its first open (Settings.tsx, lazyOverlay): one never opened is closed, with no link
+const wizardOrShut = () => (seen.wizard ?? { existing: null, link: null }) as WizardProps;
 const importer = () => seen.import as ImportProps;
 const text = () => document.body.textContent ?? "";
 const buttons = () => [...document.body.querySelectorAll("button")];
@@ -88,7 +91,9 @@ async function detail(title: string) {
   await click(buttons().find((b) => b.textContent?.includes(title))!);
 }
 
+beforeAll(() => loadPages());
 beforeEach(() => {
+  seen.wizard = seen.import = null;
   LIST.launchers = [GW, CODEX, ALIAS];
   copied = [];
   toasts.length = 0;
@@ -103,6 +108,22 @@ afterEach(() => {
   host.remove();
   document.body.innerHTML = "";
   dropImportLink();
+});
+
+it("filters Model providers by the TRAE CLI command and display name", async () => {
+  const legacy = { name: "traex", display_name: "traecli", source: "persona" };
+  const named = { name: "trae-cli", display_name: "Team relay", source: "persona" };
+  LIST.launchers = [GW, legacy, named];
+  await mount();
+  const search = host.querySelector<HTMLInputElement>(`input[aria-label="${t("settings.search_providers")}"]`)!;
+  expect(search).not.toBeNull();
+  type(search, "traecli");
+  expect(host.textContent).toContain("TRAE CLI");
+  expect(host.textContent).toContain("Team relay");
+  expect(host.textContent).not.toContain("Example Gateway");
+  type(search, "Team relay");
+  expect(host.textContent).toContain("Team relay");
+  expect(host.textContent).not.toContain("TRAE CLI");
 });
 
 describe("a page opened with an import link", () => {
@@ -155,7 +176,7 @@ describe("a page opened with an import link", () => {
     await act(async () => holdImportLink(LINK));
     await flush();
     expect(keyBox()!.value).toBe("FAKE-EXAMPLE-KEY");
-    expect(wizard()).toMatchObject({ existing: null });
+    expect(wizardOrShut()).toMatchObject({ existing: null });
     expect(toasts).toEqual([t("settings-providerlink.link_waits")]);
     await click(button(t("common.cancel")));
     expect(wizard()).toMatchObject({ existing: "new", link: LINK });
@@ -179,7 +200,7 @@ describe("a page opened with an import link", () => {
 
   it("opens nothing without one", async () => {
     await mount();
-    expect(wizard()).toMatchObject({ existing: null, link: null });
+    expect(wizardOrShut()).toMatchObject({ existing: null, link: null });
   });
 });
 

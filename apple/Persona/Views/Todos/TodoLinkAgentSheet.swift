@@ -101,9 +101,7 @@ struct TodoLinkAgentSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }.lineLimit(1).disabled(draft.busy)
-                }
+                SheetClose(disabled: draft.busy) { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(target.isSpace ? String(localized: "Add [Todo Link Agent Sheet ecf9c1]") : String(localized: "Link [Todo Link Agent Sheet 748cd8]")) {
                         submit { try await store.link(target, to: draft.selectedTodoID) }
@@ -117,11 +115,6 @@ struct TodoLinkAgentSheet: View {
         .onAppear { draft.reset(currentTodoID: currentTodoID) }
         .onChange(of: target.id) { _, _ in draft.reset(currentTodoID: currentTodoID) }
         .presentationDetents([.medium, .large])
-        #if os(macOS)
-        // A Mac sheet ignores detents and opens at its content's minimum size. The list has none before its rows are
-        // measured, so the sheet came up as a strip with no to-do to pick (#4404). On the stack, not its root content.
-        .macSheet()
-        #endif
     }
 
     private func submit(_ operation: @escaping @MainActor () async throws -> Void) {

@@ -1,12 +1,9 @@
 import Foundation
 import UniformTypeIdentifiers
-#if canImport(UIKit)
 import UIKit
-#endif
 
 /// The phone's own clipboard, for sending it to a computer and putting a computer's on it (#3064). Closures, so the
-/// clipboard model's tests hand in a pasteboard of their own. On the Mac `UIPasteboard` is the general pasteboard
-/// (Mac/Compat).
+/// clipboard model's tests hand in a pasteboard of their own.
 struct PhonePasteboard {
     /// What is on it now, or nil when it is empty. On iOS reading what another app copied asks "Allow Paste?" first
     /// (unless Settings › Persona › Paste from Other Apps is Allow); refused, it reads as nil.
@@ -29,7 +26,13 @@ struct PhonePasteboard {
             switch content.kind {
             case .text: board.string = content.text ?? ""
             case .image:
-                if let bytes = content.image?.bytes, let image = UIImage(data: bytes) { board.image = image }
+                if let bytes = content.image?.bytes {
+                    if let type = PhonePasteboard.rawImageType(bytes) {
+                        board.setData(bytes, forPasteboardType: type.identifier)
+                    } else if let image = UIImage(data: bytes) {
+                        board.image = image
+                    }
+                }
             case .empty, .concealed: break
             }
         },
@@ -38,6 +41,16 @@ struct PhonePasteboard {
             return board.hasStrings || board.hasImages || board.hasURLs
         }
     )
+
+    /// PNG and JPEG go onto the pasteboard as their original bytes. Handing the pasteboard a UIImage instead leaves
+    /// the pasteboard service encoding it after the setter returns, so the next pasteboard call on the main thread,
+    /// our observer before or the system paste button now, waits for that work. The unchanged bytes leave it nothing
+    /// to encode (#8198); every other format keeps UIKit's decode-and-image path.
+    private nonisolated static func rawImageType(_ bytes: Data) -> UTType? {
+        if bytes.starts(with: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) { return .png }
+        if bytes.starts(with: [0xff, 0xd8, 0xff]) { return .jpeg }
+        return nil
+    }
 
     /// An image as the hub takes it: PNG, or JPEG at falling quality when the PNG is too big (`ClipboardLimits`). Still
     /// too big, the smallest JPEG comes back anyway: sending it is refused as too large, said in words.

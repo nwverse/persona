@@ -1,6 +1,8 @@
 package screen
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -105,6 +107,113 @@ func TestReadCodexApprovalWrapped(t *testing.T) {
 	}
 }
 
+func TestReadCodex0172ApprovalFooters(t *testing.T) {
+	for _, title := range []string{
+		"Would you like to run the following command?",
+		`Do you want to approve network access to "example.com"?`,
+		"Implement this plan?",
+	} {
+		for _, footer := range []string{
+			"Press enter to confirm or esc to cancel",
+			"enter confirm · esc cancel",
+			"enter to submit · esc to cancel",
+			"enter submit · esc cancel",
+			"enter to submit", "enter submit", "esc to cancel", "esc cancel",
+			"to confirm", "to cancel",
+			"Press enter to\n  confirm or esc to\n  cancel",
+		} {
+			t.Run(title+"/"+footer, func(t *testing.T) {
+				text := "  " + title + "\n\n  Reason: Contact the requested host\n\n" +
+					"› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\n  " + footer
+				s := ReadCodex(text)
+				if s.View != CodexApproval || s.Approval == nil {
+					t.Fatalf("no approval: %+v", s)
+				}
+				a := s.Approval
+				if a.Title != title || a.Reason != "Contact the requested host" || len(a.Options) != 2 ||
+					!a.Options[0].Selected || a.Role(RoleAllow).Key != "1" || a.Rev == "" || s.Draft != "" {
+					t.Fatalf("approval: %+v, draft %q", a, s.Draft)
+				}
+			})
+		}
+	}
+}
+
+func TestReadCodex0172ImplementPlan(t *testing.T) {
+	text := "  Implement this plan?\n\n" +
+		"› 1. Yes, implement this plan          Switch to Default and start coding\n" +
+		"  2. Yes, clear context and implement  Fresh thread with this plan\n" +
+		"  3. No, stay in Plan mode             Continue planning with the model\n\n"
+	for _, footer := range []string{"enter select · esc back", "enter to select · esc to go back", ""} {
+		s := ReadCodex(text + "  " + footer)
+		if s.View != CodexApproval || s.Approval == nil || s.Approval.Title != "Implement this plan?" ||
+			len(s.Approval.Options) != 3 || !s.Approval.Options[0].Selected || s.Draft != "" {
+			t.Fatalf("footer %q: %+v", footer, s)
+		}
+	}
+}
+
+func TestReadCodex0172QuestionFooters(t *testing.T) {
+	text := "  Question 1/2 (2 unanswered)\n  Which color should the banner be?\n\n" +
+		"  › 1. Red                warm\n    2. Blue               calm\n" +
+		"    3. None of the above  Optionally, add details in notes (tab)\n\n"
+	for _, footer := range []string{
+		"tab to add notes | enter to submit answer | esc to interrupt",
+		"enter submit | esc cancel", "enter to submit | esc to cancel",
+		"enter to submit", "enter submit", "esc to cancel", "esc cancel",
+		"enter to\n  submit answer | esc to\n  cancel",
+	} {
+		s := ReadCodex(text + "  " + footer)
+		if s.View != CodexQuestion || s.Question == nil {
+			t.Fatalf("footer %q: no question: %+v", footer, s)
+		}
+		q := s.Question
+		if q.Index != 1 || q.Total != 2 || q.Question != "Which color should the banner be?" ||
+			len(q.Options) != 3 || q.Options[0].Description != "warm" || q.Other().Key != "3" || s.Draft != "" {
+			t.Fatalf("footer %q: question %+v, draft %q", footer, q, s.Draft)
+		}
+	}
+}
+
+func TestReadCodex0172PlainScreenPlaceholders(t *testing.T) {
+	footer := "\n\n  GPT-6 low · ~/project\n  ? for shortcuts\n"
+	for _, placeholder := range []string{CodexPlaceholder, "Ask a follow-up question"} {
+		for _, tc := range []struct{ name, text, want string }{
+			{"plain", placeholder, ""},
+			{"plain reset", "\x1b[0m" + placeholder + "\x1b[0m", ""},
+			{"plain wrapped", strings.Replace(placeholder, " ", "\n  ", 1), ""},
+			{"dim", "\x1b[2m" + placeholder + "\x1b[0m", ""},
+			{"typed", "\x1b[37m" + placeholder + "\x1b[0m", placeholder},
+			{"typed prefix", placeholder + " about this project", placeholder + " about this project"},
+			{"typed multiline", placeholder + "\n  keep this text", placeholder + "\nkeep this text"},
+		} {
+			t.Run(placeholder+"/"+tc.name, func(t *testing.T) {
+				s := ReadCodex("› " + tc.text + footer)
+				if s.View != CodexComposer || s.Draft != tc.want {
+					t.Fatalf("view %q draft %q, want composer draft %q", s.View, s.Draft, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestReadCodex0172DialogHistory(t *testing.T) {
+	for _, tc := range []struct{ name, text, view string }{
+		{"plan in history", "  Implement this plan?\n› 1. Yes, implement this plan\n  2. No, stay in Plan mode\n\n" +
+			"• Done.\n\n› Ask a follow-up question\n\n  ? for shortcuts\n", CodexComposer},
+		{"approval before question", "  Would you like to run the following command?\n\n• Done.\n\n" +
+			"  Question 1/1\n  Choose a color.\n\n  › 1. Red\n    2. Blue\n\n  enter submit · esc cancel\n", CodexQuestion},
+		{"generic picker", "  Choose a model\n› 1. Default\n  2. Other\n\n  enter confirm · esc cancel\n", CodexDialog},
+		{"transcript with plan", "T R A N S C R I P T\n  Implement this plan?\n› 1. Yes\n  2. No\n\n  q to quit\n", CodexTranscript},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if s := ReadCodex(tc.text); s.View != tc.view {
+				t.Fatalf("view %q, want %q: %+v", s.View, tc.view, s)
+			}
+		})
+	}
+}
+
 func TestReadCodexQuestion(t *testing.T) {
 	for _, name := range []string{"codex-0.153.4-plan-question-120", "codex-0.163.0-plan-question-120"} {
 		q := ReadCodex(fixture(t, name+".ansi")).Question
@@ -159,6 +268,70 @@ func TestReadCodexComposerWithAdjacentFooter(t *testing.T) {
 	}
 }
 
+// A status row wider than the pane wraps onto indented rows above the shortcuts hint (#9977); all of them are footer.
+func TestReadCodexComposerWithWrappedStatus(t *testing.T) {
+	for _, f := range []struct{ name, footer string }{
+		{"title wrapped", "  GPT-6.1-Sol max Fast · /home/me/work/example-project · Read the integration\n" +
+			"  plan · Main [default]\n" +
+			"  ← for agents · ? for shortcuts\n"},
+		{"wrapped twice", "  GPT-6.1-Sol max Fast · /home/me/work/example-project\n" +
+			"  · Read the integration plan for the example\n" +
+			"  project · Main [default]\n" +
+			"  ? for shortcuts\n"},
+		{"wrapped before the path", "  GPT-6.1-Sol max Fast ·\n" +
+			"  /home/me/work/a-very-long-worktree-path/example-project · Review · Main [default]\n" +
+			"  ← for agents · ? for shortcuts\n"},
+	} {
+		for _, tc := range []struct{ name, composer, want string }{
+			{"empty", "› Ask Codex to do anything\n", ""},
+			{"typed", "› check the build\n", "check the build"},
+			{"multiline", "› check the build\n  and keep my changes\n", "check the build\nand keep my changes"},
+			{"colored empty", "› \x1b[2mAsk Codex to do anything\x1b[0m\n", ""},
+		} {
+			t.Run(f.name+"/"+tc.name, func(t *testing.T) {
+				s := ReadCodex("• Done.\n\n" + tc.composer + f.footer)
+				if s.View != CodexComposer || s.Draft != tc.want {
+					t.Fatalf("view %q draft %q, want composer draft %q", s.View, s.Draft, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// Indented rows above a shortcuts hint with no status row among the last few are a draft and stay protected.
+func TestReadCodexDraftAboveHintWithoutStatus(t *testing.T) {
+	for _, tc := range []struct{ name, screen, want string }{
+		{"no status", "› keep this text\n  plan · Main [default]\n  ← for agents · ? for shortcuts\n",
+			"keep this text\nplan · Main [default]\n← for agents · ? for shortcuts"},
+		{"separator continuation", "› keep this\n  · /work/example\n  ? for shortcuts\n",
+			"keep this\n· /work/example\n? for shortcuts"},
+		{"text above a separator continuation", "› keep this\n  some text\n  · /work/example\n  ? for shortcuts\n",
+			"keep this\nsome text\n· /work/example\n? for shortcuts"},
+		{"status too far up", "› keep\n  GPT-6.1-Sol xhigh · /work/example\n  a\n  b\n  c\n  d\n  ? for shortcuts\n",
+			"keep\nGPT-6.1-Sol xhigh · /work/example\na\nb\nc\nd\n? for shortcuts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ReadCodex("• Done.\n\n" + tc.screen)
+			if s.View != CodexComposer || s.Draft != tc.want {
+				t.Fatalf("view %q draft %q, want composer draft %q", s.View, s.Draft, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadCodexPasteWithHomeDirectoryWarningFooter(t *testing.T) {
+	draft := "[Pasted Content 1101 chars]Keep the visible tail\nincluding its wrapped continuation."
+	for _, footer := range []string{
+		"  GPT-6.1-Sol xhigh · ~      ⚠ 4 warnings · f2 to view\n",
+		"  GPT-6.1-Sol xhigh · ~\n  ← for agents · ? for shortcuts\n",
+	} {
+		s := ReadCodex("› [Pasted Content 1101 chars]Keep the visible tail\n  including its wrapped continuation.\n" + footer)
+		if s.View != CodexComposer || s.Draft != draft {
+			t.Fatalf("footer became draft: %+v", s)
+		}
+	}
+}
+
 // 0.166 can place the status and warning on one row, without a shortcuts row.
 func TestReadCodexComposerWithSingleRowFooter(t *testing.T) {
 	footer := "  GPT-6-Astra high Fast · ~/project · Review project                 ⚠ 1 warning · f2 to view\n"
@@ -175,5 +348,26 @@ func TestReadCodexComposerWithSingleRowFooter(t *testing.T) {
 				t.Fatalf("view %q draft %q, want composer draft %q", s.View, s.Draft, tc.want)
 			}
 		})
+	}
+}
+
+// The Codex 0.169 rate-limit picker ("Approaching rate limits", footer "enter select · esc back") is a dialog, and its
+// first line is its own heading, not the conversation above it, which DialogHead would give (#7343).
+func TestCodexDialogHeadRateLimitPicker(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "codex-0.169-rate-limit-picker.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := CodexDialogHead(string(b)); got != "Approaching rate limits" {
+		t.Fatalf("head %q, want Approaching rate limits (DialogHead: %q)", got, DialogHead(Plain(string(b))))
+	}
+	for _, name := range []string{"codex-0.163.0-empty-120.txt", "codex-0.163.0-exec-approval-120.txt"} {
+		b, err := os.ReadFile(filepath.Join("testdata", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := CodexDialogHead(string(b)); got != "" {
+			t.Fatalf("%s: head %q, want none", name, got)
+		}
 	}
 }

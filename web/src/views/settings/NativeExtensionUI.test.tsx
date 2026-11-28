@@ -7,9 +7,13 @@ import type { UIStreamRequest, UIStreamSnapshot, View } from "../../lib/extensio
 import type { AppUIStreamPage } from "../../lib/extension-ui-app-stream";
 const seam = vi.hoisted(() => ({
   entries: [] as Array<{ adapter: AppUIStreamPage; sent: UIStreamRequest[]; frame: (body: object) => void }>,
-  views: [] as View[], draws: vi.fn(),
+  views: [] as View[], draws: vi.fn(), compose: vi.fn(),
 }));
 vi.mock("../../lib/managers", () => ({ listManagers: async () => ({ default: "manager" }) }));
+vi.mock("./ExtensionView", async (original) => {
+  const mod = await original<typeof import("./ExtensionView")>();
+  return { ...mod, composeAssistant: seam.compose };
+});
 vi.mock("../../lib/extension-ui-app-stream", async (original) => {
   const mod = await original<typeof import("../../lib/extension-ui-app-stream")>();
   return { ...mod, appUIStreamPage: (options: Parameters<typeof mod.appUIStreamPage>[0], manager: string, effect: Parameters<typeof mod.appUIStreamPage>[2], failed: Parameters<typeof mod.appUIStreamPage>[3]) => {
@@ -29,6 +33,7 @@ vi.mock("../../lib/extension-ui", async (original) => ({
     return { sections: [{ items: [{ type: "text", text: `HTTP ${ui}` }, { type: "button", title: "HTTP next", action: { id: "next", push: { ui: "legacy-detail" } } }] }] };
   },
 }));
+import { openOverlay, overlayDepth } from "../../lib/back-close";
 import { NativeExtensionUI } from "./NativeExtensionUI";
 import { LegacyExtensionUI } from "./ExtensionView";
 import charts from "../../../../schema/extension/examples/View.v6-charts.json";
@@ -36,11 +41,11 @@ import overview from "../../../../schema/extension/examples/View.overview-card.j
 let root: Root, host: HTMLDivElement;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }) });
-  seam.entries = []; seam.views = []; seam.draws.mockClear();
+  seam.entries = []; seam.views = []; seam.draws.mockClear(); seam.compose.mockClear();
   history.replaceState({}, "", "/extension/example/main");
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); seam.entries.forEach((e) => e.adapter.dispose()); host.remove(); vi.unstubAllGlobals(); });
+afterEach(async () => { await act(async () => root.unmount()); seam.entries.forEach((e) => e.adapter.dispose()); host.remove(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 const nativeView = (): View => ({ sections: [{ key: "section", items: [{ type: "text", key: "text", text: "Native entry" }, { type: "button", key: "next", title: "Native next", action: { id: "next", push: { ui: "detail" } } }] }] });
 function gapView(): View {
   const view = structuredClone(charts) as View;
@@ -68,6 +73,17 @@ async function click(text: string) {
   expect(button).toBeDefined(); await act(async () => button.click()); await flushSnapshots();
 }
 describe("native navigation repairs", () => {
+  it.each(["desktop", "browser"])("opens the first streamed view in the %s web renderer", async (hostKind) => {
+    if (hostKind === "desktop") vi.stubGlobal("personaDesktop", { platform: "darwin" });
+    await mount();
+    expect(seam.entries).toHaveLength(1);
+    const entry = seam.entries[0];
+    expect.soft(entry.adapter.session.getState().error).toBeUndefined();
+    expect(entry.sent).toHaveLength(1);
+    expect(entry.sent).toMatchObject([{ request: "open", context: { platform: "web" } }]);
+    expect(top().textContent).toContain("Native entry");
+    expect(seam.draws).not.toHaveBeenCalled();
+  });
   it("mounts a chart-gap HTTP page exactly once", async () => {
     seam.views = [gapView()]; await mount();
     expect(seam.draws).toHaveBeenCalledTimes(1);
@@ -99,6 +115,27 @@ describe("native navigation repairs", () => {
     });
     expect(top().textContent).toContain("Native entry");
   });
+  it("replaces an open overlay's entry when pushing so closing the overlay does not undo the push", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const backSpy = vi.spyOn(history, "back");
+    seam.views = [nativeView(), gapView()];
+    await mount();
+    const onOverlayPop = vi.fn();
+    const closeOverlay = openOverlay(onOverlayPop);
+    const lenAtOverlay = history.length;
+    expect(overlayDepth()).toBe(1);
+
+    await click("Native next");
+    closeOverlay();
+    await act(async () => { await vi.runAllTimersAsync(); });
+
+    expect(backSpy).not.toHaveBeenCalled();
+    expect(onOverlayPop).not.toHaveBeenCalled();
+    expect(history.length).toBe(lenAtOverlay);
+    expect(overlayDepth()).toBe(0);
+    expect(history.state.extPage).toBe(2);
+    expect(top().textContent).toContain("HTTP detail");
+  });
   it.each(["local", "receipt"])("replaces the eighth page for a %s push without an extra history entry", async (source) => {
     await mount();
     for (let depth = 2; depth <= 8; depth++) await click("Native next");
@@ -124,6 +161,22 @@ describe("native navigation repairs", () => {
     expect(seam.entries).toHaveLength(9);
     expect(old.adapter.session.getState().phase).toBe("closed");
     expect(top().querySelector('[data-native-key="root"]')).not.toBeNull();
+  });
+  it("puts a page's own quick prompt from its native receipt into the main composer (#16697)", async () => {
+    const composeView: View = { sections: [{ key: "section", items: [{ type: "button", key: "compose", title: "Compose", action: { id: "compose" } }] }] };
+    seam.views = [composeView];
+    await mount();
+    const entry = seam.entries[0];
+    const initial = entry.adapter.session.getState().snapshot!;
+    await click("Compose");
+    const request = entry.sent.find((r) => r.request === "event")!;
+    if (request.request !== "event") throw Error("event expected");
+    await act(async () => {
+      entry.frame({ kind: "delta", delta: { protocol: 1, session: initial.session, epoch: initial.epoch, base_version: 1, version: 2, operations: [] } });
+      entry.frame({ kind: "receipt", request_id: request.request_id, receipt: { session: initial.session, epoch: initial.epoch, event_id: request.interaction.event_id, version: 2, status: "accepted", result: { open_url: "persona://compose?prompt=today&text=What%20happened%20today%3F" } } });
+      for (let i = 0; i < 12; i++) await Promise.resolve();
+    });
+    expect(seam.compose).toHaveBeenCalledWith("What happened today?");
   });
   it("keeps a bare full-page chart identical to non-bare rendering, including its value axis", async () => {
     vi.stubGlobal("ResizeObserver", class {

@@ -52,6 +52,27 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 		ft.waitPending(0)
 	}
 
+	// An assistant conversation's card with no keys (a gated command confirmed whole, #9075): nothing keeps Always there,
+	// so false, and an Always answered anyway allows once. By the node's directory, else by the conversation listed.
+	m, _ := s.fleetMachine("mac")
+	ft.sessions("mac", proto.Session{SessionID: "listed", Agent: "claude", Cwd: m.assistantCwd(), Status: proto.StatusWorking})
+	for _, c := range []struct{ id, session, cwd string }{{"ix_whole", "conv", m.assistantCwd()}, {"ix_listed", "listed", ""}} {
+		whole := alwaysIx(c.id, c.session)
+		whole.Cwd = c.cwd
+		heard := make(chan proto.Resolution, 1)
+		go func() { r, _ := s.nodeInteraction(context.Background(), whole); heard <- r }()
+		if got := ft.waitPending(1)[0]; honored(got) != "false" {
+			t.Fatalf("%s: an assistant conversation's card with no keys: always_honored %s", c.id, honored(got))
+		}
+		if err := s.resolve(c.id, proto.Resolution{Allow: &yes, Always: true}); err != nil {
+			t.Fatal(err)
+		}
+		if r := <-heard; r.Allow == nil || !*r.Allow || r.Always {
+			t.Fatalf("%s: an Always on a card that keeps none: %+v", c.id, r)
+		}
+		ft.waitPending(0)
+	}
+
 	// An assistant conversation's card the manager will not remember (only it keeps Always there): false. Without a
 	// store, with more keys than are kept, with fields, or a health conversation's (confirmed each time, keys or not).
 	many := make([]string, maxAlwaysKeys+1)
@@ -61,17 +82,18 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 	fields := alwaysIx("ix_f", "conv", "tool:Bash")
 	fields.Fields = []proto.Field{{Key: "password", Label: "Password", Secret: true}}
 	for name, got := range map[string]proto.Interaction{
-		"no store":        nodeCard(alwaysIx("ix_n", "conv", "tool:Bash"), false, false),
-		"too many":        nodeCard(alwaysIx("ix_m", "conv", many...), true, false),
-		"fields":          nodeCard(fields, true, false),
-		"health":          nodeCard(alwaysIx("ix_h", "conv", "tool:Bash"), true, true),
-		"health, no keys": nodeCard(alwaysIx("ix_h2", "conv"), true, true),
+		"no store":           nodeCard(alwaysIx("ix_n", "conv", "tool:Bash"), false, false, true),
+		"too many":           nodeCard(alwaysIx("ix_m", "conv", many...), true, false, true),
+		"fields":             nodeCard(fields, true, false, true),
+		"health":             nodeCard(alwaysIx("ix_h", "conv", "tool:Bash"), true, true, true),
+		"health, no keys":    nodeCard(alwaysIx("ix_h2", "conv"), true, true, true),
+		"assistant, no keys": nodeCard(alwaysIx("ix_a", "conv"), true, false, true), // a gated command confirmed whole (#9075)
 	} {
 		if honored(got) != "false" {
 			t.Fatalf("%s: always_honored %s", name, honored(got))
 		}
 	}
-	if got := nodeCard(alwaysIx("ix_q", "conv", "tool:Bash"), true, false); honored(got) != "true" {
+	if got := nodeCard(alwaysIx("ix_q", "conv", "tool:Bash"), true, false, true); honored(got) != "true" {
 		t.Fatalf("a remembered card: always_honored %s", honored(got))
 	}
 
@@ -85,6 +107,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 		n++
 		id := fmt.Sprintf("ix_own%d", n)
 		ix.ID, ix.MachineID, ix.SessionID, ix.Kind = id, "mac", "conv", proto.IxPermission
+		ix.OutwardWrite = true // these cases exercise explicit owner grants, not internal tool review
 		ix.ExpiresAt = time.Now().Add(time.Hour)
 		go func() { _, _ = s.AskCard(ctx, ix) }()
 		got := ft.waitPending(1)[0]
@@ -96,7 +119,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 	honestID := "ix_honest"
 	heard := make(chan proto.Resolution, 1)
 	go func() {
-		r, _ := s.AskCard(ctx, proto.Interaction{ID: honestID, MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission,
+		r, _ := s.AskCard(ctx, proto.Interaction{ID: honestID, MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission, OutwardWrite: true,
 			ToolName: "iphone_do", ExpiresAt: time.Now().Add(time.Hour)})
 		heard <- r
 	}()
@@ -128,7 +151,7 @@ func TestAlwaysHonoredIsTheManagersWord(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = s.ask(ctx, proto.Interaction{ID: "ix_todo", MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission,
+		_, _ = s.ask(ctx, proto.Interaction{ID: "ix_todo", MachineID: "mac", SessionID: "conv", Kind: proto.IxPermission, OutwardWrite: true,
 			ToolName: "todo_delete", ExpiresAt: time.Now().Add(time.Hour)})
 	}()
 	deadline := time.Now().Add(5 * time.Second)

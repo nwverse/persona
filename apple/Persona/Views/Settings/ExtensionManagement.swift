@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// Dependency status in the details and the install preview; not the manifest's version constraint itself.
 nonisolated struct ExtensionDependencyStatus: Codable, Hashable, Sendable, Identifiable {
@@ -52,6 +53,27 @@ nonisolated struct ExtensionDisableConfirmation {
         let names = dependents.joined(separator: "、")
         message = dependents.isEmpty ? error.message : String(localized: "These extensions depend on it and will be turned off too: \(names). They're only turned off, not uninstalled; their settings and data stay.")
     }
+}
+
+/// A pack's own confirmation, before the hub can ask separately about dependents outside the pack.
+struct ExtensionPackDisableConfirmation: Equatable {
+    var packName: String
+    var members: [String]
+
+    var title: String {
+        String(localized: "Turn Off “\(packName)” and Its Members?")
+    }
+
+    var message: String {
+        let names = ExtensionText.list(members)
+        return String(localized: "Its members are turned off too: \(names). They're only turned off, not removed; settings and data are kept. Turning the pack back on turns them on again.")
+    }
+}
+
+/// The captured content of the page's one disable dialog. It outlives presentation so dismissal cannot change or blank it.
+enum ExtensionDisableDialog {
+    case pack(ExtensionPackDisableConfirmation)
+    case dependents(ExtensionDisableConfirmation)
 }
 
 /// A pack's uninstall with its members that stopped part way (409 `partial_uninstall`, #4072): the pack is still
@@ -190,13 +212,18 @@ nonisolated struct ExtensionInstallRequest: Encodable {
     static let shared = ExtensionDrafts()
     /// An extension's draft by hub, id and manager (another manager's copy of the same id has its own).
     struct Key: Hashable { var source: String; var id: String; var manager: String? = nil }
-    struct Draft { var config: [String: JSONValue]; var numbers: [String: String] }
+    struct Draft {
+        var config: [String: JSONValue]
+        var numbers: [String: String]
+        /// UI-only stable entry keys for entry-list drafts; never enters JSON.
+        var entryKeys: [String: [String]] = [:]
+    }
     var values: [Key: Draft] = [:]
 }
 
 extension APIClient {
     func setExtensionContribution(_ ext: String, point: String, id: String, enabled: Bool) async throws -> HubExtensionDetail {
         try JSON.decoder.decode(HubExtensionDetail.self, from: try await request("PUT",
-            extensionPath("/\(ext)/-/contributions/\(point)/\(id)"), body: ["enabled": enabled]))
+            extensionPath("/\(ext)/-/contributions/\(point)/\(id)"), query: Self.entryListsQuery, body: ["enabled": enabled]))
     }
 }

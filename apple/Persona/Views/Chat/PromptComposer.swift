@@ -3,6 +3,7 @@ import BeautifulUI
 import OSLog
 import Speech
 import SwiftUI
+import PersonaWire
 
 /// The composer's box, shared by an agent's chat (`Composer`) and a new assistant conversation (`StarterComposer`):
 /// BeautifulUI's prompt bar laid out as a toolbar. The draft is on top; under it + (photos, camera, files), @, /, the
@@ -27,6 +28,9 @@ struct PromptComposer: View {
     var models: [PromptModel] = []
     /// The model shown; `pickModel` gets the one picked from the menu.
     var modelID = ""
+    /// A direct action instead of the catalog menu, with the effective model as its button title (#6542).
+    var assistantModelName: String? = nil
+    var assistantPick: (() -> Void)? = nil
     var pickModel: (String) -> Void = { _ in }
     var onAttach: (PromptSource) -> Void
     /// True when the caller took the mention (a quoted session); otherwise its `insert` is typed.
@@ -35,6 +39,9 @@ struct PromptComposer: View {
     var onCommand: (PromptCommand) -> Bool = { _ in false }
     /// What goes with the message, quoted over the draft inside the bar's surface (#986).
     var quotes: Binding<[ContextRef]>? = nil
+    /// The new assistant's one-shot control request; other prompt composers leave both of these nil.
+    var dictationRequest: DictationRequest? = nil
+    var takeDictation: ((DictationRequest) -> Bool)? = nil
     var send: () -> Void
 
     @State private var bar = PromptBarModel(selectedModelID: "")
@@ -68,15 +75,12 @@ struct PromptComposer: View {
         o.text = $text
         o.selection = $selection
         o.focus = focused
-        #if os(iOS) || os(visionOS)
         o.showsDictation = false // the shared mic and stop, over the bar (`sharedButtons`)
-        #else
-        o.onStop = stop
-        o.onDictation = toggleDictation
-        #endif
         o.onAttachSource = onAttach
         o.onPickSource = onMention
         o.onPickCommand = onCommand
+        o.modelAction = assistantPick
+        o.modelActionTitle = assistantModelName
         return VStack(alignment: .leading, spacing: 0) {
             if let quotes, !quotes.wrappedValue.isEmpty {
                 QuoteBar(refs: quotes)
@@ -85,10 +89,15 @@ struct PromptComposer: View {
             }
             PromptBar(model: bar, sources: mentionRows, commands: commands, models: models, placeholder: placeholder,
                       options: o, onSend: { _ in if !disabled { stopDictation(); commitTyped(); send() } })
-                #if os(iOS) || os(visionOS)
+                #if os(iOS)
+                // Return Key Sends (#8178): as the bar's send, which empties the draft after; not while its @ or / list is up.
+                .returnSends(text: $text, canSend: !disabled && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments),
+                             paused: bar.token != nil || bar.isSourceMenuOpen || bar.isModelMenuOpen) {
+                    stopDictation(); commitTyped(); send(); text = ""
+                }
+                #endif
                 .mask { SendCutout(cut: stopping, control: Self.control, inset: Self.barInset).fill(style: FillStyle(eoFill: true)) }
                 .overlay(alignment: .bottomTrailing) { sharedButtons }
-                #endif
         }
             // The glass goes behind the bar, not around it: on iOS 27 a view with a glass effect takes no taps outside
             // its shape, and the bar's menus hang above it (#1005).
@@ -104,12 +113,18 @@ struct PromptComposer: View {
             .onChange(of: bar.token?.kind == .mention) { _, open in if open { mentionRows = mentions() } }
             .onChange(of: dictation.isListening) { _, on in bar.isListening = on }
             .onDisappear { stopDictation() }
+            #if os(iOS)
+            .tabActiveTask(id: dictationRequest) {
+                guard let request = dictationRequest, takeDictation?(request) == true else { return }
+                guard !dictation.isListening else { return }
+                dictation.toggle(into: $text, onFailure: { focused.wrappedValue = true })
+            }
+            #endif
             #if DEBUG
             .task { await debugMenu() }
             #endif
     }
 
-    #if os(iOS) || os(visionOS)
     /// The shell composer's mic and stop, where the bar draws its send: the stop's circle in send's corner (the same gap
     /// to the bar's edges; it is a little larger), the mic on the toolbar's middle line, as far before the stop as in
     /// the shell's composer.
@@ -146,26 +161,13 @@ struct PromptComposer: View {
     private static func wellMargin(_ side: CGFloat) -> CGFloat {
         side * (Theme.Size.tapTarget - Theme.Size.wellL) / Theme.Size.tapTarget / 2
     }
-    #endif
-
-    #if os(macOS)
-    private func toggleDictation() {
-        if dictation.isListening { stopDictation(); return }
-        let base = text.isEmpty || text.last?.isWhitespace == true ? text : text + " "
-        dictation.start(hints: [text], update: { heard in text = base + heard }) { problem in
-            AppModel.shared.toast = Toast(problem, style: .error)
-        }
-    }
-    #endif
 
     /// Ends dictation, and a start still asking for permission with it (#3407).
     private func stopDictation() { dictation.stop() }
 
     /// The keyboard's composition confirmed into the draft before it goes (`TypedText`, #2203).
     private func commitTyped() {
-        #if os(iOS) || os(visionOS)
         if focused.wrappedValue { TypedText.commitFocused(into: $text) }
-        #endif
     }
 
     #if DEBUG
@@ -185,20 +187,44 @@ struct PromptComposer: View {
 
 /// What the composer's menus offer.
 enum PromptItems {
-    static func attachments(camera: Bool, glasses: Bool = false) -> [PromptSource] {
-        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos, up to 4"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
+    /// `modules`: the active modules' composer actions (`Modules.registry.composerActions`), after the camera; a source's
+    /// id is the action's id.
+    static func attachments(camera: Bool, modules: [ModuleComposerAction] = []) -> [PromptSource] {
+        var out = [PromptSource(id: "photo", name: String(localized: "Photos"), detail: String(localized: "Photos or videos"), icon: .symbol(Theme.Icon.photos), kind: .attach)]
         if camera { out.append(PromptSource(id: "camera", name: String(localized: "Take Photo [Chat View 6e3a10]"), detail: String(localized: "Take one with the camera"), icon: .symbol("camera"), kind: .attach)) }
-        if glasses { out.append(PromptSource(id: "glasses", name: String(localized: "Glasses Photo"), detail: String(localized: "Take one with the Meta glasses"), icon: .symbol(Theme.Icon.glasses), kind: .attach)) }
+        out += modules.map { PromptSource(id: $0.id, name: String(localized: $0.title), detail: String(localized: $0.detail), icon: .symbol($0.symbol), kind: .attach) }
         out.append(PromptSource(id: "file", name: String(localized: "Files"), detail: String(localized: "Uploads to that computer and inserts the path"), icon: .symbol("doc"), kind: .attach))
         return out
     }
 
     /// Persona' quick messages under short "/" words (picking one types its message, sent with send), then Claude
     /// Code's own commands.
-    static func commands(clear: Bool, loop: Bool = false) -> [PromptCommand] {
+    static func commands(clear: Bool, loop: Bool = false, permissions: Bool = false) -> [PromptCommand] {
         var out = SlashCommand.commands(loop: loop).map { PromptCommand($0.word, detail: $0.detail, insert: $0.text) }
+        // Persona's own (#6513): the composer opens the mode list for it (`onCommand`), nothing is typed or sent.
+        if permissions { out.append(PromptCommand(SessionModes.permissionsCommand, detail: String(localized: "Switch permission mode"))) }
         if clear { out.append(PromptCommand("/clear", detail: String(localized: "Clear context and start a new session"))) }
         return out
+    }
+
+    /// The user's saved prompts (#9436) as commands: picking one types its text. Each has its own id (`saved:…`), as a
+    /// saved prompt may share its name with a command.
+    static func saved(_ prompts: [SavedPrompt]) -> [PromptCommand] {
+        prompts.map { PromptCommand("/" + $0.name, detail: SlashMenuRow.savedDetail, insert: $0.text, id: "saved:\($0.id)") }
+    }
+
+    /// Persona's own commands the chat runs when picked in the bar, instead of typing them.
+    enum OwnCommand: Equatable { case loop, permissions, clear }
+
+    /// Which of Persona's own commands a row picked in the bar is, by its id (#11410): a saved prompt's is `saved:…`, so
+    /// one named `permissions`, `loop` or `clear` types its text. `/permissions` only where the mode list is offered.
+    static func ownCommand(_ command: PromptCommand, permissions offered: Bool) -> OwnCommand? {
+        switch command.id {
+        case SlashCommand.loop.word: .loop
+        case SessionModes.permissionsCommand: offered ? .permissions : nil
+        case MainClearCommand.word: .clear
+        default: nil
+        }
     }
 
     /// Claude Code's `/model` aliases: picking one sends `/model <alias>` to the session.
@@ -224,7 +250,10 @@ enum PromptItems {
             return ["opus", "sonnet", "haiku"].first { m.lowercased().contains($0) } ?? m
         }
         if let row = list.first(where: { $0.id.caseInsensitiveCompare(m) == .orderedSame }) { return row.id }
-        if let alias = list.first(where: { !$0.isDefault && $0.resolved == m }) ?? list.first(where: { $0.resolved == m }) {
+        let matches: (AgentModel) -> Bool = { row in
+            row.resolved == m || (row.aliases ?? []).contains { $0.caseInsensitiveCompare(m) == .orderedSame }
+        }
+        if let alias = list.first(where: { !$0.isDefault && matches($0) }) ?? list.first(where: matches) {
             return alias.id
         }
         return m
@@ -334,11 +363,24 @@ final class Dictation {
     /// Stands in for asking the person for the microphone and speech recognition (tests hold a start inside that wait);
     /// nil asks the system.
     @ObservationIgnored var permission: (() async -> Bool)?
+    /// Why dictation does not start now: a system call is live (`LiveCallGate`), and dictation's own audio session would
+    /// cut the call's microphone. Nil while it may. The tests' own stands in for the gate.
+    @ObservationIgnored var callGate: () -> String? = { LiveCallGate.dictationRefusal }
+    /// Why a start now would be refused at once (the call is on), for the mic's tap and hold to say before anything opens.
+    var callRefusal: String? { callGate() }
     #if DEBUG
     /// `-showDictationSample "<words>"`: hears these words, one every beat, instead of the microphone (simulators
     /// may have none), for screenshots and recordings of the composer's mic. Without `permission` nothing is asked.
     @ObservationIgnored var sample = UserDefaults.standard.string(forKey: "showDictationSample")
     #endif
+    /// The microphone's loudness, for the dictation bar's wave; nothing observes it (`DictationMeter`).
+    @ObservationIgnored let meter = DictationMeter()
+    /// Everything heard so far in this run, as the last update gave it.
+    @ObservationIgnored private(set) var heard = ""
+    /// `finish()` is waiting for the recognizer's last words; set when they came.
+    @ObservationIgnored private var finishing = false
+    @ObservationIgnored private var gotFinal = false
+    @ObservationIgnored private var audioLease: AudioSessionBroker.Lease?
 
     /// A recognizer for the language the owner speaks (`DictationLanguage`): their choice, else the language of `hints`
     /// (the draft and their recent messages in this chat), else the last sure choice, else the interface language.
@@ -365,8 +407,15 @@ final class Dictation {
     /// (a tap, then a hold, or a send, while the system still asks; #3407). A newer start takes over from an older one
     /// already listening, which would otherwise hold the microphone and fail it as in use.
     func start(hints: [String] = [], update: @escaping (String) -> Void, failed: @escaping (String) -> Void = { _ in }) {
+        // A live system call keeps the microphone and its audio session: refused at once, nothing opens, the call goes on.
+        if let refusal = callGate() {
+            failed(refusal)
+            return
+        }
         let turn = UUID()
         startTurn = turn
+        heard = ""
+        meter.reset()
         Task {
             if let problem = await listen(turn, hints: hints, update: update) { failed(problem) }
         }
@@ -379,66 +428,89 @@ final class Dictation {
         #else
         let sample: String? = nil
         #endif
-        #if os(iOS) || os(visionOS)
         if sample == nil, RecordingCapture.shared.state != .idle { return String(localized: "A recording is in progress. Stop it before dictating.") }
-        #endif
         var granted = true
         if let permission { granted = await permission() } else if sample == nil { granted = await Self.allowed() }
         guard startTurn == turn else { return nil }
+        // A system call that went live during that wait (an urgent call answered) keeps the microphone and its session:
+        // refused, nothing claimed or opened (the call manager's voice does not claim `RecordingMicrophone`).
+        if let refusal = callGate() { return refusal }
         guard granted else { return String(localized: "No access to the microphone or speech recognition. Turn it on in Settings › Persona.") }
         if isListening { stopListening() }
         #if DEBUG
         if let sample { return startSample(sample, update: update) }
         #endif
-        #if os(iOS) || os(visionOS)
         guard RecordingCapture.shared.state == .idle else { return String(localized: "A recording is in progress. Stop it before dictating.") }
-        #endif
         guard let recognizer = Self.recognizer(hints: hints), recognizer.isAvailable else {
             return String(localized: "Speech recognition isn't available right now")
         }
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
-        #if os(iOS) || os(visionOS) // a Mac has no audio session to configure: the engine takes the input as it is
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
+        // On the audio session's queue, after any deactivation a closing bar left there (`stop(settling:)`), and in order
+        // with a system call's own category (`LiveCallGate.sessionQueue`): a call that went live before this block runs
+        // has the session, and this touches nothing.
+        let opened: SessionOpening = await withCheckedContinuation { c in
+            Self.audioQueue.async {
+                guard !LiveCallGate.liveNow else { return c.resume(returning: .call) }
+                do {
+                    try AudioSessionBroker.shared.setCategory(.record, mode: .measurement, options: .duckOthers)
+                    try AudioSessionBroker.shared.setActive(true, options: .notifyOthersOnDeactivation)
+                    c.resume(returning: .opened)
+                } catch {
+                    c.resume(returning: .failed)
+                }
+            }
+        }
+        // A call live now has the session (its category was queued after this one's): the microphone goes back and the
+        // session stays as the call has it.
+        if opened == .call || callGate() != nil {
+            RecordingMicrophone.shared.release(microphoneOwner)
+            return callGate() ?? LiveCallGate.dictationLine
+        }
+        guard opened == .opened else {
             RecordingMicrophone.shared.release(microphoneOwner)
             return String(localized: "Couldn't open the microphone")
         }
-        #endif
         let engine = AVAudioEngine()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        Self.tap(engine.inputNode, into: request)
+        Self.tap(engine.inputNode, into: request, meter: meter)
         engine.prepare()
         do { try engine.start() } catch {
             engine.inputNode.removeTap(onBus: 0)
-            #if os(iOS) || os(visionOS)
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            #endif
+            if callGate() == nil { try? AudioSessionBroker.shared.setActive(false, options: .notifyOthersOnDeactivation) }
             RecordingMicrophone.shared.release(microphoneOwner)
             return String(localized: "Couldn't open the microphone")
         }
         self.engine = engine
         self.request = request
         self.update = update
+        audioLease = AudioSessionBroker.shared.acquire(id: "core.dictation", kind: .meetingRecording)
         isListening = true
         listeningRun = UUID(); let run = listeningRun
         task = Self.recognize(recognizer, request) { [weak self] heard, done in
             Task { @MainActor in
                 guard let self, self.listeningRun == run else { return }
-                if let heard { self.update?(heard) }
-                if done { self.stop() }
+                if let heard {
+                    self.heard = heard
+                    self.update?(heard)
+                }
+                if done {
+                    if self.finishing { self.gotFinal = true } else { self.stop() }
+                }
             }
         }
         return nil
     }
 
+    /// How dictation's session opening went on the audio session's queue: opened, failed, or not tried because a system
+    /// call is live.
+    private nonisolated enum SessionOpening: Sendable { case opened, failed, call }
+
     #if DEBUG
     private func startSample(_ sample: String, update: @escaping (String) -> Void) -> String? {
         guard RecordingMicrophone.shared.claim(microphoneOwner) else { return String(localized: "The microphone is in use. Stop the recording or dictation first.") }
         self.update = update
+        meter.reset(synthetic: true)
         isListening = true
         listeningRun = UUID(); let run = listeningRun
         let words = sample.split(separator: " ").map(String.init)
@@ -446,20 +518,51 @@ final class Dictation {
             for count in 1...max(1, words.count) {
                 try? await Task.sleep(for: .milliseconds(350))
                 guard let self, self.listeningRun == run else { return }
-                self.update?(words.prefix(count).joined(separator: " "))
+                self.heard = words.prefix(count).joined(separator: " ")
+                self.update?(self.heard)
             }
         }
         return nil
     }
     #endif
 
-    /// Ends dictation, and a start still waiting for permission (its turn passes).
-    func stop() {
+    /// Stops listening and returns everything heard: the microphone closes at once, then the recognizer gets up to
+    /// `Theme.DictationBar.finalWait` for its last words (the dictation bar's stop and send, which show "Transcribing").
+    func finish(settling: Bool = false) async -> String {
         startTurn = UUID()
-        stopListening()
+        guard isListening else { return heard }
+        if engine != nil, task != nil {
+            finishing = true
+            gotFinal = false
+            engine?.stop()
+            engine?.inputNode.removeTap(onBus: 0)
+            request?.endAudio()
+            meter.reset()
+            let deadline = ContinuousClock.now + Theme.DictationBar.finalWait
+            while !gotFinal, isListening, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            finishing = false
+        }
+        let words = heard
+        stopListening(settling: settling)
+        return words
     }
 
-    private func stopListening() {
+    /// Ends dictation, and a start still waiting for permission (its turn passes). `settling`: the audio session is let
+    /// go a moment later, off the main thread, when the microphone is still free then; giving it up blocks for about
+    /// 50 ms, a dropped frame in the middle of the dictation bar closing. Callers that hand the audio to something else
+    /// straight away (a voice call) stop without settling.
+    func stop(settling: Bool = false) {
+        startTurn = UUID()
+        stopListening(settling: settling)
+    }
+
+    private func stopListening(settling: Bool = false) {
+        finishing = false
+        meter.reset()
+        audioLease?.release()
+        audioLease = nil
         guard RecordingMicrophone.shared.release(microphoneOwner) else { return }
         listeningRun = UUID()
         engine?.stop()
@@ -471,14 +574,29 @@ final class Dictation {
         task = nil
         update = nil
         isListening = false
-        #if os(iOS) || os(visionOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
+        // A system call that went live while dictating (an urgent call answered) has the session now: it stays active.
+        guard callGate() == nil else { return }
+        if settling {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: Theme.DictationBar.settle)
+                // Someone took the microphone meanwhile, or a call went live: theirs now.
+                guard RecordingMicrophone.shared.isFree, (self?.callGate() ?? LiveCallGate.dictationRefusal) == nil else { return }
+                Self.audioQueue.async {
+                    guard !LiveCallGate.liveNow else { return }
+                    try? AudioSessionBroker.shared.setActive(false, options: .notifyOthersOnDeactivation)
+                }
+            }
+        } else {
+            try? AudioSessionBroker.shared.setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
+
+    /// Dictation's audio session calls, in order, off the main thread, on the queue a system call sets its category on.
+    private static var audioQueue: DispatchQueue { LiveCallGate.sessionQueue }
 
     private static func allowed() async -> Bool {
         let speech = await withCheckedContinuation { c in
-            // Answered on a background queue: `@Sendable` keeps the block off the main actor (BackgroundCallbackTests).
+            // Answered on a background queue: `@Sendable` keeps the block off the main actor (test_apple_background_callbacks.py).
             SFSpeechRecognizer.requestAuthorization { @Sendable in c.resume(returning: $0) }
         }
         guard speech == .authorized else { return false }
@@ -487,9 +605,11 @@ final class Dictation {
 
     // The audio tap and the recognizer call back off the main thread: their closures are made here, outside the
     // main actor, so they are not taken for main-actor code.
-    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest) {
+    nonisolated private static func tap(_ input: AVAudioInputNode, into request: SFSpeechAudioBufferRecognitionRequest,
+                                        meter: DictationMeter) {
         input.installTap(onBus: 0, bufferSize: 1024, format: input.outputFormat(forBus: 0)) { buffer, _ in
             request.append(buffer)
+            meter.take(buffer)
         }
     }
 
@@ -501,7 +621,6 @@ final class Dictation {
     }
 }
 
-#if os(iOS) || os(visionOS)
 /// What of `PromptBar` shows: all of it but, while the shared stop stands in its place, the bar's own send. The menus
 /// hang above the bar, so the shape reaches far past its edges.
 private nonisolated struct SendCutout: Shape {
@@ -518,4 +637,3 @@ private nonisolated struct SendCutout: Shape {
         return p
     }
 }
-#endif

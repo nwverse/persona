@@ -1,7 +1,5 @@
 import SwiftUI
-#if canImport(UIKit)
 import UIKit
-#endif
 
 /// The persona's face, still (the sidebar's card, the profile, Settings): a package's avatar in a circle, or a
 /// built-in's PersonaAvatar. `persona` defaults to the one on screen.
@@ -43,19 +41,17 @@ struct PersonaDot: View {
     var size: CGFloat
     var state: PersonaState
     var persona: Persona?
+    /// Holds still whatever the state (a call on hold, muted or over: `CallAvatar`).
+    var still = false
 
     var body: some View {
         let p = persona ?? model.persona
-        let still = reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled
+        let still = still || reduceMotion || ProcessInfo.processInfo.isLowPowerModeEnabled
         Group {
             if !p.isBuiltin, let frames = model.personas.frames(p, state) {
-                #if os(iOS) || os(visionOS)
                 VisibleWork { eligible in
                     PersonaFramesView(frames: frames, animating: !still, eligible: eligible)
                 }
-                #else
-                PersonaFramesView(frames: frames, animating: !still)
-                #endif
             } else {
                 AssistantAvatar(size: size, design: p.avatarDesign, state: state, still: still)
             }
@@ -70,7 +66,6 @@ extension Persona {
     var avatarDesign: AssistantAvatar.Design { design.flatMap(AssistantAvatar.Design.init(rawValue:)) ?? .mochi }
 }
 
-#if os(iOS) || os(visionOS)
 /// Frames in a UIImageView, looping; the first one alone when not animating (frame 0 says the state by itself).
 struct PersonaFramesView: UIViewRepresentable {
     var frames: PersonaFrames
@@ -140,7 +135,6 @@ final class PersonaFramesImageView: UIImageView {
         animationRequested = false
     }
 }
-#endif
 
 /// A persona's colors as small swatches: primary, then the accent (light / dark halves).
 struct PersonaSwatches: View {

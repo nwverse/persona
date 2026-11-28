@@ -11,7 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/mail"
+	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -21,6 +21,7 @@ func (h *Manager) readInbox(ctx context.Context, round inboxRound) assistantwire
 	if h.connectors == nil {
 		return r
 	}
+	h.enforceIMessageVisibility()
 	for _, c := range h.connectors.All() {
 		r.Names[c.ID()] = connector.DisplayName(ctx, c)
 	}
@@ -34,10 +35,12 @@ func (h *Manager) readInbox(ctx context.Context, round inboxRound) assistantwire
 	return r
 }
 
-// readMail is each mail account's latest inbox page, read up to inboxMailParallel accounts at once and kept in the
-// accounts' order; an account that can't be read is left out and named in Failed with why (the manager keeps what it
-// had and the apps say it is behind). nil without mail or when the accounts can't be listed.
+// readMail reads the latest page of every eligible mailbox, up to inboxMailParallel accounts at once, in account
+// order. An unreadable folder is left out and its account named in Failed. nil when mail is off or listing fails.
 func (h *Manager) readMail(ctx context.Context) *assistantwire.InboxMailRead {
+	if h.inboxVisibilityBlocksSource("mail") {
+		return nil
+	}
 	// Add to Inbox off (#5307): no mail round, so the manager keeps the mail items it has; search, replies and the
 	// knowledge base go on.
 	if h.mail == nil || h.connectors.Get("mail") == nil || !h.connectors.Feeds("mail", connector.FeedInbox) {
@@ -67,8 +70,10 @@ func (h *Manager) readMail(ctx context.Context) *assistantwire.InboxMailRead {
 	for i, acc := range read {
 		if acc != nil {
 			out.Accounts = append(out.Accounts, *acc)
-			h.inboxReads.note("mail:"+accounts[i].ID, now, "")
-			continue
+			if errs[i] == nil {
+				h.inboxReads.note("mail:"+accounts[i].ID, now, "")
+				continue
+			}
 		}
 		code := mailReadErrorOf(errs[i])
 		if code != assistantwire.ReadTimeout {
@@ -91,19 +96,43 @@ func (h *Manager) readMail(ctx context.Context) *assistantwire.InboxMailRead {
 	return out
 }
 
-// readMailAccount is one account's latest inbox page; nil and why when it can't be read.
-func (h *Manager) readMailAccount(ctx context.Context, a mail.MailAccount) (*assistantwire.InboxMailAccount, error) {
-	res, err := h.mail.ListMessages(ctx, mail.ListOptions{AccountID: a.ID, Limit: 40})
-	if err != nil {
-		h.logf("inbox: mail %s: %v", a.Email, err)
-		return nil, err
+// readMailAccount keeps INBOX on the original wire field so an older assistant only processes that mailbox.
+// A failed folder's page is left out. Other pages can be applied while the account reports that it is behind.
+func (h *Manager) readMailAccount(ctx context.Context, a mailwire.MailAccount) (*assistantwire.InboxMailAccount, error) {
+	boxes, firstErr := h.mail.IntakeMailboxes(ctx, a.ID)
+	if firstErr != nil {
+		boxes = []string{"INBOX"}
 	}
 	acc := &assistantwire.InboxMailAccount{ID: a.ID, Email: a.Email, Messages: []assistantwire.InboxMailSummary{}}
-	for _, m := range res.Messages {
-		acc.Messages = append(acc.Messages, assistantwire.InboxMailSummary{Mailbox: m.Mailbox, UID: m.UID, MessageID: m.MessageID,
-			Subject: m.Subject, From: mailAddress(m.From), To: mailAddresses(m.To), Date: m.Date, Snippet: m.Snippet, Seen: m.Seen})
+	for _, box := range boxes {
+		res, err := h.mail.ListMessages(ctx, mailwire.ListOptions{AccountID: a.ID, Mailbox: box, Limit: 40})
+		if err != nil {
+			if box == "INBOX" {
+				acc.InboxUnavailable = true
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		msgs := make([]assistantwire.InboxMailSummary, 0, len(res.Messages))
+		for _, m := range res.Messages {
+			msgs = append(msgs, assistantwire.InboxMailSummary{Mailbox: box, UID: m.UID, MessageID: m.MessageID,
+				Subject: m.Subject, From: mailAddress(m.From), To: mailAddresses(m.To), Date: m.Date, Snippet: m.Snippet, Seen: m.Seen, Answered: m.Answered})
+		}
+		if box == "INBOX" {
+			acc.UIDValidity, acc.Messages = res.UIDValidity, msgs
+		} else {
+			acc.Folders = append(acc.Folders, assistantwire.InboxMailFolder{Name: box, UIDValidity: res.UIDValidity, Messages: msgs})
+		}
 	}
-	return acc, nil
+	if firstErr != nil {
+		h.logf("inbox: mail %s: %v", a.Email, firstErr)
+	}
+	if acc.InboxUnavailable && len(acc.Folders) == 0 {
+		return nil, firstErr
+	}
+	return acc, firstErr
 }
 
 // mailHealth is each mail account's status by id as mail settings show it ("error": its server refuses the login;
@@ -125,17 +154,17 @@ func (h *Manager) mailHealth() map[string]string {
 // deadline and the network's are timeouts too.
 func mailReadErrorOf(err error) string {
 	var ne net.Error
-	if errors.Is(err, mail.ErrTimedOut) || errors.As(err, &ne) && ne.Timeout() {
+	if errors.Is(err, mailwire.ErrTimedOut) || errors.As(err, &ne) && ne.Timeout() {
 		return assistantwire.ReadTimeout
 	}
 	return readErrorOf(err)
 }
 
-func mailAddress(a mail.Address) assistantwire.MailAddress {
+func mailAddress(a mailwire.Address) assistantwire.MailAddress {
 	return assistantwire.MailAddress{Name: a.Name, Email: a.Email}
 }
 
-func mailAddresses(list []mail.Address) []assistantwire.MailAddress {
+func mailAddresses(list []mailwire.Address) []assistantwire.MailAddress {
 	out := []assistantwire.MailAddress{}
 	for _, a := range list {
 		out = append(out, mailAddress(a))
@@ -168,6 +197,11 @@ func (h *Manager) readConnectors(ctx context.Context) []assistantwire.InboxSourc
 		}
 		src := assistantwire.InboxSource{ID: c.ID(), Name: connector.DisplayName(ctx, c), Extension: fromExtension(c.ID()), Migrated: isMigrated(c.ID()),
 			Things: []connector.InboxThing{}}
+		if h.inboxVisibilityBlocksSource(c.ID()) {
+			src.Off = true
+			out = append(out, src)
+			continue
+		}
 		state := connector.StatusOf(ctx, c).State
 		if !h.connectors.Feeds(c.ID(), connector.FeedInbox) || state != connector.StateOK && state != connector.StateRateLimited ||
 			h.waitsForTriageModel(ctx, c) { // a hub.json plugin's that needs the triage model (extension_inbox.go)

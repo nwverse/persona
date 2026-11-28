@@ -1,29 +1,48 @@
 package persona.core.designsystem
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.ripple.RippleAlpha
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.material3.RippleConfiguration
+import androidx.compose.material3.RippleDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.scale as scaleDraw
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.toggleableState
@@ -36,6 +55,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.flow.collectLatest
+import kotlin.math.roundToInt
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -68,6 +89,11 @@ private fun MessageItemState(meta: MessageItemMeta) {
         }
         else -> JStateLabel(meta.state.orEmpty(), meta.status, modifier = Modifier.fillMaxWidth(), problem = meta.problem)
     }
+}
+
+/** The one avatar geometry shared by [MessageItem] and the picture loader its caller provides. */
+object MessageItemTokens {
+    fun avatarSize(prominent: Boolean) = if (prominent) 42.dp else 38.dp
 }
 
 /**
@@ -111,6 +137,8 @@ fun MessageItem(
     dimmed: Boolean = false,
     /** The event row's third content line; absent, every line keeps its existing meaning and placement. */
     meta: MessageItemMeta? = null,
+    /** A chat list keeps its name readable at accessibility sizes by moving time below it; other rows keep their layout. */
+    stackTitleTimeAtLargeText: Boolean = false,
     extra: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -129,19 +157,23 @@ fun MessageItem(
                 JCheckMark(androidx.compose.ui.state.ToggleableState(checked), Modifier.padding(top = Tokens.Space.s))
                 Spacer(Modifier.width(Tokens.Space.m))
             }
-            JAvatar(group ?: sender, size = if (prominent) 42.dp else 38.dp, icon = avatarIcon, badge = badge, badgeColor = badgeColor, image = avatar)
+            JAvatar(group ?: sender, size = MessageItemTokens.avatarSize(prominent), icon = avatarIcon, badge = badge, badgeColor = badgeColor, image = avatar)
             Spacer(Modifier.width(12.dp.dense))
             Column(Modifier.weight(1f)) {
                 val followed = meta != null
                 val prioritizeTitle = followed || heading != null
                 val titleText = if (followed) heading ?: title else heading ?: group ?: sender
-                val stackTitleTime = prioritizeTitle && time != null && LocalDensity.current.fontScale >= STACK_TITLE_TIME_AT_FONT_SCALE
+                // The system's chosen scale decides, not the capped interface one: above the cap the title and time
+                // still share too little width, so the row stacks exactly where it did before the cap (#7321).
+                val chosenScale = (LocalReadingDensity.current ?: LocalDensity.current).fontScale
+                val stackTitleTime = (prioritizeTitle || stackTitleTimeAtLargeText) && time != null &&
+                    chosenScale >= STACK_TITLE_TIME_AT_FONT_SCALE
                 if (stackTitleTime) {
                     Column {
                         Row(verticalAlignment = Alignment.Top) {
                             Text(titleText, style = type.headline, color = palette.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f))
-                            if (titleIcon != null) {
+                            if (prioritizeTitle && titleIcon != null) {
                                 Spacer(Modifier.width(Tokens.Space.xs))
                                 JIcon(titleIcon, titleIconLabel, size = Tokens.Space.l, tint = palette.ink3, decorative = titleIconLabel == null)
                             }
@@ -331,6 +363,7 @@ fun HubCard(
 data class NavItem(val key: String, val label: String, val icon: PhIcon, val badge: Int = 0, val badgeText: String? = null, val dot: Boolean = false)
 
 /** Primary home navigation above the page; all auxiliary destinations belong to the sidebar. */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeNavigation(
     items: List<NavItem>,
@@ -345,58 +378,354 @@ fun HomeNavigation(
     // Felt only when it moves to another page, as iOS's switcher.
     val haptics = rememberHaptics()
     val select: (String) -> Unit = { key -> if (key != selected) haptics(Haptic.Tap); onSelect(key) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val scale = (density.fontScale * HomeTokens.shellTextStep).coerceAtMost(HomeTokens.shellScaleMaximum)
     if (PersonaTheme.style != AppStyle.Glass) {
-        Row(modifier.fillMaxWidth().background(palette.background).statusBarsPadding()
-            .padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            leading()
-            // The switcher keeps its cells' width; given the rest of the row itself, Board's ruled frame stretched
-            // past its two cells and left an empty box beside them.
-            Box(Modifier.weight(1f)) {
+        val switcher: @Composable (Boolean, Boolean) -> Unit = { compact, centered ->
+            Box(
+                Modifier.width(IntrinsicSize.Max),
+                contentAlignment = if (centered) Alignment.Center else Alignment.CenterStart,
+            ) {
                 JSegmented(items.map { JSegment(it.label, it.badge.takeIf { count -> count > 0 }) },
                     items.indexOfFirst { it.key == selected }.coerceAtLeast(0), { index ->
                         val key = items[index].key
                         if (key == selected && onSelectedMenu != null) onSelectedMenu() else select(key)
-                    })
+                    }, Modifier.testTag("home-switcher"), compact = compact)
             }
-            trailing()
         }
+        HomeNavigationLayout(
+            modifier = modifier.fillMaxWidth().background(palette.background).statusBarsPadding(),
+            horizontalPadding = Tokens.Space.s,
+            verticalPadding = Tokens.Space.xs,
+            inlineSpacing = Tokens.Space.s,
+            trailingSpacing = Tokens.Space.s,
+            centerSwitcher = false,
+            centerInlineVertically = true,
+            endAccessory = null,
+            endAccessoryOffset = Tokens.Space.flush,
+            compactEndAccessoryOffset = Tokens.Space.flush,
+            leading = leading,
+            trailing = trailing,
+            fullSwitcher = { switcher(false, false) },
+            compactSwitcher = { switcher(true, false) },
+            stackedSwitcher = { switcher(true, true) },
+        )
         return
     }
-    val scale = (androidx.compose.ui.platform.LocalDensity.current.fontScale * HomeTokens.shellTextStep)
-        .coerceAtMost(HomeTokens.shellScaleMaximum)
+    val choose: (NavItem) -> Unit = { item ->
+        if (item.key == selected && onSelectedMenu != null) onSelectedMenu() else select(item.key)
+    }
+    val segmentWidth = HomeTokens.segmentWidth * scale + if (density.fontScale > 1f) Tokens.Space.s else Tokens.Space.flush
+    val waiting = items.lastOrNull()?.badge ?: 0
+    HomeNavigationLayout(
+        modifier = modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight),
+        horizontalPadding = Tokens.Space.l,
+        verticalPadding = Tokens.Space.xxs,
+        inlineSpacing = null,
+        trailingSpacing = null,
+        centerSwitcher = true,
+        centerInlineVertically = false,
+        endAccessory = if (waiting > 0) ({ GlassHomeBadge(waiting) }) else null,
+        endAccessoryOffset = Tokens.Space.s,
+        compactEndAccessoryOffset = Tokens.Space.flush,
+        leading = leading,
+        trailing = { HomeNavigationActions { trailing() } },
+        fullSwitcher = {
+            GlassHomeSwitcher(items, selected, segmentWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, onClick = choose)
+        },
+        compactSwitcher = {
+            GlassHomeSwitcher(items, selected, segmentWidth, scale,
+                textWidth = HomeTokens.segmentWidth * scale, surfacePadding = Tokens.Space.xxs, badgeOffset = Tokens.Space.flush, onClick = choose)
+        },
+        stackedSwitcher = { available ->
+            val fittedWidth = ((available - Tokens.Space.xs * 2) / items.size.coerceAtLeast(1))
+                .coerceIn(Tokens.Space.flush, segmentWidth)
+            GlassHomeSwitcher(items, selected, fittedWidth, scale,
+                textWidth = minOf(HomeTokens.segmentWidth * scale, fittedWidth),
+                narrowText = fittedWidth < segmentWidth, onClick = choose)
+        },
+    )
+}
+
+/** Horizontal bounds relative to the capsule's left edge, including a badge aligned to its top end. */
+internal data class HomeSwitcherOccupiedBounds(val left: Int, val right: Int) {
+    val width: Int get() = right - left
+}
+
+internal fun homeSwitcherOccupiedBounds(capsuleWidth: Int, badgeWidth: Int?, badgeOffset: Int): HomeSwitcherOccupiedBounds {
+    if (badgeWidth == null) return HomeSwitcherOccupiedBounds(0, capsuleWidth)
+    val badgeLeft = capsuleWidth - badgeWidth + badgeOffset
+    return HomeSwitcherOccupiedBounds(
+        left = minOf(0, badgeLeft),
+        right = maxOf(capsuleWidth, badgeLeft + badgeWidth),
+    )
+}
+
+/**
+ * Measures real control widths, then tries centered full, centered compact, gap full, gap compact and stacked.
+ * Non-Glass styles start at gap full. Measurement candidates hide their semantics and do not run the pill
+ * spring (`LocalSlidingPillAnimate`); only the selected one is placed.
+ */
+@Composable
+private fun HomeNavigationLayout(
+    modifier: Modifier,
+    horizontalPadding: Dp,
+    verticalPadding: Dp,
+    inlineSpacing: Dp?,
+    trailingSpacing: Dp?,
+    centerSwitcher: Boolean,
+    centerInlineVertically: Boolean,
+    endAccessory: (@Composable () -> Unit)?,
+    endAccessoryOffset: Dp,
+    compactEndAccessoryOffset: Dp,
+    leading: @Composable () -> Unit,
+    trailing: @Composable RowScope.() -> Unit,
+    fullSwitcher: @Composable () -> Unit,
+    compactSwitcher: @Composable () -> Unit,
+    stackedSwitcher: @Composable (Dp) -> Unit,
+) {
+    SubcomposeLayout(modifier) { constraints ->
+        val leadingPlaceable = subcompose(0) { Box { leading() } }.first().measure(androidx.compose.ui.unit.Constraints())
+        val trailingPlaceable = subcompose(1) {
+            Row(
+                horizontalArrangement = trailingSpacing?.let { Arrangement.spacedBy(it) } ?: Arrangement.Start,
+                verticalAlignment = Alignment.CenterVertically,
+            ) { trailing() }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val full = subcompose(2) {
+            CompositionLocalProvider(LocalSlidingPillAnimate provides false) {
+                Box(Modifier.clearAndSetSemantics {}) { fullSwitcher() }
+            }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val compact = subcompose(3) {
+            CompositionLocalProvider(LocalSlidingPillAnimate provides false) {
+                Box(Modifier.clearAndSetSemantics {}) { compactSwitcher() }
+            }
+        }.first().measure(androidx.compose.ui.unit.Constraints())
+        val accessory = endAccessory?.let { content ->
+            subcompose(4) {
+                Box(Modifier.clearAndSetSemantics {}) { content() }
+            }.first().measure(androidx.compose.ui.unit.Constraints())
+        }
+        val fullBounds = homeSwitcherOccupiedBounds(full.width, accessory?.width, endAccessoryOffset.roundToPx())
+        val compactBounds = homeSwitcherOccupiedBounds(compact.width, accessory?.width, compactEndAccessoryOffset.roundToPx())
+        val horizontal = horizontalPadding.roundToPx()
+        val vertical = verticalPadding.roundToPx()
+        val gap = inlineSpacing?.roundToPx() ?: 0
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else {
+            horizontal * 2 + leadingPlaceable.width + fullBounds.width + trailingPlaceable.width + gap * 2
+        }
+        val contentWidth = (width - horizontal * 2).coerceAtLeast(0)
+        fun fitsCentered(capsuleWidth: Int, occupied: HomeSwitcherOccupiedBounds): Boolean {
+            if (!centerSwitcher) return false
+            val capsuleLeft = (contentWidth - capsuleWidth) / 2
+            return capsuleLeft + occupied.left >= leadingPlaceable.width &&
+                capsuleLeft + occupied.right <= contentWidth - trailingPlaceable.width
+        }
+        fun fitsGap(occupied: HomeSwitcherOccupiedBounds) =
+            leadingPlaceable.width + occupied.width + trailingPlaceable.width + gap * 2 <= contentWidth
+        val centeredFull = fitsCentered(full.width, fullBounds)
+        val centeredCompact = !centeredFull && fitsCentered(compact.width, compactBounds)
+        val gapFull = !centeredFull && !centeredCompact && fitsGap(fullBounds)
+        val gapCompact = !centeredFull && !centeredCompact && !gapFull && fitsGap(compactBounds)
+        val inline = centeredFull || gapFull
+        val compactInline = centeredCompact || gapCompact
+        val centeredInline = centeredFull || centeredCompact
+        val stacked = !inline && !compactInline
+        val level = when {
+            centeredFull -> "home-level-centered-full"
+            centeredCompact -> "home-level-centered-compact"
+            gapFull -> "home-level-gap-full"
+            gapCompact -> "home-level-gap-compact"
+            else -> "home-level-stacked"
+        }
+        val stackedWidth = (contentWidth - (fullBounds.width - full.width)).coerceAtLeast(0)
+        val switcher = when {
+            inline -> subcompose(6) { Box(Modifier.testTag(level)) { fullSwitcher() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+            compactInline -> subcompose(7) { Box(Modifier.testTag(level)) { compactSwitcher() } }.first()
+                .measure(androidx.compose.ui.unit.Constraints())
+            else -> subcompose(5) { Box(Modifier.testTag(level)) { stackedSwitcher(stackedWidth.toDp()) } }.first()
+                .measure(androidx.compose.ui.unit.Constraints(maxWidth = contentWidth))
+        }
+        val firstRowHeight = maxOf(leadingPlaceable.height, trailingPlaceable.height)
+        val stackGap = if (stacked) Tokens.Space.xs.roundToPx() else 0
+        val contentHeight = if (stacked) firstRowHeight + stackGap + switcher.height
+            else maxOf(firstRowHeight, switcher.height)
+        val desiredHeight = contentHeight + vertical * 2
+        val height = if (constraints.hasBoundedHeight) desiredHeight.coerceIn(constraints.minHeight, constraints.maxHeight)
+            else maxOf(desiredHeight, constraints.minHeight)
+        val leadingY = if (!stacked && centerInlineVertically) vertical + ((contentHeight - leadingPlaceable.height) / 2f).roundToInt() else vertical
+        val trailingY = if (!stacked && centerInlineVertically) vertical + ((contentHeight - trailingPlaceable.height) / 2f).roundToInt() else vertical
+        val switcherY = if (stacked) vertical + firstRowHeight + stackGap
+            else if (centerInlineVertically) vertical + ((contentHeight - switcher.height) / 2f).roundToInt() else vertical
+        val switcherX = when {
+            stacked -> horizontal + (contentWidth - switcher.width) / 2
+            centeredInline -> horizontal + (contentWidth - switcher.width) / 2
+            centerSwitcher -> {
+                val occupied = if (compactInline) compactBounds else fullBounds
+                val gapStart = horizontal + leadingPlaceable.width + gap
+                val gapWidth = contentWidth - leadingPlaceable.width - trailingPlaceable.width - gap * 2
+                gapStart + (gapWidth - occupied.width) / 2 - occupied.left
+            }
+            else -> horizontal + leadingPlaceable.width + gap
+        }.coerceAtLeast(horizontal)
+        layout(width, height) {
+            switcher.placeRelative(switcherX, switcherY)
+            leadingPlaceable.placeRelative(horizontal, leadingY)
+            trailingPlaceable.placeRelative(width - horizontal - trailingPlaceable.width, trailingY)
+        }
+    }
+}
+
+internal val LocalHomeNavigationActions = staticCompositionLocalOf { false }
+
+/** Share the home action's material and press treatment with an individual floating navigation control. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun HomeNavigationActions(content: @Composable () -> Unit) {
+    val interactive = PersonaTheme.style == AppStyle.Glass && LocalGlassSource.current != null &&
+        PersonaTheme.glass == GlassLevel.Liquid && !PersonaTheme.reduceMotion
+    CompositionLocalProvider(
+        LocalHomeNavigationActions provides true,
+        LocalRippleConfiguration provides if (interactive) HomeNavigationGlassRipple else LocalRippleConfiguration.current,
+        content = content,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+private val HomeNavigationGlassRipple = RippleDefaults.RippleAlpha.let {
+    RippleConfiguration(
+        rippleAlpha = RippleAlpha(
+            draggedAlpha = it.draggedAlpha,
+            focusedAlpha = it.focusedAlpha,
+            hoveredAlpha = it.hoveredAlpha,
+            pressedAlpha = 0f,
+        ),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GlassHomeSwitcher(
+    items: List<NavItem>,
+    selected: String,
+    segmentWidth: Dp,
+    scale: Float,
+    textWidth: Dp = segmentWidth,
+    narrowText: Boolean = false,
+    surfacePadding: Dp = Tokens.Space.xs,
+    badgeOffset: Dp = Tokens.Space.s,
+    modifier: Modifier = Modifier,
+    onClick: (NavItem) -> Unit,
+) {
+    val palette = PersonaTheme.palette
     val density = androidx.compose.ui.platform.LocalDensity.current
     val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
-    Box(modifier.fillMaxWidth().statusBarsPadding().heightIn(min = HomeTokens.headerHeight)
-        .padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xxs)) {
-        Box(Modifier.align(Alignment.TopStart)) { leading() }
-        Box(Modifier.align(Alignment.TopCenter).padding(end = HomeTokens.segmentWidth)) {
-            Row(Modifier.floatingSurface(CircleShape).padding(Tokens.Space.xs)) {
-                items.forEach { item ->
-                    val chosen = item.key == selected
-                    val labelStyle = PersonaTheme.type.body.copy(fontSize = PersonaTheme.type.body.fontSize * HomeTokens.shellTextStep,
-                        fontWeight = if (chosen) FontWeight.SemiBold else FontWeight.Normal)
-                    val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
-                    val available = with(density) { (HomeTokens.segmentWidth * scale).toPx() }
-                    val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
-                    val fittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
-                    Box(Modifier.width(HomeTokens.segmentWidth * scale).height(HomeTokens.segmentHeight * scale)
-                        .clip(CircleShape).background(if (chosen) {
-                            if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight
-                        } else Color.Transparent)
-                        .clickable(role = Role.Tab) {
-                            if (chosen && onSelectedMenu != null) onSelectedMenu() else select(item.key)
-                        }.semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
-                        Text(item.label, style = labelStyle.copy(fontSize = fittedSize),
-                            color = if (chosen) palette.ink else palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val placed = LocalSlidingPillAnimate.current
+    val interactive = placed && LocalGlassSource.current != null &&
+        PersonaTheme.glass == GlassLevel.Liquid && !PersonaTheme.reduceMotion
+    val pressSources = if (placed) {
+        remember(items.map(NavItem::key)) { List(items.size) { MutableInteractionSource() } }
+    } else {
+        emptyList()
+    }
+    val presses = pressSources.map { it.collectIsPressedAsState() }
+    val pressTransform = if (interactive) {
+        val pressScale = remember { Animatable(1f) }
+        val motion = PersonaTheme.motion
+        LaunchedEffect(presses, motion) {
+            snapshotFlow { presses.any { it.value } }.collectLatest { pressed ->
+                pressScale.animateTo(if (pressed) HomeTokens.switcherPressScale else 1f, motion.enter())
+            }
+        }
+        // Keep Haze's backdrop coordinates fixed while the capsule grows.
+        Modifier.graphicsLayer().drawWithContent {
+            val amount = pressScale.value
+            if (amount == 1f) drawContent()
+            else scaleDraw(amount) { this@drawWithContent.drawContent() }
+        }
+    } else {
+        Modifier
+    }
+    // The measuring copies only need the capsule's size.
+    val surface = if (placed) pressTransform.homeNavigationGlassSurface(interactive) else Modifier
+    Box(modifier) {
+        // One pill for the whole switch. iOS `ShellSwitch` / `SwitchMotion` (`ShellComponents.swift`):
+        // a tap glides it on `Theme.Motion.state`, and the label's colour and weight change inside that
+        // same animation (lines 325 and 336). There is no shell strip here, so it does not follow a finger.
+        // A missing key is not a segment: no pill, rather than one under the first.
+        GlassSlidingPill(
+            selected = items.indexOfFirst { it.key == selected },
+            count = items.size,
+            color = if (PersonaTheme.darkTheme) HomeTokens.segmentDark else HomeTokens.segmentLight,
+            modifier = Modifier.testTag("home-switcher").then(surface).padding(surfacePadding),
+        ) { index ->
+            val item = items[index]
+            val chosen = item.key == selected
+            val body = PersonaTheme.type.body
+            val available = with(density) { textWidth.toPx() }
+            // The chosen weight's size is the old single measurement. The other weight is only the
+            // crossfade (`GlassSegmentLabel`): SwiftUI fades the glyphs when the font changes.
+            fun fitted(weight: FontWeight): androidx.compose.ui.text.TextStyle {
+                val labelStyle = body.copy(
+                    fontSize = body.fontSize * HomeTokens.shellTextStep,
+                    fontWeight = weight,
+                )
+                val measured = textMeasurer.measure(item.label, style = labelStyle, maxLines = 1)
+                val fit = (available / measured.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                val baseFittedSize = maxOf(Tokens.Type.Label.size.value, labelStyle.fontSize.value * fit).sp
+                val fittedSize = if (narrowText) {
+                    var candidate = baseFittedSize
+                    var result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
+                    while (result.isLineEllipsized(0) && candidate.value > Tokens.Type.Label.size.value) {
+                        candidate = maxOf(Tokens.Type.Label.size.value, candidate.value * 0.95f).sp
+                        result = textMeasurer.measure(item.label, style = labelStyle.copy(fontSize = candidate),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            constraints = androidx.compose.ui.unit.Constraints(maxWidth = available.toInt()))
                     }
+                    candidate
+                } else baseFittedSize
+                return labelStyle.copy(fontSize = fittedSize)
+            }
+            // Touch lights the material or changes the pressed label's tone. Keep focus and hover cues;
+            // a filled press ripple would look like a second selected segment.
+            val pressed = !interactive && presses.getOrNull(index)?.value == true
+            val (selectedStyle, idleStyle) = remember(item.label, body, available, narrowText, textMeasurer) {
+                fitted(FontWeight.SemiBold) to fitted(FontWeight.Normal)
+            }
+            CompositionLocalProvider(LocalRippleConfiguration provides HomeNavigationGlassRipple) {
+                Box(Modifier.width(segmentWidth).height(HomeTokens.segmentHeight * scale)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = pressSources.getOrNull(index),
+                        indication = LocalIndication.current,
+                        role = Role.Tab,
+                    ) { onClick(item) }
+                    .semantics { this.selected = chosen }, contentAlignment = Alignment.Center) {
+                    GlassSegmentLabel(
+                        item.label, selected = chosen,
+                        selectedColor = if (pressed) palette.ink.copy(alpha = HomeTokens.switcherPressedSelectionAlpha) else palette.ink,
+                        idleColor = if (pressed) palette.ink else palette.ink2,
+                        style = selectedStyle, idleStyle = idleStyle,
+                    )
                 }
             }
-            val waiting = items.lastOrNull()?.badge ?: 0
-            if (waiting > 0) Text("$waiting", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-                color = palette.needsYou.text, modifier = Modifier.align(Alignment.TopEnd).offset(x = Tokens.Space.s, y = -Tokens.Space.xs)
-                    .clip(CircleShape).background(palette.sunken).padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs), maxLines = 1)
         }
-        Row(Modifier.align(Alignment.TopEnd), verticalAlignment = Alignment.CenterVertically) { trailing() }
+        val waiting = items.lastOrNull()?.badge ?: 0
+        if (waiting > 0) GlassHomeBadge(waiting,
+            Modifier.align(Alignment.TopEnd).offset(x = badgeOffset, y = -Tokens.Space.xs).testTag("home-badge"))
     }
+}
+
+@Composable
+private fun GlassHomeBadge(count: Int, modifier: Modifier = Modifier) {
+    Text("$count", style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+        color = PersonaTheme.palette.needsYou.text,
+        modifier = modifier.clip(CircleShape).background(PersonaTheme.palette.sunken)
+            .padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
+        maxLines = 1)
 }

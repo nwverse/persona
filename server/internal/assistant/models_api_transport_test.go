@@ -14,12 +14,93 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestLauncherUserAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name, headers, want string
+		set                 bool
+	}{
+		{name: "default"},
+		{name: "other headers", headers: "X-Secret: synthetic-private-header"},
+		{name: "canonical", headers: "User-Agent: first-agent\nX-Secret: synthetic-private-header", want: "first-agent", set: true},
+		{name: "case insensitive and last wins", headers: "USER-AGENT: first-agent\nuSeR-aGeNt: second-agent", want: "second-agent", set: true},
+		{name: "empty", headers: "user-agent: ", set: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				want := modelhttp.UserAgent()
+				if tc.set {
+					want = tc.want
+				}
+				if got := r.Header.Get("User-Agent"); got != want {
+					t.Errorf("User-Agent = %q, want %q", got, want)
+				}
+				wantSecret := ""
+				if strings.Contains(tc.headers, "X-Secret:") {
+					wantSecret = "synthetic-private-header"
+				}
+				if got := r.Header.Get("X-Secret"); got != wantSecret {
+					t.Errorf("X-Secret = %q, want %q", got, wantSecret)
+				}
+				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+			}))
+			defer gw.Close()
+			s, _, _ := modelService(t)
+			key, err := s.sealKey("synthetic-key")
+			if err != nil {
+				t.Fatal(err)
+			}
+			l := storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "stored", Kind: "launcher", API: "messages", BaseURL: gw.URL, Model: "m"}, KeySealed: key}
+			if tc.headers != "" {
+				l.HeadersSealed, err = s.sealKey(tc.headers)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			putLaunchers(t, s, l)
+			cfg, err := s.apiConfig(context.Background(), ModelBinding{Provider: "launcher.stored"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (cfg.UserAgent != nil) != tc.set || (tc.set && *cfg.UserAgent != tc.want) {
+				t.Fatalf("unexpected UserAgent configuration")
+			}
+			raw, err := json.Marshal(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "UserAgent") || strings.Contains(string(raw), "user_agent") || (tc.want != "" && strings.Contains(string(raw), tc.want)) {
+				t.Fatalf("User-Agent leaked into JSON: %s", raw)
+			}
+			answer, err := s.aiClient(cfg).Complete(context.Background(), "system", "hello", 8)
+			if err != nil || answer != "ok" || calls != 1 {
+				t.Fatalf("answer=%q err=%v calls=%d", answer, err, calls)
+			}
+		})
+	}
+}
+
+func TestLauncherUserAgentUnreadableHeaders(t *testing.T) {
+	s, _, _ := modelService(t)
+	key, err := s.sealKey("synthetic-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "stored", Kind: "launcher", API: "messages", BaseURL: "https://api.example.com", Model: "m"}, KeySealed: key, HeadersSealed: "synthetic-secret-invalid-ciphertext"})
+	_, err = s.apiConfig(context.Background(), ModelBinding{Provider: "launcher.stored"})
+	if err == nil || strings.Contains(err.Error(), "synthetic-secret") {
+		t.Fatalf("unsafe or missing error: %v", err)
+	}
+}
+
 func TestDirectAPITransportSave(t *testing.T) {
 	for _, api := range []string{"", "messages", "responses"} {
-		for _, field := range []string{"headers", "proxy", "no_proxy"} {
+		for _, field := range []string{"proxy", "no_proxy"} {
 			t.Run(api+"/"+field, func(t *testing.T) {
 				s, _, st := modelService(t)
 				value := map[string]string{"headers": "X-Example: synthetic-header", "proxy": "http://proxy.example.com", "no_proxy": "example.com"}[field]
@@ -96,7 +177,7 @@ func TestDirectAPITransportPresetAndLocalization(t *testing.T) {
 		s, hub, _ := modelService(t)
 		hub.presets = []LauncherPreset{{ID: "team/direct", Kind: "api", API: api, BaseURL: "https://api.example.com", Model: "m"}}
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
-			result, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{Method: "POST", Path: "/api/v1/launchers", Body: []byte(`{"name":"preset","preset":"team/direct","headers":"X-Example: synthetic-header"}`), Header: map[string][]string{"Accept-Language": {string(lang)}}}, nil)
+			result, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{Method: "POST", Path: "/api/v1/launchers", Body: []byte(`{"name":"preset","preset":"team/direct","proxy":"http://proxy.example.com"}`), Header: map[string][]string{"Accept-Language": {string(lang)}}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,15 +200,8 @@ func TestDirectAPITransportProbe(t *testing.T) {
 			name, kind, api, field, override  string
 			preset, anonymous, allowed, clear bool
 		}{
-			{name: "stored messages headers", kind: "api", api: "messages", field: "headers"},
 			{name: "stored default messages proxy", kind: "api", field: "proxy"},
 			{name: "stored responses no_proxy", kind: "api", api: "responses", field: "no_proxy"},
-			{name: "stored responses headers", kind: "api", api: "responses", field: "headers"},
-			{name: "override to messages", kind: "api", api: "responses", field: "headers", override: "messages"},
-			{name: "preset messages headers", kind: "api", api: "messages", field: "headers", preset: true},
-			{name: "preset default messages headers", kind: "api", field: "headers", preset: true},
-			{name: "preset responses headers", kind: "api", api: "responses", field: "headers", preset: true},
-			{name: "anonymous responses headers", api: "responses", field: "headers", anonymous: true},
 			{name: "anonymous messages headers", api: "messages", field: "headers", anonymous: true, allowed: true},
 			{name: "stored legacy launcher headers", api: "messages", field: "headers", allowed: true},
 			{name: "stored launcher proxy", kind: "launcher", api: "messages", field: "proxy", allowed: true},
@@ -182,8 +256,12 @@ func TestDirectAPITransportProbe(t *testing.T) {
 				} else {
 					out = s.providerDiscover(ctx, in)
 				}
+				want := int32(1)
+				if operation == "discover" {
+					want = 2 // the model list, then the capability report
+				}
 				if tc.allowed {
-					if calls.Load() != 1 || out["error"] != nil {
+					if calls.Load() != want || out["error"] != nil {
 						t.Fatalf("allowed calls=%d result=%v", calls.Load(), out)
 					}
 				} else if calls.Load() != 0 || out["error"] != i18n.T(i18n.En, "assistant-models_launchers.err_api_transport") {
@@ -196,7 +274,7 @@ func TestDirectAPITransportProbe(t *testing.T) {
 
 func TestDirectAPITransportRuntime(t *testing.T) {
 	for _, api := range []string{"", "messages", "responses"} {
-		for _, field := range []string{"headers", "proxy", "no_proxy"} {
+		for _, field := range []string{"proxy", "no_proxy"} {
 			t.Run(api+"/"+field, func(t *testing.T) {
 				var calls atomic.Int32
 				gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(http.StatusBadRequest) }))

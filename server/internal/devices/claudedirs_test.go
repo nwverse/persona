@@ -34,9 +34,13 @@ func (f *dirsNode) handle(_ context.Context, method string, params json.RawMessa
 		var c map[string]json.RawMessage
 		_ = json.Unmarshal(params, &c)
 		f.configure = append(f.configure, c)
-		if raw, ok := c["claude_dirs_blocked"]; ok {
-			f.blocked = nil
-			_ = json.Unmarshal(raw, &f.blocked)
+		// Like the node (node.go node.configure): absent or null leaves the patterns as they are.
+		var p struct {
+			Blocked *[]string `json:"claude_dirs_blocked"`
+		}
+		_ = json.Unmarshal(params, &p)
+		if p.Blocked != nil {
+			f.blocked = *p.Blocked
 		}
 		return map[string]any{}, nil
 	case "sessions.list":
@@ -169,6 +173,51 @@ func TestBlockClaudeDirs(t *testing.T) {
 	}
 }
 
+// Lifting the last pattern tells the node [] (null would leave it blocking): the directory reads unblocked, its
+// sessions are listed again, on the next connection too.
+func TestUnblockLastClaudeDir(t *testing.T) {
+	_, _, m, mux := dirsHub(t)
+	ctx := context.Background()
+	f := connectDirsNode(t, m)
+	if code, _ := put(t, mux, "/api/v1/machines/m1/claude-dirs/blocked", `{"blocked":["~/.automation/claude-a"]}`); code != 200 {
+		t.Fatalf("block = %d", code)
+	}
+	if ids := listedIDs(m); !slices.Equal(ids, []string{"work"}) {
+		t.Fatalf("blocked sessions %v", ids)
+	}
+
+	code, out := put(t, mux, "/api/v1/machines/m1/claude-dirs/blocked", `{"blocked":[]}`)
+	if code != 200 {
+		t.Fatalf("unblock = %d %v", code, out)
+	}
+	f.mu.Lock()
+	last := f.configure[len(f.configure)-1]
+	f.mu.Unlock()
+	if string(last["claude_dirs_blocked"]) != `[]` {
+		t.Fatalf("node told claude_dirs_blocked %s", last["claude_dirs_blocked"])
+	}
+	if ids := listedIDs(m); !slices.Equal(ids, []string{"bot", "work"}) {
+		t.Fatalf("unblocked sessions %v", ids)
+	}
+	st := m.claudeDirsState(ctx)
+	if len(st.Blocked) != 0 {
+		t.Fatalf("patterns %v", st.Blocked)
+	}
+	for _, d := range st.Dirs {
+		if d.Blocked {
+			t.Fatalf("%s still blocked: %+v", d.Path, st.Dirs)
+		}
+	}
+
+	m.configureNode(ctx, m.peer, nil, true)
+	f.mu.Lock()
+	last = f.configure[len(f.configure)-1]
+	f.mu.Unlock()
+	if string(last["claude_dirs_blocked"]) != `[]` {
+		t.Fatalf("configure on connect: claude_dirs_blocked %s", last["claude_dirs_blocked"])
+	}
+}
+
 func TestBlockClaudeDirsRefusesBadPatterns(t *testing.T) {
 	_, _, _, mux := dirsHub(t)
 	for _, body := range []string{`{"blocked":["relative/dir"]}`, `{"blocked":["~/["]}`, `nope`} {
@@ -275,6 +324,23 @@ func TestConfigureNodeSaysClaudeStartDir(t *testing.T) {
 	}
 	if !slices.Contains(m.claudeDirs(ctx), "~/.config/claude-code/profiles/work") {
 		t.Fatalf("not looked in: %v", m.claudeDirs(ctx))
+	}
+}
+
+// hub.json machines[].extra_path reaches the node on connect (#10127); unset it is [], so a list taken out of hub.json
+// is taken out of the node's PATH on the next connect.
+func TestConfigureNodeSaysExtraPath(t *testing.T) {
+	_, _, m, _ := dirsHub(t)
+	f := connectDirsNode(t, m)
+	ctx := context.Background()
+	m.configureNode(ctx, m.peer, nil, true)
+	m.cfg.ExtraPath = []string{"~/.cargo/bin", "/opt/tools/bin"}
+	m.configureNode(ctx, m.peer, nil, true)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.configure) != 2 || string(f.configure[0]["extra_path"]) != `[]` ||
+		string(f.configure[1]["extra_path"]) != `["~/.cargo/bin","/opt/tools/bin"]` {
+		t.Fatalf("extra_path in node.configure: %v", f.configure)
 	}
 }
 

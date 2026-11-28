@@ -11,20 +11,28 @@ SCRIPTS = Path(__file__).resolve().parent
 # A fake docker. $TEST_CONTAINERS lists the containers there as name=user (the POSTGRES_USER each was made with, what
 # `inspect … .Config.Env` answers), $TEST_VOLUMES the volumes. `inspect` answers a network mode ($TEST_NETWORK) for
 # anything else, and `exec … pg_isready` answers like the real one for a Postgres listening on $TEST_LISTEN_PORT inside
-# the container: ready when the port it asks (PGPORT, else 5432) is that one. Every call is logged to $TEST_LOG.
+# the container: ready when the port it asks (PGPORT, else 5432) is that one. `run` fails when $TEST_RUN_FAILS is set
+# (an image that cannot be pulled, a port taken). Every call is logged to $TEST_LOG.
 FAKE_DOCKER = r'''#!/bin/bash
 printf '%s\n' "$*" >> "$TEST_LOG"
 user_of() { for e in $TEST_CONTAINERS; do [ "${e%%=*}" = "$1" ] && { echo "${e#*=}"; return 0; }; done; return 1; }
 case "$1" in
-  ps) for e in $TEST_CONTAINERS; do echo "${e%%=*}"; done ;;
-  start|run) ;;
+  ps) for e in $TEST_CONTAINERS; do echo "${e%%=*}"; done
+      if [ -n "${TEST_EXTRA_CONTAINERS:-}" ]; then
+        i=0; while [ "$i" -lt "$TEST_EXTRA_CONTAINERS" ]; do echo "other-container-padding-name-$i"; i=$((i + 1)); done
+      fi ;;
+  start) ;;
+  run) [ -z "$TEST_RUN_FAILS" ] || exit 125 ;;
   volume)
     case "$2" in
       inspect) for v in $TEST_VOLUMES; do [ "$v" = "$3" ] && exit 0; done; exit 1 ;;
     esac ;;
   inspect)
     case "$3" in
-      *Config.Env*) u=$(user_of "$4") || exit 1; echo "POSTGRES_USER=$u"; echo "POSTGRES_PASSWORD=pw" ;;
+      *Config.Env*) u=$(user_of "$4") || exit 1; echo "POSTGRES_USER=$u"; echo "POSTGRES_PASSWORD=pw"
+        if [ -n "${TEST_EXTRA_ENV:-}" ]; then
+          i=0; while [ "$i" -lt "$TEST_EXTRA_ENV" ]; do echo "EXTRA_ENV_PADDING_$i=value-$i"; i=$((i + 1)); done
+        fi ;;
       *) echo "$TEST_NETWORK" ;;
     esac ;;
   exec)
@@ -66,14 +74,16 @@ class DbShTestCase(unittest.TestCase):
             {"database_url": "postgres://persona:pw@127.0.0.1:%d/persona?sslmode=disable" % url_port},
             containers="persona-postgres=persona", network=network, listen_port=listen_port)
 
-    def run_with(self, config, containers="", volumes="", network="bridge", listen_port=5432, test_db="1"):
+    def run_with(self, config, containers="", volumes="", network="bridge", listen_port=5432, test_db="1", run_fails="",
+                 extra_containers="", extra_env=""):
         """db.sh with hub.json holding config (None: no hub.json) and the containers / volumes given."""
         if config is not None:
             (self.state / "hub.json").write_text(json.dumps(config))
         env = {"PATH": str(self.tools) + os.pathsep + os.defpath, "HOME": str(self.root),
                "_PERSONA_STATE_DIR": str(self.state), "TEST_LOG": str(self.log),
                "TEST_NETWORK": network, "TEST_LISTEN_PORT": str(listen_port), "TEST_CONTAINERS": containers,
-               "TEST_VOLUMES": volumes, "TEST_TEST_DB": test_db}
+               "TEST_VOLUMES": volumes, "TEST_TEST_DB": test_db, "TEST_RUN_FAILS": run_fails,
+               "TEST_EXTRA_CONTAINERS": str(extra_containers), "TEST_EXTRA_ENV": str(extra_env)}
         return subprocess.run(["bash", str(SCRIPTS / "db.sh")], env=env, capture_output=True, text=True, timeout=30)
 
     def calls(self):
@@ -129,7 +139,29 @@ class DbShTestCase(unittest.TestCase):
         result = self.run_with(None, containers="persona-postgres=persona jarvis-postgres=jarvis",
                                volumes="persona-pgdata jarvis-pgdata")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("persona-postgres exists but hub.json's database_url is not its database", result.stderr)
+        # Linux CI differs from the macOS fixture; retain its actual path in a failed assertion without printing
+        # successful fixture output. The fake database URL is a constant, not a real credential.
+        detail = "stdout:\n" + result.stdout[-4000:] + "\nstderr:\n" + result.stderr[-4000:] + "\nDocker calls:\n" + self.calls()[-8000:]
+        self.assertIn("persona-postgres exists but hub.json's database_url is not its database", result.stderr, detail)
+        self.assert_nothing_made()
+        calls = self.calls()
+        self.assertIn("start jarvis-postgres", calls)
+        self.assertNotIn("start persona-postgres", calls)
+        self.assertNotIn("exec -e PGPORT=5432 persona-postgres", calls)
+        self.assertEqual((self.state / "hub.json").read_text(), before)
+
+    def test_with_both_containers_and_large_docker_output_pipefail_keeps_legacy_and_note(self):
+        # Regression for #14644: under `set -o pipefail`, early-exiting pipe readers (`grep -qx`, `head -1`)
+        # can send SIGPIPE (141) to `docker ps` / `docker inspect` while later lines are still being written.
+        # Padding output past the OS pipe buffer (~64 KiB) makes that SIGPIPE deterministic.
+        before = json.dumps({"database_url": LEGACY_URL})
+        (self.state / "hub.json").write_text(before)
+        result = self.run_with(None, containers="persona-postgres=persona jarvis-postgres=jarvis",
+                               volumes="persona-pgdata jarvis-pgdata",
+                               extra_containers=3000, extra_env=3000)
+        detail = "stdout:\n" + result.stdout[-4000:] + "\nstderr:\n" + result.stderr[-4000:] + "\nDocker calls:\n" + self.calls()[-8000:]
+        self.assertEqual(result.returncode, 0, detail)
+        self.assertIn("persona-postgres exists but hub.json's database_url is not its database", result.stderr, detail)
         self.assert_nothing_made()
         calls = self.calls()
         self.assertIn("start jarvis-postgres", calls)
@@ -184,6 +216,17 @@ class DbShTestCase(unittest.TestCase):
         self.assertRegex(url, r"^postgres://persona:[0-9a-f]{48}@127\.0\.0\.1:18661/persona\?sslmode=disable$")
         self.assertEqual((self.state / "hub.json").stat().st_mode & 0o777, 0o600)
         self.assertIn("exec -e PGPORT=5432 persona-postgres pg_isready -U persona -d persona", calls)
+
+
+    def test_a_failed_docker_run_takes_back_what_it_made_so_the_next_run_starts_clean(self):
+        result = self.run_with(None, run_fails="1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("docker run failed", result.stderr)
+        calls = self.calls()
+        self.assertIn("volume create persona-pgdata", calls)
+        self.assertIn("rm -f persona-postgres", calls)
+        self.assertIn("volume rm persona-pgdata", calls)
+        self.assertFalse((self.state / "hub.json").exists() and "database_url" in (self.state / "hub.json").read_text())
 
 
 

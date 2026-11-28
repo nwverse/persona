@@ -2,6 +2,12 @@
 
 Pitfalls, odd behavior, and the tradeoffs made at the time (originally in `CLAUDE.md`; index in `docs/lessons/README.md`). Add new lessons to the relevant section, or start a section if none fits.
 
+- A herdr workspace label is not task ownership (#4786): directory basenames and user renames make it ambiguous. Record
+  `task_id` and the actual `workspace_id` with every task session, select resumes by that ID, and require the same pair
+  before `workspace.close`. A label is needed only to create or recreate the task workspace. `worktree.create`'s
+  `open_workspace` defaults to true; task checkouts on classic herdr and grouped Orca workers can set it false, with the Agent tab opening in
+  the shared task workspace instead. Older herdr versions have no checkout-only RPC, so the node uses its existing Git
+  fallback for this path. Closing that workspace is not deleting its Git checkout.
 - herdr `pane read --source recent` returns at most about 1000 lines (even with a larger --lines), has no offset or scrolling API, and does not persist them: terminal history can only be read in chunks within those 1000 lines; the transcript holds the complete history.
 - For keys that distinguish single tap / quick double tap / hold (terminal key-bar modifiers), do not track press and release with `DragGesture(minimumDistance: 0)`: it misses the second tap of a quick double tap
   (XCUITest's doubleTap sends only one down / up pair). Overlay a UIView that overrides touchesBegan / Ended (`TouchArea` in `TerminalKeys.swift`).
@@ -79,6 +85,28 @@ A correct worktree creation result and a successful Agent reply do not prove tha
   the command, as before the warning). Check a parser change against real captures at several widths (120, 100, 57, 40) and a few seconds apart. Capture them from a throwaway `claude` in a private pty
   with a VT emulator (pyte), with no Persona hooks and outside herdr: no card reaches anyone's phone, and the screen can be resized at will.
 
+## Orca's screen read lifts the input box's text out of the rows (#17042)
+
+Orca 1.4.277's `terminal.read {screen: true}` does not return the screen as drawn: it finds the Agent's input box,
+leaves its prompt row as the bare glyph (`❯`, `›`), drops the rows the text wrapped onto, and returns the box's text
+as a separate `draft`. A plain read of the rows alone takes every box for empty, so an effort change typed `/effort`
+into a user's draft and submitted both together. `orcart.Screen.Text` puts the draft back in its row. The draft has no
+colors: with Claude Code 2.1.331 a typed draft and Claude's grey suggested message come back the same, though Orca's
+own emulator skips dim cells for its internal "typed text" checks; no method on the local socket returns that. Check
+what an engine's read returns against a real Agent on an isolated runtime (its own HOME and profile, a throwaway repo,
+a stand-in Messages API) before trusting a plain-text rule, and capture the empty box, a typed draft and the grey
+suggestion separately.
+
+## Orca's schema is not its behavior: fences, folders and tab names (#17043)
+
+On Orca 1.4.277's local socket, `terminal.split` and `terminal.closeTab` accept `expectedIncarnationId` but do not
+hold it (a wrong one still split and closed the tab), the split's `cwd` is honoured only by the layout-addressed form
+the socket refuses (`host_not_owned`), and on a runtime with no window `terminal.rename` changes the terminals' titles
+and the phone tab model (`session.tabs.list`'s `customTitle`) but not the tab title in `terminal.list`'s layouts. Look
+the terminal up yourself right before a call whose fence the runtime ignores, reach a folder through the new shell's
+`command`, and read a tab's current name where renames land. Check each of these on an isolated runtime: the request
+schema in Orca's bundle says what it accepts, not what it does.
+
 ## A visible Codex composer does not prove takeover readiness
 
 Codex can draw an empty input box before its folder-trust dialog arrives. A takeover must wait for the original thread to be loaded and joined on the shared app-server, not merely for a running process, a visible composer, or an HTTP success. Test the late dialog after a transient composer, and send a real follow-up from the client. Keep the pending client action mounted when session discovery changes the history row into a live row, or a later failure and its continuation-only fallback can disappear before the request completes (#5739).
@@ -88,3 +116,11 @@ Codex can draw an empty input box before its folder-trust dialog arrives. A take
 - A gate keyed on the session row (`session(key)?.canTerminal == true`) silently drops a terminal addressed by its pane (`pane:<id>`, a plain shell), which has no row: iOS sent no `terminal_subscribe` for Open Terminal Here and the page sat on Taking over… for good. When a capability check guards a stream, decide what an address with no row means (`AppModel.terminalUsable`), and let the caller know when nothing went out (`terminalSubscribe` returns false) rather than letting it wait for an answer.
 - A UI test against the mock proves the stream only with `MOCK_TERMINAL_STREAM=1` (and `MOCK_TERMINAL_CONTROL=1` to drive). Without it the feed polls `GET …/screen` over HTTP, which works for any address, so a broken subscribe never shows.
 - Every subscription that is sure to be answered needs a bound on its wait: a reason and Retry when nothing came (docs/integrations/terminal.md section 30). A Retry that only sends the same subscribe again does nothing at the hub (same device, same size: no new watch); drop it first.
+
+## tmux refuses a new session's command over 16 KB (#10058)
+
+`tmux new-session -- <command>` sends the command to its server in one message of at most 16 KB (MAX_IMSGSIZE, tmux 3.3a); a longer one prints `command too long` on the client's terminal, exits 1 and starts nothing. An assistant's Claude Code start (system prompt, tool rules, `--disallowedTools`) is about 25 KB, so every interactive start fell back to `claude -p`, and the reason read only "exited before it was ready (status 1)": the client's terminal output was discarded. Put a long command in a script and run that (`tuiScript`), keep what a tmux client prints until it is known to have started, and test with a real start's length, not a short `claude --model haiku`.
+
+## A daemonized tmux server cuts a process off from whoever started it (#10058)
+
+`tmux new-session` forks a server that daemonizes: its panes descend from init, not from the process that ran tmux. The node tells the assistant's MCP server and hooks from an Agent's by their ancestry (`mcpAssistantOf`), so interactive Claude Code in such a pane got an Agent's four tools in the main conversation. Run the server in the foreground as a child (`tmux -D`, tmux 3.2 or later), create the session detached with `-N` (without it, a `new-session` that comes before the server listens starts a daemon of its own, and `tmux -D` then finds a server there, acts as a client and exits with "open terminal failed: not a terminal": 1 start in 4 in tests), and set `destroy-unattached` only once a client is attached (a detached session goes at once otherwise). tmux also sets the pane's `PWD` to the `-c` folder as written, and Claude Code takes its working directory from `PWD`: a symlinked home's other spelling became a second working directory. Give the pane the `PWD` the print-mode process gets; `exec.Cmd` with no `Env` adds `PWD=Dir` the same way.

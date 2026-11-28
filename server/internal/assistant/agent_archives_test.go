@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,35 @@ func archiveRows(t *testing.T, s *Service) []proto.Session {
 	return body.Sessions
 }
 
+func TestArchiveSnapshotKeepsStopCauseWithoutLiveControls(t *testing.T) {
+	for _, cause := range []proto.StopCause{
+		proto.StopTaskCompleted, proto.StopIdle, proto.StopRestart, proto.StopUser, proto.StopUnknown, "future-cause",
+	} {
+		t.Run(string(cause), func(t *testing.T) {
+			c := stoppedBoxAgent("stop0001")
+			c.SourceKind = "codex_history"
+			c.ReadOnlyReason = "The linked to-do was closed."
+			c.Capabilities = &proto.SessionCapabilities{
+				Read: true, Send: true, Terminal: true, Attach: true, Interrupt: true, Approve: true,
+				StopCause: cause, Modes: proto.CanModes(true), Model: proto.CanModes(true),
+			}
+			snapshot := archiveSnapshot(c)
+			want := &proto.SessionCapabilities{Read: true, Terminal: true, StopCause: cause}
+			if !reflect.DeepEqual(snapshot.Capabilities, want) || !stoppedAgent(snapshot) {
+				t.Fatalf("lost stopped provenance or retained live controls: %+v", snapshot.Capabilities)
+			}
+			if snapshot.ReadOnlyReason != c.ReadOnlyReason {
+				t.Fatalf("lost closed-task reason: %q, want %q", snapshot.ReadOnlyReason, c.ReadOnlyReason)
+			}
+		})
+	}
+	c := stoppedBoxAgent("stop0001")
+	c.Capabilities = nil
+	if got := archiveSnapshot(c).Capabilities; !reflect.DeepEqual(got, &proto.SessionCapabilities{Read: true}) {
+		t.Fatalf("snapshot inferred capabilities: %+v", got)
+	}
+}
+
 func TestAgentSessionArchivesPersistAndRestore(t *testing.T) {
 	ft, _ := archiveTestService(t)
 	for _, agent := range []string{"claude", "codex"} {
@@ -68,7 +98,7 @@ func TestAgentSessionArchivesPersistAndRestore(t *testing.T) {
 		}
 	}
 	restarted, _ := archiveTestService(t)
-	restarted.s.store = func() Store { return ft.st }
+	restarted.s.setStore(func() Store { return ft.st })
 	restarted.d.setSessions("mac", nil)
 	rows := archiveRows(t, restarted.s)
 	if len(rows) != 2 {
@@ -88,7 +118,7 @@ func TestAgentSessionArchivesPersistAndRestore(t *testing.T) {
 		t.Fatalf("restore stayed archived: %+v", got)
 	}
 	again, _ := archiveTestService(t)
-	again.s.store = func() Store { return ft.st }
+	again.s.setStore(func() Store { return ft.st })
 	again.d.setSessions("mac", nil)
 	restored := again.s.decorated("mac")
 	if len(restored) != 2 {
@@ -126,7 +156,7 @@ func TestAgentSessionArchiveActivityPermanentlyRestores(t *testing.T) {
 				}
 			}
 			restarted, _ := archiveTestService(t)
-			restarted.s.store = func() Store { return ft.st }
+			restarted.s.setStore(func() Store { return ft.st })
 			restarted.d.setSessions("mac", nil)
 			if got := archiveRows(t, restarted.s); len(got) != 0 {
 				t.Fatalf("restore not persisted: %+v", got)
@@ -301,5 +331,82 @@ func TestAgentSessionArchiveIgnoresAListReadBeforeIt(t *testing.T) {
 	ft.d.setSessions("mac", []proto.Session{row}) // asking the user again, read after the archive
 	if archivedIDs(t, s)[row.SessionID] {
 		t.Fatal("activity after the archive did not restore it")
+	}
+}
+
+// A conversation archived under an id it went by before (a Paseo agent's transcript, or an earlier fork of it, which
+// it was listed under before #6709) is not repeated in Archived or the inventory while a row names that id among its
+// aliases (#8131): the row listed under its own id now is the conversation. The record stays: once no row names the
+// id, it is listed again. A record under another id, and one on another machine, are not touched.
+func TestArchiveUnderAnAliasIsTheListedRow(t *testing.T) {
+	const transcript, fork = "5d510000-0000-4000-8000-0000000000e1", "5d510000-0000-4000-8000-0000000000e0"
+	ft, rows := archiveTestService(t)
+	s, ctx := ft.s, context.Background()
+	old := time.Now().Add(-48 * time.Hour)
+	for _, sid := range []string{transcript, fork} { // archived while the node listed the conversation under these ids
+		if err := s.noteAgentArchive(ctx, proto.Session{MachineID: "mac", SessionID: sid, Agent: "claude", Title: "Fix the build",
+			Status: proto.StatusOffline, State: proto.StateOffline, UpdatedAt: old}, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.noteAgentArchive(ctx, rows[1], true); err != nil { // an Agent archived under its own id
+		t.Fatal(err)
+	}
+	if got := archivedIDs(t, s); !got[transcript] || !got[fork] || !got[rows[1].SessionID] {
+		t.Fatalf("archived %v", got)
+	}
+
+	live := proto.Session{MachineID: "mac", SessionID: "paseo-e1", Agent: "claude", Title: "Fix the build", Status: proto.StatusIdle,
+		State: proto.StateIdle, UpdatedAt: time.Now(), SourceKind: proto.SourceRuntime}
+	live.SetAliases([]string{transcript, fork})
+	ft.d.setSessions("mac", []proto.Session{rows[0], rows[1], live})
+	if got := archivedIDs(t, s); got[transcript] || got[fork] || !got[rows[1].SessionID] || len(got) != 1 {
+		t.Fatalf("Archived while a row names the conversation's other ids: %v", got)
+	}
+	for _, row := range s.decorated("mac") {
+		if row.SessionID == transcript || row.SessionID == fork {
+			t.Fatalf("the inventory repeats the conversation: %+v", row)
+		}
+	}
+
+	ft.d.setSessions("mac", []proto.Session{rows[0], rows[1]}) // no row names them any more
+	if got := archivedIDs(t, s); !got[transcript] || !got[fork] {
+		t.Fatalf("the records went with the row that named them: %v", got)
+	}
+}
+
+func TestRuntimeListIDMatchesJSONMarshal(t *testing.T) {
+	cases := [][2]string{
+		{"", ""},
+		{"mac", "claude-11111111-2222-4333-8444-555555555555"},
+		{"box-01", "session:with/safe_punct.~@#%^*()+=[]{}|;',?"},
+		{`quote"machine`, `back\slash`},
+		{"<html&tag>", "a<b&c>d"},
+		{"ctrl\x00nul", "line\nbreak\tand\rcarriage"},
+		{"unit\x1fsep", "del\x7fchar"},
+		{"\u4f1a\u8bdd", "\u6d4b\u8bd5-\U0001f680"},
+		{"line\u2028sep", "para\u2029sep"},
+		{"bad\xffutf8", "more\xfe\x80bytes"},
+		{strings.Repeat("m", 96), strings.Repeat("s", 96)},
+		{strings.Repeat("a", 80) + "<", strings.Repeat("b", 80) + `"`},
+	}
+	for b := range 256 {
+		s := string([]byte{'x', byte(b), 'y'})
+		cases = append(cases, [2]string{s, "sess"}, [2]string{"mach", s})
+	}
+	for _, tc := range cases {
+		raw, err := json.Marshal([2]string{tc[0], tc[1]})
+		if err != nil {
+			t.Fatalf("marshal %q %q: %v", tc[0], tc[1], err)
+		}
+		want := string(raw)
+		got := runtimeListID(tc[0], tc[1])
+		if got != want {
+			t.Fatalf("runtimeListID(%q, %q) = %q, want %q", tc[0], tc[1], got, want)
+		}
+		m := map[string]int{want: 42}
+		if v, ok := lookupRuntimeListID(m, tc[0], tc[1]); !ok || v != 42 {
+			t.Fatalf("lookupRuntimeListID(%q, %q) = (%d, %v), want (42, true)", tc[0], tc[1], v, ok)
+		}
 	}
 }

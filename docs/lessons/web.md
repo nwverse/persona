@@ -1,5 +1,257 @@
 # Lessons: web UI and interactions
 
+## Idle app ownership still needs takeover confirmation (#17419)
+
+A Codex takeover plan's `running` and `app_owned` flags describe different things. An idle app-owned session still
+requires explicit confirmation and `confirm_stop: true`; use both flags when opening the dialog and building the POST
+body. Keep the running-turn warning for active turns and show app-ownership copy for idle App sessions.
+
+## Closed history extends the to-do list without replacing the board (#17695)
+
+The hub projects the board and its direction counts before bounding the closed rows in GET /todos. Use those counts to
+offer a direction review even before its first completed row is loaded. Keep that review selected while the cursor reads
+older rows. Append those rows to Done or Cancelled without feeding them back into active board groups. Calendar shows
+the dated rows already in memory.
+
+Use `board.counts.needs_you` for the Web attention total. The section's visible count includes surfaced rows that
+do not add to that total, and Batch decide counts the immediate projected rows with an open decision. A merged
+board has hub-wide totals. Read the selected assistant's board when the browser shows one of several assistants.
+
+## Channel refreshes keep the routing draft (#17664)
+
+A channel read updates the current configuration document under one resource key. A refresh counter in that key or a
+different component tree at the split-pane breakpoint discards unsaved input. A committed PUT acknowledges the edit even
+when a GET overlaps it. Read again after the PUT to reconcile the displayed state and ignore the overlapping reply once
+that follow-up starts.
+
+## Configuration editors share the resource's write order (#17762)
+
+A layout can remount an editor while its save is in flight. Put the confirmed snapshot, draft and write queue under the
+same scoped resource key as its requests. When an endpoint receives a whole document, read a fresh baseline before
+applying the edited fields. A follow-up read can confirm a lost response for the named fields without repeating the
+write. Test a remount and a credential replacement separately, since only the latter retires the resource's queue.
+
+## A TypeError is not a network failure (#16182)
+
+fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.
+`errorText` mapped every TypeError to "Can't reach the hub". The Agents lists run their answer's processing, and the
+store subscribers each publish reaches, inside the read's `try`, so a row the page tripped over showed as a network gap
+that Retry could never close, while the hub logged the read as a 200. `lib/api.ts` now turns fetch's own rejection,
+and a body that breaks off, into `HubUnreachableError`. Only that, or a TypeError carrying the browser's fetch-failure
+message, is a gap (`isNetworkFailure`). Any other TypeError says what broke ("Something went wrong on this page: …") and
+is not retried. When code needs to know whether a request reached the hub, use `isNetworkFailure`, not `instanceof TypeError`.
+
+## Closed-task links keep native navigation and the app base (#6819)
+
+Build closed-task banner links with the router's `href` and handle clicks with `onLinkClick`. Plain clicks stay
+in-app, modified clicks retain native navigation, and native destinations retain the reverse-proxy base path.
+Test the rendered anchor and its click behavior at both the root and a nested base path, not only the router helper.
+
+## Reopening a model picker can reuse the computer's catalog (#15481)
+
+The browser's repeat read and the computer's forced discovery are separate. Use the opening read for fast results
+and send `refresh=1` for an explicit refresh or Retry. Keep the previous list visible while the request runs, and
+verify that a changed catalog replaces its rows in the same opening.
+
+## A text shimmer needs an opaque source color (#15367)
+
+Setting `color: transparent` also clears any gradient stop that reads `currentColor`.
+Use a transparent glyph fill for the animated gradient and check the painted text in a browser.
+
+## A folder of trees names its repository, it is not one (#13453)
+
+Path inference keys a tree in a folder kept apart from its repository (herdr's `~/.herdr/worktrees/<repository>/<tree>`)
+by that folder. Nothing is checked out there, so a Repo section keyed by it never meets the repository's own section,
+which Git keys by the main checkout. When a tree was removed after its work merged, or has not been read yet, Git places
+none of its Agents, and the repository showed as a second section with its name. Treat such a folder as naming its
+repository, and resolve it against what Git placed on the same computer: another tree of that folder, else the one
+section of that name. When either is ambiguous, keep it apart. A fixture where every session carries `repo_root` never
+reaches this fallback, so test sessions with a removed tree's bare `cwd`. Check the folder is at the computer's home: a
+cwd in a folder of a repository's own tree (`/code/app/.worktrees/feature/src`) has the same shape, and joining by the
+tree's name moved its Agent into an unrelated repository's section.
+
+## Approval waiting is not delivery waiting (#9762)
+
+Settings and the Sent ledger can share a localization namespace. Keep the
+permission-card waiting message separate from a pending delivery outcome;
+reusing `pending` silently replaced the approval instructions with a delivery
+badge. Exercise the pending card and the outcome badge independently.
+
+## A folded launcher must retain its identity (#10249)
+
+When replacing a launcher rail, do not promote the current launcher's models into a separate Recommended group or
+cap its rows in a second view: both hide the account behind another navigation step. Keep one disclosure per launcher,
+reuse the existing row/setup projection, and flatten search without duplicating recommended or favorite models.
+On touch screens the model-ID line may replace the usual second line; search must keep the launcher name as well,
+or identical model names from different accounts become indistinguishable. Test typed-ID picks against their named
+launcher, not only the ID, and keep failed picks out of Recent.
+
+## A lazy waiting row needs a lazy ordering boundary (#9390)
+
+Ordering an unopened tray from its shared classifier imports the age computation on the first screen even when the
+row is lazy. Keep canonical classification and counts unchanged; order the waiting list inside its existing lazy
+boundary. To-dos similarly orders only the already-classified waiting groups in its lazy page, preserving the other
+sections and counts. Check the boundary regression and every language's measured first-screen budget; do not hide
+growth with an exemption, a larger budget or unrelated catalog changes. New waiting copy stays in its own lazy namespace.
+On a clickable task row, stop propagation only for links, controls and the portalled editor. Stopping every click
+on a metadata wrapper makes its plain text a dead area: test both text-to-row selection and separate control actions.
+Copying a reminder should dismiss the editor only after success, so the phone's confirmation toast does not cover
+its footer. Keep the editor on failure, and do not discard text edited while clipboard permission was pending.
+
+## Transcript cut sizes are bytes, not characters (#9442)
+
+A page's `full_size` signals a truncated item and measures the original UTF-8 bytes; the displayed text may also
+include a truncation note. Request full text by the marker, not by subtracting character counts. If it remains cut,
+the missing character count is unknown; reserve numeric counts for clipping locally held complete text.
+
+## A stalled export page is incomplete history (#9430)
+
+When a page promised older history, an empty page or one without an older new item must stop paging and mark the export
+partial. A page outside the requested range must not overwrite collected messages. Show the incomplete warning even
+when no usable timestamp was returned; a file that stopped safely must not look complete.
+
+## Historical times need their own UTC offset (#9422)
+
+Do not format a past event with the UTC offset at page load: daylight-saving changes can shift the displayed time
+and date. Resolve the browser's local offset at the event's instant, and test both seasonal directions across midnight.
+Chart axes too (#9863): a step added to one offset-shifted start drifts an hour off midnight across a change; lay each
+day's round times out with `Date`'s local fields (`clockTicks` in `web/src/lib/machine-detail.ts`).
+
+## ZIP preview limits must check actual bytes (#9384)
+
+A central-directory size is untrusted: limiting only its declared uncompressed size still allows a small deflate
+stream to inflate far beyond the limit. Count the streamed output and cancel on overflow; also bound the directory
+range before requesting it. Exercise both with forged ZIP metadata, not only normal generated archives. A Range
+request can also receive a full 200 or a malformed 206: bound the HTTP body itself, validate the returned range,
+and test with real streamed responses (#9405).
+
+## Vite module IDs use forward slashes on Windows (#9341)
+
+`fileURLToPath` returns host-native paths, while Vite's module IDs use forward slashes. Normalize config directories
+with Vite's `normalizePath` before comparing allowlisted module IDs or removing build-machine paths from a graph.
+Keep the isolation rules strict: verify the actual public viewer build on Windows, its relative graph paths, and
+the rejection of an injected module outside the allowed graph.
+
+## Translate the full item, not the page's preview (#8650)
+
+A hub-paged answer's `text` is only a prefix until `useFullText` loads its full item. Passing that prefix to a
+translation action produced a partial translation and replaced the very control that could load the rest.
+Load through the existing full-text hook before the model request; share manual/in-flight loads and keep its
+loading/failure control readable. Use the item's stable source identity while the visible text expands, so the
+translation is not discarded as a stale result. A regression must render the real `Answer` with `full_size`,
+not only `MessageActions` around already complete text; assert the exact full payload and no spend on load failure.
+
+Reuse the existing translation module on intent rather than adding request/cache code to the first screen. Check
+owner/item/unmount both before loading the full text and after it; a module or source load can outlive the reply.
+
+Measure the normalized first-screen chunks, not a helper's standalone compressed size: a small lazy state wrapper
+can cost more than it removes. Menu-only actions and text selection can share the existing reply-controls chunk
+through `lazyOverlay` / `lazyDialog`, preserving the visible phone actions and dialog exits. List only their
+remaining eager translation keys in the startup catalog; moving code alone still ships a whole namespace's words.
+Build the touch menu's Select text action there as well as its dialog, so its label does not remain eager.
+Use `Menu.point` for a right-click position instead of creating and cleaning up a zero-sized DOM anchor.
+The fork action's label and callback belong in that same cold chunk; its opener needs only eligibility. Read the
+conversation context and filter the reply's More actions there too, rather than preparing closed-menu state.
+The side bar's clipping measurement can share it on pointer/focus intent: keep the same buttons safely below
+until it arrives, and do not publish placement for disconnected elements.
+Keep one anchor and scope for the message's overlay: opening its full context menu from an open More menu must
+replace that menu, not leave two copies with different action scopes.
+Check whole startup namespaces: an already lazy dialog (such as New main chat) can still ship all its words there.
+Keep its header and immediate feedback keys eager, and let the existing dialog loader bring the rest.
+When merging a new menu row, keep its label and callback in that cold menu too, preserving the upstream scope and
+payload. Select messages belongs last in the full menu, not the compact More menu; await the intent-loaded menu
+in its regression rather than dropping the original selection assertions.
+
+## A refused credential-mirror write must not erase the readable legacy login (#9023)
+
+Migration reads are on the startup path, so a `setItem` quota or permission failure can otherwise leave the whole app blank before any page boundary mounts. Return the already-read legacy token and its matching device id when the canonical mirror cannot be written; `storedValue` must use that same accepted fallback, never revive a legacy token beside an orphan canonical id or override a canonical empty sign-out. Re-read the canonical value after attempting migration so another tab's newer write still wins. Test token and device-id write failures separately, plus a real browser startup with synthetic storage; never clear a user's profile to make the migration succeed.
+
+## Compact buttons need their touch targets when moved into a dialog (#7446)
+
+The shared `Button` is drawn 32 px tall. Keep `touch-hit` on every dialog, file-picker and Undo action when replacing
+an older `min-h-11` button. Its pseudo-element expands the target without changing the drawn box: browser acceptance
+must check coarse-pointer hit testing and actual edge taps, rather than the button's bounding rectangle alone.
+
+## Drop targets must cancel navigation before filtering drag types or busy states (#7446)
+
+Cancel every `dragover` and `drop` default before filtering for files or a busy state: ignoring a link, text or a
+second file must not let the browser navigate away from the app. Keep the file-type and busy guards on the upload
+and drag highlight. `Skills.test.tsx` checks link/text drags without upload or highlight, and both file events while
+a ZIP preview is pending, including that the first check completes and no second check starts.
+
+## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
+
+A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta` pushes (docs/protocol/protocol.md
+"Bounded Agents lists"), so the store's `sessions[mid]` stays empty and `sessionSummaries` holds only the list's first
+page. The Machines cards and a computer's page read `sessions[mid]` and said "No agents running" / "Agent 0" for every
+computer. Read a computer's Agents the way the Agents list does (`useFullAgentSessions`, folded, without the assistant's
+conversations), and keep the older hub's pushed path working (the same hook returns the store's rows there). A count
+whose source has not been read yet, or failed, is unknown, not zero: `useFullAgentSessions().loaded` / `error` and
+`useAgentListStatus()` tell the page to say "Loading…" or "Couldn't load …" instead. Take that status from the same
+source as the count: with several assistants Overview counts from the complete list, and a status read from the paged
+list said "loaded" while the complete list was still on its way or had failed (`useScopedAgentListStatus`). A count of
+the first pages (`sessionSummaries`) is not a computer's count either while the list has more pages. Check with
+`MOCK_SESSIONS_LIST=1` and without it, with the default roster (several assistants) and `MOCK_MANAGERS=1`, and with
+`GET /api/v1/sessions` answering 500 in the browser.
+
+## A date field's change fires per typed segment; a list hidden under a narrow detail drops the focus (web audit, 2026-11-14)
+
+- `<input type="date">`, `time` and `datetime-local` fire `input` (React's `onChange`) whenever the typed segments make
+  a valid value: the "1" of a day "15" is already the 1st. A field that saves on `onChange` and disables itself while
+  saving stores the half-typed day and takes the focus away before the next digit. Save typed changes on blur or Enter
+  and a change with no key before it (the browser's picker) at once, and never disable a field mid-edit
+  (`PlanField` in `web/src/views/Todos.tsx`). A half-typed field reads `""` with `validity.badInput`: go back to the
+  saved value, do not clear it. Chrome's first Tab out of the last segment stops on the picker button. Playwright's
+  `fill` sends no keys, so a test needs real `keyboard.type` (`web/e2e/todos-keyboard-layout.mjs`).
+- A list hidden with `display: none` under a phone-width detail takes the focused row with it: the focus falls to
+  `<body>`. Move it to the detail's Back when a row opens it, and back to that row on the way back (Back, Esc, the
+  browser's Back). Chrome keeps a hidden scroller's offset but reads `scrollTop` as 0 while hidden and fires a scroll
+  event, so a scroll memory that saves on every event can store 0.
+- A count shown under one name ("Done") must come from the rule that fills the section of that name, in every
+  grouping: the header counting closed to-dos by `done_at` disagreed with the Done section (seen or 24 hours old) and
+  with a failed start the sections show open. Count a merged row's to-dos under the row's section, as the section titles
+  do, not each under its own.
+- A grouping drawn from a hub list that holds only some to-dos (the pinned directions' tree lists only open ones,
+  `server/internal/assistant/direction_tree.go`) must still place the ones it leaves out: a to-do moved out of the
+  page's Done fold vanished from 常驻 and was counted as "open, under no direction". Check every grouping for each
+  to-do state a rule change moves.
+
+## A read that only handles the expected failure loads forever (2026-11-14, workflow board)
+
+The board's switch started as "not answered yet" (`enabled: null`) and its read handled only 404; a 500 left it null,
+so `/workspace-board` and Settings showed their loaders until the next reconnect. Any state that a page draws as
+"loading" needs an exit on every failure: keep the reason next to it and draw it with Retry. The same page also read
+every 503 as "this hub has no board, update it", while the manager answers 503 `assistant_offline` while it restarts:
+tell an unsupported hub from a passing failure by the error's `code` (`not_supported`), not by its status, and offer
+Retry only for what a retry can fix. A message about the hub's version belongs on its own, without the controls of a
+page that cannot work there. The switch's module is on the first screen and its pages are lazy: exporting its read for
+their Retry renamed the first screen's imports (ja +120 B), while handing `retry` out through the hook they already
+import, and keeping the 404 as the stored failure rather than a flag of its own, kept it within a few dozen bytes of main.
+
+## A folded sidebar group kept every row mounted (web usability audit, 2026-11-14)
+
+`Collapse` keeps its children unless it is `lazy`, and the sidebar's folds were not: with 400 Agents the rows under
+folded groups stayed in the DOM, inert, about 8,800 elements that every page switch laid out again (230–310 ms long
+tasks on a 4x-throttled phone, none with 74 Agents). Sidebar folds are lazy by default now, so a test that looks for a
+folded group's rows (to check they are inert) opens the group first. Two smaller costs hid behind the big DOM: each
+group heading read its height in a layout effect (`getBoundingClientRect`), and one set a custom property on the
+scroller, which restyles everything under it before the next heading's read. Take such heights from a
+`ResizeObserver`: its first report comes after the browser's own layout and before the paint. Do not synchronously flush
+another React layout pass from that delivery: the shared group-heading observer did that and reproduced
+`ResizeObserver loop completed with undelivered notifications` in the desktop smoke. Let React batch those reports, and
+verify the real browser console, not only a jsdom test. A callback's target or timestamp alone does not identify the
+writer; use a before/after control and keep the warning in the verdict (`web/e2e/sidebar-resize-observer.mjs`, #7701).
+Measure with a production build (`vite preview`), CDP CPU throttling and a `longtask`
+observer, against the same mock with fewer sessions (`web/e2e/sidebar-many-agents.mjs`).
+
+Dropping what is not drawn has three costs to pay for. A broadcast to mounted listeners (Collapse all / Expand all)
+misses the groups that are gone, so note each broadcast and have a group take the one it missed when it mounts again
+(`src/lib/fold-all.ts`). Rows split into one wrapper per part remount when they cross a part boundary (React keys are
+per parent), losing focus to `body`: keep every row a keyed sibling under one parent and mark where parts start. And a
+lazily loaded chunk rendered by something always on screen (the sidebar) takes the whole app down when its download
+fails, since no error boundary sits above it: keep such code in the always-loaded bundle, or put a boundary with a
+plain fallback around it.
+
 ## Removing a client-only prompt includes its hooks and fixture documentation (#6570)
 
 The star toast was browser-local, but readiness refresh and successful Agent creation loaded its rule lazily.
@@ -41,6 +293,11 @@ screen 49 B over its budget. Words the live screen needs only once it is connect
 dynamically (`screen/DisplayMenu.tsx`, namespace `screen-displays`): the build makes that import wait for the rest of the
 catalog, so the first screen does not grow and nothing has to wait for it at run time. Gating ScreenView's own rendering
 on `i18nRest()` does not pass the build: the check reads which namespaces a chunk names, not when it reads them.
+
+Since #14404 the live screen is the screen-share module's page of its own (`web/src/modules/screen-share/standalone.tsx`):
+its namespaces (`screen-share-*`) are the module's catalog, loaded before its code, so they are in no first screen at all.
+What that file imports statically still runs without waiting for the rest of the catalog, so a core key it reads must be
+in the startup list; the build still names one that is not.
 
 ## A mouse event sent again comes out on whole pixels (#5729)
 
@@ -113,6 +370,14 @@ grew 9 B, but the ja count grew 255 B and `main` failed the build, with no first
 now counts imported names as one fixed string and export lists as empty ones. To check a surprising move, compare the
 number of entries in each first-screen chunk's `export{…}` between the two builds.
 
+## A chunk that can load before App takes first-screen code through App (#10226)
+
+#3962's fix (a small module of its own) does not work for a chunk that may load before App, such as the Developing
+Persona recorder's: a module both it and App import becomes a new chunk on the first screen. The To-dos view's shadow
+reads `lib/todo-triage.ts` through App's re-export instead (`view-shadow.test.ts` fails on a value import there); a direct
+import split the triage out at about 700 B. Under `npm run dev` an edit to the triage then reloads the page rather than
+refreshing it in place.
+
 ## A change's first-screen cost depends on the main it is measured on (#6348)
 
 The paged Agents list's groups measured +1,402 B for ja on one `main`, then +1,510 B, +1,396 B and +1,501 B on the
@@ -121,9 +386,21 @@ and each merge moved what it compresses against. For the same reason a lazy spli
 alone: the sections' view is about 1.5 KB minified and compressed on its own, and moving it to its own chunk took 407 B
 off. Measure the branch and `main` at the same commit, after the last merge, and write that pair beside
 `FIRST_SCREEN_BUDGET`; never carry a delta over from an earlier base, and never estimate a split from a module's own
-size. A build under its budget prints no numbers: build a scratch checkout with the constant set to 1 B, and the error
-names every language's count. While the PR waits, `main` may raise the budget for its own changes: merge it, keep its
-note, and append yours with a new pair.
+size. Every build prints each language's count (#7418; before, a build under its budget printed none, and the way to
+see them was a scratch build with the constant at 1 B). While the PR waits, `main` may raise the budget for its own
+changes: merge it, keep its note, and append yours with a new pair.
+
+## A startup namespace ships every one of its strings in every first screen (#7418)
+
+The first-screen budget had 0 B of room after weeks of raises of 11 B, 25 B and 187 B, while the startup catalog sent
+whole namespaces for a key or two: `settings` (157 keys) for the sidebar's Avatar label, `terminal-full` (46) for one
+shortcut's name, `todos` (274) for 26 kicker and stage words, and five listed namespaces that no first-screen code named
+any more. That was about 54 KB of raw Japanese the first screen never read; ja pays the most, its strings being the
+longest in bytes. Listing those keys (`settings.avatar` in `startup-namespaces.json` takes every key that begins with
+it) took 8.3 to 8.8 KB off each language, and keeping test files and e2e scripts out of Tailwind's scan 157 B more:
+their assertions and fixtures (`not.toContain("outline-white")`, `[typed:zzz]`) had been written into every page's
+stylesheet. Before raising the budget, look at what the first screen sends and never reads: per startup namespace, the
+keys the built first-screen chunks name against all of its keys, and the CSS rules only words in tests produce.
 
 ## An idle-contracted chunk's growth raises the idle budget, it cannot move to on-intent (#5386)
 
@@ -332,7 +609,7 @@ A background wake can reopen an exchange before its recap. Find the live exchang
 
 ## Optional sidebar entries need both setup and list results (#2934)
 
-A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
+A paged list can publish rows before its independent source-status request completes. Gate the optional Personal agents section on both results, not merely a loaded count, and keep its subscription mounted while hidden. An `agents` event that says the list changed (`session_ids: []`, which the hub sends when a source is added or removed, when its listing starts or stops failing, and for an extension's keyless `agentsrc.updated`) must reread source status as well as sessions in bounded mode; otherwise enabling a source leaves the entry hidden until a reload. An event naming sessions rereads only the sessions, and the status with them once it is a minute old (#7681): the status read asks every source's extension in turn, and a session's new message does not change it. Cold failures with no conversations stay hidden, while refresh errors for existing conversations retain their retry UI. Regress both result orders and live empty/setup transitions under StrictMode.
 
 ## Report evidence is separate from report prose (#2554)
 
@@ -376,6 +653,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 - `lib/viewport.ts` caches each MediaQueryList. A responsive test mock must expose a live `matches` getter (and deliver change events when testing an in-place resize), rather than capture its first value. Pin the test language explicitly: a shared Chrome's browser preferences can differ from the test driver's locale.
 - A host-owned secondary page under a connector route must opt out of the connector split-detail layout (#2412); otherwise the record ledger keeps an unrelated connector list beside it. Scope category-button assertions to the settings navigation: a secondary page's Back button can have the same label as its parent category. Legacy path aliases also need normalization on browser history events, not only on initial mount.
 - Continuous deep-link reloads hit a Vite development-module fetch failure during this check. Keep the failure record and rerun against the production build with the same mock hub; a working initial dev screenshot does not prove reload/share behavior.
+- A route change in lazy Settings can still alter the first screen. Calling `useShownOffline` with options kept its controlled-hook branches on the startup path. Match the existing offline result to the route owner in Settings. Importing the Settings path parser before the URL builder also reordered Vite's preload dependencies for other pages. Keep the parser behind the integration codec and compare the normalized production counts for each language on the same base (#17762).
 
 ## Message provenance is independent of model roles (#2125)
 
@@ -406,7 +684,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 
 ## Full-history positions are not a tail-window count (#2338)
 
-The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. If a richer independent navigation API is being developed elsewhere, keep the temporary adapter narrow and document its migration boundary rather than taking over that task.
+The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. The compact index and its per-history excerpt cache can now sit in the lazy rail chunk. Keep a selected historical window's cursors separate from the live subscription. Using the live view's last sequence for either direction can silently skip records or cause an unbounded continuity pull (#15813).
 
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
@@ -507,11 +785,19 @@ Adding Bcc to the request alone leaves Bcc-only edits lost on dismissal and Bcc-
 - Assistant conversation rows use `showState={false}` to retain their chat / pin icon and timestamp rather than the full Agent-row presentation. That must not suppress the working `StatusMark`: use the existing status token while working, restore the idle icon when work ends, and leave the timestamp and layout alone.
 - Automatic conversation groups have their own working tally; that does not cover individual recent or pinned conversations. Regress first load and live session updates for both, including pinned `/agent` chats and legacy hubs that only report `status`.
 
+## Unread marks on Persona chat rows (2026-11-23, #13425)
+
+- **A row that hides its state hides every state it does not let through**: `showState={false}` kept the chat icon in the slot, and #5870 let only the working arc back in, so an unread Persona chat under Pinned or Recent looked read on the web while the main row and the iOS and Android drawers marked it. When a row turns its state column off, list each state it must still say (working, Unread, Just finished, needs you's count) and regress each one on that row.
+- **One slot, one rank**: a lead's arc for work running under it and the lead's own state compete for the same 14 px. Decide by the list rank, as iOS's `RowStateMark` does: its own needs you, working or Unread wins; Just finished ranks after Working and gives way. Draw Unread with the predicate the row uses (`unreadShown`: a turn a usage limit stopped is drawn seen), and count with the same one, or a folded heading counts a chat its row draws read.
+- **Count what the reference tally counts, in its words**: the folded heading reuses the Agents list's `StateTally`, which counts Unread but not Just finished, and whose spoken label said "Folded agents"; a list of chats needs its own noun (`chats`), or a screen reader hears agents.
+- **A chat on screen is seen on every store update**: `set` marks each viewed chat that turns Unread seen at once (`seeViewed`), so a test of "a later reply brings the mark back" must close the chat's view first; with it open, the reply is seen as it lands, as it should be. In the browser, the open chat's row is the current row, medium weight like every current row: check a read title's weight after leaving the chat.
+
 ## Knowledge counts change pill wrapping (2026-11-06, #4047)
 
 - **Rendering categories before counts still shifts the first screen**: on a narrow screen, one extra digit in the selected category can wrap the final pill onto another line. Do not guess digit width or fix the width of loaded pills. Without a cached list, show only the existing `Loading` below search, then mount filters and content together when the list arrives. Keep the loading notice in that branch too, so newly inserted filters cannot push it down (following #4029's one-time display approach).
 - **Loading gates distinguish empty lists from failures**: an empty list object is loaded and cached data can display immediately; a first-load failure must still allow category switching or retry. Search is independent of category lists and must not be blocked by this gate.
 - **Validate real layout**: jsdom checks timing only. Measure wrapping with Playwright + mock hub at width 390, using `layout-shift` over 4 seconds after navigation, excluding `hadRecentInput`, with 3 repetitions per group. Also delay list responses and capture light / dark loading and loaded states. Pin time and animation frames for before / after comparisons, checking loaded pixels rather than mistaking timers or animation for layout changes.
+- **Later (2026-11-14): the count left the pills**. Holding the pills back until the count arrived kept the first paint still, but picking another kind still changed the selected pill's width, so the row re-wrapped and every pill after it moved, and an uncached kind took the whole row away while it loaded. The pills now carry no count (each section under them says how many it holds), so they paint at once and never move; `web/e2e/knowledge-kind-chips.mjs` measures every pill's box while each picked kind's list read is held (a mock answers in milliseconds, so without the hold the loading state is never measured) and once the list is drawn. The iOS app still shows the count on its selected pill. A width that depends on the selection is the bug: remove what varies before reaching for reserved widths.
 
 ### Confirmed facts belong to the requested entry (#1341)
 
@@ -554,6 +840,7 @@ An auth status push rerenders the sign-in group and replaces inline completion c
 ## Provider probes belong to an editor opening and its connection (#1314)
 
 - Settings keeps the provider wizard mounted while closed. Fence discovery and connection-test success, failure and busy cleanup by an editor generation and the inputs used by the request, including headers and protocol. Comparing values only at completion misses close/reopen and input changes followed by restoration. Invalidate at commit before promise continuations can affect a replacement editor, and release retired busy indicators so the current editor can retry. Discovery still merges through a functional form update to preserve model edits made while waiting; model selection is not a connection change. Regress with the actual component and deferred HTTP responses, including the saved payload and a fresh request still pending when the retired request settles.
+- An import POST keeps running when its dialog closes or changes computer/alias (#8230). Retire that view's close and inline-error callbacks, while preserving the completed import's result notice and the mounted provider list's refresh. Keep the synchronous pending guard until the mutation settles, including across close/reopen; releasing it with the view would admit a duplicate write. A failure after leaving that view uses the existing error toast and names the original computer, so it neither disappears nor replaces the current preview's error.
 
 ## About me saves outlive the settings page (#1338)
 
@@ -715,11 +1002,16 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - **Usage totals belong to the complete report scope** (#1567): bind accepted data and request status to the machine, range, model and launcher. Keep selector catalogs separately while another scope loads or fails; they are navigation options, not evidence of that scope's totals. Show current failures with retry, and label retained same-scope data as potentially stale. A scope cleanup alone does not order overlapping polls: ignore superseded success, error, unsupported and completion handlers even when transport cancellation arrives late. Exercise the actual component through the REST client with deferred synthetic fetch responses, including machine changes and empty launcher encoding.
 
 - **A `seen` the page only sends is lost without a word** (#6493): the web sent `{"type":"seen"}` on open and drew whatever the hub pushed next. `send` drops the message while the socket is still connecting (opening a chat link, a reload, a tab coming back after its socket went quiet), a half-open socket swallows it, and the next list still says Unread: the green dot stays after reading. Mark it seen locally at once and keep the mark until the hub's own rows say it was recorded (a later `seen_at`), with an HTTP retry after 5 s and a resend after hello (`lib/seen-outbox.ts`, the app's `SeenOutbox`). Hold the mark in the store's `set` so every way rows come in (pushes, paged-list pages, HTTP answers) is drawn seen, and hold it in `SessionRow` too: the paged sidebar draws the list's own rows, not the store's. The mock hub always takes the socket's `seen` and pushes back at once, so a plain mock run does not show this; rewrite or drop frames with `page.routeWebSocket` to check it.
+- **A mark the hub recorded still holds the lists that have not read since** (#12766): the page reads several lists of the same agents, each on its own hints and at most once in two seconds (the chat's lookup, the store's list, the sidebar's root list, a filtered list, the groups' counts). Letting a seen mark go as soon as the first of them showed `seen_at` recorded put the sidebar's row, still the one read before the look, back to green until its own list read: up to two seconds on a fleet whose working agents hint all the time. Keep the recorded mark for a while (`SEEN_SETTLE_MS`), held only against rows that still carry the old `seen_at`, and drop it at once when a row shows a new turn, work or a question. The plain mock hides it (every list reads at once): bump a working agent every 300 ms (`/mock/bump?what=last`) so each list reads on its own window.
+- **Correct a count only against the rows of the same read** (#12766): the hub's Unread counts still count an agent the page holds seen until a read after the record. Subtract a held agent only when it is among rows that came in the same answer as those counts (`sessions_page_counts`: the root list's or a filtered list's own page, published in one `SessionList` update since then; without the feature the hub's counts are left as they are); a separate counts read (a grouping while Lark-bot sessions are hidden) against another list's older rows took the agent off twice, one too few for up to two seconds, and one newer row against older counts put it back for a moment. Counts read on their own are read on every hint and follow the hub within one round trip.
 - **Do not compare the page's own `seen_at` with the hub's**: "Mark all as seen" writes a local `seen_at` into its copy, which would read as "recorded" and drop the mark before the hub ever had it. Remember the value written and ignore it.
+- **A folded unread dot can belong to a side session**: before debugging the seen outbox, compare the parent's own `state` and `seen_at` with `children.sides_unread`. A roots page can return an idle parent in its Unread filter, and the sidebar can draw its folded dot next to the parent's own completion line. Read the folded children with `parent_session_id` to find the unread key. Viewing the parent records only the parent's key; a side is seen when its own chat is viewed. Since #13496 the parent's row names the unread side and opens it, so the user can tell the two cases apart too; a row whose dot stays with no such line is the bug to chase.
+- **A row that reads rows for itself keeps reading until the hub agrees** (#13496): the sidebar's parent row reads its side rows to name an unread one, and they are what clears its dot at once when that side is seen. Mounting the reader only while the row looks Unread would drop those rows the moment they clear it, and the row would fall back to the hub's older `sides_unread` for a round trip (green again). Keep it on the hub's rollup (or the held rows) instead, and draw nothing while it agrees with the page.
 - **Mark a turn that ends while the chat is shown in the same update that brings it**: a React effect on the session's state runs after the green frame is drawn (and was the only path that re-marked). The store knows which chats are on screen (`viewSession`) and marks them inside `set` while the tab is visible.
 
 - A paging fallback must change its data source as well as its component (#6362). `useAgentSessions` exposes only the bounded window on paging hubs, and those hubs suppress full socket snapshots. Pins and groups require a query-free complete `/sessions` read, refreshed by invalidation hints and scoped to the fallback's lifetime. Test a pin beyond the first page without injecting a full socket list. Bulk actions must also accept displayed rows absent from the detail cache: iterating only cached rows silently skips them. Overlay changed local details without replacing newer HTTP rows with unchanged old cache entries.
 - Serializing full-list reads is not throttling (#6362): working agents can continuously invalidate display data, producing back-to-back complete downloads. Enforce a completion-based cooldown with one trailing read at a fixed deadline; preserve immediate reconnects and clear scheduled reads on reset/unmount.
+- A throttle that lets "a read is out" skip its window does nothing on a busy fleet (#9215): the next hint always lands mid-read, so `SessionList` read back to back and `loading` never cleared. Every Load more, infinite scroll and auto-load waits for `!loading`, so the button vanished under the pointer. Every hint waits for a window counted from when the last read came back, a page someone asked for goes before a queued refresh, and Load more hides only while its own page is out (`loadingMore`), never for a background refresh. The mock hub only shows this with `/mock/delay` plus `/mock/bump?what=rev` every few hundred ms.
 - Treat loading counts as unknown, not zero (#6362). Clearing scoped counts before a refresh, or copying a temporary null root count during rebaseline, removes state chips and changes list height. Keep the last successful counts until a valid replacement arrives, including real zero counts; test deferred responses after root-count changes as well as filter changes.
 
 - Never nest buttons in link rows: make row ⋯ a sibling of `<a>`, absolutely positioned with `group-hover/row:flex` (Tailwind v4 `group-hover` already works only under `@media (hover:hover)`). Row-end hints / badges yield on hover with
@@ -731,6 +1023,8 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - **`memo` on a row holds only if a refetch keeps unchanged objects** (#2294): a push or poll that reads JSON again gives every row a new prop, so `memo` alone still draws the whole list. Keep the old object of each item that reads the same (`sameValue` in `lib/stable-lines.ts`; `lib/lark-reuse.ts`, `LarkChatsStore.refresh`, `BoardModel.refresh`), keep the array itself when nothing changed, and notify no one for a patch that changes nothing. A label the row derives from the clock (`shortTime`, `clock`) is then worked out by the list and passed as a string, or a kept row still says 10:00 after midnight; where the list itself skips the render (an unchanged page) or rows sit in other components (threads, dialogs), the rows read a context that changes with the day (`Today` in `LarkThread.tsx`).
 - A roughly 280 px sidebar wraps four filter pills (dots and counts) with `px-2 gap-1`; tighten to `px-[7px] gap-0.5`.
 - Reference-line labels on charts ("N cores" on load) get crossed by data lines when drawn underneath. Draw after the lines, with a page-background outline (`paint-order: stroke`).
+- **A dialog opened from inside a clickable card gets the card's clicks** (#8037): `Dialog` portals into `<body>`, but React still bubbles a portal's events through the component tree, so a click on a button in an alert sheet rendered inside a Machines card reached the card's `onClick`, and `openFromCard`'s `currentTarget.contains(target)` check (a DOM check) did not see the button as the card's own: the page navigated away. Render such a dialog once at the page level, outside every card, and open it through a stable callback (which also keeps the memoized cards' props stable).
+- **Whatever a page computes for every card on each render counts as a card render in `MachinesCardMemo.test.tsx`** (#8037): the cards' order needs each computer's alerts, and an alert model that called `machineDeployment` made a sessions push "render" every card. Read the two deployment booleans the order needs directly, or memoize per computer.
 - Machine details has three monitoring cells per row; at 390 width a subtitle gets about 94 px, while "56.5 GB / 64.0 GB" takes 92 px (2026-11-06, #3637). Headless Chrome at 390 just fits and hides truncation in screenshots; 15 px narrower (desktop scrollbar), or a slightly wider font, cuts the total. Measure natural text width (`Range.getBoundingClientRect`) against cell `clientWidth`, not just 390-wide screenshots. Show a shared unit once (`usedOfTotal`, "56.5 / 64.0 GB", 74 px).
 
 ### Terminal (xterm.js)
@@ -774,6 +1068,10 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Debounced drafts must flush pending writes on composer unmount, session change, and `pagehide` (#4591). Cleanup with only `clearTimeout` loses final text when switching within 250 milliseconds (chat remounts by session `key`). On the render changing `draftKey`, text is still old but key is new; write only when keys match. Clearing on send also clears the pending write.
 - Reproduce slow delivery / failure locally with mock hub `MOCK_SEND_DELAY_MS=<milliseconds>`, `MOCK_SEND_FAIL=1`.
 - Restoration must check whether the composer still belongs to that session (#4551): switching away during send remounts chat, making old `setDraft` ineffective after the saved draft was deleted; changing only `draftKey` instead puts text into another session. Restore through `sendDraft(key, { type: "unsent" })`: use that session's open composer, otherwise saved draft. Images, context, and references already followed this separation; text was missed.
+- Image previews and their original object URLs belong to the draft store across composer unmounts (#17179). A
+  confirmed refusal puts the held URLs back into the sending conversation. The IndexedDB layer saves original
+  image bytes so an edited draft can make a new source URL on reload. Fence pending reads and writes when the
+  draft or credentials change.
 
 ## Smooth, stable expansion / collapse (2026-11-04, #1124)
 
@@ -914,6 +1212,7 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 ## Composer Enter yields to the IME first (2026-11-05, #2733)
 
 - **Every composer `onKeyDown` handling Enter / Esc must start with `if (composing(e.nativeEvent)) return;`** (`lib/send-history.ts`, checks `isComposing || keyCode === 229`). Browsers still deliver Enter used to confirm Japanese conversion or commit English through Pinyin. Without a composition check, incomplete text creates to-dos, saves titles, or adds list items. Esc likewise cancels composition and closes the whole row. Test in jsdom with `new KeyboardEvent("keydown", { key: "Enter", isComposing: true })` (`views/ime-enter.test.tsx`).
+- **macOS Safari and WKWebView fire `compositionend` just before the committing Enter's `keydown`**, which then has `isComposing` false (#11237). A field whose Enter sends or picks a row tracks the composition itself: `useComposition` (`lib/ime.ts`) spreads `onCompositionStart` / `onCompositionEnd` on the field and `busy(e.nativeEvent)` also treats a key within `COMPOSITION_TAIL_MS` of the end as the input method's. Native capture listeners use `imeKey` with their own state. Menus that a typed `/` or `@` opens wait for the composition to end, and the chat composer is not collapsed to measure its height mid-composition. Test by dispatching `compositionstart` / `compositionend` and then a plain `keydown` Enter.
 
 ## Pushes are best-effort; pages need their own fallback (2026-11-05, #3139)
 
@@ -957,7 +1256,7 @@ Writes without items (titles, modes) also advance `updated_at`, returning empty 
 ## Wrap horizontal rows when they do not fit; do not rely on horizontal scrolling (#3594)
 
 Scrollbars are globally hidden, and mouse wheels scroll vertically only. Overflowing horizontal rows (Settings categories) hide later items from mouse users, who cannot scroll to them. Wrap the row (button text stays single-line) or use a menu.
-If the header grows, elements below it (App.tsx connection-status pill) cannot assume 56px; Settings writes actual header height to `<main>` `--page-header`.
+Nothing may float under a page's header assuming its height: the connection-status pill once sat at `--page-header` (Settings wrote its taller header's height there) and still covered fields and titles, so it is now a strip above the page that pushes it down (`App.tsx`, web usability audit item 87).
 
 ## Do not fade answers in again after remounting (2026-11-06, #4107)
 
@@ -1121,6 +1420,19 @@ own and reloads when idle (docs/web/web.md "New versions"). When verifying a web
 before it, not only a fresh load.
 ## Workspace identity outlives its Agents
 
+An optional lazy panel needs a local error boundary at every mount (#7100).
+Settings' boundary did not protect the Todo detail: a naming import failure
+reached the route boundary and unmounted its dirty title and notes. Exercise the
+real Todo lifecycle with the import pending, reject it after both fields are
+dirty, and check that the same editors can still save. Test actual chunk failure
+and Reload in a browser too; saved-field recovery after a full reload is distinct
+from retaining unsaved drafts while the local error is displayed.
+
+Naming-preview retries must reconcile selected repository IDs after reloading task associations (#7100). Keeping a
+draft does not mean keeping IDs for removed repositories: an invisible stale ID made every retry fail even after
+reloading. Intersect the selection with the fetched associations, preserve unchecked choices, and leave newly added
+repositories unselected. Verify the request after a real association removal, not only the rendered checkbox list.
+
 An Agent collection cannot serve as a workspace inventory: empty ancestors disappear, and pinning or filtering can remove the only row carrying a parent edge. Keep discovery independent of the board and count actual Agents separately from catalog containers. Bind actions to credential generation, manager, computer, host and runtime workspace ID; matching paths do not grant ownership. A combined browser fixture must stamp its sessions and discovery with the same manager, or it correctly exercises isolation instead of navigation.
 
 The current assistant and the roster's default are different scopes. Workspace discovery and management entry points follow `shownManager`, while an item without a manager still belongs to `defaultManager`. A choice change must cancel reads and invalidate deletion previews immediately, even if the user switches back before a response arrives; subscribing only to changes of the roster's default misses that transition.
@@ -1146,6 +1458,10 @@ same owner, manager, host and workspace safety checks.
 A workspace row has separate disclosure, selection and action controls. When merging shared sidebar fold timing, keep that structure and apply `sidebarFoldMotion` to its disclosure chevron and `sidebarFold` to the matching `Collapse`. Choosing either side wholesale drops either workspace controls or the shared timing; child-workspace folds need the same motion contract.
 
 The first screen also counts startup translations. Keep generic request-owner and uncertain-creation errors in the existing worktree catalog; load the advanced composer catalog with the composer. A pair of eager error labels should not make every advanced-field description part of the first screen.
+
+## Split a sidebar summary from a lazy message index (#12038)
+
+A compact index shared by the sidebar and every message can put the message menu's identity map and per-message subscriptions on the first screen even when its writes are lazy. Give the sidebar a small count/access store and let the lazy message controls own the full index. Do not remove read-only markers or duplicate request logic to save bytes. Measure the production bundle: merely moving translation keys or splitting type files may add bytes instead of reducing them.
 
 ## Archive refusals must roll back optimistic removal (#4277)
 
@@ -1202,3 +1518,143 @@ px, while `offsetHeight` and the computed height say 44. Reduced motion only sho
 frame is still drawn. Wait for the panel's animations before measuring:
 `await dialog.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))`
 (`web/e2e/standing-authorizations.mjs`).
+
+## A focus trap that lists only controls misses Chrome's focusable scrollers
+
+Chrome lets the keyboard focus a scrolling element with no focusable child of its own (the shortcut help's list). A
+modal's Tab trap that only knows the controls from `focusables()` sees the focus "outside" its list there and jumps back
+to the first control, so the controls after the scroller are never reached by Tab. Decide from where the focus is in
+the document instead: inside the modal but on no listed control, let the browser's order go on and wrap only past either
+end (`trapTabIn` in `web/src/ui/overlay.ts`). Check a trap with Tab in a real browser, not only in jsdom, which has no such
+focus stops.
+
+## Uppercase label styles rewrite names
+
+A heading styled as a label (`uppercase tracking-[0.06em]`) also capitalizes whatever is put in it. A menu header or a
+palette section that holds a space, project or computer name then shows "weather" as "WEATHER", a name the user never
+typed. Give those headings their text as written (`Menu`'s `headerAsWritten`, the palette's `sectionAsWritten`) and
+keep the label style for label words.
+
+## A reload another tab asks for waits for a calm page
+
+A `storage` listener that reloads the page (a language picked in another tab) runs whatever the page holds: a half-typed
+dialog or field is lost, and a page with a `beforeunload` guard pops a leave-page prompt from a background tab. Reuse
+the calm test a new build waits for (`mayReload(pageCalm())` in `web/src/lib/new-version.ts`: no draft, no open dialog or
+menu, the page hidden or left alone) and offer the reload in a toast meanwhile (`web/src/lib/language-sync.ts`). Its
+words come from the catalog's rest, which `main.tsx`'s own imports do not wait for: wait for `i18nRest()` before `t()`.
+
+## Testing Web Push in Playwright needs a real profile (2026-11-14, #7459)
+
+- Chrome has no push messaging in an incognito-like context, and every `browser.newContext()` is one: `pushManager.subscribe` fails with "AbortError: Registration failed - permission denied" whatever permissions are granted, headless or not. `chromium.launchPersistentContext(<temp dir>)` gives a real profile, where headless Chrome subscribes at FCM and receives pushes; drop `--disable-background-networking` from Playwright's default switches (`ignoreDefaultArgs`), which push needs.
+- A push can be handed to the service worker without a push service: DevTools' `ServiceWorker.deliverPushMessage` with the registration id from `ServiceWorker.workerRegistrationUpdated` (`web/e2e/web-push.mjs`).
+- FCM now and then answers 410 for a subscription a fresh headless profile made moments before; subscribing again works. A live check retries once that way instead of failing.
+- Vite's dev server registers no service worker (`lib/pwa.ts`): anything that depends on it is checked against the built app under `vite preview`, which keeps the dev server's `/api` proxy.
+
+## An IntersectionObserver says nothing about a jump across its view (audit item 51)
+
+An observer reports a target only when it crosses a threshold. A mark that goes from below a scroller's view to above it
+in one frame (a long scroll, `scrollTop` set by script, a reveal) is "not intersecting" both times, so no entry comes and
+code that tells "above" from "below" by `boundingClientRect.top < rootBounds.top` keeps the old answer. When only "above
+the view" matters, open the view far below the scroller (`rootMargin: "0px 0px 1000000px 0px"`): a mark is then either
+in it or above it, and every change between the two is reported (`watchPin` in `web/src/views/SidebarSection.tsx`, the
+sidebar's pinned headings). Check such code with a jump, not only with a scroll a few pixels at a time.
+
+## An uncertain send must keep the computer's reason, not a generic "not sure" (#8975)
+
+`failureText` turned every `delivered: unknown` into "Not sure it arrived. Check the chat", under the failed bubble's
+"Not sent:" prefix, and **Check** could only find the same unknown receipt. A message a Claude desktop session held for
+approval (bypass permissions mode holds Persona's peer messages) read as "Not sent: not sure it arrived" forever, and the
+owner retyped it on the computer. Keep the node's code on the entry and word the bubble from it (`entryReason`, also for
+entries kept from before), draw an uncertain one as waiting (caution color, no "Not sent"), and make a Check that finds
+nothing new say so. The node tells held from merely unconfirmed by the session's permission mode (`peer_held`).
+
+- Keep delivery receipts on the synchronous send path when deferring optional failure UI. The kept-message renderer and its retry/delete actions can load together, while receipt validation and row reconciliation stay immediate. Put the deferred row under a local error boundary and show the existing user bubble while it loads; verify that a failed import leaves the composer and its draft mounted. Keep words used only by deferred dialogs in the full client catalog: the existing lazy-import wait loads it before rendering. The startup literal-key guard and normal app/public build must still pass without changing the budget or counter. Startup selectors are prefixes: rewind.editing also selects rewind.editing_hint, so do not list both.
+
+### Flat work traces keep expansion separate from execution (#10247)
+
+Changing a live action group's header must not change its identity: search and jump-to-step open those keys, and folded history may replace the first visible item. Close a superseded run inside an already inspected trace, preserve explicit reopen/jump choices, and keep the outer summary's live override separate so completion still collapses it. Count action kinds from the complete group, not the progressive rendering budget; otherwise headers change as idle batches mount. Preview edits only in the current run, while every edit row still opens the complete changes view.
+
+## Filter history after folding, and reconcile search snapshots (#10240)
+
+A stopped parent can own a working child or a pending side request. Fold the complete sidebar rows before selecting non-running history, or the parent disappears from live work and its children become duplicate history rows. A frozen content-search result can also outlive Resume or deletion: use the current complete row for its identity and drop identities removed from a loaded snapshot. Compute day headings and counts after all filters, with local calendar fields rather than UTC date substrings.
+
+## A terminal menu must own focus before taking typing keys (#10239)
+
+An open Menu listens in the window's capture phase. Merely hiding pane controls from session rows does not make its
+N, I and Backspace accelerators safe: a program or a field can regain focus while the menu is still open. The terminal
+toolbar opts into Menu's focus scope, accepts keys only from its own trigger or menu levels, and explicitly focuses the
+trigger when opening. Check a real xterm textarea and a non-editable element as well as ordinary search input. Raw
+pane addresses also need to resolve a listed Agent before closing, or they would fall back to a shell confirmation
+and lose the busy-Agent warning.
+
+## Local font preferences (#10243)
+
+A stylesheet's normal custom property loses to a theme's inline value. An explicit font preference needs precedence while keeping the inline default intact for reset and fallback. Do not replace the theme's token in place. Keep before-paint validation and runtime validation contract-tested, quote a custom family as one CSS string, and treat FontFaceSet checks as advisory: they cannot reliably establish whether every installed family exists.
+
+Full UI retains a machine's xterm feed between surfaces. Reading font family only in `mount()` misses a newly opened surface that reuses that feed. Refresh its family on attachment, preserve font size, and guard asynchronous local CJK loading against a later family choice.
+
+## Deep tree rows need space for their counts (#10477)
+
+A shrinking file name cannot protect an end count when the row itself has unbounded indentation padding. Put the indentation and icon inside the name's shrinkable, clipped region; keep the count outside it with no wrapping. Bound deep indentation to a share of that region so the file name still has room for an ellipsis. Measure bounds against the containing panel, not the viewport, and keep the requested width separate from its temporary fitted width. Verify deep rows at minimum width in a real browser: jsdom cannot detect a clipped minus sign.
+
+### A local preference moving to shared settings (#10241)
+
+A read-then-write migration can overwrite a choice another browser just saved.
+Use an insert-if-absent at the database's unique key, not a service mutex or an
+unconditional PUT after a GET. Return the current value even when migration loses.
+Keep the legacy key on read/write failure and guard delayed reads with a save and
+credential generation. Filtering must consume the acknowledged shared value in
+both complete and paged lists before grouping/counts; a quick filter must never
+turn the display preference back on as a side effect.
+
+## Live turn clock ownership stays on the live line (#12446)
+
+A foreground dock timer flag in `ChatContext` invalidates every historical exchange when a turn starts or ends,
+even through memoized rows. Carry it as a prop only on live transcript lines (including live children of an opened
+background round). Compare message-action renders for starting and ending separately against different history
+lengths, and retain the single-timer tests for Agent and Persona chats.
+
+## Same-address history replacements need a route snapshot change (#12055)
+
+`history.replaceState` can change a drill-down's origin while leaving its URL unchanged. Calling the router's listeners is
+not enough when `useRoute` snapshots only `location.pathname + location.search`: React sees the same snapshot and keeps the
+old sidebar highlight. Snapshot a router revision that advances on every actual navigation, including same-address replace,
+and test the visible row as well as the cleared `handoff` state. A component that copied that origin into `useState` still
+keeps the old way-back strip, so read the current entry when the revision changes. Keep an explicit sidebar reselection as
+a replace, not a push, so it cannot add a duplicate history entry.
+
+- A standalone Vite component screenshot fixture still needs the production language-catalog and page-token plugins, plus the text-scale PostCSS transform. Loading the raw locale metadata as a catalog fails before React renders. Initialize localization before importing the component and capture browser page errors so a missing table reports its initialization error instead of only a selector timeout.
+
+## Two projections of one tree need one flat rule (#13454)
+
+By repo builds a repository's rows two ways: from the hosts' workspace catalog, and from sessions alone where no host
+lists the place. The session-only projection drew a lone main checkout flat (`showsWorktreeLevel`), but a catalog
+workspace always kept its level, so a folder with a herdr workspace read `notes › notes › Agents` while the same folder
+without one read `notes › Agents`; every Agent row under it then ended with `<repository> › <tree>`, a third copy of
+the headings' names. Give both projections the same rule: a level that only repeats its heading's name is left out, and
+the heading takes the row's marks and menu. A host that does not say which workspace is the main checkout (herdr has no
+`is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
+order the tree: actions keep reading what the host said. Guess only for a host that names no project: a desktop app's
+project lists each of its folders as its own `project_path`, so the section's first folder wore the home mark (#14497).
+
+## Keep a native select's label separate from its choices (#15518)
+
+Use a label linked by ID, with the select beside it. When a label wraps the native select, browser label lookup can
+include the option text in the label. Check the label in a real browser and attach any inherited-policy hint with
+`aria-describedby` so it stays available without changing the control's name.
+
+## Resolve Integrations support for the owning assistant (#17762)
+
+The roster announces the projection per assistant. Wait for that credential's roster before selecting the catalog
+reader. A failed projection read stays with its assistant and can be retried. A connector referenced by a detail
+section is loaded for that owner even when the sidebar shows another assistant with an identically named connector.
+
+## A cached first screen is not evidence of an outcome (#16286)
+
+The chat draws its cached page at once and reads the hub's newest page behind it (`useTranscript`, `firstRead`). The
+cache can be older than the last turn's reply, so anything that judges an outcome from it is a guess. "No response
+returned" with Retry was drawn from the cache. While a stalled hub held the read (#16214), each reload showed it again,
+and Retry sent the question a second time although the reply was in the transcript. Draw verdicts and offer actions that
+act on them only once the page holds the newest read, `firstRead` without an `error` (`chatLines` `stale`). A failed
+read keeps its "Refresh failed" pill, which reloads and sends nothing. Test with a cache that lacks the reply and a held
+read (`sync/fake-hub.ts` `hold`), not with a mocked transcript.

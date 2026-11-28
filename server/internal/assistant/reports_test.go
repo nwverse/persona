@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,15 +19,19 @@ const testReportDelay = 50 * time.Millisecond
 
 // reportService is a task service whose Feishu bot is paired, with reports on (or off) and the execution steps on (the
 // card as it was before #3218), recording the posts.
-func reportService(t *testing.T, on bool) (*Service, *fakeHub, func() []string) {
+func reportService(t *testing.T, on bool, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true})
+	return reportServiceWith(t, FeishuFeatures{Main: true, Cards: true, Reports: on, ReportSteps: true}, stores...)
 }
 
 // reportServiceWith is reportService with the bot's switches as given.
-func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, func() []string) {
+func reportServiceWith(t *testing.T, feats FeishuFeatures, stores ...Store) (*Service, *fakeHub, func() []string) {
 	t.Helper()
-	s, f := newTaskService(t)
+	var st Store
+	if len(stores) > 0 {
+		st = stores[0]
+	}
+	s, f := newTaskServiceOn(t, st)
 	s.reports.mu.Lock()
 	s.reports.delay = testReportDelay
 	s.reports.mu.Unlock()
@@ -55,14 +61,17 @@ func reportServiceWith(t *testing.T, feats FeishuFeatures) (*Service, *fakeHub, 
 // A task's turn that ends with a merged PR is one card in the chat: the task, its stage, what was said, links to the
 // task's page, the PR and the agent; never a bare id. The todo carries the stage and the PR for the apps.
 func TestTaskDoneIsReportedInFeishu(t *testing.T) {
-	s, f, posts := reportService(t, true)
+	needsLarkLayer(t)
+	s, f, posts := reportService(t, true, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
+		"fix/login", "fix/login", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "修好了，https://github.com/o/r/pull/901 已合并", 0)
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
 	card := posts()[0]
 	for _, want := range []string{"修登录崩溃", "✅开发", "🔵**合入**", "⚪部署", "已合并",
-		"https://hub.example.com/todos?id=" + todo.ID, "https://github.com/o/r/pull/901", "https://hub.example.com/s/box/s1"} {
+		"https://hub.example.com/todos/" + todo.ID, "https://github.com/o/r/pull/901", "https://hub.example.com/s/box/s1"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card lacks %q:\n%s", want, card)
 		}
@@ -79,6 +88,7 @@ func TestTaskDoneIsReportedInFeishu(t *testing.T) {
 // A chart in the Agent's answer (persona-card, #3140) is drawn on the report card as its numbers, never cut down to
 // the title alone: the owner reads this card in Lark (#4093).
 func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
@@ -100,6 +110,7 @@ func TestTaskReportDrawsAChartAsNumbers(t *testing.T) {
 // Changes within the delay are one card, the decision on top with its own answerable card; with reports off nothing
 // is posted.
 func TestTaskReportsMergeAndPutDecisionsFirst(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportService(t, true)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusBlocked, "", 1)
@@ -149,10 +160,112 @@ func TestStageOf(t *testing.T) {
 			t.Errorf("stageOf(%q) = %q, want %q", text, got, want)
 		}
 	}
-	if got := stageBar("zh-Hans", ""); strings.Contains(got, "✅") || strings.Contains(got, "🔵") {
+	if got := stageBar("zh-Hans", "", false); strings.Contains(got, "✅") || strings.Contains(got, "🔵") {
 		t.Errorf("no stage: %s", got)
 	}
+	if got := stageBar("zh-Hans", "", true); strings.Contains(got, "✅") || strings.Contains(got, "完成") {
+		t.Errorf("no stage, done: %s", got) // nothing reached: the plain strip, never a Done of nothing
+	}
+	// Done after the steps taken (#11590): no current step, nothing claimed past Develop.
+	if got, want := stageBar("en", "develop", true), "✅Plan → ✅Build → ✅**Done**"; got != want {
+		t.Errorf("done at develop = %s, want %s", got, want)
+	}
+	if got := stageBar("en", "develop", false); !strings.Contains(got, "🔵**Build**") || !strings.Contains(got, "⚪Verified") {
+		t.Errorf("open at develop = %s", got)
+	}
 	_ = context.Background
+}
+
+func TestStageOfSelectsOnlyAnUnambiguousLegacyPR(t *testing.T) {
+	const delivery = "https://github.com/example/project/pull/12"
+	const unrelated = "https://github.com/example/project/pull/13"
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"one distinct PR", delivery + "\n" + delivery + "#discussion_r123", delivery},
+		{"multiple prose PRs", delivery + "\n" + unrelated, ""},
+		{"explicit closeout", delivery + "\n<closeout status=\"done\">\nartifact: pr " + unrelated + "\nartifact: url " + delivery + "\n</closeout>", unrelated},
+		{"closeout without a PR", unrelated + "\n" + researchNoPRCloseout, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, got := stageOf(tc.text); got != tc.want {
+				t.Fatalf("stage PR = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdvanceTaskReplyPreservesDeliveryBinding(t *testing.T) {
+	const delivery = "https://github.com/example/project/pull/12"
+	const english = "https://github.com/example/project/pull/13"
+	const chinese = "https://github.com/example/project/pull/14"
+	const replacement = "https://github.com/example/project/pull/15"
+	s, todo, _ := linkRoleTask(t)
+	ctx := t.Context()
+	store := s.store().(todoRepositoryImportStore)
+	if _, _, err := store.ImportTodoRepositoryLinks(ctx, todo.ID, []string{delivery}, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	// A repository link alone is enough to disable prose-based delivery extraction.
+	s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english)
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("prose assigned a stage PR despite a repository binding: %q", got)
+	}
+	// A structured closeout can explicitly set the primary PR. The following reports use a stale
+	// snapshot so the stored PR must win even if the caller has not seen it.
+	a := todo.Agents[0]
+	f := s.hub.(*fakeHub)
+	deliveryText := "<closeout status=\"done\">\nartifact: pr " + delivery + "\n</closeout>"
+	deliveryReply := artifactReportProof(f, todo, deliveryText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, deliveryText, deliveryReply.TS)
+	for _, enabled := range []bool{true, false} {
+		setSettings(t, s, func(v *Settings) { v.TodosV2 = &enabled })
+		s.advanceTaskReply(ctx, todo, "", "", "Checked for overlap with "+english+"\n与 "+chinese+" 无重叠。") // i18n-ignore: task report fixture
+		s.advanceTaskReply(ctx, todo, "", "", "Related work: "+delivery)
+		s.advanceTaskReply(ctx, todo, "", "", "Checked no overlap with PR #16")
+		if got := todoNow(s, todo.ID); got.PRURL != delivery || len(got.PRs) != 0 {
+			t.Fatalf("todos_v2=%v: stored PR = %q, earlier PRs = %v", enabled, got.PRURL, got.PRs)
+		}
+	}
+	replacementText := "Checked " + english + "\n<closeout status=\"done\">\nartifact: pr " + replacement + "\nartifact: url " + chinese + "\n</closeout>"
+	replacementReply := artifactReportProof(f, todo, replacementText, replacement)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, replacementText, replacementReply.TS)
+	if got := todoNow(s, todo.ID).PRURL; got != replacement {
+		t.Fatalf("explicit replacement PR = %q, want %q", got, replacement)
+	}
+	roles := linkRoles(t, s, todo.ID)
+	for u, want := range map[string]string{
+		delivery: repository.LinkRoleDelivery, replacement: repository.LinkRoleDelivery,
+		english: repository.LinkRoleReference, chinese: repository.LinkRoleReference,
+	} {
+		if roles[u] != want {
+			t.Errorf("role of %s = %q, want %q", u, roles[u], want)
+		}
+	}
+}
+
+func TestAdvanceTaskReplyLegacyDeliveryAfterReferences(t *testing.T) {
+	const reference = "https://github.com/example/project/pull/12"
+	const other = "https://github.com/example/project/pull/13"
+	const delivery = "https://github.com/example/project/pull/14"
+	s, todo, _ := linkRoleTask(t)
+	ctx := t.Context()
+	s.advanceTaskReply(ctx, todo, "", "", reference+" and "+other)
+	s.advanceTaskReply(ctx, todo, "", "", reference)
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("prose selected a saved reference as the PR: %q", got)
+	}
+	a := todo.Agents[0]
+	openText := "Opened " + delivery
+	openReply := artifactReportProof(s.hub.(*fakeHub), todo, openText, delivery)
+	s.advanceTaskReplyAt(ctx, todo, a.MachineID, a.SessionID, openText, openReply.TS)
+	if got := todoNow(s, todo.ID).PRURL; got != delivery {
+		t.Fatalf("legacy single PR = %q, want %q", got, delivery)
+	}
+	roles := linkRoles(t, s, todo.ID)
+	if roles[reference] != repository.LinkRoleReference || roles[other] != repository.LinkRoleReference || roles[delivery] != repository.LinkRoleDelivery {
+		t.Fatalf("stored roles = %v, want only the single legacy PR as delivery", roles)
+	}
 }
 
 // A decision whose question card the bot already posted (cards / all_cards) is not told again as waiting.
@@ -162,12 +275,7 @@ func TestTaskReportSkipsAskAlreadyInChat(t *testing.T) {
 	agentTurn(s, f, proto.StatusBlocked, "", 1)
 	ix := proto.Interaction{ID: "ix2", MachineID: "box", SessionID: "s1", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "用哪个分支？", Options: []proto.QuestionOption{{Label: "main"}}}}}
-	s.fbot.mu.Lock()
-	if s.fbot.cards == nil {
-		s.fbot.cards = map[string]botCard{}
-	}
-	s.fbot.cards[ix.ID] = botCard{}
-	s.fbot.mu.Unlock()
+	keepChatCard(s, ix.ID, &botCard{}) // claimed: the bot is posting its card
 	s.taskReport(todo, reportNeeds, "box", [2]string{"box", "s1"}, noticeAsk(ix), &ix)
 	time.Sleep(6 * testReportDelay)
 	if got := posts(); len(got) != 0 {
@@ -208,7 +316,7 @@ func failingPosts(f *fakeHub, alwaysFail bool) (posts func() []string, reportAtt
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		isReport := strings.Contains(m.Card, `"content":"📋 `)
+		isReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if isReport {
 			attempts++
 		}
@@ -239,6 +347,7 @@ func reportsState(s *Service) (n int, timer bool) {
 // A transport failure keeps the whole batch (its terminal reports with it), schedules a retry; the second attempt
 // posts the card and only then the needs decision card; success clears pending and the timer.
 func TestTaskReportRetriesAfterTransportFailure(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = testReportDelay
@@ -313,6 +422,7 @@ func TestTaskReportDroppedWhenBotNotReady(t *testing.T) {
 
 // After reportMaxRetries retries the batch is given up: the queue does not pin a dead transport forever.
 func TestTaskReportGivesUpAfterMaxRetries(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = testReportDelay
@@ -337,6 +447,7 @@ func TestTaskReportGivesUpAfterMaxRetries(t *testing.T) {
 // A newer change of the same todo arriving while a failed batch waits for retry replaces the failed item; the retry
 // sends the newer state.
 func TestTaskReportRetryKeepsNewerChange(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.retry = time.Second
@@ -368,6 +479,7 @@ func TestTaskReportRetryKeepsNewerChange(t *testing.T) {
 // the superseded item is never posted, the retry carries the newer state. The first post is gated open only after the
 // newer change landed.
 func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, _ := reportService(t, true)
 	s.reports.mu.Lock()
 	s.reports.delay = time.Second // the newer change's normal-delay timer must not fire while the post is gated
@@ -387,7 +499,7 @@ func TestTaskReportMergesChangeArrivedDuringPost(t *testing.T) {
 		_ = json.Unmarshal(p, &m)
 		mu.Lock()
 		got = append(got, m.Card)
-		firstReport := strings.Contains(m.Card, `"content":"📋 `)
+		firstReport := strings.Contains(m.Card, `"content":"汇报"}`)
 		if firstReport {
 			attempts++
 		}

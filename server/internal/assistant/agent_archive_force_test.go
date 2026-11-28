@@ -16,7 +16,7 @@ import (
 
 func TestForceArchiveConfirmationDatabase(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestForceArchiveConfirmationDatabase(t *testing.T) {
 	for _, kind := range []string{proto.IxPermission, proto.IxPlan, proto.IxScreen} {
 		ix := proto.Interaction{ID: "force-" + kind, MachineID: "mac", SessionID: row.SessionID, Kind: kind, ExpiresAt: time.Now().Add(time.Hour)}
 		ft.s.record(ix)
-		ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(r proto.Resolution) error {
+		ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(_ context.Context, r proto.Resolution) error {
 			if r.Allow != nil && *r.Allow || r.Approve != nil && *r.Approve || r.Always || r.Mode != "" {
 				t.Errorf("force archive granted approval: %+v", r)
 			}
@@ -190,7 +190,7 @@ func (s *forceArchiveWindowStore) PutSetting(ctx context.Context, key string, va
 
 func TestForceArchiveCloseWriteWindowDatabase(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func TestForceArchiveCloseWriteWindowDatabase(t *testing.T) {
 		t.Log("close succeeded and all three cards cancelled; reading stale blocked snapshot before final ClosedAt write")
 		checkRestart("restart after close before final ClosedAt write")
 	}
-	ft.s.store = func() Store { return window }
+	ft.s.setStore(func() Store { return window })
 	ft.d.machines["mac"].call = func(method string, raw json.RawMessage) (any, error) {
 		if method == "session.close" {
 			var records map[string]agentArchive
@@ -238,7 +238,7 @@ func TestForceArchiveCloseWriteWindowDatabase(t *testing.T) {
 	for _, kind := range []string{proto.IxPermission, proto.IxPlan, proto.IxScreen} {
 		ix := proto.Interaction{ID: "window-" + kind, MachineID: "mac", SessionID: row.SessionID, Kind: kind, ExpiresAt: time.Now().Add(time.Hour)}
 		ft.s.record(ix)
-		ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(r proto.Resolution) error {
+		ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(_ context.Context, r proto.Resolution) error {
 			resolved++
 			if !closed || r.Allow != nil && *r.Allow || r.Approve != nil && *r.Approve || r.Always || r.Mode != "" {
 				t.Errorf("unsafe cancellation: %+v", r)
@@ -281,7 +281,7 @@ func TestForceArchiveCloseWriteWindowDatabase(t *testing.T) {
 func TestForceArchiveCloseFailureClearsFenceDatabase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestForceArchiveCloseFailureClearsFenceDatabase(t *testing.T) {
 	for _, kind := range []string{proto.IxPermission, proto.IxPlan, proto.IxScreen} {
 		ix := proto.Interaction{ID: "failed-" + kind, MachineID: "mac", SessionID: row.SessionID, Kind: kind, ExpiresAt: time.Now().Add(time.Hour)}
 		ft.s.record(ix)
-		ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(proto.Resolution) error { t.Error("failed close resolved a card"); return nil }}
+		ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(context.Context, proto.Resolution) error { t.Error("failed close resolved a card"); return nil }}
 	}
 	ft.d.machines["mac"].call = func(method string, _ json.RawMessage) (any, error) {
 		if method != "session.close" {
@@ -317,8 +317,9 @@ func TestForceArchiveCloseFailureClearsFenceDatabase(t *testing.T) {
 	if _, err := database.Setting(context.Background(), agentArchivesKey, &records); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := records[runtimeListID("mac", row.SessionID)]; ok {
-		t.Fatal("failed close left a durable fence")
+	rec, ok := records[runtimeListID("mac", row.SessionID)]
+	if !ok || rec.Archived || !rec.ClosedAt.IsZero() {
+		t.Fatalf("failed close did not leave a restored generation without a fence: %+v present=%v", rec, ok)
 	}
 	if len(ft.s.pendingInteractions()) != 3 {
 		t.Fatal("failed close removed cards")
@@ -344,7 +345,7 @@ func TestForceArchiveCloseFailureClearsFenceDatabase(t *testing.T) {
 func TestForceArchiveFenceWriteFailureKeepsAgent(t *testing.T) {
 	ft, row := closeTestService(t, func(s *proto.Session) { s.Status = proto.StatusBlocked; s.State = proto.StateNeedsYou })
 	store := &archiveFailStore{fleetMem: ft.st, failWrite: true}
-	ft.s.store = func() Store { return store }
+	ft.s.setStore(func() Store { return store })
 	ix := proto.Interaction{ID: "keep-card", MachineID: "mac", SessionID: row.SessionID, Kind: proto.IxScreen}
 	ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix}
 	if err := ft.s.forceArchiveConfirmation(context.Background(), "mac", row.SessionID); err == nil {
@@ -369,7 +370,7 @@ func TestForceArchiveCardOutcomes(t *testing.T) {
 			got := map[string]proto.Resolution{}
 			for _, kind := range []string{proto.IxPermission, proto.IxPlan, proto.IxScreen} {
 				ix := proto.Interaction{ID: "card-" + kind, MachineID: "mac", SessionID: row.SessionID, Kind: kind, ExpiresAt: time.Now().Add(time.Hour)}
-				ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(r proto.Resolution) error {
+				ft.s.ixMapLocked()[ix.ID] = &pending{ix: ix, local: func(_ context.Context, r proto.Resolution) error {
 					got[kind] = r
 					return nil
 				}}

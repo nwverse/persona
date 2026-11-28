@@ -100,6 +100,8 @@ private struct ManagerRow: View {
                     Text(manager.name).lineLimit(1)
                 } chips: {
                     if manager.isDefault { Chip(text: String(localized: "Default [Prompt Composer 844b8c]"), look: .tint(Theme.accent)) }
+                    // Out of the switcher now (#9055); its page has the switch.
+                    if manager.hidden { Chip(text: String(localized: "Hidden"), look: .neutral) }
                 }
                 HStack(spacing: Theme.Space.sm) {
                     managerDot(status.tone)
@@ -141,6 +143,7 @@ struct ManagerDetailView: View {
                 Section { Text("This hub's version doesn't support several assistants yet. Update the hub and come back.").foregroundStyle(.secondary) }
             } else if let m {
                 facts(m)
+                if m.builtin { switcherSection(m) }
                 // This device's pushes from it (#1863); one still installing sends none yet.
                 if m.installing == nil { ManagerPushSection(push: push) }
                 actions(m)
@@ -173,12 +176,12 @@ struct ManagerDetailView: View {
                 .disabled(!ManagersText.validName(newName))
             Button("Cancel", role: .cancel) {}
         }
-        .confirmationDialog("Install Elsewhere?", isPresented: $confirmMove, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Install Elsewhere?", isPresented: $confirmMove, titleVisibility: .visible) {
             Button("Install Elsewhere", role: .destructive) { if let m { Task { await page.newCode(m) } } }
         } message: {
             Text("Installing elsewhere gives you a new install code. Once it's installed with that code, the assistant where it ran before stops working right away.")
         }
-        .confirmationDialog(deleteTitle(m), isPresented: $confirmDelete, titleVisibility: .visible) {
+        .accessibleConfirmationDialog(deleteTitle(m), isPresented: $confirmDelete, titleVisibility: .visible, hasCancel: true) {
             Button(m?.installing != nil ? String(localized: "Cancel Install") : String(localized: "Delete"), role: .destructive) {
                 guard let m else { return }
                 // Back to the list: this page has nothing left to show. Only if the path is still the one this page was on
@@ -217,20 +220,22 @@ struct ManagerDetailView: View {
         }
     }
 
+    /// The built-in assistant in the sidebar's switcher or not while it isn't used (#9055). The switch is the user's
+    /// choice; the footer says when the hub lists it all the same.
+    private func switcherSection(_ m: HubManager) -> some View {
+        Section {
+            SettingsSwitchRow(title: String(localized: "Show in Switcher"), symbol: Theme.Icon.view, accessibilityID: "manager.showInSwitcher",
+                              isOn: Binding(get: { !m.hide }, set: { on in Task { await page.showInSwitcher(m, on) } }))
+                .disabled(page.busy || ManagersText.switcherLocked(m))
+        } footer: {
+            Text(ManagersText.switcherNote(m))
+        }
+    }
+
     @ViewBuilder private func actions(_ m: HubManager) -> some View {
         let blocked = ManagersText.deleteBlocked(m)
         Section {
-            #if os(macOS)
-            // docs/apple/mac-design.md: a detail page's buttons are regular-size and grouped, not a row each.
-            HStack(spacing: Theme.Space.s) {
-                actionButtons(m, blocked: blocked)
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                Spacer(minLength: 0)
-            }
-            #else
             actionButtons(m, blocked: blocked)
-            #endif
         } footer: {
             if let blocked { Text(blocked) }
         }
@@ -262,14 +267,6 @@ struct ManagerDetailView: View {
             .accessibilityIdentifier("manager.newCode")
         }
         let removeTitle = installing ? String(localized: "Cancel Install") : String(localized: "Delete")
-        #if os(macOS)
-        Button(role: .destructive) { confirmDelete = true } label: {
-            Label(removeTitle, systemImage: Theme.Icon.delete).lineLimit(1)
-                .foregroundStyle(blocked == nil ? Theme.danger : Theme.Hue.gray) // red says what it does
-        }
-        .disabled(blocked != nil)
-        .accessibilityIdentifier("manager.delete")
-        #else
         if blocked != nil {
             // Not a button that looks live: the footer says why it cannot go.
             Label(removeTitle, systemImage: Theme.Icon.delete)
@@ -284,7 +281,6 @@ struct ManagerDetailView: View {
             }
             .accessibilityIdentifier("manager.delete")
         }
-        #endif
     }
 
     /// The status with its dot, drawn like the other facts rows in either style.
@@ -363,7 +359,7 @@ private struct ManagerCodeSheet: View {
             .navigationTitle(page.shown.map { String(localized: "Install “\($0.name)”") } ?? "")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1) }
+                SheetClose { dismiss() }
             }
         }
         .presentationDetents([.large])

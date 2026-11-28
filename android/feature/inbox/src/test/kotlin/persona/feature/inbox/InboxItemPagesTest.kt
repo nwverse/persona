@@ -8,6 +8,7 @@ import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.InboxItemUiRoute
 import org.junit.Assert.*
 import org.junit.Test
+import persona.core.inbox.*
 
 // docs/extensions/extensions.md "UI slots" inbox_item (#1683). Native conversations retain their chat and composer;
 // non-chat items keep the inbox_item extension contract.
@@ -86,6 +87,19 @@ class InboxItemPagesTest {
         // Feishu's and mail's items stay theirs even when the hub adds a connector block.
         assertEquals(MailRoute("mail-1"), inboxItemPage(mail.copy(connector = InboxConnectorRef("t1"))))
         assertFalse(lark.copy(connector = InboxConnectorRef("t1")).isConnector)
+    }
+
+    @Test fun anAssistantRowOpensItsOwnDetailRatherThanAnUnreadableConnectorThread() {
+        val row = InboxRecord(InboxItem("assistant:1", kind = "assistant_post", title = "Morning briefing"),
+            sourceLabel = "Assistant", source = "assistant", connector = InboxConnectorRef("server/session-1", label = "Assistant"))
+        assertEquals(InboxItemDetailRoute("assistant:1"), inboxItemPage(row))
+    }
+
+    @Test fun anAssistantRowSkipsTheGenericEventPage() {
+        val row = InboxRecord(InboxItem("assistant:1", kind = "assistant_post", title = "Morning briefing"),
+            sourceLabel = "Assistant", source = "assistant", connector = InboxConnectorRef("server/session-1", label = "Assistant"),
+            event = persona.core.contracts.InboxEventFields(status = "fyi"))
+        assertEquals(InboxItemDetailRoute("assistant:1"), inboxRowPage(row, InboxItemPages()))
     }
 
     // persona://inbox/<id>/source from an extension's page: that item's own page, as the list opened it before.

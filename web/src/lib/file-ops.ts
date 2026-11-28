@@ -2,7 +2,7 @@ import { CLIENT_HEADERS } from "./compatibility";
 // Changing a machine's files from the Files panel (#4883, the hub / node side is #4858): upload into a folder, rename,
 // move, move to the trash and put back. Only home is writable there, and not ~/.persona, ~/.persona or ~/Library (the
 // node checks, `read_only`); a delete goes to the system's trash and can be undone, there is no permanent one.
-import { ApiError, api, CLIENT_PLATFORM, CLIENT_VERSION, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "./api";
+import { ApiError, api, CLIENT_PLATFORM, CLIENT_VERSION, credentialOwner, enc, errorText, getToken, HubUnreachableError, subscribeCredentialOwner } from "./api";
 import { BASE } from "./base";
 import { currentLanguage, t } from "../i18n";
 
@@ -53,8 +53,34 @@ export function uploadToDir(
   file: File,
   opts: { dir: string; cwd?: string; conflict?: Conflict; credential?: UploadCredential; signal?: AbortSignal; onProgress?: (sent: number, total: number) => void },
 ): Promise<Uploaded> {
-  const credential = opts.credential ?? { owner: credentialOwner(), token: getToken() };
   const q = `name=${enc(file.name)}&dest=dir&dir=${enc(opts.dir)}${opts.cwd ? `&cwd=${enc(opts.cwd)}` : ""}${opts.conflict ? `&conflict=${opts.conflict}` : ""}`;
+  return uploadWithProgress(mid, file, q, opts);
+}
+
+/** The hub feature for `dest=attachment`: a file sent with a chat message, kept on the computer (#8361). */
+export const UPLOAD_ATTACHMENT_FEATURE = "upload_attachment";
+
+/**
+ * Sends `file` with a chat message to machine `mid` (docs/protocol/protocol.md "Sending files", #8361), reporting the
+ * bytes sent: `dest` "attachment" keeps it beside the chat's pictures, "health" in the health space's reports, none in
+ * the temp directory. Rejects as `uploadToDir` does.
+ */
+export function uploadAttachment(
+  mid: string,
+  file: File,
+  opts: { name?: string; dest?: string; signal?: AbortSignal; onProgress?: (sent: number, total: number) => void } = {},
+): Promise<Uploaded> {
+  return uploadWithProgress(mid, file, `name=${enc(opts.name ?? file.name)}${opts.dest ? `&dest=${enc(opts.dest)}` : ""}`, opts);
+}
+
+/** POST /machines/{mid}/files?<query> over XHR, the bytes sent reported as they go. */
+function uploadWithProgress(
+  mid: string,
+  file: File,
+  q: string,
+  opts: { credential?: UploadCredential; signal?: AbortSignal; onProgress?: (sent: number, total: number) => void },
+): Promise<Uploaded> {
+  const credential = opts.credential ?? { owner: credentialOwner(), token: getToken() };
   return new Promise((resolve, reject) => {
     // XHR, not fetch: only it reports an upload's progress
     const xhr = new XMLHttpRequest();
@@ -103,7 +129,8 @@ export function uploadToDir(
       const msg = typeof body.error === "string" && body.error ? body.error : `HTTP ${xhr.status}`;
       finish(() => reject(new ApiError(xhr.status, msg, body, isJson, xhr.getResponseHeader("X-Request-Id") ?? undefined)));
     };
-    xhr.onerror = () => { if (current()) finish(() => reject(new TypeError("network"))); };
+    // the connection failed: "Can't reach the hub", not a bug in the page (lib/network-failure.ts)
+    xhr.onerror = () => { if (current()) finish(() => reject(new HubUnreachableError("network"))); };
     xhr.onabort = () => finish(() => reject(new DOMException("aborted", "AbortError")));
     opts.signal?.addEventListener("abort", cancel, { once: true });
     try {

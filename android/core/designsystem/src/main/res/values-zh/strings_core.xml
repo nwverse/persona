@@ -52,6 +52,7 @@
         <item quantity="other">%1$d 天后过期</item>
     </plurals>
     <string name="designsystem_core_request_from_subagent">来自子 Agent · %1$s</string>
+    <string name="designsystem_core_request_from_side">来自分支会话 · %1$s</string>
     <string name="designsystem_core_request_from_mcp">来自 MCP 服务器 %1$s</string>
     <string name="designsystem_core_request_from_mcp_configured">来自 MCP 服务器 %1$s（配置来源：%2$s）</string>
     <string name="designsystem_core_request_from_terminal">这个请求来自终端：请不要同时在电脑上处理</string>
@@ -61,8 +62,8 @@
     <string name="designsystem_core_field_invalid">请检查填写内容和格式</string>
     <string name="designsystem_core_computer_fallback">电脑</string>
     <string name="designsystem_core_close_agent_title">关闭这个 Agent？</string>
-    <string name="designsystem_core_close_agent_message_tab">「%1$s」\n%2$s\n\n会退出 %3$s 上的 %4$s，并关掉它在终端里的标签页「%5$s」（分屏的标签页只关它这一格）。正在做的事会中断；对话记录会保留，之后可以在 Agents 的「历史」里继续。</string>
-    <string name="designsystem_core_close_agent_message_pane">「%1$s」\n%2$s\n\n会退出 %3$s 上的 %4$s，并关掉它所在的终端窗格。正在做的事会中断；对话记录会保留，之后可以在 Agents 的「历史」里继续。</string>
+    <string name="designsystem_core_close_agent_message_tab">「%1$s」\n%2$s\n\n这会退出 %3$s 上的 %4$s 并关闭其标签页「%5$s」。如果终端已分屏，只关闭它所在的部分。正在进行的工作会停止，会话会保留，可以从 Agents 的历史记录中恢复。</string>
+    <string name="designsystem_core_close_agent_message_pane">「%1$s」\n%2$s\n\n这会退出 %3$s 上的 %4$s 并关闭其终端。正在进行的工作会停止，会话会保留，可以从 Agents 的历史记录中恢复。</string>
     <string name="designsystem_core_close_agent_message_runtime">「%1$s」\n%2$s\n\n会结束它在 %3$s 上的会话，正在做的事会中断。</string>
     <string name="designsystem_core_delete_session_title">删除这个对话？</string>
     <string name="designsystem_core_delete_session_on_machine_command">「%1$s」会从各端的列表里移除。%2$s 上的对话记录不会删除，之后在电脑上用 %3$s 继续，它会重新出现。</string>
@@ -94,6 +95,7 @@
     <string name="designsystem_core_state_awaiting_reply">待你回复</string>
     <string name="designsystem_core_state_working">工作中</string>
     <string name="designsystem_core_state_background_waiting">后台等待中</string>
+    <string name="designsystem_core_state_just_finished">刚做完待看</string>
     <string name="designsystem_core_state_working_background">工作中（后台）</string>
     <string name="designsystem_core_state_waiting">待唤醒</string>
     <string name="designsystem_core_state_muted">已屏蔽</string>
@@ -215,25 +217,43 @@
     <string name="designsystem_core_source_identity_conflict">身份冲突</string>
     <string name="designsystem_core_source_claude_background">Claude 后台</string>
     <string name="designsystem_core_source_claude_desktop">Claude 桌面版</string>
+    <string name="designsystem_core_agents_codex_app">Codex App</string>
+    <string name="designsystem_core_agents_desktop_app">%1$s 桌面版</string>
+    <string name="designsystem_core_agents_recently_used">最近使用</string>
     <string name="designsystem_core_source_claude_terminal">终端里的 Claude</string>
     <string name="designsystem_core_source_no_send">此来源尚未允许发送</string>
     <string name="designsystem_core_read_only_because">仅查看：%1$s</string>
     <string name="designsystem_core_session_read_only">此会话仅可查看</string>
     <string name="designsystem_core_engine_herdr">终端里的 herdr</string>
     <string name="designsystem_core_engine_herdr_app">桌面 App 里开的终端</string>
-    <string name="designsystem_core_engine_orca">Orca 里的终端</string>
+    <string name="designsystem_core_engine_orca">Orca 里的终端和对话</string>
     <string name="designsystem_core_engine_tern">Tern 里的终端</string>
+    <string name="designsystem_core_engine_rex">Rex 里的终端</string>
     <string name="designsystem_core_engine_paseo">Paseo 里的 Agent</string>
     <string name="designsystem_core_engine_cindy">Cindy 里的 Agent</string>
+    <string name="designsystem_core_engine_t3code">T3 Code 里的 Agent</string>
+    <string name="designsystem_core_engine_none">没有终端引擎</string>
+    <string name="designsystem_core_engine_none_detail">只显示桌面 App 的会话</string>
     <string name="designsystem_core_engine_offline">离线，暂无检测信息</string>
     <string name="designsystem_core_engine_unknown">暂无检测信息</string>
     <string name="designsystem_core_engine_found">检测到可用</string>
     <string name="designsystem_core_engine_found_version">检测到可用，版本 %1$s</string>
     <string name="designsystem_core_engine_missing">没检测到</string>
+    <string name="designsystem_core_engine_stopped">已安装，没在运行</string>
+    <string name="designsystem_core_engine_stopped_version">已安装，没在运行，版本 %1$s</string>
+    <string name="designsystem_core_engine_incompatible_version">不兼容，版本 %1$s</string>
     <string name="designsystem_core_engine_footer">只显示所选引擎里的会话，随时可在 Agents 的机器监控里修改。</string>
     <string name="designsystem_core_engine_footer_offline">机器离线，选择会在连接后生效。只显示所选引擎里的会话。</string>
+    <string name="designsystem_core_engine_footer_none">显示桌面 App 的会话，不能从手机新建或继续会话，随时可在 Agents 的机器监控里修改。</string>
+    <string name="designsystem_core_engine_footer_none_offline">机器离线，选择会在连接后生效。显示桌面 App 的会话，不能从手机新建或继续会话。</string>
     <string name="designsystem_core_engine_switched">已切换引擎</string>
     <string name="designsystem_core_engine_saved_offline">已保存，连上后生效</string>
+    <string name="designsystem_core_engine_set_notice">这台电脑同时使用 %1$s，默认是 %2$s。要更改使用哪些引擎，请在网页版 Persona 里打开这台电脑。</string>
+    <string name="designsystem_core_engine_footer_set">显示这台电脑所有引擎里的会话。从手机新建的会话在 %1$s 里打开。</string>
+    <string name="designsystem_core_engine_footer_set_offline">机器离线，选择会在连接后生效。从手机新建的会话将在 %1$s 里打开。</string>
+    <string name="designsystem_core_engine_footer_set_one">只使用 %1$s：其他引擎会关闭，只显示它里面的会话。</string>
+    <string name="designsystem_core_engine_footer_set_one_offline">机器离线，选择会在连接后生效。只使用 %1$s，其他引擎会关闭。</string>
+    <string name="designsystem_core_engine_default_changed">已更改默认引擎</string>
     <string name="designsystem_core_tool_run">运行</string>
     <string name="designsystem_core_tool_read">读取</string>
     <string name="designsystem_core_tool_edit">编辑</string>
@@ -391,6 +411,7 @@
     <string name="designsystem_core_knowledge_meetings">会议</string>
     <string name="designsystem_core_knowledge_events">日程</string>
     <string name="designsystem_core_knowledge_recordings">录音</string>
+    <string name="designsystem_core_knowledge_topics">主题</string>
     <string name="designsystem_core_mail_error">错误</string>
     <string name="designsystem_core_mail_outlook">Outlook · Microsoft 账号登录</string>
     <string name="designsystem_core_mail_gmail">Gmail · Google 账号登录</string>
@@ -402,6 +423,7 @@
     <string name="designsystem_core_headline_agent_permission">%1$s 请求使用 %2$s</string>
     <string name="designsystem_core_headline_agent_permission_detail">%1$s 请求使用 %2$s：%3$s</string>
     <string name="designsystem_core_headline_secret_run">用你的密码在 %1$s 上运行</string>
+    <string name="designsystem_core_headline_secret_handoff">把密钥交给 Agent？</string>
     <string name="designsystem_core_headline_screen">终端等你处理</string>
     <string name="designsystem_core_headline_needs_you">需要你</string>
     <string name="designsystem_core_ask_question">在问你</string>
@@ -540,4 +562,6 @@
     <string name="designsystem_core_always_scope_edit_directory">这段对话中，这个目录里的所有文件编辑</string>
     <string name="designsystem_core_always_scope_tool">这段对话里的所有「%1$s」调用</string>
     <string name="designsystem_core_always_scope_approved">批准的范围在这段对话中持续有效</string>
+    <string name="designsystem_core_api_conversation_invalid">此会话已失效：压缩上下文属于另一个账号。请换新会话接着做。</string>
+    <string name="designsystem_core_api_conversation_invalid_label">已失效</string>
 </resources>

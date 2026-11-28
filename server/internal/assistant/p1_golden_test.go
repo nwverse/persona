@@ -24,7 +24,7 @@ func TestGoldenP1Context(t *testing.T) {
 
 func TestGoldenP1SuperviseLeaderStuck(t *testing.T) {
 	golden(t, "supervise.leader_stuck", prompts.RenderSupervise(prompts.Supervise{LeaderStuck: true, Entries: []prompts.SuperviseEntry{{
-		ID: "todo_1", Title: "平板布局", Kind: sigLeaderStuck, Detail: "基建 · 卡住超过一天，停着没做完：平板布局"}}}))
+		ID: "todo_1", Title: "平板布局", Kind: sigLeaderStuck, Detail: "基建 · 卡住了，停着没做完：平板布局"}}}))
 }
 
 func TestGoldenP1BriefLeaders(t *testing.T) {
@@ -33,7 +33,7 @@ func TestGoldenP1BriefLeaders(t *testing.T) {
 		{Name: "基建", Open: 1}}}))
 }
 
-// A leader's task stuck over a day: the extensions get leader.report stuck, and the main conversation one supervision
+// A leader's task past its inactivity threshold: the extensions get leader.report stuck, and the main conversation one supervision
 // entry naming the direction (no push).
 func TestLeaderStuckTellsTheMainConversation(t *testing.T) {
 	st := &memStore{}
@@ -68,7 +68,7 @@ func TestLeaderStuckTellsTheMainConversation(t *testing.T) {
 		}
 		return false
 	})
-	if to := e.s.digestTo(e.s.settings(context.Background()), superviseSignal{Todo: id, Kind: sigLeaderStuck}); to != "conv_main" {
+	if to := e.s.digestTo(context.Background(), e.s.settings(context.Background()), superviseSignal{Todo: id, Kind: sigLeaderStuck}); to != "conv_main" {
 		t.Fatalf("goes to %q", to)
 	}
 }
@@ -86,7 +86,7 @@ func TestContextNamesTheDirections(t *testing.T) {
 		t.Fatal(err)
 	}
 	main := e.s.Context(context.Background(), ContextParams{SessionID: "conv_main"}).Text
-	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "task_plan 的 supervisor"} {
+	for _, want := range []string{"- conv_lead_a：基建", "- conv_lead_b：conv_lead_b", "主管派的任务由该主管督办", "只接 needs_user 升级"} {
 		if !strings.Contains(main, want) {
 			t.Fatalf("the main context lacks %q:\n%s", want, main)
 		}

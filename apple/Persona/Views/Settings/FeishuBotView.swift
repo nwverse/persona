@@ -4,6 +4,8 @@ import SwiftUI
 /// open platform, enters its id and secret here, pairs by sending the bot a code, and switches on what it may do.
 struct FeishuBotView: View {
     @State private var model = FeishuBotModel()
+    @State private var sync = LarkSyncModel()
+    @State private var groupAccess = FeishuGroupAccessModel()
     @State private var confirmUnpair = false
 
     var body: some View {
@@ -14,6 +16,10 @@ struct FeishuBotView: View {
             if model.status?.hasSecret == true {
                 pairingSection
                 featuresSection
+                // Who else may @ the bot in a group (#16848): only once it is paired, and only when the hub has the route.
+                if model.status?.owner != nil {
+                    FeishuGroupAccessSections(model: groupAccess)
+                }
             }
             if let agents = model.status?.agents, !agents.isEmpty {
                 Section("Agents You've Chatted With in Lark") {
@@ -22,13 +28,21 @@ struct FeishuBotView: View {
                     }
                 }
             }
+            // Reading Lark as the owner, every day (#15392): drawn only when the hub has the sync.
+            LarkSyncSections(model: sync)
             setupSection
         }
         .themedPage()
         .detailTitle(String(localized: "Lark Bot"))
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.load() }
-        .refreshable { await model.load() }
+        .task(id: model.status?.appID) { await sync.load() } // the chat bot's app, read again when it changes
+        .task(id: model.status?.owner?.pairedAt) { await groupAccess.load() } // paired, or paired again: read group access
+        .refreshable {
+            await model.load()
+            await sync.load()
+            await groupAccess.load()
+        }
         .task(id: model.status?.pairing?.code) { // waiting for the code: look again until it is used
             guard model.status?.pairing != nil else { return }
             while !Task.isCancelled, model.status?.pairing != nil, model.status?.owner == nil {
@@ -36,7 +50,7 @@ struct FeishuBotView: View {
                 await model.load()
             }
         }
-        .confirmationDialog("Unpair?", isPresented: $confirmUnpair, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Unpair?", isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button("Unpair", role: .destructive) { Task { await model.unpair() } }
         } message: {
             Text("The bot will stop responding to the current Lark account until you pair again.")
@@ -79,39 +93,22 @@ struct FeishuBotView: View {
 
     private var credentialsSection: some View {
         Section {
-            #if os(macOS)
-            // A Mac form puts the title on the left and the field on the right: the title stays the field's name, what
-            // to type goes in the prompt (#1221).
-            TextField("App ID", text: $model.appID, prompt: Text("Required")).autocorrectionDisabled()
-            SecureField("App Secret", text: $model.appSecret, prompt: Text(model.status?.hasSecret == true ? String(localized: "Saved. Leave empty to keep") : String(localized: "Required")))
-            #else
             TextField("App ID", text: $model.appID)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .font(Theme.Font.code)
             SecretField(model.status?.hasSecret == true ? String(localized: "App Secret (saved, leave empty to keep)") : "App Secret", filled: String(localized: "Entered. Tap Verify and Save"),
                         text: $model.appSecret, identifier: "bot.appSecret")
-            #endif
             Picker("Platform", selection: $model.domain) {
                 Text("Lark [Inbox Event Views 7e4419]").tag("feishu")
                 Text("Lark").tag("lark")
                 if model.domain != "feishu" && model.domain != "lark" { Text(model.domain).tag(model.domain) }
             }
-            #if os(macOS)
-            // A standard button at the group's trailing end, not a bar the width of the form (#1221).
-            HStack {
-                Spacer(minLength: 0)
-                Button { Task { await model.saveCredentials() } } label: { Text("Verify and Save").lineLimit(1) }
-                    .formButton(prominent: true)
-                    .disabled(!model.credentialsChanged || model.appID.isEmpty || model.saving)
-            }
-            #else
             Button {
                 Task { await model.saveCredentials() }
             } label: {
                 Text("Verify and Save").lineLimit(1).frame(maxWidth: .infinity)
             }
             .disabled(!model.credentialsChanged || model.appID.isEmpty || model.saving)
-            #endif
         } header: {
             Text("App Credentials")
         } footer: {
@@ -217,8 +214,9 @@ struct FeishuBotView: View {
         Section {
             step(1, "Create a custom app on the Lark Open Platform and enable the Bot capability")
             step(2, "Under Permissions, enable: read and send direct messages (im:message, im:message:send_as_bot), receive direct messages sent to the bot, and upload and download message resources. Reading contact names helps too (contact:user.base:readonly)")
-            step(3, "In Events & Callbacks, choose “Receive events through persistent connection” and subscribe to “Receive messages” and “Card action callbacks”")
-            step(4, "Publish a version (your company's admin may need to approve it), then enter the App ID and App Secret above")
+            step(3, "Knowledge sync permissions [Lark bot setup]")
+            step(4, "In Events & Callbacks, choose “Receive events through persistent connection” and subscribe to “Receive messages” and “Card action callbacks”")
+            step(5, "Publish a version (your company's admin may need to approve it), then enter the App ID and App Secret above")
         } header: {
             Text("How to Set Up the Bot")
         } footer: {

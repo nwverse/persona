@@ -17,7 +17,7 @@ import (
 
 // Where an agent stands in its work (docs/assistant/agent-work.md, #1686), the manager's: when a turn ends it triages it — rules
 // first, then a cheap model reading the last reply — into done or blocked on a named precondition, and acts on what it
-// can: "Continue" after a transient model error (with backoff and a cap), a wake when what it waits for should be over, a
+// can: "Continue" after a transient model error (with capped backoff), a wake when what it waits for should be over, a
 // card for what the user is to decide (the answer goes back to the agent). Everything else (pushing code, deploying,
 // messaging people, touching someone else's MR) is only ever a card. Each action checks, the moment before, that the
 // session is still stopped on the same turn with nothing pending or queued: whatever the user did meanwhile wins.
@@ -49,7 +49,7 @@ type TriageSwitches struct {
 	// ReplyReminderMinutes: after how long since the user looked. 0: 30 (a PUT with 0 keeps it, a negative one clears it).
 	ReplyReminderMinutes int `json:"reply_reminder_minutes,omitempty"`
 	// TransientRetry: "Continue" after a transient model error (a dropped connection, a 5xx, overloaded), with backoff
-	// and a cap (#3208). A rule, no triage model call: independent of Enabled, and unset is on.
+	// capped delays and no attempt limit (#10444). A rule, no triage model call: independent of Enabled, and unset is on.
 	TransientRetry *bool `json:"transient_retry,omitempty"`
 }
 
@@ -85,10 +85,14 @@ func switchesOf(c assistantwire.TriageConfig) TriageSwitches {
 		Closeout: set(c.Closeout), CloseoutAsk: set(c.CloseoutAsk), TransientRetry: c.TransientRetry}
 }
 
-func maxRetries(c assistantwire.TriageConfig) int { return cmp0(c.MaxRetries, 5) }
-func maxWakes(c assistantwire.TriageConfig) int   { return cmp0(c.MaxWakes, 6) }
+func maxWakes(c assistantwire.TriageConfig) int { return cmp0(c.MaxWakes, 6) }
 func settleOf(c assistantwire.TriageConfig) time.Duration {
 	return time.Duration(cmp0(c.SettleSeconds, 15)) * time.Second
+}
+
+// justFinishedFor is how long a done turn nobody has seen stays Just finished (#9751).
+func justFinishedFor(c assistantwire.TriageConfig) time.Duration {
+	return time.Duration(cmp0(c.JustFinishedHours, 3)) * time.Hour
 }
 
 func cmp0(n, def int) int {
@@ -97,26 +101,6 @@ func cmp0(n, def int) int {
 	}
 	return def
 }
-
-// retryBackoff is how long after a transient error the "Continue" numbered attempt (0: the first) goes: the base
-// (retry_base_seconds, 15 s by default) doubled for each attempt before it, four times that for a rate limit, never
-// more than retryBackoffMost. 15 s, 30 s, 60 s, 120 s, 240 s by default; 60 s … 960 s for a rate limit.
-func retryBackoff(c assistantwire.TriageConfig, attempt int, rateLimited bool) time.Duration {
-	d := time.Duration(cmp0(c.RetryBaseSeconds, 15)) * time.Second
-	if rateLimited {
-		d *= 4
-	}
-	for range max(attempt, 0) {
-		if d >= retryBackoffMost {
-			break
-		}
-		d *= 2
-	}
-	return min(d, retryBackoffMost)
-}
-
-// retryBackoffMost caps one transient error's backoff, however large max_retries is set.
-const retryBackoffMost = 30 * time.Minute
 
 // workEvery is how often the manager looks for due wakes and expired cards; workBackfillEvery how often it looks for
 // turns that ended unseen (while it was away, or whose triage failed a while ago).
@@ -199,6 +183,7 @@ type workBook struct {
 	cards        map[string]proto.Interaction // the cards out, by id (the snapshot's interactions)
 	loaded       bool
 	triaging     map[[2]string]bool
+	retrying     map[[2]string]bool           // one due-wake delivery per session at a time
 	ciPolling    map[[2]string]bool           // bounded concurrent check reads
 	loops        map[[2]string]*toolLoopState // running-turn loop candidates and cards
 	loopLoadMu   sync.Mutex                   // serialize loading without holding work.mu on the database
@@ -291,7 +276,17 @@ func (a approval) covers(w *proto.WorkState) bool {
 }
 
 // triedTurn is a turn a triage was attempted on: a failed one is tried again after workRetryTriage, not every tick.
-type triedTurn struct{ turn, at time.Time }
+// read is what an attempt read of the turn (triageRead), which the attempts after it on the same turn use again.
+type triedTurn struct {
+	turn, at time.Time
+	read     *turnRead
+}
+
+// turnRead is a session's latest turn as triage read it: what the user asked, its last reply and the exact items.
+type turnRead struct {
+	ask, reply string
+	items      []proto.Item
+}
 
 // triageCfg is manager.json's agents.triage, as the hello has it.
 func (s *Service) triageCfg(ctx context.Context) assistantwire.TriageConfig {
@@ -463,6 +458,26 @@ func sameTurn(c proto.Session, turnAt time.Time) bool {
 	return d > -2*time.Second && d < 2*time.Second
 }
 
+func workRetiredForTurn(w proto.WorkState, turnAt time.Time) bool {
+	return w.RetiredAt != nil && (w.RetiredTurnAt == nil || turnAt.Before(w.RetiredTurnAt.Add(2*time.Second)))
+}
+
+// retiredRetry retires a transient retry when a later stopped row no longer carries its model failure. The node has
+// already required closing evidence before dropping an old error-only preview; an offline or running row is not recovery.
+// With no newer words the work stays unsure rather than becoming an invented textual conclusion.
+func retiredRetry(c proto.Session, e db.SessionWork) (db.SessionWork, bool) {
+	retry := e.Work.On == proto.WaitTransient || e.Work.On == proto.WaitUser && e.Retries > 0
+	failure, _ := latestTurnError(c)
+	if !retry || c.Status != proto.StatusDone || !c.UpdatedAt.After(e.TurnAt) || failure != "" {
+		return e, false
+	}
+	e.TurnAt = c.UpdatedAt
+	e.Work = proto.WorkState{TurnAt: c.UpdatedAt, At: time.Now().UTC(), By: "rule"}
+	e.WakeAt, e.InteractionID = nil, ""
+	e.Retries, e.Wakes = 0, 0
+	return e, true
+}
+
 // loadWork reads session_work back (once; false while it cannot be read). A card the hub still has up (only the
 // manager restarted) stays up as it is, until it is answered, its agent goes on or it expires, as when the triage was
 // the hub's; the others (the hub restarted too, or it was answered meanwhile and the hub keeps the answer) are put back
@@ -494,6 +509,16 @@ func (s *Service) loadWork(ctx context.Context) bool {
 	var up map[string]proto.Interaction
 	for i := range rows {
 		e := rows[i]
+		if c, ok := v.session(e.MachineID, e.SessionID); ok {
+			if retired, recovered := retiredRetry(c, e); recovered {
+				rows[i] = retired
+				forgot = append(forgot, retired)
+				if e.InteractionID != "" {
+					forgotIDs = append(forgotIDs, e.InteractionID)
+				}
+				continue
+			}
+		}
 		if e.InteractionID == "" {
 			continue
 		}
@@ -559,26 +584,61 @@ func (s *Service) saveWork(e db.SessionWork) {
 	if err := st.PutSessionWork(ctx, e); err != nil {
 		s.logf("work: save %s/%s: %v", e.MachineID, e.SessionID, err)
 	}
+	if err := s.importTaskRepositoryArtifacts(ctx, e); err != nil {
+		s.logf("work: repository links %s/%s not saved: %v", e.MachineID, e.SessionID, err)
+	}
+}
+
+// startWorkEventWrite serializes new event writes with fixture teardown. A stopped service starts no new write; every
+// write already counted finishes normally, including its original error logging.
+func (s *Service) startWorkEventWrite(write func()) {
+	s.work.mu.Lock()
+	if s.runCtx().Err() != nil {
+		s.work.mu.Unlock()
+		return
+	}
+	s.work.eventWrites.Add(1)
+	s.work.mu.Unlock()
+	go func() {
+		defer s.work.eventWrites.Done()
+		write()
+	}()
 }
 
 func (s *Service) workEvent(machine, session, kind string, detail map[string]any) {
 	e := db.WorkEvent{At: time.Now().UTC(), MachineID: machine, SessionID: session, Kind: kind, Detail: detail}
 	st := s.workDB()
 	if st == nil {
-		s.work.mu.Lock()
-		s.work.testEvents = append(s.work.testEvents, e)
-		s.work.mu.Unlock()
+		s.rememberWorkEvent(e)
 		return
 	}
-	s.work.eventWrites.Add(1)
-	go func() {
-		defer s.work.eventWrites.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := st.AddWorkEvent(ctx, e); err != nil {
-			s.logf("work: event: %v", err)
-		}
-	}()
+	s.startWorkEventWrite(func() { s.writeWorkEvent(st, e) })
+}
+
+// workEventNow writes on the caller's stack: a synchronous hub report is already bounded by its caller, while an
+// asynchronous operation must first be accepted by startWorkEventWrite and keep its final write in that counted unit.
+func (s *Service) workEventNow(machine, session, kind string, detail map[string]any) {
+	e := db.WorkEvent{At: time.Now().UTC(), MachineID: machine, SessionID: session, Kind: kind, Detail: detail}
+	st := s.workDB()
+	if st == nil {
+		s.rememberWorkEvent(e)
+		return
+	}
+	s.writeWorkEvent(st, e)
+}
+
+func (s *Service) rememberWorkEvent(e db.WorkEvent) {
+	s.work.mu.Lock()
+	s.work.testEvents = append(s.work.testEvents, e)
+	s.work.mu.Unlock()
+}
+
+func (s *Service) writeWorkEvent(st workStore, e db.WorkEvent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := st.AddWorkEvent(ctx, e); err != nil {
+		s.logf("work: event: %v", err)
+	}
 }
 
 // workEntry is a copy of a session's stored work state.
@@ -600,6 +660,15 @@ func (s *Service) putWork(_ context.Context, e db.SessionWork) {
 	s.work.init()
 	key := [2]string{e.MachineID, e.SessionID}
 	current := s.work.entries[key]
+	if current != nil && workRetiredForTurn(current.Work, e.TurnAt) {
+		_, out := s.work.cards[e.InteractionID]
+		delete(s.work.cards, e.InteractionID)
+		s.work.mu.Unlock()
+		if out {
+			s.publishSoon()
+		}
+		return
+	}
 	if current != nil && current.Work.Deferred && current.TurnAt.Equal(e.TurnAt) {
 		e.Work.Deferred = true
 		e.InteractionID, e.Work.InteractionID, e.WakeAt, e.Work.WakeAt = "", "", nil, nil
@@ -615,9 +684,15 @@ func (s *Service) putWork(_ context.Context, e db.SessionWork) {
 
 // supersededCardLocked takes down the card current still has when e, the work of a later turn of the same session,
 // replaces it (a turn whose start the manager did not hear of, triaged afterwards): one card per session, the latest
-// turn's (#6709). Returns the card's id ("" when none goes) and whether it was out. Callers hold s.work.mu.
+// turn's (#6709). A retired retry needs only a strictly later row: retiredRetry has already checked its failure is gone.
+// Returns the card's id ("" when none goes) and whether it was out. Callers hold s.work.mu.
 func (s *Service) supersededCardLocked(current *db.SessionWork, e db.SessionWork) (string, bool) {
-	if current == nil || current.InteractionID == "" || current.InteractionID == e.InteractionID || !e.TurnAt.After(current.TurnAt.Add(2*time.Second)) {
+	if current == nil || current.InteractionID == "" || current.InteractionID == e.InteractionID {
+		return "", false
+	}
+	later := e.TurnAt.After(current.TurnAt.Add(2 * time.Second))
+	retired := current.Work.On == proto.WaitUser && current.Retries > 0 && e.Work.Phase == "" && e.Work.By == "rule" && e.TurnAt.After(current.TurnAt)
+	if !later && !retired {
 		return "", false
 	}
 	_, out := s.work.cards[current.InteractionID]
@@ -645,7 +720,8 @@ func (s *Service) putTriageWork(e db.SessionWork, generation uint64) bool {
 	s.work.mu.Lock()
 	s.work.init()
 	current := s.work.entries[key]
-	if s.work.generation[key] != generation || current != nil && (current.TurnAt.After(e.TurnAt) || current.Work.Deferred && current.TurnAt.Equal(e.TurnAt)) {
+	retired := current != nil && workRetiredForTurn(current.Work, e.TurnAt)
+	if s.work.generation[key] != generation || current != nil && (current.TurnAt.After(e.TurnAt) || retired || current.Work.Deferred && current.TurnAt.Equal(e.TurnAt)) {
 		s.work.mu.Unlock()
 		return false
 	}

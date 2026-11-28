@@ -2,18 +2,18 @@ package assistant
 
 import (
 	"context"
-	"github.com/nwverse/persona/server/internal/closeout"
+	"errors"
 	"slices"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
@@ -43,28 +43,19 @@ type triageOut struct {
 	Artifacts []proto.WorkArtifact `json:"artifacts"`
 }
 
-// triageTurnModel asks the triage model where c stands after its turn. An answer it cannot read is unsure: a work state
-// with no phase (nothing shown, nothing done; the turn is not triaged again).
-// same: the model says the turn still waits on the very step the user approved (#3824), false when there is none.
+// triageTurnModel settles a structured closeout before asking the model about plain-text replies. An unrecognized
+// model phase leaves the work state unsure. A true same means the model recognized the previously approved wait.
 func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine string, c proto.Session) (w *proto.WorkState, same bool, err error) {
-	ask, reply := s.lastTurnOf(ctx, machine, c.SessionID)
+	ask, reply := s.triageRead(ctx, machine, c)
 	if reply == "" {
-		reply = strings.TrimSpace(c.LastText)
+		reply = turnReplyText(c.LastText, false)
 	}
 	if reply == "" {
 		return &proto.WorkState{}, false, nil
 	}
-	co, coArtifacts, hasCloseout := closeout.Parse(reply)
-	if hasCloseout {
-		s.checkCloseout(ctx, &co, coArtifacts)
-		if closeoutDisproved(co) {
-			// It says merged or deployed and it is not: nobody can call this turn finished. No phase, with the closeout
-			// and what was found kept for whoever looks, and a line naming the claim (unfinished).
-			return unfinished(&proto.WorkState{Closeout: &co, Artifacts: workArtifacts(coArtifacts), By: "rule"}, s.lang(ctx)), false, nil
-		}
-	}
-	if hasCloseout && co.Status == proto.CloseoutDone {
-		return closeoutDone(co, coArtifacts, s.lang(ctx)), false, nil // its own closeout says so: no model
+	if co, artifacts, ok := closeout.Parse(reply); ok {
+		s.checkCloseout(ctx, &co, artifacts)
+		return closeoutWork(co, artifacts, s.lang(ctx)), false, nil
 	}
 	others, byShort := triageOthers(machine, c.SessionID, v.sessions(machine))
 	name := machine
@@ -89,17 +80,11 @@ func (s *Service) triageTurnModel(ctx context.Context, v *workView, machine stri
 		}
 		in.Answered = triageAnswered(records)
 	}
-	w, same, err = judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
-		System: prompts.AgentTriage{Owner: s.owner(ctx), Language: answerLanguage(s.hello(ctx).Locale)},
-		Input:  in, Reply: reply, Others: byShort, Lang: s.lang(ctx),
+	hello := s.hello(ctx)
+	return judgeTriageWith(ctx, s.purposeModel("agent.triage"), triageJudgeInput{
+		System: prompts.AgentTriage{Owner: strings.TrimSpace(hello.Owner), Language: answerLanguage(hello.Locale)},
+		Input:  in, Reply: reply, Others: byShort, Lang: i18n.Lang(hello.Locale).Or(i18n.Default),
 	})
-	if err != nil {
-		return nil, false, err
-	}
-	if hasCloseout {
-		w = unfinished(withCloseout(w, co, coArtifacts), s.lang(ctx))
-	}
-	return w, same, nil
 }
 
 // triageJudgeInput is everything the triage model's answer is judged on, read from the session and the hub
@@ -112,19 +97,19 @@ type triageJudgeInput struct {
 	Lang   i18n.Lang                  // the texts the hub fills in itself
 }
 
-// judgeTriageWith asks m where the stopped turn in stands and applies the hub's rules to what it answers: a question
-// must be an explicit request copied from the reply, and triageWork keeps only what the model may say. same: it waits
-// on the very step the user approved (#3824). It reads nothing else, so a behaviour check can run it on written-out
-// turns (#2586, agents_triage_judge_live_test.go).
+// judgeTriageWith asks the model to classify a stopped turn and select any unanswered user requests. Each question
+// must be copied from the full reply. The same result means the model recognized the wait the user approved (#3824).
 func judgeTriageWith(ctx context.Context, m jsonModel, j triageJudgeInput) (w *proto.WorkState, same bool, err error) {
+	in := j.Input
+	in.Language = j.System.Language // One captured language for both halves of this model call.
 	var out triageOut
-	if err := m.JSON(ctx, prompts.RenderAgentTriage(j.System), prompts.RenderAgentTriageInput(j.Input), &out); err != nil {
+	if err := m.JSON(ctx, prompts.RenderAgentTriage(j.System), prompts.RenderAgentTriageInput(in), &out); err != nil {
 		return nil, false, err
 	}
 	same = out.Wait != nil && out.Wait.Approved && j.Input.ApprovedThen != ""
 	out.Questions = slices.DeleteFunc(out.Questions, func(q proto.Question) bool {
 		text := strings.TrimSpace(q.Question)
-		return text == "" || !strings.Contains(j.Reply, text) || !explicitUserRequest(text)
+		return text == "" || !strings.Contains(j.Reply, text)
 	})
 	return triageWork(out, j.Others, time.Now(), j.Lang), same, nil
 }
@@ -155,33 +140,6 @@ func triageAnswered(records []db.InteractionRecord) []prompts.AgentAnswerItem {
 	return answered
 }
 
-// A model may select a request, never turn a statement into one. The prompt handles intent; this checks its evidence.
-var userRequest = lazyre.New(`(?i)^(?:请(?:你|您)?(?:确认|选择|提供|告诉|决定|批准|授权|登录|打开|回复|帮我|在)|麻烦|你决定|需要(?:你|您)(?:确认|选择|提供|决定|批准|授权)|(?:please\s+)?(?:confirm(?:\s+to)?|choose|select|provide|tell|approve|authorize|sign in|log in|open|visit|let me know|reply)\b|(?:確認|選択|承認|入力|ログイン)してください)`) // i18n-ignore: match literal request syntax, not UI text
-var requestAnnotation = lazyre.New(`\s*(?:\([^()\n]*\)|（[^（）\n]*）|\[[^\[\]\n]*\]|【[^【】\n]*】)$`)
-
-func explicitUserRequest(text string) bool {
-	text = strings.TrimSpace(text)
-	if userRequest.MatchString(strings.TrimLeft(text, "*_`\"'「『（(【")) { // i18n-ignore: strip literal Markdown and quotation marks
-		return true
-	}
-	for {
-		// Strip decoration first, but keep parentheses until a trailing annotation has been considered.
-		text = strings.TrimRightFunc(text, func(r rune) bool {
-			return unicode.IsSpace(r) || strings.ContainsRune("*_`\"'」』”’", r) || unicode.Is(unicode.So, r) || // i18n-ignore: literal reply punctuation
-				r == '️' || r == '︎' || r == '‍' || r >= 0x1F3FB && r <= 0x1F3FF
-		})
-		if loc := requestAnnotation.FindStringIndex(text); loc != nil && loc[0] > 0 {
-			text = text[:loc[0]]
-			continue
-		}
-		trimmed := strings.TrimRight(text, "）)】]") // i18n-ignore: literal closing brackets
-		if trimmed == text {
-			return strings.HasSuffix(text, "?") || strings.HasSuffix(text, "？") // i18n-ignore: literal question punctuation
-		}
-		text = trimmed
-	}
-}
-
 // projectsFor are the names of the knowledge base's projects whose directories hold cwd on machine (none when it
 // cannot say): the assistant's own knowledge base (kb.go).
 func (s *Service) projectsFor(ctx context.Context, machine, cwd string) []string {
@@ -201,7 +159,7 @@ func (s *Service) projectsFor(ctx context.Context, machine, cwd string) []string
 func triageWork(out triageOut, others map[string]proto.WorkAgent, now time.Time, lang i18n.Lang) *proto.WorkState {
 	w := &proto.WorkState{Line: clip(oneLine(out.Line), 60)}
 	for _, a := range first(out.Artifacts, 5) {
-		if k := strings.ToLower(strings.TrimSpace(a.Kind)); slices.Contains([]string{"pr", "commit", "doc", "build", "url"}, k) && strings.TrimSpace(a.Ref) != "" {
+		if k := strings.ToLower(strings.TrimSpace(a.Kind)); slices.Contains([]string{"pr", "commit", "doc", "build", "url", "file"}, k) && strings.TrimSpace(a.Ref) != "" {
 			w.Artifacts = append(w.Artifacts, proto.WorkArtifact{Kind: k, Ref: clip(strings.TrimSpace(a.Ref), 300)})
 		}
 	}
@@ -307,29 +265,53 @@ func triageOthers(machine, sid string, list []proto.Session) ([]prompts.AgentTri
 	return out, by
 }
 
-// lastTurnOf is a session's latest turn: what the user asked in it ("" when none) and its last reply ("" when the
-// turn cannot be read).
-func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, answer string) {
+// triageRead is the latest turn of machine's session c as the triage model is given it: read once per turn. A turn
+// whose model call failed is tried again (backfillWork, every workRetryTriage while it stays unread), and the retry
+// takes what the attempt before read (triedTurn) instead of asking the node again. A turn the session's runtime will
+// not read without starting the agent (not_loaded: Paseo would relaunch the provider of an agent it let go, #8132)
+// counts as read with nothing in it: the row's last words stand in for the reply, and the retries ask nothing either.
+// A read that failed otherwise (the node away) is tried again by the next attempt.
+func (s *Service) triageRead(ctx context.Context, machine string, c proto.Session) (ask, reply string) {
+	k := [2]string{machine, c.SessionID}
+	s.work.mu.Lock()
+	t, ok := s.work.tried[k]
+	s.work.mu.Unlock()
+	if ok && t.read != nil && sameTurn(c, t.turn) {
+		return t.read.ask, t.read.reply
+	}
+	ask, reply, items, err := s.lastTurnRead(ctx, machine, c.SessionID)
+	var re *rpc.Error
+	if err != nil && !(errors.As(err, &re) && re.Code == proto.CodeNotLoaded) {
+		return "", ""
+	}
+	s.work.mu.Lock()
+	if t, ok := s.work.tried[k]; ok && sameTurn(c, t.turn) {
+		t.read = &turnRead{ask: ask, reply: reply, items: items}
+		s.work.tried[k] = t
+	}
+	s.work.mu.Unlock()
+	return ask, reply
+}
+
+// lastTurnOf is a session's latest turn: what the user asked in it ("" when none) and its last reply ("" when none);
+// err when the turn could not be read.
+func (s *Service) lastTurnOf(ctx context.Context, machine, sid string) (ask, answer string, err error) {
+	ask, answer, _, err = s.lastTurnRead(ctx, machine, sid)
+	return ask, answer, err
+}
+
+// lastTurnRead also retains the exact items, so a later asynchronous step cannot mistake a newer turn for this one.
+func (s *Service) lastTurnRead(ctx context.Context, machine, sid string) (ask, answer string, items []proto.Item, err error) {
 	var res struct {
 		Items []proto.Item `json:"items"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1}, &res); err != nil {
-		return "", ""
+	if err := s.call(cctx, machine, DeviceSessionItems, map[string]any{"session_id": sid, "turns": 1, "lazy_images": true}, &res); err != nil {
+		return "", "", nil, err
 	}
-	for _, it := range res.Items {
-		if it.Kind == proto.KindText && it.Role == "user" && strings.TrimSpace(it.Text) != "" {
-			ask = strings.TrimSpace(it.Text)
-			break
-		}
-	}
-	for i := len(res.Items) - 1; i >= 0; i-- {
-		if it := res.Items[i]; it.Kind == proto.KindText && it.Role == "assistant" && strings.TrimSpace(it.Text) != "" {
-			return ask, strings.TrimSpace(it.Text)
-		}
-	}
-	return ask, ""
+	ask, answer = turnExchange(res.Items)
+	return ask, answer, res.Items, nil
 }
 
 // clipMiddleRunes keeps a long text's first and last n runes: a last answer says what was done first and what is
@@ -353,8 +335,8 @@ type agentWake = prompts.AgentWake
 
 func renderWake(w agentWake) string { return prompts.RenderAgentWake(w) }
 
-func renderAnswer(items []agentAnswerItem) string {
-	a := prompts.AgentAnswer{}
+func renderAnswer(items []agentAnswerItem, language string) string {
+	a := prompts.AgentAnswer{Language: language}
 	for _, it := range items {
 		a.Items = append(a.Items, prompts.AgentAnswerItem{Question: oneLine(it.question), Answer: it.answer})
 	}
@@ -363,14 +345,14 @@ func renderAnswer(items []agentAnswerItem) string {
 
 // renderDelegatedAnswer is renderAnswer for answers the assistant gave for the user, and why (delegate.go): the agent
 // hears that they are the assistant's, and that the user may change them.
-func renderDelegatedAnswer(items []agentAnswerItem, reason string) string {
-	a := prompts.AgentAnswer{ByAssistant: true, Reason: oneLine(reason)}
+func renderDelegatedAnswer(items []agentAnswerItem, reason string, language string) string {
+	a := prompts.AgentAnswer{Language: language, ByAssistant: true, Reason: oneLine(reason)}
 	for _, it := range items {
 		a.Items = append(a.Items, prompts.AgentAnswerItem{Question: oneLine(it.question), Answer: it.answer})
 	}
 	return prompts.RenderAgentAnswer(a)
 }
 
-func renderAuthRelayed(app string) string {
-	return prompts.RenderAgentAuthRelayed(prompts.AgentAuthRelayed{App: app})
+func renderAuthRelayed(app string, language string) string {
+	return prompts.RenderAgentAuthRelayed(prompts.AgentAuthRelayed{Language: language, App: app})
 }

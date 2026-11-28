@@ -16,6 +16,31 @@ import SwiftUI
         guard let chrome else { return fixedHeader }
         return chrome.height - min(max(chrome.collapse, 0), chrome.maxCollapse)
     }
+    /// The two places of cards over the composer as shown: the conversation's own (`PendingCards`) and, in Persona's
+    /// conversation, its tasks' questions (`QuestionDock`, the pager that holds both in an assistant conversation, #12831). 0 while one is not on screen. They share the room
+    /// the conversation leaves them (`cardsRoom`, #9392).
+    var stackShown: CGFloat = 0
+    var taskShown: CGFloat = 0
+
+    /// The room the cards may take over the composer, both places together: the page less what the footer holds besides
+    /// them (`rest`), the header and the list's floor. With the keyboard down the conversation keeps `cardThreadRoom` too,
+    /// under the header as it stands open (#6277); with it up the cards take the conversation's room (#1912).
+    func cardsRoom(rest: CGFloat, keyboard: Bool) -> CGFloat {
+        keyboard ? height - rest - header - listFloor : height - rest - fixedHeader - listFloor - Theme.Size.cardThreadRoom
+    }
+
+    /// The most the cards may take when the user makes a card taller by hand (`CardHeight`, #12306): the conversation keeps
+    /// only a sliver over them, under the header as it stands open. The card's title row and fold stay on the page.
+    func tallestRoom(rest: CGFloat) -> CGFloat {
+        height - rest - fixedHeader - listFloor - Theme.Space.xl
+    }
+
+    /// The heights a card's grabber can give its place: from the shortest card up to `tallest` (a page too short for the
+    /// shortest card has one height, `tallest`).
+    static func resizeRange(tallest: CGFloat) -> ClosedRange<CGFloat> {
+        let top = max(tallest, Theme.Size.tapTarget)
+        return min(Theme.Size.cardLeast, top)...top
+    }
 }
 
 extension EnvironmentValues {
@@ -34,6 +59,9 @@ extension EnvironmentValues {
     /// The cards' area is the only cap on a question's form: a lone question card that may grow past half the page
     /// (`PendingCards.growsAlone`, #6277). Otherwise 55% of the page would be the cap in its place.
     @Entry var cardTakesArea = false
+    /// The card takes only the answers that send its Agent nothing (`Interaction.isLocalChoice`, the dismiss): a manager
+    /// work card whose Agent has stopped (#6839). Every other choice and the typed answer are disabled.
+    @Entry var cardLocalOnly = false
 }
 
 /// The agent's pending cards (questions, permissions) above the composer. Where they fit they are laid out as they
@@ -45,6 +73,13 @@ struct PendingCards: View {
         var interaction: Interaction
         /// Answerable from here (the session lets the phone approve); debug samples always are.
         var enabled: Bool
+        /// Only its put-off choices and its dismiss are (`cardLocalOnly`).
+        var localOnly = false
+        /// Why its session doesn't let the app answer it, said under the greyed card (#6868). Nil on one it can answer,
+        /// on a manager work card with local answers (#6839), and on a terminal dialog's answered step (#2970).
+        var blocked: AnswerBlock? = nil
+        /// Whose card it is when it is not the chat's own session's (a side session's, #7944): a line under its title.
+        var from: String? = nil
         var id: String { interaction.id }
     }
 
@@ -62,6 +97,9 @@ struct PendingCards: View {
     /// noise of the subtraction never reaches the cap and redraws the page every frame (#1580).
     @State private var footerRest: CGFloat = 0
     @State private var position = ScrollPosition(edge: .top)
+    /// The tallest line under a card the app can't answer (`CardBlockedLine`, #6868) and the gap over it; 0 without one.
+    /// A card fits itself to the area less it, so the line stays in the area too (a lone question fits the area, #6277).
+    @State private var lineRoom: CGFloat = 0
 
     /// The share of the page the cards may take before they scroll.
     private static let share: CGFloat = 0.5
@@ -91,11 +129,21 @@ struct PendingCards: View {
             ScrollView {
                 VStack(spacing: Theme.Space.m) {
                     ForEach(over ? Self.urgentFirst(cards) : cards) { card in
-                        InteractionPanel(interaction: card.interaction).disabled(!card.enabled)
-                            .chatMark("chat.card." + card.interaction.id)
+                        VStack(alignment: .leading, spacing: Theme.Space.s) {
+                            InteractionPanel(interaction: card.interaction, from: card.from).disabled(!card.enabled)
+                                .environment(\.cardLocalOnly, card.localOnly)
+                                .chatMark("chat.card." + card.interaction.id)
+                            if let blocked = card.blocked {
+                                CardBlockedLine(block: blocked, key: card.interaction.sessionKey)
+                            }
+                        }
                     }
                 }
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                .onPreferenceChange(CardBlockedLine.Height.self) { h in
+                    let room = h > 0 ? h + Theme.Space.s : 0
+                    if abs(room - lineRoom) >= 1 { lineRoom = room }
+                }
             }
             .scrollPosition($position)
             .accessibilityIdentifier("pending-cards")
@@ -115,12 +163,16 @@ struct PendingCards: View {
             // As tall as the cards as measured, at most the cap; before the first measure, its own size.
             .frame(height: height(over: over, cap: cap, keyboard: keyboard))
             .fixedSize(horizontal: false, vertical: contentHeight == 0)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { shown = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                shown = h
+                if abs(room.stackShown - h) >= 1 { room.stackShown = h }
+            }
         }
         .environment(\.cardRoom, containerLength)
-        .environment(\.cardFits, keyboard ? cap - Theme.Space.l - Theme.Space.s : 0)
-        .environment(\.cardArea, cap)
+        .environment(\.cardFits, keyboard ? cap - Theme.Space.l - Theme.Space.s - lineRoom : 0)
+        .environment(\.cardArea, cap - lineRoom)
         .environment(\.cardTakesArea, growsAlone)
+        .environment(\.cardResize, resize)
         // The container's length, read out here where the container is still the page's, not the scroll area.
         .background {
             Color.clear.containerRelativeFrame(.vertical)
@@ -131,9 +183,11 @@ struct PendingCards: View {
         .onChange(of: cards.map(\.id)) { old, new in
             if over, !Set(new).isSubset(of: Set(old)) { withAnimation(Theme.Motion.standard) { position.scrollTo(edge: .top) } }
         }
-        .onChange(of: room.footer - shown, initial: true) { _, o in
+        // What the footer holds besides both places of cards: a task's question over the entries takes its share too.
+        .onChange(of: room.footer - shown - room.taskShown, initial: true) { _, o in
             if abs(o - footerRest) >= 1 { footerRest = o }
         }
+        .onDisappear { room.stackShown = 0 }
     }
 
     /// The cards' mask: while they scroll, clear at the area's top and bottom edges and opaque from the cards' margins
@@ -167,16 +221,30 @@ struct PendingCards: View {
         #endif
     }
 
+    /// A task's question showed over the entries in Persona's conversation (now `QuestionDock`): the two share the room, each
+    /// at most half of it, as Android's do (#9392). Before, the question had no cap at all and took the whole page.
+    private var sharesRoom: Bool { room.taskShown > 0 }
+
+    /// What the footer holds besides both places of cards; before the first measure, the footer as it stands.
+    private var rest: CGFloat { footerRest > 0 ? footerRest : room.footer - shown - room.taskShown }
+
     private var cap: CGFloat {
         let half = room.height * Self.share
+        let whole = room.cardsRoom(rest: rest, keyboard: keyboardRoom)
+        // Half the room each beside a task's question; with the keyboard down a question that takes less (folded,
+        // #12306) leaves the rest to these.
+        let shared = keyboardRoom ? max(Theme.Size.tapTarget, whole / 2) : max(Theme.Size.tapTarget, whole / 2, whole - room.taskShown)
         guard keyboardRoom else {
             // A lone question takes the page down to the conversation's `cardThreadRoom` over the list's floor, never less
             // than its half. Only from values the card does not move, so the cap settles at once (#1580): the header as it
             // stands open (`fixedHeader`, not the fold, which moves with the list's height) and what the footer holds
             // besides the cards (`footerRest`, not the footer as measured, which moves with the cap).
             if growsAlone {
-                let rest = footerRest > 0 ? footerRest : room.footer - shown
-                return max(half, room.height - rest - room.fixedHeader - room.listFloor - Theme.Size.cardThreadRoom)
+                if sharesRoom { return shared }
+                let fallback = max(half, whole)
+                // The user's height (`CardHeight`, #12306), from its grabber.
+                guard let resize else { return fallback }
+                return CardHeight.shared.cap(default: fallback, range: resize.range, id: resize.id)
             }
             // In a voice call the bar is taller than the composer it replaces (at large text sizes, much taller), and the
             // conversation's last rows are the call's captions: the cards give up what of their half would leave the
@@ -186,19 +254,26 @@ struct PendingCards: View {
             // What the footer holds besides the cards comes from the bar's own height (`VoiceBarRoom`) and the count's,
             // never from the footer as measured: that moves with the cap, and a cap within a point of half flipped between
             // the two every frame.
-            guard inCall, room.height > 0 else { return half }
-            let others = VoiceBarRoom.shared.height + countHeight + Theme.Space.s * 3 + Theme.Space.m
+            guard inCall, room.height > 0 else { return sharesRoom ? min(half, shared) : half }
+            let others = (AppModel.shared.voice?.barHeight ?? 0) + countHeight + Theme.Space.s * 3 + Theme.Space.m
             let fits = room.height - room.fixedHeader - room.listFloor - Theme.Size.voiceThreadRoom - others
             return max(Theme.Size.tapTarget, min(half, fits))
         }
         // Before the first measure (a card arriving with the keyboard up), the footer as it stands: the cards are not in it yet.
-        let rest = footerRest > 0 ? footerRest : room.footer - shown
-        return max(Theme.Size.tapTarget, room.height - rest - room.header - room.listFloor)
+        return sharesRoom ? shared : max(Theme.Size.tapTarget, room.cardsRoom(rest: rest, keyboard: true))
+    }
+
+    /// The grabber's terms (#12306): a lone question growing past half the page (`growsAlone`, the keyboard down) may be
+    /// sized by hand from the shortest card to all the room above the composer, the conversation keeping a sliver. Beside
+    /// a task's question that one is sized, and this keeps its share.
+    private var resize: CardResize? {
+        guard growsAlone, !sharesRoom, let card = cards.first else { return nil }
+        return CardResize(id: card.interaction.id, height: { shown }, range: FooterRoom.resizeRange(tallest: room.tallestRoom(rest: rest)))
     }
 
     /// A voice call is on in the cards' conversation (docs/assistant/voice.md 6.2).
     private var inCall: Bool {
-        cards.first.map { VoiceCalls.shared.isLive(on: $0.interaction.sessionKey) } ?? false
+        cards.first.map { AppModel.shared.voice?.isLive(on: $0.interaction.sessionKey) ?? false } ?? false
     }
 
     /// As tall as the cards (with the scrolling margins), at most the cap; with the keyboard up no taller than they need,
@@ -217,5 +292,58 @@ struct PendingCards: View {
             let (ta, tb) = (a.element.interaction.createdAt ?? .distantPast, b.element.interaction.createdAt ?? .distantPast)
             return ta != tb ? ta > tb : a.offset > b.offset
         }.map(\.element)
+    }
+}
+
+/// Under a card the app can't answer (`PendingCards.Card.blocked`, #6868): why it is greyed, and where its session can be
+/// attached live, the ⋯ menu's Attach Live (joined, the app answers it). Before, the card only greyed out and said
+/// nothing. Worded like Android's `approvalBlockedReason` and the watch's `blockedReason`.
+struct CardBlockedLine: View {
+    @Environment(AppModel.self) private var model
+    var block: AnswerBlock
+    var key: SessionKey
+    /// The attach is on its way: a second tap doesn't send another.
+    @State private var attaching = false
+
+    /// The line's height, for the cards' area to leave it room (`PendingCards.lineRoom`): the tallest one.
+    struct Height: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+    }
+
+    var body: some View {
+        // The interface stops at xxxLarge (RootView): there the words wrap beside the button.
+        HStack(spacing: Theme.Space.s) {
+            Text(text)
+                .font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if block == .attach {
+                Button {
+                    attaching = true
+                    Task {
+                        await model.attach(key)
+                        attaching = false
+                    }
+                } label: {
+                    Label("Attach Live", systemImage: Theme.Icon.link).lineLimit(1).tapTargetHeight()
+                }
+                .font(Theme.Font.captionStrong)
+                .themedButton()
+                .disabled(attaching)
+                .accessibilityIdentifier("chat.card.attach")
+            }
+        }
+        .padding(.horizontal, Theme.Space.l)
+        .background { GeometryReader { Color.clear.preference(key: Height.self, value: $0.size.height) } }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat.card.blocked")
+    }
+
+    private var text: String {
+        switch block {
+        case .attach: String(localized: "Attach live to answer it here, or answer it on the computer.")
+        case .computer: String(localized: "This session can't be answered from here. Answer it on the computer.")
+        }
     }
 }

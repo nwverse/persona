@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct SyncEventTests {
     @Test func decodesRevs() throws {
@@ -57,7 +58,7 @@ struct SyncEventTests {
         let s = try JSON.decoder.decode(Session.self, from: Data(#"{"session_id":"s","status":"idle","permission_mode":"plan","effort":"xhigh"}"#.utf8))
         #expect(s.permissionMode == "plan")
         #expect(s.effort == "xhigh")
-        #expect(SessionModes.modeLabel(s.permissionMode) == "只做计划")
+        #expect(SessionModes.modeLabel(s.permissionMode) == "计划模式")
         #expect(SessionModes.effortLabel(s.effort) == "很高")
         #expect(SessionModes.modeLabel("on-request") == "on-request") // unknown values (Codex) show as they are
         let auto = try JSON.decoder.decode(Session.self, from: Data(#"{"session_id":"s","status":"idle","effort":"auto"}"#.utf8))
@@ -93,6 +94,12 @@ struct SyncEventTests {
         #expect(offlineAssistant.canChangeModes)
         let assistantNoModes = try decode(#"{"session_id":"assistant-no-modes","status":"working","assistant":true,"capabilities":{"send":true,"modes":false}}"#)
         #expect(!assistantNoModes.canChangeModes)
+    }
+
+    @Test func desktopComposerShowsObservedEffortWithModesDisabled() throws {
+        let s = try JSON.decoder.decode(Session.self, from: Data(#"{"session_id":"desktop","status":"idle","agent":"claude","source_kind":"claude_desktop","model":"sonnet","effort":"high","capabilities":{"read":true,"modes":false}}"#.utf8))
+        #expect(!s.canChangeModes && !s.setsEffortOnly)
+        #expect(SessionModesMenu.title(s, setsModes: false)?.effort == SessionModes.effortLabel("high"))
     }
 
     /// A Codex thread the hub drives through its app-server lists its levels (`efforts`): only its effort changes, among them.
@@ -131,6 +138,11 @@ struct SyncEventTests {
         #expect(desktop.sourceSubtitle == "Claude 桌面版")
         let cli = try decode(#"{"session_id":"s","source_kind":"claude_cli","capabilities":{"read":true},"read_only_reason":"回复请在电脑上"}"#)
         #expect(cli.sourceSubtitle == "终端里的 Claude · 仅查看：回复请在电脑上")
+        // The node's own view-only prefix is said once (#7803); a reason that is only the prefix falls back to the default.
+        let sub = try decode(#"{"session_id":"s","source_kind":"codex_app_server","capabilities":{"read":true},"read_only_reason":"仅查看：这个子 Agent 由父 Agent 驱动"}"#)
+        #expect(sub.sourceSubtitle == "Codex 实时 · 仅查看：这个子 Agent 由父 Agent 驱动")
+        let bare = try decode(#"{"session_id":"s","source_kind":"codex_app_server","capabilities":{"read":true},"read_only_reason":"仅查看："}"#)
+        #expect(bare.sourceSubtitle == "Codex 实时 · 仅查看：" + String(localized: "Sending isn't allowed from this source yet"))
         #expect(history.resumeCommand == "codex resume")
         #expect(history.sourceThreadID == "thread" && history.sourceInstanceID == "instance" && history.parentThreadID == "parent")
         let roundTrip = try JSON.decoder.decode(Session.self, from: JSON.encoder.encode(history))
@@ -156,22 +168,26 @@ struct SyncEventTests {
         #expect(Session.resumeLine(cwd: "", command: "claude --resume", id: "abc") == "claude --resume abc")
     }
 
-    @MainActor @Test func rowMenuEqualityIncludesPermissions() {
-        let actions = AgentRowMenu.Actions()
-        let key = SessionKey(machineID: "m", sessionID: "s")
-        let old = AgentRowMenu(key: key, pinned: false, muted: false, looping: false, live: true, actions: actions)
-        let external = AgentRowMenu(key: key, pinned: false, muted: false, looping: false, live: true, terminal: false, attachable: true, actions: actions)
+    @MainActor @Test func rowMenuEqualityIncludesPermissions() throws {
+        let actions = AgentMenuHandlers()
+        let base = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"m","session_id":"s","status":"working","state":"working"}"#.utf8))
+        let old = AgentActionMenu(facts: AgentActionFacts(session: base), handlers: actions)
+        var externalSession = base
+        externalSession.sourceKind = "runtime"
+        externalSession.capabilities = try JSON.decoder.decode(SessionCapabilities.self, from: Data(#"{"attach":true}"#.utf8))
+        externalSession.capabilities?.attach = true
+        let external = AgentActionMenu(facts: AgentActionFacts(session: externalSession), handlers: actions)
         #expect(old != external)
         var attached = external
-        attached.attachable = false
+        attached.facts.session.capabilities?.attach = false
         #expect(attached != external)
         #expect(external == external)
         // A runtime's session renames and closes where its node says so (#6294): the menu redraws when that changes.
         var runtime = external
-        runtime.renamable = false
+        runtime.facts.session.capabilities?.rename = false
         #expect(runtime != external)
         runtime = external
-        runtime.closable = false
+        runtime.facts.session.capabilities?.close = false
         #expect(runtime != external)
     }
 

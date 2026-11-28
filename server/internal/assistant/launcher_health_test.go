@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -19,9 +22,11 @@ import (
 // The errors seen on broken machines (placeholders for the machines; the texts as the CLIs and gateways wrote them).
 func TestClassifyLauncherError(t *testing.T) {
 	for text, want := range map[string]string{
-		`API Error: 400 {"error":{"message":"Bare Claude model name cannot be routed"}}`:        errKindModelRoute,
-		`API Error: 400 no account match for model speech_o50`:                                  errKindModelRoute,
-		`session.start: context deadline exceeded`:                                              errKindTimeout,
+		`API Error: 400 {"error":{"message":"Bare Claude model name cannot be routed"}}`: errKindModelRoute,
+		`API Error: 400 no account match for model speech_o50`:                           errKindModelRoute,
+		`API Error: 503 no eligible upstream account is currently available`:             errKindUpstream,
+		`API Error: 503 no eligible upstream account for model claude-sonnet-4-5`:        errKindUpstream,
+		`session.start: context deadline exceeded`:                                       errKindTimeout,
 		`90 秒内没有回答`:                                                                             errKindTimeout,
 		`API Error: 401 {"error":"invalid or missing API key"}`:                                 errKindAuth,
 		`Not logged in · Please run /login`:                                                     errKindAuth,
@@ -29,6 +34,8 @@ func TestClassifyLauncherError(t *testing.T) {
 		`ERROR codex_models_manager: No Trae auth token available for Trae model fetch`:         errKindAuth,
 		`error: unknown option '--plugin-dir'`:                                                  errKindCLIOutdated,
 		`Claude Code version 2.0.1 is no longer supported, please update`:                       errKindCLIOutdated,
+		`Method not found: session/set_mode`:                                                    errKindCLIOutdated,
+		`This Antigravity CLI (agy) is too old to switch to the "accept-edits" mode: it has no session/set_mode. Please update agy.`:                              errKindCLIOutdated,
 		`Claude Code 还没完成首次引导（hasCompletedOnboarding 未置为 true）：请在这台机器的终端里运行一次 claude`:                                                                             errKindOnboarding,
 		`claude did not become ready within 1m0s of starting: this machine's Claude Code has not completed its first-run setup (hasCompletedOnboarding is unset)`: errKindOnboarding,
 		`zsh: command not found: work`: errKindOther,
@@ -42,12 +49,17 @@ func TestClassifyLauncherError(t *testing.T) {
 // First-run setup is a person's job: an onboarding failure never starts an automatic repair, however many probes
 // failed in a row; periodic and on-demand checks clear it once the setup is finished.
 func TestOnboardingFailureNeverRepairs(t *testing.T) {
-	r := LauncherHealth{Kind: errKindOnboarding, Fails: 5}
+	r := LauncherHealth{State: healthFailing, CheckedAt: time.Now(), Kind: errKindOnboarding, Fails: 1}
+	if r.repairNow() {
+		t.Fatal("an onboarding failure must not repair on its first failure")
+	}
+	r.Fails = 5
 	if r.repairNow() {
 		t.Fatal("an onboarding failure must never enter auto repair")
 	}
-	if (LauncherHealth{Kind: errKindOnboarding}).repairNow() {
-		t.Fatal("an onboarding failure must not repair on its first failure either")
+	r.Kind = errKindUpstream
+	if r.repairNow() {
+		t.Fatal("an upstream pool outage must not trigger local launcher repair")
 	}
 }
 
@@ -61,6 +73,9 @@ func launcherHealthHub(t *testing.T) (*Service, *fakeHub) {
 // with no database the model settings stay as it is, so tasks name the launcher).
 func launcherHealthHubOn(t *testing.T, mk func(*testing.T, *fakeHub) *Service) (*Service, *fakeHub) {
 	t.Helper()
+	wasStagger := healthStagger
+	healthStagger = 40 * time.Millisecond // the real one would add half a minute to every round here
+	t.Cleanup(func() { healthStagger = wasStagger })
 	f := newFakeHub().withMachine()
 	f.sessions["l4"], f.sessions["box"] = nil, nil
 	f.devices = []Device{
@@ -179,6 +194,118 @@ func TestPickerHidesAFailedLauncherThatIsNotTheDefault(t *testing.T) {
 	}
 }
 
+// unavailableAt is what GET path lists off (`unavailable`), by name, asked in lang.
+func unavailableAt(t *testing.T, s *Service, path, lang string) map[string]unavailableLauncher {
+	t.Helper()
+	var body struct {
+		Unavailable []unavailableLauncher `json:"unavailable"`
+	}
+	r := httptest.NewRequest("GET", path, nil)
+	r.Header.Set("Accept-Language", lang)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("GET %s: %d %s", path, w.Code, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	out := map[string]unavailableLauncher{}
+	for _, u := range body.Unavailable {
+		out[u.Name] = u
+	}
+	return out
+}
+
+// New Agent lists a launcher whose latest check failed as unavailable, with why, instead of leaving it out (#14535): the
+// failure's class on that computer and the record's line, in the request's language, under code launcher_unhealthy; it
+// stays out of the launchers (and so of the presets). It goes back to the launchers when a check passes. The configured
+// default stays listed with its record, never in both; the main chat's list is unchanged.
+func TestNewAgentListsAFailedLauncherAsUnavailable(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	pointDefaultAt(t, s, f, "other")
+	f.mu.Lock()
+	f.launcherList = append(f.launcherList, proto.Launcher{Name: "agy", Source: "antigravity", Agent: "agy", DisplayName: "Antigravity"})
+	f.checks["l4/work"] = proto.LauncherCheck{Error: "API Error: 401 invalid api key"}
+	f.mu.Unlock()
+	ctx := context.Background()
+	s.healthRound(ctx, true)
+	s.recordHealth(ctx, "l4", "agy", healthResult{err: "Method not found: session/set_mode", source: healthSourceStart})
+
+	for _, tc := range []struct{ lang, work, agy string }{
+		{"en", "Its key or sign-in was rejected in its last check on l4: API Error: 401 invalid api key",
+			"Its CLI on l4 is too old. Update it, then test it again: Method not found: session/set_mode"},
+		{"zh-Hans", "在 l4 上的上次检查里，Key 或登录被拒绝了：API Error: 401 invalid api key",
+			"l4 上的命令行工具版本太旧，更新后再测一次：Method not found: session/set_mode"},
+		{"ja", "l4 での前回のチェックで、キーまたはサインインが拒否されました：API Error: 401 invalid api key",
+			"l4 の CLI のバージョンが古すぎます。更新してからもう一度テストしてください：Method not found: session/set_mode"},
+	} {
+		got := unavailableAt(t, s, "/api/v1/machines/l4/launchers", tc.lang)
+		work, agy := got["work"], got["agy"]
+		if work.Code != unavailableUnhealthy || work.Kind != "launcher" || work.Reason != tc.work {
+			t.Errorf("%s: work: %+v", tc.lang, work)
+		}
+		if agy.Code != unavailableUnhealthy || agy.Agent != "agy" || agy.DisplayName != "Antigravity" || agy.Reason != tc.agy {
+			t.Errorf("%s: agy: %+v", tc.lang, agy)
+		}
+	}
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers?purpose=agent.new"); slices.Contains(names, "work") || slices.Contains(names, "agy") {
+		t.Fatalf("New Agent offers a launcher that failed its check: %v", names)
+	}
+	if got := unavailableAt(t, s, "/api/v1/machines/l4/launchers?purpose=agent.new", "en"); got["work"].Code != unavailableUnhealthy {
+		t.Fatalf("purpose=agent.new does not list work as unavailable: %+v", got)
+	}
+	if got := unavailableAt(t, s, "/api/v1/machines/l4/launchers?purpose=assistant", "en"); got["work"].Code == unavailableUnhealthy || got["agy"].Code == unavailableUnhealthy {
+		t.Fatalf("the main chat's list changed: %+v", got)
+	}
+	if got := unavailableAt(t, s, "/api/v1/machines/server/launchers", "en"); len(got) != 0 {
+		t.Fatalf("a computer whose launchers all work lists some as unavailable: %+v", got)
+	}
+
+	f.mu.Lock()
+	delete(f.checks, "l4/work")
+	f.mu.Unlock()
+	postJSON(t, s, "/api/v1/launchers/health/check?machine=l4&launcher=work")
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "work") {
+		t.Fatalf("a launcher that works again is not offered: %v", names)
+	}
+	if got := unavailableAt(t, s, "/api/v1/machines/l4/launchers", "en"); got["work"].Name != "" {
+		t.Fatalf("a launcher that works again is still unavailable: %+v", got["work"])
+	}
+
+	// the configured default keeps its row and record, and is not listed off as well
+	pointDefaultAt(t, s, f, "agy")
+	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers"); !slices.Contains(names, "agy") {
+		t.Fatalf("the configured default is not listed: %v", names)
+	}
+	if got := unavailableAt(t, s, "/api/v1/machines/l4/launchers", "en"); got["agy"].Name != "" {
+		t.Fatalf("the configured default is listed off as well: %+v", got["agy"])
+	}
+}
+
+// The failure classes each have their words; a class the picker has none for says the check failed, and a long record
+// line is clipped to one short line.
+func TestUnhealthyUnavailableWordsEachClass(t *testing.T) {
+	long := strings.Repeat("x", 400) + "\nsecond line"
+	got := unhealthyUnavailable(i18n.En, "box", []unhealthyLauncher{
+		{ConfiguredLauncher: ConfiguredLauncher{Launcher: proto.Launcher{Name: "a"}, AgentType: "codex"}, record: LauncherHealth{Kind: errKindUsageLimit}},
+		{ConfiguredLauncher: ConfiguredLauncher{Launcher: proto.Launcher{Name: "b"}}, record: LauncherHealth{Kind: "something_new", Error: long}},
+	})
+	if len(got) != 2 || got[0].Reason != "Reached its subscription usage limit on box" || got[0].Agent != "codex" {
+		t.Fatalf("usage limit: %+v", got)
+	}
+	if !strings.HasPrefix(got[1].Reason, "Failed its last check on box: xxx") || strings.Contains(got[1].Reason, "\n") || len([]rune(got[1].Reason)) > 200 {
+		t.Fatalf("unknown class with a long line: %q", got[1].Reason)
+	}
+	for _, kind := range []string{errKindAuth, errKindModelRoute, errKindCLIOutdated, errKindTimeout, errKindUsageLimit, errKindUpstream, errKindOnboarding, errKindOther} {
+		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
+			if text := i18n.T(lang, unhealthyReasonKey(kind), i18n.Args{"machine": "box"}); !strings.Contains(text, "box") || strings.Contains(text, "unhealthy_") {
+				t.Errorf("%s %s: %q", kind, lang, text)
+			}
+		}
+	}
+}
+
 // launcherNamesAt is what GET path offers, in order.
 func launcherNamesAt(t *testing.T, s *Service, path string) []string {
 	t.Helper()
@@ -280,6 +407,54 @@ func TestPickerKeepsTheConfiguredDefaultWithItsReason(t *testing.T) {
 	// The same machine's main-chat list has no such default, so the failed launcher is hidden there.
 	if names := launcherNamesAt(t, s, "/api/v1/machines/l4/launchers?purpose=assistant"); slices.Contains(names, "work") {
 		t.Fatalf("the main chat's list offers the launcher that failed: %v", names)
+	}
+}
+
+// The machines are checked spaces apart (healthStagger): every one runs the same probe prompt, and a model gateway
+// that pins it to one upstream account serves a burst of them behind one another until each times out.
+func TestLauncherHealthStaggersMachines(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	healthStagger = 150 * time.Millisecond
+	s.healthRound(context.Background(), true)
+	if len(f.checkedAt) != 3 {
+		t.Fatalf("checked %v", f.checked)
+	}
+	for i := 1; i < len(f.checkedAt); i++ {
+		if gap := f.checkedAt[i].Sub(f.checkedAt[i-1]); gap < 120*time.Millisecond { // a little under for waking from the timer
+			t.Fatalf("checks %d and %d only %v apart; the machines are not staggered (%v)", i-1, i, gap, f.checked)
+		}
+	}
+}
+
+// A check that times out is asked once more at once: a gateway can leave one request silent while the account
+// answers the next. Only a second timeout in a row is recorded; other errors are recorded without a second check.
+func TestLauncherHealthRetriesATimeoutOnce(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	f.checks["server/work"] = proto.LauncherCheck{Error: "90 秒内没有回答；signal: killed"} // answers the next time
+	f.checks["box/work"] = proto.LauncherCheck{Error: "90 秒内没有回答"}                   // silent twice
+	f.onCheck = func(f *fakeHub) {
+		if n := len(f.checked); n > 0 && f.checked[n-1] == "server/work" && slices.Contains(f.checked[:n-1], "server/work") {
+			delete(f.checks, "server/work")
+		}
+	}
+	s.healthRound(context.Background(), true)
+	count := func(key string) int {
+		n := 0
+		for _, c := range f.checked {
+			if c == key {
+				n++
+			}
+		}
+		return n
+	}
+	if r := healthState(s, "server", "work"); r.State != healthOK || r.Fails != 0 || count("server/work") != 2 {
+		t.Fatalf("server: %+v after %d checks (%v)", r, count("server/work"), f.checked)
+	}
+	if r := healthState(s, "box", "work"); r.State != healthFailing || r.Kind != errKindTimeout || r.Fails != 1 || count("box/work") != 2 {
+		t.Fatalf("box: %+v after %d checks (%v)", r, count("box/work"), f.checked)
+	}
+	if r := healthState(s, "l4", "work"); r.Kind != errKindModelRoute || count("l4/work") != 1 {
+		t.Fatalf("l4: %+v after %d checks (%v)", r, count("l4/work"), f.checked)
 	}
 }
 
@@ -420,6 +595,25 @@ func TestLauncherHealthMovesPlannedTasks(t *testing.T) {
 	}
 }
 
+// A refusal on the detour happens before bind can fill in the chosen machine.
+func TestAgentStartRecordsRefusedHealthDetour(t *testing.T) {
+	s, f := launcherHealthHub(t)
+	ctx := context.Background()
+	f.checks["server/work"] = proto.LauncherCheck{Error: "unavailable"}
+	s.healthRound(ctx, true)
+	s.devs = &resourceDevs{
+		fleetDevs: newFleetDevs(),
+		machines:  map[string]*proto.Machine{"box": admissionMachine(8)},
+		samples:   map[string]*proto.MetricSample{"box": admissionSample(99, 16<<30, 2<<30, 1)},
+	}
+	_, err := s.runTool(ctx, "server", "conv9", "agent_start", json.RawMessage(`{"machine":"l4","cwd":"/home/me/code/app","prompt":"Check CI"}`))
+	if !isAdmissionDenied(err) || len(f.starts) != 0 {
+		t.Fatalf("expected admission refusal on the detour, got %v, starts %v", err, f.starts)
+	}
+	p := onlyStoredPlacement(t, s.store().(settingsPrefixStore))
+	checkPlacementGolden(t, &p, "v1 enforce l4 -> box (assistant-tasks.admission_load) | l4 launcher_unhealthy no_resources | server launcher_unhealthy no_resources | box assistant-tasks.admission_load health=0")
+}
+
 func TestAgentStartDetourRecomputesLauncherPermission(t *testing.T) {
 	s, f := launcherHealthHub(t)
 	f.zshrc = map[string][]proto.Launcher{
@@ -523,8 +717,8 @@ func TestLauncherHealthRecheckThrottleAndFailure(t *testing.T) {
 	}
 }
 
-// Records a probe cannot settle are not rechecked on the spot: a subscription usage limit (the request would be
-// refused too) and a launcher missing from the terminal's shell (the probe's login shell runs it fine).
+// A fresh usage limit waits for the recheck throttle (TestUsageLimitRuleUnknownResetIsRechecked: after it); a
+// launcher missing from the terminal's shell cannot be rechecked in the probe's login shell, where it runs fine.
 func TestLauncherHealthRecheckSkipsSpecialRecords(t *testing.T) {
 	s, f := launcherHealthHub(t)
 	ctx := context.Background()
@@ -689,6 +883,36 @@ func TestLauncherHealthIgnoresRefusedStarts(t *testing.T) {
 	}
 	if r, ok := s.launcherHealth(ctx, "l4", "work"); ok {
 		t.Fatalf("recorded: %+v", r)
+	}
+}
+
+func TestLauncherHealthAfterStartError(t *testing.T) {
+	for _, tc := range []struct {
+		name, code, message string
+		state               string
+		checks              int
+	}{
+		{"Paseo missing directory", "bad_request", "没有这个目录：~/missing", healthOK, 0},
+		{"invalid start parameters", "bad_request", "invalid start parameters", healthOK, 0},
+		{"Go node missing directory", "", "directory /home/me/missing does not exist", healthOK, 0},
+		{"Paseo provider failed", "start_failed", "Provider unavailable", healthFailing, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, f := launcherHealthHubOn(t, newStorelessService)
+			synctest.Test(t, func(t *testing.T) {
+				ctx := context.Background()
+				before := s.recordHealth(ctx, "l4", "work", healthResult{ok: true, source: healthSourceCheck})
+				s.StartEnded(ctx, StartEnded{MachineID: "l4", Launcher: "work", Code: tc.code, Error: tc.message})
+				synctest.Wait()
+				after := healthState(s, "l4", "work")
+				if after.State != tc.state || tc.state == healthOK && after.rev != before.rev {
+					t.Fatalf("health after %q: %+v, want state %q (before: %+v)", tc.message, after, tc.state, before)
+				}
+				if got := checkedNow(f); len(got) != tc.checks {
+					t.Fatalf("checks = %v, want %d", got, tc.checks)
+				}
+			})
+		})
 	}
 }
 

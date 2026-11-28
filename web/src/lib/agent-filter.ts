@@ -3,11 +3,12 @@
 // keeps its place, so the next one is still right below it.
 import { t } from "../i18n";
 import { sessionHost, sessionSource, type AgentMutes } from "./agent-groups";
-import { backgroundWaiting, stateOf } from "./format";
+import { activityOf, backgroundWaiting, stateOf } from "./format";
 import { agentKey, isSpacePinned, type AgentPins } from "./pins";
 import { isMuted } from "./session-actions";
+import { unseen } from "./seen-outbox";
 import type { AgentState, Session } from "./types";
-import { byTime, timeMs } from "./times";
+import { timeMs } from "./times";
 import { stateName } from "./state-labels";
 
 export type AgentFilter = "all" | "needs" | "unread" | "working" | "bg_waiting" | "feishu" | "terminal";
@@ -24,24 +25,11 @@ export const AGENT_FILTERS: { key: AgentFilter; label: string; state?: AgentStat
   { key: "terminal", label: t("lib-agent-filter.terminal") },
 ];
 
-const SOURCE_FILTERS = { feishu: "feishu", terminal: "terminal" } as const;
-
 export function agentFilter(value: string | null): AgentFilter {
   return AGENT_FILTERS.find((f) => f.key === value)?.key ?? "all";
 }
 
-// "botmux" beside the filters (#2786): a show / hide switch for botmux sessions, kept in this browser. It only hides
-// them from this list; the hub's per-machine switch (machine page › "Engine") still decides whether they are listed at all.
-export const BOTMUX_HIDDEN_KEY = "persona.agentHideBotmux";
-
 export const isBotmux = (s: Session) => sessionHost(s) === "botmux";
-
-/** "Lark group" only matches botmux sessions, so it and a hidden botmux cannot both hold: hiding botmux under it goes back to
- * "All", and choosing "Lark group" shows botmux again. Returns the filter and the switch after `change`. */
-export function botmuxAndFilter(filter: AgentFilter, hidden: boolean, change: "filter" | "botmux"): { filter: AgentFilter; hidden: boolean } {
-  if (filter !== "feishu" || !hidden) return { filter, hidden };
-  return change === "botmux" ? { filter: "all", hidden } : { filter, hidden: false };
-}
 
 /** The sessions the list shows: all of them, or all but botmux's while it is hidden. */
 export function withoutBotmux(sessions: Session[], hidden: boolean): Session[] {
@@ -55,11 +43,13 @@ export function filterState(f: AgentFilter): AgentState | undefined {
 /** A muted agent that is working or finished unread is not counted or listed under "Unread" / "Working" (it sits under "Muted");
  * one that needs you still is, the same as the list's order. */
 export function matchesFilter(s: Session, f: AgentFilter, mutes: AgentMutes): boolean {
-  if (f === "feishu" || f === "terminal") return sessionSource(s) === SOURCE_FILTERS[f];
+  if (f === "terminal") return sessionSource(s) === "terminal" && activityOf(s) !== "offline";
+  if (f === "feishu") return sessionSource(s) === "feishu";
   const state = filterState(f);
   if (!state) return true;
   if (state === "working" && backgroundWaiting(s) !== (f === "bg_waiting")) return false;
-  return stateOf(s) === state && (state === "needs_you" || !isMuted(s, mutes));
+  if (f === "needs" && s.view) return s.view.counted === true;
+  return activityOf(s) === state && (state === "needs_you" || !isMuted(s, mutes));
 }
 
 export type FilterCounts = Record<Exclude<AgentFilter, "all">, number>;
@@ -72,13 +62,13 @@ export function filterCounts(sessions: Session[], mutes: AgentMutes): FilterCoun
 
 /** "All", and the states that have agents right now; the chosen one stays while it empties, so it can be left. */
 export function shownFilters(selection: AgentFilter, counts: FilterCounts): AgentFilter[] {
-  return AGENT_FILTERS.map((f) => f.key).filter((k) => k === "all" || k === selection || counts[k] > 0);
+  return AGENT_FILTERS.map((f) => f.key).filter((k) => k === "all" || (k === selection && k !== "feishu") || counts[k] > 0);
 }
 
-/** The agents a filter shows: what matches now, and what it showed when it was chosen (`kept`). */
+/** The tab filter tracks current membership. Other filters can also retain rows shown earlier in the visit. */
 export function applyFilter(sessions: Session[], f: AgentFilter, mutes: AgentMutes, kept: ReadonlySet<string>): Session[] {
   if (f === "all") return sessions;
-  return sessions.filter((s) => matchesFilter(s, f, mutes) || kept.has(agentKey(s)));
+  return sessions.filter((s) => matchesFilter(s, f, mutes) || (f !== "terminal" && kept.has(agentKey(s))));
 }
 
 /** What a filter matches now, by key (what `kept` starts from when it is chosen). */
@@ -86,9 +76,27 @@ export function matchingKeys(sessions: Session[], f: AgentFilter, mutes: AgentMu
   return new Set(f === "all" ? [] : sessions.filter((s) => matchesFilter(s, f, mutes)).map(agentKey));
 }
 
-/** The finished-unread ones among these (what "Mark all as seen" marks). */
+/** Takes in newly matching keys while the filter stays chosen (#12585, iOS onChange(of: matching)); same set when unchanged. */
+export function extendKept(kept: ReadonlySet<string>, matching: ReadonlySet<string>): ReadonlySet<string> {
+  let next: Set<string> | undefined;
+  for (const key of matching) {
+    if (!kept.has(key)) (next ??= new Set(kept)).add(key);
+  }
+  return next ?? kept;
+}
+
+/** Drops cleared keys from `kept` (Clear seen under a quick filter); same set when none were kept. */
+export function removeKept(kept: ReadonlySet<string>, keys: Iterable<string>): ReadonlySet<string> {
+  let next: Set<string> | undefined;
+  for (const key of keys) {
+    if (kept.has(key)) (next ??= new Set(kept)).delete(key);
+  }
+  return next ?? kept;
+}
+
+/** The finished ones nobody has seen among these, Unread or Just finished (what "Mark all as seen" marks). */
 export function unreadOf(sessions: Session[]): Session[] {
-  return sessions.filter((s) => stateOf(s) === "unread");
+  return sessions.filter(unseen);
 }
 
 // ── the spaces' order (iOS ChatsView) ──
@@ -111,19 +119,24 @@ export function isSpaceMuted(sp: SpaceLike, mutes: AgentMutes): boolean {
   return mutes.spaces.includes(`${sp.machineId}/${sp.name}`);
 }
 
+export interface SpaceArrangement<T extends SpaceLike> { active: T[]; idle: T[] }
+
 /** Which spaces lead and which fold into "Idle spaces". Pinned spaces (not muted) lead; then the busy ones, the muted
- * busy ones after them, each in the order given (herdr's); quiet ones fold. Under a quick filter every space it leaves is listed, the most
- * recent first, and none folds. */
-export function arrangeSpaces<T extends SpaceLike>(spaces: T[], o: { pins: AgentPins; mutes: AgentMutes; filtered: boolean; busy: (sp: T) => boolean }): { active: T[]; idle: T[] } {
+ * busy ones after them, each in the order given (herdr's); quiet ones fold. Under a quick filter every space it leaves
+ * is listed in that same stable order and none folds. Without stored membership, `busy` derives the current layout.
+ * With `retainedActive`, membership or `busy` keeps a space above Idle; the caller limits `busy` to attention so an
+ * ordinary working transition does not move an Idle workspace (#11801). */
+export function arrangeSpaces<T extends SpaceLike>(spaces: T[], o: { pins: AgentPins; mutes: AgentMutes; filtered: boolean; busy: (sp: T) => boolean; retainedActive?: ReadonlySet<string> }): SpaceArrangement<T> {
   const lead = (sp: T) => isSpacePinned(sp.machineId, sp.name, o.pins) && !isSpaceMuted(sp, o.mutes);
   const pinned = spaces.filter(lead);
   const rest = spaces.filter((sp) => !lead(sp));
   if (o.filtered) {
-    return { active: [...pinned, ...rest.slice().sort((a, b) => byTime(spaceDate(b), spaceDate(a)) || a.key.localeCompare(b.key))], idle: [] };
+    return { active: [...pinned, ...rest], idle: [] };
   }
-  const busy = rest.filter(o.busy);
+  const busyNow = (sp: T) => o.busy(sp) || o.retainedActive?.has(sp.key) === true;
+  const busy = rest.filter(busyNow);
   return {
     active: [...pinned, ...busy.filter((sp) => !isSpaceMuted(sp, o.mutes)), ...busy.filter((sp) => isSpaceMuted(sp, o.mutes))],
-    idle: rest.filter((sp) => !o.busy(sp)),
+    idle: rest.filter((sp) => !busyNow(sp)),
   };
 }

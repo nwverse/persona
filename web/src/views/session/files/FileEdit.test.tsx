@@ -4,12 +4,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // CodeMirror needs layout jsdom does not have: a plain text area stands in for it, with the same props.
 const typed: { value: string | null } = vi.hoisted(() => ({ value: null }));
-vi.mock("./CodeEditor", () => ({
-  default: ({ text, onChange, bind }: { text: string; onChange: () => void; bind: (r: () => string) => void }) => {
-    bind(() => typed.value ?? text);
-    return <textarea data-testid="code-editor" defaultValue={text} onChange={(e) => { typed.value = e.target.value; onChange(); }} />;
-  },
-}));
+// A lazy chunk can take a later task even when the editor itself is mocked.
+vi.mock("./CodeEditor", async () => {
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  return {
+    default: ({ text, onChange, bind }: { text: string; onChange: () => void; bind: (r: () => string) => void }) => {
+      bind(() => typed.value ?? text);
+      return <textarea data-testid="code-editor" defaultValue={text} onChange={(e) => { typed.value = e.target.value; onChange(); }} />;
+    },
+  };
+});
 import { setToken } from "../../../lib/api";
 import { t } from "../../../i18n";
 import type { FileContent } from "../../../lib/files";
@@ -66,20 +70,24 @@ async function type(text: string) {
   await flush();
 }
 
-beforeEach(async () => {
-  setToken("synthetic-A"); sent = []; answers = []; done = []; typed.value = null;
-  vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body ?? "{}"));
-    sent.push(body);
-    const answer = answers.shift();
-    return answer ? answer(body) : Response.json({ path: body.path, size: 1, revision: "r2" });
-  }));
-  host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  await act(async () => root.render(<FileEdit mid="m1" cwd="/w" file={file()} text={"a\r\nb\r\n"} onDone={(c) => done.push(c)} />)); await flush();
-});
-afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ""; setToken(""); vi.unstubAllGlobals(); });
-
 describe("FileEdit", () => {
+  beforeEach(async () => {
+    setToken("synthetic-A"); sent = []; answers = []; done = []; typed.value = null;
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      sent.push(body);
+      const answer = answers.shift();
+      return answer ? answer(body) : Response.json({ path: body.path, size: 1, revision: "r2" });
+    }));
+    host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+    await act(async () => {
+      root.render(<FileEdit mid="m1" cwd="/w" file={file()} text={"a\r\nb\r\n"} onDone={(c) => done.push(c)} />);
+      await import("./CodeEditor");
+    });
+    await appears(() => host.querySelector('[data-testid="code-editor"]'));
+  });
+  afterEach(() => { act(() => root.unmount()); host.remove(); document.body.innerHTML = ""; setToken(""); vi.unstubAllGlobals(); });
+
   it("saves over the version opened, with the file's line endings", async () => {
     expect(button(t("files-editor.save"))!.disabled).toBe(true);
     await type("a\nb\nc\n");
@@ -123,5 +131,87 @@ describe("FileEdit", () => {
     await appears(() => done.length === 1);
     expect(sent.slice(1).map((b) => [b.path, b.create])).toEqual([["/w/a 2.txt", true], ["/w/a 3.txt", true]]);
     expect(done).toEqual([true]);
+  });
+
+  it("saves a copy beside a Windows computer's file, not in the session's folder (#9968)", async () => {
+    await act(async () => root.render(<FileEdit key="windows" mid="m1" cwd={"C:\\Users\\me"} file={file({ path: "C:\\Users\\me\\docs\\a.txt" })} text={"a\r\nb\r\n"} onDone={(c) => done.push(c)} />));
+    await appears(() => host.querySelector('[data-testid="code-editor"]'));
+    answers.push(() => Response.json({ error: "changed", code: "file_changed" }, { status: 409 }));
+    await type("y\n");
+    await click(t("files-editor.save"));
+    await appears(() => document.body.textContent?.includes(t("files-editor.changed_title", { name: "a.txt" })));
+    await click(t("files-editor.save_copy"));
+    await appears(() => done.length === 1);
+    expect(sent.slice(1).map((b) => [b.path, b.cwd, b.create])).toEqual([["C:\\Users\\me\\docs/a 2.txt", "C:\\Users\\me", true]]);
+  });
+
+  it("handles Escape safely: asks to discard when dirty, closes edit when clean, ignores IME/defaultPrevented, and blocks enclosing panel close", async () => {
+    const outerKeyDown = vi.fn();
+    window.addEventListener("keydown", outerKeyDown);
+    const area = () => document.querySelector<HTMLTextAreaElement>('[data-testid="code-editor"]')!;
+    const sendEsc = (init: KeyboardEventInit & { keyCode?: number } = {}, prevent = false) => {
+      const ev = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...init });
+      if (init.keyCode !== undefined) Object.defineProperty(ev, "keyCode", { value: init.keyCode });
+      if (prevent) ev.preventDefault();
+      act(() => { area().dispatchEvent(ev); });
+    };
+    try {
+      // 1. Dirty editor + IME Escape (isComposing / Safari keyCode 229) or already defaultPrevented: neither discards nor closes.
+      await type("unsaved change");
+      sendEsc({ isComposing: true });
+      sendEsc({ keyCode: 229 });
+      sendEsc({}, true);
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+      expect(done).toEqual([]);
+
+      // 2. Dirty editor + real Escape: opens discard confirmation dialog and stops propagation so SidePanel does not unmount.
+      outerKeyDown.mockClear();
+      sendEsc();
+      expect(document.body.textContent).toContain(t("files-editor.discard_title"));
+      expect(done).toEqual([]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+
+      // Dismiss discard dialog, keep editing.
+      await click(t("files-editor.keep_editing"));
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+
+      // 2a. External SidePanel Escape delegation (e.g. focus on ResizeHandle) prompts discard when dirty.
+      const editRoot = host.querySelector<HTMLElement>('[data-testid="file-edit"]')!;
+      expect(editRoot.hasAttribute("data-unsaved-edit")).toBe(true);
+      const delegated = new CustomEvent("persona:escape-unsaved", { cancelable: true });
+      act(() => { editRoot.dispatchEvent(delegated); });
+      expect(delegated.defaultPrevented).toBe(true);
+      expect(document.body.textContent).toContain(t("files-editor.discard_title"));
+      await click(t("files-editor.keep_editing"));
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+
+      // 2b. While saving is in flight, Escape consumes the event without opening discard dialog or closing.
+      let finishSave!: (r: Response) => void;
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finishSave = resolve; })));
+      await act(async () => { button(t("files-editor.save"))!.click(); });
+      outerKeyDown.mockClear();
+      sendEsc();
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+      expect(done).toEqual([]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+      finishSave(Response.json({ path: "/w/a.txt", size: 1, revision: "r2" }));
+      await appears(() => done.length === 1);
+      expect(done).toEqual([true]);
+      done.length = 0;
+
+      // 3. Clean editor + real Escape: exits edit mode cleanly without propagating to enclosing SidePanel.
+      await act(async () => { root.render(null); });
+      await act(async () => {
+        root.render(<FileEdit mid="m1" cwd="/w" file={file()} text={"a\r\nb\r\n"} onDone={(c) => done.push(c)} />);
+        await import("./CodeEditor");
+      });
+      await appears(() => host.querySelector('[data-testid="code-editor"]'));
+      outerKeyDown.mockClear();
+      sendEsc();
+      expect(done).toEqual([false]);
+      expect(outerKeyDown).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", outerKeyDown);
+    }
   });
 });

@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -45,6 +46,7 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.Navigator
 import java.io.File
+import persona.core.inbox.*
 
 /**
  * Inbox phase 1 on the JVM with Robolectric's native graphics, in every style, light and dark, from the shared fixture
@@ -110,7 +112,7 @@ class InboxEventShotsTest {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 key(run) {
                     Box(Modifier.testTag("shot").width(400.dp).height(2600.dp).background(PersonaTheme.palette.background)) {
-                        InboxScreen(inbox, navigator)
+                        OnAll { InboxScreen(inbox, navigator) }
                     }
                 }
             }
@@ -202,7 +204,7 @@ class InboxEventShotsTest {
 
         rule.onNode(hasText("修改") and hasClickAction()).performClick()
         rule.waitForIdle()
-        rule.onAllNodes(hasSetTextAction())[1].performTextReplacement("别这么回，先问时间")
+        rule.onAllNodes(hasSetTextAction() and hasAnyAncestor(isDialog()))[1].performTextReplacement("别这么回，先问时间")
         rule.onNode(hasText("告诉 AI") and hasClickAction()).performClick()
         rule.waitForIdle()
         assertEquals(SuggestionAction.Instruct to "别这么回，先问时间", inbox.answers.last().action to inbox.answers.last().text)

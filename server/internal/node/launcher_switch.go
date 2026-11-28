@@ -116,24 +116,37 @@ func (n *Node) putPendingSwitch(id string, ps *proto.PendingSwitch) {
 // with the model and effort, the permission mode applied after (handled). The session's own launcher drops a switch
 // that waits; handled false then when the request asks for more (a model, mode or effort), which goes on as it would
 // without a launcher.
-func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mode, effort string) (handled bool, err error) {
+// validSwitchID reports whether id is a valid session identifier for launcher/engine switching: a UUID (Claude Code,
+// Codex) or a live terminal Antigravity pane row ID (otherSession).
+func (n *Node) validSwitchID(id string) bool {
+	if validID(id) {
+		return true
+	}
+	a, live := n.agent(id)
+	return live && a.Agent == agyAgent
+}
+
+func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mode, effort string) (handled, changed bool, err error) {
 	launcher, from = strings.TrimSpace(launcher), strings.TrimSpace(from)
-	if !validID(id) {
-		return true, fmt.Errorf("invalid session id %q", id)
+	if !n.validSwitchID(id) {
+		return true, false, fmt.Errorf("invalid session id %q", id)
 	}
 	// What the request changes must not be overwritten by the hub's copy of the record still on its way (#5510).
 	if err := n.state.loaded(ctx); err != nil {
-		return true, err
+		return true, false, err
 	}
 	ps := proto.PendingSwitch{Launcher: launcher, Model: strings.TrimSpace(model), Effort: effort}
+	// An agent whose claude Persona did not start with its command (herdr's bare resume, offlauncher.go) does not run
+	// on its own launcher: picking that one may be a switch back to it, checked like any other.
+	off := n.offLauncher(id)
 	// The checks run a login shell, ask the hub for a provider's secrets, read the launcher's models: not while holding
 	// up the session's messages.
 	checked := false
-	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own {
+	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own || off {
 		// A launcher of the other engine (Claude Code ↔ Codex) is a switch to it (engine_switch.go, #5054).
 		to, err := n.switchEngine(ctx, id, launcher)
 		if err != nil {
-			return true, err
+			return true, false, err
 		}
 		ps.Agent = to
 		if to != "" {
@@ -142,30 +155,36 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 			_, err = n.planSwitch(ctx, id, ps)
 		}
 		if err != nil {
-			return true, err
+			return true, false, err
 		}
 		checked = true
 	}
 	// A switch being carried out right now (from the moment a message takes it up) takes minutes: the pick is refused
 	// at once rather than held past the hub's wait, and made again against what the agent runs on then.
 	if n.restarting(id) {
-		return true, refusal(proto.CodeSwitchStale, "the agent is being started again (a launcher switch, a resume): pick again once it runs", nil)
+		return true, false, refusal(proto.CodeSwitchStale, "the agent is being started again (a launcher switch, a resume): pick again once it runs", nil)
 	}
 	// One at a time with the messages: one carrying a switch out writes the record anew, and would drop a pick made
 	// meanwhile; this one waits for it, and is then taken against the launcher the agent runs on by then.
 	unlock := n.typing.lock(id)
 	own, _ := n.engineOwnLauncher(id, n.liveEngine(id))
-	if from != "" && from != own || launcher != own && !checked {
+	// Off its launcher (again by then: a switch carried out meanwhile puts it back on), picking that launcher is the
+	// switch back to it, unless a switch to another one waits: that pick cancels it, as it does for an agent on it.
+	waiting := n.pendingSwitch(id)
+	back := launcher == own && n.offLauncher(id) && (waiting == nil || waiting.Launcher == own)
+	if from != "" && from != own || (launcher != own || back) && !checked {
 		unlock()
-		return true, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
+		return true, false, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
 	}
-	if launcher == own {
+	if launcher == own && !back {
+		cancelled := false
 		if n.pendingSwitch(id) != nil {
 			n.putPendingSwitch(id, nil)
 			n.logf("session %s: launcher switch cancelled", id)
+			cancelled = true
 		}
 		unlock()
-		return model == "" && mode == "" && effort == "", nil
+		return model == "" && mode == "" && effort == "", cancelled, nil
 	}
 	before := n.pendingSwitch(id)
 	ps.At = time.Now().UTC()
@@ -173,7 +192,7 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	unlock()
 	n.logf("session %s: switch to launcher %s (engine %q, model %q, effort %q) waits for the next message", id, launcher, ps.Agent, ps.Model, effort)
 	if mode == "" {
-		return true, nil
+		return true, true, nil
 	}
 	if err := n.setModes(ctx, id, mode, ""); err != nil {
 		// The request did not go through: the switch it recorded goes too, the one before it back.
@@ -182,9 +201,9 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 			n.putPendingSwitch(id, before)
 		}
 		unlock()
-		return true, err
+		return true, false, err
 	}
-	return true, nil
+	return true, true, nil
 }
 
 // liveEngine is the engine session id's live agent runs ("claude" or "codex"; "" for another agent), "claude" when it
@@ -212,7 +231,7 @@ func (n *Node) switchEngine(ctx context.Context, id, launcher string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if (to == "claude" || to == "codex") && to != from {
+	if isSwitchEngine(to) && to != from {
 		return to, nil
 	}
 	return "", nil
@@ -259,7 +278,11 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 	if err != nil {
 		return nil, err
 	}
-	forward := modelExecution{Model: ps.Model, PlanThen: n.planThen(id)}
+	sourceState, _ := n.state.get(id)
+	forward := modelExecution{Source: sourceState.ModelSource, Model: ps.Model, PlanThen: n.planThen(id)}
+	if st, _ := n.state.get(id); forward.Model == "" && st.Launcher == ps.Launcher && n.offLauncher(id) {
+		forward.Model = st.Model // back on the launcher it was started on (offlauncher.go): with the model it ran there
+	}
 	if forward.Model == "" {
 		model, ok := n.switchModel(ps.Launcher, cwd, dir, dirKnown)
 		if !ok {
@@ -279,7 +302,7 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.Agent, host.Host, host.PaneRef, error) {
 	var a host.Agent
 	var ref host.PaneRef
-	if !validID(id) {
+	if !validID(id) && (!engine || !n.validSwitchID(id)) {
 		return a, nil, ref, fmt.Errorf("invalid session id %q", id)
 	}
 	unsupported := switchUnsupported
@@ -307,7 +330,7 @@ func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.
 	if !live {
 		return a, nil, ref, n.noPaneForModes(id) // a claude in a terminal Persona does not drive
 	}
-	if a.Agent != "" && a.Agent != "claude" && (!engine || a.Agent != "codex") {
+	if a.Agent != "" && a.Agent != "claude" && (!engine || !isSwitchEngine(a.Agent)) {
 		return a, nil, ref, unsupported(a.Agent + " runs in this terminal")
 	}
 	kind := host.ParsePane(a.PaneID).Kind
@@ -694,6 +717,10 @@ func (n *Node) dropSwitchNow(id string, why error) {
 // for the user or still starts, or has background work that quitting it would end (backgroundWork).
 func (n *Node) switchBusy(ctx context.Context, id string) string {
 	_ = n.refreshHosts(ctx)
+	return n.switchActivity(id)
+}
+
+func (n *Node) switchActivity(id string) string {
 	a, ok := n.agent(id)
 	if !ok {
 		return ""
@@ -743,6 +770,50 @@ func (n *Node) backgroundWork(id string) string {
 		return "a /loop"
 	}
 	return ""
+}
+
+// turnOver: session id's Claude Code in a pane is at rest as far as the node knows (its turn ended: not working, not
+// waiting on the user, not starting or moving to another launcher). From what the node holds, without asking the host.
+func (n *Node) turnOver(id string) bool {
+	a, ok := n.agent(id)
+	if !ok || a.Agent != "" && a.Agent != "claude" {
+		return false
+	}
+	return (a.AgentStatus == proto.StatusDone || a.AgentStatus == proto.StatusIdle) && !n.restarting(id)
+}
+
+// backgroundRuns: session id is known to have background work running: a background command, a workflow or a
+// background subagent. False while that is not known (the transcript's background work still being read): a Stop on a
+// session at rest is then answered as it always was.
+func (n *Node) backgroundRuns(id string) bool {
+	p := n.transcriptPath(id)
+	if p == "" {
+		return false
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		return false
+	}
+	m := n.meta(p, fi)
+	if _, _, _, pending := n.backgroundTasks(p); m.bgWait || pending {
+		return false
+	}
+	if n.liveBackground(p, n.processSince(id)) > 0 {
+		return true
+	}
+	s := proto.Session{SessionID: id}
+	n.setBackground(&s, m)
+	for _, w := range s.Workflows {
+		if w.Running {
+			return true
+		}
+	}
+	for _, sub := range n.subagents(id) {
+		if sub.Running && sub.Background {
+			return true
+		}
+	}
+	return false
 }
 
 // processSince is when session id's claude process started as far as the node saw it (its ultracode process
@@ -796,7 +867,7 @@ func (n *Node) liveBackground(path string, since time.Time) int {
 // lets --resume bring back the model the conversation last ran), and the mode a plan goes on in. Not the transcript's
 // model: a gateway may answer under another name than the id it takes.
 func (n *Node) ranExecution(id string, prev sessionState) modelExecution {
-	ex := modelExecution{Model: prev.Model, Fingerprint: prev.ModelFingerprint, PlanThen: prev.PlanThen}
+	ex := modelExecution{Source: prev.ModelSource, Model: prev.Model, Fingerprint: prev.ModelFingerprint, PlanThen: prev.PlanThen}
 	n.mu.Lock()
 	var picked string
 	if m, ok := n.modes[id]; ok && m.Model != nil {
@@ -885,7 +956,7 @@ func (n *Node) resumeTurn(ctx context.Context, id string) (done func()) {
 // is dropped and refuses the message instead (switchNowRefusal).
 func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.PendingSwitch, now bool) (string, bool, error) {
 	own, _ := n.ownLauncher(id)
-	if ps.Launcher == own || time.Since(ps.At) > switchMaxAge {
+	if ps.Launcher == own && !n.offLauncher(id) || time.Since(ps.At) > switchMaxAge { // off its own: a switch back (offlauncher.go)
 		n.logf("session %s: switch to launcher %s picked %s dropped: on it already, or picked too long ago", id, ps.Launcher, ps.At.Format(time.RFC3339))
 		n.putPendingSwitch(id, nil)
 		return pane, false, nil
@@ -972,13 +1043,9 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	back modelExecution, backErr error, prev sessionState, had bool) (string, error) {
 	a, h, ref := plan.a, plan.h, plan.ref
 	n.logf("session %s: switching from launcher %s to %s (model %q) in %s", id, own, ps.Launcher, plan.forward.Model, a.PaneID)
-	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
-		return "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, own), nil)
-	}
-	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
+	shells, dir, err := n.quitForLauncherRestart(ctx, id, own, a, h, ref)
 	if err != nil {
-		n.logf("session %s: switch: %v", id, err)
-		return "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
+		return "", err
 	}
 	start := func(launcher, effort string, execution modelExecution, shells []string, dir string) (*proto.Session, error) {
 		sctx, cancel := switchStartCtx(ctx, a, h, ref, shells, dir, plan.cwd)
@@ -1010,6 +1077,18 @@ func (n *Node) carryOut(ctx context.Context, id, own string, ps proto.PendingSwi
 	return "", refusal(proto.CodeSwitchFailed, fmt.Sprintf("the agent did not come up on launcher %s (%v); it is back on %s", ps.Launcher, startErr, own), nil)
 }
 
+func (n *Node) quitForLauncherRestart(ctx context.Context, id, launcher string, a host.Agent, h host.Host, ref host.PaneRef) ([]string, string, error) {
+	if quit, err := n.quitAgent(ctx, id, a.PaneID); err != nil || !quit {
+		return nil, "", refusal(proto.CodeSwitchNotStopped, fmt.Sprintf("the agent did not quit (%v); it runs on %s as before", err, launcher), nil)
+	}
+	shells, dir, err := n.shellAfterQuit(ctx, id, "claude", a, h, ref)
+	if err != nil {
+		n.logf("session %s: restart: %v", id, err)
+		return nil, "", refusal(proto.CodeSwitchFailedStopped, fmt.Sprintf("the agent quit, but its terminal did not come back to a shell prompt: %v", err), nil)
+	}
+	return shells, dir, nil
+}
+
 // switchStartCtx is the context of a start in a switch's pane (ref on h, agent a's): the pane adopted with the shells
 // in front of it, its host the start's, cd first when the shell (in dir) is not in cwd, and switchStartWait to come up
 // in.
@@ -1036,7 +1115,7 @@ func (n *Node) switched(id string, ps proto.PendingSwitch) {
 func (n *Node) noteSwitchedModel(id string, ps proto.PendingSwitch) {
 	n.mu.Lock()
 	if m, ok := n.modes[id]; ok {
-		m.Model = nil
+		m.Model, m.Awaited = nil, nil // a switch typed into the old launcher's process is not this one's
 		n.modes[id] = m
 	}
 	n.mu.Unlock()
@@ -1098,6 +1177,12 @@ func (n *Node) quitStillOpen(id, engine string) error {
 	if engine == "codex" {
 		if n.codexHolds(n.codexPath(id)) {
 			return errors.New("a Codex still has the thread open")
+		}
+		return nil
+	}
+	if engine == agyAgent {
+		if conv := n.agyHandoffConversation(id); conv != "" && agyPresenceHeld(n.agyDataRoot(), conv) {
+			return errors.New("an Antigravity process still has the conversation open")
 		}
 		return nil
 	}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -60,11 +61,11 @@ func TestNodeNamingMetadataIncremental(t *testing.T) {
 	m = read()
 	s := proto.Session{Title: m.title}
 	setContext(&s, m)
-	if s.OutputTokens != 27 || !s.TitleManual || s.TitleSource.String() != "manual" {
-		t.Fatalf("session metadata: output=%d manual=%v source=%q", s.OutputTokens, s.TitleManual, s.TitleSource)
+	if s.OutputTokensValue() != 27 || !s.TitleManual || s.TitleSource.String() != "manual" {
+		t.Fatalf("session metadata: output=%d manual=%v source=%q", s.OutputTokensValue(), s.TitleManual, s.TitleSource)
 	}
 	before := listKey([]proto.Session{s})
-	s.OutputTokens++
+	s.SetOutputTokens(int(s.OutputTokensValue()) + 1)
 	if before == listKey([]proto.Session{s}) {
 		t.Fatal("generated output did not change the published list key")
 	}
@@ -98,8 +99,8 @@ func TestNodeNamingMetadataSources(t *testing.T) {
 			s := proto.Session{Title: m.title}
 			untitled(&s, m)
 			setContext(&s, m)
-			if s.TitleManual || s.TitleSource.String() != tc.source || s.OutputTokens != tc.output {
-				t.Fatalf("source=%q manual=%v output=%d", s.TitleSource, s.TitleManual, s.OutputTokens)
+			if s.TitleManual || s.TitleSource.String() != tc.source || int(s.OutputTokensValue()) != tc.output {
+				t.Fatalf("source=%q manual=%v output=%d", s.TitleSource, s.TitleManual, s.OutputTokensValue())
 			}
 		})
 	}
@@ -108,7 +109,7 @@ func TestNodeNamingMetadataSources(t *testing.T) {
 func TestToolOnlyTitleKeepsKnownPromptProvenance(t *testing.T) {
 	s := proto.Session{Title: "◐ Claude Code"}
 	setContext(&s, quickMeta{titleSource: "prompt", outputTokens: 10})
-	if s.TitleSource != proto.TitleSourcePrompt || s.OutputTokens != 10 {
+	if s.TitleSource != proto.TitleSourcePrompt || s.OutputTokensValue() != 10 {
 		t.Fatal("tool fallback lost its proved transcript provenance")
 	}
 	unknown := proto.Session{Title: "◐ Claude Code"}
@@ -179,9 +180,105 @@ func TestBackgroundTasksStreamed(t *testing.T) {
 		if got := n.bgScans[path].meta.Background; !reflect.DeepEqual(got, want.Background) {
 			t.Errorf("%s: background tasks\n got %+v\nwant %+v", name, got, want.Background)
 		}
+		if got := n.bgScans[path].meta.BackgroundEnded; !reflect.DeepEqual(got, want.BackgroundEnded) {
+			t.Errorf("%s: ended background tasks\n got %+v\nwant %+v", name, got, want.BackgroundEnded)
+		}
 		if st, _ := os.Stat(path); n.bgScans[path].off != st.Size() {
 			t.Errorf("%s: scanned up to %d of %d bytes", name, n.bgScans[path].off, st.Size())
 		}
+	}
+}
+
+func TestBackgroundStopResultIncremental(t *testing.T) {
+	for _, tc := range []struct {
+		tool, input string
+	}{
+		{"TaskStop", `{"task_id":"shell"}`},
+		{"KillShell", `{"shell_id":"shell"}`},
+		{"KillBash", `{"shell_id":"shell"}`},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "session.jsonl")
+			ts := time.Now().UTC().Format(time.RFC3339Nano)
+			call := func(id, tool, input string) string {
+				return `{"type":"assistant","timestamp":"` + ts + `","message":{"role":"assistant","content":[{"type":"tool_use","id":"` + id + `","name":"` + tool + `","input":` + input + `}]}}` + "\n"
+			}
+			result := func(id, text string, isError bool) string {
+				return `{"type":"user","timestamp":"` + ts + `","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"` + text + `","is_error":` + strconv.FormatBool(isError) + `}]}}` + "\n"
+			}
+			appendRows := func(rows string) {
+				t.Helper()
+				f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.WriteString(rows); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			n := &Node{bgScans: map[string]*bgScan{}}
+			rows := call("launch", "Bash", `{"command":"sleep 60","run_in_background":true}`) +
+				result("launch", "Command running in background with ID: shell. Output is being written to: /tmp/shell.out", false)
+			if err := os.WriteFile(path, []byte(rows), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tasks, _, _, _ := n.backgroundTasks(path); len(tasks) != 1 {
+				t.Fatalf("launch: %+v", tasks)
+			}
+
+			// A result names only the pending call's id. Read the call and result in separate appends.
+			appendRows(call("denied", tc.tool, tc.input))
+			n.backgroundTasks(path)
+			appendRows(result("denied", "Permission denied", true))
+			if tasks, _, _, _ := n.backgroundTasks(path); len(tasks) != 1 || len(n.bgEnded(path)) != 0 {
+				t.Fatalf("denied stop: running %+v ended %+v", tasks, n.bgEnded(path))
+			}
+			appendRows(call("stopped", tc.tool, tc.input))
+			n.backgroundTasks(path)
+			appendRows(result("stopped", "Stopped background task shell", false))
+			tasks, _, _, _ := n.backgroundTasks(path)
+			ended := n.bgEnded(path)
+			if len(tasks) != 0 || len(ended) != 1 || ended[0].Status != "stopped" || ended[0].ExitCode != nil {
+				t.Fatalf("successful stop: running %+v ended %+v", tasks, ended)
+			}
+		})
+	}
+}
+
+func TestBackgroundEndedRetention(t *testing.T) {
+	now := time.Now()
+	recent, old := now.Add(-time.Hour), now.Add(-workflowKeep-time.Hour)
+	n := &Node{bgScans: map[string]*bgScan{"s": {meta: transcript.Meta{BackgroundEnded: []proto.BackgroundTask{
+		{ID: "old", Kind: "shell", EndedAt: &old},
+		{ID: "recent", Kind: "shell", Status: "completed", EndedAt: &recent},
+	}}}}}
+	ended := n.bgEnded("s")
+	if len(ended) != 1 || ended[0].ID != "recent" {
+		t.Fatalf("retained outcomes: %+v", ended)
+	}
+	path := filepath.Join(t.TempDir(), "cached.jsonl")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.metas = map[string]quickMeta{path: {size: st.Size(), mtime: st.ModTime(), readAt: now, bgEnded: []proto.BackgroundTask{{ID: "old", EndedAt: &old}, {ID: "recent", EndedAt: &recent}}}}
+	if cached := n.meta(path, st).bgEnded; len(cached) != 1 || cached[0].ID != "recent" {
+		t.Fatalf("cached meta kept expired outcomes: %+v", cached)
+	}
+	var s proto.Session
+	n.setBackground(&s, quickMeta{bgEnded: ended})
+	if got := s.BackgroundEnded(); len(got) != 1 || got[0].ID != "recent" {
+		t.Fatalf("session outcomes: %+v", got)
+	}
+	n.bgScans["s"].pending = true
+	if got := n.bgEnded("s"); got != nil {
+		t.Fatalf("pending scan published outcomes: %+v", got)
 	}
 }
 
@@ -341,4 +438,71 @@ func TestBackgroundTasksSeesManuallyBackgrounded(t *testing.T) {
 	if got := n.bgScans[path].meta.Background; len(got) != 1 || got[0].ID != "beg3p1s7d" || got[0].Kind != "shell" {
 		t.Fatalf("background tasks: %+v", got)
 	}
+}
+
+func TestBackgroundTasksKeepsCodexPlans(t *testing.T) {
+	filler := bytes.Repeat([]byte(`{"timestamp":"2026-11-22T10:00:05Z","type":"event_msg","payload":{"type":"agent_message","message":"working"}}`+"\n"), quickTail/64)
+
+	t.Run("wire update_plan and functions.update_plan across filler and append", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "rollout-wire.jsonl")
+		head := `{"timestamp":"2026-11-22T10:00:00Z","type":"session_meta","payload":{"id":"t1","cwd":"/work"}}` + "\n" +
+			`{"timestamp":"2026-11-22T10:00:01Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","call_id":"call_wire_1","arguments":"{\"plan\":[{\"step\":\"Read\",\"status\":\"completed\"},{\"step\":\"Patch\",\"status\":\"in_progress\"}]}"}}` + "\n" +
+			`{"timestamp":"2026-11-22T10:00:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wire_1","output":"Plan updated"}}` + "\n"
+		if err := os.WriteFile(path, append([]byte(head), filler...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		n := &Node{bgScans: map[string]*bgScan{}, metas: map[string]quickMeta{}}
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := n.meta(path, st)
+		if p := m.plan; p == nil || p.Done != 1 || p.Total != 2 || p.Current != "Patch" {
+			t.Fatalf("wire update_plan from far back = %+v", p)
+		}
+
+		// Append functions.update_plan in two writes separated by filler so PlanPending must bridge the gap.
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(`{"timestamp":"2026-11-22T10:01:00Z","type":"response_item","payload":{"type":"function_call","name":"functions.update_plan","call_id":"call_wire_2","arguments":"{\"plan\":[{\"step\":\"Read\",\"status\":\"completed\"},{\"step\":\"Patch\",\"status\":\"completed\"},{\"step\":\"Verify\",\"status\":\"in_progress\"}]}"}}` + "\n"); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+		n.backgroundTasks(path)
+		if _, err := f.Write(filler[:bytes.Index(filler[4096:], []byte("\n"))+4097]); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(`{"timestamp":"2026-11-22T10:01:05Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_wire_2","output":"Plan updated"}}` + "\n"); err != nil {
+			f.Close()
+			t.Fatal(err)
+		}
+		f.Close()
+
+		n.backgroundTasks(path)
+		if p := n.bgPlan(path); p == nil || p.Done != 2 || p.Total != 3 || p.Current != "Verify" ||
+			!p.At.Equal(time.Date(2026, 11, 22, 10, 1, 5, 0, time.UTC)) {
+			t.Fatalf("functions.update_plan after append = %+v", p)
+		}
+	})
+
+	t.Run("native plan_update event", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "rollout-native.jsonl")
+		head := `{"timestamp":"2026-11-22T10:00:00Z","type":"session_meta","payload":{"id":"t2","cwd":"/work"}}` + "\n" +
+			`{"timestamp":"2026-11-22T10:00:01Z","type":"event_msg","payload":{"type":"plan_update","plan":[{"step":"Inspect","status":"completed"},{"step":"Ship","status":"in_progress"}]}}` + "\n"
+		if err := os.WriteFile(path, append([]byte(head), filler...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		n := &Node{bgScans: map[string]*bgScan{}, metas: map[string]quickMeta{}}
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := n.meta(path, st)
+		if p := m.plan; p == nil || p.Done != 1 || p.Total != 2 || p.Current != "Ship" {
+			t.Fatalf("native plan_update from far back = %+v", p)
+		}
+	})
 }

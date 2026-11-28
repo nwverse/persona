@@ -58,6 +58,10 @@
   "push": "Notifications",
   "push_note": "When off, this device gets no notifications from this assistant",
   "push_failed": "Couldn't change notifications: {error}",
+  "in_switcher": "Show in the switcher",
+  "in_switcher_note": "When off, the switcher leaves this assistant out while it is not the default and has no computer",
+  "in_switcher_in_use": "It is the default or has a computer, so the switcher shows it",
+  "in_switcher_failed": "Couldn't change the switcher: {error}",
   "last_synced": "Last synced {time}",
   "offline_composer": "{name} · last synced {time}",
   "offline_composer_never": "{name} is offline",
@@ -75,5 +79,7 @@
   "move_offline": "Offline",
   "needs_update": "Needs update",
   "needs_update_note": "Its personad is older and doesn't read settings of its own (manager.json) yet, so it runs on built-in defaults. Update personad on the computer it runs on.",
+  "pending_restart": "Pending restart",
+  "pending_restart_note": "Its personad binary was updated on disk. This assistant will restart automatically once idle.",
   "machine_offline": "Its assistant “{name}” is offline. It comes back online once the assistant is back."
 }

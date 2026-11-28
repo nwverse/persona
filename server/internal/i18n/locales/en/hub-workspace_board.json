@@ -9,8 +9,13 @@
   "err_changed": "The workspace changed. Refresh and choose again",
   "err_no_directory": "This workspace has no code directory to confirm. Bind a directory directly",
   "err_pick_directory": "Choose a real code directory",
+  "err_project_binding": "Choose a name and directory for the new project",
+  "err_desktop_application": "This desktop application is not supported",
+  "err_project_directory": "Enter a directory for the project",
   "err_resolve_failed": "Couldn’t verify the directory. Check the path and node version: {error}",
   "err_resolve_empty": "Verifying the directory returned no usable workspace",
   "err_snapshot_read": "Couldn’t read the workspace history snapshot",
-  "err_snapshot_save": "Couldn’t save the workspace snapshot"
+  "err_snapshot_save": "Couldn’t save the workspace snapshot",
+  "err_activity_unavailable": "Activity history is not available on this manager. Update it to enable history.",
+  "err_activity_gone": "This activity is no longer available. Refresh the history."
 }

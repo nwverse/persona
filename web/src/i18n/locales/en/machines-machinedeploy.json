@@ -1,4 +1,6 @@
 {
   "failed": "Deploy failed: {error}",
-  "requesting": "Requesting"
+  "requesting": "Requesting",
+  "details": "Details",
+  "co_located_note": "Updates the shared personad program; co-located assistant ({names}) will restart smoothly when idle."
 }

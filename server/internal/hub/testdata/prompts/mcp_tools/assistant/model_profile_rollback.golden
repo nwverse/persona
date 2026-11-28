@@ -1,0 +1,9 @@
+{
+  "name": "model_profile_rollback",
+  "description": "Preview and undo the latest switch's model changes. The last rollback can redo a switch.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

@@ -10,8 +10,13 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+// LegacyTaskExecution is an internal assistant.send hint for unconfigured scheduled turns.
+// The devices manager consumes it against the connected node's handshake before dispatch.
+const LegacyTaskExecution = "task_execution_legacy"
 
 // Manager → hub.
 const (
@@ -48,6 +53,14 @@ const (
 	MethodRename = "devices.rename"
 )
 
+var (
+	RequestMethod         = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRequest}
+	ConnectedMethod       = buswire.Method[Connected, ConnectedReply]{Name: MethodConnected}
+	ConnectorCredMethod   = buswire.Method[ConnectorCredRequest, ConnectorCred]{Name: MethodConnectorCred}
+	ConnectorPairedMethod = buswire.Method[ConnectorCred, buswire.None]{Name: MethodConnectorPaired}
+	RenameMethod          = buswire.Method[Rename, RenameReply]{Name: MethodRename}
+)
+
 // Rename is devices.rename's params: Name "" is the computer's id again.
 type Rename struct {
 	MachineID string `json:"machine_id"`
@@ -73,6 +86,9 @@ const (
 	// MethodFileCall has NodeCall's params too, but only for a long file.copy / file.zip whose caller may cancel it.
 	// Keeping it separate leaves ordinary devices.call completion semantics unchanged when an HTTP client disconnects.
 	MethodFileCall = "devices.file_call"
+	// MethodRetireCall forwards only session.stop_if_idle and propagates cancellation.
+	// An old manager refuses it; unlike a file call, it has no unconditional fallback.
+	MethodRetireCall = "devices.retire_call"
 	// EventNotify {machine_id, event, params}: a one-way event to a node (terminal input, a port's bytes).
 	EventNotify = "devices.notify"
 	// EventConfig Config: what the hub hands the manager changed (an entry added on the admin page, the mesh, the
@@ -110,6 +126,22 @@ const (
 	MethodEnginePut = "devices.engine.put"
 )
 
+var (
+	CallMethod                 = buswire.Method[NodeCall, json.RawMessage]{Name: MethodCall}
+	FileCallMethod             = buswire.Method[NodeCall, json.RawMessage]{Name: MethodFileCall}
+	RetireCallMethod           = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRetireCall}
+	AcceptMethod               = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
+	UpdateNodesMethod          = buswire.Method[buswire.None, buswire.None]{Name: MethodUpdateNodes}
+	PairConnectorMethod        = buswire.Method[PairConnector, PairConnectorReply]{Name: MethodPairConnector}
+	ReconnectMethod            = buswire.Method[ReconnectRequest, buswire.None]{Name: MethodReconnect}
+	UsageGatewayAccountsMethod = buswire.Method[buswire.None, proto.GatewayAccounts]{Name: MethodUsageGatewayAccounts}
+	MachinesPutMethod          = buswire.Method[MachinePut, buswire.None]{Name: MethodMachinesPut}
+	MachinesRemoveMethod       = buswire.Method[MachineRef, MachineRemoved]{Name: MethodMachinesRemove}
+	MachinesGetMethod          = buswire.Method[MachineRef, MachineEntry]{Name: MethodMachinesGet}
+	EngineGetMethod            = buswire.Method[MachineRef, MachineEngine]{Name: MethodEngineGet}
+	EnginePutMethod            = buswire.Method[MachineEngine, buswire.None]{Name: MethodEnginePut}
+)
+
 // MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
 type MachineEngine struct {
 	MachineID string              `json:"machine_id"`
@@ -128,6 +160,17 @@ type MachinePut struct {
 // MachineRef names one machine.
 type MachineRef struct {
 	MachineID string `json:"machine_id"`
+}
+
+// ReconnectRequest names the machine whose node should reconnect.
+type ReconnectRequest MachineRef
+
+// UnmarshalJSON uses the manager's original anonymous struct to preserve invalid-parameter errors.
+func (r *ReconnectRequest) UnmarshalJSON(data []byte) error {
+	legacy := (*struct {
+		MachineID string `json:"machine_id"`
+	})(r)
+	return json.Unmarshal(data, legacy)
 }
 
 // MachineRemoved is devices.machines.remove's answer: whether the list had it.
@@ -195,11 +238,17 @@ type Config struct {
 	WebURL string `json:"web_url,omitempty"`
 	// TailcatDERPMapURL is hub.json's tailcat.derp_map_url.
 	TailcatDERPMapURL string `json:"tailcat_derp_map_url,omitempty"`
+	// PrivateNetwork is hub.json's security.private_network_only (office network mode): the manager never dials
+	// tailcat and tells every node to stop its tailcat endpoint (node.configure private_network).
+	PrivateNetwork bool `json:"private_network,omitempty"`
 	// NodePackagesURL is where the manager fetches the node builds the hub has none of (docs/operations/node-update.md "Node
 	// packages"): a release's dl/ (hub.json's node_packages.url, else the hub build's update URL; "" none), through
 	// NodePackagesProxy (an http:// proxy, internal/netproxy; "" direct).
-	NodePackagesURL   string `json:"node_packages_url,omitempty"`
-	NodePackagesProxy string `json:"node_packages_proxy,omitempty"`
+	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
+	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
+	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	PublishedTarget   *DevelopmentTarget `json:"published_target,omitempty"`
+	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
 	LinkPingMS        int `json:"link_ping_ms,omitempty"`
@@ -212,6 +261,9 @@ type Config struct {
 	// PendingUnknown: the hub could not read which machines wait (its database did not answer); until a handover
 	// without it, the manager treats every machine as not confirmed yet.
 	PendingUnknown bool `json:"pending_unknown,omitempty"`
+	// LinkSwitch: this hub answers devices.link_switch.* (link_switch.go) and takes Persona Link now (its TLS port or
+	// an https public_url); an older hub, or one no Persona Link can reach, leaves it out and no switch is offered.
+	LinkSwitch bool `json:"link_switch,omitempty"`
 }
 
 // LinkEndpoint is one address Persona Link may use (internal/link.Endpoint).
@@ -261,6 +313,10 @@ type RecMachine struct {
 
 // State is one machine as the manager has it.
 type State struct {
+	// TransportFor is an owning manager's retained transport identity. The hub
+	// validates the referenced computer belongs to that manager; it never resolves
+	// sessions or stores business mappings itself.
+	TransportFor string `json:"transport_for,omitempty"`
 	// Machine is what the apps get, but for what the hub adds (system, computer, browser).
 	Machine proto.Machine `json:"machine"`
 	// Config is the machine's entry: hub.json's, or a member's (a derived machine), as the hub gave it.
@@ -337,6 +393,8 @@ type NodeCall struct {
 	MachineID  string          `json:"machine_id"`
 	Method     string          `json:"method"`
 	Params     json.RawMessage `json:"params,omitempty"`
+	// StreamVersion is an offer for port.dial. The manager passes it into the node's params.
+	StreamVersion int `json:"stream_version,omitempty"`
 	// TimeoutMS bounds the call on the manager's side too, a little before the caller gives up: the manager's
 	// CodeDeadline answer comes back in time.
 	TimeoutMS int64 `json:"timeout_ms,omitempty"`
@@ -345,7 +403,61 @@ type NodeCall struct {
 	// Fallback (a connection's calls only): sent instead when the node answers unknown method, a node from before
 	// Method (launchers.catalog falls back to launchers.managed).
 	Fallback *NodeCall `json:"fallback,omitempty"`
+	// Actor says who asked for a session.modes call the manager keeps a record of (#10297): display only, never
+	// trusted for access (the hub checked the request already). Nil from an older hub and on every other call.
+	Actor *Actor `json:"actor,omitempty"`
+	// Hold (session.send only, #10661): the owner's message to an Agent may be held when it cannot go now. When the
+	// node is not connected, so nothing was written, or older held messages of the same session wait, the manager keeps
+	// this call as it came (caller and submission with it) and sends it once the node is back, answering CodeHeld
+	// instead of machine_offline. Nil from an older hub and on every other call; an older manager ignores it.
+	Hold *Hold `json:"hold,omitempty"`
+	// Ordered (session.send only, #10661): the owner's message to an Agent from a person's device, which must not go
+	// ahead of messages held for that Agent. Set whether or not Hold is: a message from an app that does not draw held
+	// messages (no Hold) is refused, nothing written, while older ones of its session are held, instead of overtaking
+	// them (codeHeldAhead, delivered none). Nil from an older hub; an older manager ignores it.
+	Ordered bool `json:"ordered,omitempty"`
 }
+
+const (
+	MethodPortDial = "port.dial"
+	// PortStreamHalfCloseV1 supports directional EOF on forwarded TCP streams.
+	PortStreamHalfCloseV1 = 1
+)
+
+var PortDialMethod = buswire.Method[PortDial, PortDialReply]{Name: MethodPortDial}
+
+// PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
+type PortDial struct {
+	ID            string `json:"id"`
+	Port          int    `json:"port"`
+	KeepAwake     bool   `json:"keep_awake,omitempty"` // keep a watched screen awake
+	Pair          string `json:"pair,omitempty"`       // ties a screen stream to screen.dial
+	Link          bool   `json:"link,omitempty"`       // use screen session framing
+	Attach        bool   `json:"attach,omitempty"`     // rejoin a live screen session
+	StreamVersion int    `json:"stream_version,omitempty"`
+}
+
+// PortDialReply confirms the stream version or the use of screen session framing.
+type PortDialReply struct {
+	Link          int `json:"link,omitempty"`
+	StreamVersion int `json:"stream_version,omitempty"`
+}
+
+// Hold is NodeCall.Hold.
+type Hold struct {
+	// Lang is the language of the words in CodeHeld's answer (the request's).
+	Lang string `json:"lang,omitempty"`
+}
+
+// HeldAnswer is CodeHeld's data: the held message as the session's row shows it.
+type HeldAnswer struct {
+	Delivered   string                    `json:"delivered"` // "later"
+	Undelivered *proto.UndeliveredMessage `json:"undelivered,omitempty"`
+}
+
+// Actor is display-only provenance for NodeCall and plan decisions: a device, hub token, extension, or internal
+// assistant. It is shared with the node contract so a plan reports the actor supplied by its manager.
+type Actor = proto.ModeActor
 
 // RequestEnd is devices.request_end's params.
 type RequestEnd struct {
@@ -367,6 +479,20 @@ type ConnectedReply struct {
 	Calls []NodeCall `json:"calls,omitempty"`
 }
 
+// ConnectorCredRequest asks for the credential of one machine.
+type ConnectorCredRequest MachineRef
+
+// UnmarshalJSON keeps the hub's legacy decode through ConnectorCred. Only the
+// machine ID is used, but malformed fields must still produce the same error.
+func (r *ConnectorCredRequest) UnmarshalJSON(data []byte) error {
+	legacy := ConnectorCred{MachineID: r.MachineID}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	r.MachineID = legacy.MachineID
+	return nil
+}
+
 // ConnectorCred is a computer of kind service's pin and credential (the token in the clear: the bus is the manager's).
 type ConnectorCred struct {
 	MachineID string `json:"machine_id"`
@@ -383,10 +509,24 @@ type PairConnector struct {
 	Proxy     string `json:"proxy,omitempty"`
 }
 
+// PairConnectorReply is the paired connector's address and version.
+type PairConnectorReply struct {
+	Address string `json:"address"`
+	Version string `json:"version"`
+}
+
 // Routes are the apps' routes on machines the manager answers itself (the hub relays them as http.request, as the
 // assistant's): its own settings of each machine and what only it can do.
 var Routes = []string{
 	"GET /api/v1/sessions/{mid}/{sid}/skills",
+	"GET /api/v1/sessions/{mid}/{sid}/mode-changes",
+	// The answer to a start's startup question, from a full device (#10365, internal/devices start_continue.go).
+	"POST /api/v1/sessions/{mid}/{sid}/start/continue",
+	// Retry and Delete on a message held for an Agent while its computer was away (#10661, internal/devices held.go),
+	// from a full device.
+	HeldOutboxRoute,
+	"POST /api/v1/sessions/{mid}/{sid}/held/{msg}/retry",
+	"DELETE /api/v1/sessions/{mid}/{sid}/held/{msg}",
 	"GET /api/v1/machines/{mid}/codex/{sid}/takeover",
 	"POST /api/v1/machines/{mid}/codex/{sid}/takeover",
 	"POST /api/v1/machines/{mid}/reconnect",
@@ -394,13 +534,33 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/herdr",
 	"PUT /api/v1/machines/{mid}/herdr",
 	"POST /api/v1/machines/{mid}/herdr/start",
+	// Named herdr sessions kept out of Persona (#14898, internal/devices herdrsessions.go).
+	"GET /api/v1/machines/{mid}/herdr/sessions",
+	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
+	// "Start new Agents as Orca chats" (#17650, internal/devices orca_chat_starts.go).
+	"GET /api/v1/machines/{mid}/orca-chat-starts",
+	"PUT /api/v1/machines/{mid}/orca-chat-starts",
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
+	// Switching an ssh computer to Persona Link (#10662, internal/devices link_switch.go); the admin page's twin is
+	// the hub's POST /api/v1/admin/machines/{mid}/link-switch, relayed to the same handler.
+	"POST /api/v1/machines/{mid}/link-switch",
+	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
+	"GET /api/v1/machines/{mid}/diagnosis",
+	"POST /api/v1/machines/{mid}/cleanup",
+	// A computer's disk usage map and its guarded trash (#14576, internal/devices usagemap.go).
+	"GET /api/v1/machines/{mid}/storage/usage",
+	"POST /api/v1/machines/{mid}/storage/trash",
+	"POST /api/v1/machines/{mid}/storage/trash/undo",
+	"POST /api/v1/machines/{mid}/storage/trash/purge",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
+	// Hidden Agent folders, beside the blocked Claude config folders (internal/devices agentdirs.go).
+	"GET /api/v1/machines/{mid}/agent-dirs/hidden",
+	"PUT /api/v1/machines/{mid}/agent-dirs/hidden",
 	"GET /api/v1/machines/{mid}/claude-live-replies",
 	"PUT /api/v1/machines/{mid}/claude-live-replies",
 	// Sharing the machine's clipboard with the phone (#3064, internal/devices clipboard.go).
@@ -422,15 +582,22 @@ var TransferRoutes = []string{
 	"POST /api/v1/files/transfer",
 	"GET /api/v1/files/transfer/{id}",
 	"DELETE /api/v1/files/transfer/{id}",
+	// The audit of the Agents' file_transfer calls (internal/devices agent_transfer.go), full devices only.
+	"GET /api/v1/files/transfer-audit",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, and one machine's range).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, the
+// history: the days, the last days by the hour, and by project: usage_projects.go).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
 	"GET /api/v1/machines/{id}/usage",
 	"GET /api/v1/usage",
+	"GET /api/v1/usage/days",
+	"GET /api/v1/usage/hours",
+	"GET /api/v1/usage/projects",
+	"GET /api/v1/usage/projects/detail",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),
@@ -459,4 +626,7 @@ const (
 	// CodeHandoffRefused: secret.stage, or a session.start with a secret_ticket, asked by the hub or another manager:
 	// only the manager that connects the computer makes a hand-off, after its own card (docs/extensions/secret-providers.md).
 	CodeHandoffRefused = "handoff_refused"
+	// CodeHeld: a session.send with Hold was not sent now but held to be sent when the node is back (#10661); its data
+	// is a HeldAnswer. Nothing was written to the node.
+	CodeHeld = "held"
 )

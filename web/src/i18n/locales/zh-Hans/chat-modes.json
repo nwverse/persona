@@ -1,0 +1,22 @@
+{
+  "changed_from": "{who} 将权限模式从「{from}」更改为「{to}」",
+  "changed_to": "{who} 将权限模式更改为「{to}」",
+  "restart_queued": "{who} 选择了「{to}」，本轮结束后将重启会话并切换至该模式",
+  "restart_done": "已重启并切换至「{to}」",
+  "restart_already": "当前已是「{to}」，无需重启",
+  "restart_failed": "无法重启并切换至「{to}」",
+  "restart_failed_why": "无法重启并切换至「{to}」：{why}",
+  "restart_dropped": "已取消，不会重启并切换至「{to}」",
+  "restart_dropped_why": "已取消，不会重启并切换至「{to}」：{why}",
+  "why_replaced": "已被新的切换请求取代",
+  "why_cancelled": "会话保持当前模式",
+  "why_process_exited": "原进程已退出",
+  "why_process_replaced": "会话已在另一进程中运行",
+  "why_process_unknown": "无法确定需要重启的进程",
+  "why_expired": "等待时间已超过两小时",
+  "why_not_stopped": "Agent 未退出",
+  "why_start_failed": "新进程启动失败，会话将继续以原模式运行",
+  "why_stopped": "新进程启动失败，会话已停止",
+  "by_hub": "hub",
+  "by_unknown": "某台设备"
+}

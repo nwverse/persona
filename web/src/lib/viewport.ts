@@ -28,17 +28,31 @@ export function keyboardVars(f: ViewportFrame | undefined): Record<(typeof KB_VA
   return f ? { "--kb-top": `${f.top}px`, "--kb-h": `${f.height}px` } : null;
 }
 
+const typesInto = (el: Element | null) => Boolean(el?.matches('input, textarea, [contenteditable]:not([contenteditable="false"])'));
+
 /** Keeps `ref`'s element over the visible part while the keyboard is up, and `--kb-top` / `--kb-h` on the root element
- *  for the other fixed things (the side panel, sheets). It sets the styles itself: the keyboard sends a stream of frames
- *  as it slides, and a React state per frame would re-render the whole page. */
+ *  for the other fixed things (the side panel, sheets), with `data-kb` on it meanwhile for the stylesheet (a waiting
+ *  card's own field, styles.css). It sets the styles itself: the keyboard sends a stream of frames as it slides, and a
+ *  React state per frame would re-render the whole page. */
 export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const vv = typeof window === "undefined" ? undefined : window.visualViewport;
     if (!vv) return;
-    const root = document.documentElement.style;
+    const html = document.documentElement;
+    const root = html.style;
     let last = "";
+    // Chrome on Android shrinks the page itself (no frame, 100dvh is right): its keyboard is the page standing well
+    // short of the tallest it was at this width while something takes typing. Turning the phone starts over.
+    let width = 0;
+    let tallest = 0;
     const update = () => {
+      if (window.innerWidth !== width) {
+        width = window.innerWidth;
+        tallest = 0;
+      }
+      tallest = Math.max(tallest, window.innerHeight);
       const f = keyboardFrame(window.innerHeight, vv);
+      html.toggleAttribute("data-kb", Boolean(f) || (tallest - window.innerHeight >= KEYBOARD_MIN && typesInto(document.activeElement)));
       // the visual viewport scrolls while the keyboard stands still: a root variable restyles the whole page, so only
       // a frame that moved is written
       const key = f ? `${f.top}/${f.height}` : "";
@@ -56,10 +70,13 @@ export function useKeyboardFrame(ref: RefObject<HTMLElement | null>) {
     update();
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
+    window.addEventListener("resize", update);
     return () => {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
       KB_VARS.forEach((k) => root.removeProperty(k));
+      html.removeAttribute("data-kb");
     };
   }, [ref]);
 }
@@ -75,21 +92,58 @@ function mediaList(q: string): MediaQueryList | undefined {
 const matches = (q: string) => Boolean(mediaList(q)?.matches);
 
 const FINE = "(any-pointer: fine)";
+const MOUSE_EVENTS = ["pointermove", "pointerdown"] as const;
+let sawMouse = false;
+let watchingMouse = false;
+const fineListeners = new Set<() => void>();
 
-/** Some pointer is precise (a mouse, a trackpad; an iPad with its keyboard and trackpad): Enter sends there. */
+function stopMouseWatch() {
+  if (!watchingMouse) return;
+  watchingMouse = false;
+  MOUSE_EVENTS.forEach((type) => window.removeEventListener(type, mousePointer, true));
+  mediaList(FINE)?.removeEventListener("change", mousePointer);
+}
+
+function mousePointer(e?: PointerEvent | MediaQueryListEvent) {
+  // The media listener also covers an imperative hasFinePointer() caller with no hook mounted.
+  // Only a mouse proves the query wrong; a correctly reported stylus already matches fine, and touch must not promote.
+  if (e && "pointerType" in e) {
+    if (e.pointerType !== "mouse") return;
+    sawMouse = true;
+  } else if (!matches(FINE)) return;
+  stopMouseWatch();
+  fineListeners.forEach((listener) => listener());
+}
+
+function watchMouse() {
+  if (watchingMouse || typeof window === "undefined") return;
+  watchingMouse = true;
+  // A click need not move the mouse first. Capture before a surface stops propagation; passive because this only observes.
+  MOUSE_EVENTS.forEach((type) => window.addEventListener(type, mousePointer, { capture: true, passive: true }));
+  mediaList(FINE)?.addEventListener("change", mousePointer);
+}
+
+/** Some pointer is precise (a mouse, a trackpad; an iPad with its keyboard and trackpad): Enter sends there. Once a real
+ *  mouse pointer is seen it stays true for this page, even on Windows browsers that misreport the media query. */
 export function hasFinePointer(): boolean {
-  return matches(FINE);
+  if (sawMouse) return true;
+  const fine = matches(FINE);
+  if (fine) stopMouseWatch();
+  else watchMouse();
+  return fine;
 }
 
 /** Whether Enter (without Shift) sends: with a precise pointer, yes; on a touch screen alone it is a new line there and
- *  only the button sends. Mod+Alt+Enter is left out: that is the waiting-card shortcut (lib/shortcuts.ts), and the
- *  composer must not swallow the key before the shortcut dispatcher sees it. */
+ *  only the button sends. Mod+Enter always sends, but Mod+Alt+Enter is left out: that is the waiting-card shortcut
+ *  (lib/shortcuts.ts), and the composer must not swallow the key before the shortcut dispatcher sees it. */
 export function enterSends(e: { key: string; shiftKey: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }, fine: boolean): boolean {
-  return e.key === "Enter" && !e.shiftKey && !(e.altKey && (e.ctrlKey || e.metaKey)) && fine;
+  return e.key === "Enter" && !e.shiftKey && (e.ctrlKey || e.metaKey ? !e.altKey : fine);
 }
 
 /** The narrow layout (below lg: the sidebar is a drawer, the side panel covers the page): Tailwind's `max-lg:`, kept in step. */
 export const NARROW = "(max-width: 1023px)";
+/** Below md (Tailwind's `max-md:`, kept in step): a list and its detail take turns instead of sitting side by side. */
+export const ONE_PANE = "(max-width: 767px)";
 /** A phone on its side: little height for anything above the composer. */
 export const SHORT = "(max-height: 500px)";
 /** A phone-width screen (Tailwind's max-sm): Dialog is a bottom sheet, Settings a list of categories. */
@@ -109,5 +163,18 @@ export function useMedia(query: string): boolean {
   return useSyncExternalStore(subscribe, () => matches(query), () => false);
 }
 
-/** Whether a precise pointer is there, following it (a trackpad attached to an iPad). */
-export const useFinePointer = () => useMedia(FINE);
+function subscribeFine(listener: () => void) {
+  fineListeners.add(listener);
+  hasFinePointer();
+  return () => {
+    fineListeners.delete(listener);
+  };
+}
+
+/** Whether a precise pointer is there, following the media query and the one-time mouse promotion. */
+export function useFinePointer(): boolean {
+  const fine = useMedia(FINE);
+  const mouse = useSyncExternalStore(subscribeFine, () => sawMouse, () => false);
+  if (!fine && !mouse) watchMouse();
+  return fine || mouse;
+}

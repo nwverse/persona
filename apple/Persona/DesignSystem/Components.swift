@@ -9,6 +9,7 @@ struct StatusDot: View {
     var size: CGFloat = 9
     /// It only waits in the background (`Session.waitsInBackground`).
     var waiting = false
+    var justFinished = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The needs-you ring: one breath every `breath` seconds, out to `1 + breathScale` times the dot as it fades.
@@ -36,25 +37,18 @@ struct StatusDot: View {
             } else if Self.showsBreathingRing(state: state, reduceMotion: reduceMotion) {
                 Circle().fill(state.color)
                     .overlay {
-                        #if os(macOS)
-                        // Core Animation runs it: the clock below relaid the whole window 30 times a second.
-                        MacBreathingRing(color: state.color.opacity(Self.ringOpacity))
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                        #else
                         VisibleWork { eligible in
                             BreathingRing(color: state.color.opacity(Self.ringOpacity), eligible: eligible)
                         }
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
-                        #endif
                     }
             } else {
-                Circle().fill(state.color)
+                Circle().fill(justFinished ? StatusPalette.unread.dot : state.color)
             }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel(state == .working && waiting ? String(localized: "Waiting in the background") : state.label)
+        .accessibilityLabel(justFinished ? StateName.justFinished.text : (state == .working && waiting ? String(localized: "Waiting in the background") : state.label))
     }
 }
 
@@ -140,6 +134,7 @@ struct AgentStateBadge: View {
     var state: AgentState
     /// It only waits in the background (`Session.waitsInBackground`).
     var waiting = false
+    var justFinished = false
     private static let attention = BUIGlyph("M12 6v8M12 18.5v.01")
 
     var body: some View {
@@ -153,6 +148,7 @@ struct AgentStateBadge: View {
                 .accessibilityLabel(String(localized: "Waiting in the background"))
         case .working: BUISpinner(size: Theme.Size.badge, lineWidth: Theme.Size.rule)
         case .unread: badge(Theme.positive, .check)
+        case .idle where justFinished: StatusDot(state: .idle, size: Theme.Size.dotXL, justFinished: true)
         case .idle: Circle().strokeBorder(Theme.cardStroke, lineWidth: Theme.Size.rule).frame(width: Theme.Size.badge, height: Theme.Size.badge)
         case .offline, .unknown: StatusDot(state: state, size: 9)
         }
@@ -166,25 +162,53 @@ struct AgentStateBadge: View {
     }
 }
 
-/// A row's name and the chips that go with it: side by side; at the accessibility text sizes the chips on a line under
-/// the name. A `Chip` never gives up width, and beside one a narrow phone left the name a character or none (#1796).
+/// A row's name and the chips that go with it: the chips right after the name while the name keeps at least half the
+/// width, or all it needs when that is less; otherwise the chips on a line under the name. A `Chip` never gives up
+/// width, and beside one a narrow phone left the name a character or none (#1796). It goes by measured widths, not by
+/// the text size, so a short name keeps its chips beside it at any size.
 struct NameWithChips<Name: View, Chips: View>: View {
     @ViewBuilder var name: Name
     @ViewBuilder var chips: Chips
-    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                name
-                HStack(spacing: Theme.Space.sm) { chips }
-            }
-        } else {
-            HStack(spacing: Theme.Space.sm) {
-                name
-                chips
-            }
+        NameThenChips {
+            name
+            HStack(spacing: Theme.Space.sm) { chips }
         }
+    }
+}
+
+private struct NameThenChips: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return subviews.first?.sizeThatFits(proposal) ?? .zero }
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil }
+            ?? subviews[0].sizeThatFits(.unspecified).width + Theme.Space.sm + subviews[1].sizeThatFits(.unspecified).width
+        return CGSize(width: width, height: frames(width, subviews).height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: proposal); return }
+        for (i, frame) in frames(bounds.width, subviews).rects.enumerated() {
+            subviews[i].place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading,
+                              proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(_ width: CGFloat, _ subviews: Subviews) -> (rects: [CGRect], height: CGFloat) {
+        let ideal = subviews[0].sizeThatFits(.unspecified)
+        let chips = subviews[1].sizeThatFits(.unspecified)
+        let room = width - chips.width - Theme.Space.sm
+        if room >= min(ideal.width, width / 2) {
+            let name = subviews[0].sizeThatFits(ProposedViewSize(width: room, height: nil))
+            let height = max(name.height, chips.height)
+            return ([CGRect(x: 0, y: (height - name.height) / 2, width: name.width, height: name.height),
+                     CGRect(x: name.width + Theme.Space.sm, y: (height - chips.height) / 2, width: chips.width, height: chips.height)],
+                    height)
+        }
+        let name = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        let y = name.height + Theme.Space.xxs
+        return ([CGRect(x: 0, y: 0, width: width, height: name.height),
+                 CGRect(x: 0, y: y, width: min(chips.width, width), height: chips.height)], y + chips.height)
     }
 }
 
@@ -219,8 +243,12 @@ struct Chip: View {
     /// Truncates instead of keeping its full width when offered less (in a FlowLayoutRow, a chip longer than the line).
     var shrinks = false
     /// A step quieter, for a tag that sits under a row's time (the Agents row's source, #3043): the label's size in
-    /// regular weight, on a tighter capsule, in every style.
+    /// regular weight, on a tighter capsule, in every style. Its symbol, when it has one, goes before the words (#6578).
     var compact = false
+
+    /// How far a compact chip's capsule reaches above and below its words: a line that must stay as tall as its words
+    /// lets the capsule hang over it by this much (a to-do row's Got It, #6578).
+    static let compactInset = Theme.Space.xxs / 2
 
     var body: some View {
         chipBody.accessibilityShowsLargeContentViewer()
@@ -228,13 +256,22 @@ struct Chip: View {
 
     @ViewBuilder private var chipBody: some View {
         if compact {
-            Text(text).lineLimit(1)
-                .font(Theme.Font.label)
-                .foregroundStyle(words)
-                .padding(.horizontal, Theme.Space.sm)
-                .padding(.vertical, Theme.Space.xxs / 2)
-                .background(Capsule().fill(fill))
-                .fixedSize()
+            Group {
+                if let symbol {
+                    HStack(spacing: Theme.Space.xs) {
+                        ThemedIcon(symbol)
+                        Text(text).lineLimit(1)
+                    }
+                } else {
+                    Text(text).lineLimit(1)
+                }
+            }
+            .font(Theme.Font.label)
+            .foregroundStyle(words)
+            .padding(.horizontal, Theme.Space.sm)
+            .padding(.vertical, Self.compactInset)
+            .background(Capsule().fill(fill))
+            .fixedSize()
         } else if AppStyle.current.usesBeautifulUI {
             BUIPill(text, tone: pillTone, icon: symbol.map { .symbol(Theme.Icon.styled($0)) }, truncates: shrinks)
         } else {
@@ -449,6 +486,11 @@ struct SegmentedChoice<Value: Hashable>: View {
 }
 
 struct EmptyStateView: View {
+    /// How the action is drawn: the page's one action, prominent; or a way to another place that holds what this one
+    /// lacks ("3 coming up this week ›"), the accent's words and ›, where the page already has its prominent action
+    /// (a foot toolbar's +). BeautifulUI draws its own secondary button for either.
+    enum ActionLook { case prominent, link }
+
     var symbol: String
     var title: String
     var message: String
@@ -456,6 +498,7 @@ struct EmptyStateView: View {
     /// The mark's color when it means something (`Theme.caution` for a warning); the accent otherwise. BeautifulUI
     /// keeps its own quiet mark.
     var tint: Color? = nil
+    var actionLook = ActionLook.prominent
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
@@ -479,9 +522,26 @@ struct EmptyStateView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if let action {
-                Button(action: action.run) { Text(action.title).lineLimit(1) }
-                    .themedButton(prominent: true)
-                    .padding(.top, Theme.Space.xs)
+                switch actionLook {
+                case .prominent:
+                    Button(action: action.run) { Text(action.title).lineLimit(1) }
+                        .themedButton(prominent: true)
+                        .padding(.top, Theme.Space.xs)
+                case .link:
+                    Button(action: action.run) {
+                        HStack(spacing: Theme.Space.xs) {
+                            Text(action.title).lineLimit(1)
+                            ThemedIcon(Theme.Icon.disclosure)
+                                .font(Theme.Font.labelHeavy)
+                                .accessibilityHidden(true)
+                        }
+                        .tapTargetHeight()
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityShowsLargeContentViewer()
+                }
             }
         }
         .padding(Theme.Space.xxl)
@@ -489,10 +549,15 @@ struct EmptyStateView: View {
     }
 }
 
+/// `card()`'s measures: from a card's edge to its content (off the 4 pt grid, DS-09).
+enum CardStyle {
+    static let padding: CGFloat = 14
+}
+
 extension View {
     /// Rounded card surface used across lists; in the BeautifulUI style its surface (the style's card color, its ring and
     /// soft shadow).
-    @ViewBuilder func card(padding: CGFloat = 14, radius: CGFloat = Theme.Radius.card) -> some View {
+    @ViewBuilder func card(padding: CGFloat = CardStyle.padding, radius: CGFloat = Theme.Radius.card) -> some View {
         if AppStyle.current.usesBeautifulUI {
             self.padding(padding)
                 .buiSurface(radius: radius, elevation: .card)

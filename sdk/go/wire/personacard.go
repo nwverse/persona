@@ -20,20 +20,33 @@ import (
 //   - stacked_bar: metric {label: the "total" label, value: total (else the parts' sum), detail: note}; a stacked bar chart with a
 //     series per part (more than four: the first three and "other", the rest's sum; the rest part's tone neutral), each one
 //     point labelled title or "total"; then a row per part {title: label, subtitle: note, value}. The unit is total's,
-//     else the card's.
+//     else the card's. With exactly one point per series, every app draws a horizontal segmented share bar; two or more
+//     categories stay vertical columns.
 //   - ring (one day's total and its parts): a donut chart, one series of a point per part (more than eight: the first
 //     seven and "other", the rest's sum), center: the total written with its unit (left out past 20 characters), detail:
 //     note; then a row per part. When total is more than the parts' sum, a "remaining" part (total less the sum) comes
-//     last. The unit is total's, else the card's. A stacked_bar is for comparing (days, people), a ring for one whole.
+//     last. The unit is total's, else the card's. A ring presents one whole as a donut; a stacked_bar presents parts as bars.
 //   - line, bar: metric {label: the "current" label, value} when the card has a value; a chart of that kind with one series of the
 //     points (the last 120), detail: note.
 
 // View is the card as the apps draw it, or nil when they cannot (it stays a code block).
 func (c PersonaCard) View() *View {
+	if c.Value != nil && !isFinite(*c.Value) {
+		return nil
+	}
+	if c.Total != nil && !isFinite(c.Total.Value) {
+		return nil
+	}
 	parts := append(append([]CardPart{}, c.Segments...), c.rest()...)
 	sum := 0.0
 	for _, p := range parts {
+		if !isFinite(p.Value) {
+			return nil
+		}
 		sum += p.Value
+	}
+	if !isFinite(sum) {
+		return nil
 	}
 	switch c.Type {
 	case PersonaCardKindStat:
@@ -50,6 +63,11 @@ func (c PersonaCard) View() *View {
 			}
 		}
 	case PersonaCardKindRing:
+		for _, p := range parts {
+			if p.Value < 0 {
+				return nil
+			}
+		}
 		if c.Total != nil && c.Total.Value > sum {
 			parts = append(parts, CardPart{Label: "剩余", Value: c.Total.Value - sum})
 			sum = c.Total.Value
@@ -57,18 +75,23 @@ func (c PersonaCard) View() *View {
 		if len(parts) < 2 || sum <= 0 {
 			return nil
 		}
-		for _, p := range parts {
-			if p.Value < 0 {
-				return nil
-			}
-		}
 	case PersonaCardKindLine:
 		if len(c.Points) < 2 {
 			return nil
 		}
+		for _, p := range c.Points {
+			if !isFinite(p.Value) {
+				return nil
+			}
+		}
 	case PersonaCardKindBar:
 		if len(c.Points) == 0 {
 			return nil
+		}
+		for _, p := range c.Points {
+			if !isFinite(p.Value) {
+				return nil
+			}
 		}
 	default:
 		return nil
@@ -180,20 +203,37 @@ func amount(v float64, unit string) string {
 	return s
 }
 
+func isFinite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
 // Number writes v grouped by thousands with at most one decimal: 2,250 · 7.5 · -1,200.3 · 0.
 func Number(v float64) string {
-	r := math.Round(v*10) / 10
-	if r == 0 {
-		r = 0 // not -0
+	if !isFinite(v) {
+		return "0"
 	}
-	neg := r < 0
-	if neg {
-		r = -r
-	}
-	whole := math.Floor(r)
-	tenth := int(math.Round((r - whole) * 10))
-	if tenth == 10 {
-		whole, tenth = whole+1, 0
+	var (
+		neg   bool
+		whole float64
+		tenth int
+	)
+	if math.Abs(v) >= 1e16 {
+		neg = v < 0
+		whole = math.Abs(v)
+	} else {
+		r := math.Round(v*10) / 10
+		if r == 0 {
+			r = 0 // not -0
+		}
+		neg = r < 0
+		if neg {
+			r = -r
+		}
+		whole = math.Floor(r)
+		tenth = int(math.Round((r - whole) * 10))
+		if tenth == 10 {
+			whole, tenth = whole+1, 0
+		}
 	}
 	digits := strconv.FormatFloat(whole, 'f', 0, 64)
 	var b strings.Builder

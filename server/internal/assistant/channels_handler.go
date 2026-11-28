@@ -24,7 +24,7 @@ func (s *Service) ChannelUnbound(_ context.Context, p ChannelUnbound) error {
 
 // ChannelReceive is channels.receive: the owner's message from a plugin's channel, taken once (the chat apps deliver
 // some again) and handled in the background.
-func (s *Service) ChannelReceive(_ context.Context, p ChannelReceive) error {
+func (s *Service) ChannelReceive(ctx context.Context, p ChannelReceive) error {
 	var m channel.Message
 	if err := json.Unmarshal(p.Message, &m); err != nil {
 		return badRequest(err)
@@ -32,14 +32,17 @@ func (s *Service) ChannelReceive(_ context.Context, p ChannelReceive) error {
 	if m.ID == "" {
 		return badRequest(errors.New("a message without an id"))
 	}
-	first, err := s.claimChannelMessage(p.Channel, m.ID)
+	if m.Owner != nil && !*m.Owner {
+		return badRequest(errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required")))
+	}
+	admission, err := s.admitChannelMessage(ctx, p.Channel, m)
 	if err != nil {
 		return &rpc.Error{Code: CodeTryAgain, Message: err.Error()} // the hub hands it over again
 	}
-	if !first {
+	if admission == nil {
 		return nil // delivered again
 	}
-	go s.channelReceive(p.Channel, m, p.Action)
+	go admission.run(s, m, p.Action)
 	return nil
 }
 
@@ -54,14 +57,49 @@ func (s *Service) ChannelNoted(_ context.Context, p ChannelNoted) {
 func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced) {
 	c := &s.chans
 	c.mu.Lock()
+	if announcedAt, ok := c.announcedOccurrence[p.Interaction.ID]; ok &&
+		!announcedAt.IsZero() && !p.Interaction.CreatedAt.IsZero() && p.Interaction.CreatedAt.Before(announcedAt) {
+		c.mu.Unlock()
+		return // an older replay cannot replace or repost the current occurrence
+	}
+	if endedAt, ok := c.endedOccurrence[p.Interaction.ID]; ok {
+		if !endedAt.IsZero() && !p.Interaction.CreatedAt.IsZero() && p.Interaction.CreatedAt.Before(endedAt) {
+			c.mu.Unlock()
+			return // the newer occurrence is already terminal; do not resurrect the older one
+		}
+		if !p.Interaction.CreatedAt.Equal(endedAt) {
+			// A new occurrence must be deliverable and answerable even while the old
+			// occurrence's terminal event is still inside the in-flight guard window.
+			delete(c.ended, p.Interaction.ID)
+			delete(c.endedOccurrence, p.Interaction.ID)
+		}
+	}
 	if c.announced == nil {
 		c.announced = map[string]bool{}
 	}
+	if c.announcedOccurrence == nil {
+		c.announcedOccurrence = map[string]time.Time{}
+	}
 	c.announced[p.Interaction.ID] = true
+	c.announcedOccurrence[p.Interaction.ID] = p.Interaction.CreatedAt
 	c.mu.Unlock()
-	go s.feishuInteraction(p.Interaction)
+	go s.larkModule().AskAnnounced(p.Interaction)
 	go s.channelInteraction(p.Interaction)
 	go s.taskAsks(p.Interaction)
+	s.boardChanged()
+}
+
+// heldAnnounced notes card id as announced without telling the Feishu bot or the channels: an escalation push tiering
+// holds back (ask_route.go ringAsks) is the Needs you list's, and the channels' catch-up must not post it after all.
+// The board shows it at once.
+func (s *Service) heldAnnounced(id string) {
+	c := &s.chans
+	c.mu.Lock()
+	if c.announced == nil {
+		c.announced = map[string]bool{}
+	}
+	c.announced[id] = true
+	c.mu.Unlock()
 	s.boardChanged()
 }
 
@@ -69,17 +107,30 @@ func (s *Service) InteractionAnnounced(_ context.Context, p InteractionAnnounced
 func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	c := &s.chans
 	c.mu.Lock()
-	delete(c.announced, p.Interaction.ID)
+	announcedAt, announced := c.announcedOccurrence[p.Interaction.ID]
+	if !announced || announcedAt.IsZero() || p.Interaction.CreatedAt.IsZero() || announcedAt.Equal(p.Interaction.CreatedAt) {
+		// A delayed terminal event for A must not remove B's announcement. Legacy
+		// ID-only announcements retain their previous cleanup behavior.
+		delete(c.announced, p.Interaction.ID)
+		delete(c.announcedOccurrence, p.Interaction.ID)
+	}
 	now := time.Now()
 	for id, at := range c.ended {
 		if now.Sub(at) > 10*time.Minute {
 			delete(c.ended, id)
+			delete(c.endedOccurrence, id)
 		}
 	}
 	if c.ended == nil {
 		c.ended = map[string]time.Time{}
 	}
-	c.ended[p.Interaction.ID] = now
+	if c.endedOccurrence == nil {
+		c.endedOccurrence = map[string]time.Time{}
+	}
+	if previous, ok := c.endedOccurrence[p.Interaction.ID]; !ok || previous.IsZero() || p.Interaction.CreatedAt.IsZero() || !p.Interaction.CreatedAt.Before(previous) {
+		c.ended[p.Interaction.ID] = now
+		c.endedOccurrence[p.Interaction.ID] = p.Interaction.CreatedAt
+	}
 	c.mu.Unlock()
 	l := s.botLang(context.Background())
 	how := i18n.T(l, "assistant-channels.ended")
@@ -88,7 +139,7 @@ func (s *Service) InteractionEnded(_ context.Context, p InteractionEnded) {
 	}
 	// Taken back because the user wrote in the conversation: what they write next is not a late answer to it.
 	inChat := p.Resolution != nil && p.Resolution.Dismiss && p.Resolution.Reason == proto.DismissedInChat && p.Resolution.AnsweredBy == ""
-	s.feishuInteractionEnded(p.Interaction, how, inChat)
+	s.larkModule().AskEnded(p.Interaction, how, inChat)
 	s.channelInteractionEnded(p.Interaction, inChat)
 	s.boardChanged()
 }
@@ -128,6 +179,31 @@ func (s *Service) interactionEnded(id string) bool {
 	return ok
 }
 
+// interactionEndedFor checks the terminal marker and current announcement for
+// one occurrence. A delayed A terminal event remains a guard for A's in-flight
+// post without suppressing B; a current different announcement supersedes A.
+func (s *Service) interactionEndedFor(ix proto.Interaction) bool {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return s.interactionEndedForLocked(ix)
+}
+
+func (s *Service) interactionEndedForLocked(ix proto.Interaction) bool {
+	c := &s.chans
+	if endedAt, ok := c.endedOccurrence[ix.ID]; ok {
+		if ix.CreatedAt.IsZero() || endedAt.IsZero() || ix.CreatedAt.Equal(endedAt) {
+			return true
+		}
+	} else if _, ok := c.ended[ix.ID]; ok && ix.CreatedAt.IsZero() {
+		return true
+	}
+	if announcedAt, ok := c.announcedOccurrence[ix.ID]; ok && !announcedAt.IsZero() && !ix.CreatedAt.IsZero() {
+		return !announcedAt.Equal(ix.CreatedAt)
+	}
+	return false
+}
+
 // pushedLately: this channel received the conversation's push within the last few minutes.
 func (s *Service) pushedLately(ch, machine, session string) bool {
 	c := &s.chans
@@ -152,8 +228,8 @@ func (s *Service) channelsReconnected(ctx context.Context) {
 		s.askFollow(ctx, k[0], k[1]) // a failure is asked again by the run's watcher
 	}
 	s.forgetChannelList()
-	s.feishuForgetStatus()
-	if _, err := s.feishuStatus(ctx); err != nil { // the pairing as it is now (feishuReconcile)
+	s.larkModule().ForgetStatus()
+	if _, err := s.chat().Status(ctx); err != nil { // the pairing as it is now (feishuReconcile)
 		s.logf("channels: the Feishu bot's status: %v", err)
 	}
 	go s.sweepChannelRuns()
@@ -172,7 +248,7 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 		s.logf("channels: the cards waiting now: %v", err)
 		return
 	}
-	pending := map[string]bool{}
+	pending := map[string]proto.Interaction{}
 	c := &s.chans
 	c.mu.Lock()
 	first := !c.connected
@@ -180,25 +256,49 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 	if c.announced == nil {
 		c.announced = map[string]bool{}
 	}
+	if c.announcedOccurrence == nil {
+		c.announcedOccurrence = map[string]time.Time{}
+	}
 	var missed []proto.Interaction
 	for _, ix := range res.Interactions {
-		pending[ix.ID] = true
+		announcedAt, hasOccurrence := c.announcedOccurrence[ix.ID]
+		currentAt := announcedAt
 		if !c.announced[ix.ID] {
+			currentAt = time.Time{}
+		}
+		if endedAt, ok := c.endedOccurrence[ix.ID]; ok && endedAt.After(currentAt) {
+			currentAt = endedAt
+		}
+		if !currentAt.IsZero() && !ix.CreatedAt.IsZero() && ix.CreatedAt.Before(currentAt) {
+			// A delayed snapshot must not downgrade newer live state before the
+			// announcement guard runs. Keep the newer occurrence in the pending
+			// identity used by cleanup, and do not queue the older card as missed.
+			ix.CreatedAt = currentAt
+			pending[ix.ID] = ix
+			continue
+		}
+		pending[ix.ID] = ix
+		same := c.announced[ix.ID] && (!hasOccurrence || announcedAt.IsZero() || ix.CreatedAt.IsZero() || announcedAt.Equal(ix.CreatedAt))
+		if !same {
 			c.announced[ix.ID] = true
+			c.announcedOccurrence[ix.ID] = ix.CreatedAt
 			if !first {
 				missed = append(missed, ix)
 			}
 		}
 	}
 	for id := range c.announced {
-		if !pending[id] {
+		if _, ok := pending[id]; !ok {
 			delete(c.announced, id)
+			delete(c.announcedOccurrence, id)
 		}
 	}
 	var gone []*channel.Ask
 	if c.stLoaded {
 		for _, a := range c.st.Asks {
-			if !pending[a.ID] {
+			current, ok := pending[a.ID]
+			replaced := ok && !a.CreatedAt.IsZero() && !current.CreatedAt.IsZero() && a.CreatedAt.Before(current.CreatedAt)
+			if !ok || replaced {
 				gone = append(gone, a)
 			}
 		}
@@ -218,40 +318,7 @@ func (s *Service) channelsCatchUp(ctx context.Context) {
 		}
 	}
 	for _, a := range gone {
-		s.channelInteractionDone(proto.Interaction{ID: a.ID})
+		s.channelInteractionDone(proto.Interaction{ID: a.ID, MachineID: a.MachineID, SessionID: a.SessionID, Kind: a.Kind, CreatedAt: a.CreatedAt})
 	}
-	s.closeEndedBotCards(ctx, pending, true)
-}
-
-// closeEndedBotCards closes the bot's cards whose interaction is over. Not being in pending is not enough: right
-// after a restart the manager's table is empty or partial (interactions are restored, screen and Codex cards rebuilt,
-// after this runs), so each is closed only once the history says it ended for good (botCardOver). One that may still
-// be waiting is looked at again a little later, once (again).
-func (s *Service) closeEndedBotCards(ctx context.Context, pending map[string]bool, again bool) {
-	b := &s.fbot
-	b.mu.Lock()
-	s.loadBotLocked(ctx) // cards posted before a restart are in the chat's state
-	var maybe []botCard
-	for id, card := range b.cards {
-		if !pending[id] && card.MessageID != "" {
-			maybe = append(maybe, card)
-		}
-	}
-	b.mu.Unlock()
-	var unsure []botCard
-	for _, card := range maybe {
-		switch s.botCardOver(ctx, card.Ix.ID) {
-		case cardOver:
-			s.feishuInteractionDone(card.Ix, i18n.T(s.botLang(ctx), "assistant-channels.ended"))
-		case cardUnsure:
-			unsure = append(unsure, card)
-		}
-	}
-	if again && len(unsure) > 0 {
-		time.AfterFunc(botCardRecheck, func() {
-			cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			s.closeEndedBotCards(cctx, nil, false)
-		})
-	}
+	s.larkModule().AsksCatchUp(ctx, pending)
 }

@@ -91,11 +91,31 @@
     <string name="inbox_empty_search_text">No messages or mail match “%1$s”.</string>
     <string name="inbox_empty_title">Your inbox is empty</string>
     <string name="inbox_empty_text">Once the hub has Lark (a Lark gateway) set up or you add a mail account in Settings, messages and mail that need you show up here.</string>
-    <string name="inbox_empty_filtered_title">All caught up</string>
-    <string name="inbox_empty_filtered_text">Nothing under this filter.</string>
+    <string name="inbox_empty_text_lark">Once the hub has Lark (a Lark gateway) set up, new Lark messages that need you show up here.</string>
+    <string name="inbox_empty_text_mail">Once you add a mail account in Settings, mail that needs you shows up here.</string>
+    <string name="inbox_empty_text_generic">New items that need you will show up here.</string>
+    <string name="inbox_empty_filtered_title">Nothing open matches these filters</string>
+    <string name="inbox_empty_filtered_text">Clear the filters to see the whole Inbox.</string>
+    <string name="inbox_empty_caught_up_title">All caught up</string>
+    <string name="inbox_empty_caught_up_text">New messages and mail will show up here.</string>
+    <string name="inbox_grouping_title">Group by</string>
+    <string name="inbox_empty_action_title">Nothing needs you</string>
+    <string name="inbox_empty_working_title">Nothing in progress</string>
+    <string name="inbox_empty_fyi_title">Nothing to read</string>
+    <string name="inbox_empty_done_title">Nothing done yet</string>
+    <string name="inbox_empty_section_text">The rest are in the other sections above.</string>
+    <string name="inbox_empty_done_text">What you mark done shows up here.</string>
     <string name="inbox_group_fyi">FYI</string>
     <string name="inbox_mark_all_seen">Mark all seen</string>
     <string name="inbox_clear_all">Clear all</string>
+    <plurals name="inbox_mark_all_in_seen">
+        <item quantity="one">Mark %1$d item in “%2$s” seen</item>
+        <item quantity="other">Mark all %1$d in “%2$s” seen</item>
+    </plurals>
+    <plurals name="inbox_clear_all_in">
+        <item quantity="one">Clear %1$d item in “%2$s”</item>
+        <item quantity="other">Clear all %1$d in “%2$s”</item>
+    </plurals>
     <string name="inbox_translated">Translated</string>
     <plurals name="inbox_messages_count">
         <item quantity="one">%1$d message</item>
@@ -180,6 +200,19 @@
     <string name="inbox_handoff_last_gone">The agent this went to last time has ended, so it goes to Persona.</string>
     <string name="inbox_handoff_mark_done">Also mark as done</string>
     <string name="inbox_handoff_sending">Handing off…</string>
+    <string name="inbox_handoff_chip_summary">Summarize &amp; suggest reply</string>
+    <string name="inbox_handoff_chip_background">Look into it</string>
+    <string name="inbox_handoff_chip_handle">Handle it</string>
+    <string name="inbox_draft_reply">Draft reply</string>
+    <string name="inbox_handoff_hint">Hand to AI…</string>
+    <string name="inbox_handoff_agents">Agents</string>
+    <string name="inbox_handoff_more">More…</string>
+    <string name="inbox_handoff_view">View</string>
+    <string name="inbox_handoff_queued">Waiting to hand to %1$s; Undo is available</string>
+    <string name="inbox_handoff_queued_done">Waiting to hand to %1$s · will mark done</string>
+    <string name="inbox_handoff_sending_to">Handing to %1$s…</string>
+    <string name="inbox_handoff_sent_to">Handed to %1$s</string>
+    <string name="inbox_handoff_sent_done">Handed to %1$s · marked done</string>
     <string name="inbox_hand_to_persona">Hand to Persona</string>
     <plurals name="inbox_triage_waiting">
         <item quantity="one">%1$d message waiting for triage</item>
@@ -208,13 +241,7 @@
     <string name="inbox_local_unconfirmed">Unconfirmed · Open to check</string>
     <string name="inbox_local_draft">Draft · %1$s</string>
     <string name="inbox_tier_fyi">FYI</string>
-    <string name="inbox_mute_repo">Mute this repository</string>
-    <string name="inbox_mute_chat">Mute this conversation</string>
-    <string name="inbox_mute_sender">Mute this sender</string>
     <string name="inbox_mute_option">%1$s · %2$s</string>
-    <string name="inbox_mute_tag_repo">Repository</string>
-    <string name="inbox_mute_tag_chat">Conversation</string>
-    <string name="inbox_mute_tag_sender">Sender</string>
     <string name="inbox_mutes_title">Muted</string>
     <string name="inbox_mutes_failed">Couldn\'t read what is muted</string>
     <string name="inbox_mutes_offline">Offline: its mutes show here once it is back.</string>
@@ -231,14 +258,7 @@
     <string name="inbox_policy_title">Rule for %1$s</string>
     <string name="inbox_policy_intro">%1$s. The hub applies it in code to what comes in from here, after the AI sorts it; a mute still wins.</string>
     <string name="inbox_policy_tier">Where it goes</string>
-    <string name="inbox_policy_tier_none">Leave to triage</string>
-    <string name="inbox_policy_tier_action">Always Needs you</string>
-    <string name="inbox_policy_tier_fyi">FYI</string>
-    <string name="inbox_policy_tier_noise">Collapsed</string>
     <string name="inbox_policy_twin">AI twin</string>
-    <string name="inbox_policy_twin_none">As set</string>
-    <string name="inbox_policy_twin_first">AI twin first</string>
-    <string name="inbox_policy_twin_never">Never AI twin</string>
     <string name="inbox_policy_twin_note">AI twin first hands these to the AI twin even when they are not Needs you, before the others. Never keeps them yours. The AI twin must be on.</string>
     <string name="inbox_policy_save">Save</string>
     <string name="inbox_policy_cancel">Cancel</string>
@@ -285,6 +305,9 @@
     <string name="inbox_event_view_source">View original</string>
     <string name="inbox_done_by_manager">Handled by the assistant</string>
     <string name="inbox_event_related">Related</string>
-    <!-- Source subscriptions (#2041): with the Inbox's other settings -->
+    <string name="inbox_open_chat">Open the chat</string>
+    <string name="inbox_content">Content</string>
+    <!-- Source subscriptions (#2041): with the Inbox's other settings. Inbox Sources (#5308) once the hub says so. -->
     <string name="inbox_subscriptions">Subscriptions</string>
+    <string name="inbox_sources">Inbox Sources</string>
 </resources>

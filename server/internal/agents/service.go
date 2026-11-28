@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,7 @@ type Service struct {
 	polls     map[string]*pollMarks // source → what the poll saw of it; a new one each time the source is added
 	listings  map[string]listing    // source → how asking it for its sessions went; guarded by srcMu
 	cache     *cache
+	flights   listFlights // session lists being asked for, shared by the callers that miss the cache together
 	listIndex sessionlist.Index
 	out       *outbox
 	prefs     *prefsStore
@@ -219,19 +221,31 @@ func (s *Service) Statuses(ctx context.Context) []Status {
 }
 
 func (s *Service) sessionsOf(ctx context.Context, src Source, fresh bool) ([]Session, error) {
-	name := src.Name()
 	if !fresh {
-		if list, ok := s.cache.getSessions(name); ok {
-			return list, nil
-		}
+		return s.listShared(ctx, src) // inflight.go
 	}
-	gen := s.cache.generation(name)
+	return s.listNow(ctx, src, s.cache.generation(src.Name()))
+}
+
+// callerEnded reports whether the caller's own context ended (canceled or past its deadline)
+// or the error is a direct cancellation, so the failure belongs to the caller rather than the source.
+func callerEnded(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, context.Canceled)
+}
+
+// listNow asks src for its sessions and caches the answer unless the cache was invalidated since gen.
+func (s *Service) listNow(ctx context.Context, src Source, gen int) ([]Session, error) {
 	list, err := src.Sessions(ctx)
 	if err != nil {
-		s.noteListing(src, err)
+		if !callerEnded(ctx, err) {
+			if timedOut(err) { // the source's own timeout, not the asker's going away
+				s.cache.putTimeout(src.Name(), gen, err)
+			}
+			s.noteListing(src, err)
+		}
 		return nil, err
 	}
-	s.cache.putSessions(name, gen, list)
+	s.cache.putSessions(src.Name(), gen, list)
 	s.noteListing(src, nil)
 	return list, nil
 }
@@ -257,10 +271,10 @@ func (s *Service) listed(ctx context.Context, source, provider string) ([]Sessio
 			continue
 		}
 		list, err := s.sessionsOf(ctx, src, false)
-		if errors.Is(err, context.Canceled) {
-			return nil, err
-		}
 		if err != nil {
+			if callerEnded(ctx, err) {
+				return nil, err
+			}
 			s.logf("agents: %s: sessions: %v", src.Name(), err)
 			if source == "" && s.skipsFailed(src.Name()) {
 				continue
@@ -283,10 +297,10 @@ func (s *Service) Search(ctx context.Context, source, q string) ([]SearchHit, er
 			continue
 		}
 		hits, err := src.Search(ctx, q)
-		if errors.Is(err, context.Canceled) {
-			return nil, err
-		}
 		if err != nil {
+			if callerEnded(ctx, err) {
+				return nil, err
+			}
 			s.logf("agents: %s: search: %v", src.Name(), err)
 			if source == "" && s.skipsFailed(src.Name()) {
 				continue
@@ -373,6 +387,11 @@ type SendResult struct {
 	Upstream  json.RawMessage `json:"upstream,omitempty"`
 }
 
+// sendPreparer reserves a source's durable idempotency record before a new outbox row can mask a conflict.
+type sendPreparer interface {
+	prepareSend(ctx context.Context, clientID, text string) error
+}
+
 var uuidRe = lazyre.New(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 func NewClientID() string {
@@ -384,6 +403,9 @@ func NewClientID() string {
 
 // TextLen counts like JavaScript's String.length (UTF-16 units), which is what the Lark gateway's 20000 limit measures.
 func TextLen(s string) int { return len(utf16.Encode([]rune(s))) }
+
+// textSHA256 fingerprints the exact client payload without storing another copy of it in the outbox.
+func textSHA256(s string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(s))) }
 
 func preview(s string) string {
 	r := []rune(s)
@@ -417,6 +439,9 @@ func (s *Service) Send(ctx context.Context, id, clientID, text, origin string) (
 	if seen && prev.SessionID != id {
 		return nil, fail(http.StatusConflict, "agents: clientId %s was used for another session", clientID)
 	}
+	if seen && prev.TextSHA256 != "" && prev.TextSHA256 != textSHA256(text) {
+		return nil, fail(http.StatusConflict, "agents: clientId %s was used for a different payload", clientID)
+	}
 	if seen && (prev.Status == OutSent || prev.Status == OutDeleted) {
 		return &SendResult{Entry: prev, Duplicate: true}, nil
 	}
@@ -427,10 +452,18 @@ func (s *Service) Send(ctx context.Context, id, clientID, text, origin string) (
 	if !sess.CanSend {
 		return nil, fail(http.StatusConflict, "agents: session %s cannot send now (canSend=false)", id)
 	}
+	if p, ok := src.(sendPreparer); ok {
+		if err := p.prepareSend(ctx, clientID, text); err != nil {
+			return nil, err
+		}
+	}
 	now := time.Now().UTC()
 	e := prev
 	if !seen {
 		e = OutboxEntry{ClientID: clientID, SessionID: id, Preview: preview(text), Length: TextLen(text), Origin: origin, CreatedAt: now}
+	}
+	if e.TextSHA256 == "" {
+		e.TextSHA256 = textSHA256(text)
 	}
 	e.Status, e.Error, e.UpdatedAt = OutSending, "", now
 	e.Attempts++
@@ -495,7 +528,11 @@ func (s *Service) Outbox(ctx context.Context, id string, limit int) []OutboxEntr
 
 // Updated is a source reporting that these sessions changed (agent-bridge.updated, a send, the poll): drop
 // their cache and tell the apps. No keys means "something changed": only the list is dropped.
-func (s *Service) Updated(source string, keys []string) {
+func (s *Service) Updated(source string, keys []string) { s.report(source, keys, 0, nil) }
+
+// report drops what changed of source from the cache and tells the apps. The poll passes the list it found the
+// change in (asked at gen), which stays cached (cache.putChanged).
+func (s *Service) report(source string, keys []string, gen int, list []Session) {
 	if !s.has(source) {
 		return // gone (its plugin stopped) since: a send's follow-up has nothing left to tell
 	}
@@ -503,7 +540,11 @@ func (s *Service) Updated(source string, keys []string) {
 	for _, k := range keys {
 		ids = append(ids, source+":"+k)
 	}
-	s.cache.invalidate(source, ids)
+	if list != nil {
+		s.cache.putChanged(source, gen, list, ids)
+	} else {
+		s.cache.invalidate(source, ids)
+	}
 	s.onChange(ids)
 }
 
@@ -532,15 +573,25 @@ func (s *Service) PollOnce(ctx context.Context) {
 		gen := s.cache.generation(n)
 		list, err := src.Sessions(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				continue
+			}
+			if timedOut(err) {
+				s.cache.putTimeout(n, gen, err)
+			}
 			s.noteListing(src, err)
 			continue // the next tick tries again; the routes report errors themselves
 		}
 		changed := s.mark(n, marks[i], list)
-		s.cache.putSessions(n, gen, list)
-		s.noteListing(src, nil)
 		if len(changed) > 0 {
-			s.Updated(n, changed)
+			s.report(n, changed, gen, list)
+		} else {
+			s.cache.putSessions(n, gen, list)
 		}
+		s.noteListing(src, nil)
 	}
 }
 

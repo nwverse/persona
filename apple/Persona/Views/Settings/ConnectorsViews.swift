@@ -1,18 +1,15 @@
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 // Settings › Connectors (2026-11-01): where Persona' data comes from and acts — this device's data (phone_* tools), the mail
 // accounts, Lark (the hub's Lark gateway), and the Lark Bot the user talks to Persona through (FeishuBotView). Mail used to be managed from the inbox's ⋯ menu, this device's data was Phone Data.
 
 /// What a connector is called and says in the settings list.
 enum ConnectorText {
-    /// This device as a connector: This iPhone / iPad / Mac.
+    /// This device as a connector: This iPhone / iPad.
     static var device: String {
-        #if os(macOS)
-        String(localized: "This Mac")
-        #else
         UIDevice.current.userInterfaceIdiom == .pad ? String(localized: "This iPad") : String(localized: "This iPhone")
-        #endif
     }
 
     static func deviceSummary() -> String {
@@ -282,10 +279,11 @@ nonisolated enum ConnectorRow: Hashable, Identifiable {
     /// A hub that lists Feishu says whether it has mail; one that does not (from before M6, or no list yet) gets both
     /// rows, as before. Feishu's row (its page reads `/api/v1/lark/…`) is there only while the hub has Feishu chats
     /// (`LarkFeatures`, the Lark extension).
-    static func rows(_ list: [HubConnector], lark: Bool = true) -> [ConnectorRow] {
+    /// Mail's row (its page reads `/api/v1/mail/…`) is there only while the hub's mail module is on (`MailAccess`, #15995).
+    static func rows(_ list: [HubConnector], lark: Bool = true, mail: Bool = true) -> [ConnectorRow] {
         let listed = list.contains { $0.id == "lark" }
         let legacy: [ConnectorRow] = listed ? (list.contains { $0.id == "mail" } ? [.mail, .lark] : [.lark]) : [.mail, .lark]
-        return legacy.filter { lark || $0 != .lark } + list.filter { $0.id != "mail" && $0.id != "lark" }.map(ConnectorRow.hub)
+        return legacy.filter { (lark || $0 != .lark) && (mail || $0 != .mail) } + list.filter { $0.id != "mail" && $0.id != "lark" }.map(ConnectorRow.hub)
     }
 }
 
@@ -364,7 +362,7 @@ nonisolated enum ConnectorRow: Hashable, Identifiable {
     init(deps: Deps = .live) { self.deps = deps }
 
     var groups: [ManagerGroup<HubConnector>]? { nil }
-    func rows(lark: Bool) -> [ConnectorRow] { ConnectorRow.rows(connectors, lark: lark) }
+    func rows(lark: Bool, mail: Bool = true) -> [ConnectorRow] { ConnectorRow.rows(connectors, lark: lark, mail: mail) }
     func manager(of c: HubConnector) -> String? { manager }
 
     func load(listed: Bool) async {
@@ -430,7 +428,7 @@ struct ConnectorsSection: View {
                 }
                 .settingsListRow(SettingsPage.phoneData)
                 #endif
-                ForEach(hub.rows(lark: model.larkFeatures.chats)) { row in
+                ForEach(hub.rows(lark: model.larkFeatures.chats, mail: MailModule.access.offersMail)) { row in
                     switch row {
                     case .mail:
                         NavigationLink(value: SettingsPage.mail) {
@@ -446,10 +444,13 @@ struct ConnectorsSection: View {
                         hubRow(c)
                     }
                 }
-                NavigationLink(value: SettingsPage.feishuBot) {
-                    ConnectorRowLabel(title: String(localized: "Lark Bot"), symbol: Theme.Icon.chatBot, value: FeishuBotModel.summary(bot))
+                // The bot is the hub's Lark module's: no row while that module is off (#15995).
+                if LarkModule.botEntry.isOffered {
+                    NavigationLink(value: SettingsPage.feishuBot) {
+                        ConnectorRowLabel(title: String(localized: "Lark Bot"), symbol: Theme.Icon.chatBot, value: FeishuBotModel.summary(bot))
+                    }
+                    .settingsListRow(SettingsPage.feishuBot)
                 }
-                .settingsListRow(SettingsPage.feishuBot)
             }
             .bareListRow()
         } header: {
@@ -457,7 +458,7 @@ struct ConnectorsSection: View {
         } footer: {
             footer
         }
-        .task(id: "\(model.assistantManagerID ?? "")|\(model.settingsPath.count)|\(model.config?.url.absoluteString ?? "")") { await load() }
+        .task(id: "\(model.assistantManagerID ?? "")|\(model.settingsPath.count)|\(model.config?.url.absoluteString ?? "")|\(LarkModule.botEntry.isOffered)|\(MailModule.access.offersMail)") { await load() }
     }
 
     /// A hub connector's row, opening its manager's copy.
@@ -481,10 +482,12 @@ struct ConnectorsSection: View {
         // An older hub has no connectors (feature "connectors"): its list stays as it was.
         let listed = model.hubFeatures.contains("connectors")
         let chats = model.larkFeatures.chats
-        async let a = try? api.mailAccounts()
+        let offersMail = MailModule.access.offersMail // off: no row, and its accounts are not read (#15995)
+        async let a = offersMail ? try? api.mailAccounts() : nil
         // An assistant without the chat connector says not set up (`LarkStatus.absent`), not a blank row.
         async let l = chats ? api.chatConnectorStatus().status : nil
-        async let b = try? api.feishuBot()
+        let offersBot = LarkModule.botEntry.isOffered
+        async let b = offersBot ? try? api.feishuBot() : nil
         await hub.load(listed: listed)
         let (accs, st, bs) = await (a, l, b)
         guard !Task.isCancelled, api.sameSettingsScope(as: model.api) else { return }
@@ -585,12 +588,14 @@ struct FeishuConnectorView: View {
             Section {
                 Toggle("Show Messages on Home", isOn: $larkHome.enabled)
                 .accessibilityIdentifier("feishu-home-enabled")
+                if larkHome.enabled {
+                    Toggle(String(localized: "lark.messages.agentsToggle", defaultValue: "AI Assistants in Messages",
+                                  comment: "Settings switch: list personal AI assistants with the Lark chats on the Messages page"),
+                           isOn: $larkHome.agentsInMessages)
+                    .accessibilityIdentifier("feishu-home-agents")
+                }
             } footer: {
-                #if os(macOS)
-                Text("Adds Messages to the sidebar to browse all direct and group chats. It shares accounts and chat history with the Inbox.")
-                #else
                 Text("Adds a Messages entry on Home to browse all direct and group chats. It shares accounts and chat history with the Inbox.")
-                #endif
             }
 
             if !absent {
@@ -610,11 +615,7 @@ struct FeishuConnectorView: View {
             Section("What Persona Does with Lark") {
                 use(Theme.Icon.inbox, String(localized: "Inbox"), String(localized: "Direct messages, @mentions, group messages and mentions in docs; AI sorts them and drafts replies"))
                 use(Theme.Icon.knowledge, String(localized: "Knowledge"), String(localized: "Chats, people, groups and projects are archived as context for the assistant and AI twin"))
-                #if os(macOS)
-                use(Theme.Icon.ai, String(localized: "Assistant"), String(localized: "Persona can search messages and read docs; sending messages and other changes ask you in the app first"))
-                #else
                 use(Theme.Icon.ai, String(localized: "Assistant"), String(localized: "Persona can search messages and read docs; sending messages and other changes ask you on your phone first"))
-                #endif
                 use(Theme.Icon.agents, "/agent", String(localized: "Start a message with /agent anywhere in Lark to have an agent handle it and reply for you"))
                 ModelConfigurationLink(title: String(localized: "/agent Model"), purposeID: "lark.agent", owner: modelOwner)
             }
@@ -657,7 +658,7 @@ struct FeishuConnectorView: View {
 
     private func accountRow(_ account: LarkAccount, isDefault: Bool) -> some View {
         HStack(spacing: Theme.Space.m) {
-            LarkAvatarImage(name: account.title, url: account.avatar, size: Theme.Size.wellM)
+            LarkAvatarImage(name: account.title, url: account.picture, account: account.id, size: Theme.Size.wellM, origin: capturedAPI)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text(account.title).font(Theme.Font.body).lineLimit(1)
                 Text(accountDetail(account)).font(Theme.Font.label).lineLimit(1)

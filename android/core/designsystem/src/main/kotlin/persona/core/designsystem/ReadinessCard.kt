@@ -23,6 +23,7 @@ enum class ReadinessActionId(val wire: String, @StringRes val label: Int) {
     InstallClaude("install_claude", R.string.designsystem_readiness_action_install_claude),
     LoginClaude("login_claude", R.string.designsystem_readiness_action_login_claude),
     ConnectModel("connect_model", R.string.designsystem_readiness_action_connect_model),
+    PickModel("pick_model", R.string.designsystem_readiness_action_pick_model),
     EditProvider("edit_provider", R.string.designsystem_readiness_action_edit_provider),
     TestAssistant("test_assistant", R.string.designsystem_readiness_action_test_assistant);
 
@@ -175,4 +176,4 @@ fun ReadinessHelpDialog(
 
 /** What to type on the computer (the same lines the web's help shows). */
 private const val InstallCommand = "curl -fsSL https://claude.ai/install.sh | bash"
-private const val LoginCommand = "claude"
+private const val LoginCommand = "claude auth login"

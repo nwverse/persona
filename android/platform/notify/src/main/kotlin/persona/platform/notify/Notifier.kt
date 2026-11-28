@@ -22,6 +22,8 @@ import persona.core.contracts.NotifyEvent
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.DeviceNotificationPreferences
 import persona.core.contracts.api.DoneNotification
+import persona.core.contracts.api.ExtensionNotificationActionRecord
+import persona.core.contracts.api.ExtensionNotificationClaim
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import persona.core.contracts.api.SessionsRepository
@@ -172,6 +174,7 @@ class Notifier @Inject constructor(
                 isAssistant(session)?.let { putExtra(ActionReceiver.EXTRA_ASSISTANT, it) }
             }
             putExtra(ActionReceiver.EXTRA_ID, request.interaction)
+            putExtra(ActionReceiver.EXTRA_CREATED_AT, request.createdAt)
             putExtra(ActionReceiver.EXTRA_ACTION, key)
             putExtra(ActionReceiver.EXTRA_QUIET, true)
         }
@@ -201,7 +204,7 @@ class Notifier @Inject constructor(
     ): Boolean {
         val settings = deliveryPreferences ?: preferences.preferences.value
         if (settings?.input != true) return false
-        if (NotificationPolicy.expired(ix)) { retract(ix.id); return false }
+        if (NotificationPolicy.expired(ix)) { retract(ix.id, ix.createdAt); return false }
         val assistant = isAssistant(ix.sessionKey)
         val title = if (assistant == true && ix.kind == "question") context.getString(R.string.notify_title_assistant_asks)
             else ix.sessionTitle?.takeIf { it.isNotBlank() } ?: context.getString(R.string.notify_title_needs_you)
@@ -209,7 +212,11 @@ class Notifier @Inject constructor(
             if (note == null) line to detail else note to "$note\n$detail"
         }
         val builder = base(CH_INPUT, settings.lockDetails).forSession(ix.sessionKey).setContentTitle(title).setContentText(line)
-            .addExtras(android.os.Bundle().apply { putBoolean(EXTRA_REQUEST, true) })
+            .addExtras(android.os.Bundle().apply {
+                putBoolean(EXTRA_REQUEST, true)
+                putString(ActionReceiver.EXTRA_CREATED_AT, ix.createdAt)
+                if (note != null) putBoolean(EXTRA_OCCURRENCE_GUARD, true)
+            })
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail.take(2000)))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -234,6 +241,7 @@ class Notifier @Inject constructor(
             putExtra(ActionReceiver.EXTRA_SESSION, ix.sessionId)
             isAssistant(ix.sessionKey)?.let { putExtra(ActionReceiver.EXTRA_ASSISTANT, it) }
             putExtra(ActionReceiver.EXTRA_ID, ix.id)
+            putExtra(ActionReceiver.EXTRA_CREATED_AT, ix.createdAt)
             putExtra(ActionReceiver.EXTRA_EXPIRES_AT, ix.expiresAt)
             putExtra(ActionReceiver.EXTRA_ACTION, action.key)
         }
@@ -255,22 +263,86 @@ class Notifier @Inject constructor(
         if (channel == CH_DONE && settings.done == DoneNotification.Off) return
         if (channel == CH_ALERT && !settings.input) return
         val session = NotificationPolicy.session(event)
-        post(NotificationPolicy.tag(event), EVENT_ID, base(channel).forSession(session)
-            .setContentTitle(event.title.ifBlank { when (channel) { CH_DONE -> context.getString(R.string.notify_title_done); CH_ALERT -> context.getString(R.string.notify_title_alert); else -> "Persona" } })
+        val tag = NotificationPolicy.tag(event)
+        val extension = prepareExtensionNotification(context, event, tag)
+        val title = event.title.ifBlank { when (channel) { CH_DONE -> context.getString(R.string.notify_title_done); CH_ALERT -> context.getString(R.string.notify_title_alert); else -> "Persona" } }
+        post(tag, EVENT_ID, base(channel).forSession(session)
+            .setContentTitle(title)
             .setContentText(event.body.ifBlank { event.subtitle })
             .setSubText(event.subtitle.takeIf { it.isNotBlank() })
             .setStyle(NotificationCompat.BigTextStyle().bigText(event.body.take(2000)))
             // Inside this device's quiet hours (the hub marks reply reminders so): shown, without a sound.
             .setSilent(event.quiet)
             .setAutoCancel(true).apply {
-                if (session != null) setContentIntent(open(session, if (event.kind == "assistant") true else isAssistant(session)))
+                if (extension != null) {
+                    val intents = ExtensionNotificationIntents(context)
+                    setContentIntent(intents.contentIntent(extension.body, title))
+                    extension.buttons.forEach { addAction(intents.action(it)) }
+                } else if (session != null) setContentIntent(open(session, if (event.kind == "assistant") true else isAssistant(session)))
             }.build())
     }
 
-    fun retract(id: String) {
-        manager.cancel(interactionTag(id), EVENT_ID)
-        requestHistory.clear(id)
+    internal fun notifyExtensionReport(report: ExtensionNotificationActionReport) = when (report) {
+        is ExtensionNotificationActionReport.Toast -> extensionNotice(report.record,
+            context.getString(R.string.notify_extension_action_done_title), report.text)
+        is ExtensionNotificationActionReport.Unavailable -> extensionNotice(report.record,
+            context.getString(R.string.notify_extension_action_failed_title), context.getString(R.string.notify_extension_action_unavailable))
+        is ExtensionNotificationActionReport.PageExpired -> extensionNotice(report.record,
+            context.getString(R.string.notify_extension_action_failed_title), context.getString(R.string.notify_extension_action_page_expired))
+        is ExtensionNotificationActionReport.WrongScope -> extensionNotice(report.record,
+            context.getString(R.string.notify_extension_action_failed_title), context.getString(R.string.notify_extension_action_wrong_scope))
+        is ExtensionNotificationActionReport.ActionFailed -> extensionNotice(report.record,
+            context.getString(R.string.notify_extension_action_failed_title), context.getString(R.string.notify_extension_action_failed_detail))
     }
+
+    internal fun notifyExtensionTimeout(record: ExtensionNotificationActionRecord) = extensionNotice(record,
+        context.getString(R.string.notify_result_unconfirmed_title), context.getString(R.string.notify_extension_action_unconfirmed))
+
+    internal fun notifyExtensionMissing(token: String) = extensionNotice(null,
+        context.getString(R.string.notify_extension_action_expired_title), context.getString(R.string.notify_extension_action_expired_detail), token)
+
+    internal fun notifyExtensionClaimFailure(claim: ExtensionNotificationClaim) = when (claim) {
+        is ExtensionNotificationClaim.WrongScope -> extensionNotice(claim.record,
+            context.getString(R.string.notify_extension_action_failed_title), context.getString(R.string.notify_extension_action_wrong_scope))
+        is ExtensionNotificationClaim.Expired -> extensionNotice(claim.record,
+            context.getString(R.string.notify_extension_action_expired_title), context.getString(R.string.notify_extension_action_expired_detail))
+        is ExtensionNotificationClaim.Invalid -> extensionNotice(claim.record,
+            context.getString(R.string.notify_extension_action_expired_title), context.getString(R.string.notify_extension_action_expired_detail))
+        else -> Unit
+    }
+
+    private fun extensionNotice(record: ExtensionNotificationActionRecord?, title: String, detail: String, token: String? = null) {
+        val identity = record?.token ?: token ?: return
+        post("alert:extension-result:$identity", EVENT_ID, base(CH_ALERT)
+            .setContentTitle(title).setContentText(detail)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail.take(2000)))
+            .setOnlyAlertOnce(true).setAutoCancel(true)
+            .apply {
+                record?.let { setContentIntent(ExtensionNotificationIntents(context).contentIntent(it, it.action?.title ?: it.extension)) }
+            }.build())
+    }
+
+    @Synchronized
+    fun retract(id: String, createdAt: String? = null) {
+        val tag = interactionTag(id)
+        if (createdAt != null) {
+            val current = runCatching {
+                context.getSystemService(NotificationManager::class.java).activeNotifications
+                    .firstOrNull { it.id == EVENT_ID && it.tag == tag }
+            }.getOrNull()
+            if (current == null) {
+                requestHistory.clear(id, createdAt)
+                return
+            }
+            val shownAt = current.notification.extras.getString(ActionReceiver.EXTRA_CREATED_AT)
+            if (shownAt != null && shownAt != createdAt) return
+        }
+        manager.cancel(tag, EVENT_ID)
+        requestHistory.clear(id, createdAt)
+    }
+
+    /** Delivered occurrence by interaction ID; null is a record written by an older app. */
+    fun deliveredOccurrences(): Map<String, String?> = requestHistory.occurrences()
 
     /** Every request already posted, including one the user dismissed; a watchdog pass must not post it again. */
     fun deliveredRequests(): Set<String> = requestHistory.ids()
@@ -285,8 +357,8 @@ class Notifier @Inject constructor(
             .mapNotNullTo(HashSet()) { notice -> notice.tag?.takeIf { it.startsWith(INTERACTION_PREFIX) }?.removePrefix(INTERACTION_PREFIX) }
     }.getOrDefault(emptySet())
 
-    internal fun pending(id: String, session: SessionKey?, status: PendingStatus, assistant: Boolean?) =
-        resultNotice(id, session, status.label(context), context.getString(R.string.notify_result_open_chat), assistant)
+    internal fun pending(id: String, session: SessionKey?, status: PendingStatus, assistant: Boolean?, createdAt: String? = null) =
+        resultNotice(id, session, status.label(context), context.getString(R.string.notify_result_open_chat), assistant, createdAt = createdAt)
 
     fun retractSession(session: SessionKey) {
         context.getSystemService(NotificationManager::class.java).activeNotifications
@@ -323,8 +395,9 @@ class Notifier @Inject constructor(
         session?.let { addExtras(android.os.Bundle().apply { putString("persona.session", it.path) }) }
     }
 
-    fun failure(id: String, session: SessionKey?, assistant: Boolean? = null) = resultNotice(
+    fun failure(id: String, session: SessionKey?, assistant: Boolean? = null, createdAt: String? = null) = resultNotice(
         id, session, context.getString(R.string.notify_result_unconfirmed_title), context.getString(R.string.notify_result_check_chat), assistant,
+        createdAt = createdAt,
     )
 
     /**
@@ -332,22 +405,31 @@ class Notifier @Inject constructor(
      * tapped again. Without the request at hand (a cold start that could not reach the hub), there are no buttons to
      * bring back: a notice says it was not sent and opens the chat.
      */
-    internal fun notSent(id: String, ix: Interaction?, session: SessionKey?, assistant: Boolean?) {
-        if (ix != null && postInteraction(ix, context.getString(R.string.notify_result_not_sent_detail))) return
+    internal fun notSent(id: String, ix: Interaction?, session: SessionKey?, assistant: Boolean?, createdAt: String? = null) {
+        if (ix != null && (createdAt == null || ix.createdAt == createdAt) &&
+            postInteraction(ix, context.getString(R.string.notify_result_not_sent_detail))) return
         resultNotice(id, session, context.getString(R.string.notify_result_not_sent_title),
-            context.getString(R.string.notify_result_open_chat), assistant)
+            context.getString(R.string.notify_result_open_chat), assistant, createdAt = createdAt)
     }
 
-    internal fun actionResult(id: String, session: SessionKey?, result: NotificationActionResult, assistant: Boolean?) {
+    internal fun actionResult(id: String, session: SessionKey?, result: NotificationActionResult, assistant: Boolean?, createdAt: String? = null) {
         val (title, detail) = actionResultCopy(result) ?: return
-        resultNotice(id, session, context.getString(title), context.getString(detail), assistant, terminal = result == NotificationActionResult.Expired)
+        resultNotice(id, session, context.getString(title), context.getString(detail), assistant,
+            terminal = result == NotificationActionResult.Expired, createdAt = createdAt)
     }
 
     private fun resultNotice(
         id: String, session: SessionKey?, title: String, detail: String, assistant: Boolean?, terminal: Boolean = false,
+        createdAt: String? = null,
     ) {
         val destination = open(session, assistant, terminal)
         post(interactionTag(id), EVENT_ID, base(CH_INPUT).forSession(session)
+            .addExtras(android.os.Bundle().apply {
+                if (createdAt != null) {
+                    putString(ActionReceiver.EXTRA_CREATED_AT, createdAt)
+                    putBoolean(EXTRA_OCCURRENCE_GUARD, true)
+                }
+            })
             .setContentTitle(title).setContentText(detail)
             .setOnlyAlertOnce(true)
             .apply {
@@ -383,12 +465,23 @@ class Notifier @Inject constructor(
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC).build())
         }
 
+    @Synchronized
     private fun post(tag: String?, id: Int, notification: Notification) {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED) return
+        val occurrence = notification.extras.getString(ActionReceiver.EXTRA_CREATED_AT)
+        if (occurrence != null && notification.extras.getBoolean(EXTRA_OCCURRENCE_GUARD) && tag != null) {
+            // A result for the occurrence the owner tapped must not overwrite a replacement already on the shade.
+            val current = runCatching {
+                context.getSystemService(NotificationManager::class.java).activeNotifications
+                    .firstOrNull { it.id == id && it.tag == tag }
+            }.getOrNull()
+            val currentAt = current?.notification?.extras?.getString(ActionReceiver.EXTRA_CREATED_AT)
+            if (currentAt != null && currentAt != occurrence) return
+        }
         runCatching { manager.notify(tag, id, notification) }.onSuccess {
             if (notification.extras.getBoolean(EXTRA_REQUEST) && tag?.startsWith(INTERACTION_PREFIX) == true) {
-                requestHistory.mark(tag.removePrefix(INTERACTION_PREFIX))
+                requestHistory.mark(tag.removePrefix(INTERACTION_PREFIX), occurrence)
             }
         }
     }
@@ -404,5 +497,6 @@ class Notifier @Inject constructor(
         private const val INTERACTION_PREFIX = "interaction:"
         private fun interactionTag(id: String) = "$INTERACTION_PREFIX$id"
         private const val EXTRA_REQUEST = "persona.request"
+        private const val EXTRA_OCCURRENCE_GUARD = "persona.occurrence_guard"
     }
 }

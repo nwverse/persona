@@ -4,6 +4,7 @@ import java.io.IOException
 import java.nio.file.Files
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
@@ -12,6 +13,8 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import persona.core.contracts.Machine
+import persona.core.contracts.DirectionsEvent
+import persona.core.contracts.ExternalDirection
 import persona.core.contracts.Session
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
@@ -75,6 +78,78 @@ class AssistantSwitchIsolationTest {
         oldResponse.complete(config(null, "old-main"))
         old.await()
         assertEquals("new-main", repository.assistant.value.mainSession?.sessionId)
+    }
+
+    @Test fun conversationTagFiltersReadAbsentNullEmptyAndExactOrder() = runTest {
+        val transport = Transport()
+        val repository = RealAssistantRepository(Connection(transport), Sessions(), backgroundScope)
+        runCurrent()
+        assertEquals(ConversationTagFilters.Unsupported, repository.assistant.value.conversationTagFilters)
+
+        fun response(value: JsonElement) = JsonObject(config(null).toMutableMap().apply {
+            put("conversation_tag_filters", value)
+        })
+        transport.read = { response(JsonNull) }
+        repository.refresh()
+        assertTrue(repository.assistant.value.conversationTagFilters.supported)
+        assertNull(repository.assistant.value.conversationTagFilters.entries)
+
+        transport.read = { response(JsonArray(emptyList())) }
+        repository.refresh()
+        assertEquals(ConversationTagFilters(emptyList()), repository.assistant.value.conversationTagFilters)
+
+        transport.read = { response(JsonArray(listOf(JsonPrimitive("second"), JsonPrimitive("first")))) }
+        repository.refresh()
+        assertEquals(listOf("second", "first"), repository.assistant.value.conversationTagFilters.entries)
+    }
+
+    @Test fun recentTaskChatsApplyLocallyAndFollowTheNextRefresh() = runTest {
+        val transport = Transport()
+        val repository = RealAssistantRepository(Connection(transport), Sessions(), backgroundScope)
+        runCurrent()
+        assertNull(repository.assistant.value.recentTaskChats)
+        repository.updateRecentTaskChats(true)
+        assertEquals(true, repository.assistant.value.recentTaskChats)
+        transport.recentTaskChats = false
+        repository.refresh()
+        assertEquals(false, repository.assistant.value.recentTaskChats)
+        transport.recentTaskChats = null
+        repository.refresh()
+        assertNull(repository.assistant.value.recentTaskChats)
+    }
+
+    @Test fun lateRefreshCannotEraseRecentTaskChatsUpdate() = runTest {
+        val transport = Transport().apply { recentTaskChats = false }
+        val repository = RealAssistantRepository(Connection(transport), Sessions(), backgroundScope)
+        runCurrent()
+        val response = CompletableDeferred<JsonObject>()
+        transport.read = { response.await() }
+        val refresh = async { repository.refresh() }
+        runCurrent()
+        repository.updateRecentTaskChats(true)
+        response.complete(config(null, recentTaskChats = false))
+        refresh.await()
+        assertEquals(true, repository.assistant.value.recentTaskChats)
+    }
+
+    @Test fun recentTaskChatsUpdaterKeepsRollbackWithOriginalManager() = runTest {
+        val transport = Transport().apply { read = { config(it, recentTaskChats = it != null) } }
+        val repository = RealAssistantRepository(Connection(transport), Sessions(), backgroundScope)
+        runCurrent()
+        assertEquals(false, repository.assistant.value.recentTaskChats)
+        val update = repository.recentTaskChatsUpdater()
+        update(true)
+        AssistantManagerChoice.pick("work")
+        runCurrent()
+        assertEquals(true, repository.assistant.value.recentTaskChats)
+
+        update(false)
+
+        assertEquals("A's rollback must not rewrite B", true, repository.assistant.value.recentTaskChats)
+        transport.read = { manager -> if (manager == null) throw IOException("offline") else config(manager, recentTaskChats = true) }
+        AssistantManagerChoice.pick(null)
+        runCurrent()
+        assertEquals("A's cached optimistic value is rolled back too", false, repository.assistant.value.recentTaskChats)
     }
 
     @Test fun mainLookupPinsTheReturnedConversationBeforePageSwitchAndSend() = runTest {
@@ -235,6 +310,125 @@ class AssistantSwitchIsolationTest {
         assertFalse(repository.assistant.value.conversations.any { it.sessionId == "null-created" })
     }
 
+    @Test fun treeAndLeadersFallbackPublishOutsideDirectionTargets() = runTest {
+        val treeTransport = Transport().apply {
+            tree = { buildJsonObject { put("directions", buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "dir-outside")
+                    put("name", "Outside work")
+                    put("external", true)
+                    put("machine_id", "work")
+                    put("session_id", "agent")
+                })
+            }) } }
+        }
+        val treeRepository = RealAssistantRepository(Connection(treeTransport), Sessions(), backgroundScope)
+        runCurrent()
+        assertEquals(listOf("dir-outside"), treeRepository.assistant.value.leaders)
+        assertEquals(ExternalDirection("work", "agent"), treeRepository.assistant.value.externalDirection("dir-outside"))
+
+        AssistantManagerChoice.pick("work")
+        val fallbackTransport = Transport().apply {
+            read = { manager -> buildJsonObject {
+                config(manager).forEach { (key, value) -> put(key, value) }
+                put("leaders", buildJsonArray { add("dir-outside"); add("dir-watching") })
+            } }
+            leaders = { buildJsonObject { put("leaders", buildJsonArray {
+                add(buildJsonObject {
+                    put("id", "dir-outside")
+                    put("name", "Outside work")
+                    put("external", true)
+                    put("machine_id", "work")
+                    put("session_id", "agent")
+                })
+                add(buildJsonObject {
+                    put("id", "dir-watching")
+                    put("external", true)
+                })
+            }) } }
+        }
+        val fallbackRepository = RealAssistantRepository(Connection(fallbackTransport), Sessions(), backgroundScope)
+        runCurrent()
+        val snapshot = fallbackRepository.assistant.value
+        assertNull(snapshot.directionTree)
+        assertEquals(listOf("dir-outside", "dir-watching"), snapshot.leaders)
+        assertEquals("Outside work", snapshot.directionNames["dir-outside"])
+        assertEquals(ExternalDirection("work", "agent"), snapshot.externalDirection("dir-outside"))
+        assertEquals(ExternalDirection(), snapshot.externalDirection("dir-watching"))
+        assertNull(snapshot.externalDirection("dir-watching")?.target)
+    }
+
+    @Test fun offlineRestartRestoresOutsideDirectionOrderNamesAndTargets() = runTest {
+        val directory = Files.createTempDirectory("assistant-outside-cache").toFile()
+        try {
+            val snapshots = ListSnapshotStore(directory)
+            val online = Transport().apply {
+                tree = { buildJsonObject { put("directions", buildJsonArray {
+                    add(buildJsonObject {
+                        put("id", "dir-outside")
+                        put("name", "Outside work")
+                        put("external", true)
+                        put("machine_id", "work")
+                        put("session_id", "agent")
+                    })
+                    add(buildJsonObject {
+                        put("id", "dir-watching")
+                        put("name", "Watching")
+                        put("external", true)
+                    })
+                }) } }
+            }
+            val repository = RealAssistantRepository(Connection(online), Sessions(), backgroundScope, snapshots)
+            runCurrent()
+            repository.refresh() // also waits for the atomic snapshot write
+            assertEquals(listOf("dir-outside", "dir-watching"), repository.assistant.value.leaders)
+
+            val offline = Transport().apply { read = { throw IOException("offline") } }
+            val restored = RealAssistantRepository(Connection(offline), Sessions(), backgroundScope, snapshots)
+            try {
+                restored.refresh()
+                fail("offline refresh should report failure")
+            } catch (e: IOException) {
+                assertEquals("offline", e.message)
+            }
+            val snapshot = restored.assistant.value
+            assertEquals(listOf("dir-outside", "dir-watching"), snapshot.leaders)
+            assertEquals("Outside work", snapshot.directionNames["dir-outside"])
+            assertEquals("Watching", snapshot.directionNames["dir-watching"])
+            assertEquals(ExternalDirection("work", "agent"), snapshot.externalDirection("dir-outside"))
+            assertEquals(ExternalDirection(), snapshot.externalDirection("dir-watching"))
+            assertNull(snapshot.directionTree) // tree tasks/counts keep their existing uncached behavior
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun aDirectionsPushRereadsOnlyUnknownConversationIds() = runTest {
+        val events = MutableSharedFlow<persona.core.contracts.ServerEvent>()
+        val transport = Transport()
+        transport.tree = { buildJsonObject { put("directions", buildJsonArray {
+            add(buildJsonObject {
+                put("id", "dir-outside")
+                put("name", "Outside work")
+                put("external", true)
+            })
+        }) } }
+        val repository = RealAssistantRepository(Connection(transport), Sessions(), backgroundScope, events = events)
+        runCurrent()
+        assertEquals(1, transport.readOwners.size)
+        events.emit(DirectionsEvent)
+        runCurrent()
+        assertEquals("an outside id is intentionally absent from conversations", 1, transport.readOwners.size)
+
+        transport.tree = { buildJsonObject { put("directions", buildJsonArray {
+            add(buildJsonObject { put("id", "new-conversation"); put("name", "New direction") })
+        }) } }
+        events.emit(DirectionsEvent)
+        runCurrent()
+        assertEquals("an unknown nonexternal id may be a new conversation", 2, transport.readOwners.size)
+        assertEquals(listOf("new-conversation"), repository.assistant.value.leaders)
+    }
+
     private class Connection(transport: InboxAssistantTransport) : InboxAssistantConnection {
         override val current = MutableStateFlow<InboxAssistantTransport?>(transport)
     }
@@ -245,7 +439,10 @@ class AssistantSwitchIsolationTest {
     }
     private class Transport : InboxAssistantTransport {
         override val scope = "scope"
-        var read: suspend (String?) -> JsonObject = { config(it) }
+        var read: suspend (String?) -> JsonObject = { config(it, recentTaskChats = recentTaskChats) }
+        var tree: suspend (String?) -> JsonObject = { throw UnsupportedOperationException("Direction tree unavailable") }
+        var leaders: suspend (String?) -> JsonObject = { buildJsonObject { } }
+        var recentTaskChats: Boolean? = null
         val creates = mutableListOf<String?>()
         val readOwners = mutableListOf<String?>()
         val createOwners = mutableListOf<String?>()
@@ -254,6 +451,8 @@ class AssistantSwitchIsolationTest {
             return read(manager?.takeUnless { it == "assistant" })
         }
         override suspend fun assistant() = read(null)
+        override suspend fun directionsTreeOf(manager: String?) = tree(manager)
+        override suspend fun assistantLeadersOf(manager: String?) = leaders(manager)
         override suspend fun createConversationOf(manager: String?, main: Boolean, launcher: String?): JsonObject {
             createOwners += manager
             val normalized = manager?.takeUnless { it == "assistant" }
@@ -271,9 +470,10 @@ class AssistantSwitchIsolationTest {
     }
     companion object {
         private fun header(id: String) = AssistantManagerChoice.itemHeader(listOf("assistant", "conversations", id, "messages"), "hub")
-        private fun config(manager: String?, main: String = "${manager ?: "assistant"}-main") = buildJsonObject {
+        private fun config(manager: String?, main: String = "${manager ?: "assistant"}-main", recentTaskChats: Boolean? = null) = buildJsonObject {
             put("machine_id", "mac")
             put("main", main)
+            recentTaskChats?.let { put("recent_task_chats", it) }
             put("conversations", buildJsonArray { if (main.isNotEmpty()) add(session(manager, main)) })
         }
         private fun session(manager: String?, id: String) = buildJsonObject {

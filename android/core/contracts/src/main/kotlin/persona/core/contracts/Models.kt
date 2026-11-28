@@ -4,6 +4,7 @@ package persona.core.contracts
 
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
+import persona.core.contracts.api.ExtensionView
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -16,6 +17,22 @@ import java.time.Instant
 import java.time.OffsetDateTime
 
 // Wire types mirror docs/protocol/protocol.md and tolerate optional enhancements according to D5.
+
+/** How long past its reset a usage-limit wait still counts (the hub's limitResumeGrace). */
+internal const val USAGE_LIMIT_GRACE_MS = 10 * 60 * 1000L
+
+/**
+ * The time half of a usage-limit line (iOS `usageLimitWhen`): "Resets <time>", "Resumes <time>", or "Resumes after
+ * the reset". The assistant's rows and card format it; the shared [Session.interrupted] flag does not.
+ */
+sealed class UsageLimitWhen {
+    /** "Resets <time>": nothing continues the turn on its own. */
+    data class Resets(val at: Instant) : UsageLimitWhen()
+    /** "Resumes <time>": the Agent or the hub continues it. */
+    data class Resumes(val at: Instant) : UsageLimitWhen()
+    /** No reset time, and something continues it after the reset. */
+    data object AfterReset : UsageLimitWhen()
+}
 
 val JsonCodec = Json {
     ignoreUnknownKeys = true
@@ -32,11 +49,103 @@ val JsonCodec = Json {
  */
 fun parseTime(s: String?): Instant? {
     if (s.isNullOrEmpty()) return null
+    val fast = parseRfc3339Fast(s)
+    if (fast != ParseTimeFallback) return fast
     val instant = runCatching { OffsetDateTime.parse(s).toInstant() }.recoverCatching { Instant.parse(s) }.getOrNull()
     return instant?.takeUnless { it.isBefore(EarliestTime) }
 }
 
 private val EarliestTime: Instant = Instant.parse("2000-01-01T00:00:00Z")
+private const val EARLIEST_EPOCH_SEC: Long = 946_684_800L // 2000-01-01T00:00:00Z
+private val ParseTimeFallback: Instant = Instant.MIN
+
+/**
+ * Zero-allocation fast path for standard RFC 3339 timestamps (`YYYY-MM-DDTHH:MM:SS[.nanos](Z|±HH:MM)`).
+ * Returns [ParseTimeFallback] for non-standard inputs so the caller falls back to `java.time`.
+ */
+private fun parseRfc3339Fast(s: String): Instant? {
+    val len = s.length
+    if (len < 20) return ParseTimeFallback
+    if (s[4] != '-' || s[7] != '-' || (s[10] != 'T' && s[10] != 't') || s[13] != ':' || s[16] != ':') {
+        return ParseTimeFallback
+    }
+    val year = parseDigits(s, 0, 4)
+    val month = parseDigits(s, 5, 2)
+    val day = parseDigits(s, 8, 2)
+    val hour = parseDigits(s, 11, 2)
+    val minute = parseDigits(s, 14, 2)
+    val second = parseDigits(s, 17, 2)
+    if (year < 0 || month !in 1..12 || day < 1 || hour !in 0..23 || minute !in 0..59 || second !in 0..59) {
+        return ParseTimeFallback
+    }
+    if (day > daysInMonth(year, month)) return ParseTimeFallback
+
+    var idx = 19
+    var nano = 0
+    if (idx < len && s[idx] == '.') {
+        idx++
+        val fracStart = idx
+        var mult = 100_000_000
+        while (idx < len) {
+            val d = s[idx] - '0'
+            if (d !in 0..9) break
+            if (mult == 0) return ParseTimeFallback // >9 fractional digits: fallback
+            nano += d * mult
+            mult /= 10
+            idx++
+        }
+        if (idx == fracStart) return ParseTimeFallback
+    }
+    if (idx >= len) return ParseTimeFallback
+
+    val offsetSec: Int
+    val tz = s[idx]
+    if ((tz == 'Z' || tz == 'z') && idx + 1 == len) {
+        offsetSec = 0
+    } else if ((tz == '+' || tz == '-') && idx + 6 == len && s[idx + 3] == ':') {
+        val offH = parseDigits(s, idx + 1, 2)
+        val offM = parseDigits(s, idx + 4, 2)
+        if (offH !in 0..18 || offM !in 0..59) return ParseTimeFallback
+        val total = offH * 3600 + offM * 60
+        if (total > 18 * 3600) return ParseTimeFallback
+        offsetSec = if (tz == '+') total else -total
+    } else {
+        return ParseTimeFallback
+    }
+
+    val epochDays = daysFromCivil(year, month, day)
+    val epochSec = epochDays * 86_400L + hour * 3600L + minute * 60L + second - offsetSec
+    if (epochSec < EARLIEST_EPOCH_SEC) return null
+    return Instant.ofEpochSecond(epochSec, nano.toLong())
+}
+
+private fun parseDigits(s: String, start: Int, count: Int): Int {
+    var acc = 0
+    for (i in start until start + count) {
+        val d = s[i] - '0'
+        if (d !in 0..9) return -1
+        acc = acc * 10 + d
+    }
+    return acc
+}
+
+private fun daysInMonth(year: Int, month: Int): Int = when (month) {
+    1, 3, 5, 7, 8, 10, 12 -> 31
+    4, 6, 9, 11 -> 30
+    2 -> if ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0) 29 else 28
+    else -> 0
+}
+
+/** Howard Hinnant's exact civil-date-to-Unix-epoch-days algorithm. */
+private fun daysFromCivil(year: Int, month: Int, day: Int): Long {
+    val y = (if (month <= 2) year - 1 else year).toLong()
+    val era = (if (y >= 0) y else y - 399) / 400
+    val yoe = y - era * 400
+    val mp = month + (if (month > 2) -3 else 9)
+    val doy = (153L * mp + 2) / 5 + day - 1
+    val doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    return era * 146_097L + doe - 719_468L
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = MachineSerializer::class)
@@ -86,10 +195,50 @@ data class Machine(
     @SerialName("error_code") val errorCode: String? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
+    /** SSH to Persona Link eligibility or progress; absent on older hubs and when there is nothing to show. */
+    @WireStrict @SerialName("link_switch") val linkSwitch: MachineLinkSwitch? = null,
+    /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
+    @SerialName("engine_default") val engineDefault: String? = null,
+    /**
+     * "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's default") as the
+     * hub sends it ([OrcaChatStarts]'s wire values), only while Orca is in [engineHosts], where it applies; null elsewhere
+     * and from older hubs. Read through [orcaChatSwitch].
+     */
+    @SerialName("orca_chat_starts") val orcaChatStarts: String? = null,
 ) {
+    /** The switch: on or off where the hub sends it; null (no switch) where it does not, and for a value this app does not know. */
+    val orcaChatSwitch: Boolean? get() = OrcaChatStarts.of(orcaChatStarts)?.on
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
 }
+
+/**
+ * `Machine.orca_chat_starts` (#17650, the hub's `proto.OrcaChatStarts`): a closed set. [of] is null for an absent value
+ * and for one this app does not know, so a later state is never shown as on or off.
+ */
+enum class OrcaChatStarts(val wire: String, val on: Boolean) {
+    On("on", true),
+    Off("off", false);
+
+    companion object {
+        fun of(wire: String?): OrcaChatStarts? = entries.firstOrNull { it.wire == wire }
+    }
+}
+
+/** `Machine.link_switch`: whether this computer can switch from SSH, or where that switch stands. */
+@KeepGeneratedSerializer
+@Serializable(with = MachineLinkSwitchSerializer::class)
+data class MachineLinkSwitch(
+    @SerialName("available") val available: Boolean,
+    @SerialName("reason") val reason: String? = null,
+    /** checking | installing | connecting | rolling_back | succeeded | failed. */
+    @SerialName("phase") val phase: String? = null,
+    /** A stable reason or failure code, never presented as raw text. */
+    @SerialName("error") val error: String? = null,
+    /** True means the hub could not prove the computer returned to SSH. */
+    @WireStrict @SerialName("rollback_unconfirmed") val rollbackUnconfirmed: Boolean = false,
+    @WireTime @SerialName("at") val at: String? = null,
+)
 
 /** `GET /api/v1/machines/{id}/browser` (and the machine's `browser`): ego lite there and how far its setup is. */
 @Serializable
@@ -140,7 +289,11 @@ data class MachineComputer(
     val note: String? = null,
 )
 
-/** One engine the node looked for on its machine (docs/protocol/protocol.md "Engines"); [name] and [note] are shown as given. */
+/**
+ * One engine the node looked for on its machine (docs/protocol/protocol.md "Engines"); [name] and [note] are shown as given.
+ * [state] (Orca's row only, #17037; proto.EngineState) tells installed-and-stopped from not there: read it through
+ * `Engines.state`, which turns a state this build does not know into unknown.
+ */
 @KeepGeneratedSerializer
 @Serializable(with = DetectedEngineSerializer::class)
 data class DetectedEngine(
@@ -149,6 +302,7 @@ data class DetectedEngine(
     @SerialName("available") val available: Boolean = false,
     @SerialName("version") val version: String? = null,
     @SerialName("note") val note: String? = null,
+    @SerialName("state") val state: String? = null,
 )
 
 /** Unified agent state computed by the hub (docs/protocol/agent-states.md). */
@@ -220,10 +374,54 @@ data class BackgroundTask(
     @WireTime @SerialName("expires_at") val expiresAt: String? = null,
     /** A workflow's run (`wf_…`): which of [Session.workflows] it is. */
     @SerialName("run_id") val runId: String? = null,
+    /** Retained results have a terminal status, a stop time and, when observed, an exit code. */
+    val status: String? = null,
+    @WireTime @SerialName("ended_at") val endedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
 ) {
     /** A Workflow run: shown from [Session.workflows] where the hub sends them, never counted twice. */
     val isWorkflow: Boolean get() = kind == "workflow"
 }
+
+/**
+ * Explicit takeover / continuation capability for a read-only Codex CLI session
+ * (`docs/protocol/protocol.md`, #5813). Absent on older hubs and ordinary sessions.
+ */
+@KeepGeneratedSerializer
+@Serializable(with = CodexTakeoverCapabilitySerializer::class)
+data class CodexTakeoverCapability(
+    val running: Boolean = false,
+    @SerialName("can_resume") val canResume: Boolean = false,
+    val reason: String? = null,
+)
+
+/** Error code returned on 409 when a Codex takeover can only continue in a new session. */
+const val CODEX_TAKEOVER_CONTINUE_ONLY = "codex_takeover_continue_only"
+
+/** Result of `GET /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverInfo(
+    val running: Boolean = false,
+    @SerialName("can_resume") val canResume: Boolean = false,
+    val reason: String? = null,
+    val token: String = "",
+    val cwd: String = "",
+    @SerialName("transcript_path") val transcriptPath: String = "",
+    @SerialName("continuation_prompt") val continuationPrompt: String = "",
+)
+
+/** Request body for `POST /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverRequest(
+    val token: String,
+    @SerialName("confirm_stop") val confirmStop: Boolean = false,
+)
+
+/** Response body for `POST /api/v1/machines/{mid}/codex/{sid}/takeover`. */
+@Serializable
+data class CodexTakeoverResponse(
+    val session: Session,
+)
 
 /**
  * What a session with a [Session.sourceKind] allows; a missing field is a refusal (docs/protocol/protocol.md "Codex sources
@@ -240,6 +438,8 @@ data class SessionCapabilities(
     val attach: Boolean = false,
     /** Null on an older hub: the client keeps its agent-based rule instead of treating the field as a refusal. */
     val modes: Boolean? = null,
+    /** Explicit takeover / continuation offered for a read-only Codex CLI session (#5813). */
+    val takeover: CodexTakeoverCapability? = null,
     /** Close the agent, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
     val close: Boolean? = null,
     /** Rename it, terminal or not (a runtime's session, #6294); null from an older node: the app keeps its terminal rule. */
@@ -250,6 +450,14 @@ data class SessionCapabilities(
     val rewind: Boolean? = null,
     /** A rewind may put the files back too ("Code and conversation"); null from an older node: as its [rewind] rule says. */
     @SerialName("rewind_code") val rewindCode: Boolean? = null,
+    /**
+     * The permission modes it takes when its agent is not Claude Code (#8261, Paseo's Grok, OpenCode or Codex): `default`,
+     * its own approval, and `bypassPermissions` where it has an Allow everything. With two the chat offers a switch
+     * between them (`persona.core.domain.sort.listedModes`); null from an older node and wherever Claude Code's modes stand.
+     */
+    @SerialName("permission_modes") val permissionModes: List<String>? = null,
+    /** Reply to asynchronous questions without granting general approval support. */
+    @SerialName("answer_questions") val answerQuestions: Boolean = false,
 )
 
 /**
@@ -260,11 +468,14 @@ data class SessionCapabilities(
 @Serializable(with = WorkStateSerializer::class)
 data class WorkState(
     val phase: String = "",
+    @SerialName("just_finished") val justFinished: Boolean = false,
     val on: String? = null,
     val line: String? = null,
     val wait: String? = null,
     val then: String? = null,
     @WireTime @SerialName("wake_at") val wakeAt: String? = null,
+    /** When a usage limit that blocked this turn resets, if the session's own time is absent. */
+    @WireTime @SerialName("resets_at") val resetsAt: String? = null,
     val attempts: Int? = null,
     val max: Int? = null,
     @SerialName("interaction_id") val interactionId: String? = null,
@@ -319,6 +530,59 @@ data class SessionTodo(
     val title: String = "",
 )
 
+/**
+ * What Paseo's bridge calls every agent but Claude Code and Codex (integrations/paseo/lib/map.js `appAgent`): its
+ * engine's id, never the agent's name. Such a session names its provider by `agent_label` (Paseo's label for it,
+ * "Grok") and `launcher` (the provider's id, "grok"); the app never names it after the engine (#8143).
+ */
+const val PaseoAgent = "paseo"
+
+const val TraeCliDisplayName = "TRAE CLI"
+
+/** Known wire and launcher identifiers for the CLI. The IDE's `trae` identifier is separate. */
+fun isTraeCliId(id: String?): Boolean = id == "traex" || id == "traecli" || id == "trae-cli"
+
+internal fun isTraeCliLabel(label: String): Boolean {
+    val normalized = label.trim().lowercase()
+    return isTraeCliId(normalized) || normalized == "trae cli"
+}
+
+/**
+ * The name of an agent the app does not know by its id ([agent]): what the hub calls it ([label], a runtime's own name,
+ * "DSH"), else the id. Paseo's [PaseoAgent] is its engine, not the agent: there it is the provider's label, else its
+ * launcher (the provider's id), and the engine's name only while neither is known (#8143).
+ */
+fun unknownAgentName(agent: String?, label: String?, launcher: String?): String {
+    val said = label?.trim()?.takeIf(String::isNotEmpty)
+    if (agent != PaseoAgent) return said ?: agent.orEmpty()
+    val providerLabel = said?.takeUnless { it.equals(PaseoAgent, ignoreCase = true) }
+    val providerId = launcher?.trim()?.takeIf(String::isNotEmpty)
+    if (isTraeCliId(providerId) && (providerLabel == null || isTraeCliLabel(providerLabel))) {
+        return TraeCliDisplayName
+    }
+    return providerLabel ?: providerId ?: said ?: agent
+}
+
+/** A permission mode change recorded by the session's manager (GET …/mode-changes, #10297). */
+@Serializable
+data class ModeChange(
+    /** set, restart_done, restart_failed or restart_dropped. */
+    val kind: String = "",
+    val from: String? = null,
+    val to: String? = null,
+    /** For set: now, restart when it takes effect after this turn, or empty from an older node. */
+    val applied: String? = null,
+    /** Who asked: device, hub or extension. */
+    @SerialName("actor_kind") val actorKind: String? = null,
+    @SerialName("device_name") val deviceName: String? = null,
+    /** Why a queued restart finished as it did; a code, not display text. */
+    val reason: String? = null,
+    @WireTime val at: String = "",
+)
+
+/** Hub hello feature advertising cross-machine subagent folding, orphan filtering, and parent_machine_id queries. */
+const val SESSIONS_CROSS_MACHINE_HIERARCHY = "sessions_cross_machine_hierarchy"
+
 @KeepGeneratedSerializer
 @Serializable(with = SessionSerializer::class)
 data class Session(
@@ -326,7 +590,7 @@ data class Session(
     @SerialName("session_id") val sessionId: String,
     @SerialName("title") val title: String = "",
     @SerialName("cwd") val cwd: String = "",
-    @WireEnum("idle", "working", "blocked", "done", "offline", "unknown")
+    @WireEnum("idle", "working", "blocked", "done", "offline", "interrupted", "unknown")
     @SerialName("status") val status: String = "unknown",
     @SerialName("tab_id") val tabId: String? = null,
     @SerialName("workspace_id") val workspaceId: String? = null,
@@ -360,8 +624,33 @@ data class Session(
     @SerialName("source_instance_id") val sourceInstanceId: String? = null,
     @SerialName("parent_thread_id") val parentThreadId: String? = null,
     @SerialName("parent_session_id") val parentSessionId: String? = null,
+    /** When [parentSessionId] lives on another computer (cross-machine A2A / dispatch subagent); null for same-machine. */
+    @SerialName("parent_machine_id") val parentMachineId: String? = null,
     @SerialName("root_session_id") val rootSessionId: String? = null,
     @SerialName("is_subagent") val isSubagent: Boolean = false,
+    @SerialName("asking_parent_session_id") val askingParentSessionId: String? = null,
+    /** The listed ancestor whose chat owns this child (sessions_hierarchy). */
+    @SerialName("folded_under") val foldedUnder: String? = null,
+    /** Beside [foldedUnder] when the topmost listed ancestor lives on another computer; null for same-machine folds. */
+    @SerialName("folded_under_machine_id") val foldedUnderMachineId: String? = null,
+    /** Durable A2A task ID that launched this subagent session; null for peer messages and non-A2A subagents. */
+    @SerialName("a2a_task_id") val a2aTaskId: String? = null,
+    /** How a subagent session was created: native, a2a, dispatch, runtime, or spawned. */
+    @SerialName("subagent_origin") val subagentOrigin: String? = null,
+    /** Why a row that is no child folds: [FoldedAs.WORKER] (a tab's worker, #5180) or [FoldedAs.SIDE] (#7944). */
+    @SerialName("folded_as") val foldedAs: String? = null,
+    /**
+     * The nearest side session a folded row belongs to when it folds through one and is not that side itself (a side's
+     * own Codex children, #7944): its card and child card are that side's chat's, not the topmost parent's.
+     */
+    @SerialName("folded_side") val foldedSide: String? = null,
+    val children: SessionChildren? = null,
+    /**
+     * The session on the same machine this one was started from while staying a conversation of its own (a Claude
+     * desktop app's side chat or /btw question, #5935). Whether it folds is the hub's [foldedAs], never this.
+     */
+    @SerialName("parent_agent_id") val parentAgentId: String? = null,
+    @WireTime @SerialName("started_at") val startedAt: String? = null,
     /** Why the source only lets the phone read this session. */
     @SerialName("read_only_reason") val readOnlyReason: String? = null,
     val capabilities: SessionCapabilities? = null,
@@ -375,9 +664,17 @@ data class Session(
      * process by the node; #1379, #3957). False while unknown and from older hubs: then Allow Everything is a start's choice.
      */
     @SerialName("bypass_available") val bypassAvailable: Boolean = false,
+    /**
+     * Allow Everything was picked for this terminal Claude Code while it cannot reach it with shift+tab: the node restarts
+     * the session in it once its turn is over (#6476, docs/integrations/claude-integration.md "Full access by a restart").
+     * Until then the session still runs in [permissionMode]. False from older hubs.
+     */
+    @SerialName("bypass_pending") val bypassPending: Boolean = false,
     @SerialName("assistant") val assistant: Boolean = false,
     /** An assistant conversation put away (POST /api/v1/assistant/conversations/{id}/archive): kept, not listed. */
     @SerialName("archived") val archived: Boolean = false,
+    /** User-defined labels; null on an older hub and where the hub omits an empty set. */
+    @SerialName("tags") val tags: List<String>? = null,
     /** The manager it belongs to (docs/assistant/managers.md「Ownership」); null from an older hub: the default manager. */
     @SerialName("manager") val manager: String? = null,
     /**
@@ -392,6 +689,11 @@ data class Session(
     @SerialName("origin") val origin: String? = null,
     /** What it was opened for: the inbox item, the task, the conversation, the channel, the extension. */
     @SerialName("origin_ref") val originRef: String? = null,
+    /**
+     * The extension whose token opened it (`POST /api/v1/assistant/conversations`, docs/protocol/protocol.md "Origin of
+     * assistant chats"); absent for everyone else and from older hubs. Its mark draws that extension's icon (#10358).
+     */
+    @SerialName("opened_by") val openedBy: String? = null,
     @SerialName("space_id") val spaceId: String? = null,
     @SerialName("space_name") val spaceName: String? = null,
     @SerialName("slot_name") val slotName: String? = null,
@@ -406,6 +708,8 @@ data class Session(
      * under its own folder, whose paths name no repository). Group by repository goes by it (core:domain repoOf); older hubs never send it.
      */
     @SerialName("repo_root") val repoRoot: String? = null,
+    /** The physical directory given by the node for workspace association, with symlinks resolved. */
+    @SerialName("workspace_cwd") val workspaceCwd: String? = null,
     /** The top of the git working tree cwd is in (repoRoot for the main checkout) and its branch, from the node (#1805). */
     @SerialName("worktree") val worktree: String? = null,
     @SerialName("branch") val branch: String? = null,
@@ -419,6 +723,8 @@ data class Session(
      */
     @SerialName("queued_relayed") val queuedRelayed: Int? = null,
     @SerialName("background") val background: List<BackgroundTask>? = null,
+    /** A short-lived list of shell and Monitor outcomes. Summary rows and older hubs can omit it. */
+    @SerialName("background_ended") val backgroundEnded: List<BackgroundTask>? = null,
     /**
      * Its Workflow runs of the last day, newest first (docs/protocol/agent-states.md "Background workflows and Monitor"): a running one is
      * in [background] too, as kind `workflow`. Older hubs never send it (null).
@@ -443,6 +749,16 @@ data class Session(
     @WireTime @SerialName("activity_at") val activityAt: String? = null,
     /** Its latest turn ended in a model API error (the hub sets it while it is stopped, #1516): its task is interrupted. */
     @SerialName("turn_error") val turnError: String? = null,
+    /**
+     * What the agent or the hub called [turnError] (docs/protocol/protocol.md): `usage_limit` is a subscription limit
+     * until it resets, not a turn to continue as an interruption; `no_output` and `stopped` are the hub's own word on a
+     * task Agent's turn with no output (#10187), [turnError] then being its sentence, not an API error. Older hubs never send it.
+     */
+    @SerialName("turn_error_kind") val turnErrorKind: String? = null,
+    /** When a `usage_limit` resets (RFC3339). Absent when that time is not known. */
+    @WireTime @SerialName("turn_error_resets_at") val turnErrorResetsAt: String? = null,
+    /** The CLI goes on by itself once a usage limit resets. Absent or false: nothing of the CLI will. */
+    @SerialName("turn_error_resumes") val turnErrorResumes: Boolean? = null,
     /**
      * What the hub recognized of [turnError] (docs/protocol/protocol.md): not_logged_in, auth_failed, model_route,
      * rate_limited or model_fallback_unavailable (the model Claude Code fell back to after a refusal can't be used, #2528:
@@ -469,10 +785,15 @@ data class Session(
     @SerialName("can_fork") val canFork: Boolean = false,
     @SerialName("rev") val rev: Long? = null,
     @SerialName("suggestion") val suggestion: String? = null,
+    /** The suggested message must be reviewed in the composer, never sent in one action; absent on older hubs. */
+    @SerialName("suggestion_risky") val suggestionRisky: Boolean = false,
     /** Persona is still opening its tab and starting the agent (docs/protocol/protocol.md "New session"); sends wait for it. */
     @SerialName("starting") val starting: Boolean = false,
     /** Why starting it failed; the session is offline and sends get the same error. */
     @SerialName("start_error") val startError: String? = null,
+    /** The coded start remedy, and a terminal question's line/choices when the start waits for an answer. */
+    @SerialName("start_error_code") val startErrorCode: String? = null,
+    @SerialName("start_error_args") val startErrorArgs: Map<String, String>? = null,
     /** Codex is open in its pane and has no thread until its first message. */
     @SerialName("awaiting_first_message") val awaitingFirstMessage: Boolean = false,
     /**
@@ -550,25 +871,101 @@ data class Session(
      * waits. [launcher] stays the one it runs on until then. Summary rows leave it out.
      */
     @SerialName("pending_switch") val pendingSwitch: PendingSwitch? = null,
+    /** Earlier stretches of this conversation, oldest first, after a handoff to the other engine. */
+    @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
+    /** The manager's current queue. A complete session row without the field has no held messages. */
+    val undelivered: List<HeldAgentMessage>? = null,
+    /** Terminal host reported by the hub (`herdr`, `herdr-core`, `orca`, `tern`, `rex`, `botmux`); optional on older hubs. */
+    @SerialName("host") val host: String? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
+    /** The listed ancestor's key (`folded_under_machine_id` when cross-machine, else `machine_id`); null when not folded. */
+    val foldedUnderKey: SessionKey?
+        get() = foldedUnder?.takeIf(String::isNotBlank)?.let {
+            SessionKey(foldedUnderMachineId?.takeIf(String::isNotBlank) ?: machineId, it)
+        }
+    /** Direct parent session key (`parent_machine_id` when cross-machine, else `machine_id`); null when absent. */
+    val parentKey: SessionKey?
+        get() = parentSessionId?.takeIf(String::isNotBlank)?.let {
+            SessionKey(parentMachineId?.takeIf(String::isNotBlank) ?: machineId, it)
+        }
     /** A chat of the health space ([space]), which the assistant's own lists leave out. */
     val isHealth: Boolean get() = space == persona.core.contracts.api.AssistantSpace.HEALTH
+    /** A chat of any space ([space]: health or a domain space, #13500), which the assistant's own lists leave out. */
+    val isSpace: Boolean get() = !space.isNullOrEmpty()
     val agentState: AgentState get() = AgentState.of(state, status)
+    /**
+     * The list state of this session and its folded children; its own wire state stays intact. A side session's result
+     * not looked at yet makes it unread (`sides_unread`, #7944: sides only; Codex children and workers do not), unless it
+     * works itself.
+     */
+    val foldedState: AgentState get() = when {
+        agentState == AgentState.NeedsYou || (children?.needsYou ?: 0) > 0 -> AgentState.NeedsYou
+        (children?.working ?: 0) > 0 && agentState != AgentState.Unread &&
+            !(agentState == AgentState.Idle && awaitsReply) -> AgentState.Working
+        agentState != AgentState.Working && (children?.sidesUnread ?: 0) > 0 -> AgentState.Unread
+        else -> agentState
+    }
     /** Stopped on a model API error ([turnError]): cut off, not finished (#1516). */
     val interrupted: Boolean get() = !turnError.isNullOrBlank() && (agentState == AgentState.Unread || agentState == AgentState.Idle)
-    val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
+
+    /**
+     * Stopped on a subscription usage limit whose reset is still ahead, or not known (#8237). A known reset more than
+     * [USAGE_LIMIT_GRACE_MS] ago is over: the turn reads as interrupted again. [now] is epoch millis.
+     */
+    fun isUsageLimited(now: Long = System.currentTimeMillis()): Boolean {
+        if (turnError.isNullOrBlank() || turnErrorKind != "usage_limit") return false
+        if (agentState != AgentState.Unread && agentState != AgentState.Idle) return false
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)?.toEpochMilli() ?: return true
+        return now <= at + USAGE_LIMIT_GRACE_MS
+    }
+
+    /** The CLI said it goes on by itself, or the hub scheduled this limit's continuation. */
+    fun usageLimitContinues(): Boolean {
+        if (turnErrorResumes == true) return true
+        val waiting = work ?: return false
+        return waiting.phase == "blocked" && parseTime(waiting.resetsAt) != null && parseTime(waiting.wakeAt) != null
+    }
+
+    /**
+     * Only the time half of a usage-limit line (iOS `usageLimitWhen`), for a row that already says "Usage Limit".
+     * Null when this is not a usage-limit wait, or nothing says when. [now] is epoch millis: callers pass the
+     * minute tick, so the line changes at the grace boundary.
+     */
+    fun usageLimitWhen(now: Long = System.currentTimeMillis()): UsageLimitWhen? {
+        if (!isUsageLimited(now)) return null
+        val goesOn = usageLimitContinues()
+        val at = parseTime(turnErrorResetsAt ?: work?.resetsAt)
+        return when {
+            at == null && goesOn -> UsageLimitWhen.AfterReset
+            at == null -> null
+            goesOn -> UsageLimitWhen.Resumes(at)
+            else -> UsageLimitWhen.Resets(at)
+        }
+    }
+    val folderName: String get() = compactFolderName(cwd)
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
+
+    /** The launcher's catalog identity when a row omits an explicit launcher. */
+    val effectiveLauncher: String get() = launcher?.takeIf(String::isNotEmpty) ?: when {
+        spaceKind == "codex_app" -> "codex-app"
+        isCodex -> "codex"
+        else -> "claude"
+    }
+
     /** Claude Code, or an older hub that does not name the agent: what Claude-only controls (modes, /model, /clear) need. */
     val isClaude: Boolean get() = !isCodex && (agent.isNullOrEmpty() || agent == "claude")
-    /** Who the user talks to: Claude, Codex, a compatible CLI, or what the hub calls a runtime's agent ("DSH"). */
+    /**
+     * Who the user talks to: Claude, Codex, a compatible CLI, what the hub calls a runtime's agent ("DSH"), or a Paseo
+     * provider by its own name ("Grok", [unknownAgentName]), never the engine's.
+     */
     val agentLabel: String get() = when {
         isCodex -> "Codex"
-        agent == "traex" -> "TRAEX"
+        isTraeCliId(agent) -> TraeCliDisplayName
         isClaude -> "Claude"
-        else -> agentLabelHint?.takeIf(String::isNotBlank) ?: agent.orEmpty()
+        else -> unknownAgentName(agent, agentLabelHint, launcher)
     }
     val isLive: Boolean get() = status != "offline"
     /** [failureReason] without the warning sign botmux starts it with (the app draws its own); null when there is none. */
@@ -614,6 +1011,30 @@ data class Session(
 /** A host's failure notice without its leading warning signs (U+26A0, U+FE0F) and spaces, as iOS `Session.failureText`. */
 fun failureNoticeText(reason: String): String = reason.trim().trimStart('\u26A0', '\uFE0F').trim()
 
+/** All descendants folded under a listed session, counted by their own states. */
+@Serializable
+data class SessionChildren(
+    val total: Int = 0,
+    val working: Int = 0,
+    @SerialName("needs_you") val needsYou: Int = 0,
+    val workers: Int = 0,
+    /**
+     * The side sessions among them (`folded_as: "side"`, sessions_side_fold, #7944), by their own states, also counted in
+     * the fields above. The app reads them only for a row whose sides it does not hold (core:domain `foldRows`).
+     */
+    val sides: Int = 0,
+    @SerialName("sides_working") val sidesWorking: Int = 0,
+    @SerialName("sides_needs_you") val sidesNeedsYou: Int = 0,
+    @SerialName("sides_unread") val sidesUnread: Int = 0,
+)
+
+/** The hub's `folded_as` values. */
+object FoldedAs {
+    const val WORKER = "worker"
+    /** A side session (a Claude desktop app's side chat or /btw question), folded under its topmost listed parent (#7944). */
+    const val SIDE = "side"
+}
+
 @KeepGeneratedSerializer
 @Serializable(with = SessionCompactionSerializer::class)
 data class SessionCompaction(
@@ -642,6 +1063,39 @@ data class ImagePayload(
     @SerialName("width") val width: Int? = null,
     @SerialName("height") val height: Int? = null,
     val size: Int? = null,
+)
+
+/**
+ * What one model request used (`proto.TokenUsage`, docs/protocol/protocol.md "Token usage on items"). Counts are tokens;
+ * [cacheWrite1h] is the part of [cacheWrite] kept for an hour. [id] (`agent:<id>`) marks one subagent's report, counted
+ * once per model and speed. Older nodes omit the list.
+ */
+@Serializable
+data class TokenUsage(
+    val id: String? = null,
+    val model: String? = null,
+    @SerialName("in") val input: Long = 0,
+    @SerialName("out") val output: Long = 0,
+    @SerialName("cache_read") val cacheRead: Long = 0,
+    @SerialName("cache_write") val cacheWrite: Long = 0,
+    @SerialName("cache_write_1h") val cacheWrite1h: Long = 0,
+    val fast: Boolean = false,
+) {
+    /** A subagent's or workflow agent's report. Entries with the same id, model and speed are one report. */
+    val report: Boolean get() = !id.isNullOrBlank()
+}
+
+/**
+ * The built-in catalog's reference price in USD per one million tokens (`proto.ModelPrice`). A missing kind is unknown,
+ * not free. Input and output are present whenever the catalog has a price.
+ */
+@Serializable
+data class ModelPrice(
+    val input: Double? = null,
+    val output: Double? = null,
+    @SerialName("cache_read") val cacheRead: Double? = null,
+    @SerialName("cache_write") val cacheWrite: Double? = null,
+    @SerialName("cache_write_1h") val cacheWrite1h: Double? = null,
 )
 
 @KeepGeneratedSerializer
@@ -685,12 +1139,27 @@ data class Item(
      * model); null where it does not say (user items, older hubs). The chat marks where the replies' model changes by it.
      */
     val model: String? = null,
+    /** What the model requests this item stands for used (#5426). Older hubs omit it. */
+    val usage: List<TokenUsage> = emptyList(),
+    val narration: Boolean? = null,
+    @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
+    @SerialName("source_fingerprint") val sourceFingerprint: String? = null,
+    /** Out-of-band, read-only views rendered beside this item. */
+    @SerialName("tool_views") val toolViews: List<ExtensionView> = emptyList(),
+    /** What a BotMux-wrapped message or `botmux send` call says without its wrapper ([Botmux]); older nodes omit it. */
+    val botmux: Botmux? = null,
 )
 
 /**
  * A Claude Code model_refusal_* record as the hub gives it (server proto.ModelRefusal, #2528): its known fields with
  * values as recorded (unknown ones included) and [text], the refusal's own words. Never the record's line: older hubs
  * also sent it as `raw`, which is not decoded, so it is never shown or kept.
+ *
+ * The recovery fields are present only when the node projects its own bounded recovery onto this shape (#7824): a
+ * runtime-written record never sets them, so they decode to their defaults and older records render unchanged.
+ * [recoveryReset] says when the configured model is available again; [recoveryExhausted] marks an exhausted chain
+ * (then [fallbackModel] is empty); [recoveryReturning] that the configured model answered a probe and the next request
+ * runs on it again; [recoveryTried] lists every model tried, in order, joined by arrows.
  */
 @KeepGeneratedSerializer
 @Serializable(with = ModelRefusalSerializer::class)
@@ -702,6 +1171,10 @@ data class ModelRefusal(
     val scope: String? = null,
     val explanation: String? = null,
     val text: String? = null,
+    @WireTime @SerialName("recovery_reset") val recoveryReset: String? = null,
+    @SerialName("recovery_exhausted") val recoveryExhausted: Boolean = false,
+    @SerialName("recovery_returning") val recoveryReturning: Boolean = false,
+    @SerialName("recovery_tried") val recoveryTried: String? = null,
 )
 
 object ModelRefusalSerializer : WireSerializer<ModelRefusal>(ModelRefusal.generatedSerializer())
@@ -750,6 +1223,17 @@ data class PendingSwitch(
 )
 
 object PendingSwitchSerializer : WireSerializer<PendingSwitch>(PendingSwitch.generatedSerializer())
+
+/** The session and cutoff of one earlier stretch of an Agent conversation. */
+@KeepGeneratedSerializer
+@Serializable(with = EngineLegSerializer::class)
+data class EngineLeg(
+    @SerialName("session_id") val sessionId: String = "",
+    val agent: String = "",
+    @WireTime val until: String? = null,
+)
+
+object EngineLegSerializer : WireSerializer<EngineLeg>(EngineLeg.generatedSerializer())
 
 /** A pending "back to the configured model" (server proto.ModelRestore): `next_start`, the next start asks for [to]. */
 @KeepGeneratedSerializer
@@ -817,7 +1301,12 @@ object TurnDurationSerializer : WireSerializer<TurnDuration>(TurnDuration.genera
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionOptionSerializer::class)
-data class QuestionOption(@SerialName("label") val label: String = "", @SerialName("description") val description: String? = null)
+data class QuestionOption(
+    @SerialName("label") val label: String = "",
+    @SerialName("description") val description: String? = null,
+    /** A manager-local answer (`defer`); absent from older hubs and from choices that message the Agent. */
+    @SerialName("action") val action: String? = null,
+)
 
 @KeepGeneratedSerializer
 @Serializable(with = QuestionSerializer::class)
@@ -870,6 +1359,19 @@ data class InteractionField(
     val optional: Boolean = false,
 )
 
+/** The context the assistant filled in when it left a question to the user (`proto.Delegate`). */
+@KeepGeneratedSerializer
+@Serializable(with = DelegateSerializer::class)
+data class Delegate(
+    @SerialName("what") val what: String? = null,
+    @SerialName("why_now") val whyNow: String? = null,
+    /** An option's exact label; several questions are joined with a full-width semicolon. */
+    @SerialName("recommend") val recommend: String? = null,
+    @SerialName("cost") val cost: String? = null,
+    @SerialName("reason") val reason: String? = null,
+    @WireTime @SerialName("deadline") val deadline: String? = null,
+)
+
 @KeepGeneratedSerializer
 @Serializable(with = InteractionSerializer::class)
 data class Interaction(
@@ -877,6 +1379,12 @@ data class Interaction(
     @SerialName("machine_id") val machineId: String = "",
     @SerialName("session_id") val sessionId: String = "",
     @SerialName("session_title") val sessionTitle: String? = null,
+    @SerialName("folded_under") val foldedUnder: String? = null,
+    /** Beside [foldedUnder] when the folded ancestor lives on another computer; null for same-machine folds. */
+    @SerialName("folded_under_machine_id") val foldedUnderMachineId: String? = null,
+    @SerialName("folded_as") val foldedAs: String? = null,
+    /** The side session whose chat this card belongs to when it comes from a row folded through one (#7944). */
+    @SerialName("folded_side") val foldedSide: String? = null,
     /** The task its agent works for (docs/assistant/unified-entry.md), named by the hub. */
     @SerialName("task_title") val taskTitle: String? = null,
     @SerialName("cwd") val cwd: String? = null,
@@ -890,7 +1398,9 @@ data class Interaction(
     @SerialName("questions") val questions: List<Question>? = null,
     /** The runtime can discard this question without answering or interrupting the task. */
     @SerialName("can_cancel") val canCancel: Boolean? = null,
+    val reversible: Boolean? = null,
     @SerialName("plan") val plan: String? = null,
+    @SerialName("plan_then") val planThen: String? = null,
     @SerialName("tool_input") val toolInput: JsonElement? = null,
     @SerialName("summary") val summary: String? = null,
     @SerialName("screen") val screen: String? = null,
@@ -927,15 +1437,62 @@ data class Interaction(
     @SerialName("tool_name_title") val toolNameTitle: String? = null,
     /** The rule a question a supervisor passed up suggests (#4929); the card comes again without it once it was answered. */
     val suggestion: RuleSuggestion? = null,
+    /** A prepared approval whose current deadline is authoritative while the hub keeps it pending; absent on older hubs. */
+    @SerialName("can_clarify") val canClarify: Boolean = false,
+    /** A server-owned exact proposal; its complete original payload, not an Always rule, is the approval authority. */
+    @SerialName("approval_batch_id") val approvalBatchId: String? = null,
+    @SerialName("approval_item_id") val approvalItemId: String? = null,
+    @SerialName("owner_proposal") val ownerProposal: Boolean? = null,
+    @SerialName("no_expiry") val noExpiry: Boolean? = null,
+    @SerialName("owner_approval_phrases") val ownerApprovalPhrases: List<String>? = null,
+    /** The assistant is still deciding whether it can answer this question; nothing was pushed yet. */
+    @SerialName("delegating") val delegating: Boolean = false,
+    /** What the assistant filled in when it handed the question to the user. */
+    @SerialName("delegate") val delegate: Delegate? = null,
+    /** True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps "Leave to computer". */
+    @SerialName("no_hand_back") val noHandBack: Boolean = false,
+    /** The authoritative interaction whose display-only copy this is; absent on the authoritative card. Last to keep positional callers source-compatible. */
+    @SerialName("mirror_of") val mirrorOf: String? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** Aggregate surfaces count the authoritative request; conversation views still show both cards. */
+    val isDisplayMirror: Boolean get() = !mirrorOf.isNullOrEmpty()
+    /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
+    val ownerApprovalPhrase: String?
+        get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {
+            kind == "permission" && ownerProposal == true && !approvalBatchId.isNullOrBlank() &&
+                machineId.isNotBlank() && sessionId.isNotBlank() && it.isNotBlank()
+        }
+    /** Only questions are delegated; a direct answer while this is true still wins. */
+    val isDelegating: Boolean get() = kind == "question" && delegating
+    /** A supported following mode; absent, plan and unknown values keep the legacy approval choices (#3784). */
+    val recordedPlanThen: String?
+        get() = when (planThen) {
+            "default", "acceptEdits", "auto", "bypassPermissions" -> planThen
+            else -> null
+        }
+    /** The page that answers it; resolution still uses this interaction's own id and session. */
+    val homeKey: SessionKey
+        get() {
+            val folded = foldedUnder?.takeIf(String::isNotBlank) ?: return SessionKey(machineId, sessionId)
+            return SessionKey(foldedUnderMachineId?.takeIf(String::isNotBlank) ?: machineId, folded)
+        }
 
-    /** The agent's name on a card not from Claude Code ("Codex", "a compatible CLI", "DSH"); null for Claude's. */
+    /** Asked by an agent other than Claude Code (Codex, a compatible CLI, a runtime's): the card is that agent's, never Claude's. */
+    val fromOtherAgent: Boolean get() = !agent.isNullOrEmpty() && agent != "claude"
+
+    /**
+     * The agent's name on a card not from Claude Code ("Codex", "a compatible CLI", "DSH", a Paseo provider's "Grok");
+     * null for Claude's, and for one that names only Paseo, its engine (a node before #8142 labels every card of Paseo's
+     * other providers so): that card reads as one whose agent can't be named (#8143). [fromOtherAgent] says whose card it is.
+     */
     val agentDisplayName: String?
         get() = when (agent) {
             "codex" -> "Codex"
-            "traex" -> "TRAEX"
+            "traex", "traecli", "trae-cli" -> TraeCliDisplayName
             null, "", "claude" -> null
+            PaseoAgent -> agentLabelHint?.trim()?.takeUnless { it.isEmpty() || it.equals(PaseoAgent, ignoreCase = true) }
+                ?.let { if (isTraeCliLabel(it)) TraeCliDisplayName else it }
             else -> agentLabelHint?.takeIf(String::isNotBlank) ?: agent
         }
 
@@ -946,7 +1503,30 @@ data class Interaction(
      */
     val isSecretRun: Boolean get() = kind == "permission" && toolName == "secret_run"
 
-    /** A password card's computer, purpose and commands (the commands exactly as sent); null for any other card. */
+    /** The manager's one-run secret hand-off (#3962). Only its full card may approve it. */
+    val isSecretHandoff: Boolean get() = kind == "permission" && toolName == "secret_handoff"
+
+    /** The allowlisted, provider-described items and run context; never a reference or a secret value. */
+    val secretHandoff: SecretHandoffRequest?
+        get() {
+            if (!isSecretHandoff) return null
+            val input = toolInput as? JsonObject
+            fun text(key: String, source: JsonObject? = input) =
+                (source?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
+            // Never hide a malformed variable and leave the remaining secrets approvable: the owner must see every
+            // variable covered by this approval, so any unreadable entry invalidates the whole card.
+            val rawVariables = input?.get("variables") as? JsonArray ?: return null
+            val variables = rawVariables.map { entry ->
+                val variable = entry as? JsonObject ?: return null
+                val name = text("name", variable)
+                if (name.isEmpty()) return null
+                SecretHandoffVariable(name, text("provider_name", variable).ifEmpty { text("provider", variable) },
+                    text("title", variable))
+            }
+            return SecretHandoffRequest(variables, text("agent"), text("machine_name"), text("cwd"), text("prompt"))
+        }
+
+    /** A password card's computer, purpose, delivery and commands (the commands exactly as sent); null for any other card. */
     val secretRun: SecretRunRequest?
         get() {
             if (!isSecretRun) return null
@@ -954,17 +1534,22 @@ data class Interaction(
             fun text(key: String) = (input?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
             val commands = (input?.get("commands") as? JsonArray).orEmpty()
                 .mapNotNull { command -> (command as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank) }
-            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands)
+            val delivery = if ((input?.get("delivery") as? JsonPrimitive)?.takeIf { it.isString }?.content == "env") "env" else "stdin"
+            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands, delivery)
         }
 
     /** One line for a notification or a list row. */
     val headline: CoreText
         get() = when (kind) {
-            "question" -> questions?.firstOrNull()?.question?.let(CoreText::plain) ?: CoreText.of(Key.HeadlineQuestion, agentDisplayName ?: "Claude")
+            // Another agent's card that can't name it says only that it asks (DESIGN_SYSTEM.md 5.6), never "Claude".
+            "question" -> questions?.firstOrNull()?.question?.let(CoreText::plain)
+                ?: agentDisplayName?.let { CoreText.of(Key.HeadlineQuestion, it) }
+                ?: if (fromOtherAgent) CoreText.of(Key.AskQuestion) else CoreText.of(Key.HeadlineQuestion, "Claude")
             "elicitation" -> CoreText.of(Key.HeadlineElicitation)
             "plan" -> CoreText.of(Key.FleetPlanWaiting)
-            // A password card names the computer it runs on; its commands are in the card.
-            "permission" -> secretRun?.let { CoreText.of(Key.HeadlineSecretRun, it.machine) } ?: run {
+            // A hand-off's unknown input is never a headline; a password card names its computer.
+            "permission" -> if (isSecretHandoff) CoreText.of(Key.HeadlineSecretHandoff) else
+                secretRun?.let { CoreText.of(Key.HeadlineSecretRun, it.machine) } ?: run {
                 // The manager's title is for people; the raw toolName still decides the card's type and icon.
                 val tool: Any = toolTitle?.takeIf(String::isNotBlank) ?: toolDisplayName(toolName) ?: CoreText.of(Key.ToolGeneric)
                 val detail = summary?.takeIf { it.isNotBlank() }
@@ -981,8 +1566,20 @@ data class Interaction(
         }
 }
 
-/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, and the commands. */
-data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>) {
+/** One variable a hand-off offers, and the provider-described item its value comes from. */
+data class SecretHandoffVariable(val name: String, val provider: String, val title: String)
+
+/** The complete, non-secret context the owner approves for one Agent run. */
+data class SecretHandoffRequest(
+    val variables: List<SecretHandoffVariable>,
+    val agent: String,
+    val machine: String,
+    val cwd: String,
+    val prompt: String,
+)
+
+/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, delivery and the commands. */
+data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>, val delivery: String = "stdin") {
     companion object {
         /** The card's one field, declared by the hub: Run sends the typed password under this key in [Resolution.values]. */
         const val PASSWORD = "password"
@@ -1014,6 +1611,8 @@ data class Resolution(
     @SerialName("reason") val reason: String? = null,
     val action: String? = null,
     val content: kotlinx.serialization.json.JsonObject? = null,
+    /** Runtime-only exact proposal reply; deliberately never serialized into an ordinary card resolution. */
+    @kotlinx.serialization.Transient val ownerApprovalPhrase: String? = null,
 )
 
 /** A row of GET /api/v1/interactions/history (iOS `InteractionRecord`): a session's card, how it ended, its answer and when. */
@@ -1046,6 +1645,7 @@ data class DelegatedAnswer(val interaction: Interaction, val answers: Map<String
 data class Launcher(@SerialName("name") val name: String, @SerialName("base_url") val baseUrl: String? = null, @SerialName("model") val model: String? = null)
 
 object MachineSerializer : WireSerializer<Machine>(Machine.generatedSerializer())
+object MachineLinkSwitchSerializer : WireSerializer<MachineLinkSwitch>(MachineLinkSwitch.generatedSerializer())
 object ListeningPortSerializer : WireSerializer<ListeningPort>(ListeningPort.generatedSerializer())
 
 /** A port one of a session's processes listens on and answers HTTP at (`proto.Port`). */
@@ -1063,6 +1663,7 @@ object DetectedEngineSerializer : WireSerializer<DetectedEngine>(DetectedEngine.
 object LoopInfoSerializer : WireSerializer<LoopInfo>(LoopInfo.generatedSerializer())
 object GoalInfoSerializer : WireSerializer<GoalInfo>(GoalInfo.generatedSerializer())
 object BackgroundTaskSerializer : WireSerializer<BackgroundTask>(BackgroundTask.generatedSerializer())
+object CodexTakeoverCapabilitySerializer : WireSerializer<CodexTakeoverCapability>(CodexTakeoverCapability.generatedSerializer())
 object SessionCapabilitiesSerializer : WireSerializer<SessionCapabilities>(SessionCapabilities.generatedSerializer())
 object SessionTodoSerializer : WireSerializer<SessionTodo>(SessionTodo.generatedSerializer())
 object WorkflowSerializer : WireSerializer<Workflow>(Workflow.generatedSerializer())
@@ -1078,5 +1679,6 @@ object QuestionOptionSerializer : WireSerializer<QuestionOption>(QuestionOption.
 object QuestionSerializer : WireSerializer<Question>(Question.generatedSerializer())
 object DialogOptionSerializer : WireSerializer<DialogOption>(DialogOption.generatedSerializer())
 object ScreenDialogSerializer : WireSerializer<ScreenDialog>(ScreenDialog.generatedSerializer())
+object DelegateSerializer : WireSerializer<Delegate>(Delegate.generatedSerializer())
 object InteractionSerializer : WireSerializer<Interaction>(Interaction.generatedSerializer())
 object InteractionFieldSerializer : WireSerializer<InteractionField>(InteractionField.generatedSerializer())

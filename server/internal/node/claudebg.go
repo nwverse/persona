@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -111,7 +112,7 @@ func (n *Node) agentsListRefusal(id string) error {
 	if !listed {
 		return nil
 	}
-	return refusal(openElsewhere, claudeAgentsList+"。这次没有发送。", nil)
+	return refusal(openElsewhere, claudeAgentsList+"。这次没有发送。", map[string]any{"where": whereAgentsList})
 }
 
 // outsideSource is the source a live claude outside Persona's panes lists under, "" for one the node leaves alone: a
@@ -135,14 +136,23 @@ func (n *Node) outsideSource(c claudeProc) string {
 
 // claudeSessions lists the live claudes outside Persona's panes that are not in seen and have a transcript: the
 // background ones, the desktop app's, the ones in other terminals.
-func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.Session {
+func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePanes map[string]bool) []proto.Session {
+	if len(procs) == 0 {
+		n.setOutsideListed(nil)
+		return nil
+	}
 	var out []proto.Session
 	listed := map[string]bool{}
-	var desktop *claudeDesktopIndex // read once, when a desktop session rests
+	var desktop *claudeDesktopIndex // read once, when a desktop session is listed
+	projects := map[string]string{}
 	for _, c := range procs {
 		id := c.SessionID
 		if seen[id] || listed[id] {
 			continue // a pane lists it (and a cli claude's environment is not read for nothing)
+		}
+		if sess := n.claudeProcHerdrSession(c); n.herdrSessionBlocked(sess) && !n.isAssistantSession(id) && !n.keptSessions()[id] {
+			n.noteHerdrSessionID(id, sess)
+			continue
 		}
 		source := n.outsideSource(c)
 		if source == "" {
@@ -162,21 +172,43 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 		if !ok {
 			status = proto.StatusUnknown
 		}
-		if status == proto.StatusIdle && source == proto.SourceClaudeDesktop {
-			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+		if source == proto.SourceClaudeDesktop {
 			if desktop == nil {
 				d := readClaudeDesktopIndex(n.home)
 				desktop = &d
 			}
-			if n.desktopTurnUnread(id, *desktop) {
+			// Its last turn ended while nobody looked: Unread until it is seen (claudedesktop_unread.go).
+			if status == proto.StatusIdle && n.desktopTurnUnread(id, *desktop) {
 				status = proto.StatusDone
+			}
+		}
+		// Its turn ended on the app's end-of-turn question to the owner, marked blocked: it waits on them (#16406).
+		endAsk := ""
+		if source == proto.SourceClaudeDesktop && (status == proto.StatusIdle || status == proto.StatusDone) {
+			if endAsk = endOfTurnAsk(p); endAsk != "" {
+				status = proto.StatusBlocked
 			}
 		}
 		s := proto.Session{
 			SessionID: id, Cwd: c.Cwd, Status: status, Agent: "claude", Title: m.title, SourceKind: source,
-			Model: m.model, LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
+			Model: n.shownModel(id, m.model), LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
+		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
+			s.Capabilities.PluginInput = true // the owner's messages go in as their input (ccplugin.go)
+			if n.ccPluginSettingsCapable(id, c.pid) {
+				s.Capabilities.Model = proto.Bool(true)
+				s.Efforts = slices.Clone(proto.EffortLevels)
+			}
+		}
+		if s.Capabilities != nil && c.Status == "busy" && n.ccPlugins.interruptCapable(id, c.pid) {
+			s.Capabilities.Interrupt = true
+		}
+		pluginPerms := n.ccPluginPermissionsCapable(id, c.pid)
+		pluginPassedOver := n.ccPluginClassicPassedOver(id, c.pid)
+		if s.Capabilities != nil && pluginPerms {
+			s.Capabilities.Approve = true
+		}
 		// A claude in a tmux pane says where it runs ("tmux":"orc:@11.%11") and no hooks of Persona's run there: the
 		// pane's screen is what its approval shows on, so it gets that screen and the keys into it (#2562).
 		if pane := outsidePane(c); pane != "" {
@@ -185,18 +217,50 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 				s.Capabilities = &proto.SessionCapabilities{Read: true}
 			}
 			s.Capabilities.Terminal = true
+			s.Capabilities.Send = true         // the owner's message can be typed here even with no inbox (#5965)
+			s.Capabilities.Approve = true      // its pane's screen carries dialogs and takes approval keys (#2562)
+			s.Capabilities.Interrupt = true    // Esc goes straight to its pane even with no inbox (session.interrupt)
+			s.Capabilities.PluginInput = false // this pane, not the plugin, carries the owner's input
+			s.Capabilities.Model = proto.Bool(true)
+			s.Capabilities.Modes = proto.CanModes(true)
+			s.Capabilities.QueueEdit, s.Capabilities.QueueSendNow = proto.Bool(true), proto.Bool(true) // its queue's keys go here
+			s.Efforts = slices.Clone(proto.EffortLevels)
+			s.ReadOnlyReason = ""
+			livePanes[pane] = true // its dialog read is kept while the claude lives (forgetDialogs)
 			// Its own status file says waiting when a dialog has the keyboard, but a build that does not: a resting
 			// claude's screen is read, as for a pane (dialogstatus.go).
 			if status == proto.StatusIdle || status == proto.StatusDone || status == proto.StatusUnknown {
 				if head := n.dialogOn(id, pane); head != "" {
 					s.Status, s.AttentionReason = proto.StatusBlocked, head
 				}
+			} else if status == proto.StatusBlocked {
+				// The phone answers the dialog on the pane's screen: the row names it once it is read (#5965).
+				s.AttentionReason = n.dialogOn(id, pane)
 			}
 		}
-		if status == proto.StatusBlocked {
-			s.AttentionReason = proto.AttentionClaudeComputer
-			if s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && asking(c, m) {
+		if endAsk != "" && s.AttentionReason == "" {
+			s.AttentionReason = endAsk // the owner answers it with a message, which reaches it through its inbox
+		}
+		hasActiveCard := n.activeAsks.active(id) || n.ccPlugins.hasActivePermission(id)
+		hasPublishedAsk := s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && n.cx.hasOutsideAsk(id)
+		if hasActiveCard || hasPublishedAsk {
+			if s.Capabilities == nil {
+				s.Capabilities = &proto.SessionCapabilities{Read: true}
+			}
+			s.Capabilities.Approve = true
+		}
+		if status == proto.StatusBlocked && s.AttentionReason == "" && !hasActiveCard {
+			if pluginPassedOver {
+				s.AttentionReason = proto.AttentionClaudePluginPassedOver
+			} else if source == proto.SourceClaudeDesktop && pluginPerms {
+				s.AttentionReason = proto.AttentionClaudeDesktopComputer
+			} else {
+				s.AttentionReason = proto.AttentionClaudeComputer // no dialog read from a pane (yet)
+			}
+			if s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && (hasPublishedAsk || n.askingOutside(c)) {
 				s.AttentionReason = proto.AttentionClaudeAnswer // a message answers it (sendOutside)
+				// Its question is a card the apps answer (claudeoutside_ask.go): the answer goes as that message.
+				s.Capabilities.Approve = true
 			}
 		}
 		if s.Cwd == "" {
@@ -212,40 +276,58 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool) []proto.
 		if s.Title == "" {
 			s.Title = c.Name
 		}
-		setContext(&s, m)
+		n.setSessionContext(&s, m)
+		if s.ContextTokens > 0 && c.pid > 0 && paneEnvOfPID != nil {
+			setClaudeProcessWindow(&s, paneEnvOfPID(c.pid))
+		}
 		s.ModelFallback = m.modelFallback
 		s.Activity, s.ActivityAt = m.activityOf()
-		s.PermissionMode, s.Effort = n.currentModes(id, m)
+		var level string
+		var observedAt time.Time
+		if source == proto.SourceClaudeDesktop {
+			if observed, pid := n.ccPlugins.observedEffort(id); pid != 0 && pid == c.pid {
+				level, observedAt = observed.Level, time.UnixMilli(observed.AtMS)
+			}
+		}
+		s.PermissionMode, s.Effort = n.currentModesWithEffort(id, m, level, observedAt)
 		m.turnErr.set(&s)
 		if status == proto.StatusWorking || status == proto.StatusBlocked {
 			s.Queued = m.queue
 		}
 		s.WokeByTask = m.wake
-		n.setBackground(&s, m) // as for a pane's session
-		s.BackgroundWaiting = n.backgroundWaits(&s)
+		n.setBackground(&s, m)  // as for a pane's session
+		n.setBackgroundWait(&s) // bgwait.go (#6045, #13744)
 		s.Loop, s.Goal, s.Plan = m.loop, m.goal, m.plan
 		s.Subagents = n.subagents(id)
+		if source == proto.SourceClaudeDesktop {
+			n.decorateClaudeDesktop(&s, *desktop, projects)
+		}
 		n.decorate(&s)
 		out = append(out, s)
 	}
+	n.setOutsideListed(listed)
 	return out
 }
 
 // outsideCapabilities: read always; send when its peer inbox is one the node can use, with a reason when not. Never
 // modes: the peer inbox carries messages only, and the session has no pane to drive the TUI's pickers in (setModes).
+// Nor the queue's edit or send-now: Claude Code's queue is on its own screen, and both are keys only a pane takes
+// (queue.go); the apps would otherwise offer them to any Claude Code (#12789).
 func outsideCapabilities(c claudeProc) (*proto.SessionCapabilities, string) {
+	caps := &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false), QueueEdit: proto.Bool(false), QueueSendNow: proto.Bool(false)}
 	p, has := peerOf(c)
 	switch {
 	case has && peerReachable(p):
+		caps.Send = true
 		// A turn it runs, or a question it waits on, stops at a message of priority now (interruptOutside).
-		stoppable := c.Status == "busy" || c.Status == "waiting"
-		return &proto.SessionCapabilities{Read: true, Send: true, Interrupt: stoppable, Modes: proto.CanModes(false)}, ""
+		caps.Interrupt = c.Status == "busy" || c.Status == "waiting"
+		return caps, ""
 	case c.Kind == "bg":
-		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, claudeBgReadOnly
+		return caps, claudeBgReadOnly
 	case !has:
-		return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeNoInbox
+		return caps, proto.ReadOnlyClaudeNoInbox
 	}
-	return &proto.SessionCapabilities{Read: true, Modes: proto.CanModes(false)}, proto.ReadOnlyClaudeInbox
+	return caps, proto.ReadOnlyClaudeInbox
 }
 
 // outsidePane is the tmux pane an outside claude runs in, "" when it runs in none (#2562): Claude Code writes the pane
@@ -282,19 +364,37 @@ func (n *Node) outsideClaude(id string) (claudeProc, bool) {
 	return claudeProc{}, false
 }
 
-// sendOutside sends text to a session a claude outside Persona's panes has open, through its peer inbox; handled
-// false when no such claude has it, or it has no inbox (an older Claude Code): the caller goes on as before, and
-// start refuses it as open elsewhere (openElsewhereRefusal). Nothing else is tried: a second claude --resume would
-// write the same transcript. A send counts once the session wrote that it took the message (peerTaken); one it did
-// not take in time — held for the person at the computer, dropped as a duplicate — is reported as not confirmed
-// (delivered unknown), so the app neither shows it as sent nor resends it by itself.
+// sendOutside sends text to a session a claude outside Persona's panes has open, through its peer inbox. A verified
+// owner's ordinary message to a claude in tmux is left for send's usual pane path instead; anyone else's message there
+// still needs the inbox and is refused without one, never typed. With no pane and no inbox, handled is false and the
+// caller refuses the session as open elsewhere (openElsewhereRefusal). Nothing starts a second claude --resume on the
+// same transcript. A send counts once the session wrote that it took the message (peerTaken); one it did not take in
+// time — held for the person at the computer, dropped as a duplicate — is reported as not confirmed (delivered
+// unknown), so the app neither shows it as sent nor resends it by itself.
 func (n *Node) sendOutside(ctx context.Context, id, text string, images []proto.Image) (handled bool, err error) {
+	return n.sendOutsidePriority(ctx, id, text, images, "")
+}
+
+// sendOutsidePriority is sendOutside with a priority the caller has already established from the transcript's full
+// items. An empty priority uses the quick-metadata question check below.
+func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images []proto.Image, forced string) (handled bool, err error) {
 	c, ok := n.outsideClaude(id)
 	if !ok {
 		return false, nil
 	}
+	pane := outsidePane(c)
+	if pane != "" && strings.HasPrefix(strings.TrimSpace(text), "/") {
+		// Keep the inbox's command refusal on the tmux route too: exitAgent knows only Persona's own agents.
+		return true, refusal(peerCommand, peerCommandMsg, nil)
+	}
+	if forced == "" && pane != "" && ownerDeliveryOf(ctx) != nil {
+		return false, nil // the owner's own words go through send's ordinary tmux-pane checks and confirmation (#5965)
+	}
 	p, has := peerOf(c)
 	if !has {
+		if pane != "" {
+			return true, refusal(peerUnsupported, peerNoInboxMsg, nil) // nobody else's words may be typed into the pane
+		}
 		return false, nil
 	}
 	if strings.HasPrefix(strings.TrimSpace(text), "/") {
@@ -314,15 +414,41 @@ func (n *Node) sendOutside(ctx context.Context, id, text string, images []proto.
 	// answered it on the computer. One waiting on a permission prompt or another dialog gets it queued as before: at
 	// now it would decline the prompt, which is the computer's to approve.
 	var offset int64
-	priority := peerNext
+	priority := forced
+	if priority == "" {
+		priority = peerNext
+	}
 	if path := n.transcriptPath(id); path != "" {
 		if st, err := os.Stat(path); err == nil {
 			offset = st.Size()
-			if asking(c, n.metaNow(path, st)) {
+			if forced == "" && n.pendingOutsideAsk(c) != nil {
 				priority = peerNow
 			}
 		}
 	}
+	// The owner's own message goes in as their input through Persona's plugin when the session has it (ccplugin.go),
+	// whether idle, queued behind a running turn or behind a dialog; otherwise, and when the plugin does not take it,
+	// through the inbox.
+	if owner := ownerDeliveryOf(ctx); owner != nil && forced == "" && priority == peerNext {
+		if ok, why := n.ccPluginSend(ctx, c, id, text); ok {
+			log.Printf("send %s: claude %d (%s) took it as the user's input through Persona's plugin", id, c.pid, c.Entrypoint)
+			if c.Status == "busy" || c.Status == "waiting" {
+				markSendQueued(ctx) // it runs when the turn ends
+			}
+			// Behind a permission prompt or a plan to approve, it runs only once that is answered at the computer.
+			if now, ok := n.outsideClaude(id); ok && claudeBgStatus[now.Status] == proto.StatusBlocked {
+				if w, ok := ctx.Value(computerWaitKey{}).(*bool); ok {
+					*w = true
+				}
+			}
+			owner.as, owner.reason = deliveredUserInput, ""
+			return true, nil
+		} else {
+			owner.as, owner.reason = deliveredRelayed, why
+		}
+	}
+	p.fromMode = n.peerAttest(ctx, c, id)
+	_, p.source = ctx.Value(sourceDeliveryKey{}).(string)
 	err = peerSendAt(ctx, p, id, text, priority)
 	var pe *errPeer
 	if asPeer(err, &pe) {
@@ -347,8 +473,86 @@ func (n *Node) sendOutside(ctx context.Context, id, text string, images []proto.
 		log.Printf("send %s: claude %d's inbox: %v", id, c.pid, err)
 		return true, uncertain(err)
 	}
+	if peerHeldSeen(n.transcriptPath(id), offset) {
+		log.Printf("send %s: written to claude %d's inbox, not taken within %s: it holds it for approval at the computer", id, c.pid, peerConfirmWait)
+		return true, heldOnComputer()
+	}
 	log.Printf("send %s: written to claude %d's inbox, not taken within %s (held or dropped there)", id, c.pid, peerConfirmWait)
 	return true, unconfirmed()
+}
+
+// peerAttest is the from-mode the node states in a message to session id, which claude c has open (claudepeer.go). It
+// is the class of whoever's words the message carries, bound to evidence taken when the message is sent, and stated
+// only where that evidence is reliable (#9607):
+//   - the owner's own message (ownerInputExact), card answer or Stop (the Devices manager's owner-control RPC): it goes in as the session's own user's words, the one authorization the node acts on. The
+//     person who owns the session is the one its permission prompts and held messages wait on, and what they type at its
+//     terminal goes in whatever its mode. bypass when live receiver evidence puts the session in that class
+//     (peerSessionClassAt); nothing otherwise (a session that prompts takes a message that states none). Uncertain
+//     evidence can only make the session hold the message, never take more than its owner could.
+//   - an Agent message on the source-permission delivery RPC: the source node captured its class when the words were produced, bound to the source process and call. It never becomes owner input.
+//   - anything without reliable source evidence (including older peers and non-owner controls): nothing.
+func (n *Node) peerAttest(ctx context.Context, c claudeProc, id string) string {
+	if ownerDeliveryOf(ctx) != nil {
+		if peerSessionClassAt(ctx, n, c, id) == peerModeBypass {
+			return peerModeBypass
+		}
+		return ""
+	}
+	mode, _ := ctx.Value(sourceDeliveryKey{}).(string)
+	return mode
+}
+
+// peerSessionClass is the classifier without a send context. Keep its signature for callers that only inspect a class.
+func peerSessionClass(n *Node, c claudeProc, id string) string {
+	return peerSessionClassAt(context.Background(), n, c, id)
+}
+
+// peerSessionClassAt also accepts plan mode for owner delivery if the destination can switch to bypass.
+func peerSessionClassAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+	mode := peerSessionModeAt(ctx, n, c, id)
+	if mode == "plan" && claudeCanBypass(c.pid) {
+		return peerModeBypass
+	}
+	return permissionClass(mode)
+}
+
+// peerSessionModeAt reads the current permission mode. A readable external tmux footer is the freshest mode:
+// shift+tab changes it before Claude writes the transcript. A visible composer without a recognized mode is prompting:
+// bypass and plan keep their indicators when a draft or dialog hides default's hint. Without live evidence, read the newest
+// transcript copy in claude c's own config directory, bypassing the ordinary metadata cache.
+func peerSessionModeAt(ctx context.Context, n *Node, c claudeProc, id string) string {
+	mode := ""
+	if pane := outsidePane(c); pane != "" {
+		if text, err := n.readPane(ctx, pane, "visible", 60); err == nil {
+			mode = tuiMode(text)
+			if mode == "" && tuiPromptingScreen(text) {
+				return "default"
+			}
+		}
+	}
+	if mode == "" {
+		matches, _ := filepath.Glob(filepath.Join(filepath.Dir(c.dir), "projects", "*", id+".jsonl"))
+		var path string
+		var newest os.FileInfo
+		for _, m := range matches {
+			if st, err := os.Stat(m); err == nil && (newest == nil || st.ModTime().After(newest.ModTime())) {
+				path, newest = m, st
+			}
+		}
+		var m quickMeta
+		if newest != nil {
+			m = n.metaNow(path, newest)
+		}
+		mode = m.mode
+		if c.pid > 0 && c.StartedAt > 0 && (mode == "" || (!m.modeAt.IsZero() && m.modeAt.UnixMilli() < c.StartedAt)) {
+			if args, err := processArgv(c.pid); err == nil {
+				if argMode := argsPermissionMode(args); argMode != "" {
+					mode = argMode
+				}
+			}
+		}
+	}
+	return mode
 }
 
 // computerWaitKey is where sendOutside leaves, for session.send's answer, that the session took the message while
@@ -364,10 +568,57 @@ func withComputerWait(ctx context.Context) (context.Context, *bool) {
 // askTool is Claude Code's question tool.
 const askTool = "AskUserQuestion"
 
-// asking: claude c waits on a question it asked (its status file says waiting, and its transcript's latest call, m,
-// is the question), not on a permission prompt, a plan to approve or another dialog only the computer answers.
-func asking(c claudeProc, m quickMeta) bool {
-	return c.Status == "waiting" && m.tool == askTool
+// askingOutside reports whether outside claude c waits on an open AskUserQuestion in its current turn
+// (claudeoutside_ask.go), not on a permission prompt, a plan to approve, or another dialog only the computer answers.
+func (n *Node) askingOutside(c claudeProc) bool {
+	return n.pendingOutsideAsk(c) != nil
+}
+
+func (n *Node) setOutsideListed(listed map[string]bool) {
+	n.mu.Lock()
+	if len(listed) == 0 {
+		n.outsideListed = nil
+	} else {
+		n.outsideListed = listed
+	}
+	n.mu.Unlock()
+}
+
+func (n *Node) isOutsideListed(id string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.outsideListed[id]
+}
+
+// pokeOutsideSessionsAsync wakes the session watcher and schedules a serialized sessions.changed flush without waiting.
+func (n *Node) pokeOutsideSessionsAsync() <-chan struct{} {
+	if n.events != nil {
+		n.events.poke(true)
+	}
+	if n.peer == nil || n.botmuxPending() {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	// notifySessionsSoon runs notifySessions → sendSessions under n.sent.mu (never skipped by a stale or in-flight
+	// n.lastList update from pollAgents), guaranteeing the updated list is actually written to the wire.
+	return n.notifySessionsSoon()
+}
+
+// flushOutsideSessions pokes the watcher and waits until sessions.changed reflecting the latest outside approval state
+// has been written to the wire (bounded by ctx and listPushWait).
+func (n *Node) flushOutsideSessions(ctx context.Context) {
+	n.awaitOutsideSessionPush(ctx, n.pokeOutsideSessionsAsync())
+}
+
+func (n *Node) awaitOutsideSessionPush(ctx context.Context, done <-chan struct{}) {
+	t := time.NewTimer(listPushWait)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	case <-t.C:
+	}
 }
 
 // interruptOutside stops the turn a claude outside Persona's panes runs, through its inbox: a message at priority now
@@ -377,6 +628,9 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 	c, ok := n.outsideClaude(id)
 	if !ok || outsidePane(c) != "" {
 		return false, nil
+	}
+	if ownerDeliveryOf(ctx) != nil && c.Status == "busy" && n.ccPluginInterrupt(ctx, c, id) {
+		return true, nil
 	}
 	p, has := peerOf(c)
 	if !has {
@@ -390,6 +644,7 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 		offset = st.Size()
 	}
 	stop := prompts.PeerStop()
+	p.fromMode = n.peerAttest(ctx, c, id)
 	err = peerSendAt(ctx, p, id, stop, peerNow)
 	var pe *errPeer
 	if asPeer(err, &pe) {
@@ -402,7 +657,17 @@ func (n *Node) interruptOutside(ctx context.Context, id string) (handled bool, e
 	if err != nil {
 		return true, uncertain(err)
 	}
+	if peerHeldSeen(n.transcriptPath(id), offset) {
+		return true, heldOnComputer()
+	}
 	return true, unconfirmed()
+}
+
+// heldOnComputer is the outcome of a message the session did not take and wrote that it holds for approval at the
+// computer (peerHeldSeen). Still delivered unknown: it goes in once approved there, and nothing resends it.
+func heldOnComputer() error {
+	b, _ := json.Marshal(map[string]any{"delivered": deliveredUnknown})
+	return &rpc.Error{Code: peerHeld, Message: peerHeldMsg, Data: b}
 }
 
 // unconfirmed is the outcome of a message the inbox read but the session has not taken: delivery unknown.
@@ -484,17 +749,18 @@ func (n *Node) enginePaneRefs(env map[string]string) []string {
 	add(host.Orca, env[orcaLegacyPaneEnv])
 	add(host.Botmux, env[botmuxPaneEnv])
 	add(host.Tern, env[ternPaneEnv])
+	add(host.Rex, env[rexPaneEnv])
 	return out
 }
 
 // enginePaneEnvs are the variables Persona's engines set in their panes' processes.
 // herdrSessionEnv and herdrSocketEnv come along to tell which herdr server's pane HERDR_PANE_ID is.
 var enginePaneEnvs = []string{herdrPaneEnv, herdrSessionEnv, herdrSocketEnv, herdrCorePaneEnv, orcaPaneEnv, orcaLegacyPaneEnv,
-	botmuxPaneEnv, ternPaneEnv}
+	botmuxPaneEnv, ternPaneEnv, rexPaneEnv}
 
 // tmuxEnv is tmux's own variable in a pane's processes: "<socket>,<server pid>,<session index>". Its socket names the
 // server the pane belongs to, which a pane id alone does not (tmuxHost).
 const tmuxEnv = "TMUX"
 
 // paneEnvKeys are the variables read from a process's environment: the engines' pane variables, and the tmux server.
-var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv)
+var paneEnvKeys = append(append([]string{}, enginePaneEnvs...), tmuxEnv, "CODEX_THREAD_ID")

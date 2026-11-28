@@ -9,7 +9,7 @@ import (
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// Codex's TUI (codex-cli 0.153 / 0.163, a compatible CLI alike) read off its screen: which view has the keyboard, what its input
+// Codex's TUI (codex-cli 0.153 / 0.163 / 0.172, a compatible CLI alike) read off its screen: which view has the keyboard, what its input
 // box holds, and the two dialogs Persona answers from the phone — an approval ("Would you like to run the following
 // command?") and request_user_input's question overlay ("Question 1/2"). Layouts are the ones recorded in
 // testdata/codex-*; docs/integrations/codex.md "Questions and approvals".
@@ -132,17 +132,18 @@ func (q *CodexQuestionDialog) Selected() *CodexOption {
 const CodexPlaceholder = "Ask Codex to do anything"
 
 var (
-	codexOptionRE   = lazyre.New(`^(\s*)(›\s+)?(\d+)\.\s+(\S.*)$`)
-	codexShortcutRE = lazyre.New(`\s+\((?:[a-z]|esc)\)$`)
-	codexQuestionRE = lazyre.New(`^\s*Question (\d+)/(\d+)\b`)
-	codexColumnsRE  = lazyre.New(`^(.*?\S)\s{2,}(\S.*)$`)
-	codexNumberedRE = lazyre.New(`^›\s*\d+\.\s`)
-	codexStatusRE   = lazyre.New(`^\s{2,}\S.*\s·\s(?:~[/\\]|/|[A-Za-z]:[/\\])`)
-	codexWarningRE  = lazyre.New(`\s⚠\s+\d+\s+warnings?\s+·\s+f2 to view$`)
+	codexOptionRE       = lazyre.New(`^(\s*)(›\s+)?(\d+)\.\s+(\S.*)$`)
+	codexShortcutRE     = lazyre.New(`\s+\((?:[a-z]|esc)\)$`)
+	codexQuestionRE     = lazyre.New(`^\s*Question (\d+)/(\d+)\b`)
+	codexColumnsRE      = lazyre.New(`^(.*?\S)\s{2,}(\S.*)$`)
+	codexNumberedRE     = lazyre.New(`^›\s*\d+\.\s`)
+	codexStatusRE       = lazyre.New(`^\s{2,}\S.*\s·\s(?:~(?:[/\\]|\s|$)|/|[A-Za-z]:[/\\])`)
+	codexWarningRE      = lazyre.New(`\s⚠\s+\d+\s+warnings?\s+·\s+f2 to view$`)
+	codexDialogFooterRE = lazyre.New(`\b(?:to (?:confirm|cancel)|esc cancel|enter (?:to )?(?:confirm|submit))\b`)
 )
 
 // ReadCodex reads a Codex screen, best read with its colors: without them a draft the user typed cannot be told from
-// the box's dim placeholder beyond CodexPlaceholder.
+// the box's dim placeholder beyond the known placeholder texts.
 func ReadCodex(screen string) CodexScreen {
 	raw := strings.Split(strings.ReplaceAll(screen, "\r", ""), "\n")
 	plain := make([]string, len(raw))
@@ -159,16 +160,19 @@ func ReadCodex(screen string) CodexScreen {
 	switch {
 	case strings.Contains(strings.Join(plain[:min(3, len(plain))], "\n"), "T R A N S C R I P T") && strings.Contains(last, "q to quit"):
 		return CodexScreen{View: CodexTranscript}
-	case strings.Contains(last, "esc to cancel") && strings.Contains(last, "to confirm"):
+	case codexDialogFooterRE.MatchString(last) || strings.Contains(last, "clear notes") ||
+		strings.Contains(strings.Join(plain[max(0, len(plain)-80):], "\n"), "Implement this plan?"):
 		if a := codexApproval(plain); a != nil {
 			return CodexScreen{View: CodexApproval, Approval: a}
 		}
-		return CodexScreen{View: CodexDialog}
-	case strings.Contains(last, "enter to submit") || strings.Contains(last, "clear notes"):
 		if q := codexQuestion(plain); q != nil {
 			return CodexScreen{View: CodexQuestion, Question: q}
 		}
-	case strings.Contains(last, "main prompt"):
+		if strings.Contains(last, "confirm") && strings.Contains(last, "cancel") {
+			return CodexScreen{View: CodexDialog}
+		}
+	}
+	if strings.Contains(last, "main prompt") {
 		return CodexScreen{View: CodexAsyncPane}
 	}
 	if i := codexBox(plain); i >= 0 {
@@ -216,26 +220,49 @@ func codexBox(plain []string) int {
 	return -1
 }
 
+func codexFooterHint(line string) bool {
+	last := strings.ToLower(strings.TrimSpace(line))
+	return strings.HasPrefix(last, "? for shortcuts") ||
+		strings.HasPrefix(last, "← for agents · ? for shortcuts") ||
+		strings.HasPrefix(last, "tab to queue message") ||
+		strings.HasPrefix(last, "← for agents · tab to queue message") ||
+		codexWarningRE.MatchString(line)
+}
+
+func codexSingleRowFooter(line string) bool {
+	if !codexStatusRE.MatchString(line) {
+		return false
+	}
+	return codexWarningRE.MatchString(line) || strings.Contains(strings.ToLower(line), " · tab to queue message")
+}
+
 // codexDraft is the box's text that is not its dim placeholder: the › row and the rows right under it (a draft of
-// several lines), up to the first blank row or the TUI's bottom status. Compact layouts omit the blank separator.
+// several lines), up to the TUI's recognized footer. With an unrecognized footer, stop at the first blank row.
 func codexDraft(raw, plain []string, i int, noColor bool) string {
 	var rows []string
 	end := len(plain)
-	if end > i+1 && codexStatusRE.MatchString(plain[end-1]) && codexWarningRE.MatchString(plain[end-1]) {
-		// 0.166 also draws one status row with a warning and no shortcuts row.
+	if end > i+1 && codexSingleRowFooter(plain[end-1]) {
+		// 0.166+ can draw one status row with a warning or active-turn queue hint and no second footer row (#2133).
 		end--
-	} else if end > i+2 {
-		last := strings.TrimSpace(plain[end-1])
-		if (strings.HasPrefix(last, "? for shortcuts") || strings.HasPrefix(last, "← for agents · ? for shortcuts")) &&
-			codexStatusRE.MatchString(plain[end-2]) {
-			// Match the status/path and shortcut footer together at the bottom, not model names or hint text
-			// inside a multiline draft. Real text above this pair remains protected from remote input.
-			end -= 2
+	} else if end > i+2 && codexFooterHint(plain[end-1]) {
+		// Match the status/path and shortcut/queue footer together at the bottom, not model names or hint text
+		// inside a multiline draft. Real text above the footer remains protected from remote input.
+		if s := codexStatusStart(plain, i, end-1); s >= 0 {
+			end = s
 		}
 	}
 	for k := i; k < end; k++ {
-		if k > i && (strings.TrimSpace(plain[k]) == "" || !strings.HasPrefix(plain[k], "  ")) {
-			break
+		if k > i {
+			if strings.TrimSpace(plain[k]) == "" {
+				if end == len(plain) {
+					break
+				}
+				rows = append(rows, "")
+				continue
+			}
+			if !strings.HasPrefix(plain[k], "  ") {
+				break
+			}
 		}
 		text := plain[k]
 		if k == i {
@@ -251,11 +278,44 @@ func codexDraft(raw, plain []string, i int, noColor bool) string {
 			rows = append(rows, t)
 		}
 	}
-	draft := strings.Join(rows, "\n")
-	if noColor && draft == CodexPlaceholder {
-		return ""
+	draft := strings.TrimRight(strings.Join(rows, "\n"), "\n")
+	if noColor {
+		// PlainScreen loses dim styling; compare complete placeholder text, including wrapped rows.
+		switch joinWrapped(rows) {
+		case CodexPlaceholder, "Ask a follow-up question":
+			return ""
+		}
 	}
 	return draft
+}
+
+// codexStatusWrapRows is how many rows a status row may take once the pane wraps it (model · path · thread title ·
+// profile on a narrow pane).
+const codexStatusWrapRows = 4
+
+// codexStatusStart is the first row of the status row that ends right above hint, or -1. A status row wider than
+// the pane wraps onto indented rows, so it is matched with those rows joined back, which also covers a wrap that
+// falls before the path. Rows at or above the › row at i are never part of it. The status row starts with the model
+// and its separator, so a row that starts with a separator (a continuation) or has none cannot start it: a draft
+// line such as "some text" above "· /work/example" stays a draft.
+func codexStatusStart(plain []string, i, hint int) int {
+	for k := hint - 1; k > i && k >= hint-codexStatusWrapRows; k-- {
+		t := strings.TrimSpace(plain[k])
+		if t == "" || !strings.HasPrefix(plain[k], "  ") {
+			return -1
+		}
+		if strings.HasPrefix(t, "·") || !strings.Contains(t, " ·") {
+			continue
+		}
+		joined := plain[k]
+		for _, l := range plain[k+1 : hint] {
+			joined += " " + strings.TrimSpace(l)
+		}
+		if codexStatusRE.MatchString(joined) {
+			return k
+		}
+	}
+	return -1
 }
 
 // undimmed is a colored row's text without its dim runs.
@@ -310,9 +370,16 @@ func codexOptions(plain []string, start int, columns bool) (opts []CodexOption, 
 
 // codexApproval reads the approval above the footer: its title, then reason / command / other lines, then the options.
 func codexApproval(plain []string) *CodexApprovalDialog {
+	if codexBox(plain) >= 0 {
+		return nil // a visible composer means any approval title belongs to history
+	}
 	title := -1
 	for i := len(plain) - 1; i >= 0 && i >= len(plain)-80; i-- {
-		if strings.HasPrefix(strings.TrimSpace(plain[i]), "Would you like to") {
+		if codexQuestionRE.MatchString(plain[i]) {
+			return nil // the current question owns the numbered options below it
+		}
+		t := strings.TrimSpace(plain[i])
+		if strings.HasPrefix(t, "Would you like to") || strings.HasPrefix(t, "Do you want to") || t == "Implement this plan?" {
 			title = i
 			break
 		}
@@ -418,4 +485,43 @@ func codexQuestion(plain []string) *CodexQuestionDialog {
 		return nil
 	}
 	return q
+}
+
+// codexFirstOptionRE is a Codex picker's first option, under the cursor or not ("› 1. Switch to …", "  1. Keep …").
+var codexFirstOptionRE = lazyre.New(`^\s*(?:[❯›>]\s*)?1\.\s+\S`)
+
+// CodexDialogHead is the first line of the dialog at the bottom of a Codex screen (View CodexDialog: a picker such as
+// "Approaching rate limits", which lists its options under a paragraph of its own): the first line of that paragraph,
+// "" when none shows. DialogHead reads Claude Code's dialogs, framed by rules Codex does not draw, and so would give a
+// line of the conversation above it.
+func CodexDialogHead(screen string) string {
+	if ReadCodex(screen).View != CodexDialog {
+		return ""
+	}
+	lines := strings.Split(strings.ReplaceAll(screen, "\r", ""), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(strings.ReplaceAll(Plain(lines[i]), " ", " "), " ")
+	}
+	opt := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if codexFirstOptionRE.MatchString(lines[i]) {
+			opt = i
+			break
+		}
+	}
+	i := opt - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+	if opt < 0 || i < 0 {
+		return ""
+	}
+	for i > 0 && strings.TrimSpace(lines[i-1]) != "" {
+		i--
+	}
+	// the dialog's own text is indented; a row at the edge is the conversation's ("• Ran …"): no paragraph of its own
+	if l := lines[i]; l[0] != ' ' {
+		return ""
+	}
+	return strings.TrimSpace(lines[i])
 }

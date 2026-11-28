@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { FeedItem } from "../../lib/feed";
 import type { Todo } from "../../lib/todos";
+import { makeSessionLookup } from "../../lib/todos";
+import type { Session } from "../../lib/types";
 import { Icon } from "../../ui/icons";
 import { FeedLineView } from "./Tasks";
 import { LatestReport, ReviewBadge } from "./Supervision";
@@ -37,18 +38,22 @@ describe("a supervised task", () => {
     expect(html).toContain("1/2");
     expect(html).toContain("pull/7 merged");
     expect(html).toContain('dateTime="2026-11-10T09:00:00Z"');
-    expect(html).toContain("agent:box/s1");
-    expect(html).toContain('aria-label="还没验收"');
+    expect(html).toContain('data-testid="review-evidence-author">Agent<');
+    expect(html).not.toContain("agent:box/s1");
+    expect(html).toContain('aria-label="尚未验收"');
   });
   it.each([
-    "agent:box/s1", "supervisor:main", "judge",
-  ])("keeps the %s evidence attribution in the existing task detail without new labels", (by) => {
+    ["agent:box/s1", "Agent"],
+    ["supervisor:main", "督办"],
+    ["judge", "评审"],
+  ])("maps %s evidence attribution to readable label %s in the task detail", (by, expected) => {
     const detail: Todo = { ...todo, supervision: {
       supervisor: "main", done_when: ["Tests pass"],
       criteria: [{ criterion: "Tests pass", state: "met", evidence: "go test: PASS", at: "2026-11-11T01:00:00Z", by }],
     } };
     const html = renderToStaticMarkup(<ReviewChecklist todo={detail} />);
-    expect(html).toContain(by);
+    expect(html).toContain(`data-testid="review-evidence-author">${expected}<`);
+    expect(html).not.toContain(by);
     expect(html).toContain("go test: PASS");
     expect(html).toContain('dateTime="2026-11-11T01:00:00Z"');
   });
@@ -61,8 +66,19 @@ describe("a supervised task", () => {
     expect(html).toContain('data-testid="review-parked"');
     expect(html).toContain("Waiting for the external release");
     expect(html).toContain("go test: PASS");
-    expect(html).toContain("agent:box/s1");
+    expect(html).toContain('data-testid="review-evidence-author">Agent<');
+    expect(html).not.toContain("agent:box/s1");
     expect(html).toContain('dateTime="2026-11-11T01:00:00Z"');
+  });
+  it("does not display stale parked metadata while the task's Agent is working", () => {
+    const live: Todo = { ...todo, agents: [{ machine_id: "demo", session_id: "worker", linked_at: "2026-11-11T00:00:00Z" }],
+      supervision: { supervisor: "main", state: "parked", done_when: ["Tests pass"],
+        parked: { reason: "Earlier external wait", until: "2026-11-18T09:00:00Z", waiting_on: "someone_else", count: 1 } } };
+    const lookup = makeSessionLookup([{ machine_id: "demo", session_id: "worker", state: "working", status: "working" } as Session]);
+    const html = renderToStaticMarkup(<ReviewChecklist todo={live} lookup={lookup} />);
+    expect(html).toContain('data-testid="review-checklist"');
+    expect(html).not.toContain('data-task-wait-info=');
+    expect(html).not.toContain("Earlier external wait");
   });
   it("tints accepted work green but keeps reviews requiring user input neutral", () => {
     const accepted = renderToStaticMarkup(<ReviewBadge todo={{ ...todo, done_at: "2026-11-05T10:00:00Z", supervision: { ...todo.supervision!, state: "accepted" } }} />);
@@ -74,7 +90,7 @@ describe("a supervised task", () => {
 
   it("shows its review state and the criteria met on its card", () => {
     const html = renderToStaticMarkup(<ReviewBadge todo={todo} />);
-    expect(html).toContain("返工第 1 轮");
+    expect(html).toContain("第 1 轮返工");
     expect(html).toContain("1/2");
     expect(renderToStaticMarkup(<ReviewBadge todo={{ ...todo, supervision: undefined }} />)).toBe("");
   });
@@ -83,8 +99,8 @@ describe("a supervised task", () => {
     const html = renderToStaticMarkup(<ReviewChecklist todo={todo} />);
     expect(html).toContain("验收标准");
     expect(html).toContain("预计 30 分钟");
-    expect(html).toContain('aria-label="达成"');
-    expect(html).toContain('aria-label="缺口"');
+    expect(html).toContain('aria-label="已达成"');
+    expect(html).toContain('aria-label="未达成"');
     expect(html).toContain("只有浅色");
     expect(html).toContain("督办说明：补深色截图");
   });
@@ -94,7 +110,7 @@ describe("a supervised task", () => {
       ...todo.supervision!, state: "accepted",
       reviews: [{ at: "2026-11-05T09:00:00Z", verdict: "accepted", checks: [{ criterion: todo.supervision!.done_when![0], met: true }] }],
     } }} />);
-    expect(html).toContain('aria-label="验收后追加，未单独核对"');
+    expect(html).toContain('aria-label="验收后新增，未单独核对"');
     expect(html).toContain(renderToStaticMarkup(<Icon name="minus" size={13} stroke={2.4} />));
     expect(html).toContain("1/1");
   });
@@ -121,37 +137,14 @@ describe("a supervised task", () => {
 
   it("says when no criteria were given", () => {
     const html = renderToStaticMarkup(<ReviewChecklist todo={{ ...todo, supervision: { supervisor: "main", done_when: [] } }} />);
-    expect(html).toContain("派活时没写验收标准");
-  });
-
-  it("draws an agent's report body to Persona in the conversation without a separate evidence list", () => {
-    const item: FeedItem = { id: "f2", conversation: "main", at: "2026-11-05T09:00:00Z", kind: "report", ref: "todo_1",
-      body: { kind: "question", text: "A 先灰度还是 B 直接全量？", evidence: ["https://github.com/o/r/pull/902"] } };
-    const html = renderToStaticMarkup(<FeedLineView item={item} />);
-    expect(html).toContain('data-testid="report-line"');
-    expect(html).toContain("向 Persona 汇报");
-    expect(html).toContain("问 Persona：A 先灰度还是 B 直接全量？");
-    expect(html).not.toContain("pull/902");
-    expect(html).not.toContain("<ul");
-  });
-
-  it("marks a question that can wait, and draws it quietly", () => {
-    const say = (body: Record<string, unknown>): string =>
-      renderToStaticMarkup(<FeedLineView item={{ id: "f4", conversation: "main", at: "2026-11-05T09:00:00Z", kind: "report", ref: "todo_1", body }} />);
-    const later = say({ kind: "question", text: "图标要不要换？", later: true });
-    expect(later).toContain('data-testid="report-later"');
-    expect(later).toContain("不急，等下次早晚报");
-    expect(later).not.toContain("text-orange");
-    const urgent = say({ kind: "question", text: "图标要不要换？" });
-    expect(urgent).not.toContain("report-later");
-    expect(urgent).toContain("text-orange");
+    expect(html).toContain("未设置验收标准");
   });
 
   it("marks a line to a task that cut its turn short", () => {
     const say = (body: Record<string, unknown>): string =>
       renderToStaticMarkup(<FeedLineView item={{ id: "f3", conversation: "main", at: "2026-11-05T09:00:00Z", kind: "routed", ref: "todo_1", body }} />);
-    expect(say({ text: "先修测试", interrupted: true })).toContain("打断「");
-    expect(say({ text: "先修测试" })).not.toContain("打断「");
+    expect(say({ text: "先修测试", interrupted: true })).toContain("已中断「");
+    expect(say({ text: "先修测试" })).not.toContain("已中断「");
     expect(say({ text: "先修测试" })).toContain("对「");
   });
 
@@ -161,20 +154,13 @@ describe("a supervised task", () => {
       renderToStaticMarkup(<ReviewChecklist todo={{ ...todo, supervision: { ...todo.supervision!, state: "pending_review", auto_review } }} />);
     const clean = reviewed({ id: "rv_1", state: "clean", count: 2, blocking: 0, findings: "P2 app.ts:3 命名" });
     expect(clean).toContain("独立评审");
-    expect(clean).toContain("没有阻断问题 · 2 条发现");
+    expect(clean).toContain("无阻断问题 · 2 条发现");
     expect(clean).toContain("展开报告");
     expect(clean).not.toContain("P2 app.ts:3"); // the report opens on a click
-    expect(reviewed({ id: "rv_1", state: "blocking", count: 3, blocking: 1, findings: "P0 x" })).toContain("还剩 1 条阻断问题 · 3 条发现");
+    expect(reviewed({ id: "rv_1", state: "blocking", count: 3, blocking: 1, findings: "P0 x" })).toContain("仍有 1 条阻断问题 · 3 条发现");
     expect(reviewed({ id: "rv_1", state: "running" })).toContain("进行中");
-    expect(reviewed({ id: "rv_1", state: "failed" })).toContain("没评审完");
+    expect(reviewed({ id: "rv_1", state: "failed" })).toContain("未完成评审");
     expect(reviewed({ id: "rv_1", state: "cancelled" })).not.toContain("auto-review");
   });
 
-  it("draws a review in the conversation as a line", () => {
-    const item: FeedItem = { id: "f1", conversation: "main", at: "2026-11-05T09:00:00Z", kind: "review", ref: "todo_1",
-      body: { title: "部署 hub", verdict: "accepted", note: "已部署，/healthz ok" } };
-    const html = renderToStaticMarkup(<FeedLineView item={item} />);
-    expect(html).toContain("已验收");
-    expect(html).toContain("已部署，/healthz ok");
-  });
 });

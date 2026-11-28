@@ -12,16 +12,26 @@ import (
 
 // CreateSpace opens the workspace on the own server: pane-less work never goes to a named session.
 func (h *herdrHost) CreateSpace(ctx context.Context, cwd, label string) (*host.Created, error) {
-	c, err := h.c.WorkspaceCreate(ctx, cwd, label)
-	return fromHerdrCreated("", c), err
+	return h.CreateSpaceEnv(ctx, cwd, label, nil)
 }
 
 func (h *herdrHost) CreateSlot(ctx context.Context, space, cwd, label string) (*host.Created, error) {
+	return h.CreateSlotEnv(ctx, space, cwd, label, nil)
+}
+
+// CreateSpaceEnv is CreateSpace whose first pane's shell starts with env added (host.EnvLauncher).
+func (h *herdrHost) CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*host.Created, error) {
+	c, err := h.c.WorkspaceCreate(ctx, cwd, label, env...)
+	return fromHerdrCreated("", c), err
+}
+
+// CreateSlotEnv is CreateSlot whose pane's shell starts with env added (host.EnvLauncher).
+func (h *herdrHost) CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*host.Created, error) {
 	t, err := h.target(ctx, space)
 	if err != nil {
 		return nil, err
 	}
-	c, err := t.c.TabCreate(ctx, t.id, cwd, label)
+	c, err := t.c.TabCreate(ctx, t.id, cwd, label, env...)
 	return fromHerdrCreated(t.session, c), err
 }
 
@@ -112,6 +122,20 @@ func (h *herdrHost) CreateWorktree(ctx context.Context, space, branch, path stri
 // fresh layout of the source session decides whether the main checkout has its own workspace; cached layouts are not used.
 func (h *herdrHost) CreateWorktreeFromMain(ctx context.Context, space, mainRoot, base, branch, path string) (*host.Created, error) {
 	return h.createWorktree(ctx, space, mainRoot, base, branch, path)
+}
+
+// CreateWorktreeFromCwd has herdr make the worktree from the repository root itself, on the own server: no workspace
+// holds that repository (worktreeCreate), so none is looked for; herdr's workspace still carries the repository.
+func (h *herdrHost) CreateWorktreeFromCwd(ctx context.Context, root, branch, path string) (*host.Created, error) {
+	c, err := h.c.WorktreeCreateFromCwd(ctx, root, branch, path)
+	if err != nil {
+		return nil, err
+	}
+	out := fromHerdrCreated("", &c.Created)
+	if out.SpaceID == "" {
+		return nil, errors.New("herdr did not return the new workspace")
+	}
+	return out, nil
 }
 
 func (h *herdrHost) createWorktree(ctx context.Context, space, mainRoot, base, branch, path string) (*host.Created, error) {

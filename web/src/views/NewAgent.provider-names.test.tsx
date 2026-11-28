@@ -56,6 +56,10 @@ const row = (key: string) => rows().find((r) => r.dataset.panelRow === key)!;
 const group = (name: string) => [...document.body.querySelectorAll<HTMLElement>("[data-panel-section]")].find((g) => g.getAttribute("aria-label") === name);
 async function openPanel() {
   act(() => pill().click());
+  await act(async () => vi.dynamicImportSettled());
+  await flush();
+  // These caller tests inspect model actions; disclose the catalog first.
+  for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
 
@@ -101,19 +105,19 @@ describe("New agent: provider display names (#5029)", () => {
     expect(pill().title).toContain("我的中转 站");
     expect(pill().title).not.toContain("relay-example-com");
     await openPanel();
-    const cells = [...document.body.querySelectorAll<HTMLElement>("[data-rail-cell]")].filter((c) => !["recent", "favorites", "all"].includes(c.dataset.railCell!));
-    expect(cells.map((c) => [c.dataset.railCell, c.getAttribute("aria-label")])).toEqual([
+    const cells = [...document.body.querySelectorAll<HTMLElement>("[data-panel-launcher]")].filter((c) => !["recent", "favorites", "all"].includes(c.dataset.panelLauncher!));
+    expect(cells.map((c) => [c.dataset.panelLauncher, c.getAttribute("aria-label")])).toEqual([
       ["relay-example-com", "我的中转 站"],
       ["cc_glm", "cc_glm"],
       ["team-relay", "Team relay"],
     ]);
     // the startup ID is secondary text (#5029): the rail cell's tooltip, small and monospace in the group's header
-    expect(cells.map((c) => c.title)).toEqual(["我的中转 站 (relay-example-com)", "cc_glm", "Team relay (team-relay)"]);
+    expect(cells.map((c) => c.title)).toEqual(["我的中转 站 (relay-example-com)", "cc_glm", "Team relay (team-relay): 无法在该电脑的终端中使用"]);
     expect(group("我的中转 站")).toBeDefined();
     expect(group("cc_glm")).toBeDefined();
     expect(group("relay-example-com")).toBeUndefined();
-    // a row's second line is its provider, by its title
-    expect(row("model:cc_glm\ndefault").textContent).toContain("cc_glm");
+    // The model stays beneath the named launcher, rather than repeating the heading on each row.
+    expect(row("model:cc_glm\ndefault").closest("[data-panel-section]")?.getAttribute("aria-label")).toBe("cc_glm");
   });
 
   // The "Default: …" chip went with the chips, and its ID tooltip with it: the follow row says the provider by its title.
@@ -121,7 +125,7 @@ describe("New agent: provider display names (#5029)", () => {
     await flush();
     await openPanel();
     const follow = q("[data-follow-row]")!;
-    expect(follow.getAttribute("aria-selected")).toBe("true");
+    expect(follow.getAttribute("aria-pressed")).toBe("true");
     expect(follow.textContent).toBe("跟随模型配置我的中转 站 · glm-5");
   });
 
@@ -129,8 +133,8 @@ describe("New agent: provider display names (#5029)", () => {
     await flush();
     await openPanel();
     const blocked = group("Team relay")!;
-    expect(blocked.textContent).toContain("这台电脑的终端里用不了");
-    act(() => [...blocked.querySelectorAll("button")].find((b) => b.textContent === "怎么修好")!.click());
+    expect(blocked.textContent).toContain("无法在该电脑的终端中使用");
+    act(() => [...blocked.querySelectorAll("button")].find((b) => b.textContent === "如何修复")!.click());
     const help = q('[data-testid="launcher-blocked-help"]')!;
     expect(help.textContent).toContain("Team relay");
     expect(help.textContent).toContain("team-relay");
@@ -142,7 +146,7 @@ describe("New agent: provider display names (#5029)", () => {
     const [title, id] = [span("Team relay"), span("team-relay")];
     expect([title.textContent, title.className.includes("font-mono")]).toEqual(["Team relay", false]);
     expect([id.textContent, id.className.includes("font-mono")]).toEqual(["team-relay", true]);
-    expect(note.querySelector("button")!.getAttribute("aria-label")).toBe("怎么修好 Team relay");
+    expect(note.querySelector("button")!.getAttribute("aria-label")).toBe("如何修复 Team relay");
   });
 
   // The preset chips' "Title (id)" tooltip is gone: a preset row says its launcher by its title (as every panel row

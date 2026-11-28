@@ -1,6 +1,8 @@
 {
   "tree": "ファイル",
   "treeView": "ツリー表示",
+  "showTree": "ファイルツリーを表示",
+  "hideTree": "ファイルツリーを隠す",
   "loading": "読み込み中",
   "emptyFolder": "空のフォルダー",
   "hiddenOnly": "隠しファイルのみ",
@@ -9,6 +11,5 @@
   "openFailedInline": "開けません: {error}",
   "retry": "再試行",
   "tooMany": "ファイルが多すぎるため、先頭の 2000 件のみ表示しています",
-  "gitIgnored": "{path}（Git で無視）",
-  "copyPath": "パスをコピー"
+  "gitIgnored": "{path}（Git で無視）"
 }

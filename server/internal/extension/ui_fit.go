@@ -15,15 +15,22 @@ import (
 // Fit makes a View a plugin drew into one an app that draws UI version uiVersion can draw at slot: items of types
 // this hub does not know (a plugin written for a newer hub) are left out, a section they emptied with them; those
 // newer than the app are drawn with what it knows where that says the same (a markdown as text, a table as rows, an
-// empty state as a text and a button, a section's more as a button, a filter as a segmented), left out where it does
-// not; refresh_after is held to its bounds. The view the extension drew is checked first (CheckView), whatever the
+// empty state as a text and a button, a section's more as a button, a filter as a segmented, a columns view as a
+// stack, a section's link as a row, a tile's gauge as its value and subtitle, a graph as indented rows, a scene as
+// its poster or a row per pin), left out
+// where it does not; refresh_after is held to its bounds. The view the extension drew is checked first (CheckView), whatever the
 // app draws, so that a view is refused or drawn alike for every app; then what the app gets is checked again
 // (wire.CheckFitted), a compact one to its limits. It says what types it left out.
 func Fit(v *View, slot UISlot, uiVersion int, languages ...i18n.Lang) (dropped []string, err error) {
-	return fit(v, slot, uiVersion, false, languages...)
+	return fit(v, slot, uiVersion, nil, false, languages...)
 }
 
-func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lang) (dropped []string, err error) {
+// FitFor is Fit with an optional list of component types the client cannot draw even within uiVersion.
+func FitFor(v *View, slot UISlot, uiVersion int, unsupported []string, languages ...i18n.Lang) (dropped []string, err error) {
+	return fit(v, slot, uiVersion, unsupported, false, languages...)
+}
+
+func fit(v *View, slot UISlot, uiVersion int, unsupported []string, native bool, languages ...i18n.Lang) (dropped []string, err error) {
 	l := i18n.Default
 	if len(languages) > 0 {
 		l = languages[0].Or(i18n.Default)
@@ -31,7 +38,12 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 	if v == nil {
 		return nil, errors.New("no view")
 	}
-	dropped = wire.StripAssistantFields(v)
+	if FullPage(slot.Name) {
+		// A full page may navigate to an existing Persona session or to-do; its open is kept only for those targets.
+		dropped = wire.StripAssistantFieldsForPage(v)
+	} else {
+		dropped = wire.StripAssistantFields(v)
+	}
 	if v.Sections == nil {
 		v.Sections = []Section{}
 	}
@@ -66,6 +78,25 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 			return dropped, err
 		}
 	}
+	if native || uiVersion < 13 {
+		downgrade13(v)
+	}
+	if uiVersion < 12 || slices.Contains(unsupported, wire.ComponentMap) {
+		downgrade12(v, native, compact, l)
+	}
+	// a native stream's components never include a scene or a graph, even at 12: it gets what an older app gets
+	if native || uiVersion < 11 || slices.Contains(unsupported, wire.ComponentScene) {
+		downgrade11(v, native, compact)
+	}
+	if native || uiVersion < 10 || slices.Contains(unsupported, wire.ComponentGraph) {
+		downgrade10(v, native, compact)
+	}
+	if uiVersion < 9 {
+		downgrade9(v)
+	}
+	if uiVersion < 8 {
+		downgrade8(v, slot, native)
+	}
 	if uiVersion < 6 {
 		downgrade6(v, uiVersion, compact, l)
 	}
@@ -83,7 +114,7 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 		items := s.Items[:0]
 		for _, e := range s.Items {
 			since, known := elemSince[e.Type]
-			if !known || since > uiVersion {
+			if !known || since > uiVersion || slices.Contains(unsupported, e.Type) {
 				if !slices.Contains(dropped, e.Type) {
 					dropped = append(dropped, e.Type)
 				}
@@ -113,6 +144,8 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 		for _, s := range v.Sections {
 			n += len(s.Items)
 			for _, e := range s.Items {
+				// a graph or a scene is one item of the card; its nodes or pins still count toward the page's 300
+				// (wire.CheckView)
 				n += max(len(e.Tiles)-1, 0)
 				if e.Type == "field" || e.Type == "composer" {
 					return dropped, errors.New("a card has no fields: open a page for them")
@@ -128,8 +161,16 @@ func fit(v *View, slot UISlot, uiVersion int, native bool, languages ...i18n.Lan
 
 // FitResult makes what ui.action answered something the app can use, past the view (Fit): lines and components in
 // place (UI version 5) are checked and the components fitted one by one; an older app gets neither, so it draws the
-// page again.
+// page again. Components holding a graph or a scene are checked as an app of the newest version gets them, so a bad
+// one is refused for every app alike; an app below 10 for a graph, or below 11 for a scene, then gets no components
+// either, since the graph or scene is more or fewer items that cannot stand in for one component, and draws the page
+// again, where Fit draws them.
 func FitResult(res *ActionResult, slot UISlot, uiVersion int, languages ...i18n.Lang) error {
+	return FitResultFor(res, slot, uiVersion, nil, languages...)
+}
+
+// FitResultFor is FitResult honoring client-declared unsupported component types.
+func FitResultFor(res *ActionResult, slot UISlot, uiVersion int, unsupported []string, languages ...i18n.Lang) error {
 	l := i18n.Default
 	if len(languages) > 0 {
 		l = languages[0].Or(i18n.Default)
@@ -150,11 +191,29 @@ func FitResult(res *ActionResult, slot UISlot, uiVersion int, languages ...i18n.
 			return errors.New("items: each has the key of the one it stands for")
 		}
 	}
-	if _, err := Fit(&v, slot, uiVersion, l); err != nil {
+	// a graph below 10, a scene below 11, a map below 12, or an unsupported component becomes other items, more or fewer:
+	// the app draws the whole page again
+	redraw := slices.ContainsFunc(res.Items, func(e UIElem) bool {
+		return uiVersion < 10 && e.Type == wire.ComponentGraph ||
+			uiVersion < 11 && e.Type == wire.ComponentScene ||
+			uiVersion < 12 && e.Type == wire.ComponentMap ||
+			slices.Contains(unsupported, e.Type)
+	})
+	fitVersion := uiVersion
+	fitUnsupported := unsupported
+	if redraw {
+		fitVersion = UIVersion
+		fitUnsupported = nil
+	}
+	if _, err := FitFor(&v, slot, fitVersion, fitUnsupported, l); err != nil {
 		return err
 	}
 	if len(v.Sections) == 0 || len(v.Sections[0].Items) != len(res.Items) {
 		return errors.New("items: of types this app draws")
+	}
+	if redraw {
+		res.Items = nil
+		return nil
 	}
 	res.Items = v.Sections[0].Items
 	return nil

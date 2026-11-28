@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
@@ -21,11 +22,11 @@ func (h *Manager) adminNow() time.Time {
 	return time.Now()
 }
 
-// The send_messages states (the hub's send.go): a send claimed, done, or cut off without knowing.
+// The sent_messages states used by inbox replies.
 const (
-	sendDelivered = "delivered"
-	sendUnknown   = "unknown"
-	sendSending   = "sending"
+	sendDelivered = db.SendStateDelivered
+	sendUnknown   = db.SendStateUnknown
+	sendSending   = db.SendStateSending
 )
 
 // screenPort is macOS's Screen Sharing (VNC).
@@ -100,10 +101,11 @@ func (h *Manager) assistantToolsNow() []proto.Tool {
 	return h.opts.AssistantTools()
 }
 
-// inHealth: an assistant conversation working in cwd is in the health space. What it says leaves the space only with
+// inSpace: an assistant conversation working in cwd is in a space (any space: this side does not read the manager's
+// registry, and asking more is the safe answer). What it says leaves the space only with
 // the user knowing (docs/assistant/health.md "Outbound"): its writes are confirmed on the phone each time, whatever the gate rules
-// allow. A directory inside the space counts too (identity.InHealthSpace, #2368): this can only ask more.
-func inHealth(cwd string) bool { return cwd != "" && identity.InHealthSpace(cwd) }
+// allow. A directory inside the space counts too (identity.InSpace, #2368): this can only ask more.
+func inSpace(cwd string) bool { return cwd != "" && identity.InSpace(cwd) }
 
 // askerCwd is the directory of the conversation by is ("" when it names none or its machine does not list it).
 func (h *Manager) askerCwd(by asker) string {

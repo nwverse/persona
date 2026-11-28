@@ -5,14 +5,25 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // assistantAgent is the agent a launcher runs, as far as the assistant goes: claude (headless -p, stream-json) or
-// codex (app-server). Anything else is refused with a reason the app shows (2026-11-01: a codex launcher used to fail
+// Codex or TRAE CLI (app-server). Anything else is refused with a reason the app shows (2026-11-01: a codex launcher used to fail
 // every message on "unexpected argument '--input-format'"; Codex has its own backend since).
 func (n *Node) assistantAgent(ctx context.Context, launcher string) (string, error) {
-	if launcher == "claude" {
-		return "claude", nil
+	if proto.IsExternalLauncher(launcher) {
+		if n.external != nil {
+			if target, ok := n.external.lookup(launcher); ok && target.Engine == "claude-code" {
+				return "claude", nil
+			}
+		}
+		return "", externalRefusal(ctx, "adapter_target_not_found")
+	}
+	switch launcher {
+	case "claude", traexAgent:
+		return launcher, nil
 	}
 	if n.assistantRuntime(launcher) != nil {
 		return assistantOnRuntime, nil
@@ -25,10 +36,10 @@ func (n *Node) assistantAgent(ctx context.Context, launcher string) (string, err
 	switch d.Agent {
 	case "", "claude": // a probe that failed: try it as claude, as before
 		return "claude", nil
-	case "codex":
-		return "codex", nil
+	case "codex", traexAgent:
+		return d.Agent, nil
 	}
-	return "", fmt.Errorf("启动器 %s 跑的是 %s，Persona 助手只能用启动 Claude Code、Codex 或能当助手的 runtime 的启动器（比如 DSH 插件的）：在 设置 › 助手 换一个", launcher, d.Agent)
+	return "", fmt.Errorf("启动器 %s 跑的是 %s，Persona 助手只能用启动 Claude Code、Codex、TRAE CLI 或能当助手的 runtime 的启动器（比如 DSH 插件的）：在 设置 › 助手 换一个", launcher, d.Agent)
 }
 
 // assistantResumeLauncher is what an existing conversation id resumes on when launcher was asked for. A conversation keeps the
@@ -41,6 +52,9 @@ func (n *Node) assistantAgent(ctx context.Context, launcher string) (string, err
 func (n *Node) assistantResumeLauncher(ctx context.Context, id, launcher string, st sessionState) (own string, switched bool) {
 	if id == "" || launcher == "" {
 		return launcher, false
+	}
+	if proto.IsExternalLauncher(launcher) {
+		return launcher, false // explicit adapter picks must be refused, not silently replaced
 	}
 	if n.runtimeAssistant(id) {
 		if n.assistantRuntime(launcher) == nil {
@@ -58,15 +72,34 @@ func (n *Node) assistantResumeLauncher(ctx context.Context, id, launcher string,
 	return kind, true
 }
 
-// conversationAgent is the agent whose transcript conversation id has: "claude", "codex", or "" with none yet.
+// conversationAgent preserves the engine that owns a conversation across a cold resume.
 func (n *Node) conversationAgent(id string) string {
-	switch p := n.transcriptPath(id); {
-	case p == "":
-		return ""
-	case strings.HasPrefix(filepath.Base(p), "rollout-"):
-		return "codex"
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	if p != nil {
+		return p.agent
 	}
-	return "claude"
+	path := n.transcriptPath(id)
+	rollout := strings.HasPrefix(filepath.Base(path), "rollout-")
+	if path != "" && (pathWithin(path, n.traexHome()) ||
+		rollout && strings.HasPrefix(strings.ToLower(readCodexOrigin(path).originator), "traex")) {
+		return traexAgent
+	}
+	if n.state != nil {
+		st, _ := n.state.get(id)
+		if st.Launcher == traexAgent || path == "" && st.Launcher != "" && n.launcherKind(context.Background(), st.Launcher) == traexAgent {
+			return traexAgent
+		}
+	}
+	switch {
+	case path == "":
+		return ""
+	case rollout:
+		return "codex"
+	default:
+		return "claude"
+	}
 }
 
 // launcherKind is the agent launcher runs for the assistant (assistantAgent), "" when it can't run it.

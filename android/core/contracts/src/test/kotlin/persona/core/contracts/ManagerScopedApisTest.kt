@@ -8,8 +8,10 @@ import org.junit.Test
 import persona.core.contracts.api.AgentTriage
 import persona.core.contracts.api.ChannelManagement
 import persona.core.contracts.api.ConnectorsManagement
+import persona.core.contracts.api.GitHubInboxOptions
 import persona.core.contracts.api.FeishuBotSettings
 import persona.core.contracts.api.HubSent
+import persona.core.contracts.api.LarkSyncSettings
 import persona.core.contracts.api.RequestManager
 import persona.core.contracts.api.forManager
 import java.lang.reflect.Proxy
@@ -38,16 +40,31 @@ class ManagerScopedApisTest {
         assertEquals(null, currentCoroutineContext()[RequestManager])
         recorder(AgentTriage::class.java, seen).forManager("m-2").let { runCatching { it.switches() } }
         recorder(ConnectorsManagement::class.java, seen).forManager("m-2").let { api ->
-            runCatching { api.connectors() }
-            runCatching { api.mailAccounts() }
-            runCatching { api.larkStatus() }
-            runCatching { api.deleteMailAccount("a") }
+            val _ = runCatching { api.connectors() }
+            val _ = runCatching { api.mailAccounts() }
+            val _ = runCatching { api.larkStatus() }
+            val _ = runCatching { api.deleteMailAccount("a") }
+            val _ = runCatching { api.gitHubAuth() }
+            val _ = runCatching { api.setGitHubAuth(null) }
+            runCatching { api.setGitHubInboxOptions(GitHubInboxOptions()) }
         }
-        recorder(ChannelManagement::class.java, seen).forManager("m-2").let { api -> runCatching { api.channels() }; runCatching { api.unbind("c") } }
+        recorder(ChannelManagement::class.java, seen).forManager("m-2").let { api -> val _ = runCatching { api.channels() }; runCatching { api.unbind("c") } }
         recorder(FeishuBotSettings::class.java, seen).forManager("m-2").let { runCatching { it.status() } }
         recorder(HubSent::class.java, seen).forManager("m-2").let { runCatching { it.page() } }
-        assertEquals(listOf("switches", "connectors", "mailAccounts", "larkStatus", "deleteMailAccount", "channels", "unbind", "status", "page"),
+        assertEquals(listOf("switches", "connectors", "mailAccounts", "larkStatus", "deleteMailAccount", "gitHubAuth", "setGitHubAuth", "setGitHubInboxOptions", "channels", "unbind", "status", "page"),
             seen.map { it.first })
         assertEquals(List(seen.size) { "m-2" }, seen.map { it.second })
+    }
+
+    @Test fun theLarkBotsDailySyncNamesItsManagerToo() = runBlocking {
+        val seen = mutableListOf<Pair<String, String?>>()
+        val sync = recorder(LarkSyncSettings::class.java, seen)
+        val bot = recorder(FeishuBotSettings::class.java, seen) { name -> if (name == "getSync") sync else null }
+        val scoped = bot.forManager("m-2").sync!!
+        val _ = runCatching { scoped.view() }
+        val _ = runCatching { scoped.runBinding("k") }
+        val _ = runCatching { scoped.finishOAuth("s", "c") }
+        val _ = runCatching { scoped.oauthRedirectUri() }
+        assertEquals(listOf("getSync" to null, "view" to "m-2", "runBinding" to "m-2", "finishOAuth" to "m-2", "oauthRedirectUri" to "m-2"), seen)
     }
 }

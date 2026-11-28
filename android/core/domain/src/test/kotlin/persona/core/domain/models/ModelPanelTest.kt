@@ -19,6 +19,16 @@ class ModelPanelTest {
     private fun sections(view: PanelView = PanelView.All, query: String = "", prefs: PanelPrefs = PanelPrefs(), s: PanelState = state) =
         ModelPanel.sections(listOf(claude, work, codex), s, view, query, prefs)
 
+    @Test fun desktopEffortHasNoEditDestination() {
+        val row = sections().first().rows.first()
+        assertEquals(PanelRow.EffortEdit.Live, row.effortEdit(live = true))
+        assertEquals(PanelRow.EffortEdit.Preference, row.effortEdit(live = false))
+
+        val desktop = row.copy(model = row.model.copy(sessionEffortOnly = true))
+        assertEquals(PanelRow.EffortEdit.ReadOnly, desktop.effortEdit(live = true))
+        assertEquals(PanelRow.EffortEdit.ReadOnly, desktop.effortEdit(live = false))
+    }
+
     @Test fun allStartsWithRecommendedThenEachProvider() {
         val all = sections()
         assertEquals(listOf("recommended", "provider:work", "provider:cx"), all.map { it.key })
@@ -106,6 +116,42 @@ class ModelPanelTest {
         val waiting = state.copy(pending = PanelConfig("work", "glm-5.3"))
         assertNull(ModelPanel.rowBlock(claude.copy(locked = true), waiting, current = true))
         assertEquals(PanelReason.Busy, ModelPanel.rowBlock(claude, waiting.copy(busy = PanelReason.Busy), current = true))
+    }
+
+    @Test fun aModelOrProviderListedTwiceIsOneRow() {
+        // Claude Code lists `default` twice when its settings say "model": "default" (#9998): two rows with one key
+        // close the app as the panel opens
+        val default = PanelModel("default", "Default (recommended)", resolved = "claude-opus-5-5", providerDefault = true)
+        val twice = claude.copy(models = listOf(default, opus, sonnet, default.copy(name = "Default")))
+        for (s in listOf(state, state.copy(current = PanelConfig("claude", "default")), state.copy(recommended = emptyList()), state.copy(starting = true)))
+            for (view in listOf(PanelView.All, PanelView.Provider("claude"))) {
+                val all = ModelPanel.sections(listOf(twice, twice), s, view, "", PanelPrefs())
+                val keys = all.flatMap { listOf("h:" + it.key) + it.rows.map(PanelRow::key) }
+                assertEquals(keys.distinct(), keys)
+                assertEquals("the first of them stays", listOf("Default (recommended)"),
+                    all.flatMap { it.rows }.filter { it.model.id == "default" }.map { it.model.name })
+            }
+    }
+
+    @Test fun foldedAliasesSelectSearchAndCanonicalizeOneExistingRow() {
+        val folded = PanelModel("claude-opus-5-5", "Opus 5.5", aliases = listOf("opus", "fable"))
+        val provider = PanelProvider("claude", "claude", "claude", listOf(folded, sonnet), typable = true)
+        val running = PanelState(current = PanelConfig("claude", "OPUS"), recommended = listOf("claude"))
+        val rows = ModelPanel.sections(listOf(provider), running, PanelView.All, "", PanelPrefs()).flatMap { it.rows }
+        assertEquals(1, rows.count { it.current })
+        assertEquals("claude-opus-5-5", rows.single { it.current }.model.id)
+        assertTrue(ModelPanel.matches(provider, folded, "FaBlE"))
+        val found = ModelPanel.sections(listOf(provider), running, PanelView.All, "fable", PanelPrefs()).flatMap { it.rows }
+        assertEquals(listOf("claude-opus-5-5"), found.map { it.model.id })
+        assertTrue("a folded alias is not offered again as a typed id", found.none { it.kind == PanelRow.Kind.Typed })
+
+        val recent = ModelPanel.sections(listOf(provider), PanelState(), PanelView.Recent, "",
+            PanelPrefs().pushRecent(PanelConfig("claude", "fable"))).single().rows.single()
+        assertEquals(PanelConfig("claude", "claude-opus-5-5"), recent.setup)
+        val exact = PanelModel("opus", "Canonical Opus")
+        val both = provider.copy(models = listOf(folded, exact))
+        assertTrue(ModelPanel.runsNow(both, exact, PanelConfig("claude", "opus")))
+        assertFalse("an alias never steals another row's exact id", ModelPanel.runsNow(both, folded, PanelConfig("claude", "opus")))
     }
 
     @Test fun aListBeingReadShowsItsSpinner() {

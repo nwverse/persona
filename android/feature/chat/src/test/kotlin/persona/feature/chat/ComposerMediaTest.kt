@@ -39,6 +39,7 @@ class ComposerMediaTest {
     private fun state(text: String, vararg attachments: ComposerAttachment) = ChatComposerState(ChatComposerDraft(text, attachments.toList())).apply {
         photosOnlyText = "Please look at the photos"
         videosOnlyText = "Please look at the video"
+        filesOnlyText = "Please look at the attached files"
     }
 
     @Test fun aVideoGoesAsATagAfterTheWordsNotAsAPath() {
@@ -58,11 +59,13 @@ class ComposerMediaTest {
         assertFalse(state("hi", video(path = null)).ready)
     }
 
-    @Test fun photosAndVideosShareFourPlaces() {
+    @Test fun videosKeepTheirOwnFourPlacesApartFromPhotos() {
         assertTrue(video().media)
         assertTrue(photo().media)
         assertFalse(ComposerAttachment("f", "notes.txt", "content://x/notes", false, "/tmp/notes.txt").media)
-        assertEquals(4, MAX_COMPOSER_MEDIA)
+        assertEquals(4, MAX_COMPOSER_VIDEOS)
+        assertEquals(4, composerVideoRoom(List(20) { photo("p$it") }))
+        assertEquals(0, composerVideoRoom(List(4) { video("v$it") }))
     }
 
     @Test fun aStoredDraftKeepsItsVideoAndLength() {
@@ -89,6 +92,35 @@ class ComposerMediaTest {
         // Another kind of file keeps its tag in the words.
         val audio = "Listen\n\n<persona-file kind=\"audio\" path=\"/tmp/a.m4a\" name=\"a.m4a\" size=\"9\"/>"
         assertEquals(audio, ChatComposerState().apply { editMessage(audio) }.value.text)
+    }
+
+    @Test fun ordinaryFilesComeAfterVideosAndReturnAsFileAttachmentsOnEdit() {
+        val document = ComposerAttachment("f", "notes.txt", "content://docs/notes", false, "/tmp/notes.txt", size = 86,
+            uploadState = DraftUploadState.Uploaded)
+        val sent = state("", video(), document, photo()).message()
+        assertEquals("Please look at the photos\n\n${video().attachedFile()!!.toXml()}\n${document.attachedFile()!!.toXml()}\n\n" +
+            "<attached_images>\n/tmp/photo.jpg\n</attached_images>", sent)
+        val edited = ChatComposerState().apply {
+            photosOnlyText = "Please look at the photos"; videosOnlyText = "Please look at the video"
+            filesOnlyText = "Please look at the attached files"; editMessage(sent)
+        }
+        assertEquals("Please look at the photos", edited.value.text)
+        assertEquals(listOf("video", "file"), edited.attachments.filterNot { it.image }.map { it.attachedFile()!!.kind })
+        assertEquals(sent, edited.message())
+
+        val filesOnly = state("", document).message()
+        assertEquals("Please look at the attached files\n\n${document.attachedFile()!!.toXml()}", filesOnly)
+        assertEquals("notes.txt", composerMessagePreview(filesOnly, "[Photo]", "[Video]"))
+    }
+
+    @Test fun editKeepsEveryVideoFromAnOlderOrHandWrittenMessage() {
+        val videos = List(5) { index -> video("v$index", "/tmp/clip-$index.mov") }
+        val sent = state("Keep every video", *videos.toTypedArray()).message()
+        val edited = ChatComposerState().apply {
+            videosOnlyText = "Please look at the video"; editMessage(sent)
+        }
+        assertEquals(5, edited.attachments.count { it.video })
+        assertEquals(sent, edited.message())
     }
 
     @Test fun aQueuedVideoReadsAsItsMark() {
@@ -124,7 +156,7 @@ class ComposerMediaTest {
         val shared = java.io.File(context.filesDir, "screenshot.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         val clip = ClipData(ClipDescription("shot", arrayOf("image/png")), ClipData.Item(Uri.fromFile(shared)))
         // A copy of the app's own in cache/chat-captures, which the draft keeps and cleans up like a camera photo.
-        val copied = java.io.File(pastedImages(context, clip, MAX_COMPOSER_MEDIA) { Uri.fromFile(it) }.single().path!!)
+        val copied = java.io.File(pastedImages(context, clip, 20) { Uri.fromFile(it) }.single().path!!)
         assertEquals(java.io.File(context.cacheDir, "chat-captures").canonicalPath, copied.parentFile!!.canonicalPath)
         assertTrue(copied.name.startsWith("pasted-") && copied.name.endsWith(".png"))
         assertArrayEquals(byteArrayOf(1, 2, 3), copied.readBytes())
@@ -132,8 +164,8 @@ class ComposerMediaTest {
 
         // One the app cannot read is left out rather than attached broken.
         val missing = ClipData(ClipDescription("shot", arrayOf("image/png")), ClipData.Item(Uri.parse("content://example.com/missing.png")))
-        assertEquals(emptyList<Uri>(), pastedImages(context, missing, MAX_COMPOSER_MEDIA) { Uri.fromFile(it) })
+        assertEquals(emptyList<Uri>(), pastedImages(context, missing, 20) { Uri.fromFile(it) })
         val words = ClipData.newPlainText("words", "just words")
-        assertEquals(emptyList<Uri>(), pastedImages(context, words, MAX_COMPOSER_MEDIA) { Uri.fromFile(it) })
+        assertEquals(emptyList<Uri>(), pastedImages(context, words, 20) { Uri.fromFile(it) })
     }
 }

@@ -261,6 +261,21 @@ func TestNodeAnswersPing(t *testing.T) {
 	}
 }
 
+// A connected node reports the configured machine identity over its local socket.
+func TestNodePingIncludesTheBoundMachineIdentity(t *testing.T) {
+	e := newDoctorEnv(t)
+	e.n.machineID = "machine-example"
+	e.listenNode(t, e.opts.NodeSock)
+	line, err := nodeclient.DialAt(context.Background(), e.opts.NodeSock, sockRequest{Kind: "ping"})
+	var pong struct {
+		OK      bool   `json:"ok"`
+		Machine string `json:"machine_id"`
+	}
+	if err != nil || json.Unmarshal(line, &pong) != nil || !pong.OK || pong.Machine != "machine-example" {
+		t.Fatalf("bound ping: %q %v", line, err)
+	}
+}
+
 // Standby (no manager connected) answers ping as the resident node it stands in for.
 func TestStandbyAnswersPingAsTheResident(t *testing.T) {
 	SetResident("persona-node", "v9")
@@ -396,6 +411,9 @@ func TestDoctorGlobalPermissionHooks(t *testing.T) {
 	}
 	if !strings.Contains(c.Detail, "2 个") {
 		t.Errorf("detail %q", c.Detail)
+	}
+	if !strings.Contains(c.Hint, global) {
+		t.Errorf("hint %q does not name %q", c.Hint, global)
 	}
 	if string(mustRead(t, global)) != body {
 		t.Error("the doctor changed the user's settings")

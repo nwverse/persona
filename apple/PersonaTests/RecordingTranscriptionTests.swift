@@ -2,6 +2,7 @@ import Foundation
 import os
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct RecordingTranscriptionTests {
     @Test func uploadCarriesTextAndTimestampsOnly() throws {
@@ -62,6 +63,109 @@ import Testing
         #expect(lib.entry(entry.id)?.sentences.map(\.text) == ["已保存", "继续"])
         #expect(lib.entry(entry.id)?.sentences.last?.start == 32)
         #expect(RecordingLibrary(root: root).entry(entry.id)?.transcribedAll == true)
+    }
+
+    // MARK: Hub transcription and the phone's failures (#9491)
+
+    /// A room meeting of `segments` minutes, ended, asking for `transcription`, each segment's audio on disk and none
+    /// transcribed yet.
+    private func meeting(_ lib: RecordingLibrary, segments: Int, transcription: MeetingTranscriptionMode? = .hub,
+                         _ edit: (inout RecordingAttendance) -> Void = { _ in }) throws -> RecordingEntry {
+        var entry = try lib.create(source: .phone)
+        entry.active = false; entry.expectedSegments = segments
+        entry.meeting = RecordingMeeting(title: "Weekly")
+        var attendance = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: transcription)
+        edit(&attendance)
+        entry.attendance = attendance
+        entry.segments = (0..<segments).map { RecordingSegment(index: $0, start: Double($0) * 60, duration: 60) }
+        try lib.save(entry)
+        for i in 0..<segments { try Data([0]).write(to: lib.audio(entry.id, i)) }
+        return entry
+    }
+
+    private static let failing: @Sendable (URL, Locale) async throws -> [RecordingSentence] = { _, _ in
+        throw RecordingSpeechError.unsupportedLanguage
+    }
+
+    /// The phone can't transcribe a hub-mode meeting (no model for its language, a format it can't read; the simulator,
+    /// always): every segment is the hub's, with no text of its own, so the upload says `complete: true` and the gaps go,
+    /// rather than the hub waiting 12 hours for the minutes.
+    @Test func aHubMeetingCompletesWhenThePhoneCantTranscribeIt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let entry = try meeting(lib, segments: 3)
+        let runner = RecordingTranscription(library: lib, transcribe: Self.failing)
+        runner.enqueue(entry.id)
+        for _ in 0..<200 where lib.entry(entry.id)?.transcribedAll != true { try await Task.sleep(for: .milliseconds(10)) }
+        let done = try #require(lib.entry(entry.id))
+        #expect(done.segments.map(\.sentences) == [[], [], []])
+        #expect(runner.errors[entry.id] == nil)
+        #expect(RecordingUpload(done).complete)
+        #expect(MeetingTranscription.needsGaps(done, meeting: nil, expired: false, synced: true, done: false))
+        #expect(RecordingLibrary(root: root).entry(entry.id)?.transcribedAll == true)
+    }
+
+    /// A device-mode meeting needs the phone's text for every segment: the failure is the recording's, nothing completes,
+    /// and no gap goes.
+    @Test func aDeviceMeetingStillNeedsThePhonesText() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        for transcription in [MeetingTranscriptionMode.device, nil] {
+            let entry = try meeting(lib, segments: 2, transcription: transcription)
+            let runner = RecordingTranscription(library: lib, transcribe: Self.failing)
+            runner.enqueue(entry.id)
+            for _ in 0..<200 where runner.errors[entry.id] == nil { try await Task.sleep(for: .milliseconds(10)) }
+            #expect(runner.errors[entry.id] != nil)
+            let after = try #require(lib.entry(entry.id))
+            #expect(after.segments.allSatisfy { $0.sentences == nil })
+            #expect(!after.transcribedAll)
+            #expect(!RecordingUpload(after).complete)
+            #expect(!MeetingTranscription.needsGaps(after, meeting: nil, expired: false, synced: true, done: false))
+        }
+    }
+
+    /// Only what the hub transcribes goes without the phone's text: past where hub transcription stopped the phone's
+    /// failure is the recording's again.
+    @Test func aSegmentPastTheHubsTimeStillNeedsThePhonesText() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let entry = try meeting(lib, segments: 2) { $0.stopHub(at: 60, code: "upstream_failed") }
+        let runner = RecordingTranscription(library: lib, transcribe: Self.failing)
+        runner.enqueue(entry.id)
+        for _ in 0..<200 where runner.errors[entry.id] == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let after = try #require(lib.entry(entry.id))
+        #expect(after.segments.map(\.sentences) == [[], nil])
+        #expect(runner.errors[entry.id] != nil)
+        #expect(!RecordingUpload(after).complete)
+    }
+
+    @Test func theHubTranscribesASegmentOnlyInsideItsHubModeTime() throws {
+        func entry(_ edit: (inout RecordingAttendance) -> Void, transcription: MeetingTranscriptionMode? = .hub) -> RecordingEntry {
+            var e = RecordingEntry(id: UUID(), createdAt: .now, source: .phone, active: false, expectedSegments: 3)
+            e.meeting = RecordingMeeting(title: "Weekly")
+            var a = RecordingAttendance.room(.listener, private: false, photos: false, liveView: true, transcription: transcription)
+            edit(&a)
+            e.attendance = a
+            e.segments = (0..<3).map { RecordingSegment(index: $0, start: Double($0) * 60, duration: 60) }
+            return e
+        }
+        let segments = (0..<3).map { RecordingSegment(index: $0, start: Double($0) * 60, duration: 60) }
+        typealias T = RecordingTranscription
+        let whole = entry { _ in }
+        #expect(segments.allSatisfy { T.hubTranscribes($0, of: whole) })
+        #expect(!segments.contains { T.hubTranscribes($0, of: entry({ _ in }, transcription: .device)) })
+        #expect(!segments.contains { T.hubTranscribes($0, of: entry({ _ in }, transcription: nil)) })
+        #expect(!segments.contains { T.hubTranscribes($0, of: entry { $0.rollBackHub(at: 150) }) }, "an older manager: device for good")
+        // Recorded as a Note from 0:30 to 1:30: the first two minutes are partly the phone's, the third the hub's.
+        let note = entry { $0.closeHubTime(at: 30); $0.openHubTime(at: 90) }
+        #expect(segments.map { T.hubTranscribes($0, of: note) } == [false, false, true])
+        // A Note turned back into a meeting at once: the stretches meet, and a segment across them is the hub's.
+        let met = entry { $0.closeHubTime(at: 75); $0.openHubTime(at: 75) }
+        #expect(segments.allSatisfy { T.hubTranscribes($0, of: met) })
+        #expect(segments.map { T.hubTranscribes($0, of: entry { $0.stopHub(at: 100, code: "x") }) } == [true, false, false])
     }
 
     /// A segment whose audio is gone gets no text, and the ones after it are still transcribed (a long recording used to
@@ -173,5 +277,82 @@ import Testing
                                 transcribing: false, error: nil) == .noAudio)
         entry.segments[0].sentences = []
         #expect(entry.pullState(from: base, to: to, transcribing: false, error: nil) == .silent)
+    }
+
+    // MARK: The phone transcribes in the meeting's language, or says it can't (#13385)
+
+    /// The on-device module runs only in the recording's own language: another language or script a module answers
+    /// with, or a locale its asset doesn't support, is no answer, and with neither module left the language can't be
+    /// transcribed here (nil), never written in another language's words.
+    @Test func theEngineRunsOnlyInTheRecordingsLanguage() {
+        typealias Choice = RecordingEngineChoice
+        typealias Answer = RecordingEngineChoice.Answer
+        let zh = Locale(identifier: "zh-CN"), en = Locale(identifier: "en-US")
+        let chinese = Answer(locale: zh), english = Answer(locale: en), none = Answer()
+        #expect(Choice.pick(zh, speechAvailable: true, speech: chinese, dictation: chinese) == .speech(zh))
+        // The speech module answers another language for it (the system's word, not ours): dictation, in Chinese.
+        #expect(Choice.pick(zh, speechAvailable: true, speech: english, dictation: chinese) == .dictation(zh))
+        // It names Chinese, but has no model for it.
+        #expect(Choice.pick(zh, speechAvailable: true, speech: Answer(locale: zh, unsupported: true), dictation: chinese) == .dictation(zh))
+        #expect(Choice.pick(zh, speechAvailable: false, speech: chinese, dictation: chinese) == .dictation(zh))
+        // Neither writes Chinese: none, so the phone says it can't.
+        #expect(Choice.pick(zh, speechAvailable: true, speech: english, dictation: english) == nil)
+        #expect(Choice.pick(zh, speechAvailable: true, speech: Answer(locale: Locale(identifier: "zh-TW")), dictation: none) == nil,
+                "Traditional Chinese for a Simplified Chinese meeting")
+        #expect(Choice.pick(zh, speechAvailable: true, speech: Answer(locale: Locale(identifier: "yue-CN")), dictation: none) == nil,
+                "Cantonese for a Mandarin meeting")
+        #expect(Choice.pick(zh, speechAvailable: true, speech: none, dictation: Answer(locale: zh, unsupported: true)) == nil)
+        #expect(Choice.pick(zh, speechAvailable: true, speech: none, dictation: none) == nil)
+        // The same language and script in another region is the same language.
+        let gb = Locale(identifier: "en-GB")
+        #expect(Choice.pick(en, speechAvailable: true, speech: Answer(locale: gb), dictation: english) == .speech(gb))
+        #expect(Choice.sameLanguage(Locale(identifier: "zh"), zh) && Choice.sameLanguage(Locale(identifier: "zh-Hans"), zh))
+        #expect(!Choice.sameLanguage(en, zh))
+    }
+
+    /// A hub-mode meeting's fallback lines are the phone's own, transcribed in the language its uploads name to the hub,
+    /// for every segment; a phone that can't transcribe it says why (`cannot`), also where the hub's transcript lets the
+    /// segment go without the phone's text, until a segment transcribes again.
+    @Test func theFallbackTranscribesInTheUploadsLanguageOrSaysItCant() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        var entry = try meeting(lib, segments: 3)
+        entry.locale = "zh-CN"
+        try lib.save(entry)
+        let asked = OSAllocatedUnfairLock<[String]>(initialState: [])
+        // The last segment transcribes only once the test has seen the first two fail.
+        let released = OSAllocatedUnfairLock(initialState: false)
+        let runner = RecordingTranscription(library: lib) { url, locale in
+            asked.withLock { $0.append(locale.identifier(.bcp47)) }
+            guard url.lastPathComponent == "seg-002.m4a" else { throw RecordingSpeechError.unsupportedLanguage }
+            while !released.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(5)) }
+            return [RecordingSentence(start: 1, end: 3, text: "继续")]
+        }
+        runner.enqueue(entry.id)
+        for _ in 0..<200 where runner.cannot[entry.id] == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(runner.cannot[entry.id] == .unsupportedLanguage)
+        #expect(runner.errors[entry.id] == nil, "the hub's segments go without the phone's text (#9491)")
+        released.withLock { $0 = true }
+        for _ in 0..<200 where lib.entry(entry.id)?.transcribedAll != true { try await Task.sleep(for: .milliseconds(10)) }
+        let done = try #require(lib.entry(entry.id))
+        #expect(done.segments.map { $0.sentences?.count } == [0, 0, 1])
+        #expect(RecordingUpload(done).language == "zh-CN")
+        #expect(asked.withLock { $0 } == ["zh-CN", "zh-CN", "zh-CN"], "every segment in the upload's language")
+        #expect(runner.cannot[entry.id] == nil, "a segment transcribed: the phone can again")
+    }
+
+    /// A change of language clears what the old one couldn't do.
+    @Test func aNewLanguageClearsWhatTheOldOneCouldnt() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lib = RecordingLibrary(root: root)
+        let entry = try meeting(lib, segments: 1, transcription: .device)
+        let runner = RecordingTranscription(library: lib, transcribe: Self.failing)
+        runner.enqueue(entry.id)
+        for _ in 0..<200 where runner.errors[entry.id] == nil || runner.current != nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(runner.cannot[entry.id] == .unsupportedLanguage)
+        runner.setLocale(entry.id, "en-US")
+        #expect(runner.cannot[entry.id] == nil)
     }
 }

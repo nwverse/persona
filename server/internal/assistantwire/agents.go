@@ -1,9 +1,11 @@
 package assistantwire
 
 import (
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -24,11 +26,44 @@ type AgentsConfig struct {
 	// Dispatch is manager.json agents.dispatch: an agent handing a subtask to another connected computer
 	// (docs/plans/plan-agent-dispatch.md).
 	Dispatch DispatchConfig `json:"dispatch,omitzero"`
+	A2A      A2AConfig      `json:"a2a,omitzero"`
+	// FileTransfer is manager.json agents.file_transfer: the Agents' and the assistant's file_transfer tool, moving
+	// files between the user's computers (docs/protocol/file-transfer.md "Agents and the assistant").
+	FileTransfer FileTransferConfig `json:"file_transfer,omitzero"`
 	// LauncherHealth is manager.json agents.launcher_health: checking each machine's launchers (docs/server/launcher-health.md).
 	LauncherHealth LauncherHealthConfig `json:"launcher_health,omitzero"`
 	// Review is manager.json agents.review: the independent reviewer of a supervised task's finished change (#2173,
 	// docs/assistant/unified-entry.md "Independent review").
 	Review ReviewConfig `json:"review,omitzero"`
+	// SortByActivity and ShowFilter are manager.json agents.sort_by_activity / agents.show_filter: the initial values of
+	// the Agents list's display settings (GET /api/v1/agents/display-settings) until someone saves their own choice. Nil
+	// is off.
+	SortByActivity *bool `json:"sort_by_activity,omitempty"`
+	ShowFilter     *bool `json:"show_filter,omitempty"`
+}
+
+// A2AConfig defaults to the manager's confirmed personal computers. A supplied
+// list narrows that scope. PublicURL enables the authenticated HTTP interface.
+// Launch defaults to enabled (nil or true) within the allowed machine scope;
+// set Launch to false to keep A2A messaging while disabling new session launches.
+type A2AConfig struct {
+	Machines  []string `json:"machines,omitzero"`
+	PublicURL string   `json:"public_url,omitempty"`
+	Launch    *bool    `json:"launch,omitempty"`
+}
+
+// LaunchAllowed reports whether A2A may start new subagent sessions in scope (default true).
+func (c A2AConfig) LaunchAllowed() bool { return c.Launch == nil || *c.Launch }
+
+const ScopeA2A = "agents.a2a"
+
+// A2AToolNames are the A2A tools every session in scope gets, whatever its harness: the node binds their caller
+// (node.callerTools) and the A2A-only catalogs (session MCP tickets, daemons, `personad tool`) keep exactly these.
+// a2a_read reads another session's recent conversation (#13831).
+var A2AToolNames = []string{"a2a_sessions", "a2a_read", "a2a_send", "a2a_get", "a2a_report", "a2a_cancel"}
+
+func IsA2ATool(name string) bool {
+	return slices.Contains(A2AToolNames, name)
 }
 
 // DispatchConfig is manager.json agents.dispatch: the agents' dispatch_start / dispatch_read tools. Off unless Enabled
@@ -50,6 +85,16 @@ func (c DispatchConfig) Limit() int {
 	}
 	return c.MaxActive
 }
+
+// FileTransferConfig is manager.json agents.file_transfer: the file_transfer tool. On unless Enabled is false: it
+// moves files only between the user's own confirmed personal computers, at an Agent's or the assistant's call, under
+// the guards the tool's own (no overwrite unless asked, credentials refused, an audit row each).
+type FileTransferConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// On: the switch, on unless set false.
+func (c FileTransferConfig) On() bool { return c.Enabled == nil || *c.Enabled }
 
 // ReviewConfig is manager.json agents.review: when a supervised task's agent is judged done, a reviewer agent started
 // with Launcher (a launcher on the agent's computer), Model and Effort (its defaults when empty) and Permission (a
@@ -141,15 +186,24 @@ type TriageConfig struct {
 	// TransientRetry: the initial value of the transient_retry switch (unset: on): "Continue" after a transient model
 	// error, as a rule, whether or not the triage itself is on.
 	TransientRetry *bool `json:"transient_retry,omitempty"`
-	// MaxRetries: "Continue" sent for one run of transient errors before leaving it to the user. Default 5.
+	// MaxRetries is retained for rolling compatibility; temporary model retries have no attempt limit.
 	MaxRetries int `json:"max_retries,omitempty"`
 	// RetryBaseSeconds: the first "Continue" after a transient error waits this long, each next one twice as long as
 	// the one before (a rate limit four times as long). Default 15.
 	RetryBaseSeconds int `json:"retry_base_seconds,omitempty"`
+	// AccountExhaustionMaxRetries bounds automatic continuations for coding Agents, including task-leader Agents,
+	// when the provider says no upstream account is available. All Assistant conversations keep their existing
+	// recovery: main, leader and background-supervision chats, side chats, scheduled-task and health chats, and
+	// meeting rooms. Zero (the default) disables these continuations; a positive value compares the shared consecutive
+	// transient retry count with that bound. Ordinary transient failures are not limited by this setting.
+	AccountExhaustionMaxRetries int `json:"account_exhaustion_max_retries,omitempty"`
 	// MaxWakes: wakes for one wait before asking the user. Default 6.
 	MaxWakes int `json:"max_wakes,omitempty"`
 	// SettleSeconds: how long a stopped session stays stopped before its turn is triaged. Default 15.
 	SettleSeconds int `json:"settle_seconds,omitempty"`
+	// JustFinishedHours: how long after its turn ended a done turn nobody has seen stays Just finished on the lists
+	// (proto.WorkState.JustFinished, #9751). Default 3.
+	JustFinishedHours int `json:"just_finished_hours,omitempty"`
 }
 
 // WorkReport is the snapshot's work (Snapshot.Work): where each agent stands after its latest turn, as the manager
@@ -185,6 +239,13 @@ const WorkCardTool = "persona_triage"
 // they act outside Persona, or start and read an Agent on another computer, and still ask.
 var AgentOwnTools = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread", "task_plan", "task_review"}
 
+// AgentToolNames are the manager's tools of the agents (not the assistant's conversations), its agentToolNames:
+// reporting to the supervisor and the to-do it works on (decisions, thread, repositories and their links). Each acts
+// for the agent calling it, so the node names the session of the caller's pane for every one of them (node
+// callerTools). One list for both sides: a tool added here cannot reach the hub without its caller (#9089).
+var AgentToolNames = []string{"report_to_supervisor", "todo_decisions", "todo_decision_add", "todo_bind_thread",
+	"todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add"}
+
 const (
 	// MethodAgentStartParams: AgentStartParams → {params}: an Agent the app starts (POST /api/v1/sessions), with what
 	// it runs on filled in and its tab named. An error with CodeBadRequest is the app's to see (400); while the manager
@@ -195,9 +256,24 @@ const (
 	MethodAgentResumeParams = "agents.resume_params"
 	// MethodAgentTabName: {prompt} → {name}: a herdr tab's name for an Agent started with prompt ("" when none).
 	MethodAgentTabName = "agents.tab_name"
+	// EventAgentTabNameStarted: AgentTabNameStart, one way: a start has its session, so its model name can finish off the caller's path.
+	EventAgentTabNameStarted = "agents.tab_name_started"
 	// EventSessionSeen: SessionSeen, one way: the user looked at a session in an app.
 	EventSessionSeen = "session.seen"
 )
+
+// AgentTabNameMethod asks the manager for an Agent tab name.
+var AgentTabNameMethod = buswire.Method[AgentTabNameParams, AgentTabNameResult]{Name: MethodAgentTabName}
+
+// AgentTabNameParams carries the prompt used to name the tab.
+type AgentTabNameParams struct {
+	Prompt string `json:"prompt"`
+}
+
+// AgentTabNameResult carries the tab name, which can be empty.
+type AgentTabNameResult struct {
+	Name string `json:"name"`
+}
 
 // AgentStartParams is agents.start_params's params: Params are POST /api/v1/sessions's (the node's session.start);
 // NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later). Lang
@@ -208,6 +284,24 @@ type AgentStartParams struct {
 	NameFrom  string         `json:"name_from,omitempty"`
 	Lang      string         `json:"lang,omitempty"`
 }
+
+// AgentTabNameStart is agents.tab_name_started's params: the started session and the placeholder its tab still has to
+// carry before the late automatic name may replace it. NameFrom is the prompt or name hint, without project context.
+type AgentTabNameStart struct {
+	MachineID       AgentMachineID `json:"machine_id"`
+	SessionID       AgentSessionID `json:"session_id"`
+	TabID           AgentTabID     `json:"tab_id"`
+	ExpectedTabName string         `json:"expected_tab_name"`
+	NameFrom        string         `json:"name_from"`
+}
+
+// The distinct ID types keep a late rename from accidentally crossing computers, sessions and terminal tabs. They are
+// named strings only at this wire boundary; their JSON bytes are unchanged.
+type (
+	AgentMachineID string
+	AgentSessionID string
+	AgentTabID     string
+)
 
 // AgentResumeParams is agents.resume_params's params: Params are the message's (the node's session.send; the hub
 // sends none and puts the answer's over its own: a message may carry pictures).
@@ -227,10 +321,15 @@ type SessionSeen struct {
 // agentRoutes are the Agents business's routes the manager answers (agents_routes.go there): its switches, its
 // numbers, renaming the tabs nobody named.
 var agentRoutes = []string{
+	"GET /api/v1/agents/display-settings",
+	"PUT /api/v1/agents/display-settings",
+	"GET /api/v1/agents/botmux-owner-candidates",
 	"GET /api/v1/agents/triage",
 	"PUT /api/v1/agents/triage",
 	"GET /api/v1/agents/work/stats",
 	"POST /api/v1/tabs/autoname",
+	"POST /api/v1/sessions/{mid}/{sid}/review",
+	"GET /api/v1/sessions/{mid}/{sid}/review",
 }
 
 func init() { Routes = append(Routes, agentRoutes...) }

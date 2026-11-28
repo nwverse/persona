@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"time"
 
@@ -25,12 +27,12 @@ func (p *Pusher) sendDirect(d Device, r apns.Request) (apns.Result, error) {
 	p.sendMu.RLock()
 	defer p.sendMu.RUnlock()
 	if !p.currentPushTarget(d) {
-		return apns.Result{}, fmt.Errorf("push registration changed before dispatch")
+		return apns.Result{}, errRegistrationChanged
 	}
 	res, err := p.direct.Send(context.Background(), r)
 	tries := 1
 	for _, wait := range p.retryWaits {
-		if err == nil && !directRetryable(res.Status) {
+		if (err == nil && !directRetryable(res.Status)) || errors.Is(err, apns.ErrInvalidDeviceToken) {
 			break
 		}
 		time.Sleep(wait)
@@ -62,6 +64,22 @@ func directRetryable(status int) bool {
 
 type relayResult struct{ gone bool }
 
+// errNotSent marks a push that never left the hub (sendFailure).
+var errNotSent = errors.New("push not sent")
+
+// errRelayOff: office network mode never posts to a relay (Pusher.privateOnly).
+var errRelayOff = fmt.Errorf("%w: office network mode pushes only with the hub's own APNs key", errNotSent)
+
+var errRegistrationChanged = fmt.Errorf("%w: push registration changed before dispatch", errNotSent)
+
+// relayRefusal is the relay's answer to a push it did not take: a status other than 200 and 410 (postRelayOnce).
+type relayRefusal struct {
+	status      int
+	msg, reason string
+}
+
+func (e *relayRefusal) Error() string { return fmt.Sprintf("%d %s %s", e.status, e.msg, e.reason) }
+
 // postRelay hands one push to the device's relay (relayproto.PushRequest, docs/operations/push-relay.md "API"). A grant the relay
 // no longer takes (its secret was replaced) is renewed once with the device's token, which the hub already has. A
 // failure that may pass is tried again (postRelayRetrying): one dropped connection used to lose the push (#2150).
@@ -69,7 +87,7 @@ func (p *Pusher) postRelay(d Device, req relayproto.PushRequest) (res relayResul
 	p.sendMu.RLock()
 	defer p.sendMu.RUnlock()
 	if !p.currentPushTarget(d) {
-		return res, fmt.Errorf("push registration changed before dispatch")
+		return res, errRegistrationChanged
 	}
 	defer func() {
 		if !res.gone {
@@ -119,10 +137,13 @@ func relayRetryable(status int) bool {
 }
 
 func (p *Pusher) postRelayOnce(d Device, req relayproto.PushRequest) (relayResult, int, error) {
+	if p.privateOnly {
+		return relayResult{}, -1, errRelayOff
+	}
 	body, _ := json.Marshal(req)
 	hr, err := http.NewRequest("POST", d.RelayURL+"/v1/push", bytes.NewReader(body))
 	if err != nil {
-		return relayResult{}, -1, err // not a status: a request that cannot be made is not tried again
+		return relayResult{}, -1, fmt.Errorf("%w: %v", errNotSent, err) // not a status: a request that cannot be made is not tried again
 	}
 	hr.Header.Set("Authorization", "Bearer "+d.RelayGrant)
 	hr.Header.Set("Content-Type", "application/json")
@@ -150,12 +171,15 @@ func (p *Pusher) postRelayOnce(d Device, req relayproto.PushRequest) (relayResul
 		p.logf("relay %s: %s token gone (%s)", d.Name, req.Type, out.Reason)
 		return relayResult{gone: true}, resp.StatusCode, nil
 	default:
-		return relayResult{}, resp.StatusCode, fmt.Errorf("%d %s %s", resp.StatusCode, out.Error, out.Reason)
+		return relayResult{}, resp.StatusCode, &relayRefusal{status: resp.StatusCode, msg: out.Error, reason: out.Reason}
 	}
 }
 
 // renewGrant registers the device's token with its relay again and keeps the new grant.
 func (p *Pusher) renewGrant(d Device) (Device, error) {
+	if p.privateOnly {
+		return d, errRelayOff
+	}
 	if d.APNSToken == "" || d.Topic == "" {
 		return d, fmt.Errorf("device has no token to register")
 	}
@@ -236,19 +260,21 @@ const apnsMaxAlert = 4096
 const relayMaxPlain = relayproto.MaxSealed/4*3 - pushcrypto.MinSealed
 
 // fitAlert is payload as JSON of at most most bytes: its alert texts are shortened (1000 characters, then half that…)
-// until it fits; the full text is in the app. payload's "aps" is replaced in place by a shortened copy.
+// until it fits; the full text is in the app. It edits the map it is given, so callers pass a copy of a payload other
+// devices share: "aps" is replaced by a shortened copy, and dropAnswers may delete "ask" or replace "todo".
 func fitAlert(payload map[string]any, most int) ([]byte, error) {
 	b, _ := json.Marshal(payload)
 	full := payload["aps"]
 	for limit := 1000; len(b) > most; limit /= 2 {
-		if limit < 20 {
-			if _, ok := payload["ask"]; !ok {
+		if limit < shortestAlert(payload) {
+			aps, ok := dropAnswers(payload, full)
+			if !ok {
 				return nil, fmt.Errorf("payload of %d bytes does not fit", len(b))
 			}
-			// Option labels must remain complete. Without ask, the client opens the app;
-			// retry from the full alert so dropping options does not leave a tiny preview.
-			delete(payload, "ask")
-			payload["aps"] = full
+			// Option labels must remain complete. Without them, the client opens the app (or takes the
+			// recommendation); retry from the full alert so dropping options does not leave a tiny preview.
+			full = aps
+			payload["aps"] = aps
 			b, _ = json.Marshal(payload)
 			limit = 2000 // The loop halves this before retrying the alert at 1000 characters.
 			continue
@@ -257,6 +283,48 @@ func fitAlert(payload map[string]any, most int) ([]byte, error) {
 		b, _ = json.Marshal(payload)
 	}
 	return b, nil
+}
+
+// decideAlertShortest is how short fitAlert lets a decision's alert get to keep its option labels: the alert is what
+// the owner reads before answering from the lock screen, and a label long enough to cost it more is one an action's
+// title could not show whole anyway, so the push falls back to Take Recommendation.
+const decideAlertShortest = 500
+
+// shortestAlert is how short fitAlert may cut payload's alert before it drops the options a notification answers with:
+// decideAlertShortest characters for a decision's `todo.options`; for a card's `ask`, whose question travels in `ask`
+// itself, the shortest alert there is.
+func shortestAlert(payload map[string]any) int {
+	if td, _ := payload["todo"].(map[string]any); td["options"] != nil {
+		return decideAlertShortest
+	}
+	return 20
+}
+
+// dropAnswers takes out of payload, in place, the options a notification answers with, for when its alert may not be
+// shortened further (shortestAlert): a card's whole `ask`, or a decision's `todo.options` with the mutable-content that
+// has a newer app's extension offer them as actions (#10465), never the decision's category, `todo.lockscreen` or
+// `todo.ask`, so a decision only the app may answer stays so and one the lock screen may answer falls back to Take
+// Recommendation. It answers the aps to start again from: full (payload's aps before any shortening), less its
+// mutable-content once the options went. full and the `todo` map are copied before an edit, since other devices'
+// payloads share them. False: nothing to drop.
+func dropAnswers(payload map[string]any, full any) (any, bool) {
+	if _, ok := payload["ask"]; ok {
+		delete(payload, "ask")
+		return full, true
+	}
+	td, _ := payload["todo"].(map[string]any)
+	if _, ok := td["options"]; !ok {
+		return full, false
+	}
+	td = maps.Clone(td)
+	delete(td, "options")
+	payload["todo"] = td
+	if aps, ok := full.(map[string]any); ok {
+		aps = maps.Clone(aps)
+		delete(aps, "mutable-content")
+		full = aps
+	}
+	return full, true
 }
 
 // shortenAlert returns a copy of aps whose alert texts have at most n characters (the original is shared by all devices).

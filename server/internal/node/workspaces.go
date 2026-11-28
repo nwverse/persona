@@ -75,17 +75,23 @@ func fillSpaceDirectories(spaces []host.Space, panes []host.Agent) {
 	}
 }
 
-// listWorkspaces is the machine's workspace catalog: each terminal host's workspaces, and those of each engine runtime
-// that keeps workspaces of its own (Paseo's, runtimeworkspaces.go), with or without sessions in them.
+// listWorkspaces is the machine's workspace catalog: native desktop projects, each terminal host's workspaces, and
+// those of each engine runtime that keeps workspaces of its own (Paseo's, runtimeworkspaces.go), with or without sessions.
 func (n *Node) listWorkspaces(ctx context.Context) (proto.WorkspacesResponse, error) {
 	out := proto.WorkspacesResponse{Workspaces: []proto.Workspace{}}
+	desktop, desktopSources, desktopErrors := n.desktopWorkspaces()
+	out.Workspaces = append(out.Workspaces, desktop...)
+	out.Errors = append(out.Errors, desktopErrors...)
 	hs := n.hosts.All()
 	runtimes, runtimeEngine := n.catalogRuntimes()
-	if len(hs) == 0 && !runtimeEngine {
+	if len(hs) == 0 && !runtimeEngine && desktopSources == 0 && len(desktopErrors) == 0 {
 		return out, fmt.Errorf("unsupported: this node has no workspace host")
 	}
 	var failures []error
-	succeeded := 0
+	for _, failure := range desktopErrors {
+		failures = append(failures, fmt.Errorf("%s workspaces: %s", failure.Source, failure.Error))
+	}
+	succeeded := desktopSources
 	for _, h := range hs {
 		var spaces []host.Space
 		var err error
@@ -144,8 +150,14 @@ func (n *Node) listWorkspaces(ctx context.Context) (proto.WorkspacesResponse, er
 }
 
 // resolveWorkspace validates a directory binding on the machine that owns it.
-// It performs no host, terminal, agent, or Git operations.
-func (n *Node) resolveWorkspace(asked string) (proto.Workspace, error) {
+// It performs no host, terminal, agent, or Git operations. The id is the physical path; so is the cwd, unless terminal
+// asks for the spelling an Agent is started in: the home's own spelling of that directory when the home is a link
+// (visiblePath), since a terminal in a container that mounts the home at $HOME has no directory under the home's real
+// path (#10365). The hub compares task folders with the home's two spellings folded (node.info home_real), so either
+// names the same folder there. For a terminal it also makes the git links of the linked worktree the directory is in
+// portable (portableWorktreeLinks: files only, no git run), as a checkout made before, or by git on the host, still
+// names the real path.
+func (n *Node) resolveWorkspace(asked string, terminal bool) (proto.Workspace, error) {
 	path := n.resolvePath(asked, "")
 	if path == "" {
 		return proto.Workspace{}, fmt.Errorf("workspace path must be an absolute directory or ~/ path")
@@ -167,6 +179,13 @@ func (n *Node) resolveWorkspace(asked string) (proto.Workspace, error) {
 	if !st.IsDir() {
 		return proto.Workspace{}, fmt.Errorf("workspace path is not a directory")
 	}
+	cwd := real
+	if terminal {
+		cwd = n.visiblePath(real)
+		if top := worktreeTop(real); top != "" {
+			n.portableWorktreeLinks(top)
+		}
+	}
 	return proto.Workspace{ID: real, Source: "directory", SourceID: real, Title: filepath.Base(real),
-		Cwd: real, Online: true, Available: true}, nil
+		Cwd: cwd, Online: true, Available: true}, nil
 }

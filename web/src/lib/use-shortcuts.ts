@@ -5,14 +5,16 @@ import { useEffect, useRef } from "react";
 import { toast } from "../ui/atoms";
 import { AGENT_GROUPINGS } from "./agent-groups";
 import { adjacentTab, machineAt, panelToggle, terminalChat, type PaneRef } from "./shortcut-nav";
-import { toggleHelp } from "./shortcut-help";
-import { toggleMaximized, toggleSidebarColumn } from "./layout";
-import { togglePalette } from "./palette";
+import { closeHelp, toggleHelp } from "./shortcut-help";
+import { focusInColumn, toggleMaximized, toggleSidebarColumn } from "./layout";
+import { closePalette, getPalette, togglePalette, type PaletteMode } from "./palette";
 import { closePanel, getPanel, openPanel, type Panel } from "./panel";
+import { splitSubagentLink } from "./subagent-link";
 import { inWorkView, navigate, withWorkView, type Route } from "./router";
 import { canShowTerminal, readView, rememberView, resolveView } from "./session-view";
 import { cycleGrouping, groupingLabel, setAllFolded, stepSidebarRow } from "./sidebar-api";
 import { focusWaitingCard } from "./card-keys";
+import { COMPOSER_INPUT } from "./dock-focus";
 import { dispatchKey, registerShortcut } from "./shortcuts";
 import { getSession, getState } from "./store";
 
@@ -28,8 +30,30 @@ export interface ShortcutContext {
   closeDrawer?: () => void;
 }
 
+/** ⌘K / ⌘⇧P and ⌘/: the palette and the shortcut help take each other's place, never one over the other (with two
+ *  modals stacked Esc and Tab serve only the top one, and the one under it waits behind for its own Esc). Closing one and
+ *  opening the other in one render gives the focus back where the first was opened from (ui/overlay.ts useModalFocus). */
+export function paletteKey(mode: PaletteMode) {
+  closeHelp();
+  togglePalette(mode);
+}
+export function helpKey() {
+  if (getPalette().open) closePalette();
+  toggleHelp();
+}
+
 /** The panel ⌘B closed last, to bring back. */
 let lastPanel: Panel | null = null;
+
+/** An overview-origin detail is valid only while that overview is open. Invalidate its visible and Cmd+B-remembered
+ * states together when the origin goes away; a list-origin detail and an unrelated remembered panel stay untouched. */
+export function invalidateOverviewPanel(mid: string, sid: string) {
+  const dependent = (p: Panel | null) =>
+    (p?.kind === "background" && p.from === "overview" && p.mid === mid && p.sid === sid) ||
+    (p?.kind === "subagent" && p.from === "overview" && (p.parentMid ?? p.mid) === mid && (p.parentSid ?? splitSubagentLink(p.sid)?.parent) === sid);
+  if (dependent(lastPanel)) lastPanel = null;
+  if (dependent(getPanel())) closePanel();
+}
 
 /** The narrow layout's sidebar drawer's label (App.tsx): a modal dialog the page's shortcuts don't stand aside for. */
 export const SIDEBAR_LABEL = t("lib-use-shortcuts.sidebar");
@@ -39,12 +63,19 @@ export function overlayOpen(doc: Pick<Document, "querySelector"> = document): bo
   return Boolean(doc.querySelector(`[data-shortcut-layer], [role="dialog"][aria-modal="true"]:not([aria-label=${JSON.stringify(SIDEBAR_LABEL)}])`));
 }
 
-const visible = (el: Element) => el.getClientRects().length > 0;
+const visible = (el: Element) => el.getClientRects().length > 0 && !el.closest("[inert]") && getComputedStyle(el).visibility !== "hidden";
+const enabledInput = (el: HTMLElement) => !el.matches(":disabled,[aria-disabled=true]") && !el.closest("fieldset:disabled") && visible(el);
 
 /** ⌘I: the conversation's input box, else the terminal that is showing. */
 function focusInput(route: Route): boolean {
   const chat = ["session", "tab", "persona", "persona-new", "agents"].includes(route.name);
-  const box = chat ? [...document.querySelectorAll<HTMLTextAreaElement>("main textarea:not(.xterm-helper-textarea)")].find((t) => !t.disabled && visible(t)) : undefined;
+  let box: HTMLElement | undefined;
+  if (chat) {
+    const composers = [...document.querySelectorAll<HTMLElement>(`main ${COMPOSER_INPUT}`)];
+    box = composers.length
+      ? composers.find(enabledInput)
+      : [...document.querySelectorAll<HTMLTextAreaElement>("main textarea:not(.xterm-helper-textarea)")].find(enabledInput);
+  }
   const el = box ?? [...document.querySelectorAll<HTMLTextAreaElement>(".xterm-helper-textarea")].find((t) => visible(t.closest(".xterm") ?? t));
   if (!el) return false;
   el.focus();
@@ -58,9 +89,9 @@ export function useShortcuts(ctx: ShortcutContext) {
 
   useEffect(() => {
     const off = [
-      registerShortcut("jump", () => togglePalette("jump")),
-      registerShortcut("commands", () => togglePalette("command")),
-      registerShortcut("help", () => toggleHelp()),
+      registerShortcut("jump", () => paletteKey("jump")),
+      registerShortcut("commands", () => paletteKey("command")),
+      registerShortcut("help", helpKey),
       registerShortcut("settings", () => navigate({ name: "settings" })),
       // what a click on the sidebar's Persona row does: the main conversation (#5581)
       registerShortcut("persona", () => {
@@ -75,7 +106,7 @@ export function useShortcuts(ctx: ShortcutContext) {
       }),
       registerShortcut("left-sidebar", () => {
         if (at.current.narrow) at.current.toggleDrawer();
-        else toggleSidebarColumn();
+        else toggleSidebarColumn(focusInColumn());
       }),
       registerShortcut("maximize", () => (at.current.narrow ? false : void toggleMaximized())),
       registerShortcut("terminal-chat", () => {
@@ -97,7 +128,7 @@ export function useShortcuts(ctx: ShortcutContext) {
         if ("close" in to) {
           lastPanel = current;
           closePanel();
-        } else openPanel(to.open);
+        } else openPanel(to.open, { push: false });
       }),
       registerShortcut("focus-input", () => focusInput(at.current.route)),
       // the card then answers on its own keys (lib/card-keys.ts, Interactions.tsx)

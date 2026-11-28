@@ -150,6 +150,14 @@ describe("an exchange's usage", () => {
     expect(segs.map((s) => s.usage?.first)).toEqual([true, undefined, undefined]);
   });
 
+  it("counts a wake after an answer, and the work it woke, in an exchange of its own (#9140)", () => {
+    const wake: Item = { id: "w5#0", seq: 5, role: "system", kind: "notice", wake: true, text: "Background command finished", task: { kind: "shell", status: "completed", task_id: "b1" }, usage: [opus({ in: 5 })] };
+    const items = [u(1, "check the trains"), a(2, "running", [opus({ out: 3 })]), u(3, "what to pack?"), a(4, "a rain jacket", [opus({ out: 4 })]), wake, a(6, "three trains run", [opus({ out: 6 })])];
+    const segs = segOf(chatLines(items));
+    expect(segs.map((s) => models(s)?.[0])).toEqual([tokens({ out: 3 }), tokens({ out: 4 }), tokens({ in: 5, out: 6 })]);
+    expect(segs.map((s) => s.answer?.id)).toEqual(["a2#0", "a4#0", "a6#0"]);
+  });
+
   it("is one string for the reply's props, the same for the same usage", () => {
     const one = segments([u(1, "a"), a(2, "b", [opus({ in: 1 })])])[0].usage;
     const two = segments([u(1, "a"), a(2, "b", [opus({ in: 1 })])])[0].usage;
@@ -217,6 +225,25 @@ describe("the card's lines", () => {
       "Time 1m 5s",
       "Model: Opus 5.5",
     ]);
+    expect(usageLines(one, { total: 0.1234, models: [{ model: OPUS, cost: 0.1234 }] }, 65_000, 342)).toEqual([
+      "Request details",
+      "Token value this turn: $0.12",
+      "Tokens: 1.2M total · input 2 · output 3.4k",
+      "Cache breakdown: read 1.2M · write 9.0k · hit rate 99.3%",
+      "Time 1m 5s",
+      "First token 342 ms",
+      "Model: Opus 5.5",
+    ]);
+  });
+
+  it("captures first observed non-negative ttft_ms on a Segment", () => {
+    const segs = segOf(chatLines([
+      u(1, "go"),
+      { ...think(2), ttft_ms: -5 },
+      { ...call(3, "c3"), ttft_ms: 0 },
+      { ...a(4, "done"), ttft_ms: 420 },
+    ]));
+    expect(segs[0].ttftMs).toBe(0);
   });
 
   it("with two priced models: each one's cost instead of the model", () => {

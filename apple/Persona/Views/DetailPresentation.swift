@@ -9,9 +9,6 @@ import SwiftUI
 /// class change would rebuild the chat under them.
 private struct DetailPresentation<Page: View>: ViewModifier {
     @Environment(\.horizontalSizeClass) private var widthClass
-    /// Pushed in Agents' column on a phone's tabs, the page carries the Assistant | Agents switch as the column's other
-    /// pages do (#3680).
-    @Environment(\.splitDetail) private var split
     @Binding var isPresented: Bool
     @ViewBuilder var page: () -> Page
 
@@ -31,7 +28,6 @@ private struct DetailPresentation<Page: View>: ViewModifier {
             #if os(iOS)
             .navigationDestination(isPresented: Binding(get: { isPresented && pushes }, set: { isPresented = $0 })) {
                 page().environment(\.detailPushed, true)
-                    .modifier(PageTabSwitchInset(shown: split?.pageSwitch == true))
             }
             #endif
     }
@@ -41,6 +37,9 @@ extension EnvironmentValues {
     /// The page was pushed by `detailPresentation` (regular width), not risen as a sheet: no stack of its own (it is
     /// in the chat's), and its close goes back.
     @Entry var detailPushed = false
+    /// The stack the chat is in takes a task's detail as a value on its path (`TaskDetailRoute`, #13156): the Sidebar
+    /// layout's page in regular width, where a page pushed by view stayed in front of every root the sidebar picked.
+    @Entry var taskDetailByValue = false
 }
 
 extension View {

@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // What Persona and a task's agent say to each other in the new conversation layout (#1666, `ChatLayout`): Persona's
 // message to the task (feed `routed` with `from` "assistant", #1542) reads "Persona → @task", the agent's report (feed
@@ -60,37 +61,6 @@ struct UserRoutedExchange: View {
     }
 }
 
-/// A task's agent to Persona (`report`): a question, a block, done, or how far it got.
-struct ReportExchange: View {
-    var item: FeedItem
-    var taskTitle: String
-    var layout: ChatLayout
-    private var store: TasksStore { .shared }
-
-    var body: some View {
-        let kind = item.reportKind ?? ""
-        let attention = ReviewText.reportWantsAttention(kind)
-        VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            Button {
-                if let id = item.ref, store.todos[id] != nil { store.detailTask = id }
-            } label: {
-                ExchangeHeader(from: taskTitle, to: ChatNames.persona, icon: Theme.Icon.reported,
-                               tint: attention ? Theme.cautionText : .secondary)
-            }
-            .buttonStyle(.plain)
-            .disabled(item.ref.flatMap { store.todos[$0] } == nil)
-            ExchangeText(text: ReviewText.reportLine(kind: kind, text: ExchangeText.withoutHeadingMarks(item.text ?? ""), step: item.step, steps: item.steps),
-                         shown: layout.shownLines, pinKey: "report-" + item.id)
-                .chatBoxed(Theme.ChatBox.persona)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.trailing, Theme.Space.xxl)
-        .chatPinned("report-" + item.id)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("exchange.report")
-    }
-}
-
 /// The names in the headers. Persona is the assistant's role here, whatever its avatar is called (as the web's
 /// "task reported to Persona" line).
 enum ChatNames {
@@ -108,6 +78,8 @@ struct FoldToggle: View {
     var prefix: String
     var tint: Color? = nil
     var showMore = false
+    /// When true, expands the tappable label itself to a full-width 44 pt row (e.g. inside card footers).
+    var fullRow = false
     var title: String? = nil
     var action: () -> Void
 
@@ -121,7 +93,9 @@ struct FoldToggle: View {
             }
             .font(Theme.Font.captionStrong)
             .foregroundStyle(tint ?? Theme.accent)
-            .frame(maxWidth: showMore ? .infinity : nil, alignment: .leading)
+            .padding(.horizontal, fullRow ? Theme.Space.s : Theme.Space.flush)
+            .frame(maxWidth: showMore || fullRow ? .infinity : nil, alignment: .leading)
+            .scaledFrame(minHeight: fullRow ? Theme.Size.tapTarget : nil)
             // A bubble's Show More: the caption line and 16 pt around it, at least `Theme.Size.tapTarget` tall, with
             // nothing laid out around it (what the bubble looks like stays as it is).
             .contentShape(Rectangle().inset(by: showMore ? -Theme.Space.l : 0))

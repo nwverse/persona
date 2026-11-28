@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 @MainActor struct SessionListTests {
     private func row(_ n: Int, text: String = "") throws -> Session {
@@ -12,6 +13,241 @@ import Testing
     private func model(_ fetch: @escaping SessionListModel<Session>.Fetch) -> SessionListModel<Session> {
         SessionListModel(id: { $0.id }, removalID: { SessionListIdentity.runtime($0, group: "")?.path },
                          fetch: fetch, counts: { _ in counts() })
+    }
+
+    private struct PagedSeenFixture {
+        let folder: URL
+        let model: AppModel
+        let list: SessionListModel<Session>
+        let hub: FakeHub
+        let group: String
+        let opened: SessionKey
+        let finished: SessionKey
+    }
+
+    private var embeddedCountsJSON: String {
+        #"{"total":4,"machine":{"m":4},"project":{},"group":{},"state":{"unread":2,"idle":2},"just_finished":1,"revision":"page-r0"}"#
+    }
+    private var standaloneCountsJSON: String {
+        #"{"total":4,"machine":{"m":4},"project":{},"group":{},"state":{"unread":2,"idle":2},"just_finished":1,"revision":"standalone-r0"}"#
+    }
+    private var filteredEmbeddedCountsJSON: String {
+        #"{"total":2,"machine":{"m":2},"project":{},"group":{},"state":{"unread":2},"just_finished":0,"revision":"filtered-r0"}"#
+    }
+    private func staleSeenPageJSON(withCounts: Bool, malformedCounts: Bool = false, countsJSON: String? = nil) -> String {
+        let first = #"{"machine_id":"m","session_id":"s1","status":"done","state":"unread","seen_at":"1970-01-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z"}"#
+        let second = #"{"machine_id":"m","session_id":"s2","status":"done","state":"unread","seen_at":"1970-01-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z"}"#
+        let finished = #"{"machine_id":"m","session_id":"s3","status":"done","state":"idle","seen_at":"1970-01-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z","work":{"phase":"done","line":"Merged","just_finished":true}}"#
+        let seen = #"{"machine_id":"m","session_id":"s4","status":"done","state":"idle","seen_at":"2026-03-01T00:00:00Z","updated_at":"2026-03-01T00:00:00Z"}"#
+        let embedded: String
+        if malformedCounts { embedded = #","counts":"invalid""# }
+        else { embedded = withCounts ? #","counts":\#(countsJSON ?? embeddedCountsJSON)"# : "" }
+        return #"{"sessions":[\#(first),\#(second),\#(finished),\#(seen)],"remove":[],"has_more":true,"next_cursor":"next","revision":"r0","total":4\#(embedded)}"#
+    }
+
+    private var emptyNextPageJSON: String {
+        #"{"sessions":[],"remove":[],"has_more":false,"revision":"r0","total":4}"#
+    }
+
+    private func pagedSeenFixture(pageCounts: Bool, embeddedCounts: Bool, malformedCounts: Bool = false) async throws -> PagedSeenFixture {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/sessions") { request in
+            if request.query["counts"] == "1" { return Data(self.standaloneCountsJSON.utf8) }
+            if request.query["cursor"] == "next" { return Data(self.emptyNextPageJSON.utf8) }
+            let counts = request.query["state"] == "unread" ? self.filteredEmbeddedCountsJSON : nil
+            let withCounts = embeddedCounts && request.query["with_counts"] == "1"
+            return Data(self.staleSeenPageJSON(withCounts: withCounts, malformedCounts: malformedCounts, countsJSON: counts).utf8)
+        }
+        hub.on("POST", "/api/v1/sessions/m/s1/seen", json: "{}")
+        hub.on("POST", "/api/v1/sessions/m/s3/seen", json: "{}")
+        let group = "seen-counts-" + UUID().uuidString
+        let model = AppModel(stateFolder: folder)
+        model.registry = HubRegistry(hubs: [PairedHub(config: hub.client.config, group: group)])
+        model.buildLinks()
+        let link = try #require(model.link(group))
+        link.transportForTests = hub.client.transport
+        var features = ["sessions_list", "sessions_just_finished"]
+        if pageCounts { features.append("sessions_page_counts") }
+        link.received(HubHello(features: features))
+        let list = model.sessionLists.list(link, model: model)
+        await list.load()
+        try #require(list.paged)
+        #expect(list.rows.map { $0.needsSeen() } == [true, true, true, false])
+        return PagedSeenFixture(folder: folder, model: model, list: list, hub: hub, group: group,
+                                opened: SessionKey(group: group, machineID: "m", sessionID: "s1"),
+                                finished: SessionKey(group: group, machineID: "m", sessionID: "s3"))
+    }
+
+    private func openAndConfirm(_ fixture: PagedSeenFixture) throws {
+        fixture.model.visibleSession = fixture.opened
+        fixture.model.markSeen(fixture.opened)
+        fixture.model.markSeen(fixture.finished)
+        var opened = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"m","session_id":"s1","status":"done","state":"idle","seen_at":"2026-03-01T00:00:01Z","updated_at":"2026-03-01T00:00:00Z"}"#.utf8))
+        var finished = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"m","session_id":"s3","status":"done","state":"idle","seen_at":"2026-03-01T00:00:01Z","updated_at":"2026-03-01T00:00:00Z"}"#.utf8))
+        opened.group = fixture.group
+        finished.group = fixture.group
+        // An independent answer records both marks before the paged list reads its pre-open rows again.
+        fixture.model.applySessions([opened.machineRef: [opened, finished]], complete: false)
+    }
+
+    /// Source-compatible access to the additive wire count. Missing decoding is -1; an omitted legitimate zero is 0.
+    private func justFinishedCount(_ counts: SessionListCounts?) -> Int {
+        guard let counts, let field = Mirror(reflecting: counts).children.first(where: { $0.label == "justFinished" }) else { return -1 }
+        let mirror = Mirror(reflecting: field.value)
+        guard mirror.displayStyle == .optional else { return field.value as? Int ?? -1 }
+        guard let value = mirror.children.first?.value else { return 0 }
+        return value as? Int ?? -1
+    }
+    private func seenCount(_ counts: SessionListCounts?) -> Int {
+        guard let idle = counts?.state["idle"] else { return -1 }
+        let finished = justFinishedCount(counts)
+        return finished < 0 ? -1 : idle - finished
+    }
+
+    @Test(arguments: [false, true]) func markingOfflineUpdatesTheVisibleAgentsList(complete: Bool) async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let model = AppModel(stateFolder: folder)
+        let hub = FakeHub()
+        let group = UUID().uuidString
+        model.registry = HubRegistry(hubs: [PairedHub(config: hub.client.config, group: group)])
+        model.buildLinks()
+        let link = try #require(model.link(group))
+        link.transportForTests = hub.client.transport
+        link.received(HubHello(features: ["sessions_list"]))
+        var newerTurn = false
+        hub.on("GET", "/api/v1/sessions") { request in
+            if request.query["counts"] == "1" {
+                return Data(#"{"total":8000,"machine":{},"group":{},"project":{},"state":{},"revision":"r0"}"#.utf8)
+            }
+            let time = newerTurn ? "2026-03-02T00:00:00Z" : "2026-03-01T00:00:00Z"
+            let first = #"{"machine_id":"m","session_id":"s1","state":"idle","rev":17,"updated_at":"\#(time)","work":{"phase":"done","line":"Merged","just_finished":true}}"#
+            let second = #"{"machine_id":"m","session_id":"s2","state":"idle","awaits_reply":true,"work":{"phase":"done","just_finished":true}}"#
+            let third = #"{"machine_id":"m","session_id":"s3","state":"unread"}"#
+            let extra = complete ? #""has_more":false,"total":3"# : #""has_more":true,"next_cursor":"frozen","total":8000"#
+            let revision = newerTurn ? "r1" : "r0"
+            return Data(#"{"sessions":[\#(first),\#(second),\#(third)],"remove":[],\#(extra),"revision":"\#(revision)"}"#.utf8)
+        }
+        var query = SessionListQuery()
+        query.legacy = complete
+        let page = model.sessionLists.list(link, model: model)
+        await page.select(query)
+        let key = SessionKey(group: group, machineID: "m", sessionID: "s1")
+        let visible = { model.sessionLists.sessions }
+        #expect(page.paged != complete && page.complete == complete)
+        try #require(visible().map(\.sessionID) == ["s1", "s2", "s3"])
+        #expect(visible()[0].needsSeen() && visible()[1].awaitsYourReply(muted: false))
+        model.visibleSession = key
+        model.markSeen(key)
+        model.markSeen([SessionKey(group: group, machineID: "m", sessionID: "s3")])
+        #expect(model.latest(key)?.needsSeen() == false)
+        #expect(visible().map { $0.needsSeen() } == [false, true, false])
+        #expect(visible()[0].rev == 17 && visible()[0].work?.line == "Merged")
+        #expect(visible()[1].awaitsYourReply(muted: false) && model.heldInList == key)
+        await page.reload() // the same frozen rows arrive while neither local mark has an acknowledgement
+        #expect(visible().map { $0.needsSeen() } == [false, true, false])
+        #expect(page.total == (complete ? 3 : 8000) && page.hasMore != complete && page.revision == "r0")
+        newerTurn = true
+        await page.reload()
+        #expect(visible().map { $0.needsSeen() } == [true, true, false])
+        #expect(visible().map(\.sessionID) == ["s1", "s2", "s3"] && page.revision == "r1")
+
+        if !complete {
+            let scope = RuntimeSessionLists.Scope(hub: group, query: SessionListQuery(machine: "m"))
+            await model.sessionLists.expand(scope)
+            let section = try #require(model.sessionLists.sections[scope])
+            #expect(section.rows.map { $0.needsSeen() } == [true, true, false])
+            model.markSeen([key])
+            #expect(section.rows.map { $0.needsSeen() } == [false, true, false])
+            await page.next()
+            #expect(hub.sent("GET", "/api/v1/sessions").contains { $0.query["cursor"] == "frozen" })
+        }
+    }
+
+    @Test func heldRowsAndTheirEmbeddedCountsChangeTogether() async throws {
+        let fixture = try await pagedSeenFixture(pageCounts: true, embeddedCounts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        try openAndConfirm(fixture)
+        await fixture.list.reload() // the same pre-open rows and the counts from that one answer
+
+        #expect(fixture.list.rows.map { $0.needsSeen() } == [false, true, false, false])
+        #expect(fixture.list.counts?.revision == "page-r0")
+        #expect(fixture.list.counts?.state["unread"] == 1)
+        #expect(fixture.list.counts?.state["idle"] == 3)
+        #expect(justFinishedCount(fixture.list.counts) == 0)
+        #expect(seenCount(fixture.list.counts) == 3)
+        #expect(fixture.list.counts?.total == 4 && fixture.list.total == 4)
+        #expect(fixture.model.sessionLists.stateCounts?[.unread] == 1)
+        #expect(fixture.model.sessionLists.stateCounts?[.all] == 4)
+        let requests = fixture.hub.sent("GET", "/api/v1/sessions")
+        let rowReads = requests.filter { $0.query["counts"] == nil }
+        #expect(rowReads.count == 2 && rowReads.allSatisfy { $0.query["with_counts"] == "1" })
+        #expect(requests.allSatisfy { $0.query["counts"] == nil }, "coupled counts never need a separate answer")
+
+        await fixture.list.next() // cursor continuations carry rows only; the first answer's counts stay coupled
+        #expect(fixture.list.counts?.revision == "page-r0")
+        #expect(fixture.list.counts?.state["unread"] == 1)
+        #expect(fixture.list.counts?.state["idle"] == 3)
+        let continued = fixture.hub.sent("GET", "/api/v1/sessions")
+        #expect(continued.count == 3 && continued.allSatisfy { $0.query["counts"] == nil })
+        #expect(continued.last?.query["cursor"] == "next")
+        #expect(continued.last?.query["with_counts"] == nil)
+    }
+
+    @Test(arguments: [false, true]) func standaloneCountsStayUnadjustedWithoutCountsInTheRowAnswer(pageCounts: Bool) async throws {
+        let fixture = try await pagedSeenFixture(pageCounts: pageCounts, embeddedCounts: false)
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        try openAndConfirm(fixture)
+        await fixture.list.reload()
+
+        #expect(fixture.list.rows.map { $0.needsSeen() } == [false, true, false, false])
+        // These counts came from another answer: keep every hub value, rather than pairing them with the held rows.
+        #expect(fixture.list.counts?.revision == "standalone-r0")
+        #expect(fixture.list.revision == "r0")
+        #expect(fixture.list.counts?.state["unread"] == 2)
+        #expect(fixture.list.counts?.state["idle"] == 2)
+        #expect(justFinishedCount(fixture.list.counts) == 1)
+        #expect(seenCount(fixture.list.counts) == 1)
+        #expect(fixture.list.counts?.total == 4 && fixture.list.total == 4)
+        let requests = fixture.hub.sent("GET", "/api/v1/sessions")
+        #expect(requests.filter { $0.query["counts"] == "1" }.count == 2)
+        let rowReads = requests.filter { $0.query["counts"] == nil }
+        #expect(rowReads.allSatisfy { ($0.query["with_counts"] == "1") == pageCounts })
+    }
+
+    @Test func filteredRootKeepsStandaloneCountScope() async throws {
+        let fixture = try await pagedSeenFixture(pageCounts: true, embeddedCounts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        await fixture.list.select(SessionListQuery(state: "unread"))
+
+        #expect(fixture.list.query.state == "unread")
+        #expect(fixture.list.counts?.revision == "standalone-r0")
+        #expect(fixture.list.counts?.total == 4)
+        #expect(fixture.model.sessionLists.stateCounts?[.all] == 4)
+        #expect(fixture.model.sessionLists.stateCounts?[.unread] == 2)
+        let requests = fixture.hub.sent("GET", "/api/v1/sessions")
+        let filteredRows = requests.filter { $0.query["state"] == "unread" && $0.query["counts"] == nil }
+        #expect(filteredRows.count == 1 && filteredRows[0].query["with_counts"] == nil)
+        let counts = requests.filter { $0.query["counts"] == "1" }
+        #expect(counts.count == 1 && counts[0].query["state"] == nil)
+    }
+
+    @Test func invalidEmbeddedCountsFallBackToStandalone() async throws {
+        let fixture = try await pagedSeenFixture(pageCounts: true, embeddedCounts: true, malformedCounts: true)
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        try openAndConfirm(fixture)
+        await fixture.list.reload()
+
+        #expect(fixture.list.rows.map { $0.needsSeen() } == [false, true, false, false])
+        #expect(fixture.list.error == nil)
+        #expect(fixture.list.counts?.revision == "standalone-r0")
+        #expect(fixture.list.counts?.state["unread"] == 2)
+        #expect(fixture.list.counts?.state["idle"] == 2)
+        #expect(justFinishedCount(fixture.list.counts) == 1)
+        let requests = fixture.hub.sent("GET", "/api/v1/sessions")
+        #expect(requests.filter { $0.query["counts"] == "1" }.count == 2)
+        #expect(requests.filter { $0.query["counts"] == nil }.allSatisfy { $0.query["with_counts"] == "1" })
     }
 
     @Test func fetchedPagesDoNotBecomeUrgentOnlyInsertions() throws {
@@ -364,6 +600,133 @@ import Testing
         #expect(model.latest(key) == nil)
     }
 
+    /// A complete (non-paged) hub's filtered Agents list never lands another manager's row; opening that chat still
+    /// fetches it (#8748), so the composer can send when the Agent allows it.
+    @Test func openingAMissingRowOnACompleteHubFetchesItEnabled() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#)
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
+        let model = await completeChatModel(hub, key: key)
+        model.open(key)
+        await eventually { model.latest(key) != nil }
+        #expect(model.latest(key)?.canSend == true)
+        #expect(model.missingSessionReason(key) == nil)
+        #expect(hub.sent("GET", "/api/v1/sessions").contains(where: {
+            $0.query["machine_id"] == "macbook" && $0.query["session_id"] == id
+        }))
+    }
+
+    /// After the missing row is in the index, a later filtered complete landing must not clear it while the chat is open.
+    @Test func aFilteredCompleteLandingKeepsAnOpenMissingRow() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#)
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
+        let model = await completeChatModel(hub, key: key)
+        model.open(key)
+        await eventually { model.latest(key) != nil }
+        let other = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"manager":"assistant","state":"idle","status":"idle"}"#.utf8))
+        var stamped = other
+        stamped.group = key.group
+        model.landCompleteSessionList([stamped], group: key.group, manager: "assistant")
+        #expect(model.latest(key)?.sessionID == id, "the open other-manager row must survive a filtered landing")
+        #expect(model.latest(key)?.canSend == true)
+    }
+
+    /// A held row of the landing's own manager that left the list, or any held row on an unfiltered landing, still drops
+    /// (#8748 round 2): deleted / archived Agents must not keep the composer enabled.
+    @Test func aHeldRowOfTheFilterOrAnUnfilteredLandingIsDropped() async throws {
+        let hub = FakeHub()
+        let sameID = UUID().uuidString.lowercased()
+        let otherID = UUID().uuidString.lowercased()
+        hub.on("GET", "/api/v1/sessions") { request in
+            let sid = request.query["session_id"] ?? ""
+            if sid == sameID {
+                return Data(#"{"sessions":[{"machine_id":"macbook","session_id":"\#(sameID)","title":"Mine","manager":"assistant","state":"working","status":"working"}]}"#.utf8)
+            }
+            if sid == otherID {
+                return Data(#"{"sessions":[{"machine_id":"macbook","session_id":"\#(otherID)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#.utf8)
+            }
+            return Data(#"{"sessions":[]}"#.utf8)
+        }
+        let sameKey = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: sameID)
+        let otherKey = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: otherID)
+        let model = await completeChatModel(hub, key: sameKey)
+        model.open(sameKey)
+        await eventually { model.latest(sameKey) != nil }
+        let kept = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"manager":"assistant","state":"idle","status":"idle"}"#.utf8))
+        var stamped = kept
+        stamped.group = sameKey.group
+        model.landCompleteSessionList([stamped], group: sameKey.group, manager: "assistant")
+        #expect(model.latest(sameKey) == nil, "a row of the filter that left the list is dropped")
+
+        model.open(otherKey)
+        await eventually { model.latest(otherKey) != nil }
+        model.landCompleteSessionList([stamped], group: otherKey.group, manager: nil)
+        #expect(model.latest(otherKey) == nil, "an unfiltered landing drops a missing held row")
+    }
+
+    /// A retained other-manager row on a complete hub must refresh on `sessions_list`: list-mode hubs no longer push
+    /// full snapshots, so without a detail read the open chat would keep a stale `canSend` / `isStopped` (#8748).
+    @Test func aRetainedRowRefreshesOnASessionsListHint() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        var payload = #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","state":"working","status":"working"}]}"#
+        hub.on("GET", "/api/v1/sessions") { _ in Data(payload.utf8) }
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: id)
+        let model = await completeChatModel(hub, key: key)
+        let owner = UUID()
+        model.open(key)
+        model.subscribe(key, by: owner)
+        await eventually { model.latest(key) != nil }
+        let other = try JSON.decoder.decode(Session.self, from: Data(#"{"machine_id":"server","session_id":"main","title":"Persona","assistant":true,"manager":"assistant","state":"idle","status":"idle"}"#.utf8))
+        var stamped = other
+        stamped.group = key.group
+        model.landCompleteSessionList([stamped], group: key.group, manager: "assistant")
+        #expect(model.latest(key)?.canSend == true)
+
+        payload = #"{"sessions":[{"machine_id":"macbook","session_id":"\#(id)","title":"Other","manager":"m-other","status":"offline","state":"offline","capabilities":{"read":true,"terminal":true},"read_only_reason":"stopped"}]}"#
+        let beforeStop = hub.sent("GET", "/api/v1/sessions").count
+        model.handle(.sessionsList(revision: "r-stopped"), group: key.group)
+        await eventually { model.latest(key)?.isStopped == true }
+        #expect(model.latest(key)?.canSend == false)
+        #expect(hub.sent("GET", "/api/v1/sessions").count > beforeStop)
+
+        payload = #"{"sessions":[]}"#
+        model.handle(.sessionsList(revision: "r-gone"), group: key.group)
+        await eventually { model.latest(key) == nil && model.missingSessionReason(key) != nil }
+        #expect(model.missingSessionReason(key) == String(localized: "This conversation isn't available"))
+    }
+
+    /// When the hub answers with no row, the composer gets a reason instead of a silent disable (#8748).
+    @Test func aMissingRowShowsAComposerReason() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/sessions", json: #"{"sessions":[],"total":0}"#)
+        let key = SessionKey(group: "complete-fixture", machineID: "macbook", sessionID: UUID().uuidString.lowercased())
+        let model = await completeChatModel(hub, key: key)
+        model.open(key)
+        await eventually { model.missingSessionReason(key) != nil }
+        #expect(model.latest(key) == nil)
+        #expect(model.missingSessionReason(key) == String(localized: "This conversation isn't available"))
+    }
+
+    /// A complete-list fixture: no paged revision, so detail recovery used to no-op before #8748.
+    private func completeChatModel(_ hub: FakeHub, key: SessionKey) async -> AppModel {
+        let model = AppModel()
+        model.forgetRestoredForTests()
+        let list = SessionListModel<Session>(id: { $0.id }, removalID: { _ in nil },
+            fetch: { _, _, _ in SessionListPage(sessions: [], remove: nil, hasMore: nil, nextCursor: nil, revision: nil, total: nil) },
+            counts: { _ in counts() })
+        await list.load()
+        model.sessionLists.setForTests(list, group: key.group)
+        var client = hub.client
+        client.group = key.group
+        client.sessionLookup = true
+        model.apiForTests = client
+        return model
+    }
+
     @Test func aChatOnAListedSessionTakesItsCompleteRow() async throws {
         let hub = FakeHub()
         let id = UUID().uuidString.lowercased()
@@ -373,6 +736,62 @@ import Testing
         await eventually { model.latest(key) != nil }
         #expect(model.latest(key)?.queued == ["full detail"])
         #expect(model.chat(key).error == nil)
+    }
+
+    @Test func aHintSaysWhichRowsChangedOnlyWhenWellFormed() throws {
+        func changes(_ json: String) -> SessionListChanges? {
+            guard case .sessionsList(_, let changes)? = ServerEvent.decode(Data(json.utf8)) else { Issue.record("hint lost: \(json)"); return nil }
+            return changes
+        }
+        let named = changes(#"{"changed":[["demo","s1"],["mac/2","s/2"]],"revision":"r2","since":"r1","type":"sessions_list"}"#)
+        #expect(named?.since == "r1")
+        #expect(named?.names(SessionKey(group: "g", machineID: "demo", sessionID: "s1")) == true)
+        #expect(named?.names(SessionKey(group: "g", machineID: "mac/2", sessionID: "s/2")) == true)
+        #expect(named?.names(SessionKey(group: "g", machineID: "demo", sessionID: "s2")) == false)
+        #expect(changes(#"{"changed":[],"revision":"r2","since":"r1","type":"sessions_list"}"#)?.since == "r1", "nothing named")
+        #expect(changes(#"{"changed":[["demo"]],"revision":"r2","since":"r1","type":"sessions_list"}"#) == nil, "not a pair")
+        #expect(changes(#"{"changed":[["demo","s1"]],"revision":"r2","type":"sessions_list"}"#) == nil, "no since")
+        #expect(changes(#"{"changed":[["demo","s1"]],"revision":"r2","since":7,"type":"sessions_list"}"#) == nil, "since of another shape")
+        #expect(changes(#"{"changed":[["demo",1]],"revision":"r2","since":"r1","type":"sessions_list"}"#) == nil, "an id of another shape")
+    }
+
+    /// An open chat reads its own row again only for a hint that may be about it (#9479, the web's rule since #6685): one
+    /// that starts where its last exact answer stands and does not name it moves that answer to its revision instead.
+    @Test func aHintAboutOtherSessionsLeavesAnOpenChatsRowUnread() async throws {
+        let hub = FakeHub()
+        let id = UUID().uuidString.lowercased()
+        var revision = "r1"
+        hub.on("GET", "/api/v1/sessions") { _ in
+            Data(#"{"sessions":[{"machine_id":"demo","session_id":"\#(id)","title":"t"}],"total":1,"revision":"\#(revision)"}"#.utf8)
+        }
+        let key = SessionKey(group: "detail-fixture", machineID: "demo", sessionID: id)
+        let model = await chatModel(hub, key: key, subscriber: UUID())
+        await eventually { model.latest(key) != nil }
+        let reads = { hub.sent("GET", "/api/v1/sessions").count }
+        #expect(reads() == 1)
+        func hint(_ to: String, since: String?, naming: [String] = []) {
+            let changes = since.map { SessionListChanges(since: $0, changed: naming.map { ("demo", $0) }) }
+            model.handle(.sessionsList(revision: to, changes: changes), group: key.group)
+        }
+
+        hint("r2", since: "r1", naming: ["someone-else"])
+        hint("r3", since: "r2")
+        await eventually { reads() > 1 } // a read these started would show within this wait
+        #expect(reads() == 1, "two hints about other sessions, chained from the answer: nothing to read")
+
+        revision = "r4"
+        hint("r4", since: "r3", naming: [id])
+        await eventually { reads() == 2 }
+        #expect(reads() == 2, "a hint that names it reads")
+        await eventually { model.passesOver(key, revision: "r5", changes: SessionListChanges(since: "r4", changed: [])) }
+
+        hint("r6", since: "r1", naming: ["someone-else"])
+        await eventually { reads() == 3 }
+        #expect(reads() == 3, "a hint from another starting point reads")
+
+        hint("r7", since: nil)
+        await eventually { reads() == 4 }
+        #expect(reads() == 4, "a hint that cannot say reads")
     }
 
     @Test func aFailedDetailReadStillShowsItsError() async throws {
@@ -436,9 +855,11 @@ import Testing
         let query = LiveConnection.queryItems(EventCursor(), sessionList: true)
         #expect(query.first?.value?.contains("sessions_list") == true)
         #expect(LiveConnection.queryItems(EventCursor()).first?.value?.contains("sessions_list") == false)
+        #expect(query.first?.value?.contains("sessions_list_changes") == true, "asks which rows each hint is about (#9479)")
         let ev = ServerEvent.decode(Data(#"{"type":"sessions_list","revision":"opaque"}"#.utf8))
-        guard case .sessionsList(let revision)? = ev?.stamped("other") else { Issue.record("hint lost"); return }
+        guard case .sessionsList(let revision, let changes)? = ev?.stamped("other") else { Issue.record("hint lost"); return }
         #expect(revision == "opaque")
+        #expect(changes == nil, "no starting point: could be about any row")
         #expect(SessionListIdentity.runtime(#"["machine/with/slashes","session/with/slashes"]"#, group: "other") ==
                 SessionKey(group: "other", machineID: "machine/with/slashes", sessionID: "session/with/slashes"))
     }

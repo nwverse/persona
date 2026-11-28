@@ -228,6 +228,100 @@ struct VoiceConversationTests {
         #expect(socket.frames.last?["text"] as? String == "顺便把 lint 也修了")
     }
 
+    /// #14933: the extension's reply edges reach the audio in order with the voice, so its jitter buffer holds through a
+    /// slow reply's pauses and plays what it holds as the reply ends.
+    @Test func replyEdgesReachTheAudio() async {
+        let rig = VoiceRig()
+        let (call, socket) = await live(rig)
+        socket.deliver(#"{"type":"reply","state":"start"}"#)
+        socket.deliver(data: .pcm(240))
+        socket.deliver(data: .pcm(240))
+        socket.deliver(#"{"type":"reply","state":"end"}"#)
+        socket.deliver(#"{"type":"reply","state":"later"}"#)
+        #expect(rig.audio.replies == [true, false], "an edge this app does not know is ignored")
+        #expect(rig.audio.played == [.pcm(240), .pcm(240)])
+        #expect(call.phase == .live(.listening))
+    }
+
+    /// An extension from before `reply` (#14932) sends no edges: the audio is never told one, and plays as before.
+    @Test func anExtensionWithoutReplyEdgesLeavesTheAudioToTheSilences() async {
+        let rig = VoiceRig()
+        let (call, socket) = await live(rig)
+        #expect(!call.features.contains("reply"))
+        socket.deliver(data: .pcm(240))
+        socket.deliver(#"{"type":"clear"}"#)
+        socket.deliver(data: .pcm(240))
+        #expect(rig.audio.replies.isEmpty)
+        #expect(rig.audio.played == [.pcm(240), .pcm(240)])
+        #expect(rig.audio.clears == 1)
+    }
+
+    // MARK: The voice's lead (#14933)
+
+    /// A voice that came slower than it plays starts its next call with the lead it reached, for a day; a call that
+    /// measured nothing leaves that as it was, and one whose replies kept up forgets it.
+    @Test func aSlowVoiceStartsItsNextCallWithTheLeadItReached() async {
+        let rig = VoiceRig()
+        let key = VoiceLeadMemory.key(group: rig.key.group, extensionID: "voice", voice: "marin")
+        defer { rig.leads.defaults.removeObject(forKey: key) }
+        let first = rig.call()
+        await first.begin()
+        #expect(rig.audio.startedLeads == [0], "never measured: the first lead")
+        rig.audio.lead = VoiceLead(level: 4, slow: true)
+        first.end(.user)
+
+        let second = rig.call()
+        await second.begin()
+        #expect(rig.audio.startedLeads.last == 4)
+        rig.audio.lead = VoiceLead(level: 4, slow: nil) // one short reply, too quick to measure
+        second.end(.user)
+        rig.clock.advance(VoiceLeadMemory.keep - 60)
+        let third = rig.call()
+        await third.begin()
+        #expect(rig.audio.startedLeads.last == 4, "nothing measured: the day counts on from the call that found it slow")
+        rig.audio.lead = VoiceLead()
+        third.end(.user)
+        rig.clock.advance(120)
+        let fourth = rig.call()
+        await fourth.begin()
+        #expect(rig.audio.startedLeads.last == 0, "a day later the voice starts at 200 ms again")
+        fourth.end(.user)
+
+        rig.leads.remember(VoiceLead(level: 3, slow: true), group: rig.key.group, extensionID: "voice", voice: "marin", now: rig.clock.now)
+        let fifth = rig.call()
+        await fifth.begin()
+        #expect(rig.audio.startedLeads.last == 3)
+        rig.audio.lead = VoiceLead(level: 3, slow: false) // its replies all kept up
+        fifth.end(.user)
+        let sixth = rig.call()
+        await sixth.begin()
+        #expect(rig.audio.startedLeads.last == 0, "a voice that kept up is forgotten")
+        sixth.end(.user)
+    }
+
+    /// Changing the voice mid-call: the old voice's lead is remembered, the new one starts where its own calls left it
+    /// (a fast voice at 200 ms, with no lead it never needed).
+    @Test func anotherVoiceStartsFromItsOwnLead() async {
+        let rig = VoiceRig()
+        let marin = VoiceLeadMemory.key(group: rig.key.group, extensionID: "voice", voice: "marin")
+        let cedar = VoiceLeadMemory.key(group: rig.key.group, extensionID: "voice", voice: "cedar")
+        defer {
+            rig.leads.defaults.removeObject(forKey: marin)
+            rig.leads.defaults.removeObject(forKey: cedar)
+        }
+        let (call, _) = await live(rig)
+        #expect(rig.audio.startedLeads == [0])
+        rig.audio.lead = VoiceLead(level: 4, slow: true)
+        call.change(voice: "cedar")
+        #expect(rig.audio.startedLeads == [0, 0], "another voice: the first lead")
+        #expect(rig.leads.level(group: rig.key.group, extensionID: "voice", voice: "marin", now: rig.clock.now) == 4)
+        rig.audio.lead = VoiceLead(level: 1, slow: false)
+        call.change(voice: "marin")
+        #expect(rig.audio.startedLeads == [0, 0, 4], "back to the slow voice: its lead")
+        #expect(rig.leads.level(group: rig.key.group, extensionID: "voice", voice: "cedar", now: rig.clock.now) == 0)
+        call.end(.user)
+    }
+
     @Test func phaseFollowsTheVoiceAndTheUsersCaption() async {
         let rig = VoiceRig()
         let (call, socket) = await live(rig)
@@ -427,6 +521,7 @@ struct VoiceConversationTests {
         let (call, socket) = await live(rig)
         socket.deliver(#"{"type":"run","id":"r1","task":"跑测试","state":"working","msg_ids":["r1"],"base_seq":10}"#)
         rig.audio.emit(.interrupted)
+        rig.audio.emit(.interruptionEnded(shouldResume: false))
         #expect(call.phase == .ended(.interrupted))
         await call.restart()
         let resumed = try #require(rig.socket)
@@ -464,10 +559,15 @@ struct VoiceConversationTests {
         #expect(car.idleTimer.changes.isEmpty)
     }
 
-    @Test func aPhoneCallEndsItAndFreesTheMicrophone() async {
+    /// A phone call pauses the phone's voice chat (#9887: on hold, the socket and the microphone kept); one the system
+    /// says not to resume from ends it and frees the microphone.
+    @Test func aPhoneCallPausesItAndOneThatMayNotResumeEndsIt() async {
         let rig = VoiceRig()
         let (call, socket) = await live(rig)
         rig.audio.emit(.interrupted)
+        #expect(call.held && !call.phase.isEnded && !socket.closed && rig.audio.stops == 0)
+        #expect(!socket.texts.contains { $0.contains(#""type":"hold""#) }, "an extension without `hold` hears nothing of it")
+        rig.audio.emit(.interruptionEnded(shouldResume: false))
         #expect(call.phase == .ended(.interrupted))
         #expect(socket.closed && rig.audio.stops == 1)
         #expect(rig.microphone.claim(UUID()))
@@ -557,6 +657,154 @@ struct VoiceConversationTests {
         #expect(!VoiceIdle.expired(now: later, lastActivity: start, openRuns: true, targetWorking: false, playing: false))
         #expect(!VoiceIdle.expired(now: later, lastActivity: start, openRuns: false, targetWorking: true, playing: false))
         #expect(!VoiceIdle.expired(now: later, lastActivity: start, openRuns: false, targetWorking: false, playing: true))
+    }
+
+    // MARK: A system call (#9290)
+
+    @Test func aSystemCallSaysItsSurfaceAndOtherCallsDoNot() async throws {
+        let rig = VoiceRig()
+        let (_, socket) = await started(rig, surface: .call)
+        #expect(try #require(socket.start)["surface"] as? String == "call")
+        let phone = VoiceRig()
+        let (_, other) = await started(phone)
+        #expect(try #require(other.start)["surface"] == nil)
+    }
+
+    @Test func anInterruptionHoldsASystemCallInsteadOfEndingIt() async {
+        let rig = VoiceRig()
+        let (call, socket) = await started(rig, surface: .call)
+        socket.ready(rig.key)
+        rig.audio.emit(.interrupted)
+        #expect(call.phase.isLive && !socket.closed)
+        rig.audio.emit(.interruptionEnded(shouldResume: true))
+        #expect(rig.heard == [.ready, .interrupted, .interruptionEnded(shouldResume: true)])
+    }
+
+    @Test func onHoldSilenceGoesUpAndNothingPlays() async {
+        let rig = VoiceRig()
+        let (call, socket) = await started(rig, surface: .call)
+        socket.ready(rig.key)
+        let clears = rig.audio.clears
+        call.setHeld(true)
+        #expect(call.held && rig.audio.clears == clears + 1, "what the voice was saying is dropped")
+        rig.audio.capture(.pcm(1600))
+        socket.deliver(data: .pcm(480))
+        #expect(rig.audio.played.isEmpty)
+        #expect(socket.audio.last.map { VoicePCM.samples($0).allSatisfy { $0 == 0 } } == true)
+        call.setHeld(false)
+        rig.audio.capture(.pcm(1600))
+        #expect(socket.audio.last.map { VoicePCM.samples($0).contains { $0 != 0 } } == true)
+        socket.deliver(data: .pcm(480))
+        #expect(rig.audio.played.count == 1)
+    }
+
+    /// Speech the microphone caught while the connection waited for `ready` (the first one, or a reconnect's), then the
+    /// call went on hold: none of it goes up when `ready` comes while it is held, with the hold feature or without.
+    @Test func onHoldWhatWasCaughtBeforeReadyNeverGoesUp() async {
+        for hold in [false, true] {
+            let rig = VoiceRig()
+            let (call, socket) = await started(rig, surface: .call)
+            rig.audio.capture(.pcm(1600, 5000))
+            call.setHeld(true)
+            rig.audio.capture(.pcm(1600, 5000))
+            socket.ready(rig.key, hold: hold)
+            #expect(!socket.audio.isEmpty)
+            #expect(socket.audio.allSatisfy { VoicePCM.samples($0).allSatisfy { $0 == 0 } }, "hold feature \(hold): silence only")
+            if hold { #expect(socket.frames.last?["type"] as? String == "hold" && socket.frames.last?["on"] as? Bool == true) }
+
+            // A reconnect: what was caught while the socket was away, then the hold, then the new `ready`.
+            call.setHeld(false)
+            socket.drop()
+            rig.audio.capture(.pcm(1600, 5000))
+            call.setHeld(true)
+            rig.audio.capture(.pcm(1600, 5000))
+            await rig.advance(1)
+            let again = rig.socket!
+            again.ready(rig.key, hold: hold)
+            #expect(again !== socket && !again.audio.isEmpty)
+            #expect(again.audio.allSatisfy { VoicePCM.samples($0).allSatisfy { $0 == 0 } }, "hold feature \(hold): after a reconnect")
+            call.setHeld(false)
+            rig.audio.capture(.pcm(1600, 5000))
+            #expect(again.audio.last.map { VoicePCM.samples($0).contains { $0 != 0 } } == true, "off hold it is heard again")
+        }
+    }
+
+    @Test func holdFramesGoOnlyToAnExtensionThatTakesThemAndAgainAfterAReconnect() async {
+        let rig = VoiceRig()
+        let (call, socket) = await started(rig, surface: .call)
+        socket.ready(rig.key)
+        call.setHeld(true)
+        #expect(!socket.texts.contains { $0.contains(#""type":"hold""#) }, "an extension without the feature hears nothing")
+        call.setHeld(false)
+
+        let held = VoiceRig()
+        let (other, first) = await started(held, surface: .call)
+        first.ready(held.key, hold: true)
+        other.setHeld(true)
+        #expect(first.frames.last?["type"] as? String == "hold" && first.frames.last?["on"] as? Bool == true)
+        first.drop()
+        await held.advance(1)
+        let second = held.socket!
+        second.ready(held.key, hold: true)
+        #expect(second.frames.last?["type"] as? String == "hold" && second.frames.last?["on"] as? Bool == true,
+                "still on hold: the new connection hears it")
+        other.setHeld(false)
+        #expect(second.frames.last?["on"] as? Bool == false)
+    }
+
+    @Test func onHoldTheQuietMinutesStopAndStartAgainAfter() async {
+        let rig = VoiceRig()
+        let (call, socket) = await started(rig, surface: .call)
+        socket.ready(rig.key)
+        call.setHeld(true)
+        await rig.advance(900)
+        #expect(call.phase.isLive, "frozen while held")
+        call.setHeld(false)
+        await rig.advance(570)
+        #expect(call.phase.isLive)
+        await rig.advance(30)
+        #expect(call.phase == .ended(.idle), "the idle rule still ends a system call")
+    }
+
+    @Test func connectedAtIsTheFirstReadyAndSaidOnce() async {
+        let rig = VoiceRig()
+        let (call, socket) = await started(rig, surface: .call)
+        #expect(call.connectedAt == nil)
+        socket.ready(rig.key)
+        let at = rig.clock.now
+        #expect(call.connectedAt == at)
+        socket.drop()
+        await rig.advance(1)
+        rig.socket?.ready(rig.key)
+        #expect(call.connectedAt == at && rig.heard.filter { $0 == .ready }.count == 1)
+    }
+
+    @Test func aSystemCallsMuteOnThePageIsToldAndItsManagersIsNot() async {
+        let rig = VoiceRig()
+        let (call, _) = await live(rig)
+        call.muted = true
+        #expect(!rig.heard.contains(.muted(true)), "an in-app call has no system to tell")
+        let system = VoiceRig()
+        let (other, socket) = await started(system, surface: .call)
+        socket.ready(system.key)
+        other.muted = true
+        other.setCallMuted(false)
+        #expect(system.heard == [.ready, .muted(true)])
+        #expect(!other.muted)
+    }
+
+    @Test func theEndIsTold() async {
+        let rig = VoiceRig()
+        let (call, _) = await started(rig, surface: .call)
+        call.end(.lost)
+        call.end(.user)
+        #expect(rig.heard == [.ended(.lost)])
+    }
+
+    @Test func endedForAnUrgentCallOffersContinue() {
+        let note = VoiceEndNote.make(.urgentCall, extensionID: "voice")
+        #expect(note?.again == .resume && note?.text.isEmpty == false)
+        #expect(!VoiceEnd.urgentCall.byUser)
     }
 
     @Test func endingTwiceKeepsTheFirstReason() async {

@@ -1,7 +1,7 @@
 // Package host is what the node needs from a terminal host — where the terminals run (herdr, later Orca): its panes,
 // reading their screens, typing into them, opening and closing them. What runs inside a pane (Claude Code, Codex,
 // a compatible CLI) is the agent; telling agents apart, finding their sessions and judging their state stay in the node, on top
-// of any host (docs/plans/plan-orca-support.md).
+// of any host (docs/integrations/engines.md "The host layer").
 //
 // A host implements Host; everything else is an optional capability the node finds with a type assertion.
 package host
@@ -26,6 +26,9 @@ const (
 	// Tern is Tern, Stencil's multiplexing terminal: a pane is a Tern block, its id the block's number (what Tern puts in
 	// the block's processes as TERN_PANE).
 	Tern = "tern"
+	// Rex is Rex, a multiplexing terminal: a pane is a terminal block, its id the block's full ID ("block:<uuid>", what
+	// Rex puts in the block's processes as REX_BLOCK).
+	Rex = "rex"
 	// Tmux is a tmux server the user opened: a pane is tmux's own id ("%11"), read and typed into through the tmux
 	// command. No space, slot or agent comes from it: a session running there is listed by claudebg.go (#2562).
 	Tmux = "tmux"
@@ -33,7 +36,7 @@ const (
 
 // Kinds are the host kinds a stored pane may be prefixed with; the list is fixed, not what a machine registers, so
 // a stored pane means the same everywhere.
-var Kinds = []string{Herdr, Orca, HerdrCore, Botmux, Tern, Tmux}
+var Kinds = []string{Herdr, Orca, HerdrCore, Botmux, Tern, Rex, Tmux}
 
 // Host is what every terminal host provides. Pane ids in what it returns (Agent.PaneID, Created.Pane) are PaneRefs
 // of its own kind; the PaneRefs it is given are always of its kind.
@@ -84,6 +87,25 @@ type PlainScreen interface {
 	PlainScreen() bool
 }
 
+// Scrollbacker is a host whose "recent" read is the screen alone but which keeps a pane's earlier output apart from it
+// (Orca: terminal.read's output tail, and its log by cursor beyond that). The node pages what a client shows above
+// the screen from it (session.screen.before, session.screen "recent"); the node's own checks of a pane keep reading
+// its screen, which is what the pane shows.
+type Scrollbacker interface {
+	// Scrollback is up to lines (0: all it has) of the pane's output, oldest first, ending with what the program writes
+	// now; rows it redrew in place appear as they ended. None when nothing is above the screen (a program on the
+	// alternate screen). dropped: the pane wrote output older than the first line that is not available: the host let
+	// it go, or keeps it only in a form that does not line up with these lines.
+	Scrollback(ctx context.Context, pane PaneRef, lines int) (output []string, dropped bool, err error)
+}
+
+// QuickScreen is a host whose screen read is cheap enough to repeat several times a second while someone watches a
+// pane it cannot stream (Orca: one request on its local socket, answered from its own terminal emulator).
+// ScreenRefresh is the shortest gap a client should leave between reads then; a host without it is read once a second.
+type QuickScreen interface {
+	ScreenRefresh() time.Duration
+}
+
 // ScreenDriver is a host that may not drive its panes' terminals at all: when CanDriveScreen is false, Read, SendText
 // and SendKeys fail (ErrUnsupported) and only Prompt reaches the agent, as a message of its own (botmux). The node
 // then offers nothing that has to read a screen back or type a command (ultracode). A host without it can.
@@ -122,6 +144,15 @@ type Launcher interface {
 	Run(ctx context.Context, pane PaneRef, command string) error
 	// NameAgent names the agent running in a pane (shown by the host).
 	NameAgent(ctx context.Context, pane PaneRef, name string) error
+}
+
+// EnvLauncher is a Launcher that can start the new pane's shell with extra environment ("KEY=VALUE"): herdr's
+// workspace.create / tab.create env, the Herdr App's terminal.run env. The node opens an Agent's terminal this way so
+// the shell's own startup files can tell it from one the user opened (PERSONA_AGENT, #10111) and skip the questions
+// that would stop the start (#10365).
+type EnvLauncher interface {
+	CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*Created, error)
+	CreateSlotEnv(ctx context.Context, space, cwd, label string, env []string) (*Created, error)
 }
 
 // Organizer renames and closes.
@@ -312,11 +343,14 @@ type ReadOpts struct {
 	ANSI bool
 }
 
-// AgentSession is what an agent integration in the host reported about the pane's session (Kind "id": Value is the
-// session id; Kind "path": Value is the session's file, as herdr's pi integration reports it).
+// AgentSession is what an agent integration in the host reported about the pane's session. Source identifies the
+// reporting integration and Agent names the agent. Kind "id" carries the session ID in Value. Kind "path" carries
+// the session's file, as herdr's pi integration reports it.
 type AgentSession struct {
-	Kind  string
-	Value string
+	Source string
+	Agent  string
+	Kind   string
+	Value  string
 }
 
 // Agent is one pane as the node sees it: where it is, and the agent running in it with its state and session when the
@@ -328,12 +362,18 @@ type Agent struct {
 	// Name is the agent's name in the host (NameAgent).
 	Name string
 	// AgentStatus is the host's state for the agent (proto.Status*), "" when it has none.
-	AgentStatus   string
-	Cwd           string
-	ForegroundCwd string
+	AgentStatus    string
+	Cwd            string
+	ForegroundCwd  string
+	ForegroundPID  int
+	ForegroundArgv []string
 	// PaneID is the pane as a PaneRef string (String): a herdr pane id as is ("@<session>:<id>" for a named herdr
 	// session's, herdr.QualifyID).
 	PaneID string
+	// ParentPaneID is the pane that started this one as a PaneRef string (String), "" when the host says it belongs to
+	// none. A host that knows its panes' parent (herdr-core's terminal.parent) reports it: the node draws the session
+	// under its parent's while both are listed (linkHerdrChildren).
+	ParentPaneID string
 	// TabID, WorkspaceID: the host's slot and space ids.
 	TabID       string
 	WorkspaceID string

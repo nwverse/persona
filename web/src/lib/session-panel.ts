@@ -9,21 +9,24 @@
 // engine needs a new conversation, and an agent that can't change its model while it runs (a Codex thread) keeps its
 // effort and speed only. Loaded with the panel, not with the composer.
 import { t } from "../i18n";
-import { agentId, agentName } from "./agent-kind";
-import { ALL_EFFORTS, defaultModel, launcherAgent, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
+import { activityOf, sessionCan } from "./format";
+import { agentId, agentName, providerAgent } from "./agent-kind";
+import { ALL_EFFORTS, defaultModel, effortVariantBase, launcherAgent, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
+import { launcherBlock } from "./launcher-health";
 import { validModelId } from "./model-id";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelProvider, type PanelState } from "./model-panel";
 import { canSwitchModel, isCurrentModel, modelBusy, sessionLauncher } from "./model-switch";
-import { currentModelRow, engineSwitchable, modelLabel, pendingEngine, sessionEngine, type ModelList } from "./session-models";
+import { launcherTitle } from "./provider-names";
+import { currentModelRow, engineSwitchable, modelLabel, pendingEngine, sessionEngine, sessionSwitches, type ModelList } from "./session-models";
+import { speedId, speedOptions, speedTier } from "./session-speed";
 import type { Launcher, Session } from "./types";
-
-const hasFast = (s: Session) => Boolean(s.service_tiers?.some((x) => x.id === "priority"));
 
 /** The efforts a row's slider offers. Antigravity lists one model per thinking level, so its rows have none (a pick
  *  takes the variant's own); the model a thread runs takes the thread's own levels (a Codex thread says them); an ID
  *  typed by hand into Claude Code takes any, as nobody knows. */
 function rowEfforts(engine: string, m: AgentModel, listed: boolean, current: boolean, s: Session): string[] {
   if (engine === "agy") return [];
+  if (current && !sessionSwitches(s).effort) return [];
   if (current && s.efforts?.length) return s.efforts;
   if (listed && !m.custom) return m.efforts ?? [];
   return engine === "claude" ? ALL_EFFORTS : [];
@@ -34,11 +37,23 @@ function panelModel(m: AgentModel, engine: string, current: boolean, s: Session,
   const out: PanelModel = { id: m.id, name: modelName(m), efforts: rowEfforts(engine, m, listed, current, s) };
   if (m.description) out.description = m.description;
   if (m.resolved) out.resolved = m.resolved;
-  if (m.default_effort) out.defaultEffort = m.default_effort;
+  if (m.aliases?.length) out.aliases = m.aliases;
+  if (m.default_effort && (!current || s.effort || effortVariantBase(m.id, m.default_effort))) out.defaultEffort = m.default_effort;
   if (m.custom) out.custom = true;
   if (m.price) out.price = m.price;
-  if (current && engine === "codex" && hasFast(s)) out.fast = true;
+  if (current && activityOf(s) !== "offline" && sessionCan(s, "send")) {
+    const speeds = speedOptions(s);
+    if (speeds.length) out.speeds = engine === "claude" ? speeds.map((choice) => choice.id === "fast" ? { ...choice, description: t("ui-modelpanel.claude_fast") } : choice) : speeds;
+  }
   if (current && s.context_window) out.context = s.context_window;
+  if (current && engine === "codex") {
+    if (sessionSwitches(s).effort) out.effortNote = t("chat-modelpanel.effort_next_turn");
+    else if (s.state === "offline" || s.status === "offline") out.effortUnavailable = t("chat-modelpanel.effort_offline");
+    else if (s.parent_thread_id) out.effortUnavailable = t("chat-modelpanel.effort_parent");
+    else if (s.capabilities?.send === false) out.effortUnavailable = t("chat-modelpanel.effort_read_only");
+    else if (s.source_kind === "codex_app_server" || s.space_kind === "codex_app") out.effortUnavailable = t("chat-modelpanel.effort_model_fixed");
+    else out.effortUnavailable = t("chat-modelpanel.effort_terminal");
+  }
   return out;
 }
 
@@ -57,18 +72,25 @@ export interface PanelOptions {
   engineSwitch?: boolean;
   /** The engine each launcher runs, as the panel's providers say (a pick from a list not read yet still knows it). */
   engineOf?: (launcher: string) => string | undefined;
+  /** Display-only advertised model for a newly launched session before `s.model` arrives; never used by `pickPlan`. */
+  displayModel?: string;
 }
 
 /** Whether `s` may move to another launcher of its engine: on a hub that does it, a Claude Code Agent whose model the
- *  app switches (one in a terminal; the node refuses the rest, `switch_unsupported`). */
-export const switchesLauncher = (s: Session, o: PanelOptions): boolean => Boolean(o.switching) && sessionEngine(s) === "claude" && canSwitchModel(s);
+ *  app switches in a terminal (a runtime's session, Paseo's too, switches only its model; the node refuses the rest,
+ *  `switch_unsupported`, #8142). */
+export const switchesLauncher = (s: Session, o: PanelOptions): boolean => Boolean(o.switching) && !s.source_kind && sessionEngine(s) === "claude" && canSwitchModel(s);
 
-/** The engine a conversation moves to from `engine` ("" for an engine that doesn't switch). */
+const SWITCH_ENGINES = new Set(["claude", "codex", "agy"]);
+
+/** The engine a conversation moves to from `engine` ("" for an engine that doesn't switch). Kept for single-target callers. */
 export const otherEngine = (engine: string): string => (engine === "claude" ? "codex" : engine === "codex" ? "claude" : "");
 
-/** Whether `s` may move to a launcher of `engine`, the other engine, with its next message (#5054). */
-export const switchesEngine = (s: Session, engine: string, o: PanelOptions): boolean =>
-  Boolean(o.engineSwitch) && engine !== "" && engine === otherEngine(sessionEngine(s)) && engineSwitchable(s);
+/** Whether `s` may move to a launcher of `engine`, another engine, with its next message (#5054). */
+export const switchesEngine = (s: Session, engine: string, o: PanelOptions): boolean => {
+  const from = sessionEngine(s);
+  return Boolean(o.engineSwitch) && engine !== "" && engine !== from && SWITCH_ENGINES.has(from) && SWITCH_ENGINES.has(engine) && engineSwitchable(s);
+};
 
 /** The panel's providers and state for `s`: `launchers` the computer's (undefined before they are read), `listOf` what
  *  was read for each. The session's own launcher is always there, at its place in the list or first. */
@@ -80,36 +102,42 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
   const all = launchers ?? [];
   const names = all.some((l) => l.name === own) ? all.map((l) => l.name) : [own, ...all.map((l) => l.name)];
   const ownList = listOf(own).list;
-  const row = currentModelRow(ownList?.models ?? [], s.model);
+  const shownModel = s.model || o.displayModel;
+  const row = currentModelRow(ownList?.models ?? [], shownModel);
 
   const providers = names.map((name): PanelProvider => {
     const e = listOf(name);
     const mine = name === own;
-    const kind = mine ? engine : agentId(launcherAgent(name, all, e.list));
+    const kind = mine ? engine : agentId(providerAgent(launcherAgent(name, all, e.list), name));
     // another launcher of the engine, on a hub that switches to it with the next message; or one of the other engine, on
     // a hub that moves the conversation there (#5054)
     const other = !mine && ((switching && kind === engine) || switchesEngine(s, kind, o));
-    const p: PanelProvider = { id: name, name, engine: kind, models: null };
+    const launcher = all.find((l) => l.name === name);
+    const defaultRow = currentModelRow(e.list?.models ?? [], launcher?.model) ?? defaultModel(e.list?.models ?? []);
+    const defaultName = defaultRow ? (defaultRow.resolved ? modelLabel(defaultRow.resolved) : modelName(defaultRow)) : launcher?.model ? modelLabel(launcher.model) : undefined;
+    const p: PanelProvider = { id: name, name: launcherTitle(name, all), engine: kind, models: null, defaultModel: defaultName, status: launcherBlock(launcher)?.reason };
+    // the session's own provider is called what its row calls it (a Paseo provider's label, #8142)
+    if (mine && s.agent_label) p.engineLabel = s.agent_label;
+    if (e.error) p.error = e.error;
+    if (e.loading || (e.list === undefined && !e.error)) p.loading = true;
     if (e.list === undefined) {
-      if (e.error) p.error = e.error;
-      else p.loading = true;
       // the model it runs stays there while its list is read or couldn't be: its flyout (effort, Fast, ultracode) works
       // as the old popover's tabs did with no list
-      if (mine && s.model) p.models = [panelModel({ id: s.model, name: modelLabel(s.model) }, kind, true, s, false)];
+      if (mine && shownModel) p.models = [panelModel({ id: shownModel, name: modelLabel(shownModel) }, kind, true, s, false)];
     } else {
       let models = (e.list?.models ?? []).map((m) => panelModel(m, kind, mine && m === row, s));
       // a launcher that fixes its own --model takes no model with a switch: its default entry, only
       if (other && e.list?.locked) models = models.filter((m) => m.id === defaultModel(e.list?.models ?? [])?.id);
       // the model it runs, when the list doesn't name it (a list that couldn't be read, an older hub, a model it lacks)
-      if (mine && !row && s.model) models.push(panelModel({ id: s.model, name: modelLabel(s.model) }, kind, true, s, false));
+      if (mine && !row && shownModel) models.push(panelModel({ id: shownModel, name: modelLabel(shownModel) }, kind, true, s, false));
       p.models = models;
     }
     if (other) {
       if (typedModelOffered(kind, e.list)) p.typable = true;
     } else if (!mine) {
-      p.unavailable = kind === engine ? t("chat-modelpanel.other_provider") : t("chat-modelpanel.other_engine", { from: agentName(engine), to: agentName(kind) });
+      p.unavailable = kind === engine ? t("chat-modelpanel.other_provider") : t("chat-modelpanel.other_engine", { from: agentName(engine, s.agent_label), to: agentName(kind) });
     } else if (!modelSwitch) {
-      p.unavailable = t("chat-modelpanel.model_fixed", { agent: agentName(engine) });
+      p.unavailable = t("chat-modelpanel.model_fixed", { agent: agentName(engine, s.agent_label) });
     } else {
       if (e.list?.locked) p.locked = t("composer.locked");
       if (typedModelOffered(engine, e.list)) p.typable = true;
@@ -117,9 +145,9 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     return p;
   });
 
-  const model = row?.id ?? s.model;
+  const model = row?.id ?? shownModel;
   const state: PanelState = {
-    current: model ? cleanSetup({ provider: own, model, effort: s.effort, fast: s.service_tier === "priority" }) : null,
+    current: model ? cleanSetup({ provider: own, model, effort: s.effort, speed: s.service_tier && speedId(s.service_tier) }) : null,
     // the models that switch at once: the session's own launcher's
     recommended: modelSwitch ? [own] : [],
   };
@@ -156,17 +184,17 @@ export function pickPlan(s: Session, config: PanelConfig, listOf: (launcher: str
   const steps: ModeStep[] = [];
   if (s.pending_switch?.launcher && s.pending_switch.launcher !== own) steps.push({ launcher: own, from: own });
   if (!same) steps.push({ model: config.model });
-  const effort = config.effort || (sessionEngine(s) === "agy" ? row?.default_effort : undefined);
-  if (effort && effort !== s.effort) steps.push({ effort });
-  // a saved setup without Fast is Standard (cleanSetup drops `fast: false`)
-  const speed = speedStep(s, Boolean(config.fast));
+  const effortAfterModel = (!same && sessionEngine(s) === "agy" ? row?.default_effort : undefined) || s.effort;
+  if (config.effort && config.effort !== effortAfterModel) steps.push({ effort: config.effort });
+  // The advertised tiers belong to the running model. A different model is picked on its own.
+  const speed = same ? speedStep(s, config.speed) : undefined;
   if (speed) steps.push(speed);
   return steps;
 }
 
 /** The engine launcher `name` runs: what the panel's providers say, else its list's agent; undefined when neither knows. */
 export function launcherEngine(name: string, list: LauncherModels | null | undefined, o: PanelOptions): string | undefined {
-  return o.engineOf?.(name) || (list?.agent ? agentId(list.agent) : undefined);
+  return o.engineOf?.(name) || (list?.agent ? agentId(providerAgent(list.agent, name)) : undefined);
 }
 
 /** A pick on another launcher: the switch the next message carries out; nothing when that very switch waits already. */
@@ -185,11 +213,10 @@ function switchPlan(s: Session, config: PanelConfig, list: LauncherModels | null
   return [step];
 }
 
-/** The speed a setup asks for (Codex's service tier): only where the thread has a Fast speed, and (a pick) only when it
- *  changes. `always`: the flyout's switch, sent whatever the session says: the session learns a speed only from the push
- *  after the agent took it, so Fast on and straight back off must send the second tap too. */
-export function speedStep(s: Session, fast: boolean | undefined, always = false): ModeStep | undefined {
-  if (fast === undefined || !hasFast(s)) return undefined;
-  const tier = fast ? "priority" : "default";
-  return always || tier !== (s.service_tier ?? "default") ? { service_tier: tier } : undefined;
+/** Speed always travels alone. An unsupported saved tier cannot turn into a different speed request. */
+export function speedStep(s: Session, speed: string | undefined, always = false): { service_tier: string } | undefined {
+  if (!speed || activityOf(s) === "offline" || !sessionCan(s, "send")) return undefined;
+  const tier = speedTier(s, speed);
+  if (!tier || (!always && speedId(s.service_tier ?? "") === speed)) return undefined;
+  return { service_tier: tier };
 }

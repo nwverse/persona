@@ -1,7 +1,6 @@
 import Foundation
-#if os(iOS) || os(visionOS)
 import Observation
-#endif
+import PersonaWire
 
 // A recorded day's recap as the phone reads it from the hub (docs/assistant/day-recap.md): the payload in the contract's
 // shape, what a day's page shows of it, and the model that follows it. The payload and the page's values are pure and
@@ -711,7 +710,6 @@ nonisolated enum RecordingDayTranscript {
     }
 }
 
-#if os(iOS) || os(visionOS)
 // MARK: - The model
 
 /// A day's recap for its page. Each look reads the light recordings list (`GET /api/v1/recordings`) for where every
@@ -908,4 +906,3 @@ nonisolated enum RecordingDayTranscript {
         try await api.getDecodedOffMain("/api/v1/kb/recordings/\(id.uuidString.lowercased())", as: RecordingDayRecapAnswer.self)
     }
 }
-#endif

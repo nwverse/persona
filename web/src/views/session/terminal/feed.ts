@@ -11,6 +11,7 @@ import type { SearchAddon as XSearch } from "@xterm/addon-search";
 import { api, errorText, isAbort, sessionPath } from "../../../lib/api";
 import { openLink } from "../../../lib/links";
 import { getSession, getState, isOpen, onHubEvent, send } from "../../../lib/store";
+import { sessionEngineName } from "../../../lib/engine-names";
 import { passesToApp } from "../../../lib/shortcuts";
 import {
   ANSWER_LIMIT_MS,
@@ -23,6 +24,7 @@ import {
   decodeBase64,
   encodeKey,
   historyAnchor,
+  historyEnd,
   isStale,
   keyDecision,
   keyNameForBytes,
@@ -34,6 +36,8 @@ import {
   modifiersPressed,
   parseTerminalPush,
   pasteBytes,
+  pollDelay,
+  POLL_MS,
   typedWithModifiers,
   usableGrid,
   withModifiers,
@@ -65,6 +69,7 @@ import {
 } from "../../../lib/terminal-details";
 import { FIND_LIMIT, findIndex, findInLines, marksFor, stepFind, type FindMarks, type FindPos, type RowMatch } from "../../../lib/terminal-search";
 import { subscribeAppearance } from "../../../lib/terminal-appearance";
+import { readTerminalRenderer, writeTerminalRenderer, type TerminalRenderer } from "../../../lib/labs";
 import { toast } from "../../../ui/atoms";
 import { copyNotice, copyWith, osc52Text, transferFiles } from "../../../lib/terminal-clipboard";
 import { cjkFontStack, terminalFontReady } from "./cjk";
@@ -117,6 +122,10 @@ export interface FeedView {
   hasOlder: boolean;
   /** The page reached the start of what herdr keeps (about 1000 lines). */
   atLimit: boolean;
+  /** The page reached the start of what the computer keeps, and older output was let go (#17048). */
+  dropped: boolean;
+  /** Polling, the computer lets the screen be read several times a second while it changes (`refresh_ms`, #17048). */
+  pollFast: boolean;
   /** "Wrap": long rows fold at the panel's width while watching (remembered). */
   wrap: boolean;
   fontSize: number;
@@ -126,10 +135,16 @@ export interface FeedView {
   screen: ScreenRows | null;
   /** xterm's colors, for the rows the page draws (the terminal's Appearance: the page's light / dark, or its own). */
   palette: TerminalPalette | null;
-  /** "Cursor style" / "Blinking cursor" / "WebGL rendering": the options in "Terminal settings" (remembered). */
+  /** "Cursor style" / "Blinking cursor": options in "Terminal settings" (remembered). */
   cursorStyle: CursorStyle;
   cursorBlink: boolean;
-  webgl: boolean;
+  /** Settings › Labs › Terminal renderer as this view opened with it (lib/labs.ts): read once, when the view is made, so
+   *  changing it in Labs leaves this view as it is and applies to the next terminal opened. */
+  rendererChosen: TerminalRenderer;
+  /** What draws this view right now: "standard" until the WebGL addon has loaded, and again after it failed. */
+  renderer: TerminalRenderer;
+  /** WebGL was chosen but failed in this view (no WebGL, or the GPU context was lost): it draws with the standard renderer. */
+  rendererFellBack: boolean;
   /** The search: the current match (0-based, -1 when none is current) among `count`; null while not searching. */
   find: { index: number; count: number } | null;
   /** The page's own rows (history, and the screen when the page draws it) that hold a match. */
@@ -144,7 +159,6 @@ export interface ScreenRows {
 
 const TICK_MS = 250;
 const RESIZE_MS = 250;
-const POLL_MS = 1000;
 const WHEEL_MS = 50;
 const LINK_DOWN = t("session-terminal-feed.hub_unreachable");
 const WATCH_KEY = "persona.terminal.watch";
@@ -152,11 +166,19 @@ const WRAP_KEY = "persona.terminal.wrap";
 const FONT_KEY = "persona.terminal.fontSize";
 const CURSOR_KEY = "persona.terminal.cursorStyle";
 const BLINK_KEY = "persona.terminal.cursorBlink";
-const WEBGL_KEY = "persona.terminal.webgl";
 const MOUSE_KEY = "persona.terminal.mouse";
 export const FONT_SIZES = { min: 9, max: 20, default: 13 };
 /** Frames held while history is read; past this the screen starts over from a whole frame instead. */
 const HELD_MAX = 4 << 20;
+
+/** Disposes a renderer addon that may already be gone (a lost context disposes parts of it itself). */
+function disposeQuietly(addon: { dispose(): void }) {
+  try {
+    addon.dispose();
+  } catch {
+    // already disposed
+  }
+}
 
 function savedFontSize(): number {
   const n = Number(localStorage.getItem(FONT_KEY));
@@ -208,6 +230,8 @@ export class TerminalFeed {
   private focusedOnce = false;
   /** The last screen read while polling (its rows, when the page draws them). */
   private pollText = "";
+  /** When a poll last found the screen changed: the node's quicker pace holds for a while after (pollDelay). */
+  private pollChangedAt = 0;
   /** The plain lines of `older` (what the next page is located by). */
   private olderPlain: string[] = [];
   /** Frames that arrived while history is read, applied on "Back to latest". */
@@ -288,6 +312,8 @@ export class TerminalFeed {
       loadingOlder: false,
       hasOlder: true,
       atLimit: false,
+      dropped: false,
+      pollFast: false,
       wrap: localStorage.getItem(WRAP_KEY) === "1",
       fontSize: savedFontSize(),
       fontFamily: "",
@@ -295,7 +321,9 @@ export class TerminalFeed {
       palette: null,
       cursorStyle: parseCursorStyle(localStorage.getItem(CURSOR_KEY)),
       cursorBlink: parseFlag(localStorage.getItem(BLINK_KEY)),
-      webgl: parseFlag(localStorage.getItem(WEBGL_KEY)),
+      rendererChosen: readTerminalRenderer().value,
+      renderer: "standard",
+      rendererFellBack: false,
       find: null,
       marks: null,
     };
@@ -426,7 +454,7 @@ export class TerminalFeed {
 
     this.measure(true); // the first grid sizes the empty terminal and is what driving asks for
     this.patch({ ready: true, fontFamily: family });
-    if (this.view.webgl) void this.enableWebgl();
+    if (this.view.rendererChosen === "webgl") void this.enableWebgl();
     this.tick();
     void cjkFontStack(family).then((stack) => {
       if (!stack || this.disposed || !this.term) return;
@@ -439,7 +467,7 @@ export class TerminalFeed {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.everSubscribed && this.view.mode === "stream") send({ type: "terminal_unsubscribe", ...this.ids() });
+    if (this.everSubscribed) send({ type: "terminal_unsubscribe", ...this.ids() });
     this.polling?.abort();
     clearTimeout(this.gridTimer);
     clearTimeout(this.wheelTimer);
@@ -566,6 +594,12 @@ export class TerminalFeed {
     return getState().machines.find((m) => m.id === this.mid);
   }
 
+  /** The engine the session's terminal is in, by name ("herdr", "Orca"): the words for a session that isn't running say
+   *  where (#17053). A pane address names its own host. */
+  private engineName(): string {
+    return sessionEngineName(getSession(this.mid, this.sid), this.machine(), this.sid.startsWith("pane:") ? this.sid.slice(5) : undefined);
+  }
+
   /** Why the terminal hasn't come: its computer is offline, or isn't answering. */
   private notAnswering() {
     const m = this.machine();
@@ -574,7 +608,11 @@ export class TerminalFeed {
   }
 
   private onHello = () => {
-    if (this.view.mode !== "stream" || this.disposed) return;
+    if (this.disposed) return;
+    if (this.view.mode !== "stream") {
+      if (this.everSubscribed && this.live()) send({ type: "terminal_subscribe", ...this.ids() });
+      return;
+    }
     this.subscribed = false;
     this.linkLost();
     if (this.live()) this.subscribeNow(true);
@@ -654,7 +692,7 @@ export class TerminalFeed {
       // next try is answered ("View only" between tries read as a mirror that had given up, #6327).
       this.patch({ offline, loaded: true, control: taking ? (offline ? "off" : "starting") : c });
       // An offline computer in the page's words, whatever the hub's error says (it may name the machine by id).
-      this.failed(offline ? t("session-terminal-feed.not_in_herdr") : this.machine()?.online === false ? this.notAnswering() : error);
+      this.failed(offline ? t("session-terminal-feed.not_running_in", { engine: this.engineName() }) : this.machine()?.online === false ? this.notAnswering() : error);
     }
     this.inputMode();
   }
@@ -1213,48 +1251,53 @@ export class TerminalFeed {
     if (this.term) this.term.options.cursorBlink = on;
   }
 
-  /** WebGL drawing instead of the DOM renderer (off by default: the default look is unchanged). */
-  setWebgl(on: boolean) {
-    if (on) localStorage.setItem(WEBGL_KEY, "1");
-    else localStorage.removeItem(WEBGL_KEY);
-    this.patch({ webgl: on });
-    if (on) void this.enableWebgl();
-    else this.dropWebgl();
-  }
+  // ── the renderer (Settings › Labs › Terminal renderer, lib/labs.ts) ─────────
 
-  /** The addon loads on first use (its own chunk). A browser without WebGL, or a lost context, goes back to the default renderer. */
+  /** WebGL instead of the DOM renderer, for a view opened with it chosen. The addon loads on first use (its own chunk).
+   *  A browser without WebGL, or a lost GPU context, goes back to the default renderer: see webglFailed. */
   private async enableWebgl() {
     if (this.webglAddon || !this.term) return;
+    let gl: { dispose(): void } | null = null;
     try {
       const { WebglAddon } = await import("@xterm/addon-webgl");
-      if (this.disposed || !this.term || !this.view.webgl || this.webglAddon) return;
-      const gl = new WebglAddon();
-      gl.onContextLoss(() => {
-        this.dropWebgl();
-        this.turnOffWebgl(t("session-terminal-feed.webgl_lost"));
-      });
-      this.term.loadAddon(gl);
-      this.webglAddon = gl;
+      if (this.disposed || !this.term || this.webglAddon || this.view.rendererFellBack) return;
+      const addon = new WebglAddon();
+      gl = addon;
+      addon.onContextLoss(() => this.webglFailed("webgl_lost"));
+      this.term.loadAddon(addon);
+      this.webglAddon = addon;
+      this.patch({ renderer: "webgl" });
     } catch {
-      this.webglAddon = null;
-      if (!this.disposed) this.turnOffWebgl(t("session-terminal-feed.webgl_unavailable"));
+      if (gl && !this.webglAddon) disposeQuietly(gl);
+      if (!this.disposed) this.webglFailed("webgl_unavailable");
     }
   }
 
-  private turnOffWebgl(why: string) {
-    localStorage.removeItem(WEBGL_KEY);
-    this.patch({ webgl: false });
-    toast(why);
+  /** WebGL failed in this view: let go of the GL context so xterm draws with the DOM again (the screen's contents are
+   *  xterm's buffer, untouched by the renderer, so nothing typed or shown is lost), and go back to the standard renderer
+   *  in Labs too, so the next terminal doesn't fail the same way. Terminals already open keep theirs. */
+  private webglFailed(why: "webgl_lost" | "webgl_unavailable") {
+    if (this.view.rendererFellBack) return;
+    this.dropWebgl();
+    this.patch({ renderer: "standard", rendererFellBack: true });
+    const kept = writeTerminalRenderer("standard").ok;
+    if (why === "webgl_lost") toast(kept ? t("session-terminal-feed.webgl_lost") : t("session-terminal-feed.webgl_lost_unsaved"));
+    else toast(kept ? t("session-terminal-feed.webgl_unavailable") : t("session-terminal-feed.webgl_unavailable_unsaved"));
   }
 
-  /** Lets go of the GL context (off, or lost): xterm draws with the DOM again. */
+  /** Lets go of the GL context (lost, or the view closing): xterm draws with the DOM again and repaints what it holds. */
   private dropWebgl() {
     const gl = this.webglAddon;
     this.webglAddon = null;
-    try {
-      gl?.dispose();
-    } catch {
-      // already disposed by the context loss
+    if (!gl) return;
+    disposeQuietly(gl);
+    const term = this.term;
+    if (term && !this.disposed) {
+      try {
+        term.refresh(0, term.rows - 1);
+      } catch {
+        // xterm is closing
+      }
     }
   }
 
@@ -1421,14 +1464,15 @@ export class TerminalFeed {
     this.patch({ loadingOlder: true, paused: true });
     const { anchor, loaded } = historyAnchor([...this.olderPlain, ...this.screenPlain()]);
     try {
-      const r = await api<{ text?: string; has_more?: boolean; at_limit?: boolean }>(`${sessionPath(this.mid, this.sid)}/screen/before`, {
+      const r = await api<{ text?: string; has_more?: boolean; at_limit?: boolean; dropped?: boolean }>(`${sessionPath(this.mid, this.sid)}/screen/before`, {
         method: "POST",
         json: { anchor, lines: HISTORY_PAGE, loaded, format: "ansi" },
       });
       if (this.disposed || !this.view.paused) return;
       const rows = r.text ? parseAnsiRows(r.text) : [];
       if (rows.length) this.olderPlain = [...rows.map(plainRow), ...this.olderPlain];
-      this.patch({ older: rows.length ? [...rows, ...this.view.older] : this.view.older, hasOlder: Boolean(r.has_more), atLimit: Boolean(r.at_limit) });
+      const end = historyEnd(r);
+      this.patch({ older: rows.length ? [...rows, ...this.view.older] : this.view.older, hasOlder: end === "more", atLimit: end === "limit", dropped: end === "dropped" });
     } catch (e) {
       if (!this.disposed && !isAbort(e)) toast(t("session-terminal-feed.older_failed", { error: errorText(e) }), "error");
     } finally {
@@ -1445,7 +1489,7 @@ export class TerminalFeed {
     this.olderPlain = [];
     this.recount();
     const wasPaused = this.view.paused;
-    this.patch({ older: [], hasOlder: true, atLimit: false, paused: false, loadingOlder: false });
+    this.patch({ older: [], hasOlder: true, atLimit: false, dropped: false, paused: false, loadingOlder: false });
     if (!wasPaused) return;
     if (this.view.mode === "stream") {
       const held = this.held, overflow = this.heldOverflow;
@@ -1544,11 +1588,13 @@ export class TerminalFeed {
     this.polling = ctrl;
     const rows = this.grid?.rows ?? this.term?.rows ?? 40;
     try {
-      const r = await api<{ text?: string; status?: string }>(`${sessionPath(this.mid, this.sid)}/screen?format=ansi&lines=${rows}`, { signal: ctrl.signal });
+      const r = await api<{ text?: string; status?: string; refresh_ms?: number }>(`${sessionPath(this.mid, this.sid)}/screen?format=ansi&lines=${rows}`, { signal: ctrl.signal });
       if (this.disposed || ctrl.signal.aborted || this.view.mode !== "poll" || !this.term) return;
       if (this.grid) this.resize(this.grid.cols, this.grid.rows);
       const text = r.text ?? "";
+      const now = Date.now();
       if (text !== this.lastPoll) {
+        if (this.lastPoll !== null) this.pollChangedAt = now;
         this.lastPoll = text;
         this.pollText = text;
         this.term.reset();
@@ -1556,10 +1602,10 @@ export class TerminalFeed {
         this.term.write("\x1b[?25l" + text.replace(/\r?\n/g, "\r\n").replace(/(\r\n)+$/, ""));
         this.screenChanged();
       }
-      const now = Date.now();
       this.healthy(now);
-      this.nextTry = now + POLL_MS;
-      this.patch({ offline: r.status === "offline", loaded: true });
+      // The node's quicker pace only while someone can see the panel: a hidden page reads once a second.
+      this.nextTry = now + pollDelay(document.hidden ? undefined : r.refresh_ms, this.pollChangedAt, now);
+      this.patch({ offline: r.status === "offline", loaded: true, pollFast: pollDelay(r.refresh_ms, now, now) < POLL_MS });
     } catch (e) {
       if (isAbort(e) || this.disposed) return;
       this.failed(errorText(e));

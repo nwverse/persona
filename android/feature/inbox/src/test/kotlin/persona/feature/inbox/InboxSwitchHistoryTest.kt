@@ -31,6 +31,7 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 /** Done open while the current assistant changes: the new assistant's Done (its days and history) is read too (#3374 review). */
 @RunWith(AndroidJUnit4::class)
@@ -91,7 +92,7 @@ class InboxSwitchHistoryTest {
         rule.setContent {
             PersonaTheme(darkTheme = false, reduceMotion = true) {
                 CompositionLocalProvider(LocalManagerRoster provides roster) {
-                    Box(Modifier.width(400.dp).height(1500.dp)) { InboxScreen(inbox, navigator) }
+                    Box(Modifier.width(400.dp).height(1500.dp)) { OnAll { InboxScreen(inbox, navigator) } }
                 }
             }
         }

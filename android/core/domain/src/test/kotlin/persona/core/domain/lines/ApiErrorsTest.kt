@@ -10,6 +10,17 @@ import org.junit.Test
 
 /** API error cards (iOS APIErrorInfo / ChatLines.foldAPIErrors): the same wording and folding rules. */
 class ApiErrorsTest {
+    @Test fun sealedCompactionCannotBeRetried() {
+        val sealed = "This conversation was compacted natively by <account>: the compaction is sealed (encrypted) to that account and can't go to it now"
+        for (text in listOf(sealed, "API Error: 503 upstream: $sealed", sealed.uppercase())) {
+            val error = ApiErrorInfo.parse(text)!!
+            assertEquals(false, error.transient)
+            assertTrue(error.needsAction)
+        }
+        assertEquals(true, ApiErrorInfo.parse("API Error: 503 encrypted connection failed")?.transient)
+        assertNull(ApiErrorInfo.parse("A reply explaining: $sealed"))
+    }
+
     @Test fun readsClaudeCodesAndTheHubsErrors() {
         val a = ApiErrorInfo.parse("API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}} request_id: req_011CUxyzABCD1234")!!
         assertEquals(529, a.status); assertEquals("模型服务太忙，过载了", (a.reason).zhAny()); assertEquals(true, a.transient)
@@ -27,6 +38,17 @@ class ApiErrorsTest {
         assertNull(ApiErrorInfo.parse("The API Error: field is documented here"))
         assertNull(ApiErrorInfo.parse("I looked at it. The log says API Error: 500 somewhere in the middle of a long answer"))
         assertNull(ApiErrorInfo.parse(null))
+    }
+
+    @Test fun olderHubsRawToolSearchRefusalKeepsItsDedicatedRemedy() {
+        val edge = "API Error: 400 request is not representable on this edge: ToolSearch is not supported on this endpoint " +
+            "(defer_loading:true, tool_search_*, tool_reference); resend with all tools loaded"
+        assertTrue(ApiErrorInfo.parse(edge)!!.toolSearchUnsupported)
+        assertTrue(ApiErrorInfo.parse("API Error: 400 tools.3.defer_loading: Extra inputs are not permitted")!!.toolSearchUnsupported)
+        assertTrue(ApiErrorInfo.parse("API Error: request is not representable: ToolSearch is unavailable")!!.toolSearchUnsupported)
+        assertEquals(false, ApiErrorInfo.parse("API Error: 400 bad request")!!.toolSearchUnsupported)
+        assertEquals(false, ApiErrorInfo.parse("API Error: 401 defer_loading is not permitted")!!.toolSearchUnsupported)
+        assertEquals(false, ApiErrorInfo.parse("API Error: 500 tool_search failed")!!.toolSearchUnsupported)
     }
 
     @Test fun readsTheGatewaysIds() {

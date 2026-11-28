@@ -23,6 +23,8 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 
+	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
@@ -35,6 +37,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/managerupdate"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -48,10 +51,17 @@ func Main(ctx context.Context, build update.Build, stdin io.Reader) error {
 	return MainWith(ctx, build, stdin, MainHooks{})
 }
 
-// MainHooks are what a caller of MainWith gets of the running manager besides.
+// MainHooks are what a caller of MainWith / RunManagerWith gets of the running manager besides.
 type MainHooks struct {
 	// Ready is given the manager's Idle once it is made (before it connects to the hub).
 	Ready func(Idle)
+	// PendingRestart is given a setter to report pending_restart to the hub once BusHub is made.
+	PendingRestart func(func(bool))
+	// HubVersion provides the version on the bound connection after takeover.
+	HubVersion func(func() string)
+	// HostDataDir is the host's Persona data directory (~/.persona) captured before PERSONA_HOME is redirected to an
+	// independent manager's directory, so manager.hello can read the co-located node's machine-uid.
+	HostDataDir string
 }
 
 // MainWith is Main with h.
@@ -127,7 +137,12 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 	// itself again): nothing of it runs next to the one that has the token (manager.RunBuiltin waits for a new one).
 	o.Fingerprint, o.StopWhenRevoked, o.TokenFirst = fingerprint, deploy == DeployService, deploy == DeployService
 	o.RotateSecretKey = true
-	o.Logf, o.ExtConfig, o.Ready = logger.Printf, ext, h.Ready
+	o.Logf, o.ExtConfig, o.Ready, o.PendingRestart = logger.Printf, ext, h.Ready, h.PendingRestart
+	o.HubVersion = h.HubVersion
+	o.HostDataDir = h.HostDataDir
+	if o.HostDataDir == "" {
+		o.HostDataDir = home
+	}
 	// Its own database, its data moved there once (owndb.go); the hub's while that cannot be yet.
 	if o.DatabaseURL, o.OnHubDatabase, err = builtinDatabase(ctx, home, cfg.DatabaseURL, provisionOwn, logger.Printf); err != nil {
 		return err
@@ -255,6 +270,11 @@ type runOptions struct {
 	Logf       func(format string, args ...any)
 	// Ready is given the manager's Idle once its service is made (MainHooks.Ready); nil: nobody asks.
 	Ready func(Idle)
+	// PendingRestart is given BusHub.SetPendingRestart once BusHub is made (MainHooks.PendingRestart); nil: nobody asks.
+	PendingRestart func(func(bool))
+	HubVersion     func(func() string)
+	// HostDataDir is the host's Persona data directory (~/.persona) used to read machine-uid for manager.hello.
+	HostDataDir string
 	// Errors is the process's log writer that reports its error lines (newErrorTee); nil: run makes one.
 	Errors *errorTee
 }
@@ -341,10 +361,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	var svc *Service
 	var ext *extmgr.Manager
 	// ConfigFile: its usage section (the account-pool gateways and their keys) is the devices', read and written there.
-	devs := devices.New(devices.Options{Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
-		Logf: log.New(stderr, "devices: ", log.LstdFlags).Printf,
+	devs := devices.New(devices.Options{Edition: build.Edition, PackageHub: func() *bus.Client { return bh.Client() }, Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
+		Logf:         log.New(stderr, "devices: ", log.LstdFlags).Printf,
+		ProjectState: func(st devicewire.States) devicewire.States { return svc.logicalProjectStates(st) },
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
-			if !waitsOnPerson(method) { // a tool call, a write the gate forwarded: idle (idle.go) waits for it
+			if !waitsOnPerson(method) && method != "mcp.tools" { // discovery watches reconnect after restart; actual tool calls hold idle
 				svc.nodeAnswering.Add(1)
 				defer svc.nodeAnswering.Add(-1)
 			}
@@ -356,26 +377,60 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			}
 			return svc.NodeRequest(ctx, machine, method, params) // the interactions, the MCP tools (fleet_events.go)
 		},
-		Event:    func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
-		Detached: func(machine string) { svc.NodeDetached(machine) },
-		Location: func() *time.Location { return svc.location(context.Background()) },
+		Event:                  func(machine, event string, params json.RawMessage) bool { return svc.NodeEvent(machine, event, params) },
+		Detached:               func(machine string) { svc.NodeDetached(machine) },
+		HiddenAgentDirsChanged: func(machine string) { svc.HiddenAgentDirsChanged(machine) },
+		Location:               func() *time.Location { return svc.location(context.Background()) },
+		UpdateHandoffGrace:     func() time.Duration { return nodeUpdateHandoffGraceOf(svc.hello(context.Background())) },
+		PromptLanguage:         func() string { return answerLanguage(svc.hello(context.Background()).Locale) },
 		// The extensions' part of a node's connection and its events (internal/extmgr).
-		Own:         func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
-		OnConnected: func(machine string) { ext.NodeConnected(machine) },
-		OnEvent:     func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
-		// A node's new connection gets the launchers added in Persona, with their keys (models_launchers_push.go).
-		// Not one waiting to be confirmed: it gets them when it is (trustChanged, machine_trust.go).
+		Own: func(ctx context.Context, machine string) map[string]json.RawMessage { return ext.Own(ctx, machine) },
+		OnConnected: func(machine string) {
+			ext.NodeConnected(machine)
+			if svc != nil {
+				svc.NodeConnected(ctx, machine)
+			}
+		},
+		OnEvent: func(machine, event string, params json.RawMessage) bool { return ext.NodeEvent(machine, event, params) },
+		// The messages held for a machine's Agents changed (devices held.go): its rows again, nothing else of a list.
+		HeldChanged: func(machine string) { svc.publishSessions(machine) },
+		// A node's new connection gets its own settings and the launchers added in Persona, with their keys
+		// (models_launchers_push.go). Not one waiting to be confirmed: it gets them when it is (trustChanged,
+		// machine_trust.go).
 		NodeCalls: func(ctx context.Context, machine string) []devicewire.NodeCall {
-			return svc.managedNodeCalls(ctx, machine)
+			return svc.nodeConnectCalls(ctx, machine)
 		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
 		Connected: func() bool { return bh.Client().Peer() != nil },
-		Hub:       lazyHost{c: func() *bus.Client { return bh.Client() }}})
+		// The official DeepSeek launchers' prepaid balances (#11825): the manager holds their sealed keys.
+		LauncherBalances: func(ctx context.Context) ([]proto.UsageAccount, bool) { return svc.LauncherBalances(ctx) },
+		// Usage sources of type extension (#12402): the extensions are made below; ext is read when a source is due.
+		UsageExtension: func(ctx context.Context, id, launcher string) (json.RawMessage, error) {
+			if ext == nil {
+				return nil, errors.New("extensions are not running")
+			}
+			return ext.UsageQuery(ctx, id, launcher)
+		},
+		DirectUsageSources: func() []devices.DirectUsageSource { return ext.DirectUsageSources() },
+		DirectUsageQuery: func(ctx context.Context, source devices.DirectUsageSource) (json.RawMessage, error) {
+			return ext.DirectUsageQuery(ctx, source)
+		},
+		Hub: lazyHost{c: func() *bus.Client { return bh.Client() }}})
+	// The run-time module switch (the modules settings row), read once here, before the extensions: the kernel and every
+	// provider seam (moduleswitch) get the same list, so a module switched off is absent as one built out.
+	assistantStore := repositorystore.New(database)
+	modulesOff := ReadModuleSwitch(ctx, assistantStore, logf)
+	// The assistant's pages (Dashboards, #15017) are the built-in manager's: the hub relays the extensions' routes to
+	// the default manager, and no other has pages (pages_ui.go).
+	var pages extmgr.Pages
+	if o.ID == assistantwire.AssistantID {
+		pages = pagesHook{svc: func() *Service { return svc }}
+	}
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
-	ext = extmgr.New(extmgr.Options{Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
+	ext = extmgr.New(extmgr.Options{Modules: moduleswitch.Off(modulesOff...), Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
 		Store: database, Build: build, ManagerID: o.ID, HubURL: hub, HubClient: httpClient, HubProofKey: extwire.ProofKey(token),
 		Logf: log.New(stderr, "extensions: ", log.LstdFlags).Printf,
 		Hub:  lazyHost{c: func() *bus.Client { return bh.Client() }, b: func() *BusHub { return bh }}, Devices: devs,
@@ -390,11 +445,19 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 				svc.transcriptionReadinessChanged()
 			}
 		},
+		TracksChanged: func() {
+			if svc != nil {
+				svc.tracksChanged()
+			}
+		},
 		AssistantTools: func() []proto.Tool { return svc.toolsNow() },
 		// The model providers' keys that are references, for their provider extensions' details (launcher_secrets.go).
 		LauncherReferences: func(ctx context.Context) []extmgr.LauncherReference { return svc.launcherReferences(ctx) },
 		AssistantMachine:   func() string { return svc.mainMachine(context.Background()) },
 		Ask:                func(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) { return svc.AskCard(ctx, ix) },
+		AskPrepared: func(ctx context.Context, ix proto.Interaction, op approvalops.Operation) (approvalops.Outcome, error) {
+			return svc.AskPreparedCard(ctx, ix, op)
+		},
 		DialRelay: func(ctx context.Context, query string) (*websocket.Conn, error) {
 			return bus.DialAt(ctx, hub, token, httpClient, devicewire.RelayPath, query)
 		},
@@ -406,16 +469,28 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return nil
 		},
 		Lang:     func() i18n.Lang { return svc.lang(context.Background()) },
-		Timezone: func() string { return svc.userTZ() }})
+		Timezone: func() string { return svc.userTZ() },
+		Pages:    pages})
 	o.Errors.ext.Store(ext)
 	bh = NewBusHub(BusOptions{ID: o.ID, Hub: hub, Token: token, HTTPClient: httpClient, Version: version, Deploy: deploy,
-		ConfigFile: o.ConfigFile, Outbox: database,
+		HostDataDir: o.HostDataDir, ConfigFile: o.ConfigFile, Outbox: database, Features: func() []string { return svc.moduleFeatures() },
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
+	if o.PendingRestart != nil {
+		o.PendingRestart(bh.SetPendingRestart)
+	}
+	if o.HubVersion != nil {
+		o.HubVersion(devs.AdvertisedHubVersion)
+	}
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
-	svc = New(Options{Hub: bh, Store: func() Store { return database }, Logf: logf, Devices: devs,
-		KB: &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
-		Trust: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile})
+	svc = New(Options{Hub: bh, Store: func() Store { return assistantStore }, Logf: logf, Devices: devs,
+		ModulesOff: modulesOff, // the built-in modules switched off (modules.go)
+		KB:         &KBOptions{Dir: o.KBDir, KeyDir: o.HandlesDir}, SecretKey: o.SecretKey,
+		Trust: devs, AgentDirs: devs, HerdrSessions: devs, OrcaChats: devs, ID: o.ID, Build: version, RepositoryConfig: o.ConfigFile,
+		RemoteImageCache: filepath.Join(home, "cache", "remote-images")})
+	// A node can reconnect before the scheduler starts. Its restored approval
+	// timers and storage retries belong to this manager's lifetime too.
+	svc.running.Store(&ctx)
 	svc.SetExtensions(ext) // the connectors', Cua's and ego's tools, in this process (fleet_tools.go)
 	// When the north star's recording began (north_star.go).
 	go svc.northStarStarted(ctx)
@@ -433,11 +508,25 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		defer close(extDone)
 		_ = ext.Run(ctx) // after ctx: stops the extensions' programs (they are the manager's children)
 	}()
-	if o.ID != "assistant" {
+	var developmentDone chan *managerupdate.DevelopmentImage
+	if o.ID != assistantwire.AssistantID || o.Deploy == DeployService {
+		updateDir := home
+		if o.ID == assistantwire.AssistantID {
+			updateDir = managerconf.DefaultDir(home)
+		}
+		developmentDone = make(chan *managerupdate.DevelopmentImage, 1)
 		go func() {
+			var image *managerupdate.DevelopmentImage
+			defer func() { developmentDone <- image }()
 			if err := bh.Wait(ctx); err == nil {
 				if err := managerupdate.MarkReady(home, build); err != nil {
 					logf("manager update readiness: %v", err)
+				}
+				image = followDevelopment(ctx, updateDir, o.HostDataDir, build, devs, func(ctx context.Context) (bool, string) {
+					return managerIdle(ctx, bh, svc, ext)
+				}, logf)
+				if image != nil {
+					stop()
 				}
 			}
 		}()
@@ -446,6 +535,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	stop() // a refused token ends Run before ctx: the computers and the extensions stop with it
 	<-done
 	<-extDone
+	if developmentDone != nil {
+		if image := <-developmentDone; image != nil {
+			return image
+		}
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -496,6 +590,12 @@ func readHubConfig() (hubConfig, error) {
 	}
 	if v := identity.Getenv("PERSONA_LISTEN"); v != "" {
 		cfg.Listen = v
+	}
+	// How long a logical conversation's input may wait for its receipt before it expires (logical_undelivered.go).
+	if v := identity.Getenv("PERSONA_INPUT_DELIVERY_DEADLINE"); v != "" {
+		if d, ok := logicalInputDeadlineFrom(v); ok {
+			logicalInputDeliveryDeadline = d
+		}
 	}
 	return cfg, nil
 }

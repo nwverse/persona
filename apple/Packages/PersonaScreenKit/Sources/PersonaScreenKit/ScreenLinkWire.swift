@@ -1,7 +1,7 @@
 import Foundation
 
 // The live screen's session wire (#6398, docs/extensions/computer-use.md "Live screen routes (#6398)"): what the phone
-// and the node's internal/screenlink say on every transport of a screen session, the hub's relays and the direct
+// and the node's internal/modules/screen-share/screenlink say on every transport of a screen session, the hub's relays and the direct
 // routes alike. The same framing as the video wire (u32 big-endian length, u8 type, body), so `ScreenVideoParser`
 // splits it too; the channels' own bytes (RFB, the video wire) travel inside `data`. spec/fixtures/screen-link holds
 // byte-exact cases both sides check.
@@ -17,6 +17,10 @@ public enum ScreenLinkWire {
 
     public enum Kind: UInt8 {
         case data = 1, ack, paths, attach, attached, ping, pong, use, resumed, close, reset
+        /// The video over UDP (#7873), on a direct route's TLS connection.
+        case udpOpen, udpReady
+        /// The phone processed `close`; a distinct type so a final-data ack cannot be mistaken for it (#10006).
+        case closeAck
     }
 }
 
@@ -44,15 +48,18 @@ public struct ScreenLinkPaths: Codable, Equatable, Sendable {
     public var candidates: [Candidate]
     /// Why there are no direct routes, when the node knows: `firewall`.
     public var unavailable: String?
+    /// The version of the video over UDP the node offers on its direct routes (#7873); nil: none.
+    public var udp: Int?
 
     public init(version: Int = 1, token: String, cert: String? = nil, port: Int? = nil, candidates: [Candidate] = [],
-                unavailable: String? = nil) {
+                unavailable: String? = nil, udp: Int? = nil) {
         self.version = version
         self.token = token
         self.cert = cert
         self.port = port
         self.candidates = candidates
         self.unavailable = unavailable
+        self.udp = udp
     }
 
     public init(from decoder: Decoder) throws {
@@ -63,6 +70,29 @@ public struct ScreenLinkPaths: Codable, Equatable, Sendable {
         port = try c.decodeIfPresent(Int.self, forKey: .port)
         candidates = try c.decodeIfPresent([Candidate].self, forKey: .candidates) ?? []
         unavailable = try c.decodeIfPresent(String.self, forKey: .unavailable)
+        udp = try c.decodeIfPresent(Int.self, forKey: .udp)
+    }
+}
+
+/// The node's answer to `udpOpen` (#7873): the UDP port on the address the connection reached and the flow's id
+/// (8 bytes, base64url without padding), or why not.
+public struct ScreenLinkUDPReady: Codable, Equatable, Sendable {
+    public var port: Int?
+    public var flow: String?
+    public var unavailable: String?
+
+    public init(port: Int? = nil, flow: String? = nil, unavailable: String? = nil) {
+        self.port = port
+        self.flow = flow
+        self.unavailable = unavailable
+    }
+
+    /// The flow id's bytes, when it is one.
+    public var flowID: Data? {
+        guard var s = flow?.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") else { return nil }
+        while s.count % 4 != 0 { s += "=" }
+        guard let d = Data(base64Encoded: s), d.count == 8 else { return nil }
+        return d
     }
 }
 
@@ -99,8 +129,13 @@ public enum ScreenLinkMessage: Equatable, Sendable {
     case resumed([ScreenLinkOffset])
     /// The channel ends at `offset`.
     case close(channel: UInt8, offset: UInt64)
+    /// The phone processed the close ending at `offset`; sent again for every copy of that close.
+    case closeAck(channel: UInt8, offset: UInt64)
     /// The video channel goes on at `offset`, a message boundary: a partial message held is dropped.
     case reset(channel: UInt8, offset: UInt64)
+    /// Open a UDP flow beside this direct connection (#7873).
+    case udpOpen
+    case udpReady(ScreenLinkUDPReady)
     case unknown(type: UInt8, body: Data)
 
     /// The message with its length prefix, ready to send.
@@ -116,7 +151,10 @@ public enum ScreenLinkMessage: Equatable, Sendable {
         case let .use(entries): return Self.frame(.use, entries.reduce(into: Data()) { $0 += Self.head($1.channel, $1.offset) })
         case let .resumed(entries): return Self.frame(.resumed, entries.reduce(into: Data()) { $0 += Self.head($1.channel, $1.offset) })
         case let .close(ch, off): return Self.frame(.close, Self.head(ch, off))
+        case let .closeAck(ch, off): return Self.frame(.closeAck, Self.head(ch, off))
         case let .reset(ch, off): return Self.frame(.reset, Self.head(ch, off))
+        case .udpOpen: return Self.frame(.udpOpen, Data())
+        case let .udpReady(r): return Self.frame(.udpReady, (try? JSONEncoder().encode(r)) ?? Data())
         case let .unknown(type, body): return ScreenVideoWire.frame(type, body: body)
         }
     }
@@ -136,6 +174,9 @@ public enum ScreenLinkMessage: Equatable, Sendable {
         case .close:
             let (ch, off) = try head(b)
             return .close(channel: ch, offset: off)
+        case .closeAck:
+            let (ch, off) = try head(b)
+            return .closeAck(channel: ch, offset: off)
         case .reset:
             let (ch, off) = try head(b)
             return .reset(channel: ch, offset: off)
@@ -158,6 +199,10 @@ public enum ScreenLinkMessage: Equatable, Sendable {
             guard b.count % 9 == 0 else { throw ScreenVideoError.truncated }
             let entries = stride(from: 0, to: b.count, by: 9).map { ScreenLinkOffset(b[$0], readU64(b, $0 + 1)) }
             return kind == .use ? .use(entries) : .resumed(entries)
+        case .udpOpen:
+            return .udpOpen
+        case .udpReady:
+            do { return .udpReady(try JSONDecoder().decode(ScreenLinkUDPReady.self, from: body)) } catch { throw ScreenVideoError.badJSON }
         }
     }
 

@@ -1,6 +1,8 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 // Hub transcription on the phone (#3862 phase 5; contract docs/assistant/meeting-minutes.md「Phase 5: hub transcription」,
 // the phone's side docs/apple/recording.md「Hub transcription (phase 5)」): the audio socket's frames, the 60 seconds kept
@@ -153,6 +155,32 @@ struct MeetingAudioRingTests {
         #expect(ring.lostGaps == [MeetingGap(from: 1, to: 2)])
     }
 
+    /// The iPhone's crash on the tap's thread (#7740): with the ring full, an `ack` inside the second it holds made what
+    /// falls out a reversed range, and `..<` trapped. What falls out acknowledged is no gap.
+    @Test func anAckInsideTheHeldAudioSurvivesTheRingFilling() {
+        var ring = MeetingAudioRing(seconds: 1)
+        ring.append(samples(16000), at: 0)
+        ring.ready(from: 0)
+        while ring.next() != nil {}
+        ring.ack(12000)
+        ring.append(samples(1600, from: 16000), at: 16000)
+        #expect(ring.start == 1600 && ring.end == 17600)
+        #expect(ring.lostGaps.isEmpty)
+        ring.append(samples(16000, from: 17600), at: 17600)
+        #expect(ring.lostGaps == [MeetingGap(from: 0.75, to: 1.1)], "only what fell out past the hub's ack")
+    }
+
+    /// The same trap through a reconnect: `ready.from` inside the audio held counts as acknowledged.
+    @Test func aReadyInsideTheHeldAudioSurvivesTheRingFilling() {
+        var ring = MeetingAudioRing(seconds: 1)
+        ring.append(samples(16000), at: 0)
+        ring.ready(from: 8000)
+        ring.append(samples(1600, from: 16000), at: 16000)
+        #expect(ring.start == 1600 && ring.end == 17600)
+        #expect(ring.lostGaps.isEmpty)
+        #expect(ring.next() == .audio(MeetingPCM.data(samples(1600, from: 8000)[...]), at: 8000))
+    }
+
     @Test func aSendThatFallsBehindSeeksToTheOldestHeld() {
         var ring = MeetingAudioRing(seconds: 1)
         ring.append(samples(1600), at: 0)
@@ -298,6 +326,32 @@ struct MeetingAudioRingTests {
         late.ready(from: 0, generation: late.currentGeneration)
         late.drain()
         #expect(decoded(other.audio.reduce(Data(), +)) == samples(1600))
+    }
+
+    /// The iPhone's crash (#7740): a hub-mode meeting past its first minute, the hub acknowledging every 5 seconds as it
+    /// does, on the tap's own path (converted buffers of 4096 frames at 48 kHz). It trapped at the minute.
+    @Test func aHubModeMeetingGoesOnPastTheRingsMinute() throws {
+        let uplink = MeetingAudioUplink(recording: UUID())
+        let socket = open(uplink)
+        uplink.ready(from: 0, generation: uplink.currentGeneration)
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false))
+        let frames: AVAudioFrameCount = 1365
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        var fed: Int64 = 0, acked: Int64 = 0
+        while fed < 90 * 16000 {
+            uplink.feed(buffer, at: MeetingAudioClock.seconds(fed))
+            fed += Int64(frames)
+            if fed - acked >= 5 * 16000 {
+                uplink.drain()
+                acked = fed
+                uplink.ack(MeetingAudioClock.seconds(acked))
+            }
+        }
+        uplink.drain()
+        #expect(uplink.heldEnd == MeetingAudioClock.seconds(fed))
+        #expect(uplink.lost.isEmpty, "what fell out was acknowledged")
+        #expect(socket.audio.reduce(0) { $0 + $1.count } == Int(fed) * 2, "all of it went, once")
     }
 }
 
@@ -687,7 +741,11 @@ struct MeetingGapUploadTests {
         typealias T = MeetingTranscription
         #expect(T.needsGaps(e, meeting: nil, expired: false, synced: true, done: false))
         #expect(!T.needsGaps(e, meeting: nil, expired: true, synced: true, done: false), "never past `days`")
-        #expect(!T.needsGaps(e, meeting: nil, expired: false, synced: false, done: false), "after the complete upload")
+        #expect(!T.needsGaps(e, meeting: nil, expired: false, synced: false, done: false), "after the latest upload")
+        // The phone's own text isn't waited for (#9491).
+        var untranscribed = e
+        untranscribed.segments[0].sentences = nil
+        #expect(T.needsGaps(untranscribed, meeting: nil, expired: false, synced: true, done: false))
         #expect(!T.needsGaps(e, meeting: nil, expired: false, synced: true, done: true))
         var final = MeetingTranscription.Meeting()
         final.hub = MeetingTranscriptionView(mode: .hub, state: "final")
@@ -1626,16 +1684,19 @@ private actor SlowPut {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     @Test func theLineUnderRecordSaysWhatEachModeSends() {
-        let hub = Words.startPrivacy(.hub, service: nil, talk: true, days: 14)
-        let named = Words.startPrivacy(.hub, service: "Example ASR", talk: true, days: 14)
-        let device = Words.startPrivacy(.device, service: "Example ASR", talk: true, days: 14)
-        let quiet = Words.startPrivacy(.device, service: nil, talk: false, days: 14)
+        let hub = Words.startPrivacy(.hub, service: nil, talk: true, textDays: 14)
+        let named = Words.startPrivacy(.hub, service: "Example ASR", talk: true, textDays: 14)
+        let device = Words.startPrivacy(.device, service: "Example ASR", talk: true, textDays: 14)
+        let quiet = Words.startPrivacy(.device, service: nil, talk: false, textDays: 14)
         #expect(named.contains("Example ASR") && !hub.contains("Example ASR"), "the extension named only when the owner chose it")
         #expect(Set([hub, named, device, quiet]).count == 4)
         #expect(!device.contains("Example ASR"), "privacy mode sends no meeting audio, whatever extension is chosen")
-        #expect(Words.startPrivacy(nil, service: nil, talk: true, days: 14) == device, "a hub without the flag: as before")
-        #expect(Words.startPrivacy(.hub, service: nil, talk: false, days: 14) == hub, "hub mode's words say Talk included")
+        #expect(Words.startPrivacy(nil, service: nil, talk: true, textDays: 14) == device, "a hub without the flag: as before")
+        #expect(Words.startPrivacy(.hub, service: nil, talk: false, textDays: 14) == hub, "hub mode's words say Talk included")
         #expect(hub.contains("14") && quiet.contains("14"), "how long the text is kept")
+        let forever = Words.startPrivacy(.hub, service: nil, talk: true, textDays: 0)
+        let long = Words.startPrivacy(.hub, service: nil, talk: true, textDays: 1000)
+        #expect(forever != hub && long.contains("1000"), "0 is forever and windows past 365 are exact")
         #expect(Words.modePrivacy(.hub, service: "Example ASR").contains("Example ASR"))
         #expect(Words.modePrivacy(.device, service: "Example ASR") == Words.modePrivacy(.device, service: nil))
         #expect(Words.title(.device) != Words.title(.hub))
@@ -1662,6 +1723,101 @@ private actor SlowPut {
         #expect(Set([wifi, stopped, problem]).count == 3)
     }
 
+    /// #13385: a phone that can't transcribe the meeting never says its transcript shows; the notice says what the hub
+    /// is at, and a line of its own says why this iPhone has no lines, naming the meeting's language.
+    private static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    /// #13446: the hub's `problem` code read as the kind of failure, by every case the hub's `problemOfJob` runs too
+    /// (spec/fixtures/meeting-transcription-problems).
+    @Test func theProblemKindsFollowTheSharedCases() throws {
+        struct Fixtures: Decodable {
+            struct Case: Decodable {
+                var name: String
+                var problem: String
+                var kind: String?
+            }
+            var version: Int
+            var cases: [Case]
+        }
+        let data = try Data(contentsOf: Self.repo.appending(path: "spec/fixtures/meeting-transcription-problems/cases.json"))
+        let fixtures = try JSONDecoder().decode(Fixtures.self, from: data)
+        #expect(fixtures.version == 1)
+        #expect(fixtures.cases.count >= 9)
+        for c in fixtures.cases {
+            #expect(Words.upstreamKind(c.problem)?.rawValue == c.kind, "\(c.name)")
+        }
+    }
+
+    /// #13446: the fallback notice says why the hub isn't transcribing for each kind, naming the speech service (the
+    /// built-in one as such), and what to do; the phone's own state on a line under it. Waiting for Wi-Fi and a stop
+    /// say what they said before, and so does a problem with no reason of its own.
+    @Test func theFallbackNoticeSaysWhyForEachKind() {
+        var m = MeetingTranscription.Meeting()
+        m.decided = .init(mode: .hub)
+        m.socket = .ready
+        let showing = String(localized: "Showing this iPhone's transcript.")
+        m.problem = "upstream_forbidden"
+        var notice = Words.fallbackNotice(m, service: "Example ASR", phoneCannot: nil)
+        #expect(notice.words == Words.upstream(.refused, service: "Example ASR"))
+        #expect(notice.words.contains("Example ASR"))
+        #expect(notice.phone == showing)
+        #expect(!notice.words.contains("upstream_forbidden"), "never the code itself")
+        let builtIn = String(localized: "the speech service [Meeting Transcription]")
+        #expect(Words.fallbackNotice(m, service: nil, phoneCannot: nil).words.contains(builtIn))
+        // This iPhone can't transcribe either: its reason takes the second line.
+        notice = Words.fallbackNotice(m, service: "Example ASR", phoneCannot: "No lines here.")
+        #expect(notice.words == Words.upstream(.refused, service: "Example ASR") && notice.phone == "No lines here.")
+
+        var said: Set<String> = []
+        for (code, kind) in [("upstream_forbidden", Words.UpstreamKind.refused), ("upstream_busy", .busy),
+                             ("upstream_unavailable", .unreachable), ("upstream_failed", .failed)] {
+            m.problem = code
+            let words = Words.fallbackNotice(m, service: "Example ASR", phoneCannot: nil).words
+            #expect(words == Words.upstream(kind, service: "Example ASR"), "\(code)")
+            said.insert(words)
+        }
+        #expect(said.count == 4, "a sentence of its own for each kind")
+
+        // A problem with no reason of its own: as before.
+        m.problem = "made_up_future_problem"
+        notice = Words.fallbackNotice(m, service: "Example ASR", phoneCannot: nil)
+        #expect(notice == .init(words: Words.fallback(m), phone: nil))
+        // Waiting for Wi-Fi and a stop come first, as before.
+        m.problem = "upstream_busy"
+        m.socket = .waitingForWiFi
+        #expect(Words.fallbackNotice(m, service: "Example ASR", phoneCannot: nil) == .init(words: Words.fallback(m), phone: nil))
+        m.socket = .ready
+        m.stopped = "replaced"
+        #expect(Words.fallbackNotice(m, service: "Example ASR", phoneCannot: "No lines here.")
+            == .init(words: Words.fallback(m, phoneCannot: true), phone: "No lines here."))
+    }
+
+    @Test func aPhoneThatCantTranscribeSaysWhy() {
+        var m = MeetingTranscription.Meeting()
+        m.decided = .init(mode: .hub)
+        m.problem = "upstream_failed"
+        let promise = String(localized: "The hub isn't transcribing right now. Showing this iPhone's transcript.")
+        #expect(Words.fallback(m) == promise)
+        #expect(Words.fallback(m, phoneCannot: true) == String(localized: "The hub isn't transcribing right now."))
+        m.stopped = "upstream_failed"
+        #expect(Words.fallback(m, phoneCannot: true) == String(localized: "The hub stopped transcribing this meeting."))
+        m.socket = .waitingForWiFi
+        #expect(Words.fallback(m, phoneCannot: true) == String(localized: "Waiting for Wi-Fi to send the audio to the hub."))
+
+        let english = Locale(identifier: "en")
+        #expect(Words.languageName("zh-CN", in: english) == "Chinese")
+        #expect(Words.languageName("ja-JP", in: english) == "Japanese")
+        let fellBack = Words.phoneCannot(.unsupportedLanguage, locale: "zh-CN", fellBack: true, interface: english)
+        let own = Words.phoneCannot(.unsupportedLanguage, locale: "zh-CN", fellBack: false, interface: english)
+        #expect(fellBack == String(localized: "This iPhone can't transcribe \("Chinese") on the device either, so no lines show until the hub transcribes again."))
+        #expect(own == String(localized: "This iPhone can't transcribe \("Chinese") on the device, so it shows no lines for this meeting."))
+        #expect(Words.phoneCannot(.needsNewerSystem, locale: "zh-CN", fellBack: true, interface: english)
+            == String(localized: "This iPhone needs iOS 26 or later to transcribe on the device, so no lines show until the hub transcribes again."))
+        // Without a hub to come back to, and for a model that didn't download: the error's own words, with what to do.
+        #expect(Words.phoneCannot(.needsNewerSystem, locale: "zh-CN", fellBack: false) == RecordingSpeechError.needsNewerSystem.errorDescription)
+        #expect(Words.phoneCannot(.modelUnavailable, locale: "zh-CN", fellBack: true) == RecordingSpeechError.modelUnavailable.errorDescription)
+    }
+
     /// With the Highlights card on top (phase 2b), the hub's lines are the Full Transcript's rows in place of the phone's:
     /// in the live log's order, a placeholder skipped, each row's id its position, so a line the hub sends again keeps its
     /// row; bookmarks and questions keep their places; and a highlight's minute lights the hub's lines in it.
@@ -1683,6 +1839,17 @@ private actor SlowPut {
         #expect(focus.scroll == .line(2) && focus.lit == [.line(2), .line(3)], "the minute's hub lines lit")
     }
 
+    /// Build the fixture in steps: the one-line map times out in Xcode 26.6.
+    private func makeFiveMeetingGaps() -> [MeetingGap] {
+        var gaps: [MeetingGap] = []
+        for index in 0..<5 {
+            let start: Double = Double(index * 100)
+            let end: Double = Double(index * 100 + 10)
+            gaps.append(MeetingGap(from: start, to: end))
+        }
+        return gaps
+    }
+
     @Test func theRecordingPageSaysTheModeTheStateAndTheGaps() throws {
         #expect(Words.facts(nil, asked: .hub, gapUpload: .idle) == nil, "no mode decided: nothing")
         #expect(Words.facts(.init(mode: .device), asked: nil, gapUpload: .idle) == nil, "a meeting on the phone as always")
@@ -1702,7 +1869,7 @@ private actor SlowPut {
         let unknown = try #require(Words.facts(.init(mode: .hub, state: "someday"), asked: .hub, gapUpload: .idle))
         #expect(unknown.busy, "a state the app doesn't know reads as still being finished")
 
-        let many = (0..<5).map { MeetingGap(from: Double($0 * 100), to: Double($0 * 100 + 10)) }
+        let many: [MeetingGap] = makeFiveMeetingGaps()
         let spans = Words.spans(many)
         #expect(spans.contains("0:00") && spans.contains("3:30") && !spans.contains("6:40") && spans.contains("2"),
                 "the first three, then how many more")

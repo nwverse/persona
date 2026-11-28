@@ -2,9 +2,13 @@ package devices
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/devicewire"
 
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -54,26 +58,81 @@ func (m *Machine) expectedReload() bool {
 	return time.Now().Before(m.reloadUntil) || m.warmLocked(time.Now())
 }
 
+// reloadRetryBudget bounds how long call retries not-started refusals; reloadRetryEvery is the initial wait,
+// doubling up to reloadRetryMax with bounded upward jitter so a prolonged node_restarting refusal does not storm
+// the node at 100 ms. Vars so tests change them.
+var reloadRetryBudget, reloadRetryEvery, reloadRetryMax = 20 * time.Second, 100 * time.Millisecond, 2 * time.Second
+
+func reloadRetryDelay(wait, remaining time.Duration) time.Duration {
+	if wait <= 0 {
+		return 0
+	}
+	if jitter := wait / 4; jitter > 0 {
+		wait += time.Duration(rand.Int64N(int64(jitter) + 1))
+	}
+	return min(wait, remaining)
+}
+
 // call retries only an explicit not-started refusal or a close before writing. An ambiguous dropped write is never
 // replayed. The retry budget bounds waiting, not the operation's original execution deadline after the node is ready.
+// When the budget or the caller's wait runs out between tries, the last try had not started: that is said
+// (rpc.NotSent), so a caller can tell it from a request that may have reached the node. Each call leaves a line in the
+// log when it fails (calllog.go).
 func (m *Machine) call(ctx context.Context, method string, params any, out any) error {
+	return m.callWithSnapshot(ctx, method, params, out, nil)
+}
+
+func taskExecutionCall(method string, params any) bool {
+	if method == "assistant.directory" {
+		return true
+	}
+	if method != "assistant.send" {
+		return false
+	}
+	raw, _ := json.Marshal(params)
+	var fields map[string]json.RawMessage
+	return json.Unmarshal(raw, &fields) == nil && string(fields["task_execution"]) == "true"
+}
+
+// callWithSnapshot leaves a successful call's actual RPC attempt in snapshot, including after a wait or retry.
+func (m *Machine) callWithSnapshot(ctx context.Context, method string, params any, out any, snapshot *sessionSnapshot) (err error) {
+	start, tries := time.Now(), 0
+	defer func() { m.logCall(method, err, time.Since(start), tries) }()
 	var deadline time.Time
+	wait := reloadRetryEvery
+	maxWait := max(reloadRetryMax, reloadRetryEvery)
 	for {
-		err := m.callOnce(ctx, method, params, out)
+		tries++
+		err := m.callOnce(ctx, method, params, out, snapshot)
+		m.mu.Lock()
+		updateHandoff := m.updateHandoff
+		m.mu.Unlock()
+		if updateHandoff && restartingError(err) {
+			return err // an update handoff refuses new headless work until its deployment settles, not a short reconnect
+		}
+		if devicewire.TaskExecutionWaitEnabled(ctx) && taskExecutionCall(method, params) && restartingError(err) {
+			return err // the scheduler's longer compatibility bound owns this pre-delivery wait
+		}
 		notSent := errors.Is(err, errOffline) || errors.Is(err, rpc.ErrSuspended) || errors.Is(err, rpc.ErrClosed) && !errors.Is(err, rpc.ErrDropped)
 		if !restartingError(err) && !(notSent && m.expectedReload()) {
 			return err
 		}
 		if deadline.IsZero() {
-			deadline = time.Now().Add(20 * time.Second)
+			deadline = time.Now().Add(reloadRetryBudget)
 		}
-		if time.Until(deadline) <= 0 {
-			return context.DeadlineExceeded
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return rpc.NotSent(context.DeadlineExceeded)
 		}
+		timer := time.NewTimer(reloadRetryDelay(wait, remaining))
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(min(100*time.Millisecond, time.Until(deadline))):
+			timer.Stop()
+			return rpc.NotSent(ctx.Err())
+		case <-timer.C:
+		}
+		if wait > 0 && wait < maxWait {
+			wait = min(wait*2, maxWait)
 		}
 	}
 }

@@ -18,11 +18,11 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/db/dbtest"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
-	"github.com/nwverse/persona/server/internal/voice"
 )
 
 // TestMain doubles as a plugin: re-run with PERSONA_TEST_PLUGIN=1 the test binary serves on PERSONA_PLUGIN_SOCKET.
@@ -42,12 +42,26 @@ func TestMain(m *testing.M) {
 		serveTranscriptionExtensionForTest()
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "voice" { // the built-in voice extension run by the hub (voice_extension_test.go)
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		if err := voice.Run(ctx); err != nil {
+	if run, ok := builtinext.LookupProgram("volc"); ok && len(os.Args) > 1 && os.Args[1] == "volc" { // the built-in Volcengine speech extension run by the hub (volc_extension_test.go)
+		version := "test" // newTestManager's version
+		if len(os.Args) == 3 {
+			version = os.Args[2]
+		} // packaged speech fixture
+		if err := run(context.Background(), version); err != nil {
 			log.Fatal(err)
 		}
+		return
+	}
+	if run, ok := builtinext.LookupProgram("voice"); ok && len(os.Args) > 1 && os.Args[1] == "voice" { // the built-in voice extension run by the hub (voice_extension_test.go)
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := run(ctx, "test"); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "eventer" { // assistant.event from a real program (extension_assistant_event_test.go)
+		serveEventExtensionForTest()
 		return
 	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "boxed" {
@@ -82,8 +96,28 @@ func TestMain(m *testing.M) {
 		serveAuthRelayExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "lookup" {
+		serveTextLookupExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "secrets" {
 		serveSecretProviderExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "routine" {
+		serveRoutineForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "memory" { // memory_sources_test.go
+		serveMemorySourceExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "offload" { // extension_offload_test.go
+		serveOffloadExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "repos" {
+		serveRepositoryProviderExtensionForTest()
 		return
 	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "secretuser" {
@@ -110,6 +144,14 @@ func TestMain(m *testing.M) {
 		serveQuotaExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "usage" {
+		serveUsageExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "lark_images" {
+		serveLarkImageFixture()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "messaging" {
 		serveMessagingExtensionForTest()
 		return
@@ -124,6 +166,10 @@ func TestMain(m *testing.M) {
 	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "agentsrc" {
 		serveAgentSourceExtensionForTest()
+		return
+	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "live" {
+		serveLiveExtensionForTest()
 		return
 	}
 	// The official market (#2351) is added only by the tests about it: the others' markets are their own.

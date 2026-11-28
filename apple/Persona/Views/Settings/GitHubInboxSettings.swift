@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Settings › Connectors › GitHub › Inbox (docs/assistant/inbox.md「Connector: GitHub」): which CI failures come in, and repositories
 // that bring nothing in. Kept on the hub (PUT /api/v1/connectors/github/settings {"options": …}).
@@ -57,9 +58,6 @@ struct GitHubInboxSettings: View {
             }
             HStack {
                 TextField(String(localized: "Mute repository: owner/name"), text: $newRepo)
-                    #if os(macOS)
-                    .labelsHidden() // the title is the prompt (#1221)
-                    #endif
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .onSubmit(add)

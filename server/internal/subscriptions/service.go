@@ -56,6 +56,9 @@ type Connectors interface {
 type Options struct {
 	Store      Store
 	Connectors Connectors
+	// ReadAllowed fences one subscription before connector calls or stored content reads. Nil permits every read; a
+	// false answer pauses only that subscription, never an unrelated source on the same manager.
+	ReadAllowed func(ctx context.Context, sub Subscription) bool
 	// Location is the user's time zone: {{since_date}}, daily_at, times without a zone.
 	Location func() *time.Location
 	// Audit records a change (plugin_audit): on connector, action by whom, with detail that holds no content.
@@ -111,15 +114,17 @@ func (realClock) Sleep(ctx context.Context, d time.Duration) error {
 type Service struct {
 	o Options
 
-	mu       sync.Mutex
-	catalogs map[string]catalogEntry
-	reading  map[string]bool // catalogs being read in the background
-	gates    map[string]*gate
-	busy     map[string]bool // connectors whose subscriptions are running now
-	running  int
-	asked    map[string]bool      // subscriptions asked to run now
-	kicked   map[string]time.Time // when a connector's changed event makes each of its subscriptions due (ConnectorChanged)
-	wake     chan struct{}
+	mu        sync.Mutex
+	catalogs  map[string]catalogEntry
+	reading   map[string]bool // catalogs being read in the background
+	gates     map[string]*gate
+	busy      map[string]bool // connectors whose subscriptions are running now
+	running   int
+	retryBusy map[string]bool      // busy connectors whose due work was skipped by startDue; re-poked on worker exit
+	retryCap  bool                 // due connectors skipped because running == maxRunning; re-poked on worker exit
+	asked     map[string]time.Time // subscriptions asked to run now (due at or after the stored time; zero means immediately)
+	kicked    map[string]time.Time // when a connector's changed event makes each of its subscriptions due (ConnectorChanged)
+	wake      chan struct{}
 
 	// Push sources (push.go): one push at a time, and each device's items in the last hour.
 	pushMu sync.Mutex
@@ -162,10 +167,14 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]bool{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
+		busy: map[string]bool{}, retryBusy: map[string]bool{}, asked: map[string]time.Time{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
+
+func (s *Service) readAllowed(ctx context.Context, sub Subscription) bool {
+	return s.o.ReadAllowed == nil || s.o.ReadAllowed(ctx, sub)
+}
 
 // shown is s as the API shows it: off while both destinations are off, its floor of intervals filled in.
 func shown(sub Subscription) Subscription {
@@ -483,6 +492,9 @@ func (s *Service) check(ctx context.Context, c ConnectorInfo, sourceID string, r
 	if !c.ready() {
 		return fail(&Problem{CodeNotConnected, "The connector cannot be reached now."})
 	}
+	if sub != nil && !s.readAllowed(ctx, *sub) {
+		return fail(&Problem{CodeNotConnected, "The source is paused by private-chat visibility."})
+	}
 	sources, err := s.catalog(ctx, c, time.Minute)
 	if err != nil {
 		p := catalogProblem(err)
@@ -729,6 +741,7 @@ func withRecipe(sub Subscription, t target, dr DryRun, origin string, now time.T
 	next.RunState, next.Error, next.FailCount, next.FailingSince, next.ShapeMisses = StateOK, nil, 0, nil, 0
 	if !SameRecipe(t.recipe, sub.Recipe) {
 		next.Continuation = nil
+		next.Answer, next.AnswerAt = nil, nil // another recipe's answer: each thread's newest stored until its next run
 	}
 	if t.recipe.Mode != sub.Recipe.Mode {
 		next.SnapshotHash = ""
@@ -948,7 +961,7 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 		return Subscription{}, pushOnly("pull")
 	}
 	s.mu.Lock()
-	s.asked[id] = true
+	s.asked[id] = time.Time{}
 	s.mu.Unlock()
 	s.o.Audit(ctx, sub.Connector, "subscription_run_now", by, map[string]any{"subscription": id})
 	s.poke()
@@ -1007,6 +1020,17 @@ func (s *Service) ConnectorChanged(ctx context.Context, id string) {
 // they took from it (#2039): its destinations are switched off first, so they take nothing more meanwhile; when the
 // removal fails the subscription stays (off), and deleting again finishes it. It is recorded either way.
 func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor) error {
+	return s.delete(ctx, id, withData, by, nil)
+}
+
+// DeleteAt is Delete with an optimistic-concurrency predicate. A clarified
+// approval uses it so an update between its final state check and the delete
+// cannot be removed under a stale proposal.
+func (s *Service) DeleteAt(ctx context.Context, id string, revision int64, withData bool, by Actor) error {
+	return s.delete(ctx, id, withData, by, &revision)
+}
+
+func (s *Service) delete(ctx context.Context, id string, withData bool, by Actor, expected *int64) error {
 	sub, err := s.o.Store.GetSubscription(ctx, id)
 	if err != nil {
 		return err
@@ -1014,16 +1038,41 @@ func (s *Service) Delete(ctx context.Context, id string, withData bool, by Actor
 	if sub == nil {
 		return notFound("subscription")
 	}
+	if expected != nil && sub.Revision != *expected {
+		return conflictWith(sub)
+	}
 	if withData && s.o.Forget != nil {
 		if sub, err = s.switchOff(ctx, *sub); err != nil {
 			return err
+		}
+		if expected != nil && sub.Revision != *expected {
+			// switchOff had to change the revision before the destinations could
+			// forget their data; the delete predicate follows that fresh revision.
+			expected = new(int64)
+			*expected = sub.Revision
 		}
 		if err := s.o.Forget(ctx, *sub); err != nil {
 			s.o.Logf("subscription %s: delete its data: %v", id, err)
 			return err
 		}
 	}
-	if err := s.o.Store.DeleteSubscription(ctx, id); err != nil {
+	if expected == nil {
+		err = s.o.Store.DeleteSubscription(ctx, id)
+	} else {
+		var ok bool
+		ok, err = s.o.Store.DeleteSubscriptionAt(ctx, id, *expected)
+		if err == nil && !ok {
+			cur, getErr := s.o.Store.GetSubscription(ctx, id)
+			if getErr != nil {
+				return getErr
+			}
+			if cur == nil {
+				return notFound("subscription")
+			}
+			return conflictWith(cur)
+		}
+	}
+	if err != nil {
 		return err
 	}
 	s.mu.Lock()

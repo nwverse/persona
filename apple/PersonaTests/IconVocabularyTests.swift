@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import UIKit
 @testable import Persona
+import PersonaWire
 
 /// SF Symbols go through `Theme.Icon` (Shared/Design/Icons.swift): one meaning, one symbol (docs/apple/icons.md). These read
 /// the sources next to this file (apple/Persona, apple/PersonaWatch, apple/Shared) and look at what is passed as
@@ -35,7 +36,7 @@ struct IconVocabularyTests {
     }
 
     private static func files() -> [URL] {
-        ["Persona", "PersonaWatch", "Shared"].flatMap { dir in
+        ["Persona", "Modules", "PersonaWatch", "Shared"].flatMap { dir in
             (FileManager.default.enumerator(at: ios.appending(path: dir), includingPropertiesForKeys: nil)?
                 .compactMap { $0 as? URL } ?? [])
                 .filter { $0.pathExtension == "swift" && $0.lastPathComponent != "Icons.swift" }

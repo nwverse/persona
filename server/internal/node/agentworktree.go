@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/herdr"
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -60,8 +61,14 @@ func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint stri
 		return res, refusal("not_a_repository", "the folder is not in a Git repository", nil)
 	}
 	h, _ := n.hostOfKind(kind) // the host's checkouts directory; without one, herdr's
-	base := n.worktreesDir(h, repo.name)
 	branch = strings.TrimSpace(branch)
+	// On Orca, Orca makes it, under the Orca worktree the folder is (hostorca_agentworktree.go).
+	if o, ok := h.(*orcaHost); ok {
+		if res, done, err := n.orcaAgentWorktreeAdd(ctx, o, repo, branch, nameHint); done {
+			return res, err
+		}
+	}
+	base := n.worktreesDir(h, repo.name)
 	candidates := []string{branch}
 	if branch == "" {
 		own := agentBranch(nameHint)
@@ -79,7 +86,7 @@ func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint stri
 		if err := checkBranch(ctx, repo.root, b); err != nil {
 			return res, err
 		}
-		if dest, err = n.checkoutPath(repo.root, dest); err != nil {
+		if dest, err = n.checkoutPath(ctx, repo.root, dest); err != nil {
 			return res, err
 		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
@@ -89,7 +96,7 @@ func (n *Node) worktreeAdd(ctx context.Context, kind, cwd, branch, nameHint stri
 		if exists {
 			args = []string{"worktree", "add", "--", dest, b}
 		}
-		if _, err := gitTimed(ctx, repo.root, 2*time.Minute, args...); err != nil {
+		if err := n.addWorktree(ctx, repo.root, dest, args...); err != nil {
 			return res, refusal("worktree_failed", gitFailure(err), nil)
 		}
 		return proto.WorktreeAdded{Path: dest, Branch: b, Root: repo.root}, nil
@@ -121,6 +128,13 @@ func pathTaken(p string) bool {
 // for any folder in a repository, where worktree.add would put a new agent's worktree. A folder outside any repository
 // is simply not a worktree.
 func (n *Node) worktreeStatus(ctx context.Context, kind, cwd string) (proto.WorktreeStatus, error) {
+	rt, runtime, _ := n.worktreeRuntime(ctx, kind)
+	return n.worktreeStatusOn(ctx, kind, cwd, rt, runtime)
+}
+
+// worktreeStatusOn is worktreeStatus where rt makes kind's worktrees (runtime: an engine runtime, nil when it cannot;
+// not runtime: a terminal host, whose worktrees the node makes itself).
+func (n *Node) worktreeStatusOn(ctx context.Context, kind, cwd string, rt *runtimeConn, runtime bool) (proto.WorktreeStatus, error) {
 	var st proto.WorktreeStatus
 	dir := proto.ExpandHome(strings.TrimSpace(cwd), n.home)
 	if dir == "" || !filepath.IsAbs(dir) {
@@ -136,11 +150,11 @@ func (n *Node) worktreeStatus(ctx context.Context, kind, cwd string) (proto.Work
 		return st, nil
 	}
 	st.Branch = repo.branch
-	rt, runtime, _ := n.worktreeRuntime(ctx, kind)
+	var h host.Host
 	if runtime {
 		st.Checkouts = n.runtimeCheckoutsOf(ctx, rt, st.Path) // the runtime's folder ("" when it cannot say)
 	} else {
-		h, _ := n.hostOfKind(kind)
+		h, _ = n.hostOfKind(kind)
 		st.Checkouts = n.worktreesDir(h, repo.name)
 	}
 	gitDir, err1 := absGit(ctx, st.Path, "--git-dir")
@@ -156,6 +170,10 @@ func (n *Node) worktreeStatus(ctx context.Context, kind, cwd string) (proto.Work
 		_, st.Ours = rt.ownedWorktreeAt(st.Path)
 	} else {
 		st.Ours = within(realPath(st.Path), realPath(st.Checkouts))
+		// On Orca: any linked worktree Orca made, wherever its workspace folder is (worktreeRemove has Orca remove it).
+		if o, ok := h.(*orcaHost); ok && !st.Ours {
+			st.Ours = o.agentWorktreeAt(ctx, st.Path) != nil
+		}
 	}
 	if out, err := git(ctx, st.Path, "status", "--porcelain"); err == nil {
 		for _, line := range strings.Split(out, "\n") {
@@ -204,13 +222,25 @@ func absGit(ctx context.Context, dir, option string) (string, error) {
 // deleting a branch with commits the main checkout's branch lacks, unless the user confirmed it (force).
 func (n *Node) worktreeRemove(ctx context.Context, kind, path string, deleteBranch, force bool) (proto.WorktreeRemoved, error) {
 	var res proto.WorktreeRemoved
-	if _, runtime, _ := n.worktreeRuntime(ctx, kind); runtime { // the checks and the runtime's archive, inside the hub's 90 s
+	p := proto.ExpandHome(strings.TrimSpace(path), n.home)
+	if filepath.IsAbs(p) {
+		if err := n.guardBackendDeletion(p); err != nil {
+			return res, err
+		}
+	}
+	rt, runtime, _ := n.worktreeRuntime(ctx, kind)
+	// A reviewer's copy is a plain worktree in the node's own checkouts folder on every engine, and goes the way the node
+	// made it (reviewsnapshot.go). An engine runtime made no workspace of it, so the runtime's way refused it as
+	// not_our_worktree, which the manager reads as gone already: every copy stayed on the disk (#8135).
+	if runtime && n.isReviewCopy(ctx, kind, p) {
+		rt, runtime = nil, false
+	}
+	if runtime { // the checks and the runtime's archive, inside the hub's 150 s
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, runtimeRemoveDeadline)
 		defer cancel()
 	}
-	p := proto.ExpandHome(strings.TrimSpace(path), n.home)
-	st, err := n.worktreeStatus(ctx, kind, p)
+	st, err := n.worktreeStatusOn(ctx, kind, p, rt, runtime)
 	if err != nil {
 		return res, err
 	}
@@ -227,8 +257,18 @@ func (n *Node) worktreeRemove(ctx context.Context, kind, path string, deleteBran
 		return res, refusal("worktree_unmerged", "the branch has commits that are not on the main branch",
 			map[string]any{"unmerged": st.Unmerged, "main_branch": st.MainBranch})
 	}
-	if rt, runtime, _ := n.worktreeRuntime(ctx, kind); runtime { // ours: a worktree workspace the runtime made
+	if runtime { // ours: a worktree workspace the runtime made
 		return n.runtimeAgentWorktreeRemove(ctx, rt, st, deleteBranch, force)
+	}
+	// One of Orca's worktrees goes through Orca, which then drops it from its sidebar (hostorca_agentworktree.go).
+	if h, _ := n.hostOfKind(kind); h != nil {
+		if o, ok := h.(*orcaHost); ok {
+			if w := o.agentWorktreeAt(ctx, st.Path); w != nil {
+				if res, done, err := n.orcaAgentWorktreeRemove(ctx, o, w, deleteBranch, force); done {
+					return res, err
+				}
+			}
+		}
 	}
 	args := []string{"worktree", "remove"}
 	if force {

@@ -13,7 +13,10 @@ COLD=<n> also times n cold starts of each package with `am start -W`; a start th
 dropped. Every package must be paired already.
 RUNS (10), SWIPE_MS (180) and SETTLE_S (0.9) override the round count, swipe duration and idle delay; ONLY=agents,chat
 limits the scenarios."""
-import json, os, re, statistics, subprocess, sys, time
+from functools import partial
+import json, os, re, statistics, sys, time
+
+from android_perf_capture import adb_command, frame_counts, write_report
 
 RUNS = int(os.environ.get("RUNS", "10"))
 SWIPE_MS = int(os.environ.get("SWIPE_MS", "180"))
@@ -72,8 +75,10 @@ def ordered(packages, i):
 
 
 def cold_start_ms(text):
-    """TotalTime of an `am start -W`, or None when the phone says the start was not cold (the process was still alive, or
-    something else, such as a permission prompt, came to the front instead)."""
+    """TotalTime for a successful cold start. Older shells may omit status or launch state."""
+    status = re.search(r"^Status:[ \t]*(.*)$", text, re.MULTILINE)
+    if status and status.group(1).strip() != "ok":
+        return None
     state = re.search(r"LaunchState: (\w+)", text)
     total = re.search(r"TotalTime: (\d+)", text)
     if not total or (state and state.group(1) != "COLD"):
@@ -95,11 +100,7 @@ def main():
     only = os.environ["ONLY"].split(",") if os.environ.get("ONLY") else None
     links = scenarios(os.environ.get("CHAT"), only)
 
-    def adb(*args, capture=False):
-        cmd = ["adb", "-s", serial, *args]
-        if capture:
-            return subprocess.run(cmd, capture_output=True, text=True, timeout=90).stdout
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=90)
+    adb = partial(adb_command, serial, timeout=90)
 
     w, h = map(int, re.findall(r"(\d+)x(\d+)", adb("shell", "wm", "size", capture=True))[-1])
 
@@ -109,12 +110,8 @@ def main():
 
     def summary(package):
         text = adb("shell", "dumpsys", "gfxinfo", package, capture=True)
-
-        def num(pattern):
-            found = re.search(pattern, text)
-            return int(found.group(1)) if found else None
-
-        return dict(total=num(r"Total frames rendered: (\d+)"), janky=num(r"Janky frames: (\d+)"), histogram=histogram(text))
+        total, janky = frame_counts(text)
+        return dict(total=total, janky=janky, histogram=histogram(text))
 
     raw = dict(("%s/%s" % (label, name), []) for label, _ in packages for name in links)
     cold = dict((label, []) for label, _ in packages)
@@ -123,19 +120,20 @@ def main():
 
     def save():
         for key, runs in raw.items():
-            frames = sum(r["total"] or 0 for r in runs)
+            if not runs:
+                continue
+            frames = sum(r["total"] for r in runs)
             result[key] = dict(
                 frames_total=frames,
-                janky_percent_total=round(100.0 * sum(r["janky"] or 0 for r in runs) / max(1, frames), 2),
-                janky_percent_per_run=stats([100.0 * r["janky"] / r["total"] for r in runs if r["total"]]),
+                janky_percent_total=round(100.0 * sum(r["janky"] for r in runs) / frames, 2),
+                janky_percent_per_run=stats([100.0 * r["janky"] / r["total"] for r in runs]),
                 frame_ms=histogram_stats(merged(runs)),
                 runs=[dict(total=r["total"], janky=r["janky"]) for r in runs],
             )
         for label, values in cold.items():
             if values:
                 result[label + "/cold_start_ms"] = stats(values)
-        with open(out, "w") as f:
-            json.dump(result, f, ensure_ascii=False, indent=1)
+        write_report(out, result)
 
     for i in range(COLD):
         for label, package in ordered(packages, i):

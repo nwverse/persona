@@ -136,7 +136,7 @@ func dispatchProfilePlan(t *testing.T, s *Service, st *profileTaskStore, task Pl
 }
 
 func profilePlanTask() PlanTask {
-	return PlanTask{Title: "Fix the login crash", Prompt: "Fix the login crash and verify the change", Machine: "box", Cwd: "/code/app", Tier: "standard", Permission: "bypassPermissions"}
+	return PlanTask{Title: "Fix the login crash", Prompt: "Fix the login crash and verify the change", Role: "worker", Machine: "box", Cwd: "/code/app", Tier: "standard", Permission: "bypassPermissions"}
 }
 
 func profileNodeStarts(f *fakeHub) []DeviceCall {
@@ -283,7 +283,8 @@ func TestModelProfileMCPDispatch(t *testing.T) {
 	}
 	var p ModelProfileView
 	requireProfileMCP(t, s, "model_profile_get", map[string]any{"id": "economy"}, &p)
-	if p.ID != "economy" || p.Active || p.Tiers["standard"].Model != "test-economy" {
+	// The seeded strength name reads back under its kind-of-work name, the old one kept as an alias (#14700).
+	if p.ID != "economy" || p.Active || p.Tiers["dev"].Model != "test-economy" || !slices.Equal(p.Tiers["dev"].Aliases, []string{"standard"}) {
 		t.Fatalf("get: %+v", p)
 	}
 	requireProfileStoreUnchanged(t, st.memStore, before, puts)
@@ -336,7 +337,8 @@ func TestModelProfileMCPSharedRestrictions(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, puts := profileStoreSnapshot(st.memStore)
-	tools := []string{"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback"}
+	tools := []string{"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback",
+		"model_profile_capture", "model_profile_deactivate", "model_profile_clear"}
 	for _, tt := range []struct {
 		name, session    string
 		assistant, guest bool
@@ -430,7 +432,7 @@ func TestProfileSnapshotFreshOutsideCache(t *testing.T) {
 		if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: id}); err != nil {
 			t.Fatal(err)
 		}
-		got := s.contextSnapshot(ctx)
+		got := s.contextSnapshot(ctx, "", false)
 		if !strings.Contains(got, "- 模型档位：") {
 			t.Fatal("profile line missing")
 		}

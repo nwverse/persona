@@ -1,6 +1,7 @@
 package persona.feature.chat
 
 import persona.core.contracts.Interaction
+import persona.core.contracts.JsonCodec
 import persona.core.contracts.api.InteractionGoneException
 import persona.core.contracts.api.InteractionPromptChangedException
 import persona.core.contracts.Resolution
@@ -9,6 +10,7 @@ import persona.core.contracts.api.ResolveOutcome
 import persona.core.domain.CardAnswer
 import persona.core.domain.answer.AnswerAction
 import persona.core.domain.answer.AnswerBuilder
+import persona.core.domain.answer.AnswerContext
 import persona.core.domain.answer.AnswerDraft
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -53,6 +55,21 @@ class InteractionSubmissionTest {
     private class HubAnswer(override val status: Int?, override val code: String? = null, message: String = "HTTP $status") :
         java.io.IOException(message), HubCodedFailure
 
+    @Test fun aCommandInputReplyRetainsTheHubReasonWithoutAssumingDelivery() = runTest {
+        val error = HubAnswer(502, "internal", "The command refused the line")
+        val chat = submitInteraction(keepUnconfirmedReason = true) { throw error }
+        assertEquals(InteractionReply(InteractionSubmission.Unknown, reason = "The command refused the line"), chat)
+        assertEquals(CardAnswer.Unconfirmed, chat.card)
+        assertEquals(chat, classifyInteractionFailure(error, keepUnconfirmedReason = true))
+        assertNull(submitInteraction { throw error }.reason)
+        val unconfirmed = classifyInteractionFailure(HubAnswer(409, "command_input_unconfirmed", "Computer did not confirm"), true)
+        assertEquals(CardAnswer.Unconfirmed, unconfirmed.card)
+        assertEquals("Computer did not confirm", unconfirmed.reason)
+        val definite = classifyInteractionFailure(HubAnswer(409, "command_input_refused", "Nothing was typed"), true)
+        assertEquals(CardAnswer.Refused, definite.card)
+        assertEquals("Nothing was typed", definite.reason)
+    }
+
     // #1881: a refusal the hub answered leaves the card answerable with its words; only a lost receipt stays unconfirmed.
     @Test fun aRefusalTheHubAnsweredIsNotUnconfirmed() = runTest {
         val codex = submitInteraction { throw HubAnswer(409, "input_draft", "The terminal has a draft in its input box") }
@@ -82,6 +99,45 @@ class InteractionSubmissionTest {
             InteractionSubmission.Refused to CardAnswer.Refused,
             InteractionSubmission.Unknown to CardAnswer.Unconfirmed,
         ), InteractionSubmission.entries.associateWith { InteractionReply(it).card })
+    }
+
+    @Test fun planApprovalUsesTheModeRecordedByTheHub() {
+        val request = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-then","kind":"plan","plan":"1. Ship it","plan_then":"default"}""",
+        )
+        for (action in listOf(AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise)) {
+            val result = AnswerBuilder.build(request, action, context = AnswerContext(fullPlanRead = true))
+            assertTrue(action.name, result.allowed)
+            assertEquals(action.name, Resolution(approve = true, mode = "default"), result.resolution)
+        }
+        for (recorded in listOf(null, "")) {
+            assertEquals("acceptEdits", AnswerBuilder.build(request.copy(planThen = recorded), AnswerAction.ApproveEdits).resolution?.mode)
+        }
+    }
+
+    @Test fun recordedBypassRequiresTheFullPlanRead() {
+        val request = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-bypass","kind":"plan","plan":"1. Ship it","plan_then":"bypassPermissions"}""",
+        )
+        assertFalse(AnswerBuilder.build(request, AnswerAction.ApproveAll,
+            context = AnswerContext(fullPlanRead = false)).allowed)
+        val read = AnswerBuilder.build(request, AnswerAction.ApproveAll,
+            context = AnswerContext(fullPlanRead = true))
+        assertTrue(read.allowed)
+        assertEquals(Resolution(approve = true, mode = "bypassPermissions"), read.resolution)
+    }
+
+    @Test fun unknownPlanThenKeepsTheSelectedLegacyMode() {
+        val future = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-future","kind":"plan","plan":"1. Ship it","plan_then":"futureMode"}""",
+        )
+        assertEquals(Resolution(approve = true, mode = "default"),
+            AnswerBuilder.build(future, AnswerAction.ApproveStepwise).resolution)
+        val plan = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"plan-again","kind":"plan","plan":"1. Ship it","plan_then":"plan"}""",
+        )
+        assertEquals(Resolution(approve = true, mode = "acceptEdits"),
+            AnswerBuilder.build(plan, AnswerAction.ApproveEdits).resolution)
     }
 
     @Test fun passwordPreservesWhitespaceOnTheWireButNeverEntersSavedDrafts() {

@@ -1,4 +1,5 @@
 import BeautifulUI
+import MarkdownUI
 import SwiftUI
 
 // Inbox phase 1 (docs/assistant/inbox.md): what an event adds to the inbox's screens — the row's mark and the detail's
@@ -128,11 +129,15 @@ struct InboxEventBlocks: View {
         #endif
     }
 
-    /// The short AI summary, below the state rather than above the metadata on iPhone and iPad.
+    /// The short AI summary, below the state rather than above the metadata on iPhone and iPad. The assistant's own row
+    /// has its text there instead, as Markdown (#9041).
     @ViewBuilder private var summary: some View {
-        if let s = item.summary, !s.isEmpty {
+        if let text = item.markdownBody {
+            InboxMarkdownBody(id: item.key, text: text)
+        } else if let s = item.summary, !s.isEmpty {
             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                 .font(Theme.Font.secondary)
+                .lookUpWords(plain: "\u{FFFC} " + s) // the mark is one attachment character
                 .lineHeight(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -456,7 +461,7 @@ struct InboxSuggestionCard: View {
     /// Side by side, the main one last at the trailing edge (as the draft card had them); where that does not fit (the
     /// Mac's narrow action column) one under another, full width, the main one first.
     private func buttons(_ s: InboxItem.Suggestion) -> some View {
-        let actions = InboxEventText.actions(s)
+        let actions = MailModule.access.suggestionActions(s, for: item)
         return ViewThatFits(in: .horizontal) {
             HStack(spacing: Theme.Space.s) {
                 Spacer(minLength: 0)
@@ -590,7 +595,7 @@ struct InboxSuggestionEditor: View {
             .navigationTitle(InboxEventText.kindTitle(suggestion))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
                         let changed = text
@@ -629,6 +634,35 @@ nonisolated extension InboxEventText {
         }
         return Set(latest.values)
     }
+
+    /// Plain reported detail has no expansion to reveal it, so it stays readable in full instead of being clipped.
+    internal static func chainLineLimit(_ e: InboxItem.ChainEntry, open: Bool) -> Int? {
+        open || (e.detailIsInLine && e.link == nil && (e.messages ?? []).isEmpty) ? nil : 2
+    }
+}
+
+/// The assistant's own row's text (#9041): the chat's Markdown in the chat's theme at the reading size, folded to its
+/// first lines with Expand under them when it is long (`LineFold`, open or not kept by the row), never cut with "…".
+struct InboxMarkdownBody: View {
+    /// The row's key: what keeps it open.
+    var id: String
+    var text: String
+
+    /// Lines shown folded: a briefing's first screen, its conclusion and first section.
+    static let foldedLines = 10
+
+    var body: some View {
+        LineFold(lines: Self.foldedLines, id: "inbox-body-" + id) {
+            Markdown(MarkdownMemo.content(text))
+                .markdownSoftBreakMode(.lineBreak)
+                .markdownTheme(.persona)
+                .readingContent()
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("inbox.body")
+    }
 }
 
 /// The chain: collapsed to the three newest entries with 'show all (N)'; each row time · source icon · words, and a tap goes
@@ -647,6 +681,8 @@ struct InboxChainSection: View {
     @State private var todo: TodoDetailRoute?
     /// The whole chain of an item listed with part of it (`InboxItem.chainCut`, #4742), read when the section appears.
     @State private var whole: [InboxItem.ChainEntry]?
+    /// An assistant row's received message: its whole text is drawn above (#9041), so a few lines say which, cut with "…".
+    private static let assistantMessageLines = 3
 
     var body: some View {
         let chain = item.chainCut ? whole ?? item.chain ?? [] : item.chain ?? []
@@ -675,10 +711,7 @@ struct InboxChainSection: View {
             .accessibilityIdentifier("inbox.chain")
             .task(id: CutChain(key: item.key, count: item.chainCount)) { await readWhole() }
             .sheet(item: $todo) { r in
-                NavigationStack { TodoDetailView(todoID: r.id).macSheetDone { todo = nil } }
-                #if os(macOS)
-                .macSheet()
-                #endif
+                NavigationStack { TodoDetailView(todoID: r.id).sheetDone { todo = nil } }
             }
         }
     }
@@ -701,7 +734,7 @@ struct InboxChainSection: View {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 tappable(e, target) { line(e, target: target, open: open, showsLiveState: showsLiveState) }
                 // An entry that goes somewhere and has messages too: they open here with the chevron.
-                if target.navigates && e.expandable {
+                if target.navigates && unfolds(e) {
                     Button { toggle(e) } label: {
                         ThemedIcon(open ? Theme.Icon.collapse : Theme.Icon.expand)
                             .font(Theme.Font.labelHeavy).foregroundStyle(.secondary)
@@ -718,6 +751,12 @@ struct InboxChainSection: View {
         .accessibilityValue(e.id)
     }
 
+    /// Whether an entry that goes somewhere also unfolds its messages beside it. An assistant row's received message is the
+    /// text drawn in full above (#9041): its entry only goes to the conversation, one arrow (#9928).
+    private func unfolds(_ e: InboxItem.ChainEntry) -> Bool {
+        e.expandable && !(item.isAssistantRow && e.kind == "received")
+    }
+
     private func line(_ e: InboxItem.ChainEntry, target: InboxChainTarget, open: Bool, showsLiveState: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
             Text(LarkTime.short(e.at)).font(Theme.Font.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).fixedSize()
@@ -729,7 +768,7 @@ struct InboxChainSection: View {
             Text(InboxEventText.chainText(e))
                 .font(Theme.Font.secondary)
                 .foregroundStyle(e.kind == "reported" ? .secondary : .primary)
-                .lineLimit(open ? nil : 2)
+                .lineLimit(InboxEventText.chainLineLimit(e, open: open))
                 .frame(maxWidth: .infinity, alignment: .leading)
             if showsLiveState, let key = e.link?.sessionKey {
                 InboxChainAgentState(key: key)
@@ -814,8 +853,11 @@ struct InboxChainSection: View {
     private func expansion(_ e: InboxItem.ChainEntry) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             ForEach(Array((e.messages ?? []).enumerated()), id: \.offset) { _, m in
-                Text(m.sender.map { String(localized: "\($0): \(m.text)", comment: "Who wrote it: what they wrote") } ?? m.text)
+                // An older assistant row's message is its Markdown run into one line: said without the marks (#9041).
+                let text = item.markdownInSummary ? InboxItem.withoutMarks(m.text) : m.text
+                Text(m.sender.map { String(localized: "\($0): \(text)", comment: "Who wrote it: what they wrote") } ?? text)
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
+                    .lineLimit(item.isAssistantRow ? Self.assistantMessageLines : nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let d = InboxEventText.expansionDetail(e) {
@@ -983,14 +1025,14 @@ struct InboxSourcePage: View {
         case .document:
             InboxDocDetailView(item: item)
         case .connector:
-            InboxConnectorDetailView(item: item)
+            InboxConnectorDetailView(item: item, manager: model.itemManager(item.manager))
         case .moment:
             if let moment = item.moment {
                 LarkMomentsPostView(postID: moment.postID, pushed: true, manager: model.linkManager(item.manager))
             }
         case .mail:
             if let mail {
-                MailDetailView(summary: mail, accounts: accounts)
+                MailReaderView(item: item, summary: mail, accounts: accounts)
             } else {
                 EmptyStateView(symbol: Theme.Icon.info, title: item.title, message: item.preview)
             }
@@ -1002,7 +1044,7 @@ struct InboxSourcePage: View {
     /// The mail the link names, else the thread's newest.
     private var mail: MailSummary? {
         guard let uid = route.uid, let m = item.mail else { return item.mailSummary }
-        return MailSummary(accountID: m.accountID, mailbox: m.mailbox, uid: uid, messageID: uid == m.uids.last ? m.messageID : nil,
+        return MailSummary(accountID: m.accountID, mailbox: m.sourceMailbox ?? "INBOX", uid: uid, messageID: uid == m.uids.last ? m.messageID : nil,
                            subject: item.title, from: m.from, date: item.updatedAt, snippet: item.preview, seen: true)
     }
 }
@@ -1041,6 +1083,7 @@ struct InboxEventPage: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
+        .textLookupSurface("inbox") // its words look up on a tap (#10977)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             InboxHandOffBar(item: item, draft: canDraft ? draft : nil,
                             draftTitle: item.agentDraft == nil ? nil : String(localized: "View Draft"))
@@ -1084,7 +1127,8 @@ struct InboxEventPage: View {
 
     /// Draft Reply is offered when the item can be answered from here and no suggested reply is there already.
     private var canDraft: Bool {
-        let canReply = item.connector.map { $0.canReply == true } ?? true
+        // A mail's reply goes out through the hub's mail module: not offered while it is off (#15995).
+        let canReply = (item.connector.map { $0.canReply == true } ?? true) && MailModule.access.offersReply(to: item)
         return canReply && item.currentSuggestion?.kind != "reply" && !item.isDone
     }
 }

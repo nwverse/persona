@@ -3,7 +3,9 @@
 // POST /todos/{id}/accept, the route the briefing's Accept takes (Brief.tsx) — OK takes a decision's recommendation, Got it
 // acknowledges a conclusion, Accept verifies a deployed to-do. A decision that recommends nothing has no button: it is
 // answered in the conversation the task came from.
-import { useState } from "react";
+import { VerificationFollowUp } from "./assistant/VerificationFollowUp";
+import { EvidenceLink } from "./assistant/EvidenceLink";
+import { useRef, useState } from "react";
 import { t } from "../i18n";
 import { errorText } from "../lib/api";
 import { acceptBrief, setRoute } from "../lib/feed";
@@ -12,11 +14,29 @@ import { navigate } from "../lib/router";
 import { stateName } from "../lib/state-labels";
 import { refreshTodos } from "../lib/store";
 import { askTake, askTone, openAsk, type AskTake, type Todo, type TodoAsk } from "../lib/todos";
-import { Button, cx, toast } from "../ui/atoms";
+import { Button, cx, toast, type ToastAction } from "../ui/atoms";
 import { Icon, type IconName } from "../ui/icons";
 
 /** Where answering one round stands: not yet, sent, the hub took it, or that round was already answered (409). */
-export type AskTaking = "idle" | "busy" | "taken" | "handled";
+export type AskTaking = "idle" | "busy" | "taken" | "recorded" | "handled";
+
+/** Optional integrations for a panel that owns the ask's actions and feedback instead of using the default singletons. */
+export interface TodoAskControls {
+  onAccept?: (todoId: string, askedAt: string) => ReturnType<typeof acceptBrief>;
+  onOpenConversation?: (todo: Todo, ask: TodoAsk) => void;
+  onRefresh?: () => void | Promise<void>;
+  /** `resend`: on a failure, the action that answers the same round again (#17431). */
+  onNotice?: (message: string, tone: "ok" | "error", resend?: ToastAction) => void;
+}
+
+export interface TodoAskLineProps extends TodoAskControls {
+  todo: Todo;
+  className?: string;
+}
+
+export interface TodoAskPanelProps extends TodoAskControls {
+  todo: Todo;
+}
 
 const TONE: Record<ReturnType<typeof askTone>, string> = { attention: "text-attention", red: "text-red", green: "text-green" };
 const ICON: Record<ReturnType<typeof askTone>, IconName> = { attention: "hand", red: "info", green: "check" };
@@ -41,6 +61,7 @@ function takeTitle(what: AskTake, title: string): string {
 /** What stands in for the button once the round is answered. */
 function takenText(what: AskTake, taking: AskTaking): string {
   if (taking === "handled") return t("assistant-brief.handled");
+  if (taking === "recorded") return t("assistant-brief.recorded_not_delivered");
   return what === "take" ? t("assistant-brief.taken") : what === "ack" ? t("assistant-brief.noted") : t("assistant-brief.accepted");
 }
 
@@ -49,25 +70,52 @@ function takenText(what: AskTake, taking: AskTaking): string {
  * "handled", and the to-dos are read again so its stale ask goes; a failure (the recommendation did not reach the agent,
  * the hub could not save) says why and leaves the button to try again. A newer round starts over.
  */
-export function useTakeAsk(todo: Pick<Todo, "id">, ask: TodoAsk): { taking: AskTaking; take: () => void } {
+export function useTakeAsk(
+  todo: Pick<Todo, "id">,
+  ask: TodoAsk,
+  { onAccept = acceptBrief, onRefresh = refreshTodos, onNotice = toast }: TodoAskControls = {},
+): { taking: AskTaking; take: () => void } {
   const [state, setState] = useState<{ round: string; taking: AskTaking }>({ round: "", taking: "idle" });
   const taking = state.round === ask.asked_at ? state.taking : "idle";
   const what = askTake(ask);
-  const take = () => {
-    if (taking !== "idle" || !what) return;
+  // One answer on its way at a time, from the button or the failure's Resend alike: never two for one round.
+  const running = useRef(false);
+  const current = useRef(ask.asked_at);
+  current.current = ask.asked_at;
+  const failed = (e: unknown, resend?: ToastAction) => {
+    const text = t("todos.ask_failed", { error: errorText(e) });
+    if (resend) onNotice(text, "error", resend);
+    else onNotice(text, "error");
+  };
+  const refresh = async () => {
+    try {
+      await onRefresh();
+    } catch (e) {
+      failed(e); // the answer already succeeded: keep it settled and report only the stale list
+    }
+  };
+  const take = async () => {
+    if (running.current || taking !== "idle" || !what) return;
+    running.current = true;
     const round = ask.asked_at;
     setState({ round, taking: "busy" });
-    acceptBrief(todo.id, round).then(
-      (res) => {
-        setState({ round, taking: res === "accepted" ? "taken" : "handled" });
-        toast(takenText(what, res === "accepted" ? "taken" : "handled"), "ok");
-        if (res === "handled") void refreshTodos(); // acceptBrief reads them again only when it took it
-      },
-      (e) => {
-        setState({ round, taking: "idle" });
-        toast(t("todos.ask_failed", { error: errorText(e) }), "error");
-      },
-    );
+    try {
+      const res = await onAccept(todo.id, round);
+      setState({ round, taking: res === "accepted" ? "taken" : res });
+      onNotice(takenText(what, res === "accepted" ? "taken" : res), "ok");
+      // Controlled callbacks own the reread; the all-default path needs one only for an earlier round.
+      if (onRefresh !== refreshTodos || onAccept !== acceptBrief || res === "handled") void refresh();
+    } catch (e) {
+      setState({ round, taking: "idle" });
+      // the choice stays: the button works again, and the failure offers to send this round once more
+      failed(e, { label: t("todos.ask_resend"), run: () => void resend(round) });
+    } finally {
+      running.current = false;
+    }
+  };
+  // Resend from the failure: the same round only, while nothing else for it is on its way.
+  const resend = (round: string) => {
+    if (round === current.current) void take();
   };
   return { taking, take };
 }
@@ -75,13 +123,13 @@ export function useTakeAsk(todo: Pick<Todo, "id">, ask: TodoAsk): { taking: AskT
 /** The ask on a to-do's row, a task's card or the task panel's banner: its verdict, the recommendation, the mark of a
  *  decision held for the briefing (#5803), and the button as a link. Its clicks never open the row. Nothing when the
  *  to-do waits on nothing. */
-export function TodoAskLine({ todo, className }: { todo: Todo; className?: string }) {
+export function TodoAskLine({ todo, className, ...controls }: TodoAskLineProps) {
   const ask = openAsk(todo);
-  return ask ? <AskLine todo={todo} ask={ask} className={className} /> : null;
+  return ask ? <AskLine todo={todo} ask={ask} className={className} {...controls} /> : null;
 }
 
-function AskLine({ todo, ask, className }: { todo: Todo; ask: TodoAsk; className?: string }) {
-  const { taking, take } = useTakeAsk(todo, ask);
+function AskLine({ todo, ask, className, ...controls }: TodoAskLineProps & { ask: TodoAsk }) {
+  const { taking, take } = useTakeAsk(todo, ask, controls);
   const what = askTake(ask);
   const tone = askTone(ask);
   const recommend = ask.recommend ? t("assistant-brief.recommend", { option: ask.recommend }) : "";
@@ -106,7 +154,7 @@ function AskLine({ todo, ask, className }: { todo: Todo; ask: TodoAsk; className
         )}
       </span>
       {what &&
-        (taking === "taken" || taking === "handled" ? (
+        (taking === "taken" || taking === "recorded" || taking === "handled" ? (
           <span data-ask-done={taking} className="shrink-0 whitespace-nowrap text-ink-2">
             {takenText(what, taking)}
           </span>
@@ -133,13 +181,18 @@ function AskLine({ todo, ask, className }: { todo: Todo; ask: TodoAsk; className
 
 /** The ask on a to-do's page: what it waits on in full and how to answer it — the button, and for a decision the
  *  conversation it came from, where it can be answered another way. */
-export function TodoAskPanel({ todo }: { todo: Todo }) {
+export function TodoAskPanel({ todo, ...controls }: TodoAskPanelProps) {
   const ask = openAsk(todo);
-  return ask ? <AskPanel todo={todo} ask={ask} /> : null;
+  return ask ? <AskPanel todo={todo} ask={ask} {...controls} /> : null;
 }
 
-function AskPanel({ todo, ask }: { todo: Todo; ask: TodoAsk }) {
-  const { taking, take } = useTakeAsk(todo, ask);
+function openConversation(todo: Todo, ask: TodoAsk) {
+  setRoute(todo.origin!, todo.id, ask.asked_at);
+  navigate(conversationPage(todo.origin!, undefined, todo.manager));
+}
+
+function AskPanel({ todo, ask, onOpenConversation = openConversation, ...controls }: TodoAskPanelProps & { ask: TodoAsk }) {
+  const { taking, take } = useTakeAsk(todo, ask, controls);
   const what = askTake(ask);
   const tone = askTone(ask);
   const decide = ask.outcome === "decide";
@@ -155,12 +208,14 @@ function AskPanel({ todo, ask }: { todo: Todo; ask: TodoAsk }) {
         <span className="text-[12.5px] font-semibold text-ink-2">{stateName("needs_you")}</span>
       </div>
       <p className={cx("mt-2 text-[13.5px] font-medium leading-[1.55] select-text [overflow-wrap:anywhere]", TONE[tone])}>{ask.verdict}</p>
+      {!ask.outcome && ask.summary && <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink-2 select-text [overflow-wrap:anywhere]" title={ask.summary}>{ask.summary}</p>}
+      {!ask.outcome && <EvidenceLink verification link={ask.link} todoId={todo.id} />}
       {ask.recommend && <p className="mt-1 text-[13px] leading-[1.55] text-ink select-text [overflow-wrap:anywhere]">{t("assistant-brief.recommend", { option: ask.recommend })}</p>}
       {!what && <p className="mt-1 text-[12.5px] leading-[1.6] text-ink-3">{t("todos.ask_answer_hint")}</p>}
       {(what || (decide && todo.origin)) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {what &&
-            (taking === "taken" || taking === "handled" ? (
+            (taking === "taken" || taking === "recorded" || taking === "handled" ? (
               <span data-ask-done={taking} className="text-[12.5px] text-ink-2">
                 {takenText(what, taking)}
               </span>
@@ -169,12 +224,10 @@ function AskPanel({ todo, ask }: { todo: Todo; ask: TodoAsk }) {
                 {takeLabel(what, false)}
               </Button>
             ))}
+          {taking === "idle" && <VerificationFollowUp todo={todo} />}
           {decide && todo.origin && (
             // the conversation the task came from: the to-do's manager's, whichever assistant is current
-            <Button icon="chat" onClick={() => {
-              setRoute(todo.origin!, todo.id, ask.asked_at);
-              navigate(conversationPage(todo.origin!, undefined, todo.manager));
-            }}>
+            <Button icon="chat" onClick={() => onOpenConversation(todo, ask)}>
               {t("todos.ask_answer")}
             </Button>
           )}

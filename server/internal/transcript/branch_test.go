@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -137,6 +139,29 @@ func TestAbandonedBranchIsLeftOutOfARead(t *testing.T) {
 	if _, err := f.Full("u2#0"); err == nil {
 		t.Fatal("an abandoned item is still there")
 	}
+}
+
+// File windows parse slices of one read buffer. The cached items and branch topology
+// must stay usable after the buffer itself becomes unreachable.
+func TestFileReleasesParsedWindow(t *testing.T) {
+	f := &File{tree: &branchTree{}}
+	buf := []byte(rewound().b.String() + "\n{bad json}\npartial")
+	ref := weak.Make(&buf[0])
+	f.parseLines(buf, 0, 1, &f.meta, f.tree, &f.items, nil)
+	runtime.GC()
+	if ref.Value() != nil {
+		t.Error("parsed window is still reachable")
+	}
+	for _, rec := range f.tree.recs {
+		if rec.raw != nil {
+			t.Fatalf("cached branch record %s holds its raw line", rec.uuid)
+		}
+	}
+	want(t, f.items, "一", "答一", "二改", "答二改")
+	if !f.tree.hidden["u2"] {
+		t.Fatal("lost the rewound branch")
+	}
+	runtime.KeepAlive(f)
 }
 
 // The usual case for a running node: the conversation is read, shown, and the user goes back later. The batch with the
@@ -436,6 +461,13 @@ func TestBranchesAcrossWindows(t *testing.T) {
 	if windowed.history() != whole.history() {
 		t.Fatalf("history after paging back %q (opened with %q), whole read %q", windowed.history(), windowedTokenAtOpen, whole.history())
 	}
+	m := windowed.Meta()
+	if windowed.partialMeta || m.FirstUser != "一" {
+		t.Fatalf("full metadata did not reach the first prompt: %q", m.FirstUser)
+	}
+	if m.tree.raw != nil || windowed.meta.tree.raw != nil {
+		t.Fatal("full metadata retained the last raw line")
+	}
 }
 
 // Truncating or replacing the file starts the tree over.
@@ -713,11 +745,44 @@ func TestTailSkippedLineIsTheSameInTheTree(t *testing.T) {
 		{`{"type":"user","uuid":"u","parentUuid":"p","isCompactSummary":true,"timestamp":"2026-11-05T10:00:00Z","message":{"role":"user","content":"` + big + `"}}`, false},
 	} {
 		var whole, skipped Tail
-		var m Meta
-		whole.Line(&m, ParseLine(0, []byte(c.line), &m))
-		skipped.Skipped([]byte(c.line))
-		if len(skipped.tree.recs) != 1 || skipped.tree.recs[0] != whole.tree.recs[0] || whole.tree.recs[0].prompt != c.prompt {
-			t.Fatalf("%.80s…: skipped %+v, whole %+v", c.line, skipped.tree.recs, whole.tree.recs)
+		var wm, sm Meta
+		for i, line := range []string{prompt("seed", "go"), replyLine, turnEndLine} {
+			whole.Line(&wm, ParseLine(i, []byte(line), &wm))
+			skipped.Line(&sm, ParseLine(i, []byte(line), &sm))
 		}
+		whole.Line(&wm, ParseLine(3, []byte(c.line), &wm))
+		skipped.Skipped([]byte(c.line))
+		if len(skipped.tree.recs) != 4 {
+			t.Fatalf("%.80s…: skipped %+v, want the seed and one record", c.line, skipped.tree.recs)
+		}
+		got, want := skipped.tree.recs[3], whole.tree.recs[3]
+		if got.uuid != want.uuid || got.parent != want.parent || got.prompt != want.prompt || got.reply != want.reply ||
+			got.system != want.system || got.turnEnd != want.turnEnd || got.prompt != c.prompt || got.hasOutcome != c.prompt {
+			t.Fatalf("%.80s…: skipped %+v, whole %+v; a skipped line must keep only the tree shape, not new outcome evidence", c.line, got, want)
+		}
+	}
+}
+
+func TestTailSkippedLineDoesNotResetOutcomeEvidence(t *testing.T) {
+	var whole, skipped Tail
+	var wm, sm Meta
+	for i, line := range []string{prompt("seed", "go"), replyLine, turnEndLine} {
+		whole.Line(&wm, ParseLine(i, []byte(line), &wm))
+		skipped.Line(&sm, ParseLine(i, []byte(line), &sm))
+	}
+	big := strings.Repeat("A", 20<<10)
+	line := `{"type":"user","uuid":"big","parentUuid":"p","timestamp":"2026-11-05T10:00:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"` + big + `"}]},"toolUseResult":{"stdout":"` + big + `"}}`
+	whole.Line(&wm, ParseLine(3, []byte(line), &wm))
+	skipped.Skipped([]byte(line))
+	recap := `{"type":"system","subtype":"away_summary","uuid":"recap","parentUuid":"p","timestamp":"2026-11-05T10:01:00Z","content":"recap"}`
+	whole.Line(&wm, ParseLine(4, []byte(recap), &wm))
+	skipped.Line(&sm, ParseLine(4, []byte(recap), &sm))
+	whole.Settle(&wm)
+	skipped.Settle(&sm)
+	if sm.TurnOpen != wm.TurnOpen || sm.TurnClosed != wm.TurnClosed || sm.TurnSucceeded() != wm.TurnSucceeded() ||
+		sm.TurnError != wm.TurnError || sm.TurnErrorResumes != wm.TurnErrorResumes {
+		t.Fatalf("a visible recap after a skipped line reset outcome evidence: skipped open=%v closed=%v success=%v error=%q resumes=%v; whole open=%v closed=%v success=%v error=%q resumes=%v",
+			sm.TurnOpen, sm.TurnClosed, sm.TurnSucceeded(), sm.TurnError, sm.TurnErrorResumes,
+			wm.TurnOpen, wm.TurnClosed, wm.TurnSucceeded(), wm.TurnError, wm.TurnErrorResumes)
 	}
 }

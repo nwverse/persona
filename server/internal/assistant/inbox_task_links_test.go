@@ -6,8 +6,69 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
+
+func TestInboxTaskRepositoryLinksOverrideProse(t *testing.T) {
+	ctx := t.Context()
+	st := repositorystore.New(todoTestDB(t))
+	s, f := newQuietServiceOn(t, st)
+	in := newFakeInbox()
+	f.inbox, in.svc = in, s
+	if err := s.inboxReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const base = "https://github.com/example/project"
+	task := supervisedTodo(t, s, "Review the change, compare #15 and #16")
+	setNotes(s, task.ID, base+"/pull/14#discussion_r1 and example/project#15")
+	links := []repository.LinkInput{
+		{URL: base + "/pull/12"},
+		{URL: base + "/issues/13"},
+		{URL: base + "/pull/14", Role: repository.LinkRoleReference},
+		{URL: base + "/issues/15", Role: repository.LinkRoleReference},
+	}
+	if _, _, err := st.ImportTodoRepositoryLinkDetails(ctx, task.ID, links, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	legacy := supervisedTodo(t, s, "Follow example/project PR #12")
+	refOnly := supervisedTodo(t, s, "Follow example/project PRs #18 and #19")
+	if _, _, err := st.ImportTodoRepositoryLinkDetails(ctx, refOnly.ID, []repository.LinkInput{
+		{URL: base + "/pull/18", Role: repository.LinkRoleReference},
+	}, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	boundOnly := supervisedTodo(t, s, "Review the release")
+	if _, _, err := st.ImportTodoRepositoryLinks(ctx, boundOnly.ID, []string{base + "/pull/20"}, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+
+	delivery := githubItem("github:delivery", "pull", "12")
+	issue := githubItem("github:issue", "issues", "13")
+	prRef := githubItem("github:pr-ref", "pull", "14")
+	issueRef := githubItem("github:issue-ref", "issues", "15")
+	issueRef.Context = "Also see " + base + "/issues/13"
+	unbound := githubItem("github:unbound", "pull", "16")
+	bareRef := githubItem("github:bare-ref", "pull", "18")
+	legacyBare := githubItem("github:legacy-bare", "pull", "19")
+	release := githubItem("github:release", "pull", "20")
+	prRef.Agent = &InboxAgent{TodoID: task.ID} // a link created before the reference role was enforced
+	putItems(s, delivery, issue, prRef, issueRef, unbound, bareRef, legacyBare, release)
+
+	for _, enabled := range []bool{false, true, false} {
+		setSettings(t, s, func(v *Settings) { v.TodosV2 = &enabled })
+		s.linkInboxTaskURLs(ctx)
+		for item, want := range map[*InboxItem]string{
+			delivery: task.ID, issue: task.ID, legacyBare: refOnly.ID, release: boundOnly.ID,
+			prRef: "", issueRef: "", unbound: "", bareRef: "",
+		} {
+			if got := linkedTo(s, item); got != want {
+				t.Errorf("todos_v2=%v: %s routed to %q, want %q (competing legacy task %s)", enabled, item.ID, got, want, legacy.ID)
+			}
+		}
+	}
+}
 
 // Exercise the production pass: matching must not depend on triage, the twin, or a model response.
 func TestInboxTaskURLRouting(t *testing.T) {
@@ -280,7 +341,7 @@ func TestInboxTaskURLRoutingKeepsTheTwinsAgeLimit(t *testing.T) {
 	}
 }
 
-func TestInboxTaskURLRoutingDoesNotReplayStoredLinks(t *testing.T) {
+func TestInboxTaskURLRoutingRestoresOnlyPendingLinks(t *testing.T) {
 	ctx := context.Background()
 	h := agentHub(t)
 	turnInboxSignalsOn(t, h.Service)
@@ -319,8 +380,10 @@ func TestInboxTaskURLRoutingDoesNotReplayStoredLinks(t *testing.T) {
 		t.Fatal("reload lost the supervised task or its forwarding setting")
 	}
 	again.handPass(ctx)
-	if g, ok := pendingInbox(again, todo.ID); ok {
-		t.Fatalf("restart replayed stored content: %+v", g.Inbox)
+	// The already raised, undelivered signal survives (#5732), but the stored inbox row is not replayed as new content:
+	// there is still this one signal, for the same message and with the same count.
+	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 1 || g.Key != it.ID+"@1" {
+		t.Fatalf("restart lost the pending link or replayed stored content: %+v, %v", g.Inbox, ok)
 	}
 	loaded := again.inbox.items[it.ID]
 	again.inbox.mu.Lock()
@@ -329,11 +392,11 @@ func TestInboxTaskURLRoutingDoesNotReplayStoredLinks(t *testing.T) {
 	again.inbox.noteReceived(loaded, prev, nil)
 	again.inbox.mu.Unlock()
 	again.handPass(ctx)
-	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 2 || g.Key != it.ID+"@2" {
-		t.Fatalf("new messages after restart were not counted once: %+v, %v", g.Inbox, ok)
+	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 3 || g.Key != it.ID+"@2" {
+		t.Fatalf("new messages after restart were not combined with the pending one exactly once: %+v, %v", g.Inbox, ok)
 	}
 	again.handPass(ctx)
-	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 2 {
+	if g, ok := pendingInbox(again, todo.ID); !ok || g.Inbox.Count != 3 {
 		t.Fatalf("repeated pass duplicated new content: %+v, %v", g.Inbox, ok)
 	}
 	checkNoTwinWork(t, h)

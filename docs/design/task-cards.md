@@ -1,6 +1,8 @@
 # 任务卡：iOS 与 Web 的对比和统一设计稿
 
 状态：P1–P7 已定（2026-11-12，全部按推荐，见 §5），按本稿实现（#5569）。Web 一侧已实现，逐项状态见 §7；iOS 一侧见 §7 的 iOS 行。
+
+**P3 replaced on 2026-11-15** (#8237): a task has one card in the chat, its hand-off card from when it was handed out; how it ended (done, stopped, failed, interrupted) is no longer a card but its row in In Progress, Needs You or, once finished, Finished (#10922; In Progress's Just Finished group until then). See `docs/design/DESIGN_SYSTEM.md` 4.8.0 and `docs/design/DECISIONS.md`. §3.3's conclusion cards and P3 below are kept as history.
 对比基线：`origin/main` @ `d6b446fcea`（2026-11-12）。截图在 [`task-cards/`](task-cards/)，数据来自 `scripts/mock/mock_hub.py`
 （`MOCK_TASKS=1 MOCK_TASKS_CUT=1 MOCK_USAGE_LIMIT=1 MOCK_TODO_ASKS=1 MOCK_TASK_DECISION=1`），iOS 是 iPhone 17 Pro 模拟器（iOS 26.0，英文），
 Web 是本地 vite 页面，视口 430 px 宽（手机宽度，和 iPhone 可比），深浅色各一张。
@@ -190,8 +192,10 @@ P7 已定，Web 一侧已删（§7）。**更正**：`OutcomeReceipt`、`Receipt
 | --- | --- | --- | --- |
 | Done | ✓ 实心，`positive` | `positive` 12% | PR、View |
 | Stopped（没做完） | 时钟，secondary | `Fill.well` / `--field` | PR、View |
-| Failed to start | ✕ 实心，`danger` | `danger` 12%（Web `--danger-wash`） | Retry |
+| Failed to start | ✕ 实心，`danger` | `danger` 12%（Web `--danger-wash`） | Use <launcher> instead (when offered), Retry |
 | Interrupted | ✕ 实心，`danger` | `danger` 12%（Web `--danger-wash`） | Continue、View |
+
+Failed-start remedies (#10452): the alternative launcher comes first only with `task_retry_launcher` and plan-task `retry_with`, on its own measured full-width row so its complete label never squeezes Retry / Remove; the ordinary Retry / Remove row keeps its old layout and Retry needs no `plan_id`. A `shell_waiting` question appears above those actions only with `todo_start_answer` and a live `kept_until`, using the shared choice-card pattern in `DESIGN_SYSTEM.md` 3.3. The task answer restarts the task on the hub and never resends chat messages.
 
 ### 3.4 要你拍板
 

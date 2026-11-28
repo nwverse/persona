@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import persona.core.domain.inbox.InboxGroups
 import persona.core.domain.inbox.InboxRow
 import persona.core.domain.inbox.InboxRowType
+import persona.core.inbox.*
 
 // The inbox's groups and Done's history on Android (#2576, as #2059 on the web and iOS; docs/assistant/inbox.md
 // "Grouping"): the rules are persona.core.domain.inbox.InboxGroups, this file gives them the rows' records and titles.
@@ -52,18 +53,35 @@ internal class InboxDoneHistory(private val repository: InboxRepository, private
     private val next = HashMap<String, InboxDoneCursor>()
     private val ended = HashSet<String>()
 
-    /** Done was opened: each of [managers]' counts in [zone], and the first page of those whose hub has none. */
+    private var counted: kotlinx.coroutines.Deferred<Unit>? = null
+
+    /**
+     * Each of [managers]' counts in [zone], once, without a page: read on entering the Inbox while its list holds no done
+     * item, so the section bar can offer Done on the hub's word (#9053). [start] waits for it while it is still out.
+     */
+    fun count(managers: List<String?>, zone: ZoneId): kotlinx.coroutines.Deferred<Unit> = counted ?: run {
+        counting = true
+        val asked = managers.map { it.orEmpty() }.distinct()
+        scope.async {
+            val read = asked.map { m ->
+                async { m to try { repository.doneDays(m.ifEmpty { null }, zone) } catch (e: CancellationException) { throw e } catch (_: Exception) { null } }
+            }.awaitAll()
+            days = read.mapNotNull { (m, d) -> d?.let { m to it } }.toMap()
+            counting = false
+        }.also { counted = it }
+    }
+
+    /** Done was opened: each of [managers]' counts in [zone] ([count]), and the first page of those whose hub has none. */
     fun start(managers: List<String?>, zone: ZoneId) {
         if (started) return
         started = true
-        counting = true
         val asked = managers.map { it.orEmpty() }.distinct()
+        // Done reads its counts as it opens: the entry's read stands in only while it is still out. A finished one may have
+        // failed, or come before items were marked done since.
+        if (counted?.isCompleted == true) counted = null
+        val read = count(managers, zone)
         scope.launch {
-            val counted = asked.map { m ->
-                async { m to try { repository.doneDays(m.ifEmpty { null }, zone) } catch (e: CancellationException) { throw e } catch (_: Exception) { null } }
-            }.awaitAll()
-            days = counted.mapNotNull { (m, d) -> d?.let { m to it } }.toMap()
-            counting = false
+            read.await()
             val uncounted = asked.filter { it !in days }
             if (uncounted.isNotEmpty()) load(uncounted)
         }
@@ -80,7 +98,7 @@ internal class InboxDoneHistory(private val repository: InboxRepository, private
             try {
                 val pages = asked.map { m -> async { m to repository.doneHistory(m.ifEmpty { null }, next[m]) } }.awaitAll()
                 add(pages.flatMap { it.second.records })
-                pages.forEach { (m, page) -> if (page.next == null) { ended += m; next.remove(m) } else next[m] = page.next }
+                pages.forEach { (m, page) -> val after = page.next; if (after == null) { ended += m; next.remove(m) } else next[m] = after }
                 more = asked.any { it !in ended }
             } catch (e: CancellationException) {
                 throw e
@@ -111,7 +129,7 @@ internal class InboxDoneHistory(private val repository: InboxRepository, private
             try {
                 val page = repository.doneHistory(manager.ifEmpty { null }, groupNext[id] ?: InboxDoneCursor(end.toString(), null))
                 add(page.records)
-                if (page.next == null) endedGroups = endedGroups + id else groupNext[id] = page.next
+                val after = page.next; if (after == null) endedGroups = endedGroups + id else groupNext[id] = after
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {

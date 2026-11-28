@@ -76,28 +76,32 @@ type storedLauncher struct {
 	ViaMachine string    `json:"via_machine,omitempty"`
 	Created    time.Time `json:"created"`
 	Updated    time.Time `json:"updated"`
+	// channelAlias is the channel the launcher is an alias of (execution_channels.go): made on every read, never
+	// stored.
+	channelAlias string
 }
 
 // LauncherView is one launcher for the app: where it comes from, which machines have it; never the key.
 type LauncherView struct {
-	Kind                   string   `json:"kind,omitempty"`
-	Agent                  string   `json:"agent,omitempty"`
-	API                    string   `json:"api,omitempty"`
-	Name                   string   `json:"name"`
-	DisplayName            string   `json:"display_name,omitempty"` // managed: the name shown, "" shows Name
-	Source                 string   `json:"source"`                 // zshrc (an rc file's) | persona | agy | builtin (plain claude)
-	BaseURL                string   `json:"base_url,omitempty"`
-	Model                  string   `json:"model,omitempty"`
-	SmallModel             string   `json:"small_model,omitempty"`
-	SubagentModel          string   `json:"subagent_model,omitempty"`
-	CustomModel            string   `json:"custom_model,omitempty"`
-	CustomModelName        string   `json:"custom_model_name,omitempty"`
-	CustomModelDescription string   `json:"custom_model_description,omitempty"`
-	Args                   []string `json:"args,omitempty"`
-	HasKey                 bool     `json:"has_key,omitempty"`
-	Auth                   string   `json:"auth,omitempty"`     // managed: api_key (x-api-key) or bearer
-	Machines               []string `json:"machines,omitempty"` // zshrc: the machines whose rc file defines it; builtin: that have claude
-	Hidden                 bool     `json:"hidden,omitempty"`
+	Kind                   string                  `json:"kind,omitempty"`
+	Agent                  string                  `json:"agent,omitempty"`
+	API                    string                  `json:"api,omitempty"`
+	Name                   string                  `json:"name"`
+	DisplayName            string                  `json:"display_name,omitempty"` // managed: the name shown, "" shows Name
+	Source                 string                  `json:"source"`                 // zshrc (an rc file's) | persona | agy | builtin (plain claude)
+	BaseURL                string                  `json:"base_url,omitempty"`
+	Model                  string                  `json:"model,omitempty"`
+	SmallModel             string                  `json:"small_model,omitempty"`
+	SubagentModel          string                  `json:"subagent_model,omitempty"`
+	CustomModel            string                  `json:"custom_model,omitempty"`
+	CustomModelName        string                  `json:"custom_model_name,omitempty"`
+	CustomModelDescription string                  `json:"custom_model_description,omitempty"`
+	Args                   []string                `json:"args,omitempty"`
+	HasKey                 bool                    `json:"has_key,omitempty"`
+	Auth                   string                  `json:"auth,omitempty"`     // managed: api_key (x-api-key) or bearer
+	Machines               []string                `json:"machines,omitempty"` // zshrc: the machines whose rc file defines it; builtin: that have claude
+	Hidden                 bool                    `json:"hidden,omitempty"`
+	PermissionModes        proto.PermissionModeSet `json:"permission_modes,omitempty"`
 	// RCFiles (source zshrc only): the files it was found in (~/.zshrc, ~/.bashrc: each machine's login shell's), for the group title.
 	RCFiles []string `json:"rc_files,omitempty"`
 	// Stale (zshrc, builtin): the machines of Machines that did not answer this time (offline, timed out, failed):
@@ -105,7 +109,7 @@ type LauncherView struct {
 	Stale []string `json:"stale,omitempty"`
 	// Versions (builtin): Claude Code's version on each machine that said.
 	Versions map[string]string `json:"versions,omitempty"`
-	// Managed only (#2455, proto.ManagedLauncher's fields): never the headers themselves, only has_headers.
+	// Managed only (#2455, proto.ManagedLauncher's fields): never header values, only has_headers and header_names.
 	Models        []proto.ProviderModel `json:"models,omitempty"`
 	OpusModel     string                `json:"opus_model,omitempty"`
 	SonnetModel   string                `json:"sonnet_model,omitempty"`
@@ -113,13 +117,15 @@ type LauncherView struct {
 	FableModel    string                `json:"fable_model,omitempty"`
 	SubagentForce bool                  `json:"subagent_force,omitempty"`
 	HasHeaders    bool                  `json:"has_headers,omitempty"`
-	HasEnv        bool                  `json:"has_env,omitempty"` // never the environment itself
-	Proxy         string                `json:"proxy,omitempty"`
-	NoProxy       string                `json:"no_proxy,omitempty"`
-	TimeoutMS     int                   `json:"timeout_ms,omitempty"`
-	CompactWindow int                   `json:"compact_window,omitempty"`
-	MaxContext    int                   `json:"max_context,omitempty"`
-	Effort        string                `json:"effort,omitempty"`
+	// HeaderNames identifies configured fields without returning their secret values.
+	HeaderNames   []string `json:"header_names,omitempty"`
+	HasEnv        bool     `json:"has_env,omitempty"` // never the environment itself
+	Proxy         string   `json:"proxy,omitempty"`
+	NoProxy       string   `json:"no_proxy,omitempty"`
+	TimeoutMS     int      `json:"timeout_ms,omitempty"`
+	CompactWindow int      `json:"compact_window,omitempty"`
+	MaxContext    int      `json:"max_context,omitempty"`
+	Effort        string   `json:"effort,omitempty"`
 	// Origin is ManagedLauncher.Source ("" made by hand, "zshrc:<alias>@<machine>", "preset:<id>"); "source" is taken.
 	Origin string `json:"origin,omitempty"`
 	// Managed only: the device scope (docs/integrations/launchers.md "Device scope and on-demand delivery"). LegacyScope:
@@ -130,6 +136,9 @@ type LauncherView struct {
 	OwnService    string   `json:"own_service,omitempty"`
 	KeyMachines   []string `json:"key_machines,omitempty"`
 	LegacyScope   bool     `json:"legacy_scope,omitempty"`
+	// Pi (managed): pi can use it too on the computers in its scope (proto.ManagedLauncher.PiAPI,
+	// docs/integrations/pi.md "Persona's model providers").
+	Pi bool `json:"pi,omitempty"`
 	// ViaMachine (managed, kind api): the computer that sends its requests; "" this manager (models_via.go).
 	ViaMachine string `json:"via_machine,omitempty"`
 	// KeyReference (managed): the key is a reference to a provider extension's secret: the reference and what it
@@ -141,6 +150,11 @@ type LauncherView struct {
 	Definitions map[string]string `json:"definitions,omitempty"`
 	// Details per machine (zshrc launchers, detail only): what the launcher really sets when run (node/launcherprobe.go).
 	Details map[string]proto.LauncherDetail `json:"details,omitempty"`
+	// Internal provenance for model.run admission (never serialized): whether this view came from a verified built-in
+	// Antigravity companion, and which machines in Machines have a model.run-compatible entry (non-nil when built from
+	// machine snapshots).
+	builtinCompanion bool
+	modelRunMachines []string
 }
 
 // launcherView is a managed launcher for the app: never the key or the headers.
@@ -152,7 +166,21 @@ func launcherView(l storedLauncher) LauncherView {
 		SubagentForce: l.SubagentForce, HasHeaders: l.HeadersSealed != "", HasEnv: l.EnvSealed != "", Proxy: l.Proxy, NoProxy: l.NoProxy, TimeoutMS: l.TimeoutMS,
 		CompactWindow: l.CompactWindow, MaxContext: l.MaxContext, Effort: l.Effort, Origin: l.Source,
 		Share: l.share(), ScopeMachines: l.ScopeMachines, Delivery: l.delivery(), OwnService: l.ownService(), LegacyScope: l.Share == "",
-		ViaMachine: l.ViaMachine, keySealed: l.KeySealed}
+		Pi: l.PiAPI() != "" && l.share() != shareNone, ViaMachine: l.ViaMachine, keySealed: l.KeySealed}
+}
+
+// launcherView adds the only header metadata safe to reopen in an editor: field names, never their values. An
+// unreadable sealed record keeps HasHeaders so the owner can replace or clear it without a value being exposed.
+func (s *Service) launcherView(l storedLauncher) LauncherView {
+	v := launcherView(l)
+	if v.HasHeaders {
+		if raw, err := s.openKey(l.HeadersSealed); err == nil {
+			for _, header := range parseHeaders(raw) {
+				v.HeaderNames = append(v.HeaderNames, header[0])
+			}
+		}
+	}
+	return v
 }
 
 var managedLauncherName = lazyre.New(`^[A-Za-z_][A-Za-z0-9_-]*$`)
@@ -251,10 +279,17 @@ func (s *Service) storedLaunchersKnown(ctx context.Context) ([]storedLauncher, b
 	if _, err := memoSetting(ctx, st, launchersManagedKey, &list); err != nil {
 		return nil, false
 	}
-	return list, true
+	catalog, ok := s.channelCatalog(ctx)
+	if !ok {
+		return list, false
+	}
+	return withChannelAliases(list, catalog), true
 }
 
 var errManagedLaunchersRead = errors.New("managed provider configuration unavailable")
+
+// errChannelsRead: the managed channels, whose aliases are managed launchers too, could not be read.
+var errChannelsRead = errors.New("managed channels unavailable")
 
 // readStoredLaunchers preserves every raw sealed record for mutation decisions. A missing setting is empty;
 // storage and JSON failures abort the operation. Decryption belongs to consumers that need credentials,
@@ -272,7 +307,11 @@ func (s *Service) readStoredLaunchers(ctx context.Context) (list []storedLaunche
 	if _, err := st.Setting(ctx, launchersManagedKey, &list); err != nil {
 		return nil, err
 	}
-	return list, nil
+	catalog, ok := s.channelCatalog(ctx) // what a channel change made is there at once (execChannelBook)
+	if !ok {
+		return nil, errChannelsRead
+	}
+	return withChannelAliases(list, catalog), nil
 }
 
 // readHiddenLaunchers reads launchers.hidden from the store itself (never a request's memo) for a change to it, made

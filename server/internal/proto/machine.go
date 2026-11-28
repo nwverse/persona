@@ -1,6 +1,10 @@
 package proto
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
+)
 
 type Machine struct {
 	ID string `json:"id"`
@@ -39,9 +43,19 @@ type Machine struct {
 	Deploying   bool   `json:"deploying,omitempty"`
 	DeployError string `json:"deploy_error,omitempty"`
 	// CanDeploy is explicit so clients can distinguish an older hub without capability reporting.
-	CanDeploy    *bool  `json:"can_deploy,omitempty"`
+	CanDeploy *bool `json:"can_deploy,omitempty"`
+	// DeploySource is the verified program used for this deployment, when known.
+	DeploySource string `json:"deploy_source,omitempty"`
 	DeployReason string `json:"deploy_reason,omitempty"`
-	DeployPhase  string `json:"deploy_phase,omitempty"`
+	// DeployNoPackage: the node itself could be updated from here, and what stops it is the hub's side: no node build it
+	// can send for its platform now (none, or the release site cannot be reached; DeployReason says which): not a node
+	// to reinstall (#10566).
+	DeployNoPackage bool   `json:"deploy_no_package,omitempty"`
+	DeployPhase     string `json:"deploy_phase,omitempty"`
+	// LinkSwitch: switching this ssh computer to Persona Link (#10662, docs/operations/link.md "Switching from SSH").
+	// Set by a manager that can, for each ssh computer it connects itself and for a little while after a switch ended;
+	// nil from an older manager (the apps then offer nothing).
+	LinkSwitch *MachineLinkSwitch `json:"link_switch,omitempty"`
 	// System: OS and hardware, from the node's last connection (kept across hub restarts).
 	System *System `json:"system,omitempty"`
 	// Link: kind link, while the computer's persona-link is connected (docs/operations/link.md).
@@ -76,6 +90,13 @@ type Machine struct {
 	// FileTransfer: whether files may be sent to this computer to keep and between it and others (#3065,
 	// docs/protocol/file-transfer.md). Always set by a manager that knows the feature; nil (from an older one) is off.
 	FileTransfer *MachineFileTransfer `json:"file_transfer,omitempty"`
+	// OrcaChatStarts: "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's
+	// default"), on or off, set only while Orca is in the computer's engine set, where it applies; absent otherwise and
+	// from an older manager (the apps then offer no switch). Changed with PUT …/orca-chat-starts.
+	OrcaChatStarts OrcaChatStarts `json:"orca_chat_starts,omitempty"`
+	// ClaudePlugin: the Persona plugin for Claude Code on it, as its node last said (docs/operations/link.md "Claude
+	// Code plugin"); nil from an older node or one that has not checked.
+	ClaudePlugin *ClaudePlugin `json:"claude_plugin,omitempty"`
 	// Hub mesh (docs/server/mesh.md): the hub that connects to this machine (its owner), its name, the machine's own id
 	// (~/.persona/machine-uid, empty for an old node or one never reached) and how the hub the client talks to gets
 	// there. A hub without peers fills them in for its own machines too.
@@ -86,6 +107,27 @@ type Machine struct {
 	// Paths: every way the center has to this computer (docs/archive/operations/plan-hub-center.md 5), when there is more than one or it
 	// is a member hub's; the machine detail and the admin page show them.
 	Paths []MachinePath `json:"paths,omitempty"`
+}
+
+// OrcaChatStarts is Machine.OrcaChatStarts, a closed set: the switch "Start new Agents as Orca chats" on a computer
+// where it applies. The zero value is absent: Orca is not in the computer's engine set, or the manager is older. A
+// client reads a value it does not know as absent (no switch), so a later state is never shown as on or off.
+type OrcaChatStarts string
+
+const (
+	OrcaChatStartsOn  OrcaChatStarts = "on"
+	OrcaChatStartsOff OrcaChatStarts = "off"
+)
+
+// Valid: one of the set (absent is not).
+func (s OrcaChatStarts) Valid() bool { return s == OrcaChatStartsOn || s == OrcaChatStartsOff }
+
+// OrcaChatStartsOf is the switch's state where it applies.
+func OrcaChatStartsOf(on bool) OrcaChatStarts {
+	if on {
+		return OrcaChatStartsOn
+	}
+	return OrcaChatStartsOff
 }
 
 // MachineRoute is how the center reaches a machine now (docs/archive/operations/plan-hub-center.md 5): via one of its own ways (local |
@@ -107,6 +149,60 @@ type MachinePath struct {
 	Active bool   `json:"active,omitempty"`
 }
 
+// MachineLinkSwitch is where switching an ssh computer to Persona Link stands. Available: a switch can start now;
+// otherwise Reason says why not (a LinkSwitchReason* code, the apps' own words). Phase is the current or last switch's
+// (LinkSwitchPhase*, "" none); a failed one says why in Error (a code) and RollbackUnconfirmed when the computer could
+// not be shown to be back on ssh as before.
+type MachineLinkSwitch struct {
+	Available           bool      `json:"available"`
+	Reason              string    `json:"reason,omitempty"`
+	Phase               string    `json:"phase,omitempty"`
+	Error               string    `json:"error,omitempty"`
+	RollbackUnconfirmed bool      `json:"rollback_unconfirmed,omitempty"`
+	At                  time.Time `json:"at,omitzero"` // when Phase last changed
+}
+
+// MachineLinkSwitch phases, in order; a switch ends succeeded or failed.
+const (
+	LinkSwitchPhaseChecking    = "checking"     // looking at the computer over ssh, nothing changed yet
+	LinkSwitchPhaseInstalling  = "installing"   // sending Persona Link, switching the connection, installing and pairing
+	LinkSwitchPhaseConnecting  = "connecting"   // waiting for the computer to connect through Persona Link
+	LinkSwitchPhaseRollingBack = "rolling_back" // undoing what this switch did, back to ssh
+	LinkSwitchPhaseSucceeded   = "succeeded"
+	LinkSwitchPhaseFailed      = "failed"
+)
+
+// MachineLinkSwitch reasons (why not available) and errors (why a switch failed). The apps say each in their own
+// words; an unknown one is LinkSwitchReasonUnknown's.
+const (
+	LinkSwitchReasonOffline         = "offline"          // the computer is not connected over ssh now
+	LinkSwitchReasonUnsupportedOS   = "unsupported_os"   // only Linux computers switch from here (amd64, arm64)
+	LinkSwitchReasonLinkUnavailable = "link_unavailable" // the hub takes no Persona Link (no TLS port or https address)
+	LinkSwitchReasonHubOld          = "hub_old"          // the hub cannot switch computers (an older build)
+	LinkSwitchReasonPending         = "pending"          // the user has not confirmed the computer
+	LinkSwitchReasonCustomNode      = "custom_node"      // remote_bin or the node's data directory is not the default
+	LinkSwitchReasonBusy            = "busy"             // a node update or another switch is running
+	LinkSwitchReasonInProgress      = "in_progress"      // a switch of this computer is running (a second start)
+	LinkSwitchReasonNoSystemd       = "no_systemd"       // no systemd user services on the computer
+	LinkSwitchReasonLingerOff       = "linger_off"       // its services stop when the user signs out (loginctl enable-linger)
+	LinkSwitchReasonExistingLink    = "existing_link"    // Persona Link is installed or paired on it already
+	LinkSwitchReasonNoNode          = "no_node"          // no node program on the computer to run as a service
+	LinkSwitchReasonNoPackage       = "no_package"       // the hub has no Persona Link build for its platform
+	LinkSwitchReasonTransferFailed  = "transfer_failed"  // sending Persona Link over ssh failed
+	LinkSwitchReasonInstallFailed   = "install_failed"   // installing or pairing on the computer failed
+	LinkSwitchReasonLinkTimeout     = "link_timeout"     // it did not connect through Persona Link in time
+	LinkSwitchReasonConfigChanged   = "config_changed"   // its entry changed meanwhile
+	LinkSwitchReasonInterrupted     = "interrupted"      // the manager restarted during the switch
+	LinkSwitchReasonUnknown         = "unknown"
+
+	// LinkSwitchReasonUnsafePermissions: the home folder, ~/.persona or its bin is not the user's own, or may be written by
+	// other users (others, or a group other than the user's own private group), who could swap the program the switch runs.
+	LinkSwitchReasonUnsafePermissions = "unsafe_permissions"
+	// LinkSwitchReasonHubUnanswered: undoing a failed switch needed the hub, which did not answer within the manager's
+	// bound (or does not know the call): the computer may still be set to Persona Link.
+	LinkSwitchReasonHubUnanswered = "hub_unanswered"
+)
+
 // MachineLink is a live persona-link: its build, the hub URL it went to and since when.
 type MachineLink struct {
 	Version string    `json:"version,omitempty"`
@@ -118,26 +214,30 @@ type NodeInfo struct {
 	// Protocol, ProtocolMin and Capabilities are the node protocol handshake (internal/nodeproto, docs/protocol/protocol.md
 	// "Node handshake"): the node protocol it speaks, the oldest manager protocol it answers, and what it can do.
 	// Nodes from before the handshake leave all three out (protocol 0); managers from before it ignore them.
-	Protocol           int      `json:"protocol,omitempty"`
-	ProtocolMin        int      `json:"protocol_min,omitempty"`
-	Capabilities       []string `json:"capabilities,omitempty"`
-	NodeUpdate         bool     `json:"node_update,omitempty"`
-	NodeUpdateReason   string   `json:"node_update_reason,omitempty"`
-	ModelConfiguration bool     `json:"model_configuration,omitempty"`
-	Hostname           string   `json:"hostname"`
-	OS                 string   `json:"os"`
-	Arch               string   `json:"arch"`
-	Home               string   `json:"home"`
-	DataDir            string   `json:"data_dir,omitempty"`
-	HerdrVersion       string   `json:"herdr_version"`
-	ClaudeVersion      string   `json:"claude_version"`
-	Version            string   `json:"version"`
-	System             *System  `json:"system,omitempty"`
+	Protocol           int                 `json:"protocol,omitempty"`
+	ProtocolMin        int                 `json:"protocol_min,omitempty"`
+	Capabilities       []string            `json:"capabilities,omitempty"`
+	NodeUpdate         bool                `json:"node_update,omitempty"`
+	NodeUpdateReason   string              `json:"node_update_reason,omitempty"`
+	UpdateDraining     *NodeUpdateDraining `json:"update_draining,omitempty"`
+	ModelConfiguration bool                `json:"model_configuration,omitempty"`
+	Hostname           string              `json:"hostname"`
+	OS                 string              `json:"os"`
+	Arch               string              `json:"arch"`
+	Home               string              `json:"home"`
+	DataDir            string              `json:"data_dir,omitempty"`
+	HerdrVersion       string              `json:"herdr_version"`
+	ClaudeVersion      string              `json:"claude_version"`
+	Version            string              `json:"version"`
+	System             *System             `json:"system,omitempty"`
 	// Program is the program the node runs as (nodeproto.ProgramPersonad / ProgramPersonaNode) and Executable the file
 	// it runs from: an update brings the same kind of program, to that file. Older nodes leave both out (personad, at the
 	// machine's remote_bin).
 	Program    string `json:"program,omitempty"`
 	Executable string `json:"executable,omitempty"`
+	// Edition is the edition the node was built as (nodeproto.Edition): left out by a full build and by every node
+	// from before editions, "core" by a core-only one. An update brings a build of the same edition, never the other.
+	Edition nodeproto.Edition `json:"edition,omitempty"`
 	// Engine is the engine the node drives now; Engines, what it found (proto.Machine.Engines). Older nodes leave
 	// both out.
 	Engine  string   `json:"engine,omitempty"`
@@ -159,6 +259,13 @@ type NodeInfo struct {
 	// Clipboard: whether the node reaches a clipboard where it runs (clipboard.get / clipboard.set, capability
 	// clipboard). An older node leaves it out.
 	Clipboard *ClipboardSupport `json:"clipboard,omitempty"`
+	// HomeReal is Home with its links followed, when that is another path (a home reached through a symlink, such as
+	// /home/me -> /data/home/me): the hub cannot resolve another computer's links, and a directory named either way
+	// is the same one (remembered kinds of tasks, #8095). Older nodes, and homes that are no link, leave it out.
+	HomeReal string `json:"home_real,omitempty"`
+	// ClaudePlugin is the Persona plugin for Claude Code there (claudeplugin.go): nil from older nodes and from a
+	// node that has not checked yet.
+	ClaudePlugin *ClaudePlugin `json:"claude_plugin,omitempty"`
 }
 
 // System is what a machine is: OS, hardware, since when it runs (sysmon; docs/server/machines.md). Read once when the node

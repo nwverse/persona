@@ -1,3 +1,4 @@
+import PersonaWire
 import SwiftUI
 
 /// A recent setup as New Agent's card shows it, and what tapping it puts in the form (#2134).

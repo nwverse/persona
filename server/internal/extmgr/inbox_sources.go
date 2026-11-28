@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/subscriptions"
@@ -127,10 +128,8 @@ const assistantSource = "assistant"
 // cannot be reached the switch shows on, its default, and a change is refused by SetFeed.
 func (b builtinSources) assistant(ctx context.Context) subscriptionsui.Builtin {
 	on := true
-	var res struct {
-		On bool `json:"on"`
-	}
-	if err := b.h.callAssistant(ctx, assistantwire.MethodInboxPost, map[string]any{}, &res); err == nil {
+	params := assistantwire.InboxPostParams{On: assistantwire.InboxPostLeftOut}
+	if res, err := buswire.Call(ctx, assistantCaller(b.h.callAssistant), assistantwire.InboxPostMethod, params); err == nil {
 		on = res.On
 	}
 	return subscriptionsui.Builtin{ID: assistantSource, Name: i18n.T(b.h.userLang(), "extmgr-inbox_sources.assistant"), Icon: "robot",
@@ -144,12 +143,15 @@ var migrations = map[string]subscriptions.Migration{
 	"imessage": {Connector: "imessage", Source: "imessage", Icon: "chat", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubMessage)},
 	// GitHub's rows as its Collect makes them, through the generic inbox_things (#6381, #6404).
 	"github": {Connector: "github", Source: "github", Icon: "code", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubNotice)},
+	// Lark's rows as its extension's Collect makes them, through the generic inbox_things (#13672): chats, documents
+	// and moments of several accounts, a conversation's batch of new messages beside its events' state (#13637).
+	"lark": {Connector: "lark", Source: "lark", Icon: "chat", Recipe: inboxRows(wire.ConnectorSubscriptionKindSubMessage)},
 }
 
 // withheld are the sources whose default subscription is not offered yet: the owner says when (decision 6 of the
-// migration). GitHub's waits for iMessage's week on the owner's hub (2026-11-13). One already switched still shows
-// its switch, to switch back.
-var withheld = map[string]bool{"github": true}
+// migration), each after the source before it has had its week there. GitHub's is offered since iMessage's week
+// (#13599); Lark's waits for GitHub's (#13672). One already switched still shows its switch, to switch back.
+var withheld = map[string]bool{"lark": true}
 
 // inboxRows is a default subscription's recipe: the source's own Inbox rows, ready-made (inbox_things), a row
 // without a kind of its own being kind.
@@ -166,11 +168,31 @@ func (b builtinSources) via(ctx context.Context, src *subscriptionsui.Builtin) {
 	via := &subscriptionsui.Via{}
 	if s, _, err := b.h.subs.Get(ctx, subscriptions.MigrationID(src.ID)); err == nil {
 		via.On, via.Subscription = s.Migrated != nil, s.ID
+		if via.On {
+			src.Read = subscriptionRead(s) // the Inbox round no longer reads it (#11762)
+		}
 	}
 	if withheld[src.ID] && !via.On {
 		return // not offered yet
 	}
 	src.Via = via
+}
+
+// subscriptionRead is a switched source's latest read as its default subscription's runs keep it, as sourceReads
+// would: the latest attempt, the latest that worked, and why the latest failed while it did. Stored, so a restart
+// keeps it. None before its first run.
+func subscriptionRead(s subscriptions.Subscription) *subscriptionsui.Read {
+	if s.LastRunAt == nil {
+		return nil
+	}
+	r := &subscriptionsui.Read{At: *s.LastRunAt, OK: s.LastOKAt}
+	if s.Error != nil {
+		r.Error = s.Error.Code
+		if r.Error == "" {
+			r.Error = assistantwire.ReadFailed
+		}
+	}
+	return r
 }
 
 // SetMigrated reads source id's Inbox feed through its default subscription (on) or as before, named as the source.
@@ -230,7 +252,12 @@ func (b builtinSources) SetFeed(ctx context.Context, id string, inbox, on bool, 
 		if !inbox {
 			return fmt.Errorf("%q has no knowledge-base feed", id)
 		}
-		return b.h.callAssistant(ctx, assistantwire.MethodInboxPost, map[string]any{"on": on}, nil)
+		post := assistantwire.InboxPostOff
+		if on {
+			post = assistantwire.InboxPostOn
+		}
+		_, err := buswire.Call(ctx, assistantCaller(b.h.callAssistant), assistantwire.InboxPostMethod, assistantwire.InboxPostParams{On: post})
+		return err
 	}
 	f := connector.FeedArchive
 	if inbox {
@@ -282,10 +309,9 @@ func (b builtinSources) SetRules(ctx context.Context, id, rules string, _ subscr
 var errInboxAway = errors.New("the inbox is not available")
 
 func (b builtinSources) Mutes(ctx context.Context, source string) ([]subscriptionsui.Mute, error) {
-	var res struct {
-		Mutes []assistantwire.InboxMute `json:"mutes"`
-	}
-	if err := b.h.callAssistant(ctx, assistantwire.MethodInboxMutes, map[string]string{"source": source}, &res); err != nil {
+	res, err := buswire.Call(ctx, assistantCaller(b.h.callAssistant), assistantwire.InboxMutesMethod,
+		assistantwire.InboxMutesParams{Source: source})
+	if err != nil {
 		return nil, errors.Join(errInboxAway, err)
 	}
 	out := []subscriptionsui.Mute{}
@@ -296,7 +322,9 @@ func (b builtinSources) Mutes(ctx context.Context, source string) ([]subscriptio
 }
 
 func (b builtinSources) Unmute(ctx context.Context, id string) error {
-	return b.h.callAssistant(ctx, assistantwire.MethodInboxUnmute, map[string]string{"id": id}, nil)
+	_, err := buswire.Call(ctx, assistantCaller(b.h.callAssistant), assistantwire.InboxUnmuteMethod,
+		assistantwire.InboxUnmuteParams{ID: assistantwire.InboxMuteID(id)})
+	return err
 }
 
 // Native is the built-in source that reads a catalog service: the mail account on its domain (the mail source), or
@@ -332,11 +360,9 @@ func (b builtinSources) Native(service string) (string, string) {
 // triagePreview has the assistant's triage model try a preview's items (the pages' Try Triage with the Model): one
 // verdict each, nothing kept.
 func (h *Manager) triagePreview(ctx context.Context, tp subscriptions.TriagePreview) ([]subscriptionsui.Verdict, error) {
-	var res struct {
-		Verdicts []assistantwire.InboxTriageVerdict `json:"verdicts"`
-	}
 	in := assistantwire.InboxTriagePreview{Source: tp.Source, Name: tp.Name, Kinds: tp.Kinds, Things: tp.Things}
-	if err := h.callAssistant(ctx, assistantwire.MethodInboxTriagePreview, in, &res); err != nil {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.InboxTriagePreviewMethod, in)
+	if err != nil {
 		return nil, err
 	}
 	out := make([]subscriptionsui.Verdict, 0, len(res.Verdicts))

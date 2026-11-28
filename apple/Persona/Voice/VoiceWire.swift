@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 // The app's side of the voice extension's socket (docs/assistant/voice.md「Protocol changes」: protocol 2; protocol 1 is in
 // docs/extensions/extensions.md「Voice」). Pure data and parsing: it builds for every platform the Persona folder is
@@ -222,6 +223,21 @@ nonisolated enum VoiceLink: Equatable, Sendable {
     }
 }
 
+/// Where one of the voice's replies begins or ends, as the extension says (`reply` frame, feature `reply`, #14932): the
+/// jitter buffer then needs no silence to tell (`VoicePlayout`, #14933). An extension without the feature sends none.
+nonisolated enum VoiceReplyEdge: Equatable, Sendable {
+    case start, end
+    case other(String)
+
+    init(wire: String) {
+        switch wire {
+        case "start": self = .start
+        case "end": self = .end
+        default: self = .other(wire)
+        }
+    }
+}
+
 /// The `code` of an `error` frame (docs/assistant/voice.md 3.3).
 nonisolated enum VoiceErrorCode: Equatable, Sendable {
     case noUpstream, upstreamForbidden, upstreamUnavailable, upstreamFailed
@@ -292,6 +308,8 @@ nonisolated enum VoiceFrame: Equatable, Sendable {
     case run(VoiceRun)
     case ask(VoiceAsk)
     case link(VoiceLink)
+    /// A reply of the voice begins or ends (protocol 2, feature `reply`).
+    case reply(VoiceReplyEdge)
     case error(VoiceFailure)
     case other(type: String)
 
@@ -331,6 +349,8 @@ nonisolated enum VoiceFrame: Equatable, Sendable {
             return .ask(VoiceAsk(interactionID: id, state: VoiceAskState(wire: str(o["state"]) ?? ""), by: str(o["by"])))
         case "link":
             return .link(VoiceLink(wire: str(o["state"]) ?? ""))
+        case "reply":
+            return .reply(VoiceReplyEdge(wire: str(o["state"]) ?? ""))
         case "error":
             return .error(VoiceFailure(code: str(o["code"]).map(VoiceErrorCode.init(wire:)), message: str(o["message"]) ?? "",
                                        fatal: o["fatal"]?.bool ?? false))
@@ -386,9 +406,14 @@ nonisolated struct VoiceStart: Equatable, Sendable {
     /// `"meeting"`, with the recording whose room `target` is. nil for every other call.
     var mode: String? = nil
     var recordingID: String? = nil
+    /// `"call"` for a system call (a call to Persona, #9290); nil for in-app and CarPlay calls. Informational: the hub
+    /// writes it in the call log's start line, and an extension that does not know it ignores it.
+    var surface: String? = nil
 
     /// The mode of a meeting call: bound to the recording's room, hearing only Talk spans.
     static let meetingMode = "meeting"
+    /// The surface of a system call.
+    static let callSurface = "call"
 }
 
 /// Text frames the app sends.
@@ -399,7 +424,13 @@ nonisolated enum VoiceMessage {
                           target: s.target.map { TargetFrame(machineID: $0.machineID, sessionID: $0.sessionID) },
                           recent: s.recent.isEmpty ? nil : s.recent, history: s.history.isEmpty ? nil : s.history,
                           resume: s.resume.isEmpty ? nil : ResumeFrame(runs: s.resume.map(ResumeRun.init)),
-                          echoCancellation: s.echoCancellation, speechGate: s.speechGate))
+                          echoCancellation: s.echoCancellation, speechGate: s.speechGate, surface: nonEmpty(s.surface)))
+    }
+
+    /// A system call went on hold (`true`) or off it (#9290): the extension pauses the realtime upstream at once and
+    /// nothing wakes it until the hold ends. Sent only to an extension whose `ready` lists `hold` (`VoiceHold.feature`).
+    static func hold(_ on: Bool) -> String {
+        encode(HoldFrame(on: on))
     }
 
     /// A meeting call's Talk span opens (`true`) or closes (#3862 phase 4): the app sends the microphone's audio only
@@ -452,9 +483,10 @@ nonisolated enum VoiceMessage {
         var resume: ResumeFrame?
         var echoCancellation: Bool?
         var speechGate: Bool?
+        var surface: String?
 
         enum CodingKeys: String, CodingKey {
-            case type, model, voice, mode, target, recent, history, resume
+            case type, model, voice, mode, target, recent, history, resume, surface
             case protocolVersion = "protocol"
             case recordingID = "recording_id"
             case echoCancellation = "echo_cancellation"
@@ -464,6 +496,11 @@ nonisolated enum VoiceMessage {
 
     private struct TalkFrame: Encodable {
         let type = "talk"
+        var on: Bool
+    }
+
+    private struct HoldFrame: Encodable {
+        let type = "hold"
         var on: Bool
     }
 

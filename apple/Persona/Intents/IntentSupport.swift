@@ -180,11 +180,18 @@ nonisolated enum IntentSupport {
         return out
     }
 
-    /// Every group's sessions, or one group's.
+    /// Every group's sessions, or one group's, as the Agents list has them: a side session folded into its parent's
+    /// chat (`folded`).
     static func sessions(group: String? = nil) async throws -> [Session] {
         var out: [Session] = []
         for api in try clients() where group == nil || api.group == group { out += try await api.sessions() }
-        return out
+        return folded(out)
+    }
+
+    /// A side session lives in its parent's chat (#7944, `SideFold`): Siri and Shortcuts list, count and send to the
+    /// parent, in its folded state, never the side. By what each hub's last hello said (intents read no hello).
+    static func folded(_ sessions: [Session]) -> [Session] {
+        SideFold.fold(sessions, groups: SideFold.rememberedGroups(Set(sessions.map(\.group)))).listed
     }
 
     /// Every group's pending interactions.
@@ -233,10 +240,12 @@ nonisolated enum IntentPicker {
     /// own. A quiet task's agent (the hub's `quiet`, #1731) is the main conversation's to tell, and a muted agent (it
     /// or its space, `mutes` by group, or the hub's `muted` stamp on the card) is not shown anywhere. 「Persona 状态」
     /// reads from these and 「批准第一个待处理」 settles from these, so Siri never approves a card it did not read
-    /// out (#5257).
+    /// out (#5257). A card its task's supervisor holds (`Interaction.supervisorHeld`) is not the user's to answer: Siri
+    /// neither reads it out nor settles it.
     static func visible(_ interactions: [Interaction], sessions: [Session], mutes: [String: Pins]) -> [Interaction] {
         let byKey = Dictionary(sessions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         return interactions.filter { ix in
+            guard !ix.isDisplayMirror, ix.answerableHere else { return false }
             let s = byKey[ix.sessionKey]
             switch TabBadges.place(ix.sessionKey, session: s, quiet: s?.quiet == true, mutes: mutes[ix.group]) {
             case .assistant: return true

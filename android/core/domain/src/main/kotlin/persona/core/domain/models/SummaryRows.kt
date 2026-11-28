@@ -15,6 +15,7 @@ fun Session.keepingDetails(old: Session?): Session {
     return copy(
         launcher = launcher ?: old.launcher,
         permissionMode = permissionMode ?: old.permissionMode,
+        bypassAvailable = if (permissionMode == null) old.bypassAvailable else bypassAvailable,
         effort = effort ?: old.effort,
         efforts = efforts.ifEmpty { old.efforts },
         ultracode = ultracode ?: old.ultracode,
@@ -24,6 +25,7 @@ fun Session.keepingDetails(old: Session?): Session {
         queued = queued ?: old.queued,
         ports = ports ?: old.ports,
         suggestion = suggestion ?: old.suggestion,
+        suggestionRisky = if (suggestion == null) old.suggestionRisky else suggestionRisky,
         codexRoute = codexRoute ?: old.codexRoute,
         codexRouteNote = codexRouteNote ?: old.codexRouteNote,
         runtime = runtime ?: old.runtime,
@@ -33,5 +35,10 @@ fun Session.keepingDetails(old: Session?): Session {
         compaction = compaction ?: old.compaction,
         asks = asks ?: old.asks,
         pendingSwitch = pendingSwitch ?: old.pendingSwitch,
+        // Summary rows omit the coded start details. Keep the pair only while the failure they explain is unchanged;
+        // a row carrying a new code must never inherit the previous code's arguments.
+        startErrorCode = startErrorCode ?: old.startErrorCode.takeIf { startError == old.startError },
+        startErrorArgs = if (startErrorCode != null) startErrorArgs else old.startErrorArgs.takeIf { startError == old.startError },
+        undelivered = undelivered ?: old.undelivered,
     )
 }

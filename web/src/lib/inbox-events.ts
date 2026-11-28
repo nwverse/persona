@@ -3,14 +3,15 @@
 // (`handling`), at most one suggestion with its version, and the handling chain. Every field is optional: an item from an
 // older hub has none of them and the inbox draws exactly what it drew before.
 //
-// The pure parts are plain functions so the tests run them without a DOM; `actOnSuggestion` is the one request.
+// The pure parts are plain functions so the tests run them without a DOM. What the first screen's lib/inbox.ts needs
+// (`statusOf`, and `actOnSuggestion`, the one request, with its toast `actedText`) is in lib/inbox-suggestion.ts, re-exported
+// here: the rest is the Inbox page's and the hand-off card's, which load lazily, so it and its words stay off the first screen.
 
 import { t } from "../i18n";
-import { api, ApiError, errorText } from "./api";
-import { itemHeaders } from "./manager-choice";
-import { uuid } from "./format";
 import type { DocChange, InboxItem } from "./inbox";
 import type { Route } from "./router";
+
+export { actedText, actOnSuggestion, statusOf, type SuggestionResult } from "./inbox-suggestion";
 
 // ── wire types ───────────────────────────────────────────
 
@@ -27,7 +28,7 @@ export interface InboxHandling {
   error?: string;
 }
 
-export type SuggestionKind = "reply" | "agent" | "conclusion" | "todo";
+export type SuggestionKind = "reply" | "handoff" | "agent" | "conclusion" | "todo";
 
 export interface InboxSuggestion {
   version: number;
@@ -39,9 +40,24 @@ export interface InboxSuggestion {
   /** Needs judgment: confirming hands it back to the processing conversation instead of running it. */
   handback?: boolean;
   machine_id?: string;
+  /** The existing conversation proposed by a handoff suggestion. */
+  session_id?: string;
+  target_title?: string;
   changes?: DocChange[];
   at?: string;
   /** The conversation the item was handed to that handed it in (Hand to AI); absent for the item's own AI twin. */
+  conversation?: { machine_id: string; session_id: string };
+}
+
+/** A server-kept reply attempt. Its text is the actual confirmed payload, including edits. */
+export interface InboxSuggestionAttempt {
+  version: number;
+  status: "sending" | "failed" | "unknown" | "sent";
+  retryable: boolean;
+  code?: string;
+  retry_after?: number;
+  text: string;
+  at: string;
   conversation?: { machine_id: string; session_id: string };
 }
 
@@ -89,18 +105,6 @@ export function hasEvent(it: InboxItem): boolean {
   return Boolean(it.chain?.length || it.suggestion || it.recap || it.handling);
 }
 
-/** The section of an open item: the hub's `status` when it sends one, else the triage tier as before (empty = "Needs you"). */
-export function statusOf(it: InboxItem): InboxStatus {
-  switch (it.status) {
-    case "action":
-    case "working":
-    case "fyi":
-    case "noise":
-      return it.status;
-  }
-  return it.tier === "fyi" || it.tier === "noise" ? it.tier : "action";
-}
-
 /** The word an "In progress" row shows for what is going on; undefined when nothing is. */
 export function handlingWord(it: InboxItem): string | undefined {
   switch (it.handling?.state) {
@@ -125,10 +129,12 @@ export function handlingFailed(it: InboxItem): boolean {
 }
 
 /** The suggestion's name: "Suggested reply" / "Suggested Agent" / "Conclusion" (an unknown kind: "Suggestion"). */
-export function suggestionTitle(s: InboxSuggestion): string {
+export function suggestionTitle(s: InboxSuggestion, isMainTarget = false): string {
   switch (s.kind) {
     case "reply":
       return t("lib-inbox-events.kind_reply");
+    case "handoff":
+      return t("lib-inbox-events.kind_handoff", { target: s.target_title || (isMainTarget ? t("sidebar.main_chat") : t("lib-format.untitled_session")) });
     case "agent":
       return t("lib-inbox-events.kind_agent");
     case "conclusion":
@@ -151,6 +157,8 @@ export function suggestionButtons(s: InboxSuggestion): { confirm: string; edit: 
   switch (s.kind) {
     case "reply":
       return { confirm: t("lib-inbox-events.send"), edit: true };
+    case "handoff":
+      return { confirm: t("lib-inbox-events.hand_off"), edit: true };
     case "agent":
       return { confirm: t("lib-inbox-events.start"), edit: true };
     case "conclusion":
@@ -210,49 +218,4 @@ export function itemAtUid(it: InboxItem, uid?: number): InboxItem {
   if (!m || uid === undefined) return it;
   const i = m.uids.indexOf(uid);
   return i < 0 ? it : { ...it, mail: { ...m, uids: m.uids.slice(0, i + 1) } };
-}
-
-// ── acting on the suggestion ─────────────────────────────
-
-export type SuggestionResult =
-  | { ok: true; item: InboxItem }
-  | { ok: false; stale: true; item?: InboxItem; error: string }
-  | { ok: false; stale: false; error: string; code?: string };
-
-/**
- * POST /api/v1/inbox/{id}/suggestion: "Confirm" (with the edited text when "Edit" changed it), "Reject", or "Say something" (instruct).
- * The version shown goes with it, so a suggestion that changed since is not run: the hub answers 409 suggestion_stale
- * with the item as it is now.
- */
-export async function actOnSuggestion(path: string, version: number, action: SuggestionAction, text?: string, clientID = uuid(), manager?: string, due?: string): Promise<SuggestionResult> {
-  try {
-    // the item's manager (another than the default: docs/assistant/managers.md "Clients") is named on its request
-    const item = await api<InboxItem>(`${path}/suggestion`, { method: "POST", json: { version, action, text: text || undefined, due: due || undefined, client_id: clientID }, headers: itemHeaders(manager) });
-    return { ok: true, item };
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 409 && e.body?.code === "suggestion_stale") {
-      const item = e.body.item as InboxItem | undefined;
-      return { ok: false, stale: true, item: item?.id ? item : undefined, error: t("lib-inbox-events.stale") };
-    }
-    return { ok: false, stale: false, error: errorText(e), code: e instanceof ApiError && typeof e.body?.code === "string" ? e.body.code : undefined };
-  }
-}
-
-/** The toast after a suggestion was acted on. */
-export function actedText(s: InboxSuggestion, action: SuggestionAction): string {
-  if (action === "reject") return t("lib-inbox-events.rejected");
-  if (action === "instruct") return t("lib-inbox-events.instructed");
-  if (s.handback) return t("lib-inbox-events.handed_back");
-  switch (s.kind) {
-    case "reply":
-      return t("lib-inbox-events.sent");
-    case "agent":
-      return t("lib-inbox-events.agent_started");
-    case "conclusion":
-      return t("lib-inbox-events.filed");
-    case "todo":
-      return t("lib-inbox-events.todo_added");
-    default:
-      return t("lib-inbox-events.handed_back");
-  }
 }

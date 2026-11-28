@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Drawing the code page's blocks (ExtensionCodePage.swift): one lazy stack, each block a row; the tabs over the page,
 // a single file's lines, the phone's directory pages.
@@ -24,7 +25,7 @@ struct CodeBlockStack: View {
 
     var body: some View {
         content
-            .confirmationDialog(pendingConfirm?.0.action.confirm ?? "", isPresented: confirming, titleVisibility: .visible) {
+            .accessibleConfirmationDialog(pendingConfirm?.0.action.confirm ?? "", isPresented: confirming, titleVisibility: .visible, hasCancel: true) {
                 if let (b, go) = pendingConfirm {
                     Button(role: b.tone == "danger" ? .destructive : nil) { go() } label: { Text(b.title).lineLimit(1) }
                         .accessibilityIdentifier("plugin-ui-confirm")
@@ -125,6 +126,7 @@ struct CodeBlockStack: View {
                     }
                     if let more { ExtensionMoreRow(more: more, model: model, link: $link) }
                 }
+                .environment(\.extensionCardInset, CardStyle.padding)
                 .card()
                 if let footer, !footer.isEmpty {
                     Text(footer).font(Theme.Font.label).foregroundStyle(.secondary).padding(.horizontal, Theme.Space.xs)
@@ -677,7 +679,7 @@ struct CodeBreadcrumbView: View {
             line
             ScrollView(.horizontal) { line }
                 .scrollIndicators(.hidden)
-                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
                 .contentMargins(.vertical, Theme.Space.flush, for: .scrollContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -714,14 +716,15 @@ struct CodeTabsBar: View {
 
     var body: some View {
         // One row when it fits (no scroll view: the first one on a page under the navigation bar gets the bar's height
-        // as its inset and drew its row out of sight); a row that scrolls sideways when it does not.
+        // as its inset and drew its row out of sight); a row that scrolls sideways when it does not. That row stays
+        // clipped to its slot, as the breadcrumb's and `CapsuleFilterBar`'s do: unclipped, it was drawn a bar's height
+        // lower, under the page's list (#13010).
         ViewThatFits(in: .horizontal) {
             row
             ScrollView(.horizontal) { row }
                 .scrollIndicators(.hidden)
-                .scrollEdgeEffectHidden(true, for: .all)
+                .scrollEdgeEffectHiddenWhenSupported(true, for: .all)
                 .contentMargins(.vertical, Theme.Space.flush, for: .scrollContent)
-                .scrollClipDisabled()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
@@ -876,11 +879,7 @@ struct CodeFileBlock: View {
     /// One line's height in the lines view (its own rule: the font's line height and a quarter).
     var lineHeight: CGFloat {
         let f = CodeMetrics.font
-        #if os(macOS)
-        return ceil((f.ascender - f.descender + f.leading) * 1.25) // NSFont has no lineHeight
-        #else
         return ceil(f.lineHeight * 1.25)
-        #endif
     }
 
     func line(_ i: Int) -> NSAttributedString {

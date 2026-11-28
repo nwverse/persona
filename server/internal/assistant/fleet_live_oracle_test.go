@@ -8,9 +8,12 @@ import (
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount/fleetcountadapt"
+	"github.com/nwverse/persona/server/internal/assistant/fleetview"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -38,18 +41,29 @@ func oracleNeedsYou(agents []oracleInput, ixs []proto.Interaction, counts func(o
 			byKey[a.Session.MachineID+"/"+a.Session.SessionID] = a
 		}
 	}
+	// An agent every pending card of which its task's supervisor holds (delegating, not a question) is not the user's.
+	held := map[string]bool{}
+	for _, ix := range ixs {
+		key := ix.MachineID + "/" + ix.SessionID
+		if _, seen := held[key]; !seen {
+			held[key] = true
+		}
+		if !ix.Delegating || ix.Kind == proto.IxQuestion {
+			held[key] = false
+		}
+	}
 	var out []oracleNeeder
 	asked := map[string]bool{}
 	for _, ix := range ixs {
 		key := ix.MachineID + "/" + ix.SessionID
-		if a, ok := byKey[key]; ok && !asked[key] && stands(ix) {
+		if a, ok := byKey[key]; ok && !asked[key] && !held[key] && stands(ix) {
 			asked[key] = true
 			out = append(out, oracleNeeder{agent: a, card: &ix})
 		}
 	}
 	for _, a := range agents {
 		key := a.Session.MachineID + "/" + a.Session.SessionID
-		if counts(a) && !asked[key] && a.Session.State == proto.StateNeedsYou && !a.Session.Assistant {
+		if counts(a) && !asked[key] && !held[key] && a.Session.State == proto.StateNeedsYou && !a.Session.Assistant {
 			out = append(out, oracleNeeder{agent: a})
 		}
 	}
@@ -71,8 +85,15 @@ func oracleBuildFleetIn(l i18n.Lang, agents []oracleInput, ixs []proto.Interacti
 		if ix := n.card; ix != nil {
 			item.Kind, item.Detail = ix.Kind, clip(oneLine(interactionDetail(l, *ix)), fleetDetailMax)
 			item.Interaction, item.Since = ix.ID, unixSeconds(ix.CreatedAt)
-			if len(ix.Fields) > 0 {
+			if !ix.CreatedAt.IsZero() {
+				item.InteractionCreatedAt = ix.CreatedAt.UTC().Format(time.RFC3339Nano)
+			}
+			// #12982: no buttons for a permission without a summary or a plan without a title.
+			blind := ix.Kind == proto.IxPermission && strings.TrimSpace(ix.Summary) == "" ||
+				ix.Kind == proto.IxPlan && strings.TrimSpace(planTitle(ix.Plan)) == ""
+			if len(ix.Fields) > 0 || blind {
 				item.Interaction = ""
+				item.InteractionCreatedAt = ""
 			}
 		}
 		needs = append(needs, item)
@@ -215,7 +236,7 @@ func randomFleet(rng *rand.Rand) ([]fleetInput, []proto.Interaction, map[string]
 				State:     pick(proto.StateNeedsYou, proto.StateWorking, proto.StateUnread, proto.StateIdle, proto.StateWorking),
 				Title:     pick("", "Claude Code", "Fix the build", "a very long title that goes on and on past every limit", "two\nlines"),
 				Cwd:       pick("/code/app", "/code/web", ""),
-				SpaceName: pick("", "app", "web"), SlotName: pick("", "2", "tests"), SlotIndex: rng.IntN(3),
+				SpaceName: pick("", "app", "web"), SlotName: pick("", "2", "tests"), SlotIndex: int32(rng.IntN(3)),
 				LastText:  pick("", "done", "first line\nsecond", "a long reply that is clipped somewhere after sixty runes, really quite long"),
 				Assistant: rng.IntN(8) == 0, Quiet: rng.IntN(10) == 0, UpdatedAt: at(), StateSince: at(),
 				Agent: pick("claude", "codex"), IsSubagent: rng.IntN(6) == 0, BackgroundWorking: rng.IntN(4) == 0}
@@ -263,11 +284,15 @@ func randomFleet(rng *rand.Rand) ([]fleetInput, []proto.Interaction, map[string]
 }
 
 // The fleet and Persona Link's summary are what they were before the agents were read by pointer and only the shown
-// items were made, byte for byte, for random fleets in each language.
+// items were made, byte for byte, for random fleets in each language. The agents are the ones fleetInputsInto hands
+// over, without quiet tasks' and directory-hidden ones (a quiet task's cards stay, as visiblePendingCards keeps them):
+// fleetcount leaves those agents off the Live Activity, whose rule the working rows follow too, where the oracle
+// counted every agent it was handed.
 func TestFleetMatchesOracle(t *testing.T) {
 	rng := rand.New(rand.NewPCG(7, 11))
 	for round := range 1500 {
 		agents, ixs, told := randomFleet(rng)
+		agents = slices.DeleteFunc(agents, func(a fleetInput) bool { return fleetcountadapt.Visibility(a.Session).LeftOut() })
 		old := make([]oracleInput, len(agents))
 		for i, a := range agents {
 			old[i] = oracleInput{Machine: a.Machine, Session: *a.Session, Muted: a.Muted, TurnStart: a.TurnStart}
@@ -285,3 +310,18 @@ func TestFleetMatchesOracle(t *testing.T) {
 		}
 	}
 }
+
+// The oracle's names for what it shares with the fleet, now that the rule a form stands for no agent is fleetcount's
+// and the text is fleetview's: the oracle keeps the words it was written in.
+func cardStands(ix proto.Interaction) bool { return ix.Kind != proto.IxElicitation }
+
+func agentTitle(sess *proto.Session, n int) string {
+	return fleetview.AgentTitle(sessionTitle(sess), n)
+}
+
+var (
+	agentPlace        = fleetview.AgentPlace
+	interactionDetail = fleetview.InteractionDetail
+	unixSeconds       = fleetview.UnixSeconds
+	fit               = fleetview.Fit
+)

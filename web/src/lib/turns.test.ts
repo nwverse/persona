@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chatLines, freshWords, humanizeTool, isLoopTick, mcpServerName, mergeItems, withoutFolded, parseUserText, pickSubject, segments, openRecap, personaToolVerb, toolChip, toolDisplayName, toolLabel, formatDuration } from "./turns";
+import { PERSONA_SERVERS } from "./compatibility";
+import { chatLines, freshWords, humanizeTool, insideFold, isLoopTick, mcpServerName, mergeItems, withoutFolded, parseUserText, pickSubject, segments, openRecap, personaToolVerb, supervisionTool, supervisionVisible, toolChip, toolDisplayName, toolLabel, formatDuration } from "./turns";
 import type { Item } from "./types";
 
 const u = (seq: number, text: string, extra: Partial<Item> = {}): Item => ({ id: `u${seq}#0`, seq, role: "user", kind: "text", text, ...extra });
@@ -213,6 +214,93 @@ describe("chatLines", () => {
     expect(kinds(ls)).toEqual(["segment", "notice"]);
   });
 
+  it("classifies a settled whitespace reply without changing live, answered, or queued turns", () => {
+    const first = u(1, "Check this");
+    const thinking: Item = { id: "t2#0", seq: 2, role: "assistant", kind: "thinking", text: "Considering it" };
+    const blank = a(3, " \n\t");
+    const empty = (items: Item[], live = false) => {
+      const [line] = chatLines(items, { live });
+      return line.kind === "segment" && line.seg.emptyResponse === true;
+    };
+    expect(empty([first, thinking, blank])).toBe(true);
+    expect(empty([first, thinking, blank], true)).toBe(false);
+    expect(empty([first, thinking, a(3, "An answer")])).toBe(false);
+    expect(empty([first, thinking, a(3, "API Error: 503 Unavailable")])).toBe(false);
+    expect(empty([thinking, blank])).toBe(false);
+    expect(empty([u(1, "Queued", { queued: true }), blank])).toBe(false);
+    expect(empty([first, thinking, blank, notice(4, "Interrupted")])).toBe(false);
+    expect(empty([first, thinking, blank, notice(4, "中断しました")])).toBe(false);
+    expect(empty([first, thinking, blank, notice(4, "已中断")])).toBe(false);
+  });
+
+  it("calls no turn empty while the items may predate the transcript (a cached page before its newest read)", () => {
+    const items = [u(1, "Check this"), tool(2, "search"), res(3, "search")];
+    const empty = (opts: { stale?: boolean }) => {
+      const [line] = chatLines(items, opts);
+      return line.kind === "segment" && line.seg.emptyResponse === true;
+    };
+    expect(empty({})).toBe(true);
+    expect(empty({ stale: true })).toBe(false);
+  });
+
+  it("omits the empty-response fallback on the latest turn while waiting on user input (needsYou)", () => {
+    const firstTurn = [u(1, "Earlier question"), { id: "t2#0", seq: 2, role: "assistant", kind: "thinking", text: "Hmm" } as Item];
+    const latestTurn = [u(3, "Need approval"), tool(4, "persona_settings")];
+    const lines = chatLines([...firstTurn, ...latestTurn], { needsYou: true });
+    expect(lines).toHaveLength(2);
+    expect(lines[0].kind === "segment" && lines[0].seg.emptyResponse).toBe(true);
+    expect(lines[1].kind === "segment" && lines[1].seg.emptyResponse).toBeUndefined();
+    expect(lines[1].kind === "segment" && lines[1].live).toBe(false);
+
+    const settled = chatLines([...firstTurn, ...latestTurn], { needsYou: false });
+    expect(settled[1].kind === "segment" && settled[1].seg.emptyResponse).toBe(true);
+  });
+
+  it("omits the empty-response fallback on the latest turn while session state is unknown (statusUnknown)", () => {
+    const firstTurn = [u(1, "Earlier question"), { id: "t2#0", seq: 2, role: "assistant", kind: "thinking", text: "Hmm" } as Item];
+    const latestTurn = [u(3, "Latest question"), tool(4, "read_file")];
+    const lines = chatLines([...firstTurn, ...latestTurn], { statusUnknown: true });
+    expect(lines).toHaveLength(2);
+    expect(lines[0].kind === "segment" && lines[0].seg.emptyResponse).toBe(true);
+    expect(lines[1].kind === "segment" && lines[1].seg.emptyResponse).toBeUndefined();
+    expect(lines[1].kind === "segment" && lines[1].live).toBe(false);
+
+    const settled = chatLines([...firstTurn, ...latestTurn], { statusUnknown: false });
+    expect(settled[1].kind === "segment" && settled[1].seg.emptyResponse).toBe(true);
+  });
+
+  it("omits the empty-response fallback after a silent supervision finish", () => {
+    const finish = { ...tool(2, "finish"), tool_name: "mcp__persona__supervision_finish", tool_input: { visibility: "silent" } };
+    const receipt = { ...res(3, "finish"), text: '{"visibility":"silent"}' };
+    for (const tools of [[finish], [finish, receipt]]) {
+      const [line] = chatLines([u(1, "Check this"), ...tools, a(4, "\n")]);
+      expect(line.kind === "segment" && line.seg.emptyResponse).toBeUndefined();
+    }
+  });
+
+  it("omits the empty-response fallback for /compact and notice-answered local slash commands", () => {
+    const empty = (items: Item[]) => {
+      const [line] = chatLines(items);
+      return line.kind === "segment" && line.seg.emptyResponse === true;
+    };
+    const compactWithArgs = u(1, "/compact Write every compaction summary in English.");
+    const compactedStdout = notice(2, "Compacted PreCompact completed successfully");
+    expect(empty([compactWithArgs, compactedStdout])).toBe(false);
+    expect(empty([compactWithArgs])).toBe(false);
+    expect(empty([u(1, "/compact")])).toBe(false);
+    expect(empty([u(1, "/model opus"), notice(2, "Set model to Opus")])).toBe(false);
+    expect(empty([u(1, "/cost"), notice(2, "Total cost: $0.04")])).toBe(false);
+
+    // Model-invoking slash commands, file paths, and ordinary messages still report an empty response.
+    const thinking: Item = { id: "t2#0", seq: 2, role: "assistant", kind: "thinking", text: "Reviewing" };
+    expect(empty([u(1, "/review")])).toBe(true);
+    expect(empty([u(1, "/review"), thinking, a(3, " ")])).toBe(true);
+    expect(empty([u(1, "/review"), notice(2, "API Error: 503 Unavailable")])).toBe(true);
+    expect(empty([u(1, "/compact/notes.md")])).toBe(true);
+    expect(empty([u(1, "/etc/hosts"), notice(2, "Checked")])).toBe(true);
+    expect(empty([u(1, "Please run /compact")])).toBe(true);
+  });
+
   // #3428: the node's notices for switching ultracode (transcript/ultracode.go) are ordinary notices
   it("keeps the ultracode on / off notices as notices", () => {
     for (const text of ["已开启 ultracode（只对本会话）", "已关闭 ultracode"]) {
@@ -247,10 +335,54 @@ describe("chatLines", () => {
     expect(openRecap(mid, mid[1].kind === "recaps" ? mid[1].items[0] : undefined)).toBeUndefined();
   });
 
-  // #3783: after background tasks woke the agent, the newest words are the answer, at the bottom (the longest run's
-  // words used to be the answer)
-  const wakesOf = (l: ReturnType<typeof chatLines>[number] | undefined) => (l?.kind === "segment" ? l.wakes : undefined);
-  it("answers a woken exchange with its newest words", () => {
+  // #9140: a background task that wakes the idle agent starts an exchange of its own. The turn before it had ended, so
+  // its last words stay its answer; the chat still ends on the newest words (#3783), now the woken exchange's.
+  const answers = (ls: ReturnType<typeof chatLines>) => ls.flatMap((l) => (l.kind === "segment" && l.seg.answer ? [l.seg.answer.text] : []));
+  const seg = (l: ReturnType<typeof chatLines>[number] | undefined) => (l?.kind === "segment" ? l.seg : undefined);
+
+  it("keeps the answer to a newer question when a background task reports back after it (#9140)", () => {
+    // the issue's timeline: A's background check is still running, B is asked and answered, then three notifications
+    const items = [
+      u(1, "Check which trains run on Saturday."),
+      tool(2, "a"),
+      res(3, "a"),
+      a(4, "The timetable check is running in the background."),
+      u(5, "What should I pack for two days?"),
+      a(6, "Pack a rain jacket, two shirts and walking shoes."),
+      wake(7, "Timetable check"),
+      tool(8, "b"),
+      res(9, "b"),
+      a(10, "First result: the 08:10 runs on Saturday."),
+      wake(11, "Timetable check"),
+      a(12, "Second result: the 10:40 runs too."),
+      wake(13, "Timetable check"),
+      tool(14, "c"),
+      res(15, "c"),
+      a(16, "All done: three trains run on Saturday."),
+      u(17, "Thanks. Book the 08:10."),
+    ];
+    const ls = chatLines(items);
+    expect(kinds(ls)).toEqual(["segment", "segment", "notice", "segment", "notice", "segment", "notice", "segment", "segment"]);
+    // four final texts between the two messages: each is the answer of its own exchange
+    expect(answers(ls)).toEqual([
+      "The timetable check is running in the background.",
+      "Pack a rain jacket, two shirts and walking shoes.",
+      "First result: the 08:10 runs on Saturday.",
+      "Second result: the 10:40 runs too.",
+      "All done: three trains run on Saturday.",
+    ]);
+    // the answer to B is no step of any work summary
+    expect(ls.some((l) => seg(l)?.steps.some((s) => s.kind === "text" && s.item.text?.startsWith("Pack a rain jacket")))).toBe(false);
+    // each woken exchange opens with its notification and holds only its own work
+    expect(ls[2].kind === "notice" && ls[2].item.id).toBe("n7#0");
+    expect(seg(ls[3])?.user).toBeUndefined();
+    expect(seg(ls[3])?.steps.map((s) => s.id)).toEqual(["t8#0"]);
+    expect(seg(ls[5])?.steps).toEqual([]);
+    expect(seg(ls[7])?.steps.map((s) => s.id)).toEqual(["t14#0"]);
+    expect(seg(ls[1])?.steps).toEqual([]);
+  });
+
+  it("answers a woken exchange with its own words and leaves the exchange before it alone", () => {
     const items = [
       u(1, "run the tests in the background"),
       a(2, "started, I will tell you when it ends — this is the long one"),
@@ -260,11 +392,9 @@ describe("chatLines", () => {
       a(6, "all green"),
     ];
     const ls = chatLines(items);
-    expect(kinds(ls)).toEqual(["segment"]);
-    const seg = ls[0].kind === "segment" ? ls[0].seg : null;
-    expect(seg?.answer?.text).toBe("all green");
-    const w = wakesOf(ls[0]);
-    expect(w?.wakes).toHaveLength(1);
+    expect(kinds(ls)).toEqual(["segment", "notice", "segment"]);
+    expect(answers(ls)).toEqual(["started, I will tell you when it ends — this is the long one", "all green"]);
+    expect(seg(ls[2])?.steps.map((s) => s.id)).toEqual(["t4#0"]);
   });
 
   it("keeps a long-running agent's newest words at the bottom of a long history", () => {
@@ -275,42 +405,83 @@ describe("chatLines", () => {
       items.push(wake(seq++, `wait ${n}`), tool(seq++, `t${n}`), res(seq++, `t${n}`), a(seq++, `update ${n}`));
     }
     const ls = chatLines(items);
-    const last = ls[ls.length - 1];
-    expect(last.kind === "segment" && last.seg.answer?.text).toBe("update 7");
-    expect(wakesOf(last)?.wakes).toHaveLength(8);
-    // the long summary folds into the work above, as earlier words do
-    expect(last.kind === "segment" && last.seg.steps.some((s) => s.kind === "text" && s.item.text === long)).toBe(true);
+    expect(seg(ls[ls.length - 1])?.answer?.text).toBe("update 7");
+    // the summary stays the answer of the turn that wrote it, and every update the answer of its own
+    expect(answers(ls)).toEqual([long, ...Array.from({ length: 8 }, (_, n) => `update ${n}`)]);
+    expect(ls.filter((l) => l.kind === "notice")).toHaveLength(8);
   });
 
-  it("does not take a short reply to a wake away once it lands after streaming", () => {
-    const before = [u(1, "watch the deploy"), a(2, "watching it; a long explanation of what I will check. ".repeat(20)), wake(3, "deploy"), tool(4, "x"), res(5, "x")];
-    // streaming: the reply is not an item yet, the agent is at work on the wake
-    const live = chatLines(before, { live: true });
-    const working = live[live.length - 1];
-    expect(working.kind === "segment" && working.live).toBe(true);
-    // it lands: the short words are the answer on screen
-    const done = chatLines([...before, a(6, "deployed")]);
-    const last = done[done.length - 1];
-    expect(last.kind === "segment" && last.seg.answer?.text).toBe("deployed");
+  it("shows the work a wake started as live under its notice, before and after its first step", () => {
+    const before = [u(1, "watch the deploy"), a(2, "watching it"), wake(3, "deploy")];
+    // woken, nothing of the new work here yet: a live work row of its own, the answer before it untouched
+    const woken = chatLines(before, { live: true });
+    expect(kinds(woken)).toEqual(["segment", "notice", "segment"]);
+    expect(woken[0].kind === "segment" && woken[0].live).toBe(false);
+    expect(seg(woken[0])?.answer?.text).toBe("watching it");
+    expect(woken[2].kind === "segment" && woken[2].live).toBe(true);
+    expect(woken.some((line) => line.id === "live")).toBe(false);
+    // its row keeps its key as steps come and when its words land
+    const working = chatLines([...before, tool(4, "x"), res(5, "x")], { live: true });
+    expect(working[2].id).toBe(woken[2].id);
+    expect(seg(working[2])?.id).toBe(seg(woken[2])?.id);
+    const done = chatLines([...before, tool(4, "x"), res(5, "x"), a(6, "deployed")]);
+    expect(done[2].id).toBe(woken[2].id);
+    expect(answers(done)).toEqual(["watching it", "deployed"]);
   });
 
-  it("reopens the exchange a recap closed when a background task reports back", () => {
+  it("puts work a wake started after the recap that came before it", () => {
     const ls = chatLines([u(1, "go"), a(2, "started the build, waiting for it"), recap(3, "waiting for the build"), wake(4, "build"), a(5, "ok")]);
-    expect(kinds(ls)).toEqual(["segment", "recaps"]);
-    expect(ls[0].kind === "segment" && ls[0].seg.answer?.text).toBe("ok");
+    expect(kinds(ls)).toEqual(["segment", "recaps", "notice", "segment"]);
+    expect(answers(ls)).toEqual(["started the build, waiting for it", "ok"]);
   });
 
-  it("marks the original exchange live when a wake arrives after its recap", () => {
+  it("marks the woken exchange live when a wake arrives after a recap", () => {
     const ls = chatLines([u(1, "go"), a(2, "waiting"), recap(3, "context"), wake(4, "build"), tool(5, "x")], { live: true });
-    expect(kinds(ls)).toEqual(["segment", "recaps"]);
-    expect(ls[0].kind === "segment" && ls[0].live).toBe(true);
+    expect(kinds(ls)).toEqual(["segment", "recaps", "notice", "segment"]);
+    expect(ls[0].kind === "segment" && ls[0].live).toBe(false);
+    expect(ls[3].kind === "segment" && ls[3].live).toBe(true);
     expect(ls.some((line) => line.id === "live")).toBe(false);
+  });
+
+  it("starts an exchange at a subagent's report that woke the agent, drawn under its call", () => {
+    const launch: Item = { id: "t2#0", seq: 2, role: "assistant", kind: "tool_use", tool_use_id: "agent", tool_name: "Agent", tool_input: { description: "Review", run_in_background: true } };
+    const report: Item = { id: "r5#0", seq: 5, role: "user", kind: "tool_result", tool_use_id: "agent", text: "Review finished.", wake: true, task: { kind: "agent", status: "completed" } };
+    const ls = chatLines([u(1, "review it"), launch, { ...res(3, "agent"), text: "Async agent launched successfully" }, a(4, "The review is running."), report, a(6, "The review found nothing.")]);
+    // no notice line: the report belongs to the call that launched it
+    expect(kinds(ls)).toEqual(["segment", "segment"]);
+    expect(answers(ls)).toEqual(["The review is running.", "The review found nothing."]);
+  });
+
+  it("keeps a message typed while the woken agent works in the woken exchange", () => {
+    const ls = chatLines([u(1, "go"), a(2, "started"), wake(3, "build"), tool(4, "x"), res(5, "x"), u(6, "also check the logs", { queued: true }), a(7, "build is up, logs are clean")]);
+    expect(kinds(ls)).toEqual(["segment", "notice", "segment", "segment"]);
+    expect(answers(ls)).toEqual(["started", "build is up, logs are clean"]);
+    expect(seg(ls[3])?.user?.text).toBe("also check the logs");
   });
 
   it("opens work a wake started on its own with the wake notice", () => {
     const ls = chatLines([wake(1, "build"), tool(2, "x"), res(3, "x"), a(4, "build is up")]);
     expect(kinds(ls)).toEqual(["notice", "segment"]);
     expect(ls[1].kind === "segment" && ls[1].seg.answer?.text).toBe("build is up");
+  });
+
+  it("orders a #-1 wake notice before non-numeric same-seq steps even when merged late", () => {
+    const prior = [u(1, "run build"), a(2, "Complete first reply.")];
+    const resumedThinking: Item = { id: "3@b#thinking", seq: 3, role: "assistant", kind: "thinking", text: "Checking build output" };
+    const resumedText: Item = { id: "3@b#text", seq: 3, role: "assistant", kind: "text", text: "Checking next step..." };
+    const lateWake: Item = { id: "2@a#-1", seq: 3, role: "system", kind: "notice", wake: true, text: "Background task updated" };
+    // Simulate resumed non-numeric steps landing before the #-1 wake notice at the same seq.
+    const merged = mergeItems([...prior, resumedThinking, resumedText], [lateWake]);
+    expect(merged.map((i) => i.id)).toEqual(["u1#0", "a2#0", "2@a#-1", "3@b#thinking", "3@b#text"]);
+    const ls = chatLines(merged, { live: true });
+    expect(kinds(ls)).toEqual(["segment", "notice", "segment"]);
+    expect(ls[0].kind === "segment" && ls[0].live).toBe(false);
+    expect(seg(ls[0])?.answer?.text).toBe("Complete first reply.");
+    expect(ls[2].kind === "segment" && ls[2].live).toBe(true);
+    expect(seg(ls[2])?.answer?.text).toBe("Checking next step...");
+    // A fold starting at the same seq with a non-numeric id must not claim the #-1 wake notice.
+    const sameSeqFold: Item = { id: "fold:3@b#thinking", seq: 3, role: "assistant", kind: "fold", fold: { items: 2, tools: 1, thoughts: 1, through_seq: 3, through_id: "3@b#tool0" } };
+    expect(insideFold(lateWake, sameSeqFold)).toBe(false);
   });
 
   it("turns API errors into cards and folds retries of the same one", () => {
@@ -390,6 +561,8 @@ it("an unknown tool's subject is its most telling field", () => {
   expect(pickSubject({ title: "T", description: "D" })).toBe("D");
   expect(pickSubject({ path: "/a/b/Store.swift", query: "q" })).toBe("Store.swift");
   expect(pickSubject({ zeta: "z", alpha: " a ", n: 3 })).toBe("a");
+  expect(pickSubject({ zeta: "z", zz_persona_clipped: { note: "Omitted 8 array items" } })).toBe("z");
+  expect(pickSubject({ values: [["short", 42]], zz_persona_clipped: { note: "Omitted 8 array items" } })).toBe("");
   expect(pickSubject({ n: 3 })).toBe("");
 });
 
@@ -468,13 +641,13 @@ describe("Persona's messages for the model (lib/injected.ts)", () => {
 });
 
 it("personaToolVerb names Persona's own tools by what they do, and nothing else", () => {
-  expect(personaToolVerb("mcp__persona__agent_read")).toEqual({ verb: "读 Agent 对话" });
+  expect(personaToolVerb("mcp__persona__agent_read")).toEqual({ verb: "读取 Agent 对话" });
   expect(personaToolVerb("mcp__plugin_persona__kb_update")).toEqual({ verb: "更新知识库" });
-  expect(personaToolVerb("mcp__persona__ask_user")).toEqual({ verb: "问你" });
+  expect(personaToolVerb("mcp__persona__ask_user")).toEqual({ verb: "向你提问" });
   expect(personaToolVerb("mcp__persona__send_to_agent")).toEqual({ verb: "给 Agent 发消息" });
-  expect(personaToolVerb("mcp__persona__conversation_new")).toEqual({ verb: "新开对话" });
-  expect(personaToolVerb("mcp__persona__computer_run")).toEqual({ verb: "操控电脑" });
-  expect(personaToolVerb("mcp__persona__secret_run")).toEqual({ verb: "用密码运行" });
+  expect(personaToolVerb("mcp__persona__conversation_new")).toEqual({ verb: "新建对话" });
+  expect(personaToolVerb("mcp__persona__computer_run")).toEqual({ verb: "操作电脑" });
+  expect(personaToolVerb("mcp__persona__secret_run")).toEqual({ verb: "使用密码运行" });
   expect(personaToolVerb("mcp__persona__phone_contacts_search")).toEqual({ verb: "iPhone", what: "contacts search" });
   expect(personaToolVerb("mcp__persona__mail_send")).toEqual({ verb: "邮件", what: "send" });
   // no verb of its own: keeps "Called Persona · …"
@@ -485,4 +658,21 @@ it("personaToolVerb names Persona's own tools by what they do, and nothing else"
   expect(personaToolVerb("mcp__persona")).toBeNull();
   expect(personaToolVerb("agent_read")).toBeNull();
   expect(personaToolVerb(undefined)).toBeNull();
+});
+
+it("recognizes Antigravity single-underscore and scoped Persona MCP tool names", () => {
+  for (const server of PERSONA_SERVERS) {
+    for (const prefix of [`mcp_${server}`, `mcp_${server}_0c671287`, `mcp_${server}_55a1c59d`]) {
+      expect(personaToolVerb(`${prefix}_notify_user`)).toEqual(personaToolVerb("mcp__persona__notify_user"));
+      expect(toolDisplayName(`${prefix}_mail_send`)).toBe("Persona · mail send");
+      expect(supervisionTool(`${prefix}_notify_user`)).toBe("notify_user");
+      expect(supervisionTool(`${prefix}_ask_user`)).toBe("ask_user");
+      expect(supervisionTool(`${prefix}_task_review`)).toBe("task_review");
+      expect(supervisionTool(`${prefix}_supervision_finish`)).toBe("supervision_finish");
+    }
+  }
+  expect(supervisionTool("mcp_persona_other_notify_user")).toBeUndefined();
+  const call: Item = { id: "c1", seq: 2, role: "assistant", kind: "tool_use", tool_use_id: "call_1", tool_name: "mcp_persona_0c671287_notify_user", tool_input: { message: "Ready" } };
+  const ok: Item = { id: "r1", seq: 3, role: "user", kind: "tool_result", tool_use_id: "call_1", text: "Notification sent." };
+  expect(supervisionVisible([u(1, "Check"), call, ok], new Map([["call_1", ok]]), false)).toBe(true);
 });

@@ -54,6 +54,7 @@ func agentSession() proto.Session {
 // the phone's push: green for done, orange with ⚠️ for a turn error or a model-service cut-off, the result text, the
 // machine in the note, the open button, and a reply routes back to that agent (#4674).
 func TestFeishuAgentDoneCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name      string
 		lastText  string
@@ -62,8 +63,8 @@ func TestFeishuAgentDoneCard(t *testing.T) {
 		wantBody  string
 	}{
 		{"completed", "改好了", "", "green", "改好了"},
-		{"failed", "改了一半", "exit status 1", "orange", "模型服务出错，中断了"},
-		{"cut off", "API Error: 529 overloaded", "", "orange", "模型服务出错，中断了"},
+		{"failed", "改了一半", "exit status 1", "red", "模型服务出错，中断了"},
+		{"cut off", "API Error: 529 overloaded", "", "red", "模型服务出错，中断了"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft := newFleetTest(t)
@@ -84,12 +85,14 @@ func TestFeishuAgentDoneCard(t *testing.T) {
 					t.Fatalf("card missing %q:\n%s", want, card)
 				}
 			}
-			if tc.name == "completed" {
-				if !strings.Contains(card, `"title":{"tag":"plain_text","content":"修登录"}`) || strings.Contains(card, "⚠️") {
-					t.Fatalf("completed card title: %s", card)
-				}
-			} else if !strings.Contains(card, "⚠️ 修登录") {
-				t.Fatalf("alert card title: %s", card)
+			// The title is the agent's, the state is the header's colour and its tag (no ⚠️), the place the subtitle.
+			if !strings.Contains(card, `"title":{"tag":"plain_text","content":"修登录"}`) || strings.Contains(card, "⚠️") ||
+				!strings.Contains(card, `"subtitle":{"tag":"plain_text","content":"后台 Agent · Mac"}`) {
+				t.Fatalf("card header: %s", card)
+			}
+			wantTag := map[string]string{"completed": "完成", "failed": "中断", "cut off": "中断"}[tc.name]
+			if !strings.Contains(card, `"text":{"tag":"plain_text","content":"`+wantTag+`"}`) {
+				t.Fatalf("card lacks the tag %s: %s", wantTag, card)
 			}
 			fallback, _ := posts[0]["fallback"].(string)
 			for _, want := range []string{"修登录", tc.wantBody, "后台 Agent"} {
@@ -109,10 +112,8 @@ func TestFeishuAgentDoneCard(t *testing.T) {
 				t.Fatalf("the phone push changed: %+v", got)
 			}
 			time.Sleep(50 * time.Millisecond) // rememberBotThread runs right after the post
-			ft.s.fbot.mu.Lock()
-			th := ft.s.fbot.st.Threads["om_done"]
-			ft.s.fbot.mu.Unlock()
-			if th == nil || th.Target.Kind != targetAgent || th.Target.MachineID != "mac" || th.Target.SessionID != "s1" {
+			// A reply to the card goes to the agent: the card is bound to it.
+			if th := ft.s.larkModule().Route("", "om_done"); th.Kind != targetAgent || th.MachineID != "mac" || th.SessionID != "s1" {
 				t.Fatalf("the card is not bound to the agent: %+v", th)
 			}
 			time.Sleep(200 * time.Millisecond) // the same completion settles once: no second card
@@ -126,6 +127,7 @@ func TestFeishuAgentDoneCard(t *testing.T) {
 // Nothing is posted when the pushes switch is off, the session is muted, or another Feishu path owns the turn (the
 // main conversation, a scheduled task's own conversation, health), or the turn was asked and answered in Feishu.
 func TestFeishuAgentDoneGated(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name     string
 		pushes   bool
@@ -171,6 +173,7 @@ func TestFeishuAgentDoneGated(t *testing.T) {
 
 // A result longer than the card's budget still goes out as one card, marked as cut short.
 func TestFeishuAgentDoneLongResult(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTest(t)
 	fastDone(ft)
 	answerAgentDoneBot(ft, true)
@@ -190,6 +193,7 @@ func TestFeishuAgentDoneLongResult(t *testing.T) {
 // When the card's JSON size exceeds answerCardMaxBytes and gets halved, the note and fallback
 // must mark it as cut short even if the original text was <= agentDoneClip (#4944).
 func TestFeishuAgentDoneHalvedCardMarksClipped(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	ft := newFleetTest(t)
 	fastDone(ft)
 	answerAgentDoneBot(ft, true)
@@ -210,5 +214,26 @@ func TestFeishuAgentDoneHalvedCardMarksClipped(t *testing.T) {
 	fallback, _ := posts[0]["fallback"].(string)
 	if !strings.Contains(fallback, "只发了开头") {
 		t.Fatalf("halved fallback is missing cut short notice:\n%s", fallback)
+	}
+}
+
+// A long result shows its beginning, the rest folded; an agent that asks the owner something is orange; the one
+// button opens its conversation, primary.
+func TestFeishuAgentDoneLooks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	ft := newFleetTest(t)
+	fastDone(ft)
+	answerAgentDoneBot(ft, true)
+	sess := agentSession()
+	sess.LastText = strings.Repeat("第一段说明。", 60) + "\n\n" + strings.Repeat("第二段细节。", 60)
+	driveAgentDone(ft, sess)
+	posts := waitAgentDonePosts(ft, 1)
+	if len(posts) != 1 {
+		t.Fatalf("posted %d cards", len(posts))
+	}
+	card, _ := posts[0]["card"].(string)
+	if !strings.Contains(card, `"tag":"collapsible_panel"`) || !strings.Contains(card, "第二段细节") || strings.Count(card, `"tag":"button"`) != 1 ||
+		!strings.Contains(card, `"type":"primary"`) {
+		t.Fatalf("card %s", card)
 	}
 }

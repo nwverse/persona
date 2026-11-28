@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,11 @@ import (
 // northStarDB is an isolated database with the main conversation "main-chat" and the leader conversation "dot-chat".
 func northStarDB(t *testing.T) (*Service, *db.DB, string) {
 	t.Helper()
-	dsn := newDatabase(t)
+	return northStarDBOn(t, newMigratedDatabase(t, db.ManagerSet))
+}
+
+func northStarDBOn(t *testing.T, dsn string) (*Service, *db.DB, string) {
+	t.Helper()
 	database, err := db.Open(context.Background(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +91,10 @@ func TestNorthStarInterruptionsAndAvailability(t *testing.T) {
 		{At: at(13), MachineID: "pc", SessionID: "worker", Kind: "ask_escalated", Detail: map[string]any{"todo": "task-1"}},
 		{At: at(14), MachineID: "pc", SessionID: "dot-chat", Kind: notifyEvent, Detail: map[string]any{}},
 		{At: at(14), MachineID: "pc", SessionID: "probe", Kind: notifyEvent, Detail: map[string]any{"probe": true}},
+		// notify_user calls no device took (#8138): listed apart, never interruptions.
+		{At: at(14), MachineID: "pc", SessionID: "dot-chat", Kind: notifyEvent, Detail: map[string]any{"missed": missedNoDevice}},
+		{At: at(15), MachineID: "pc", SessionID: "dot-chat", Kind: notifyEvent, Detail: map[string]any{"missed": missedNoDevice}},
+		{At: at(15), MachineID: "pc", SessionID: "worker", Kind: notifyEvent, Detail: map[string]any{"todo": "task-1", "missed": missedHubAway}},
 		// Availability: the main conversation before the split (build b1), the leader conversation after it (b2).
 		{At: at(8), MachineID: "pc", SessionID: "main-chat", Kind: sendEvent, Detail: map[string]any{"op": "resume", "origin": originApp, "role": roleMain, "outcome": outcomeOK, "build": "b1"}},
 		{At: at(9), MachineID: "pc", SessionID: "main-chat", Kind: sendEvent, Detail: map[string]any{"op": "resume", "origin": originApp, "role": roleMain, "outcome": outcomeFailed, "reason": "conversation_not_found", "build": "b1"}},
@@ -122,8 +131,9 @@ func TestNorthStarInterruptionsAndAvailability(t *testing.T) {
 	if in.Categories[nsAuthorization].ByKind[proto.IxPermission] != 1 || in.Categories[nsActionCard].ByKind[proto.IxQuestion] != 2 {
 		t.Fatalf("kinds: %+v %+v", in.Categories[nsAuthorization], in.Categories[nsActionCard])
 	}
-	wantExcluded := InterruptExcluded{SupervisorRouted: 2, SupervisorHeld: 1, SupervisorEscalated: 1, AutoAuthorized: 1, Probe: 2}
-	if in.Excluded != wantExcluded {
+	wantExcluded := InterruptExcluded{SupervisorRouted: 2, SupervisorHeld: 1, SupervisorEscalated: 1, AutoAuthorized: 1, Probe: 2,
+		NotifyMissed: map[string]int{missedNoDevice: 2, missedHubAway: 1}, CallSkipped: map[string]int{}}
+	if !reflect.DeepEqual(in.Excluded, wantExcluded) {
 		t.Fatalf("excluded %+v, want %+v", in.Excluded, wantExcluded)
 	}
 	if len(in.Sources) == 0 || in.Sources[0].Count != 2 || in.Sources[0].TodoID != "task-1" || in.Sources[0].Title != "Fix the build" {
@@ -297,9 +307,12 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 	}
 	ev(midnight.Add(4*time.Hour), sendEvent, "main-chat", bad)
 
+	if !s.briefingOn() {
+		return
+	}
 	f := s.briefFactsAt(ctx, now, "")
-	f.l = i18n.Lang("en")
-	f.NorthStarLines = f.NorthStar.lines(f.l)
+	f.Lang = "en"
+	f.NorthStarLines = s.briefNorthStarAt(ctx, now, s.location(ctx)).lines(i18n.En)
 	want := []string{
 		"Interruptions today: 1 (0 questions · 0 cards to act on · 1 notifications · 0 authorization cards); yesterday by this time 3, -2",
 		"Availability today (main and leader conversations): 75% (3 of 4 starts and resumes worked); yesterday by this time 50%, +25 pp",
@@ -309,7 +322,7 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 	if strings.Join(f.NorthStarLines, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("north star lines:\n%s", strings.Join(f.NorthStarLines, "\n"))
 	}
-	f.ConfirmationLines = s.confirmationLines(f.l, f.Confirmations)
+	f.ConfirmationLines = s.confirmationLines(i18n.En, s.briefConfirmationsAt(ctx, now, s.location(ctx)))
 	card, plain, _ := s.briefCard(f, "Daily report", "")
 	head := strings.Index(plain, "North star")
 	if head < 0 || head > strings.Index(plain, want[0]) || strings.Index(plain, want[3]) > strings.Index(plain, "Today's confirmation cards") {
@@ -318,11 +331,11 @@ func TestNorthStarBriefingOpensWithIt(t *testing.T) {
 	if !strings.Contains(card.JSON(), "75%") {
 		t.Fatalf("card JSON lacks the rate: %s", card.JSON())
 	}
-	model := f.modelText()
+	model := s.briefModelText(f)
 	if !strings.HasPrefix(model[strings.Index(model, "\n")+1:], "- 北极星指标") || !strings.Contains(model, want[1]) {
 		t.Fatalf("model facts do not open with the north star:\n%s", model)
 	}
-	body, err := json.Marshal(f.body(s, "Daily report"))
+	body, err := json.Marshal(s.briefBodyOf(f, "Daily report"))
 	mustDo(t, err)
 	if !strings.Contains(string(body), `"north_star":{"lines":[`) || !strings.Contains(string(body), `"interruptions":1,"interruptions_yesterday":3`) ||
 		!strings.Contains(string(body), `"availability":0.75,"availability_yesterday":0.5,"attempts":4,"ok":3`) {
@@ -347,7 +360,7 @@ func TestNorthStarUnreadableIsUnknown(t *testing.T) {
 	s := newFleetTest(t).s
 	noDirectionsTimers(s)
 	base := s.store()
-	s.store = func() Store { return failingNorthStarStore{Store: base} }
+	s.setStore(func() Store { return failingNorthStarStore{Store: base} })
 	b := s.briefNorthStarAt(context.Background(), time.Now(), time.UTC)
 	if !b.Unknown || strings.Join(b.lines(i18n.Lang("en")), "") != "North star: today's numbers could not be read; they are unknown." {
 		t.Fatalf("a read failure became numbers: %+v", b)
@@ -392,7 +405,7 @@ func TestNorthStarCommandReadsReadOnly(t *testing.T) {
 	s, _, dsn := northStarDB(t)
 	setSettings(t, s, func(v *Settings) { v.Timezone = "Asia/Shanghai" })
 	loc := shanghai(t)
-	hubURL := newDatabase(t)
+	hubURL := newMigratedDatabase(t, db.HubSet)
 	hubDB, err := db.Open(ctx, hubURL, db.HubSet)
 	mustDo(t, err)
 	t.Cleanup(hubDB.Close)
@@ -403,10 +416,14 @@ func TestNorthStarCommandReadsReadOnly(t *testing.T) {
 		{"00000000-0000-0000-0000-000000000002", "/api/v1/sessions/pc/dot-chat/messages", "done", `{}`},
 		{"00000000-0000-0000-0000-000000000003", "/api/v1/sessions/pc/worker/messages", "failed", `{"code":"offline"}`},
 	}
+	var latestMessageAt time.Time
 	for _, op := range ops {
 		target, _ := json.Marshal(map[string]string{"path": op.path, "query": ""})
-		_, _, err := hubDB.BeginClientOp(ctx, db.ClientOp{ID: op.id, DeviceID: "phone", Kind: "message", Target: target, Digest: "d"})
+		stored, _, err := hubDB.BeginClientOp(ctx, db.ClientOp{ID: op.id, DeviceID: "phone", Kind: "message", Target: target, Digest: "d"})
 		mustDo(t, err)
+		if stored.CreatedAt.After(latestMessageAt) {
+			latestMessageAt = stored.CreatedAt
+		}
 		result, _ := json.Marshal(map[string]any{"status": 200, "body": []byte(op.body)})
 		mustDo(t, hubDB.FinishClientOp(ctx, op.id, op.state, result))
 	}
@@ -419,6 +436,11 @@ func TestNorthStarCommandReadsReadOnly(t *testing.T) {
 	if err := ro.PutSetting(ctx, "north-star-write-probe", 1); err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("the command's connection could write: %v", err)
 	}
+	// Postgres timestamps the messages on its own clock, which may be ahead of the test host's. The command only
+	// counts records up to its supplied time, so wait until all fixture messages are inside that window.
+	waitFor(t, "the command clock to reach the hub message timestamps", func() bool {
+		return !time.Now().Before(latestMessageAt)
+	})
 	ns, err := northStarCommand(ctx, ro, roHub, "", "", "", time.Now())
 	mustDo(t, err)
 	if ns.TimeZone != loc.String() || ns.RecordingSince != nil {
@@ -515,6 +537,7 @@ func TestNorthStarRecordsSendsRefusedBeforeTheyRan(t *testing.T) {
 	ctx := context.Background()
 	s, database, _ := northStarDB(t)
 	b := &BusHub{svc: s, helloed: make(chan struct{})}
+	close(b.helloed) // the hub's hello is answered: the request does not wait helloWait for it
 	if _, err := b.request(ctx, assistantwire.MethodSendParams, json.RawMessage(`{"machine_id":"server","session_id":"main-chat","params":{"text":"hi","model":"not a model id!"}}`)); err == nil {
 		t.Fatal("a bad model was taken")
 	}
@@ -565,9 +588,9 @@ func TestNorthStarRecordingStartIsSavedByTheFirstRecord(t *testing.T) {
 	s, database, _ := northStarDB(t)
 	s.build = "b9"
 	base := s.store()
-	s.store = func() Store { return failingNorthStarStore{Store: base} }
+	s.setStore(func() Store { return failingNorthStarStore{Store: base} })
 	s.northStarStarted(ctx) // the database could not be read at startup
-	s.store = func() Store { return base }
+	s.setStore(func() Store { return base })
 	before := time.Now()
 	if _, err := s.runTool(ctx, "pc", "dot-chat", "notify_user", json.RawMessage(`{"title":"Done","body":"PR merged"}`)); err != nil {
 		t.Fatal(err)

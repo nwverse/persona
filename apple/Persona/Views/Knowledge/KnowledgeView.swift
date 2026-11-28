@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// What Persona knows (the hub's ~/.persona/data, docs/assistant/knowledge.md): projects first, then chats, people, docs, meetings and
 /// events, most important and most relevant first. Not a browser of Feishu: every row is Persona' own digest, and the
@@ -11,6 +12,7 @@ import SwiftUI
 /// chip row, projects grouped into Focus / Active / Done / Not a Project, and search hits that open their entry.
 struct KnowledgeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shell) private var shell
     @State private var kind: KBKind = .projects
     @State private var tag: String?
     @State private var lists: [KBKind: KBList] = [:]
@@ -27,66 +29,45 @@ struct KnowledgeView: View {
     @State private var curating: Bool?
     /// The project the user asked to delete, while the question is up.
     @State private var deletingProject: KBEntry?
+    /// The recording a swipe asked to delete (its row shows the question), and why a delete failed (#8731).
+    @State private var deletingRecording: UUID?
+    /// A recording row's recording while Rename is open (#8873).
+    @State private var renamingRecording: UUID?
+    @State private var recordingFailure: String?
     /// Projects taken off the list while their deletion is sent.
     @State private var hiddenProjects: Set<String> = []
     #if DEBUG
     @State private var debugEntry: KBEntry?
     @State private var debugAsked = false
-    #if os(iOS) || os(visionOS)
     @State private var debugRecording: UUID?
     #endif
-    #endif
-    #if os(iOS) || os(visionOS)
-    @State private var recordings = RecordingLibrary.shared
-    #endif
-    /// Where entries open beside the list instead of pushing (the Mac's Knowledge section).
-    @Environment(\.kbOpenEntry) private var opener
 
     private var list: KBList? { lists[kind] }
     /// Searching only once there is text besides spaces: `search()` trims the same way and asks for nothing when that
     /// leaves nothing, so the results area would spin for good on a field of spaces (#4086).
     private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    /// Recordings on a phone is this device's own list (with what is still recording or transcribing), not the hub's copy.
-    private var localRecordings: Bool {
-        #if os(iOS) || os(visionOS)
-        true
-        #else
-        false
-        #endif
-    }
-
-    private var counts: [KBKind: Int] {
-        var out = lists.mapValues { $0.items.count }
-        #if os(iOS) || os(visionOS)
-        out[.recordings] = recordings.entries.count
-        #endif
-        return out
+    /// `kind`: the list it opens on (the Meetings page's All Meetings opens meetings, #8731); recordings' is meetings'.
+    init(kind: KBKind = .projects) {
+        _kind = State(initialValue: kind.listedAs)
     }
 
     private var kindBar: some View {
-        KBKindBar(kind: $kind, counts: counts)
+        KBKindBar(kind: $kind)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0))
+            .unclippedListRow() // the first pills reach the cell's rounded corners (#7735)
     }
 
     var body: some View {
         List {
             // Search covers every kind: the chips (one of them lit) would say otherwise.
             if !searching {
-                #if os(macOS)
-                kindBar // not in a section: the Mac's inset list gave it an empty header band and a rule (#830)
-                #else
                 Section { kindBar }
                     .listSectionSpacing(.compact)
-                #endif
             }
             if searching {
                 searchResults
-            } else if kind == .recordings, localRecordings {
-                #if os(iOS) || os(visionOS)
-                RecordingsSection()
-                #endif
             } else if let list {
                 content(list)
             } else if let error {
@@ -96,25 +77,31 @@ struct KnowledgeView: View {
             }
         }
         .listStyle(.insetGrouped)
-        #if os(iOS)
-        .recordingLiveSheet() // the live recording sheet opens from here too (`RecordingsSection` is this list's Recordings kind)
-        #endif
-        #if os(macOS)
-        .modifier(MacBelowTitleRowIfAsked()) // under Knowledge's title in the window: the list starts below it (#1243)
-        #endif
+        .devScreen("knowledge")
+        .alert("Couldn't Finish", isPresented: Binding(get: { recordingFailure != nil }, set: { if !$0 { recordingFailure = nil } })) {
+            Button("OK [Recordings Section de32e2]") { recordingFailure = nil }.lineLimit(1)
+        } message: { Text(recordingFailure ?? "") }
+        .recordingRename($renamingRecording)
         .themedPage()
-        .detailTitle(String(localized: "Knowledge")) // pushed in Persona's page: ‹ Knowledge in the title row on the Mac
+        .detailTitle(String(localized: "Knowledge"))
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
-            #if os(macOS)
-            MacToolbarMiddle() // the menu by the search field, clear of the title row's Knowledge (#830)
-            #endif
-            ToolbarItem(placement: .topBarTrailing) { if !(kind == .recordings && localRecordings) { tagMenu } }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { showMap = true } label: { ThemedIcon(Theme.Icon.knowledgeMap) }
-                    .accessibilityLabel("Knowledge Map")
-                    .accessibilityIdentifier("kb.map")
+            #if os(iOS)
+            if shell != nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        tagChoices
+                        Button { showMap = true } label: { Label("Knowledge Map", systemImage: Theme.Icon.knowledgeMap) }
+                            .accessibilityIdentifier("kb.map")
+                    } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                        .accessibilityLabel("More")
+                }
+            } else {
+                legacyToolbar
             }
+            #else
+            legacyToolbar
+            #endif
         }
         .navigationDestination(isPresented: $showMap) { KnowledgeMapView() }
         // Always shown: the drawer that hides on scroll folded away as soon as results replaced the list (the chips
@@ -125,9 +112,6 @@ struct KnowledgeView: View {
         .environment(\.knowledgeSettingsAPI, listContext)
         .onChange(of: kind) { showIgnored = false }
         .refreshable { await load() }
-        #if os(macOS)
-        .macRefreshes { await load() } // ⌘R: no pull to refresh on the Mac
-        #endif
         // Entries open with view-based links, not `navigationDestination(for:)`: this page is itself pushed with
         // `navigationDestination(isPresented:)`, and a value-pushed page on top of that lands *under* it (docs/lessons/ios.md):
         // a hit seemed not to open, and back showed the entry's ⚠️ placeholder (2026-10-31).
@@ -138,29 +122,21 @@ struct KnowledgeView: View {
         .navigationDestination(item: $debugEntry) { e in
             KnowledgeDetailView(entry: e, query: UserDefaults.standard.string(forKey: "showKnowledgeSearch"))
         }
-        #if os(iOS) || os(visionOS)
         // `-showRecordingSample YES`: a made-up recording (no microphone); with `-openRecording YES` its page.
         .navigationDestination(item: $debugRecording) { RecordingDetailView(id: $0) }
-        #endif
         .onAppear {
-            #if os(iOS) || os(visionOS)
             if let id = RecordingSamples.installIfAsked(), UserDefaults.standard.bool(forKey: "openRecording") { debugRecording = id }
-            #endif
             if let q = UserDefaults.standard.string(forKey: "showKnowledgeSearch") { query = q }
             // `-showKnowledgeMap YES`: the knowledge map pushed (screenshots).
             // A moment later: pushed while this page is still being pushed, the map was dropped now and then.
             if UserDefaults.standard.bool(forKey: "showKnowledgeMap") {
                 Task { try? await Task.sleep(for: .seconds(1)); showMap = true }
             }
-            if let k = UserDefaults.standard.string(forKey: "showKnowledgeKind").flatMap(KBKind.init(rawValue:)) { kind = k }
+            if let k = UserDefaults.standard.string(forKey: "showKnowledgeKind").flatMap(KBKind.init(rawValue:)) { kind = k.listedAs }
             if let ref = UserDefaults.standard.string(forKey: "showKnowledgeEntry"), let slash = ref.firstIndex(of: "/") {
                 let id = String(ref[ref.index(after: slash)...])
                 let e = KBEntry(kind: String(ref[..<slash]), id: id, name: id, relevance: 0)
-                if let opener {
-                    opener.open = .init(entry: e, query: UserDefaults.standard.string(forKey: "showKnowledgeSearch"))
-                } else {
-                    debugEntry = e
-                }
+                debugEntry = e
             }
         }
         #endif
@@ -174,7 +150,9 @@ struct KnowledgeView: View {
         } else if list.items.isEmpty {
             Section {
                 EmptyStateView(symbol: kind.symbol, title: tag == nil ? String(localized: "No \(kind.title) yet") : String(localized: "No \(kind.title) tagged #\(tag!)"),
-                               message: String(localized: "The hub archives and condenses your Lark and email conversations, organizes them into projects, people, docs and meetings, and ranks them by importance and relevance."))
+                               message: kind == .meetings
+                                   ? String(localized: "Meetings and notes you record on your phone, and meetings from connected apps such as Lark, show up here.")
+                                   : String(localized: "The hub archives and condenses your Lark and email conversations, organizes them into projects, people, docs and meetings, and ranks them by importance and relevance."))
             }
             .listRowBackground(Color.clear)
         } else if kind == .projects {
@@ -206,10 +184,16 @@ struct KnowledgeView: View {
             }
         } else {
             // Most people are only someone in a group (no importance yet): folded under the ranked ones, as Not a Project.
-            let ranked = tag != nil ? list.items : list.items.filter { !($0.importance ?? "").isEmpty }
-            let rest = tag != nil ? [] : list.items.filter { ($0.importance ?? "").isEmpty }
+            // A meeting is looked for by when it was (#8731): both newest first, the sorted ones under All, with the owner's
+            // own recordings, never folded (one just ended has no importance until its summary is written).
+            let byTime = kind == .meetings
+            let open: (KBEntry) -> Bool = { !($0.importance ?? "").isEmpty || (byTime && $0.kind == KBKind.recordings.rawValue) }
+            let ranked = tag != nil ? list.items : list.items.filter(open)
+            let rest = tag != nil ? [] : list.items.filter { !open($0) }
             if !ranked.isEmpty {
-                Section { rows(ranked) } header: { header(tag.map { "#" + $0 } ?? String(localized: "By Importance and Relevance"), ranked.count) }
+                Section { rows(byTime ? KBList.newestFirst(ranked) : ranked) } header: {
+                    header(tag.map { "#" + $0 } ?? (byTime ? String(localized: "All") : String(localized: "By Importance and Relevance")), ranked.count)
+                }
             }
             if !rest.isEmpty {
                 Section {
@@ -225,7 +209,7 @@ struct KnowledgeView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("kb.rest")
-                    if showIgnored || ranked.isEmpty { rows(rest) }
+                    if showIgnored || ranked.isEmpty { rows(byTime ? KBList.newestFirst(rest) : rest) }
                 } footer: {
                     if !ranked.isEmpty {
                         Text("\(kind.title) that have only appeared in groups and aren't tagged yet. Anyone who has talked with you or shows up in important chats gets organized by AI.")
@@ -276,13 +260,58 @@ struct KnowledgeView: View {
     }
 
     private func rows(_ items: [KBEntry]) -> some View {
-        ForEach(items.filter { !hiddenProjects.contains($0.id) || $0.kind != KBKind.projects.rawValue }) { e in
+        ForEach(items.filter { (!hiddenProjects.contains($0.id) || $0.kind != KBKind.projects.rawValue) && !deletedHere($0) }) { e in
             if e.kind == KBKind.projects.rawValue {
                 projectRow(e)
             } else {
-                KBEntryLink(entry: e) { KBRow(entry: e) }
+                if let id = e.localRecording, RecordingLibrary.shared.entry(id) != nil {
+                    recordingRow(e, id: id)
+                } else {
+                    KBEntryLink(entry: e) { KBRow(entry: e) }
+                }
             }
         }
+    }
+
+    /// A recording deleted on this phone (here or on its page) leaves the list at once; the hub's copy goes once the
+    /// deletion syncs. The rows read the library's entries, so a deletion redraws them.
+    private func deletedHere(_ e: KBEntry) -> Bool {
+        guard let id = e.localRecording else { return false }
+        return RecordingLibrary.shared.isDeleted(id)
+    }
+
+    /// A recording this phone made, in the meetings list (#8731): its own page opens (minutes, transcript, the meeting's
+    /// conversation), and a swipe deletes it as the Meetings page's rows do (#4938), asked first.
+    private func recordingRow(_ e: KBEntry, id: UUID) -> some View {
+        NavigationLink {
+            if RecordingLibrary.shared.entry(id)?.isDay == true { RecordingDayView(id: id) } else { RecordingOpen(id: id) }
+        } label: { KBRow(entry: e) }
+            .accessibilityIdentifier("kb.recording")
+            // Rename (#8873): a touch and hold, and VoiceOver's actions; not a day, named by its date. Not with the hub's
+            // recording module off (#15214); Delete below stays.
+            .contextMenu {
+                if RecordingLibrary.shared.entry(id)?.isDay == false, RecordingModule.allowance.offersWrites {
+                    Button { renamingRecording = id } label: { Label("Rename", systemImage: Theme.Icon.edit) }
+                }
+            }
+            .accessibilityAction(named: Text("Rename")) {
+                if RecordingLibrary.shared.entry(id)?.isDay == false, RecordingModule.allowance.offersWrites { renamingRecording = id }
+            }
+            .accessibleConfirmationDialog("Delete This Recording?", isPresented: Binding(get: { deletingRecording == id }, set: { if !$0, deletingRecording == id { deletingRecording = nil } }),
+                                titleVisibility: .visible) {
+                Button("Delete", role: .destructive) {
+                    if let message = RecordingDeletion.run(id) { recordingFailure = message }
+                }
+            } message: { Text("The audio on this device will be deleted now. Its text in Knowledge is removed after sync succeeds; if Knowledge is off or read-only, that deletion stays pending.") }
+            .swipeActions(edge: .trailing) {
+                // As on the Meetings page: none while the watch still records it, and a day is deleted on its page (it
+                // stops the watch and deletes every part on the hub).
+                if let local = RecordingLibrary.shared.entry(id), !local.active, !local.isDay {
+                    Button { deletingRecording = id } label: { Label("Delete", systemImage: Theme.Icon.delete) }
+                        .tint(Theme.danger)
+                        .accessibilityIdentifier("kb.recording.delete")
+                }
+            }
     }
 
     /// A project row: Delete in its swipe actions and context menu, asked first as on the web (#4412), then undoable.
@@ -294,10 +323,10 @@ struct KnowledgeView: View {
             .contextMenu {
                 Button(role: .destructive) { deletingProject = e } label: { Label("Delete", systemImage: Theme.Icon.delete) }
             }
-            .confirmationDialog(String(localized: "Delete This Project?"),
+            .accessibleConfirmationDialog(String(localized: "Delete This Project?"),
                                 isPresented: Binding(get: { deletingProject?.id == e.id },
                                                      set: { if !$0, deletingProject?.id == e.id { deletingProject = nil } }),
-                                titleVisibility: .visible) {
+                                titleVisibility: .visible, hasCancel: true) {
                 Button(String(localized: "Delete"), role: .destructive) { Task { await deleteProject(e) } }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -310,7 +339,6 @@ struct KnowledgeView: View {
     private func deleteProject(_ e: KBEntry) async {
         guard let api = scopedAPI() else { return }
         hiddenProjects.insert(e.id)
-        if opener?.isOpen(e) == true { opener?.open = nil }
         let trash: KBTrashEntry
         do {
             trash = try await api.kbDeleteProject(e.id)
@@ -352,18 +380,31 @@ struct KnowledgeView: View {
 
     // MARK: Tags
 
-    private var tagMenu: some View {
-        Menu {
-            Button { tag = nil } label: {
-                if tag == nil { Label("All", systemImage: Theme.Icon.done) } else { Text("All") }
-            }
-            Section("Frequent Tags") {
-                ForEach(list?.tags ?? [], id: \.self) { t in
-                    Button { Haptics.tap(); tag = t } label: {
-                        if tag == t { Label("#" + t, systemImage: Theme.Icon.done) } else { Text("#" + t) }
-                    }
+    @ToolbarContentBuilder private var legacyToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) { tagMenu }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showMap = true } label: { ThemedIcon(Theme.Icon.knowledgeMap) }
+                .accessibilityLabel("Knowledge Map")
+                .accessibilityIdentifier("kb.map")
+        }
+    }
+
+    @ViewBuilder private var tagChoices: some View {
+        Button { tag = nil } label: {
+            if tag == nil { Label("All", systemImage: Theme.Icon.done) } else { Text("All") }
+        }
+        Section("Frequent Tags") {
+            ForEach(list?.tags ?? [], id: \.self) { t in
+                Button { Haptics.tap(); tag = t } label: {
+                    if tag == t { Label("#" + t, systemImage: Theme.Icon.done) } else { Text("#" + t) }
                 }
             }
+        }
+    }
+
+    private var tagMenu: some View {
+        Menu {
+            tagChoices
         } label: {
             ThemedIcon(tag == nil ? Theme.Icon.filter : Theme.Icon.filterActive)
         }
@@ -406,7 +447,6 @@ struct KnowledgeView: View {
             resultsFor = ""
             error = nil
             searchError = nil
-            opener?.open = nil
         }
         listContext = api
         return api
@@ -436,10 +476,18 @@ struct KnowledgeView: View {
     }
 
     private func load() async {
-        guard let api = scopedAPI(), !(kind == .recordings && localRecordings) else { return }
+        guard let api = scopedAPI() else { return }
         let kind = kind
         do {
-            let l = try await api.kbList(kind, tag: tag)
+            let l: KBList
+            if kind == .meetings {
+                // One list with the recordings (#8731): both are read, and either failing fails the page.
+                async let meetings = api.kbList(.meetings, tag: tag)
+                async let recordings = api.kbList(.recordings, tag: tag)
+                l = try await KBList.meetings(meetings, recordings: recordings)
+            } else {
+                l = try await api.kbList(kind, tag: tag)
+            }
             guard !Task.isCancelled, api.sameSettingsScope(as: model.api) else { return }
             lists[kind] = l
             error = nil
@@ -456,74 +504,46 @@ struct KnowledgeView: View {
         }
     }
 }
-/// The entry open beside Knowledge's list, where entries open there rather than push: the Mac's Knowledge section puts the
-/// list and the open entry side by side (#2318) and sets one on the list. Elsewhere (the phone, Knowledge pushed in
-/// Persona's page) there is none and the rows push their entry. A reference, so opening one redraws the rows that
-/// change and the detail, not the list's page.
-@Observable final class KBOpenEntry {
-    struct Open: Hashable {
-        var entry: KBEntry
-        /// Opened from a search: the places it was found come first.
-        var query: String?
-    }
-
-    var open: Open?
-
-    func isOpen(_ e: KBEntry) -> Bool { open?.entry.kind == e.kind && open?.entry.id == e.id }
-}
-
 extension EnvironmentValues {
-    /// Entries open beside the list (`KBOpenEntry`); nil: they push.
-    @Entry var kbOpenEntry: KBOpenEntry?
     @Entry var knowledgeSettingsAPI: APIClient?
 }
 
-/// A row that opens its entry: beside the list where there is a `KBOpenEntry` (the open one selected, in the shell's
-/// selected shade), pushed otherwise.
+/// A row that opens its entry: pushed on the page's stack.
 struct KBEntryLink<Label: View>: View {
     var entry: KBEntry
     var query: String? = nil
     @ViewBuilder var label: Label
-    @Environment(\.kbOpenEntry) private var opener
 
     var body: some View {
-        if let opener {
-            // Read here, not by the list: opening another entry redraws two rows, not the whole list.
-            let selected = opener.isOpen(entry)
-            let shape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-            Button { opener.open = .init(entry: entry, query: query) } label: {
-                label.frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .macListRow(selected: selected, in: shape, outset: Theme.Space.s)
-            .macHoverShade(in: shape, outset: Theme.Space.s)
-            .accessibilityAddTraits(selected ? .isSelected : [])
-        } else {
-            NavigationLink { KnowledgeDetailView(entry: entry, query: query) } label: { label }
-        }
+        NavigationLink { KnowledgeDetailView(entry: entry, query: query) } label: { label }
     }
 }
 
-/// The six kinds as chips with their icon (and how many, once loaded), all in sight: no sideways scroll view (the
-/// navigation stack can take one at the top of a page for the page's own and inset it, docs/lessons/ios.md「`Layout` and components」, and
-/// Events was off the edge). Chips that do not fit drop their icons, then go to a second row.
+/// The kinds as chips with their icon, all in sight: no sideways scroll view (the navigation stack can take one at the
+/// top of a page for the page's own and inset it, docs/lessons/ios.md「`Layout` and components」, and Events was off the
+/// edge). Chips that do not fit drop their icons, then go to a second row.
+///
+/// No chip changes width, so none moves when another kind is picked or a kind's list arrives (#7507, as the web since
+/// #7434): they carry no count (each section under them says how many it holds), and the picked one's heavier title
+/// takes no more room than the others.
 struct KBKindBar: View {
     @Binding var kind: KBKind
-    var counts: [KBKind: Int]
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI { filterChips } else { plain }
     }
 
-    /// The BeautifulUI style: its filter chips, each kind with its count, wrapping to a second row instead of scrolling
-    /// sideways.
+    /// The BeautifulUI style: its filter chips, wrapping to a second row instead of scrolling sideways. No count either: a
+    /// kind's count is known only once its list is read, when it is first picked, so its chip grew then and pushed the
+    /// chips after it along or onto another row.
     private var filterChips: some View {
         LarkFlowLayout(spacing: Theme.Space.xs, lineSpacing: Theme.Space.sm) {
-            ForEach(KBKind.allCases) { k in
-                BUIFilterChip(k.title, count: counts[k], isActive: k == kind) {
+            ForEach(KBKind.listed) { k in
+                BUIFilterChip(k.title, isActive: k == kind) {
                     Haptics.tap()
                     withAnimation(Theme.Motion.standard) { kind = k }
                 }
+                .accessibilityIdentifier("kb.kind." + k.rawValue)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -540,7 +560,7 @@ struct KBKindBar: View {
     }
 
     @ViewBuilder private func chips(icons: Bool, padding: CGFloat) -> some View {
-        ForEach(KBKind.allCases) { k in
+        ForEach(KBKind.listed) { k in
             let on = k == kind
             Button {
                 Haptics.tap()
@@ -548,10 +568,10 @@ struct KBKindBar: View {
             } label: {
                 HStack(spacing: Theme.Space.xs) {
                     if icons { ThemedIcon(k.symbol).font(Theme.Font.captionStrong) }
-                    Text(k.title)
-                    if let n = counts[k], on { Text(Self.count(n)).monospacedDigit().opacity(0.75) }
+                    // Every chip is as wide as its title in the picked weight, so picking one widens nothing.
+                    Text(k.title).font(Theme.Font.secondaryStrong).hidden().accessibilityHidden(true)
+                        .overlay { Text(k.title).font(on ? Theme.Font.secondaryStrong : Theme.Font.secondaryMedium) }
                 }
-                .font(on ? Theme.Font.secondaryStrong : Theme.Font.secondaryMedium)
                 .lineLimit(1)
                 .fixedSize()
                 .padding(.horizontal, padding)
@@ -565,9 +585,6 @@ struct KBKindBar: View {
             .accessibilityAddTraits(on ? .isSelected : [])
         }
     }
-
-    /// 1985 → "1985" (no grouping comma: the chip is narrow), past 9999 → "10K+".
-    static func count(_ n: Int) -> String { n > 9999 ? String(localized: "10K+") : String(n) }
 }
 
 /// One ranked entry: a kind tile carrying the importance, the name, its one-line state, then tags and when it changed.
@@ -576,7 +593,11 @@ struct KBRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
+            // A recording that stands for an imported meeting too (#8872): the app it came from in the corner.
             KBAvatar(entry: entry)
+                .overlay(alignment: .bottomTrailing) {
+                    if let imported = entry.imported { KBImportedBadge(imported: imported) }
+                }
             VStack(alignment: .leading, spacing: Theme.Space.xs) {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
                     // Two lines: documents and meetings are told apart by the end of their titles.
@@ -600,10 +621,15 @@ struct KBRow: View {
         }
         .padding(.vertical, Theme.Space.xs)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(entry.imported?.notesTitle ?? "")
     }
 
     private func badges(tags: Int) -> some View {
         HStack(spacing: Theme.Space.sm) {
+            // Notes and all-day recordings among meetings (#8731); meetings carry none.
+            if let t = entry.recordingTag { KBPill(text: t) }
+            // Its minutes or upload wait for the hub's recording module, which is off (#15214).
+            if let t = entry.pausedTag { KBPill(text: t) }
             ImportanceBadge(importance: entry.importance)
             if let n = entry.topicPoints { KBPill(text: String(localized: "\(n) knowledge points")) }
             if let k = entry.projectKind { KBPill(text: k, tint: (entry.extra ?? "").hasPrefix("long") ? Theme.Hue.blue : nil) }
@@ -683,7 +709,7 @@ enum RelevanceMeter {
     }
 }
 
-/// One entry found by a search: its tile and name, then up to two matching lines with what was searched for in bold.
+/// One entry found by a search: its tile and name, then up to two lines with the matches highlighted.
 struct KBHitRow: View {
     var result: KBResult
     var query: String
@@ -715,14 +741,14 @@ struct KBHitRow: View {
         .padding(.vertical, Theme.Space.xxs)
     }
 
-    /// The text with every word searched for in bold primary (the hub matches lines with all the words).
+    /// The accent tint behind every word searched for (the hub matches lines with all the words).
     static func marked(_ text: String, _ query: String) -> AttributedString {
         var a = AttributedString(text)
         for q in query.split(whereSeparator: \.isWhitespace).map(String.init) where !q.isEmpty {
             var from = a.startIndex
             while from < a.endIndex, let r = a[from...].range(of: q, options: .caseInsensitive) {
+                a[r].backgroundColor = Theme.accentTint
                 a[r].foregroundColor = .primary
-                a[r].inlinePresentationIntent = .stronglyEmphasized
                 from = r.upperBound
             }
         }
@@ -732,6 +758,10 @@ struct KBHitRow: View {
 
 struct KnowledgeDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.shownAsSheet) private var shownAsSheet
+    @Environment(\.dismiss) private var dismiss
+    /// An Agent this page opens, pushed over it with Back to it (#12006).
+    @State private var pushedAgent: SessionKey?
     @Environment(\.knowledgeSettingsAPI) private var inheritedAPI
     @State private var capturedAPI: APIClient?
     @Environment(\.openURL) private var openURL
@@ -739,6 +769,8 @@ struct KnowledgeDetailView: View {
     /// Opened from a search: the places it was found come first.
     var query: String? = nil
     @State private var detail: KBDetailResponse?
+    /// A chat's Inbox items as the page draws them (#15356), worked out once per read.
+    @State private var chatInbox: KBChatInbox.Page?
     @State private var error: String?
     @State private var allMatches = false
     @State private var allMoments = false
@@ -753,9 +785,12 @@ struct KnowledgeDetailView: View {
     @State private var openPoint: KBOpenPoint?
     @State private var pushedEntry: KBEntry?
     /// The link the user asked to remove, while the question is up.
-    @State private var unlinking: KBUnlink?
-    /// Links taken off the page while their removal is written and checked (`kind/id`).
-    @State private var hiddenLinks: Set<String> = []
+    @State private var unlinking: KBRelationship?
+    /// The row hidden while its removal is written and checked (`kind/id`).
+    @State private var hiddenLink: String?
+    @State private var removedLinks: [KBRemovedLink] = []
+    @State private var changingLink: String?
+    @State private var relationshipRevision = 0
     #if DEBUG
     @State private var debugDay: KBMatch?
     @State private var debugOpened = false
@@ -775,6 +810,11 @@ struct KnowledgeDetailView: View {
     /// Search matches shown before Show All.
     static let matchesShown = 5
 
+    /// An Agent of this project, or one started from it: pushed over this page, as any page opens one it links to (#12006).
+    private func openAgent(_ key: SessionKey) {
+        model.openInPage(key, push: pageAgentPush(inSheet: shownAsSheet) { pushedAgent = $0 })
+    }
+
     var body: some View {
         List {
             if !Self.debugLower {
@@ -785,16 +825,30 @@ struct KnowledgeDetailView: View {
             if let d = detail?.detail {
                 if let query, let matches = detail?.matches { found(matches, query: query, chat: d.kind == KBKind.chats.rawValue ? d.id : nil) }
                 if let facts = ItemFacts(kind: d.kind, meta: d.meta), !facts.isEmpty { factsSection(facts) }
+                // A recording the hub holds back while its recording module is off (#15214): said, with nothing to tap.
+                if d.kind == KBKind.recordings.rawValue, d.paused?.isModuleOff == true {
+                    Section { RecordingPausedNote() }
+                }
+                // A recording that stands for an imported meeting too (#8872): its notes in the app, opened in this one.
+                if let imported = d.importedMeeting {
+                    Section {
+                        KBImportedNotesButton(imported: imported) { url in
+                            if model.assistantMain ?? model.assistantCurrent != nil { link = LinkTarget(url: url) } else { openURL(url) }
+                        }
+                    }
+                }
                 if !Self.debugLower, let agents = detail?.agents, !agents.isEmpty {
                     Section {
                         ForEach(agents) { s in
-                            Button { model.open(s.key) } label: {
-                                SessionRow(session: s, machine: model.machine(s.machineRef))
+                            Button { openAgent(s.key) } label: {
+                                SessionRow(session: s, machine: model.machine(s.machineRef), preferHerdrTabName: model.prefersHerdrTabName(for: s))
                             }
                             .buttonStyle(.plain)
                         }
                     } header: { sectionHeader(String(localized: "Agents on This Project"), agents.count) }
                 }
+                // A chat's Inbox items (#15356): none, nothing drawn.
+                if let inbox = chatInbox, opensInbox { KBChatInboxSection(page: inbox, open: openInboxItem) }
                 if let log = d.log, !log.isEmpty { timeline(log) }
                 KBFactsSection(facts: KBFacts.text(d.meta), edit: { factsEditor = true }, delete: { Task { await deleteFacts() } })
                 // Empty once the header's parts are taken out (a summary that is just the one line): no blank card.
@@ -806,16 +860,21 @@ struct KnowledgeDetailView: View {
                 } else if let sum = d.summary, case let profile = Self.profile(sum, oneLine: shown.oneLine), !profile.isEmpty {
                     Section("Profile") {
                         Markdown(Links.markdown(MathMarkdown.rewrite(profile))).markdownTheme(.persona).readingContent().textSelection(.enabled)
+                            .textLookupSurface("knowledge")
                             .padding(.vertical, Theme.Space.sm)
                     }
                 }
                 if let into = d.meta?["merged_into"]?.string, !into.isEmpty { mergedSection(into) }
                 if let moments = d.moments, !moments.isEmpty { momentsSection(moments) }
                 links(d)
+                KBRemovedLinksSection(rows: removedLinks, changingLink: changingLink) { relationship in
+                    Task { await allowAgain(relationship) }
+                }
                 if let recent = d.recent, !recent.isEmpty {
                     Section {
                         DisclosureGroup(isExpanded: $showRecent) {
-                            Text(recent).font(Theme.Font.secondary).textSelection(.enabled)
+                            // A row an Inbox item holds opens that item (#15356).
+                            KBRecentText(text: recent, pieces: opensInbox ? chatInbox?.pieces : nil, open: openInboxItem)
                         } label: {
                             Label("Messages from the Last 7 Days", systemImage: Theme.Icon.conversation)
                         }
@@ -844,13 +903,9 @@ struct KnowledgeDetailView: View {
                     .accessibilityLabel("Tag")
             }
         }
-        #if os(macOS)
-        .macLinkPanel($link) // the Mac's panel at the trailing edge; picks go to Persona
-        #else
         .sheet(item: $link) { t in
             if let key = model.assistantMain ?? model.assistantCurrent { LinkSheet(target: t, key: key) }
         }
-        #endif
         .sheet(isPresented: $editing) {
             KBTagEditor(entry: shown) { await load() }
                 .environment(\.knowledgeSettingsAPI, capturedAPI)
@@ -859,6 +914,12 @@ struct KnowledgeDetailView: View {
             KBPointSheet(point: p.point, links: p.links, crumbs: p.crumbs) { e in pushedEntry = e }
         }
         .navigationDestination(item: $pushedEntry) { e in KnowledgeDetailView(entry: e) }
+        .pushedAgentChat($pushedAgent)
+        .sheet(item: $unlinking) { relationship in
+            KBRemoveLinkSheet(relationship: relationship) { lockLists in
+                Task { await unlink(relationship, lockLists: lockLists) }
+            }
+        }
         .sheet(isPresented: $factsEditor) {
             KBFactsEditor(name: shown.name, initial: KBFacts.text(detail?.detail.meta)) { text in
                 try await saveFacts(text)
@@ -866,10 +927,6 @@ struct KnowledgeDetailView: View {
                 Task { await deleteFacts() }
             }
         }
-        #if DEBUG && os(macOS)
-        // `-showKBEditor YES` with `-showKnowledgeEntry <kind>/<id>`: the tag editor open (Mac screenshots).
-        .onAppear { if UserDefaults.standard.bool(forKey: "showKBEditor") { editing = true } }
-        #endif
         #if DEBUG
         // `-showKnowledgeDay YES` with `-showKnowledgeEntry chats/<id> -showKnowledgeSearch <text>`: the day of the
         // first message found, opened at it (screenshots).
@@ -884,15 +941,12 @@ struct KnowledgeDetailView: View {
         .sheet(isPresented: $newAgent) {
             NewChatView(initialPrompt: agentPrompt) { s in
                 newAgent = false
-                model.open(s.key)
+                openAgent(s.key)
             }
         }
         .task { await load() }
         .environment(\.knowledgeSettingsAPI, capturedAPI)
         .refreshable { await load() }
-        #if os(macOS)
-        .macRefreshes { await load() }
-        #endif
     }
 
     // MARK: Header
@@ -940,15 +994,9 @@ struct KnowledgeDetailView: View {
         }
     }
 
-    // The phone's two buttons share the row; the Mac's are the regular size, side by side at the leading edge
-    // (docs/apple/mac-design.md: no buttons the width of the page, #2318).
-    #if os(macOS)
-    private static let buttonsFill: CGFloat? = nil
-    private static let buttonsSize = ControlSize.regular
-    #else
+    // The two buttons share the row, at the large size.
     private static let buttonsFill: CGFloat? = .infinity
     private static let buttonsSize = ControlSize.large
-    #endif
 
     /// A project's status when it is not the usual Active.
     private var projectStatus: String? {
@@ -1082,7 +1130,7 @@ struct KnowledgeDetailView: View {
 
     /// Related entries by kind (projects, chats, people…), a few each with All for the rest; then the code directories.
     @ViewBuilder private func links(_ d: KBDetail) -> some View {
-        let links = (d.links ?? []).filter { !hiddenLinks.contains($0.kind + "/" + $0.id) }
+        let links = (d.links ?? []).filter { $0.kind + "/" + $0.id != hiddenLink }
         let dirs = d.meta?["dirs"]?.array?.compactMap(\.string) ?? []
         let byKind = Dictionary(grouping: links, by: \.kind)
         ForEach(KBKind.allCases) { k in
@@ -1090,7 +1138,7 @@ struct KnowledgeDetailView: View {
                 let open = openKinds.contains(k.rawValue)
                 Section {
                     ForEach(open ? group : Array(group.prefix(Self.linksShown))) { e in
-                        linkRow(e, removal: KBUnlink.removal(d, name: shown.name, linked: e))
+                        linkRow(e, removal: KBRelationship.removal(d, name: shown.name, linked: e))
                     }
                     if group.count > Self.linksShown {
                         Button {
@@ -1118,24 +1166,20 @@ struct KnowledgeDetailView: View {
     }
 
     /// A related entry; one held in this entry's own list can also be taken off it (swipe, or touch and hold).
-    @ViewBuilder private func linkRow(_ e: KBEntry, removal: KBUnlink?) -> some View {
+    @ViewBuilder private func linkRow(_ e: KBEntry, removal: KBRelationship?) -> some View {
         let row = NavigationLink { KnowledgeDetailView(entry: e) } label: { KBLinkRow(entry: e) }
         if let removal {
             row
                 .swipeActions(edge: .trailing) {
-                    Button { unlinking = removal } label: { Label("Remove Link", systemImage: Theme.Icon.clear) }.tint(Theme.danger)
+                    Button { unlinking = removal } label: { Label("Remove Link", systemImage: Theme.Icon.clear) }
+                        .tint(Theme.danger).disabled(changingLink != nil)
                 }
                 .contextMenu {
                     Button(role: .destructive) { unlinking = removal } label: { Label("Remove Link", systemImage: Theme.Icon.clear) }
+                        .disabled(changingLink != nil)
                 }
-                // On the row, so the question points at the link it is about (on the page it pointed at the header).
-                .confirmationDialog(removal.question, isPresented: Binding(get: { unlinking?.id == removal.id },
-                                                                           set: { if !$0, unlinking?.id == removal.id { unlinking = nil } }),
-                                    titleVisibility: .visible) {
-                    Button(String(localized: "Remove Link"), role: .destructive) { Task { await unlink(removal) } }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text(removal.explanation)
+                .accessibilityAction(named: Text("Remove Link")) {
+                    if changingLink == nil { unlinking = removal }
                 }
         } else {
             row
@@ -1178,47 +1222,77 @@ struct KnowledgeDetailView: View {
         await load()
     }
 
-    /// Removes a link: the row goes at once, the hub is told, then both entries are read back. A write that failed can
-    /// still have changed either one, so what is said comes from what was read, never from the write alone.
-    /// `checkOnly`: only read back after an earlier try (whether the hub took that write).
-    private func unlink(_ r: KBUnlink, checkOnly accepted: Bool? = nil) async {
-        guard let api = capturedAPI else { return }
-        let key = r.second.kind + "/" + r.second.id
-        hiddenLinks.insert(key)
+    /// Hide the row immediately. Both readbacks decide the outcome, even if the write reported an error.
+    /// Check Again keeps the original choice and only reads.
+    private func unlink(_ relationship: KBRelationship, lockLists: Bool, checkOnly: Bool = false) async {
+        guard let api = capturedAPI, changingLink == nil else { return }
+        let key = relationship.id
+        changingLink = key
+        relationshipRevision += 1
+        if !checkOnly { hiddenLink = key }
+        defer {
+            hiddenLink = nil
+            changingLink = nil
+        }
         var writeError: Error?
-        if accepted == nil {
-            do { try await api.kbCorrect(r.targetKind, id: r.targetID, r.update) } catch { writeError = error }
+        if !checkOnly {
+            let target = relationship.target
+            do {
+                try await api.kbCorrect(target.kind, id: target.id, relationship.removalUpdate(lockLists: lockLists))
+            } catch { writeError = error }
         }
-        let taken = accepted ?? (writeError == nil)
-        var read: [KBDetail?] = []
-        var readError: Error?
-        for end in r.ends {
-            do { read.append(try await api.kbDetail(end.kind, id: end.id).detail) } catch {
-                read.append(nil)
-                readError = readError ?? error
-            }
-        }
-        await load()
-        hiddenLinks.remove(key)
-        let reason = { (e: Error) in e.shown ?? e.localizedDescription }
-        if r.confirmed(read) {
+        async let current = api.kbReadback(relationship.first, query: query)
+        async let other = api.kbReadback(relationship.second)
+        let (currentRead, otherRead) = await (current, other)
+        let first = currentRead.response
+        let second = otherRead.response
+        if let first, KBRelationship.matches(first.detail, relationship.first) { showDetail(first) }
+        if relationship.removalConfirmed(first?.detail, second?.detail, lockLists: lockLists) {
             Haptics.success()
             model.toast = Toast(String(localized: "Link removed"), style: .success)
             return
         }
         Haptics.error()
-        if let readError {
-            let message = taken
-                ? String(localized: "Link removed, but checking it failed: \(reason(readError))")
-                : String(localized: "Couldn't confirm the link was removed: \(reason(readError))")
-            model.toast = Toast(message, style: .error,
-                                action: Toast.Action(title: String(localized: "Check Again")) { Task { await unlink(r, checkOnly: taken) } })
-        } else if !taken {
-            let message = writeError.map { String(localized: "Couldn't remove the link: \(reason($0))") } ?? String(localized: "Couldn't remove the link.")
-            model.toast = Toast(message, style: .error,
-                                action: Toast.Action(title: String(localized: "Try Again")) { Task { await unlink(r) } })
+        let reason = { (e: Error) in e.shown ?? e.localizedDescription }
+        let readError = currentRead.error ?? otherRead.error
+        if readError == nil, let writeError, let first, let second,
+           KBRelationship.matches(first.detail, relationship.first), KBRelationship.matches(second.detail, relationship.second) {
+            model.toast = Toast(String(localized: "Couldn't remove the link: \(reason(writeError))"), style: .error,
+                                action: Toast.Action(title: String(localized: "Try Again")) {
+                Task { await unlink(relationship, lockLists: lockLists) }
+            })
         } else {
-            model.toast = Toast(String(localized: "The link is still there. The hub may need an update."), style: .error)
+            let message = readError.map { String(localized: "Couldn't confirm the link was removed: \(reason($0))") }
+                ?? String(localized: "Couldn't confirm the link was removed. The hub may need an update.")
+            model.toast = Toast(message, style: .error,
+                                action: Toast.Action(title: String(localized: "Check Again")) {
+                Task { await unlink(relationship, lockLists: lockLists, checkOnly: true) }
+            })
+        }
+    }
+
+    private func allowAgain(_ relationship: KBRelationship) async {
+        guard let api = capturedAPI, changingLink == nil, removedLinks.contains(where: { $0.id == relationship.id }) else { return }
+        changingLink = relationship.id
+        relationshipRevision += 1
+        defer { changingLink = nil }
+        let target = relationship.target
+        do {
+            try await api.kbCorrect(target.kind, id: target.id, relationship.allowanceUpdate)
+            let current = relationship.first
+            let response = try await api.kbDetail(current.kind, id: current.id, query: query)
+            guard relationship.allowanceConfirmed(response.detail) else {
+                Haptics.error()
+                model.toast = Toast(String(localized: "Couldn't confirm this link can be made again."), style: .error)
+                return
+            }
+            showDetail(response)
+            Haptics.success()
+            model.toast = Toast(String(localized: "Persona can link these entries again"), style: .success)
+        } catch {
+            Haptics.error()
+            let reason = error.shown ?? error.localizedDescription
+            model.toast = Toast(String(localized: "Couldn't allow the link again: \(reason)"), style: .error)
         }
     }
 
@@ -1285,12 +1359,39 @@ struct KnowledgeDetailView: View {
         }
     }
 
+    private func showDetail(_ response: KBDetailResponse) {
+        let name = Self.shown(entry, detail: response).name
+        removedLinks = KBRemovedLink.rows(in: response.detail, name: name)
+        chatInbox = KBChatInbox.Page(response)
+        detail = response
+        error = nil
+    }
+
+    /// Whether this phone opens Inbox items: not while the hub's navigation hides the Inbox page, where a link to one
+    /// goes back to the start (`returnToStartIfHidden`).
+    private var opensInbox: Bool {
+        #if os(iOS)
+        !model.hiddenNavigationPages.contains(.inbox)
+        #else
+        true
+        #endif
+    }
+
+    /// An Inbox item of this chat, opened in the Inbox as a link to it opens; a sheet this page is in closes first.
+    private func openInboxItem(_ item: KBInboxItem) {
+        Haptics.tap()
+        if shownAsSheet { dismiss() }
+        model.openKBInboxItem(item.id, manager: capturedAPI?.managerID)
+    }
+
     private func load() async {
         if capturedAPI == nil { capturedAPI = inheritedAPI ?? model.api?.currentAssistantSettings() }
-        guard let api = capturedAPI else { return }
+        guard let api = capturedAPI, changingLink == nil else { return }
+        let revision = relationshipRevision
         do {
-            detail = try await api.kbDetail(entry.kind, id: entry.id, query: query)
-            error = nil
+            let response = try await api.kbDetail(entry.kind, id: entry.id, query: query)
+            guard revision == relationshipRevision else { return }
+            showDetail(response)
             #if DEBUG
             // `-showKnowledgeFacts YES` / `-showKnowledgeUnlink YES` with `-showKnowledgeEntry <kind>/<id>`: the confirmed
             // facts editor, or the question for the first link that can be removed, up once the entry loads (screenshots).
@@ -1302,13 +1403,13 @@ struct KnowledgeDetailView: View {
                     openPoint = KBOpenPoint(point: p, links: d.links ?? [], crumbs: [Self.shown(entry, detail: detail).name] + (p.path ?? []))
                 }
                 if UserDefaults.standard.bool(forKey: "showKnowledgeUnlink") {
-                    unlinking = d.links?.lazy.compactMap { KBUnlink.removal(d, name: Self.shown(entry, detail: detail).name, linked: $0) }.first
+                    unlinking = d.links?.lazy.compactMap { KBRelationship.removal(d, name: Self.shown(entry, detail: detail).name, linked: $0) }.first
                 }
             }
             #endif
         } catch {
             // Cancelled (the page went away mid-load) is not an error to show.
-            if let shown = error.shown { self.error = shown }
+            if revision == relationshipRevision, let shown = error.shown { self.error = shown }
         }
     }
 }
@@ -1362,7 +1463,7 @@ struct KBMomentView: View {
                 }
                 if let chunks {
                     ForEach(Array(chunks.enumerated()), id: \.offset) { _, c in
-                        Markdown(c).markdownTheme(.persona).readingContent()
+                        Markdown(c).markdownTheme(.persona).readingContent().textLookupSurface("knowledge")
                     }
                 } else if let error {
                     Label(error, systemImage: Theme.Icon.error).foregroundStyle(Theme.danger).font(Theme.Font.caption)
@@ -1433,7 +1534,7 @@ struct ItemFacts {
     }
 }
 
-/// A place a search found in an entry: where (Profile, Chat History · day), the line with the words in bold, and for a message
+/// A place a search found in an entry: where (Profile, Chat History · day), the line with the matches highlighted, and for a message
 /// the one before and after it in grey.
 struct KBMatchRow: View {
     var match: KBMatch
@@ -1462,7 +1563,7 @@ struct KBMatchRow: View {
     }
 }
 
-/// One archived message: who and when on a line, then what was said, the searched words in bold.
+/// One archived message: who and when on a line, then what was said, with the searched words highlighted.
 struct KBMessageText: View {
     var line: KBMessageLine
     var query: String
@@ -1536,10 +1637,6 @@ struct KBDayView: View {
             .listStyle(.insetGrouped)
             .themedPage()
             .navigationBarTitleDisplayMode(.inline)
-            #if os(macOS)
-            // The day and its chat in the title bar's row (#855); a principal item would say the day twice.
-            .pageTitle(Self.title(day), subtitle: chatName)
-            #else
             .navigationTitle(Self.title(day))
             .pageToolbar {
                 ToolbarItem(placement: .principal) {
@@ -1549,7 +1646,6 @@ struct KBDayView: View {
                     }
                 }
             }
-            #endif
             .task(id: day) {
                 await load()
                 // Laid out first, then to the found message (a few rows above it stay in sight).
@@ -1691,17 +1787,9 @@ struct KBTagEditor: View {
                 }
                 Section {
                     Slider(value: $relevance, in: 0...100, step: 5)
-                    #if os(macOS)
-                        .labelsHidden() // its empty label column took the left half of the row
-                    #endif
                 } header: { Text("Relevance to Me \(Int(relevance))") }
                 Section {
-                    #if os(macOS)
-                    // A grouped Mac form shows a titled field as label + trailing value: the hint read as a label.
-                    TextField(String(localized: "Separate with spaces"), text: $tags, prompt: Text("Separate with spaces")).labelsHidden()
-                    #else
                     TextField(String(localized: "Separate with spaces"), text: $tags)
-                    #endif
                 } header: { Text("Tags") }
                 if entry.kind == KBKind.projects.rawValue {
                     Section("Project") {
@@ -1724,10 +1812,8 @@ struct KBTagEditor: View {
             .navigationTitle(entry.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(saving)
-                }
+                SheetClose { dismiss() }
+                SheetConfirm(id: "kb-entry-save", name: String(localized: "Save"), busy: saving) { Task { await save() } }
             }
             .onAppear {
                 if capturedAPI == nil { capturedAPI = inheritedAPI ?? model.api?.currentAssistantSettings() }
@@ -1742,10 +1828,6 @@ struct KBTagEditor: View {
             }
         }
         .presentationDetents([.medium, .large])
-        #if os(macOS)
-        // This sheet did not pick up macLook's grouped form (cause unknown): the two-column one cut rows off.
-        .macSheet()
-        #endif
     }
 
     private func save() async {

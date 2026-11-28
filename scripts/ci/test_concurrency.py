@@ -25,7 +25,7 @@ class ConcurrencyTests(unittest.TestCase):
     def test_all_manual_entry_points_cancel_same_branch_lane_not_same_commit_key(self):
         for filename, prefix in [('ci.yml', 'ci'), ('apple-test.yml', 'apple'),
                                  ('server-test.yml', 'server'), ('android-test.yml', 'android'),
-                                 ('scripts-tests.yml', 'scripts')]:
+                                 ('scripts-tests.yml', 'scripts'), ('web-ui-e2e.yml', 'web-ui-e2e')]:
             with self.subTest(filename=filename):
                 config = workflow(filename)['concurrency']
                 self.assertEqual(config['cancel-in-progress'], 'true')
@@ -53,8 +53,17 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertIn('workflow_call', workflow('apple-test.yml')['on'])
         self.assertIn('workflow_dispatch', workflow('apple-test.yml')['on'])
 
+    def test_web_matrix_shards_full_and_core_only_suites(self):
+        job = workflow('web-test.yml')['jobs']['web']
+        self.assertIn('strategy', job)
+        strategy = job['strategy']
+        self.assertEqual(int(strategy['max-parallel']), 2)
+        self.assertEqual(strategy['fail-fast'], 'false')
+        self.assertEqual(strategy['matrix']['shard'], ['1/2', '2/2'])
+        self.assertEqual(job['env']['PERSONA_WEB_TEST_SHARD'], '${{ matrix.shard }}')
+
     def test_heavy_matrices_keep_all_shards_with_bounded_parallelism(self):
-        for filename, job, maximum, size in [('server-test.yml', 'server', 2, 4),
+        for filename, job, maximum, size in [('server-test.yml', 'server', 2, 7),
                                               ('android-test.yml', 'android', 2, 2),
                                               ('scripts-tests.yml', 'scripts', 1, 2)]:
             with self.subTest(filename=filename):

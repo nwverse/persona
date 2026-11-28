@@ -91,9 +91,6 @@ struct GitPane: View {
             await load()
             await readPR(force: true)
         }
-        #if os(macOS)
-        .pageToolbar { MacRefreshItem(id: [machineID, cwd]) { await load() } } // no pull to refresh on the Mac
-        #endif
         .task(id: cwd) { await load() }
         // The pull request again only when what was pushed moved (gh asks GitHub each time), as on the web.
         .task(id: canWrite ? GitPRModel.key(status) : "") { await readPR() }
@@ -113,21 +110,6 @@ struct GitPane: View {
         }
         .sheet(item: $diff) { t in GitDiffSheet(machineID: machineID, group: group, cwd: cwd, root: status?.root, target: t) }
         .sheet(item: $commit) { c in GitCommitSheet(machineID: machineID, group: group, cwd: cwd, commit: c) }
-        #if os(macOS) && DEBUG
-        .onAppear {
-            // `-macGitSheet diff|commit`: a made-up change / commit's sheet, to see its size on the Mac (demo mode has
-            // no repositories, so it shows its error state). The change and the commit are the ones scripts/mock/mock_hub.py
-            // (MOCK_FILES=1) answers for, so paired with it the sheets show a real diff.
-            switch UserDefaults.standard.string(forKey: "macGitSheet") {
-            case "diff":
-                diff = GitDiffTarget(file: GitFile(path: "Sources/App/main.swift", index: "M", worktree: "M", added: 2, deleted: 1), staged: false)
-            case "commit":
-                commit = GitCommit(hash: String(repeating: "0", count: 32) + "a1b2c3d0", short: "a1b2c3d", subject: "Show the city name",
-                                   author: "Sample Dev")
-            default: break
-            }
-        }
-        #endif
     }
 
     private func header(_ s: GitStatus) -> some View {
@@ -409,7 +391,7 @@ struct GitPane: View {
                     }
                 }
             }
-            .confirmationDialog(Text("Push to the Remote?"), isPresented: Binding(get: { askingPush != nil }, set: { if !$0 { askingPush = nil } }),
+            .accessibleConfirmationDialog(Text("Push to the Remote?"), isPresented: Binding(get: { askingPush != nil }, set: { if !$0 { askingPush = nil } }),
                                 titleVisibility: .visible, presenting: askingPush) { kind in
                 Button { Task { await push(kind) } } label: { Text("Push").lineLimit(1) }
                     .accessibilityIdentifier("git.push.confirm")
@@ -701,10 +683,10 @@ struct GitDiffSheet: View {
                 }
             }
             .navigationTitle(target.file.name)
-            .navigationSubtitle(target.file.folder.isEmpty ? String(localized: "Repository root") : target.file.folder)
+            .navigationSubtitleWhenSupported(target.file.folder.isEmpty ? String(localized: "Repository root") : target.file.folder)
             .navigationBarTitleDisplayMode(.inline)
             .pageToolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button { UIPasteboard.general.string = diff?.diff } label: { Label("Copy Diff", systemImage: Theme.Icon.copy) }
@@ -714,9 +696,6 @@ struct GitDiffSheet: View {
             }
             .task(id: target) { await load() }
             .onHubReconnect(group) { if error != nil { Task { await load() } } }
-            #if os(macOS)
-            .macLargeSheet(bars: true)
-            #endif
         }
     }
 
@@ -804,12 +783,9 @@ struct GitCommitSheet: View {
             .themedPage()
             .navigationTitle(commit.short)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
             .task { await load() }
             .onHubReconnect(group) { if error != nil { Task { await load() } } }
-            #if os(macOS)
-            .macLargeSheet(bars: true)
-            #endif
         }
     }
 
@@ -912,12 +888,7 @@ struct DiffText: View {
             out.append(NSAttributedString(string: gutter, attributes: [.font: font, .foregroundColor: UIColor.tertiaryLabel, .backgroundColor: bg]))
             let body = l.text.padding(toLength: max(width, l.text.count), withPad: " ", startingAt: 0)
             let color: UIColor = l.kind == .add || l.kind == .del || l.kind == .context ? .label : fg
-            #if os(macOS)
-            // An NSTextView fills a background to the view's edge from the line break: the last line needs one too.
-            let end = "\n"
-            #else
             let end = i < lines.count - 1 ? "\n" : ""
-            #endif
             out.append(NSAttributedString(string: body + end, attributes: [.font: font, .foregroundColor: color, .backgroundColor: bg]))
         }
         return out

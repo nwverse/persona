@@ -9,6 +9,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,10 +22,7 @@ func golden(t *testing.T, name, got string) {
 	t.Helper()
 	path := filepath.Join("testdata", "prompts", name+".golden")
 	if os.Getenv("UPDATE_GOLDEN") != "" {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+		if err := writeGolden(path, got); err != nil {
 			t.Fatal(err)
 		}
 		return
@@ -35,6 +33,45 @@ func golden(t *testing.T, name, got string) {
 	}
 	if got != string(want) {
 		t.Errorf("%s differs from %s\n--- got ---\n%s\n--- want ---\n%s", name, path, got, want)
+	}
+}
+
+// writeGolden does not let a narrowly selected partition's incomplete render erase a real fixture (#12482).
+func writeGolden(path, got string) error {
+	if got == "" {
+		if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
+			return fmt.Errorf("%s: refusing to replace a nonempty golden with an empty render", path)
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(got), 0o644)
+}
+
+func TestGoldenUpdateKeepsARealFixtureOnAnIncompleteRender(t *testing.T) {
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll(filepath.Join("testdata", "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join("testdata", "prompts", "kept.golden")
+	if err := os.WriteFile(path, []byte("real fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("UPDATE_GOLDEN", "1")
+	t.Run("incomplete render", func(t *testing.T) {
+		if err := writeGolden(path, ""); err == nil {
+			t.Fatal("an incomplete render was accepted")
+		}
+	})
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "real fixture" {
+		t.Fatalf("an incomplete render replaced the fixture: %q, %v", raw, err)
+	}
+	golden(t, "kept", "intentional replacement")
+	raw, err = os.ReadFile(path)
+	if err != nil || string(raw) != "intentional replacement" {
+		t.Fatalf("an intentional update was not kept: %q, %v", raw, err)
 	}
 }
 
@@ -74,6 +111,18 @@ func TestGoldenRelay(t *testing.T) {
 		Tool: "conversation_send", Text: "示例消息：把结果整理一下", Hop: 2}))
 }
 
+func TestGoldenRelayQuote(t *testing.T) {
+	q := relayRequest{BriefRequest: BriefRequest{
+		Text: "示例原话：周五前把导出修好", At: time.Date(2026, 11, 17, 4, 52, 0, 0, time.UTC),
+		Conversation: "b2e4d6f8-0000-4000-8000-000000000001", MessageID: "msg-1",
+		Via: []string{"b2e4d6f8-0000-4000-8000-000000000001", "b2e4d6f8-0000-4000-8000-000000000003"},
+	}}
+	msg := relayMsg{From: q.Conversation, FromTitle: "Persona", Tool: "conversation_send", Text: "示例消息：这件交给你", Hop: 1, Quote: &q}
+	golden(t, "relay.quote", relayText(msg))
+	q.Text, q.Part, q.PartRef = "把导出修好", true, "example-part-id"
+	golden(t, "relay.quote_part", relayText(msg))
+}
+
 func TestGoldenTaskPrompt(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Shanghai") // passed in: the output doesn't depend on the machine's zone
 	due := time.Date(2026, 10, 31, 1, 0, 0, 0, time.UTC)
@@ -88,7 +137,6 @@ func TestGoldenTaskPrompt(t *testing.T) {
 		{"once_late", Task{Title: "看 CI", Prompt: "看看 CI 跑完没有", Repeat: repeatOnce}, 25 * time.Minute, false, true, false},
 		{"once_untitled", Task{Prompt: "提醒我喝水", Repeat: repeatOnce}, time.Minute, false, true, false},
 		{"interval_late", Task{Prompt: "巡检各台电脑上的 Agent，有卡住的告诉我", Repeat: repeatInterval, EveryMinutes: 120}, 3 * time.Hour, false, false, false},
-		{"interval_leader_open", Task{Title: "巡检", Prompt: "巡检", Repeat: repeatInterval, EveryMinutes: 180, cadenceEvery: leaderOpenEveryMinutes}, 0, false, false, false},
 		{"interval_manual", Task{Title: "巡检", Prompt: "巡检", Repeat: repeatInterval, EveryMinutes: 30}, 3 * time.Hour, true, true, false},
 		{"daily_kb", Task{Title: "早报", Prompt: "给我今天的早报", Repeat: repeatDaily}, 2 * time.Hour, false, true, false},
 		{"daily_nokb", Task{Title: "早报", Prompt: "给我今天的早报", Repeat: repeatDaily}, 0, false, false, false},
@@ -191,8 +239,21 @@ func TestGoldenTodoThreadReply(t *testing.T) {
 	golden(t, "todo_thread_reply.unrecorded", prompts.RenderTodoThreadReply(prompts.TodoThreadReply{Title: "天气 App 发 1.3 版", Text: "先发安卓，iOS 等审核过了再说"}))
 	in := prompts.BotMessage{Persona: true, Owner: "示例用户", Text: "先发安卓"}
 	golden(t, "bot_message.private", prompts.RenderBotMessage(in))
+	in.Todo = &prompts.BotTodo{ID: "todo_0123456789abcdef", Title: "天气 App 发版", Notes: "先发安卓。\n链接：https://example.com/release"}
+	golden(t, "bot_message.todo_reminder", prompts.RenderBotMessage(in))
+	in.Todo = nil
 	in.Topic = true
 	golden(t, "bot_message.topic", prompts.RenderBotMessage(in))
+}
+
+func TestGoldenUnboundTopicMessage(t *testing.T) {
+	for _, locale := range []string{"en", "zh-Hans", "ja"} {
+		in := prompts.BotMessage{Persona: true, Topic: true, UnboundTopic: true,
+			Language: answerLanguage(locale), Text: "Review the seed order"}
+		golden(t, "bot_message.answer_only."+locale, prompts.RenderBotMessage(in))
+		in.TopicMessageID = "om_example"
+		golden(t, "bot_message.main_decides."+locale, prompts.RenderBotMessage(in))
+	}
 }
 
 func TestGoldenStandingActions(t *testing.T) {
@@ -201,4 +262,54 @@ func TestGoldenStandingActions(t *testing.T) {
 		Task: "Merge the current pull request after checks pass; verify locally.", Directory: "/code/app",
 		Card: `{"plan":"Merge PR #123, then run local tests."}`,
 	}))
+}
+
+// What the main conversation gets for the owner's "@bot /read …" in a Lark group (bot/read_group, #11803): in each
+// language, in a topic, and with no words after the command; the answer held for the owner (#14437), and with the
+// read_group_direct switch posted straight into the group.
+func TestGoldenBotReadGroup(t *testing.T) {
+	// The prompt as the lark module fills it for a /read (its read.go; readPrompt checks it is these).
+	readPrompt := func(owner, lang, chat, message, thread, task string, direct bool) prompts.BotReadGroup {
+		return prompts.BotReadGroup{Owner: owner, Language: lang, ChatID: chat, MessageID: message, ThreadID: thread, Task: task,
+			Dir: "~/.persona/lark-read/" + message, Default: 40, Most: 500, FileMB: 50, TotalMB: 200, Images: 20,
+			Minutes: 20, Calls: 40, Direct: direct}
+	}
+	for _, direct := range []bool{false, true} {
+		suffix := ""
+		if direct {
+			suffix = ".direct"
+		}
+		in := readPrompt("示例用户", "", "oc_example", "om_example", "", "看下这几条告警是不是同一个原因", direct)
+		golden(t, "bot_read_group"+suffix, prompts.RenderBotReadGroup(in))
+		in.Language, in.Owner, in.Task = "English", "Example User", "Are these alerts the same cause?"
+		golden(t, "bot_read_group"+suffix+".en", prompts.RenderBotReadGroup(in))
+		in.Language, in.Owner, in.Task = "日本語", "サンプルユーザー", "これらのアラートは同じ原因ですか"
+		golden(t, "bot_read_group"+suffix+".ja", prompts.RenderBotReadGroup(in))
+	}
+	in := readPrompt("", "", "oc_example", "om_example", "omt_example", "", false)
+	golden(t, "bot_read_group.topic_no_task", prompts.RenderBotReadGroup(in))
+}
+
+func TestGoldenLogicalSegmentHandoff(t *testing.T) {
+	for _, language := range []string{"en", "zh-Hans", "ja"} {
+		golden(t, "segment_handoff_"+language, prompts.RenderSegmentHandoff(prompts.SegmentHandoff{Language: language, Summary: "Earlier work", Recent: []prompts.HandoffTurn{{Role: "user", Text: "Continue the same task"}}, Partial: true, Text: "Next message"}))
+	}
+}
+
+func TestGoldenLogicalSegmentSummary(t *testing.T) {
+	for _, language := range []string{"en", "zh-Hans", "ja"} {
+		golden(t, "segment_summary_"+language, prompts.RenderSegmentSummary(language))
+	}
+	// The caller supplies answerLanguage's display names, and empty retains the historical Chinese bytes.
+	for _, tc := range []struct{ language, golden string }{{"", "zh-Hans"}, {"Chinese", "zh-Hans"}, {"English", "en"}, {"Japanese", "ja"}} {
+		got := prompts.RenderSegmentSummary(tc.language)
+		path := filepath.Join("testdata", "prompts", "segment_summary_"+tc.golden+".golden")
+		want, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != string(want) {
+			t.Errorf("language %q does not preserve the %s rendering", tc.language, tc.golden)
+		}
+	}
 }

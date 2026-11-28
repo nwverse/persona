@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
@@ -30,9 +31,21 @@ func clipTo(s string, n int) string {
 	return s[:cut] + note
 }
 
-// clipNoteFormat is the note clipParts ends a cut string with (%d: the original size in bytes). The apps know a tool input
-// was cut by it (clippedNote; web/src/lib/turn-changes.ts).
-const clipNoteFormat = "\n…（已截断，共 %d 字节）"
+// The Go and web file-change summaries recognize this suffix in tool inputs
+// (clippedNote; web/src/lib/turn-changes.ts).
+const (
+	clipNotePrefix = "\n…（已截断，共 "
+	clipNoteSuffix = " 字节）"
+	clipNoteFormat = clipNotePrefix + "%d" + clipNoteSuffix
+)
+
+// ClipNote returns the suffix that marks a tool input string as truncated from total bytes.
+func ClipNote(total int) string { return fmt.Sprintf(clipNoteFormat, total) }
+
+// ApproximateClipNote marks a tool input string whose original byte count is estimated.
+func ApproximateClipNote(total int) string {
+	return fmt.Sprintf(clipNotePrefix+"≈%d"+clipNoteSuffix, total)
+}
 
 // clipParts is where clipTo cuts s (len(s) > n) and the note it adds.
 func clipParts(s string, n int) (cut int, note string) {
@@ -40,7 +53,7 @@ func clipParts(s string, n int) (cut int, note string) {
 	for cut > 0 && (s[cut]&0xC0) == 0x80 {
 		cut--
 	}
-	return cut, fmt.Sprintf(clipNoteFormat, len(s))
+	return cut, ClipNote(len(s))
 }
 
 // light is the copy of an item that pages and pushes carry; cut says something was left out (fetch it with Full).
@@ -52,22 +65,71 @@ func light(it proto.Item, keepImage bool) (_ proto.Item, cut bool) {
 		limit, note = pageOutputLen, "\n…（已截断，点开看全文，共 %d 字节）"
 	}
 	if len(it.Text) > limit && it.Role == "user" && it.Kind == proto.KindText {
+		recordRawTextHash(&it, it.Text)
 		if t, ok := lightContexts(it.Text, limit); ok { // what the user wrote stays whole, the blocks' bodies are cut
 			it.FullSize, it.Text = len(it.Text), t
 			cut = true
 		}
 	}
 	if len(it.Text) > limit {
+		if it.Role == "user" && it.Kind == proto.KindText {
+			recordRawTextHash(&it, it.Text)
+		}
 		end := pageCut(it.Text, limit)
 		it.FullSize = len(it.Text)
 		it.Text = it.Text[:end] + fmt.Sprintf(note, len(it.Text))
 		cut = true
+	}
+	// Quoted questions have their own budget. For a multi-answer reply the plain Text
+	// remains a readable preview even if the complete list needs the full-item endpoint.
+	quoteBytes := 0
+	for _, reply := range it.QuestionReplies {
+		quoteBytes += len(reply.Question) + len(reply.Answer)
+	}
+	if quoteBytes > pageTextLen {
+		if len(it.QuestionReplies) == 1 {
+			it.QuestionReplies = []proto.QuestionReply{{Question: clipTo(it.QuestionReplies[0].Question, pageTextLen)}}
+		} else {
+			it.QuestionReplies = nil
+		}
+		it.QuestionRepliesCut, cut = true, true
 	}
 	if it.Image != nil && it.Image.Data != "" && !keepImage {
 		it.Image = it.Image.Placeholder()
 		cut = true
 	}
 	return it, cut
+}
+
+// recordRawTextHash captures the SHA-256 of raw (and its \r\n-trimmed form) on it before truncation,
+// preserving the first (most complete) hash if it was already recorded at parse time.
+func recordRawTextHash(it *proto.Item, raw string) {
+	if it.RawTextSHA256 != "" || raw == "" {
+		return
+	}
+	it.RawTextSHA256 = sha256Hex(raw)
+	if trimmed := strings.TrimRight(raw, "\r\n"); trimmed != raw {
+		it.RawTextTrimmedSHA256 = sha256Hex(trimmed)
+	}
+}
+
+// clipUserText clips user prompt text at maxTextLen while preserving the untruncated SHA-256 for anchor matching.
+func clipUserText(it *proto.Item, raw string) {
+	if len(raw) > maxTextLen {
+		recordRawTextHash(it, raw)
+	}
+	it.Text = clip(raw)
+}
+
+// LightItem applies the page and push limits to an item from a native transcript reader.
+func LightItem(it proto.Item) proto.Item {
+	it, _ = light(it, false)
+	return it
+}
+
+// ClipToolInput applies the transcript's wire size limit to a tool's arguments.
+func ClipToolInput(input json.RawMessage) json.RawMessage {
+	return clipJSON(input)
 }
 
 // pageCut is where light cuts text longer than limit: s[:pageCut] is what the page keeps. It ends on a character, at
@@ -89,16 +151,35 @@ const (
 	clipNoteRoom  = 48  // what clipTo's note adds to a cut string, as JSON
 )
 
-// clipJSON shortens long strings anywhere in a tool input object: a Write's content, but also push_files'
-// files[].content, MultiEdit's edits[].new_string or an MCP call's nested blocks, which went out whole in every page and
-// push. The shape stays, so the apps' renderers still find their fields. A value that is not an object is left as it is:
-// a Claude tool_use's input and an MCP call's arguments are always objects.
+// decodeInputObject keeps the ordinary float64 behavior, but retries with json.Number when a valid number exceeds its
+// range (for example 1e1000). Such an object still deserves the whole-input bound rather than an oversized pass-through.
+func decodeInputObject(raw []byte) (map[string]any, error) {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err == nil {
+		return m, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
+		return nil, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("tool input has trailing JSON")
+	}
+	return m, nil
+}
+
+// clipJSON shortens a tool input object in three passes. Long strings anywhere are cut first: a Write's content, but also
+// push_files' files[].content, MultiEdit's edits[].new_string or an MCP call's nested blocks, which went out whole in
+// every page and push. If short values still keep the encoded object over budget, boundInputJSON drops array tails and
+// then object fields while preserving every surviving value's shape. A value that is not an object is left as it is: a
+// Claude tool_use's input and an MCP call's arguments are always objects.
 func clipJSON(raw json.RawMessage) json.RawMessage {
 	if len(raw) <= maxInputLen {
 		return raw
 	}
-	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
+	m, err := decodeInputObject(raw)
+	if err != nil {
 		return raw
 	}
 	b := marshalPlain(mapStrings(m, func(s string) string { return clipTo(s, maxInputLen/2) }))
@@ -106,8 +187,8 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 		return b
 	}
 	// Still too long (many medium strings): the strings over minInputShare share evenly what the rest leaves. Shorter
-	// strings, keys and other values are never cut, and a share is never under minInputShare, so an input made mostly of
-	// those (thousands of short array items) or of a great many long strings still goes over maxInputLen.
+	// strings, keys and other values survive this pass, and a share is never under minInputShare. If their total still
+	// exceeds maxInputLen, the third pass removes whole values rather than cutting any string below that floor.
 	long, kept := 0, 0
 	rest := marshalPlain(mapStrings(m, func(s string) string {
 		if len(s) <= minInputShare {
@@ -117,12 +198,16 @@ func clipJSON(raw json.RawMessage) json.RawMessage {
 		return ""
 	}))
 	if long == 0 {
-		return b // nothing left that may be cut
+		return boundInputJSON(b, len(raw)) // short values and keys still need the whole-input bound
 	}
 	// JSON escapes make a kept byte cost more than one: scale the share by what the first pass's strings cost.
 	share := (maxInputLen - len(rest)) * kept / (len(b) - len(rest)) / long
 	share = min(max(share-clipNoteRoom, minInputShare), maxInputLen/2)
-	return marshalPlain(mapStrings(m, func(s string) string { return clipIfShorter(s, share) }))
+	b = marshalPlain(mapStrings(m, func(s string) string { return clipIfShorter(s, share) }))
+	if len(b) <= maxInputLen {
+		return b
+	}
+	return boundInputJSON(b, len(raw))
 }
 
 // marshalPlain is v as JSON with < > & as they are, as the input came: json.Marshal writes each as six bytes, and every

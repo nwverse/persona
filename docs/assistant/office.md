@@ -8,7 +8,7 @@ The assistant and Agents started by Persona use it through the skill `persona-of
 
 The hub machine that runs the assistant does not necessarily have Node, pip / venv or LibreOffice (observed: Ubuntu lacks `ensurepip`, and Claude Code is a native binary).
 Approaches that depend on python-docx / python-pptx (lxml, which needs compiling) or Node's docx / pptxgenjs do not run there, and the environments on the various computers are not complete either.
-Every machine has `personad`, so the generator lives in it (`server/internal/office`). Go has no mature docx / pptx library with a suitable license, so we write minimal valid Office Open XML ourselves;
+Every machine has `personad`, so the generator lives in it (`server/internal/modules/office/office`, a module the node's composition root provides; `docs/architecture/core-and-modules.md` "The node's modules"). Go has no mature docx / pptx library with a suitable license, so we write minimal valid Office Open XML ourselves;
 Markdown is parsed with goldmark (MIT). We borrowed ideas from Anthropic's official docx / xlsx / pptx skills (self-check after writing, formulas in tables, consistent layout): only the ideas, no content was copied.
 
 ## skill (persona-office)
@@ -86,6 +86,8 @@ Why it works this way (tried on real claude on 2026-11-04):
 ## Formula values
 
 Formulas in the workbook are computed at write time and their values written into the file, like Excel does on save (`formula.go`). Many viewers (QuickLook, the App's preview, many web viewers) do not compute formulas; they only show the stored value, and with no value the cell is blank.
+
+Cached range evaluation is bounded to 65,536 cells per range and 262,144 across the workbook. A formula exceeding either limit, or referring outside Excel's sheet bounds, is kept without a cached value for a spreadsheet application to calculate. Dependent formulas whose values cannot be established are also left uncached.
 Excel and Numbers still recompute everything on open (`fullCalcOnLoad`).
 
 - Supported: `+ - * / ^ & %`, comparisons, cells and ranges (other sheets too: `Sheet!A1`, `'with space'!A1:B2`), and SUM AVERAGE MIN MAX COUNT COUNTA ROUND ABS IF IFERROR AND OR NOT.
@@ -98,7 +100,7 @@ Excel and Numbers still recompute everything on open (`fullCalcOnLoad`).
 
 ## How it was verified
 
-- Unit tests in `server/internal/office`: every part's XML is valid; content, numbering, images, tables and formula values are all present; check can read them back.
+- Unit tests in `server/internal/modules/office/office`: every part's XML is valid; content, numbering, images, tables and formula values are all present; check can read them back.
 - Synthetic samples cross-checked on macOS (2026-11-04):
   - QuickLook thumbnails: documents, every kind of slide, and workbook formula values all display correctly.
   - `textutil` reads the docx.

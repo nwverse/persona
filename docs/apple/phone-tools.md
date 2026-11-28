@@ -2,7 +2,7 @@
 
 `apple/Persona/PhoneTools/`: wraps iPhone capabilities as MCP tools so Claude on a computer can operate phone data. Toggles and authorization are under Settings › Connectors › This iPhone (called "Phone data" before 2026-11-01).
 
-Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`) →
+Route: Claude calls a `phone_*` tool → `personad mcp` → node.sock → hub → an online device (iPhone, Android, or Mac, WebSocket `tool_call`; which one: "Which device takes a call" below) →
 the app queries/writes locally → `tool_result` returns along the same route.
 
 Device tool descriptions and schemas are registered by the app (iOS `apple/Persona/PhoneTools/`, Android `android/platform/phonetools/` (`PhoneToolCatalog.kt`)). The hub adds an optional `queue_if_offline` parameter to confirmed writes and supplies its own queue management tools from `server/internal/prompts/mcp/phone/` (`docs/assistant/prompts.md`, "MCP tools"). `personad mcp` adds `file` and `trim` to `phone_clipboard_set` (see "Copying a file to the clipboard").
@@ -11,12 +11,51 @@ Descriptions and parameters for tools with the same name must match exactly on b
 
 Mail tools `mail_*` use the same `personad mcp`, but execute on the hub without going through the phone; see "Mail tools (mail_*)" below.
 
+## Which device takes a call
+
+Several of the owner's devices can offer phone tools at once: an iPhone and an iPad on one account, an Android phone.
+Each call goes to one of them (`callPhoneWithWait` in `server/internal/hub/hub.go`, `server/internal/hub/phone_primary.go`):
+
+- **Automatic** (the default, nothing chosen): among the connected devices that registered the tool, a real device
+  before a simulator, then the one that sent a message last. With none connected, the hub wakes the iOS device that
+  registered the tool most recently (silent push, at most one per device every 30 seconds) and waits up to 20 seconds
+  for a phone that offers it.
+- **A primary device** (#12019): the owner picks one in Settings › Devices on iPhone or iPad (`PUT /api/v1/phone/primary`,
+  `docs/protocol/protocol.md` "Authentication"). The hub keeps it in its own settings (`phone.primary`), one value for
+  every client. While the primary device offers the tool (connected: what its app offers now; away: its latest
+  registration):
+  1. connected, it takes the call, even when another device was active more recently;
+  2. not connected, the hub wakes it (iOS only; an Android phone is never woken) and waits up to 20 seconds for it
+     alone: another device connecting meanwhile does not end the wait;
+  3. still away, another connected device that offers the tool answers, in the automatic order. With none, the call
+     fails naming the primary device (`tools/phone_primary_offline.md`).
+
+  A primary device that cannot be reached (switched off, or Persona force-quit so the silent push never wakes it)
+  costs every call that wait before another device answers; choosing Automatic while it is away avoids it.
+
+  The clipboard tools (`phoneOnScreenTools`) are never woken for: a connected primary device takes them, otherwise
+  another connected device, otherwise the usual "open Persona" answer. Queued writes ("Offline write queue" below) wait
+  for the primary device: they are queued while it is away, even when another device is connected, and delivered to it
+  when it connects. When the primary device does not offer the tool (that data source is off there, or the tool is
+  another platform's, such as Android's `phone_notifications_list`), the call follows the automatic order.
+- **Saying which device answered**: whenever a primary device is chosen and another device answers, the result tells
+  the model so, with both devices' names (`tools/phone_stand_in.md`), so the assistant can tell the owner where an
+  answer came from, a location above all. A result that is one JSON object gets the note as its `device_note` field,
+  because the map and quick-result cards read that object from the result's text blocks joined into one; any other
+  result gets the note as a text block of its own.
+- Revoking the primary device's credential ends the choice: Settings › Devices shows Automatic again, and calls follow
+  the automatic order.
+
+The health AI write tool's per-sample confirmation and no-deletion rule apply to `phone_health_write_sample` only.
+It never writes water or protein. Separately, explicit opt-in intake sync in Settings › Health writes and removes
+Persona's own water and protein samples; see `docs/assistant/health.md` ("Syncing to Apple Health").
+
 ## Registration and toggles
 
 | Entry | Purpose |
 | --- | --- |
 | `PhoneToolRegistry.all` | All tools (ignoring toggles), used by tests and settings |
-| `PhoneToolRegistry.enabledSpecs()` | Only user-enabled data sources; sent in `register_phone` after connecting to the hub |
+| `PhoneToolRegistry.enabledSpecs()` | Only data sources that are on and allowed, or on and not asked yet where the first use asks (`PhoneDataSource.offered`); sent in `register_phone` after connecting to the hub and after a call asked iOS |
 | `PhoneToolRegistry.call(name:args:confirm:)` | Executes one call, never throws: failure becomes `isError=true` + explanation |
 | `PhoneToolRegistry.authorizationStatus(_:)` / `requestAccess(_:)` | Displays status and requests permission in settings |
 
@@ -24,20 +63,22 @@ Each data source (contacts / calendar / reminders / location / health / photos /
 integrations alarms / messages / calls / shortcuts / media / home) can be disabled individually in settings. Disabled sources
 no longer appear in `enabledSpecs()`, so the model cannot see their tools, and calls are rejected too (preventing old sessions from continuing to call them).
 The iPhone integrations act outside Persona, so they start **off** (`PhoneDataSource.iPhoneOnly`): the user turns each one on; the older sources start on.
+A source that is on but refused is not offered either. One that iOS hasn't asked about yet is offered when its first use asks
+(see "Permissions"), so the switch in Settings shows it on: the switch always says what the hub is offered.
 
 The table above is for iOS (Mac uses the same code). **Android** uses `PhoneToolRegistry.kt` in `android/platform/phonetools/`, also with `all`, `enabledSpecs()`, and `call(…)`; all calls pass through this single gate:
 
-- **Toggles** are under Settings › Phone data (Android has no "Connectors" group), one per data source (contacts / calendar / location / health / photos / clipboard / device information / notifications, no reminders). All default to off and are stored separately per pairing (`PhoneToolSettings`).
-- **Foreground restrictions** are declared in the tool catalog: `PhoneToolCatalog.kt` marks `phone_location_current` and the two clipboard tools with `foreground = true`. When the app is not in the foreground, `enabledSpecs()` omits them and calls are rejected, telling the model to ask the user to open Persona and retry. Moving to the background during execution also interrupts the call.
+- **Toggles** are under Settings › Phone data (Android has no "Connectors" group), one per data source (contacts / calendar / location / health / photos / clipboard / device information / notifications / calls, no reminders). All default to off and are stored separately per pairing (`PhoneToolSettings`).
+- **Foreground restrictions** are declared in the tool catalog: `PhoneToolCatalog.kt` marks `phone_location_current`, the two clipboard tools and `phone_call_start` with `foreground = true`. When the app is not in the foreground, `enabledSpecs()` omits them and calls are rejected, telling the model to ask the user to open Persona and retry. Moving to the background before execution also interrupts the call.
   - **iOS** has the same rule for the two clipboard tools (#4192): iOS gives an app in the background no clipboard, so a write
     woken by a silent push was dropped while the tool answered ok, and a read came back empty. `ClipboardTool` refuses both
     while Persona is not the active app, with the "open Persona and try again" answer of the other tools that need it on screen
     (`Foreground`), and answers a write ok only once the pasteboard shows it landed (`changeCount` moved and `hasStrings` is true,
     or the text was empty). iOS keeps both registered, since a suspended app cannot withdraw them, so the hub sends no silent push
-    for them (`phoneOnScreenTools` in `hub.go`): with no connected phone offering one it answers "open Persona" at once, as it ends
+    for them (`phoneOnScreenTools` in `hub.go`, which also holds `phone_health_request_access`): with no connected phone offering one it answers "open Persona" at once, as it ends
     up doing for an Android phone that stopped offering them. A phone still connected in the background gets the call and refuses it.
 - **Hub registration** is handled by `PhoneToolsRuntime.kt`: send `register_phone` after connecting. When toggles, foreground/background state, or the persistent service change (permissions are also rechecked on every return to the foreground), recalculate `enabledSpecs()` and resend only if it changed. Send an empty list on disconnect or unpairing. Tools are offered only while the app is in the foreground or the persistent service is enabled; with neither, none are offered.
-- Before execution, check toggles, permissions, foreground state, and online status in order; writes requiring confirmation (only event creation) recheck after the user taps Allow. Duplicate delivery of the same `call_id` returns the previous result without executing again.
+- Before execution, check toggles, permissions, foreground state, and online status in order; writes requiring confirmation (calendar and contact changes, and calls) recheck after the user taps Allow. Duplicate delivery of the same `call_id` returns the previous result without executing again.
 
 See `docs/android/android.md` ("App shell and direct page navigation," the Settings › Phone data item; "Phone data tools aligned with iOS (2026-11-02)") and `android/platform/phonetools/README.md` for wiring and details.
 
@@ -57,16 +98,23 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_reminders_update {id, title?, due?, notes?, priority?, list?, location?}` | Reminders | **Yes** | Changes only the fields given; `due: null` removes the due date, `notes` replaces the notes (`null` removes them), `list` moves it, `location: null` stops it going off at a place; the card lists every field that changes (#2277) |
 | `phone_reminders_complete {id}` | Reminders | **Yes** | Marks complete (using the id returned by `phone_reminders_list`) |
 | `phone_reminders_delete {id}` | Reminders | **Yes** | Deletes a reminder the user no longer needs |
-| `phone_location_current {}` | Location (while in use) | No | One-shot location, waits up to 15 seconds; returns latitude/longitude, accuracy, altitude, time, time zone, and reverse-geocoded address |
+| `phone_location_current {}` | Location (While Using; Always also while Persona isn't open, "Location when Persona isn't open") | No | One-shot location, waits up to 15 seconds; returns latitude/longitude, accuracy, altitude, time, time zone, and reverse-geocoded address |
 | `phone_location_search {query, limit?}` | Location | No | Finds a place by name or address (MapKit): name, address, latitude, longitude, up to 10 |
 | `phone_maps_search_nearby {query, latitude?, longitude?, radius_meters?, limit?}` | Location | No | Places around the current fix (or the given point), nearest first: name, address, coordinates, distance, category, phone, website and the source (#2281). MapKit gives apps no opening hours; the result says so |
 | `phone_maps_navigate {latitude, longitude, name?, mode?}` | None (foreground) | No | Opens directions in Apple Maps (`driving` / `walking` / `transit`) and returns `opened: maps`: navigation runs in Maps, not in Persona |
 | `phone_maps_route {latitude, longitude, name?, mode?, from_latitude?, from_longitude?}` | Location | No | Works out a route with `MKDirections` and opens nothing (#5544): from Maps' own idea of where the phone is (`MKMapItem.forCurrentLocation()`) or the start given, to the destination, by `driving` / `walking` / `transit`. Returns the distance in meters, the expected time in seconds, the route's name and its line simplified to at most 48 points (`RouteLine`, Douglas–Peucker); transit has the time and distance only, as Apple Maps gives apps no transit line. The prompt asks for it on "how far / how long" and keeps `phone_maps_navigate` for when the user wants to go |
 | `phone_health_summary {metrics?, days?}` | Health (read) | No | Defaults to steps over the last 7 days; steps / distance (m) / active_energy, resting_energy, dietary_energy (kcal) / protein, carbs, fat (g) / heart_rate, resting_heart_rate (bpm) / sleep (hours) / weight (kg). Energy and nutrients are daily sums; today is partial. See "Daily health summaries" below |
 | `phone_health_write_sample {metric, value?, start, end?}` | Health (write) | **Yes** | Writes one sample: steps (integer) / distance (meters) / active_energy (kilocalories) / weight (kilograms, one instant) / sleep (an asleep interval, no value); intervals at most 24 hours, not in the future; one sample at a time, no bulk import or deletion |
+| `phone_workouts_recent {days?, activity?, limit?}` | Health (read) | No | iPhone (and Vision Pro). Recent workouts from Apple Health, newest first (default 30 days, max 365; default 20, max 50), of one activity if given. Each row has the id, activity, source app, start and end, duration, distance, active energy, elevation gain, average and maximum heart rate, and pace for runs, walks, hikes and rides. See "Workouts" below |
+| `phone_workout_detail {id}` | Health (read) | No | One workout by id: the same row plus per-kilometre splits (pauses left out) and minute-average heart rate |
+| `phone_health_types {kind?}` | Health (read) | No | Every health type the phone can read (#13740): type name, store identifier, kind, unit and access. See "Every health type, sample by sample" below |
+| `phone_health_samples {type, start?, end?, limit?, anchor?}` | Health (read) | No | Individual samples of one type with source, device and metadata; paged and incremental through `anchor`, deleted ids in `deleted` |
+| `phone_health_sources {type?, days?}` | Health (read) | No | The apps (bundle id / package) and, for one type, the devices that saved health data |
+| `phone_health_request_access {types}` | Health (asks) | No (system sheet) | Asks read access for the types not asked yet; needs Persona on screen, else `status: needs_foreground` |
+| `phone_health_watch {types, stop?}` | Health (read) | No | iPhone only. Keeps an on-device snapshot of these types current (observer queries, background delivery), so locked-phone calls still answer |
 | `phone_photos_recent {limit?, days?, screenshots_only?}` | Photos (read) | No | Recent photo/video metadata: local id, time, type, dimensions, screenshot/favorite flags, duration, latitude/longitude |
 | `phone_photo_get {id, max_size?}` | Photos (read) | No | Returns the JPEG image itself (default longest edge 1280, quality 0.7) + metadata |
-| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`; the app carries no commit) |
+| `phone_device_info {}` | None | No | Model identifier, iOS version, battery and charging state, Low Power Mode, storage, network type, time zone, language, thermal state, the app's `app_version`, `app_build` and `app_channel` (`debug` / `release`); on iOS also `build` (`commit`, `dirty`, `branch`, `built_at`, `builder`, `xcode`, `swift`, `configuration`, `bundle_id`: a Debug build has them all, a Release build the commit) and `runtime` (`hub_host`, `hub_version`, `hub_connection`, `launched_at`). `build` and `runtime` are `AppDebugInfo` (`apple/Persona/App/BuildInfo.swift`), the same value Settings › About › Debug Info shows and copies (#12926); any field may be missing (older apps, Android), and the hub relays the result as it is |
 | `phone_clipboard_get {}` | None (foreground; system paste prompt) | No | Reads clipboard text |
 | `phone_clipboard_set {text}` or `{file, trim?}` | None (foreground) | No | Replaces clipboard text; `file` copies a text file from the agent's computer without the model reading it (see "Copying a file to the clipboard") |
 | `phone_notify {title, body, delay_seconds?}` | Notifications | No | Local notification, optionally delayed up to 24 hours |
@@ -75,7 +123,7 @@ See `docs/android/android.md` ("App shell and direct page navigation," the Setti
 | `phone_timer_start {seconds, label?}` | Alarms | **Yes** | Countdown timer, 1 s – 24 h |
 | `phone_alarm_cancel {id}` / `phone_alarm_pause {id}` / `phone_alarm_resume {id}` | Alarms | Cancel only | Only ids of Persona's own alarms |
 | `phone_messages_compose {recipients, body}` | None (foreground) | System sheet | Prefills `MFMessageComposeViewController` (#2279); the user sends or cancels there and the result is `sent` / `cancelled` / `failed`. Nothing is sent silently, nothing is read |
-| `phone_call_start {number, kind?, name?}` | None (foreground) | **Yes** | `tel:` / `facetime:` / `facetime-audio:` (#2280); one number only (letters or two numbers are refused), then iOS asks again. The result says the call was handed to iOS, not that it connected |
+| `phone_call_start {number, kind?, name?}` | None (foreground) | **Yes** | iOS: `tel:` / `facetime:` / `facetime-audio:` (#2280); one number only (letters or two numbers are refused), then iOS asks again. Android accepts `kind: phone` only, opens `ACTION_DIAL` with the normalized `tel:` URI and never requests `CALL_PHONE`; FaceTime kinds fail as unsupported. The result says the call was handed to iOS / Android, not that it connected |
 | `phone_shortcuts_list {}` / `phone_shortcuts_forget {name}` | None | No | The Shortcuts the user allowed (#2283), kept on the phone |
 | `phone_shortcuts_register {name, purpose?}` | None | **Yes** | Allowing a shortcut is the confirmation; after that it runs without asking |
 | `phone_shortcuts_run {name, input?}` | None (foreground) | No | Only an allowed shortcut; `shortcuts://x-callback-url/run-shortcut` with `x-success` / `x-cancel` / `x-error` back to `persona://shortcut-callback/…` (`ShortcutCallbacks`, handled first in `onOpenURL`). Waits 90 s for the callback, then says no answer came |
@@ -101,6 +149,29 @@ reminders of the lists the user leaves on (all of them at first) to the hub, whi
 return to the foreground and when the Reminders database changes while the app is in front, and sends nothing when the
 batch is the same as the last one the hub took.
 
+### Workouts
+
+`phone_workouts_recent` and `phone_workout_detail` (#2526) read workouts that the Workout app or any other app saved to Apple Health.
+They let a workout report compare a workout with recent ones of the same activity (`docs/assistant/health.md`, "Automatic workout
+reports (iOS)"), and let later questions ("how was last week's run?") use the same data. `WorkoutReader` holds the queries that the
+reports share.
+
+- **What is read**: the workout itself and its heart rate, distance (on foot or by bike) and active energy samples. No route or
+  location is read.
+- **Activity names**: a report's activity names (`Running`, `Strength training`, …), lowercased with `_` for spaces, are the
+  tool's `activity` values. Other HealthKit activities are listed but cannot be filtered on.
+- **Splits**: whole kilometres in order (`WorkoutSplits`). Each distance sample's meters are spread evenly over its own interval.
+  The pauses from the workout's events (the user's own, and the Watch's automatic ones) are left out, as the Workout app does.
+  The last part kilometre is dropped. Samples that cannot give a sensible split (a kilometre in no time, a sample outside the
+  workout) give no splits at all, since the hub refuses a whole report over one bad split. Swimming and other activities have
+  none.
+- **Elevation gain** comes from the workout's `HKMetadataKeyElevationAscended`. The average and maximum heart rate come from the
+  workout's own statistics. Values outside sensible bounds are left out.
+- **Pace** is the duration over the distance, for a run, walk, hike or ride of at least 500 m.
+- **Permission**: workouts and cycling distance join `HealthTool.readTypes`. Someone who allowed Health before these types
+  existed is asked again by the tools and the reports, through `statusForAuthorizationRequest`. That happens only while Persona
+  is in front, where the Health sheet can show. Health never says what was allowed, so a refused type reads as no data.
+
 ### Daily health summaries
 
 `phone_health_summary` reads the requested metrics and returns one row per phone-local day; `days: 1` starts at midnight today and ends at the query time. The default is `metrics: ["steps"]`, `days: 7`; the maximum is 90 days. Days or metrics without data are omitted, never filled with zero.
@@ -110,8 +181,59 @@ batch is the same as the last one the hub took.
 - iOS reads `.dietaryEnergyConsumed`, `.dietaryProtein`, `.dietaryCarbohydrates`, `.dietaryFatTotal`, and `.basalEnergyBurned` through `HealthTool.quantityIdentifiers`. These join `HealthTool.readTypes`, so the Health authorization request includes them. People who allowed Health before these types were added must also grant the new read permissions.
 - The hub advertises the app's registered description and metric enum. Open/reconnect the updated phone app so its new catalog reaches the hub; a hub update alone cannot add metrics to an older phone app.
 - HealthKit does not reveal read authorization status: an empty result can mean no source data or denied read access. Check that the source app wrote today's entries and that Persona may read those categories.
+- **Locked phone (#7677)**: while the iPhone is locked, HealthKit's database is closed and every query fails with `HKError.errorDatabaseInaccessible`. The app then never starts a query: it answers from a snapshot of every metric over 90 days, written to Application Support with `completeFileProtectionUntilFirstUserAuthentication` while the app was in the foreground (refreshed on foreground and after successful live reads, throttled to 15 minutes).
+  - Both the `health-snapshot` directory and its `summary.json` file set `isExcludedFromBackup` on every save, keeping the 90 days of health data out of iCloud/iTunes backups. The flags are reapplied to files written by older builds too.
+  - A snapshot is valid for at most 48 hours after `as_of`. An older snapshot is treated as absent: the tool fails with the same bilingual `device_locked` message as when no snapshot exists, instead of putting the English HealthKit error into the day fields.
+  - A snapshot answer keeps every field of the live answer and adds `"source": "snapshot"` plus `"as_of"`; the hub prepends a plain-text note with the same `as_of`. Both `start` and `end` are computed from the snapshot time, with `end` equal to `as_of`, rather than the time of the locked-phone request. The save-time timezone is persisted too, so travel cannot move the day window or its partial marker onto a different row. The row for the snapshot's own day has `"partial": true` because it contains only the data collected before `as_of`; earlier rows omit `partial`.
 
 For the iPhone acceptance steps using 薄荷健康, see `docs/assistant/health.md` ("How to verify").
+
+### Every health type, sample by sample (#13740)
+
+`phone_health_summary` stays for daily totals of twelve metrics. Five more tools reach every type the phone's health store has:
+
+- **Types** (`phone_health_types`): iOS lists `HealthCatalog.entries`, about 190 types by raw identifier (HealthKit has no API that
+  enumerates them): quantities, categories (symptoms included), the blood pressure and food correlations, workouts, ECGs, audiograms,
+  heartbeat series, state of mind, activity summaries, workout routes and Health Records. The tools take the snake-case name
+  (`heart_rate`, `vo2_max`) or HealthKit's identifier. A type the running iOS lacks is `unsupported`; Health Records are
+  `unavailable` (they need the clinical-records entitlement, which this build does not have, and asking for them without it raises an
+  exception), and so are workout routes (locations, never read). Android lists the 38 Health Connect record types of `HealthRecords.types`.
+- **Access**: HealthKit tells an app only whether asking would still show the sheet (`statusForAuthorizationRequest`): that is
+  `not_requested` against `requested`, and whether the user allowed reading stays hidden. Health Connect says `granted` or
+  `not_granted`; a type the build's manifest does not declare is `unavailable`. A type Persona may not read answers with its status,
+  never an error. `phone_health_request_access` asks for exactly the types given (`["all"]` for every type); a type asked about before
+  never brings the sheet up again, so the user decides once. Correlations are asked through their parts (systolic and diastolic, the
+  dietary quantities): HealthKit raises an exception for a correlation type in an authorization request. On Android a tool call has no
+  activity result to run Health Connect's request contract, so it opens Persona's page in Health Connect instead
+  (`MANAGE_HEALTH_PERMISSIONS` on 14 and later, Health Connect's settings before). The hub never wakes a phone for this tool
+  (`phoneOnScreenTools`): the sheet can show only over the app on screen.
+- **Samples** (`phone_health_samples`): one type in a window (default the last 7 days, no end), at most `limit` (default 100, max 500).
+  Each sample has `id`, `start`, `end`, `source` (name and bundle id; on Android name and package), `device` (name, manufacturer,
+  model, versions; never the local identifier or UDI), `metadata` (strings cut at 500 characters) and the kind's own fields: `value`
+  and `unit` (metric: kg, m, °C, kcal, ms for HRV, mg/dL, percent as a 0–1 fraction), a category's `value_label` where the values are
+  an enumeration (sleep stages, stand hours, symptom severity, menstrual flow), a workout's activity and totals, a correlation's
+  `objects`, an ECG's classification, average heart rate and sampling frequency (not the voltages), an audiogram's hearing levels per
+  frequency, a state of mind's valence and labels. Activity summaries answer one row per day without an anchor.
+- **Anchors**: iOS uses `HKAnchoredObjectQuery`; its archived anchor goes out as `a1.<base64url>`. The same anchor returns the next
+  page while `more` is true and, later, only what was added since, with `deleted` ids. Android's anchor is `p1.<page token>.<changes
+  token>` while pages remain and `c1.<changes token>` after: the changes token is taken before the first page, so nothing saved during
+  paging is lost; an expired changes token answers `status: anchor_expired`. Callers keep the same type and window with an anchor.
+- **Sources** (`phone_health_sources`): `HKSourceQuery` per type asked about (Android: the newest 1000 records per granted type), with
+  the devices of the newest 1000 samples when one type is given.
+- **Locked iPhone, background** (`phone_health_watch`): HealthKit cannot be read while the iPhone is locked, not even by an app woken
+  in the background. Watched types (at most 40) get an `HKObserverQuery` registered at every launch in
+  `application(_:didFinishLaunchingWithOptions:)` and, in a build with HealthKit background delivery (`app.health_background_delivery`),
+  `enableBackgroundDelivery(.immediate)`. A wake reads what is new since the snapshot's own anchor and merges it into
+  `Application Support/health-snapshot/samples/<type>.json` (`HealthSampleWatcher`, `HealthSampleSnapshot.merged`: deleted ids leave,
+  newer copies replace older ones, the last 7 days and at most 2000 samples stay), protected `untilFirstUserAuthentication` and
+  excluded from backups like the summary snapshot. Foreground returns catch up too (every 5 minutes at most). A locked call for a
+  watched type answers from the snapshot with `source: snapshot`, `as_of` and `s1.<offset>` anchors for its pages; a live anchor
+  passed meanwhile comes back unchanged so the incremental read resumes after the unlock, and the hub prepends the snapshot note.
+  An unwatched type answers `status: device_locked`. What a wearable saves while the phone stays locked is read after the next unlock.
+  Android has no such tool: the hub never wakes an Android phone and calls it only while Persona is on screen.
+- **Privacy**: results go only in the tool result to the hub that asked; neither app writes health values to a log (the observer logs
+  only HealthKit's own error text). The tools sit in the Health source, which the owner can switch off, and the inbox treats the three
+  reads as read-only (`inboxReadOnlyPhoneTools`).
 
 ### Reminders by place (#6564)
 
@@ -142,8 +264,8 @@ Tools by platform:
 - **iOS**: everything above except `phone_notifications_list`. The Home tools only in a build with the HomeKit capability ("iPhone system integrations" below).
 - **Mac** (`PersonaMac`): no health tools (Mac has no health data, `PhoneToolRegistry.healthTools`) and none of the iPhone system integrations
   (alarms, messages, calls, shortcuts, media, home, Maps' nearby search and navigation); otherwise the same as iOS. Vision Pro: the same as the Mac plus health.
-- **Android**: no reminder tools, `phone_health_write_sample`, `phone_location_search`, or any tool of #2276–#2286 yet; adds `phone_notifications_list`.
-  `phone_location_current` is available only while the app is in the foreground. `scripts/assets/export_ios_phone_tools.py` leaves these out of the Android fixture
+- **Android**: adds `phone_notifications_list`; supports the calendar / contact write tools and `phone_call_start`, but no reminder tools, `phone_health_write_sample`, `phone_health_watch`, `phone_location_search`, alarms, messages, maps, shortcuts, media or home tools. Calls accept only `kind: phone`, use a foreground `ACTION_DIAL` handoff and return `handed_to_android`; FaceTime kinds fail as unsupported.
+  `phone_location_current` is available only while the app is in the foreground. `scripts/assets/export_ios_phone_tools.py` leaves the unsupported tools out of the Android fixture
   (`IOS_ONLY`, `IOS_ONLY_TOOLS`).
 
 ### iPhone system integrations (#2276–#2286)
@@ -158,23 +280,48 @@ Code: `CalendarTool`, `RemindersTool`, `ContactsTool` (changes), `MapsTool`, `Al
 - **Foreground**: messages, calls, Maps, Shortcuts and Spotify / YouTube need Persona on screen (`Foreground.require`): iOS only opens another app, or
   shows a sheet, for the app in front. In the background they fail and ask the user to open Persona.
 - **The hub waits for the user** on every tool with a card and on `phone_messages_compose` (`phoneConfirmedTools`, 30 minutes).
-- **Alarms** need `NSAlarmKitUsageDescription` and iOS 26 (the deployment target). Not yet: a Live Activity for `AlarmAttributes<PersonaAlarmData>` in the
-  widget extension, so a timer's countdown is not drawn on the Lock Screen / Dynamic Island; the alert itself rings.
+- **Alarms** need `NSAlarmKitUsageDescription` and iOS 26+ (absent on iOS 18). A timer's countdown is drawn on the Lock Screen and in the
+  Dynamic Island by `AlarmLiveActivity` in the widget extension (`docs/apple/live-activity.md`, "Alarms and timers (AlarmKit)"); the alert rings as the Clock app's.
 - **Apple Music** needs `NSAppleMusicUsageDescription` and the MusicKit app service on the App ID (developer account); without the service catalog
   requests fail and the tool reports it.
 - **Home** needs the HomeKit capability on the App ID and the `com.apple.developer.homekit` entitlement, a signing change for the owner of the
   developer account. Until a build sets both and `PERSONA_HOMEKIT=YES` (Info.plist `PersonaHomeKit`, `HomeAccess.isBuilt`), the Home source is not
-  shown and its tools are never offered. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
-- **Share Extension** (#2282): files and choosing the conversation are #1460; nothing changed here.
+  shown and its tools are never offered. Both come from one switch: config.json `app.homekit: true` makes `scripts/persona_config.py xcconfig` add
+  the entitlement to the generated `apple/PersonaOptIn.entitlements` and write `PERSONA_HOMEKIT = YES` (`docs/operations/config.md`); turn the
+  capability on for the App ID first. `HMHomeManager` (which asks for permission) is only made after the user turns Home on.
+- **Share Extension** (#2282): Share › Persona from any app (Safari pages as title and link, Photos pictures, Files and other apps' files, text) is a separate path from these tools and from the composer's photo, camera and file pickers; it is described in `docs/apple/ios.md` ("Share to Persona (#4586, #1460)").
 
 Results are consistently pretty-printed JSON text (`ToolContent.text`), with all timestamps in ISO 8601 including the local time-zone offset; date fields use
 `yyyy-MM-dd`. `phone_photo_get` also includes a `ToolContent.image`.
 
+### Alarms and timers page
+
+AlarmKit alarms don't show in the Clock app, so before #12805 an alarm Persona set was visible nowhere until it rang. **Settings › This Device ›
+Alarms and Timers** (`AlarmsPage`, iOS 26+ like the tools; also in Settings search) lists every alarm and timer Persona set. It serves
+anyone who asked the assistant for one.
+
+- **Rows**: the name from `AlarmsTool.Labels` ("Alarm" / "Timer" without one), the time on the phone's clock or a timer's time left, how it
+  repeats (once, every day, weekdays, weekends, or the days) or a timer's length, and the state (scheduled, counting down, paused, ringing).
+  Timers come first, ringing ones on top. A timer's time left comes from the Live Activity AlarmKit runs for it
+  (`Activity<AlarmAttributes<PersonaAlarmData>>`): AlarmKit's `Alarm` has no fire date. Until the activity agrees with the alarm's state,
+  the row has no digits, and the feed reads it again for up to three seconds.
+- **Actions**: Delete on every row, after a confirmation (swipe or long press); Pause / Resume on a counting or paused timer. They call
+  the tools' own `AlarmsTool.cancel` / `pause(_:resume:)`, so a deleted alarm's label goes the same way as with `phone_alarm_cancel`. The
+  row changes at once, and AlarmKit's next list confirms it (`AlarmsPageModel.merge`).
+- **Live**: it follows `AlarmManager.shared.alarmUpdates` (`AlarmFeed`) only while the page is in front (`.tabActiveTask`). Leaving the page
+  or its tab, or the app going to the background, stops listening; coming back reads the list again.
+- **Permission**: opening the page never asks. Not asked yet: Allow Alarms asks. Refused: Open Settings. Same pattern as Settings ›
+  Meetings' calendar access.
+- **Data and tests**: AlarmKit is read into `AlarmEntry`, a plain value (`AlarmEntry(id:state:schedule:countdown:label:activity:)`), and the
+  page reaches AlarmKit only through `AlarmsPageModel.Deps`. `AlarmsPageTests` builds rows from AlarmKit's own types and drives the
+  model with a fake. `-openAlarms list|empty|denied|notAsked` (DEBUG) opens the page on made-up data for screenshots, so AlarmKit's
+  prompt never shows.
+
 ## Confirmation flow
 
 Writes (create / change / delete event, create / change / complete / delete reminder, write health data, create / change contact, alarms and timers,
-calls, allowing a shortcut, Home changes and scenes) carry a `confirmation` closure; before execution, the app shows a confirmation card (Android only confirms event creation, since it lacks the other three write tools), with a summary such as "Create event ‘…’ 14:00 → 15:00"
-or "Write health: weight 72.5 kg". If the user denies, the tool returns `isError=true` with `The user declined on the phone.`. Confirmation covers only one call;
+calls, allowing a shortcut, Home changes and scenes) carry a `confirmation` closure; before execution, the app shows a confirmation card with a summary such as "Create event ‘…’ 14:00 → 15:00"
+or "Write health: weight 72.5 kg". Android uses the same per-call confirmation for its calendar / contact writes and calls. If the user denies, the tool returns `isError=true` with `The user declined on the phone.`. Confirmation covers only one call;
 if Claude calls again, it asks again.
 
 - **One at a time** (#4456, `PhoneConfirmations`): a write that comes while another is on screen waits behind it and shows once that one is answered.
@@ -204,15 +351,17 @@ Read tools, `phone_clipboard_set`, and `phone_notify` cannot be queued. A write 
 registration; the hub refuses tools that no registered phone offers.
 
 - **Default unchanged**: omitting the parameter, or setting it to false, uses the existing call and background wake path;
-  an unreachable phone still returns an error. With true and no connected device offering that tool, the hub saves the
-  request immediately and returns its queue record and opaque `id`. After admission, it also attempts a silent push
+  an unreachable phone still returns an error. With true and no connected device offering that tool (with a primary
+  device chosen that offers it: while that device is not connected), the hub saves the request immediately and
+  returns its queue record and opaque `id`. After admission, it also attempts a silent push
   in the background using the same device selection and 30-second throttle as ordinary calls. The caller waits for
   neither the push nor reconnection. Without push configuration this attempt does nothing; the entry waits for the
   app to connect. With a connected device, the call runs normally and waits for its result. An error after sending
   never turns into a new queue entry.
 - **Confirmation still required**: accepting a queue entry does not mean the write happened. When a phone registers
   the needed tool, one delivery loop sends queued entries in their original order among the currently available tools,
-  waiting for each result before sending the next. Every delivery uses the normal app confirmation flow and starts its
+  waiting for each result before sending the next; an entry for a tool the primary device offers goes only to that
+  device ("Which device takes a call"). Every delivery uses the normal app confirmation flow and starts its
   own `phoneConfirmWait` deadline (30 minutes). Registration does not wait for queue delivery, and a tool unavailable
   on every connected device stays queued.
 - **Deduplication before delivery**: a queued entry with the same tool and normalized JSON arguments returns the existing
@@ -291,17 +440,31 @@ If no rule matches, the default is confirm: the hub sends an approval card to th
 
 ## Permissions
 
-System permissions are requested at two points: when the user taps "Authorize" in settings (`PhoneToolRegistry.requestAccess`), or on the first actual use of a tool.
-Notifications are an exception: `phone_notify` displays its own permission prompt on the first call. Other tools encountering "Not requested" only return an error and tell the model to ask the user to authorize;
-they do not show system dialogs mid-execution (health only requests read permission again after a grant, to add newly introduced types). Previously denied permissions can only
-be changed in iOS Settings.
+System permissions are requested at two points: when the user turns a source on in Settings (`PhoneToolRegistry.requestAccess`), or on the first
+actual use of a tool (#7659).
+
+- **First use asks** for contacts, calendar, reminders, location, photos and notifications (`PhoneDataSource.asksWhenUsed`, iOS only). Their
+  tools are offered while the source is on and iOS hasn't asked yet, so "remind me to buy milk when I get home" works for someone who never
+  opened Settings. Before 2026-11-14 they were offered only once allowed: the model never saw them and could only guess that something was off.
+  - `PhoneToolRegistry.call` checks the switch, then shows a write's confirmation card, then iOS's own permission dialog
+    (`askOnFirstUse`), then runs the tool. A write the user turned down never asks iOS.
+  - Allowed, the call goes on. Refused, it fails with where to allow it ("Permission denied … iOS Settings › Persona").
+  - iOS shows the dialog only for the app in front. While Persona is not, the call fails with "open Persona on the iPhone and try again"
+    and nothing is asked.
+  - Calls that arrive together wait for one dialog.
+  - Either answer posts `phoneAccessAnswered`, and `AppModel` registers again, so a refused source leaves the hub's list.
+- **Settings only** for Health and the iPhone integrations. Health's sheet lists every type, and iOS never says which reads were allowed
+  (see below). The integrations act outside Persona and start off. Health only requests read permission again after a grant, to add newly
+  introduced types. Their tools that meet "Not requested" return an error and tell the model to ask the user to turn them on.
+- The Mac app (frozen) and Vision Pro keep asking from Settings only. Android has its own rules (above).
+- Previously denied permissions can only be changed in iOS Settings.
 
 | Data source | Info.plist key | Authorization |
 | --- | --- | --- |
 | Contacts | `NSContactsUsageDescription` | `requestAccess(for: .contacts)`, full or limited |
 | Calendar | `NSCalendarsFullAccessUsageDescription` | iOS 17+ `requestFullAccessToEvents()` |
 | Reminders | `NSRemindersFullAccessUsageDescription` | iOS 17+ `requestFullAccessToReminders()` |
-| Location | `NSLocationWhenInUseUsageDescription` | `requestWhenInUseAuthorization()` |
+| Location | `NSLocationWhenInUseUsageDescription`, `NSLocationAlwaysAndWhenInUseUsageDescription` | `requestWhenInUseAuthorization()`; Always with `requestAlwaysAuthorization()`, only after the owner taps Allow (below) |
 | Health | `NSHealthShareUsageDescription`, `NSHealthUpdateUsageDescription` (+ entitlement) | `requestAuthorization(toShare: five write types, read: …)` |
 | Photos | `NSPhotoLibraryUsageDescription` | `.readWrite`, possibly limited (only user-selected photos are readable) |
 | Notifications | None (runtime authorization) | `requestAuthorization([.alert, .sound, .badge])` |
@@ -319,6 +482,41 @@ Android's `phone_health_summary` (implemented in #278, omitted when #632 merged 
 "read permission is never reported to the app," because the hub stores a single tool catalog). The difference: Health Connect tells the app which read permissions were granted,
 so settings can show "Only some data allowed," and unauthorized metrics appear in `not_granted`; if none are granted, return an error rather than an empty result.
 Health Connect is built into Android 14 and later; on 8–13 it must be installed separately (usually absent on phones without Google services), in which case the tool returns "This phone has no Health Connect."
+
+### Location when Persona isn't open
+
+`phone_location_current` reaches a phone that is not in front through the hub's silent push ("iOS limitations"). With
+While Using, iOS gives an app its location only while it is in use: in front, and a few seconds after it leaves, so a
+push-woken read usually fails. With Always it works (#13200, `apple/Persona/PhoneTools/BackgroundLocation.swift`):
+
+- **Asked once, when it explains itself** (the owner's call, 2026-11-23). A read that fails while Persona is not in front
+  with While Using answers the model "open Persona and try again" (`LocationTool.whileUsingRefusal`) and is remembered.
+  The next time Persona comes to the front it shows `LocationAlwaysSheet` once: why now, when the location is read, that
+  nothing records where the user goes, then Allow and Not Now. Only Allow calls `requestAlwaysAuthorization()`, and iOS
+  shows its own Keep Only While Using / Change to Always Allow, once ever. Nothing asks at launch, and a first use still
+  asks for When In Use (no provisional Always, whose second dialog iOS times).
+- **Settings › Connectors › This iPhone**, under Location while it is on: "Only while Persona is open" with **Allow
+  Always** while iOS can still ask, **Open Settings** after; "Also when Persona isn't open" with **Open Settings**. Not
+  asked yet and refused show no line: the switch says those, as for every source. No new switch.
+- **The Always session**: from iOS 18 Always is effective only while the app holds `CLServiceSession(authorization:
+  .always)` (WWDC24 10212), and a session with that goal asks iOS for Always whenever the app is in front. So Persona
+  holds one only once iOS says Always and Location is on (`BackgroundLocationPolicy.runs`), never for an owner who
+  hasn't chosen it; `BackgroundLocationTests` pins it.
+- **A launch after a long move**: with Always and Location on, the significant-change service runs (about 500 m, at most
+  every 5 minutes; cell and Wi-Fi, no GPS). Its only job is that iOS launches Persona again after it was ended, so a later
+  push finds it; the fix is not kept or sent, and a launch in the background opens no hub connection
+  (`AppModel.start`). `BackgroundLocation.launch()` runs first thing in `didFinishLaunching`, because Core Location keeps a
+  relaunched app's session and service only a few seconds. No `location` background mode, no continuous updates, no
+  blue indicator.
+- **Swiped away**: a silent push never launches an app the user swiped away. Whether a significant change does, and
+  whether pushes reach the app again after it, Apple's engineers have answered both ways, and there are reports that
+  iOS 26.4 doesn't: checked on a device after release. Not done: the hub keeping the latest fix to answer from, a
+  separate privacy decision.
+- **Battery**: estimated under 0.1% a day for the reads and about 0.05–0.3% on a day of ordinary travel for the
+  significant-change launches (#13200 has the sources); measured on a device from the iOS Battery page's daily use and
+  background time.
+- A few days after Always is given, iOS itself reminds the owner that Persona used the location in the background,
+  with a map, and offers While Using again.
 
 ## Implementation notes
 
@@ -338,10 +536,10 @@ Health Connect is built into Android 14 and later; on 8–13 it must be installe
 - **The app must be connected to the hub**: the hub can send `tool_call` only to a phone that has sent `register_phone`. In the foreground or just after entering the background, the WebSocket
   remains available to receive calls; when iOS suspends the iPhone app, the hub first sends a silent push to wake it in the background and waits up to 20 seconds for connection (`hub.go`, `wakePhone`). Only the most recently registered device is woken; if it was woken within 30 seconds, skip the push but still wait 20 seconds. Hub push configuration is required; Android is not woken.
   If waking fails, return an error asking the model to have the user open Persona and retry. The clipboard tools are never woken for: they answer that at once ("Foreground restrictions"). A call waits at most 2 minutes for the phone (a confirmed write 30 minutes, see "Confirmation flow"); timeout also returns an error.
-- **Background location is unavailable**: only "While Using" permission is requested, so location fails outside the foreground.
+- **Location outside the foreground needs Always**: with While Using, a push-woken `phone_location_current` usually gets no fix. Always is asked only after the owner agrees ("Location when Persona isn't open").
 - **Clipboard reads trigger a system prompt**: when reading content copied in another app, iOS asks "Allow Paste?" and the user must allow it.
-- **Health data is aggregated by day only**: no individual-record queries; steps/energy are totals, heart rate is daily average/minimum/maximum, and sleep is daily time asleep
-  (the `asleep` types, excluding "In Bed").
+- **`phone_health_summary` aggregates by day**: steps/energy are totals, heart rate is daily average/minimum/maximum, and sleep is daily time asleep
+  (the `asleep` types, excluding "In Bed"). Individual samples come from `phone_health_samples` (#13740).
 - **Photos access may be limited**: if the user grants only selected photos, `phone_photos_recent` returns only those.
 - **Notifications can be sent only when the app has execution time**: delayed notifications are scheduled by the system and arrive on time, but the call itself must succeed, meaning the app is connected to the hub or can be woken.
 - Returned content (including mail/photo metadata) enters Claude's context and is therefore given to the model for processing.

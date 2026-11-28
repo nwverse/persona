@@ -8,18 +8,23 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // ---- calls through the manager ----
 
-// deviceBusMethod keeps cancellation scoped to the long file operations whose node side supports it.
-func deviceBusMethod(method string) string {
-	if method == "file.copy" || method == "file.zip" {
-		return devicewire.MethodFileCall
+// deviceBusMethod keeps cancellation scoped to guarded retirement and the long file operations the node can cancel.
+func deviceBusMethod(method string) buswire.Method[devicewire.NodeCall, json.RawMessage] {
+	if method == nodeproto.StopIfIdle {
+		return devicewire.RetireCallMethod
 	}
-	return devicewire.MethodCall
+	if method == "file.copy" || method == "file.zip" {
+		return devicewire.FileCallMethod
+	}
+	return devicewire.CallMethod
 }
 
 // busNode is a machine's node as the hub reaches it: through the manager.
@@ -34,16 +39,29 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if caller, ok := callerOf(ctx); ok && caller != owner { // a manager's device.call, the machine moved since its check
 		return &rpc.Error{Code: devicewire.CodeNoDevice, Message: fmt.Sprintf("%s on machine %q: another manager's now", clip(method, 64), clip(b.id, 64))}
 	}
-	if owner == devicesOwner {
-		if err := b.h.waitDevices(ctx); err != nil {
-			return fmt.Errorf("%s: %w", b.id, err)
-		}
+	if err := b.h.waitDevicesFor(ctx, owner); err != nil {
+		return fmt.Errorf("%s: %w", b.id, err)
+	}
+	var streamVersion int
+	if dial, ok := params.(devicewire.PortDial); method == devicewire.MethodPortDial && ok {
+		// An old manager ignores the outer offer and forwards only the legacy port.dial parameters.
+		streamVersion, dial.StreamVersion = dial.StreamVersion, 0
+		params = dial
 	}
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw}
+	p := devicewire.NodeCall{MachineID: b.id, Method: method, Params: raw, StreamVersion: streamVersion}
+	if method == "session.interrupt" {
+		attachNodeCaller(ctx, &p)
+	}
+	if method == "session.modes" { // the manager records who changed a mode (#10297)
+		p.Actor = modesActor(ctx)
+	}
+	if method == "session.send" { // the owner's message to an Agent: after held ones, maybe held itself (send.go, #10661)
+		p.Hold, p.Ordered = holdOf(ctx), orderedOf(ctx)
+	}
 	if devicewire.IsSessionStart(method) || method == "session.send" {
 		attachNodeCaller(ctx, &p)
 		if p.Caller != nil && p.Caller.OwnerSubject != "" {
@@ -57,15 +75,14 @@ func (b *busNode) Call(ctx context.Context, method string, params, out any) erro
 	if dl, ok := ctx.Deadline(); ok {
 		p.TimeoutMS = managerTimeout(time.Until(dl)).Milliseconds()
 	}
-	var res json.RawMessage
 	busMethod := deviceBusMethod(method)
-	err = b.h.callBusAsIs(ctx, owner, busMethod, p, &res)
+	caller := managerBusCaller{id: owner, call: b.h.callBusAsIs}
+	res, err := buswire.Call(ctx, caller, busMethod, p)
 	var rpcErr *rpc.Error
-	if busMethod == devicewire.MethodFileCall && errors.As(err, &rpcErr) && rpcErr.Code == bus.CodeUnknownMethod {
+	if busMethod == devicewire.FileCallMethod && errors.As(err, &rpcErr) && rpcErr.Code == bus.CodeUnknownMethod {
 		// An older manager rejects file_call before reaching the node. Preserve its existing copy / zip behavior;
 		// only this explicit refusal may repeat the request, and the fallback intentionally does not propagate cancel.
-		res = nil
-		err = b.h.callBusAsIs(ctx, owner, devicewire.MethodCall, p, &res)
+		res, err = buswire.Call(ctx, caller, devicewire.CallMethod, p)
 	}
 	if err != nil {
 		return deviceError(b.id, err)
@@ -143,4 +160,23 @@ func deviceError(id string, err error) error {
 		return &nodeError{msg: re.Message, kind: context.DeadlineExceeded}
 	}
 	return err
+}
+
+// modesActor is who asks for a session.modes call, for the manager's record of mode changes (#10297): the device and
+// its name, the hub's own token, or an extension. Display only; the request was checked before it got here.
+func modesActor(ctx context.Context) *devicewire.Actor {
+	if a := devicewire.ModeActorOf(ctx); a != nil {
+		return a
+	}
+	if _, ok := callerOf(ctx); ok {
+		return devicewire.AssistantModeActor()
+	}
+	pr := principalOf(ctx)
+	switch {
+	case pr.Role == roleExtension:
+		return &devicewire.Actor{Kind: "extension", Extension: rowText(pr.Extension, 128)}
+	case pr.ID == "":
+		return &devicewire.Actor{Kind: "hub"}
+	}
+	return &devicewire.Actor{Kind: "device", DeviceID: rowText(pr.ID, 128), DeviceName: rowText(pr.Name, 128)}
 }

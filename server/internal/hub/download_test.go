@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,13 +20,50 @@ import (
 )
 
 type downloadNode struct {
-	mu       sync.Mutex
-	data     []byte
-	requests []proto.FileChunkRequest
-	old      bool
-	bad      bool
-	mime     string
-	thumbs   []proto.FileThumbRequest
+	mu        sync.Mutex
+	data      []byte
+	requests  []proto.FileChunkRequest
+	old       bool
+	bad       bool
+	mime      string
+	rawMime   bool
+	name      string
+	thumbMime string
+	thumbs    []proto.FileThumbRequest
+	// revision is the file's (r1 when empty): a chunk asked at another one is refused, as the node does.
+	revision string
+	// fail, when set, may fail a chunk read before it is answered (f.mu is held).
+	fail func(p proto.FileChunkRequest) error
+
+	m       *Machine // the hub's machine for this node
+	connMu  sync.Mutex
+	cutConn func()
+}
+
+// connect gives the hub's machine a new connection to this node (a full reconnect); drop cuts the one it has, as a
+// lost relay would: a call out on it fails with rpc.ErrDropped, and the machine is offline until the next connect.
+func (f *downloadNode) connect() {
+	toNode, nodeIn := io.Pipe()
+	toHub, hubIn := io.Pipe()
+	hubPeer, nodePeer := rpc.New("h", nodeIn), rpc.New("n", hubIn)
+	nodePeer.OnRequest = f.handle
+	ctx, cancel := context.WithCancel(context.Background())
+	go hubPeer.Serve(ctx, toHub)
+	go nodePeer.Serve(ctx, toNode)
+	f.connMu.Lock()
+	f.cutConn = func() { cancel(); toNode.Close(); toHub.Close(); hubPeer.Close(rpc.ErrClosed) }
+	f.connMu.Unlock()
+	f.m.mu.Lock()
+	f.m.peer = hubPeer
+	f.m.mu.Unlock()
+}
+
+func (f *downloadNode) drop() {
+	f.connMu.Lock()
+	defer f.connMu.Unlock()
+	if f.cutConn != nil {
+		f.cutConn()
+	}
 }
 
 func (f *downloadNode) handle(ctx context.Context, method string, params json.RawMessage) (any, error) {
@@ -56,7 +94,11 @@ func (f *downloadNode) handle(ctx context.Context, method string, params json.Ra
 		case p.ETag == "r1-256":
 			return proto.FileThumb{ETag: "r1-256", NotModified: true}, nil
 		}
-		return proto.FileThumb{Mime: "image/png", ETag: "r1-256", Data: []byte("png")}, nil
+		thumbMime := f.thumbMime
+		if thumbMime == "" {
+			thumbMime = "image/png"
+		}
+		return proto.FileThumb{Mime: thumbMime, ETag: "r1-256", Data: []byte("png")}, nil
 	}
 	if method != "file.chunk" {
 		return nil, errors.New("unexpected method")
@@ -66,11 +108,21 @@ func (f *downloadNode) handle(ctx context.Context, method string, params json.Ra
 		return nil, err
 	}
 	f.requests = append(f.requests, p)
+	if f.fail != nil {
+		if err := f.fail(p); err != nil {
+			return nil, err
+		}
+	}
+	revision := cmp.Or(f.revision, "r1")
+	if p.Revision != "" && p.Revision != revision {
+		return nil, &rpc.Error{Code: proto.CodeFileChanged, Message: "file changed during download; reopen it to try again"}
+	}
 	mime := f.mime
-	if mime == "" {
+	if !f.rawMime && mime == "" {
 		mime = "video/mp4"
 	}
-	out := proto.FileChunk{Path: "/work/preview.mp4", Name: "preview.mp4", Size: int64(len(f.data)), Mime: mime, Revision: "r1", Modified: time.Unix(1700000000, 0), Offset: p.Offset}
+	name := cmp.Or(f.name, "preview.mp4")
+	out := proto.FileChunk{Path: "/work/preview.mp4", Name: name, Size: int64(len(f.data)), Mime: mime, Revision: revision, Modified: time.Unix(1700000000, 0), Offset: p.Offset}
 	if p.Length > 0 {
 		out.Data = f.data[p.Offset:min(int64(len(f.data)), p.Offset+int64(p.Length))]
 		if f.bad {
@@ -82,23 +134,23 @@ func (f *downloadNode) handle(ctx context.Context, method string, params json.Ra
 
 func downloadHub(t *testing.T, f *downloadNode) http.Handler {
 	t.Helper()
+	_, mux := downloadFixture(t, f)
+	return mux
+}
+
+// downloadFixture is a hub with machine m1, connected to f, and the download routes alone.
+func downloadFixture(t *testing.T, f *downloadNode) (*Hub, *http.ServeMux) {
+	t.Helper()
 	h := newTestHub(t)
-	toNode, nodeIn := io.Pipe()
-	toHub, hubIn := io.Pipe()
-	hubPeer, nodePeer := rpc.New("h", nodeIn), rpc.New("n", hubIn)
-	nodePeer.OnRequest = f.handle
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() { cancel(); toNode.Close(); toHub.Close() })
-	go hubPeer.Serve(ctx, toHub)
-	go nodePeer.Serve(ctx, toNode)
-	m := newMachine(h, MachineConfig{ID: "m1", Name: "box"})
-	m.peer = hubPeer
-	h.byID["m1"] = m
+	f.m = newMachine(h, MachineConfig{ID: "m1", Name: "box"})
+	h.byID["m1"] = f.m
+	f.connect()
+	t.Cleanup(f.drop)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/machines/{mid}/file/download", h.withMachine(h.downloadFile))
 	mux.HandleFunc("GET /api/v1/machines/{mid}/file/thumb", h.withMachine(h.fileThumb))
 	mux.HandleFunc("GET /api/v1/machines/{mid}/file/convert", h.withMachine(h.fileConvert))
-	return mux
+	return h, mux
 }
 
 func TestDownloadStreamsWholeFileAndRanges(t *testing.T) {
@@ -158,9 +210,17 @@ func TestDownloadRefusesOldNodesAndBadChunks(t *testing.T) {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}
 	}
+	// A chunk of another revision is not sent, and the response is aborted rather than ended (#10855).
 	f := &downloadNode{data: []byte{0, 1, 2}, bad: true}
 	rec := httptest.NewRecorder()
-	downloadHub(t, f).ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/machines/m1/file/download?path=x.mp4", nil))
+	func() {
+		defer func() {
+			if v := recover(); v != http.ErrAbortHandler {
+				t.Fatalf("not aborted: %v", v)
+			}
+		}()
+		downloadHub(t, f).ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/machines/m1/file/download?path=x.mp4", nil))
+	}()
 	if rec.Body.Len() != 0 {
 		t.Fatal("changed chunk was sent")
 	}
@@ -228,8 +288,9 @@ func TestThumbnailCachesAndExplainsWhatItCannotDraw(t *testing.T) {
 		rec.Header().Get("ETag") != `"r1-256"` || !strings.Contains(rec.Header().Get("Cache-Control"), "private") {
 		t.Fatalf("%d %v %q", rec.Code, rec.Header(), rec.Body)
 	}
-	if rec := get("a.png", `"r1-256"`); rec.Code != 304 || rec.Body.Len() != 0 {
-		t.Fatalf("revalidated: %d", rec.Code)
+	if rec := get("a.png", `"r1-256"`); rec.Code != 304 || rec.Body.Len() != 0 ||
+		rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Content-Security-Policy") != "sandbox" {
+		t.Fatalf("revalidated: %d %v", rec.Code, rec.Header())
 	}
 	if rec := get("x.bin", ""); rec.Code != 404 || !strings.Contains(rec.Body.String(), proto.CodeNoThumbnail) {
 		t.Fatalf("undrawable: %d %s", rec.Code, rec.Body)
@@ -277,5 +338,103 @@ func TestDownloadDoesNotNeedTheFileTransferSwitch(t *testing.T) {
 	downloadHub(t, f).ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/machines/m1/file/download?path=preview.mp4", nil))
 	if rec.Code != 200 || rec.Body.String() != "0123456789" {
 		t.Fatalf("%d %q", rec.Code, rec.Body)
+	}
+}
+
+func TestDownloadHardensCraftedMIMEAndDisposition(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		mime        string
+		wantCT      string
+		disposition string
+		sandbox     bool
+	}{
+		{"comma-smuggled pdf", "application/pdf, text/html", "application/octet-stream", "attachment", true},
+		{"comma-smuggled image", "image/png, text/html", "application/octet-stream", "attachment", true},
+		{"pdf suffix mismatch", "application/pdf+xml", "application/pdf+xml", "attachment", true},
+		{"pdf with params stripped", "APPLICATION/PDF; foo=bar", "application/pdf", "inline", false},
+		{"empty mime", "", "application/octet-stream", "attachment", true},
+		{"whitespace mime", "   ", "application/octet-stream", "attachment", true},
+		{"slashless mime", "pdf", "application/octet-stream", "attachment", true},
+		{"text with charset", "text/plain; charset=utf-8", "text/plain; charset=utf-8", "attachment", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			f := &downloadNode{data: []byte("<script>alert(1)</script>"), mime: tc.mime, rawMime: true}
+			downloadHub(t, f).ServeHTTP(rec,
+				httptest.NewRequest("GET", "/api/v1/machines/m1/file/download?path=x&inline=1", nil))
+			h := rec.Header()
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, headers = %v", rec.Code, h)
+			}
+			if got := h.Get("Content-Type"); got != tc.wantCT {
+				t.Fatalf("Content-Type = %q, want %q", got, tc.wantCT)
+			}
+			if got := h.Get("Content-Disposition"); got != tc.disposition && !strings.HasPrefix(got, tc.disposition+";") {
+				t.Fatalf("Content-Disposition = %q, want %q", got, tc.disposition)
+			}
+			if got := h.Get("Content-Security-Policy") == "sandbox"; got != tc.sandbox {
+				t.Fatalf("sandbox = %v, want %v (CSP=%q)", got, tc.sandbox, h.Get("Content-Security-Policy"))
+			}
+			if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
+	}
+	rec := httptest.NewRecorder()
+	f := &downloadNode{data: []byte("hi"), mime: "text/html", rawMime: true, name: "evil\"\r\nX-Injected: 1.html"}
+	downloadHub(t, f).ServeHTTP(rec,
+		httptest.NewRequest("GET", "/api/v1/machines/m1/file/download?path=x&inline=1", nil))
+	cd := rec.Header().Get("Content-Disposition")
+	if (cd != "attachment" && !strings.HasPrefix(cd, "attachment;")) || strings.ContainsAny(cd, "\r\n") {
+		t.Fatalf("unsafe Content-Disposition = %q", cd)
+	}
+}
+
+func TestThumbnailRejectsSVGAndMalformedMIMEAndSandboxesValidImages(t *testing.T) {
+	for _, bad := range []string{"image/svg+xml", "image/png, text/html", "text/html", "image/x-icon", "not-a-mime"} {
+		t.Run("reject_"+bad, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			downloadHub(t, &downloadNode{thumbMime: bad}).ServeHTTP(rec,
+				httptest.NewRequest("GET", "/api/v1/machines/m1/file/thumb?path=a.svg&size=256", nil))
+			if rec.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want 502 (headers=%v)", rec.Code, rec.Header())
+			}
+			if got := rec.Header().Get("Cache-Control"); strings.Contains(got, "max-age") {
+				t.Fatalf("502 response must not be cached: Cache-Control=%q", got)
+			}
+			if got := rec.Header().Get("ETag"); got != "" {
+				t.Fatalf("502 response must not set ETag: %q", got)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{"image/png", "image/png"},
+		{"IMAGE/JPEG; quality=80", "image/jpeg"},
+		{"image/webp", "image/webp"},
+		{"image/gif", "image/gif"},
+		{"image/avif", "image/avif"},
+	} {
+		t.Run("allow_"+tc.want, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			downloadHub(t, &downloadNode{thumbMime: tc.raw}).ServeHTTP(rec,
+				httptest.NewRequest("GET", "/api/v1/machines/m1/file/thumb?path=a.png&size=256", nil))
+			h := rec.Header()
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if got := h.Get("Content-Type"); got != tc.want {
+				t.Fatalf("Content-Type = %q, want %q", got, tc.want)
+			}
+			if got := h.Get("Content-Security-Policy"); got != "sandbox" {
+				t.Fatalf("Content-Security-Policy = %q, want sandbox", got)
+			}
+			if got := h.Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
 	}
 }

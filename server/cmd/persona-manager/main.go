@@ -12,17 +12,20 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"slices"
+	"strings"
 	"syscall"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/clitext"
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
 	"github.com/nwverse/persona/server/internal/extension/sourcevalidate"
 	"github.com/nwverse/persona/server/internal/extmgr"
 	"github.com/nwverse/persona/server/internal/managercli"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/nodecmd"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
-	"github.com/nwverse/persona/server/internal/voice"
 )
 
 // What the build wrote in (-X), as personad's (the hub's update checks a program by `version -v`).
@@ -46,7 +49,7 @@ const usage = `usage:
                            unless hub.json says assistant.external (token: stdin or PERSONA_ASSISTANT_TOKEN)
   persona-manager assistant drop-shared-tables [--yes]
                            drop the built-in manager's old tables from the hub's database, once its data moved
-  persona-manager assistant north-star [--date YYYY-MM-DD] [--split RFC3339] [--tz Area/City] [--brief en]
+  persona-manager assistant north-star [--date YYYY-MM-DD] [--split RFC3339] [--tz Area/City] [--brief en] [--weekly]
                            read the interruption and availability north star from the databases, read-only
   persona-manager assistant search-reindex
                            empty the built-in manager's chat search index: it reads its chats again from the start
@@ -62,19 +65,40 @@ const usage = `usage:
                            (docs/assistant/managers.md; persona-manager manager -h for the details)
   persona-manager extension …  the extensions on this machine (docs/extensions/extensions.md "Command line")
   persona-manager voice     the built-in voice extension (the manager runs it)
+  persona-manager volc      the built-in Volcengine speech extension (the manager runs it)
   persona-manager tailcat-key  print the built-in manager's tailcat key (created the first time)
   persona-manager node …    this computer's node, when the manager runs it as itself: with no persona-node or
                            personad of its build beside it, or PERSONA_SPLIT_PROGRAMS=0 (personad node …)
   persona-manager version [-v]  the version; -v adds the channel and build number`
 
+// moduleCommands are the subcommands that run a built-in module's extension program (internal/builtinext), each
+// listed in the usage only when this build has the module.
+var moduleCommands = []string{"voice", "volc"}
+
+// usageText is usage without the lines of the module programs this build does not have.
+func usageText() string {
+	var keep []string
+	for _, line := range strings.Split(usage, "\n") {
+		if slices.ContainsFunc(moduleCommands, func(name string) bool {
+			_, ok := builtinext.LookupProgram(name)
+			return !ok && strings.HasPrefix(line, "  persona-manager "+name+" ")
+		}) {
+			continue
+		}
+		keep = append(keep, line)
+	}
+	return strings.Join(keep, "\n")
+}
+
 func main() {
+	modelhttp.SetVersion(version)
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, usage)
+		fmt.Fprintln(os.Stderr, usageText())
 		os.Exit(2)
 	}
 	if clitext.IsHelpArg(args[0]) || args[0] == "help" {
-		fmt.Println(usage)
+		fmt.Println(usageText())
 		return
 	}
 	// An extension's sandbox and its source check run this program again (docs/extensions/extensions.md "Sandbox").
@@ -93,7 +117,7 @@ func main() {
 	// This computer's node, when the manager starts it as itself (`<self> node --stdio`), and the commands it runs. The
 	// manager starts persona-node or personad of its build beside it instead, and itself only when neither is there or
 	// with PERSONA_SPLIT_PROGRAMS=0 (devices.Machine.localNode).
-	if handled, err := nodecmd.Run(ctx, stop, args, nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad}); handled {
+	if handled, err := nodecmd.Run(ctx, stop, args, nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonad, Edition: update.ThisEdition}); handled {
 		finish(err)
 		return
 	}
@@ -115,9 +139,13 @@ func main() {
 		err = managercli.TailcatKey("tailcat-key", args[1:])
 	case "extension", "ext", "plugin":
 		err = extmgr.ExtensionCommand(ctx, args[1:], os.Stdin, os.Stdout, os.Stderr)
-	case "voice":
-		err = voice.Run(ctx)
 	default: // join, run, install, uninstall, status, search-reindex (manager.Main says what it does not know)
+		// A built-in module's extension program (`persona-manager volc`), when this build has the module
+		// (internal/builtinext; docs/architecture/core-and-modules.md "Provider seams").
+		if run, ok := builtinext.LookupProgram(args[0]); ok {
+			err = run(ctx, version)
+			break
+		}
 		err = managercli.Manager(ctx, buildInfo(), args)
 	}
 	finish(err)

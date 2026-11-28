@@ -17,6 +17,8 @@ interface ChatTransport {
     suspend fun sessionCounts(filter: SessionListFilter = SessionListFilter()): SessionListCounts =
         throw SessionListsUnsupported()
     suspend fun items(session: SessionKey, query: ItemsQuery): ItemsResponse
+    /** The session's recorded permission mode changes, oldest first; empty where the hub has no such record. */
+    suspend fun modeChanges(session: SessionKey): List<ModeChange> = emptyList()
     suspend fun interactions(): List<Interaction>
     suspend fun resolve(id: String, resolution: Resolution)
     /** [resolve], with what the hub said about it (a card answered already carries the answer that took effect). */
@@ -24,6 +26,18 @@ interface ChatTransport {
         resolve(id, resolution)
         return ResolveOutcome()
     }
+    /** The transport adds the hand-off or env feature header only for this explicit full-card approval. */
+    suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution)
+    /** Answers the exact displayed occurrence; older delegated transports retain their ID-only fallback. */
+    suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean = false): ResolveOutcome =
+        resolveOutcome(interaction.id, resolution, handoffCard)
+    /** [secretRunEnv] selects the env feature instead of the hand-off feature, only when [handoffCard] is true. */
+    suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard)
+    /** An authenticated exact reply to a server-owned proposal; never an ordinary model message or card resolution. */
+    suspend fun replyOwnerApproval(interaction: Interaction, phrase: String): Unit =
+        throw UnsupportedOperationException("Exact owner replies unavailable")
     suspend fun image(session: SessionKey, itemId: String): ByteArray
     suspend fun fullItem(session: SessionKey, itemId: String): Item
     /**

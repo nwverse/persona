@@ -7,7 +7,7 @@ import persona.core.contracts.SecretRunRequest
 
 enum class AnswerAction(val wire: String) {
     ApproveAll("approve_all"), ApproveEdits("approve_edits"), ApproveStepwise("approve_stepwise"), Reject("reject"), Allow("allow"),
-    Deny("deny"), Always("always"), CancelQuestion("cancel_question"), Dismiss("dismiss"), PickOption("pick_option"),
+    Deny("deny"), Always("always"), OwnerReply("owner_reply"), CancelQuestion("cancel_question"), Dismiss("dismiss"), PickOption("pick_option"),
     Advance("advance"), Submit("submit"), ScreenOption("screen_option"), ScreenSubmit("screen_submit"),
     TerminalText("terminal_text"), TerminalKeys("terminal_keys"), SubmitElicitation("submit_elicitation"),
     DeclineElicitation("decline_elicitation"), CancelElicitation("cancel_elicitation"),
@@ -54,13 +54,31 @@ data class AnswerResult(
     val nextPage: Int? = null,
 )
 
+@kotlinx.serialization.Serializable
 data class OptionDisplay(val text: String, val recommended: Boolean)
 
+/** Existing production call sites stay exactly as they were. */
 object AnswerBuilder {
+    @JvmStatic fun display(label: String): OptionDisplay = AnswerAdapters.current().display(label)
+
+    @JvmStatic fun build(
+        interaction: Interaction,
+        action: AnswerAction,
+        draft: AnswerDraft = AnswerDraft(),
+        context: AnswerContext = AnswerContext(),
+    ): AnswerResult = AnswerAdapters.current().build(interaction, action, draft, context)
+}
+
+/** The unmodified production behavior behind [AnswerAdapter]. */
+internal object KotlinAnswerBuilder {
     fun display(label: String): OptionDisplay {
         val suffix = listOf("(Recommended)", "（推荐）", "(推荐)").firstOrNull(label::endsWith) // i18n-ignore: marks the agent writes on its options
         return if (suffix == null) OptionDisplay(label, false)
-        else OptionDisplay(label.dropLast(suffix.length).trim(), true)
+        // QuestionOption.display uses CoreFoundation .whitespaces, including U+200B but not newlines.
+        else OptionDisplay(label.dropLast(suffix.length).trim {
+            it == ' ' || it == '\t' || it == '\u00a0' || it == '\u1680' ||
+                it in '\u2000'..'\u200b' || it == '\u202f' || it == '\u205f' || it == '\u3000'
+        }, true)
     }
 
     /** Both entry policy and form validation must pass before a Resolution is produced. */
@@ -73,6 +91,18 @@ object AnswerBuilder {
         fun blocked() = AnswerResult(false, draft = draft)
         fun resolved(resolution: Resolution) = AnswerResult(true, resolution, draft)
         if (context.state != "pending" || context.sending) return blocked()
+        if (interaction.isSecretHandoff) {
+            when (action) {
+                AnswerAction.Allow, AnswerAction.Always -> {
+                    if (context.entry != AnswerEntry.Conversation || context.locked || draft != AnswerDraft() ||
+                        interaction.secretHandoff?.variables?.isNotEmpty() != true ||
+                        (action == AnswerAction.Always && interaction.alwaysLabel.isNullOrBlank())) return blocked()
+                    return resolved(Resolution(allow = true, always = if (action == AnswerAction.Always) true else null))
+                }
+                AnswerAction.Deny -> if (draft != AnswerDraft(message = draft.message) || draft.message.length > 4000) return blocked()
+                else -> return blocked()
+            }
+        }
         // A password card takes only its own two answers (#1581); no other card's answer carries a typed password.
         val passwordRulesMet = if (interaction.isSecretRun) secretRunAnswer(action, draft, context) else draft.password.isEmpty()
         if (!passwordRulesMet) return blocked()
@@ -96,6 +126,12 @@ object AnswerBuilder {
                 }
             }
         }
+        if (action == AnswerAction.OwnerReply) {
+            val phrase = interaction.ownerApprovalPhrase
+            if (context.entry != AnswerEntry.Conversation || context.locked || phrase == null ||
+                draft.feedback.isNotEmpty() || draft.message.isNotEmpty() || draft.password.isNotEmpty() || draft.values.isNotEmpty()) return blocked()
+            return resolved(Resolution(allow = true, ownerApprovalPhrase = phrase))
+        }
         if (action == AnswerAction.CancelQuestion) {
             if (interaction.kind != "question" || interaction.canCancel != true ||
                 context.entry != AnswerEntry.Conversation || context.locked) return blocked()
@@ -106,7 +142,7 @@ object AnswerBuilder {
                 if (context.entry == AnswerEntry.Notification) ApprovalAction.ChooseOption else ApprovalAction.Answer
             AnswerAction.ScreenOption, AnswerAction.ScreenSubmit, AnswerAction.TerminalText, AnswerAction.TerminalKeys ->
                 if (context.entry == AnswerEntry.Notification) ApprovalAction.ChooseOption else ApprovalAction.ScreenAnswer
-            AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation -> return blocked()
+            AnswerAction.SubmitElicitation, AnswerAction.DeclineElicitation, AnswerAction.CancelElicitation, AnswerAction.OwnerReply -> return blocked()
             else -> ApprovalAction.entries.single { it.wire == action.wire }
         }
         val policy = ApprovalPolicy.actions(context.entry, interaction.kind, context.locked)
@@ -121,6 +157,7 @@ object AnswerBuilder {
                 AnswerRequirement.SingleQuestionSingleChoice -> interaction.questions?.let {
                     it.size == 1 && !it.single().multiSelect
                 } != true
+                AnswerRequirement.QuestionNotIrreversible -> interaction.reversible == false
                 AnswerRequirement.PlainDialogOption -> action != AnswerAction.ScreenOption ||
                     screenOptions(interaction).firstOrNull { it.key == draft.option }?.kind != ScreenOptionKind.Plain
                 AnswerRequirement.AlwaysOffered -> !interaction.offersAlways
@@ -148,7 +185,8 @@ object AnswerBuilder {
         }
 
         return when (action) {
-            AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(approve = true, mode = policy.mode))
+            AnswerAction.ApproveAll, AnswerAction.ApproveEdits, AnswerAction.ApproveStepwise -> resolved(Resolution(
+                approve = true, mode = interaction.recordedPlanThen ?: policy.mode))
             AnswerAction.Reject -> resolved(Resolution(approve = false, feedback =
                 if (context.entry == AnswerEntry.Notification) draft.feedback.trim() else draft.feedback))
             AnswerAction.Allow -> resolved(Resolution(allow = true,
@@ -159,8 +197,8 @@ object AnswerBuilder {
                 if (policy.input == "none" && draft.message.isNotEmpty()) return blocked()
                 resolved(Resolution(allow = false, message = draft.message.takeIf { it.isNotEmpty() }))
             }
-            AnswerAction.CancelQuestion -> blocked() // handled before the answer policy
-            AnswerAction.Dismiss -> resolved(Resolution(dismiss = true))
+            AnswerAction.CancelQuestion, AnswerAction.OwnerReply -> blocked() // handled before the answer policy
+            AnswerAction.Dismiss -> if (interaction.noHandBack) blocked() else resolved(Resolution(dismiss = true))
             AnswerAction.PickOption, AnswerAction.Advance, AnswerAction.Submit -> question(interaction.questions.orEmpty(), action, draft)
             AnswerAction.ScreenOption -> {
                 val option = screenOptions(interaction).firstOrNull { it.key == draft.option } ?: return blocked()

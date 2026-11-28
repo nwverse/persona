@@ -4,14 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // run is what runDue does for one due task: read it as it is now, then run it.
@@ -72,6 +79,100 @@ func TestATaskRunsInItsOwnConversation(t *testing.T) {
 	}
 }
 
+func TestAFreshRecurringTaskStartsNewChatsWithARetainedOrigin(t *testing.T) {
+	node := newFakeHub().withMachine()
+	h := newStorelessService(t, node)
+	setSettings(t, h, func(s *Settings) { s.Main, s.MachineID = "main", "server" })
+	const origin = "old-followup-chat"
+	node.known[origin] = true
+	setTasks(h, Task{ID: "followup", Title: "Patrol", Prompt: "Check the changes.",
+		Repeat: repeatOnce, At: time.Now().Add(time.Hour), Enabled: true, MachineID: "server", SessionID: origin})
+
+	// The task editor converts an existing follow-up to a recurring task with fresh chats.
+	update := func(fresh bool) {
+		t.Helper()
+		body, err := json.Marshal(map[string]any{
+			"title": "Patrol", "prompt": "Check the changes.", "repeat": repeatInterval, "every_minutes": 30,
+			"enabled": true, "session_id": origin, "fresh_each_run": fresh,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/assistant/tasks/followup", strings.NewReader(string(body))))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("update task: %d %s", rec.Code, rec.Body)
+		}
+		saved, _ := taskByID(h, "followup")
+		if saved.Repeat != repeatInterval || saved.FreshEachRun != fresh || saved.SessionID != origin {
+			t.Fatalf("converted follow-up lost its origin or run preference: %+v", saved)
+		}
+	}
+	update(true)
+
+	first, err := runNow(t, h, "followup")
+	if err != nil || first.SessionID == "" || first.SessionID == origin {
+		t.Fatalf("first fresh run reused the origin: %+v, %v", first, err)
+	}
+	second, err := runNow(t, h, "followup")
+	if err != nil || second.SessionID == "" || second.SessionID == origin || second.SessionID == first.SessionID {
+		t.Fatalf("second fresh run did not start a separate conversation: %+v, %v", second, err)
+	}
+	if saved, _ := taskByID(h, "followup"); saved.SessionID != origin || saved.RunSessionID != second.SessionID {
+		t.Fatalf("fresh dispatch changed the stored origin or lost the last run: %+v", saved)
+	}
+
+	update(false)
+	continued, err := runNow(t, h, "followup")
+	if err != nil || continued.SessionID != origin {
+		t.Fatalf("turning off fresh runs did not restore the origin: %+v, %v", continued, err)
+	}
+}
+
+func TestFreshEachRunOnRescheduleUsesFinalRepeat(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		at    string
+		every string
+		want  string
+	}{
+		{name: "one-off", at: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), want: repeatOnce},
+		{name: "promoted to interval", every: "30m", want: repeatInterval},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := readyHub()
+			node.settings = &Settings{Main: "main", Timezone: "UTC"}
+			s := newStorelessService(t, node)
+			const origin = "origin-chat"
+			node.known[origin] = true
+			const prompt = "Check the renewal"
+			setTasks(s, Task{ID: "followup", Title: "Renewal", Prompt: prompt, Repeat: repeatOnce,
+				At: time.Now().Add(-time.Minute), MachineID: "server", SessionID: origin})
+			s.recordRun(ScheduleRun{RefID: "followup", Status: runOK, MachineID: "server", SessionID: origin})
+
+			args, err := json.Marshal(map[string]any{
+				"title": "Renewal", "prompt": prompt, "at": tc.at, "every": tc.every, "fresh_each_run": true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.toolScheduleFollowup(t.Context(), "server", origin, args); err != nil {
+				t.Fatal(err)
+			}
+			task, _ := taskByID(s, "followup")
+			if task.Repeat != tc.want || task.SessionID != origin || task.FreshEachRun != (tc.want != repeatOnce) {
+				t.Fatalf("rescheduled task: %+v", task)
+			}
+			if tc.want == repeatOnce {
+				sess, err := runNow(t, s, "followup")
+				if err != nil || sess.SessionID != origin {
+					t.Fatalf("one-off did not go back to its originating chat: %+v, %v", sess, err)
+				}
+			}
+		})
+	}
+}
+
 // A conversation that is gone (Claude Code cleans transcripts up after 30 days), one on another launcher, or one the
 // user reset ("New chat next time") can't be continued: the run starts a new one and that becomes the task's.
 func TestATaskStartsANewConversationWhenItsOwnCannotGoOn(t *testing.T) {
@@ -96,6 +197,7 @@ func TestATaskStartsANewConversationWhenItsOwnCannotGoOn(t *testing.T) {
 	}
 
 	// Model configuration › Main chat now runs on another launcher (a task's conversations follow it, #1570).
+	n.zshrc = map[string][]proto.Launcher{"server": {{Name: "codex", Agent: "codex"}}}
 	setModel(t, h, "assistant", ModelBinding{Provider: "launcher.codex"})
 	switched, _ := runNow(t, h, "p")
 	if switched.SessionID == gone.SessionID {
@@ -362,20 +464,64 @@ func TestTaskTurnEndingInAPIErrorFailsAndRetriesOnce(t *testing.T) {
 
 // A run whose turn ends with no output at all (the model service answered 200 with nothing: no reply, no tool call,
 // no error) is failed, pushed and retried once, not left "ok" behind a push that says "done" (#3752).
+const reviewSelection = `<persona-context kind="skill" ref="review">Review</persona-context>`
+
 func TestTaskSilentTurnFailsAndRetriesOnce(t *testing.T) {
+	const body = "给我今天的早报"
+	for _, tc := range []struct {
+		name, prompt string
+		selected     bool
+	}{
+		{"plain prompt", body, false},
+		{"selected prompt", reviewSelection + "\n\n" + body, true},
+		{"reference only", reviewSelection, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testTaskSilentTurnFailsAndRetriesOnce(t, tc.prompt, tc.selected) })
+	}
+}
+
+func testTaskSilentTurnFailsAndRetriesOnce(t *testing.T, prompt string, selected bool) {
+	t.Helper()
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)
 	h.runRetry = 50 * time.Millisecond
 	h.turnPoll = 200 * time.Millisecond
-	n.items = []proto.Item{{ID: "u1", Role: "user", Kind: proto.KindText, Text: "⏰ 早报（定时任务）\n\n给我今天的早报"},
-		{ID: "a1", Role: "assistant", Kind: proto.KindText, Text: ""}}
-	setTasks(h, Task{ID: "p", Title: "早报", Prompt: "给我今天的早报", Repeat: repeatInterval, EveryMinutes: 30, At: time.Now().Add(-time.Minute), Enabled: true, MachineID: "server", CreatedBy: "assistant"})
+	setTasks(h)
+	requestBody := map[string]any{"title": "早报", "repeat": "interval", "every_minutes": 30, "enabled": true}
+	if selected {
+		requestBody["structured_prompt"] = prompt
+		n.answerNode("assistant.directory", func(string, json.RawMessage) (any, error) {
+			return map[string]string{"cwd": "/home/me/.persona/assistant"}, nil
+		})
+		n.answerNode("assistant.content", func(string, json.RawMessage) (any, error) {
+			return map[string]bool{"valid": true}, nil
+		})
+		n.answerNode("skills.list", func(string, json.RawMessage) (any, error) {
+			return assistantskills.Catalog{Version: 1, Complete: true, Skills: []assistantskills.Entry{{ID: "review", Name: "Review"}}}, nil
+		})
+	} else {
+		requestBody["prompt"] = prompt
+	}
+	payload, _ := json.Marshal(requestBody)
+	got := request(h, "POST", "/api/v1/assistant/tasks", string(payload))
+	var saved struct{ Task Task }
+	if err := json.Unmarshal(got.Body.Bytes(), &saved); got.Code != 200 || err != nil || saved.Task.ID == "" ||
+		saved.Task.Prompt != prompt || saved.Task.PromptSelections != selected {
+		t.Fatalf("save: %d %s (%v)", got.Code, got.Body, err)
+	}
 
 	n.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking, Assistant: true,
 		Cwd: "/home/me/.persona/assistant"})
-	if _, err := runNow(t, h, "p"); err != nil {
+	if _, err := runNow(t, h, saved.Task.ID); err != nil {
 		t.Fatal(err)
 	}
+	sent, _ := n.lastSend(t)["text"].(string)
+	if !strings.Contains(sent, "早报") || selected && !strings.Contains(sent, reviewSelection) ||
+		!selected && !strings.Contains(sent, prompt) {
+		t.Fatalf("the task prompt was not sent: %q", sent)
+	}
+	n.setItems(proto.Item{ID: "u1", Role: "user", Kind: proto.KindText, Text: sent},
+		proto.Item{ID: "a1", Role: "assistant", Kind: proto.KindText})
 	// The turn ends after the first poll saw it working (started after the run went, so the watcher's polls line up).
 	go func() {
 		time.Sleep(3 * h.turnPoll / 2)
@@ -390,7 +536,7 @@ func TestTaskSilentTurnFailsAndRetriesOnce(t *testing.T) {
 	for time.Now().Before(deadline) {
 		sc := h.loadSchedule(context.Background())
 		sc.mu.Lock()
-		failed := slices.ContainsFunc(sc.runs, func(r ScheduleRun) bool { return r.RefID == "p" && r.Status == runFailed && r.Error == want })
+		failed := slices.ContainsFunc(sc.runs, func(r ScheduleRun) bool { return r.RefID == saved.Task.ID && r.Status == runFailed && r.Error == want })
 		sc.mu.Unlock()
 		if failed {
 			if p := n.pushedBy(deadline); len(p) == 0 || p[0].Title != "定时任务失败：早报" || p[0].SessionID != "s1" {
@@ -405,9 +551,12 @@ func TestTaskSilentTurnFailsAndRetriesOnce(t *testing.T) {
 			for time.Now().Before(deadline) {
 				if n.sent() >= 2 {
 					sc.mu.Lock()
-					retried := slices.ContainsFunc(sc.runs, func(r ScheduleRun) bool { return r.RefID == "p" && r.Retried })
+					retried := slices.ContainsFunc(sc.runs, func(r ScheduleRun) bool { return r.RefID == saved.Task.ID && r.Retried })
 					sc.mu.Unlock()
 					if retried {
+						if prompt == reviewSelection {
+							verifyReferenceOnlyRetryStops(t, h, n, saved.Task.ID, sent, want)
+						}
 						return
 					}
 				}
@@ -418,6 +567,46 @@ func TestTaskSilentTurnFailsAndRetriesOnce(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatal("the silent run was not recorded as failed")
+}
+
+func verifyReferenceOnlyRetryStops(t *testing.T, h *Service, n *fakeHub, taskID, first, want string) {
+	t.Helper()
+	retry := n.lastSend(t)["text"].(string)
+	source := func(text string) *proto.MessageSource {
+		return prompts.ItemSource(proto.Item{Role: "user", Kind: proto.KindText, Text: text})
+	}
+	initial, repeated := source(first), source(retry)
+	if initial == nil || repeated == nil || initial.ScheduleRunID == "" || repeated.ScheduleRunID == "" || initial.ScheduleRunID == repeated.ScheduleRunID {
+		t.Fatalf("scheduled retry did not have a new identity: initial %+v, retry %+v", initial, repeated)
+	}
+	n.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking, Assistant: true,
+		Cwd: "/home/me/.persona/assistant"})
+	n.setItems(proto.Item{ID: "u2", Role: "user", Kind: proto.KindText, Text: retry},
+		proto.Item{ID: "a2", Role: "assistant", Kind: proto.KindText})
+	// The retry's watcher must see its turn working before it ends (waitTurnEnd), or the end reads as a start that
+	// failed at once: wait for its poll after the change.
+	from := n.callCount()
+	var watcher string
+	waitFor(t, "the retry's watcher to read its turn working", func() bool {
+		watcher = n.watcherReadAfter(from, "s1")
+		return watcher != ""
+	})
+	n.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusOffline, State: proto.StateIdle, Assistant: true,
+		Cwd: "/home/me/.persona/assistant"})
+	waitFor(t, "the retry's silent failure", func() bool {
+		sc := h.loadSchedule(t.Context())
+		sc.mu.Lock()
+		defer sc.mu.Unlock()
+		return slices.ContainsFunc(sc.runs, func(r ScheduleRun) bool {
+			return r.RefID == taskID && r.ID == repeated.ScheduleRunID && r.Retried && r.Status == runFailed && r.Error == want
+		})
+	})
+	// A failed retry is not tried again: its watcher returns where it would otherwise wait runRetry and send the next
+	// prompt itself (watchScheduledRun). Once that goroutine has ended, no prompt can follow.
+	waitFor(t, "the retry's watcher to end", func() bool { return goroutineGone(watcher) })
+	if n.sent() != 2 {
+		t.Fatalf("two silent completed attempts sent %d prompts", n.sent())
+	}
 }
 
 // The session's state lags: it is never seen working, and the last item changed only because the prompt landed. The
@@ -526,11 +715,151 @@ func TestSilentRun(t *testing.T) {
 	}
 }
 
+func TestSilentRunWithSelectedPrompt(t *testing.T) {
+	const reference = `<persona-context kind="skill" ref="review">Review</persona-context>`
+	task := Task{Prompt: reference + "\n\nReview notes", PromptSelections: true}
+	at := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	prompt := taskPrompt(task, at, at, time.UTC, false, false, false)
+	user := proto.Item{ID: "u1", Role: "user", Kind: proto.KindText, Text: prompt}
+	empty := proto.Item{ID: "a1", Role: "assistant", Kind: proto.KindText}
+	if !silentRun([]proto.Item{user, empty}, task, true) {
+		t.Fatal("the completed selected prompt with no response was not recognized")
+	}
+	empty.Text = "The example looks good."
+	if silentRun([]proto.Item{user, empty}, task, true) {
+		t.Fatal("a selected prompt with a response was marked silent")
+	}
+}
+
+func TestReferenceOnlySilentRunMatchesItsOwnTurn(t *testing.T) {
+	file := `<persona-context kind="file" path="notes.txt" machine="fixture" cwd="/work" launcher="claude">Notes</persona-context>`
+	task := Task{Title: "Review", Prompt: file, PromptSelections: true, Repeat: repeatOnce, promptRunID: "run_current"}
+	at := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	render := func(t Task) string {
+		return prompts.MessageSourceText(taskPrompt(t, at, at, time.UTC, true, false, false), taskMessageSource(t))
+	}
+	sent := render(task) + "\n\n" + prompts.RenderAssistantSelectedFiles([]prompts.AssistantSelectedFile{{Name: "notes.txt", Path: "/work/notes.txt"}}, "")
+	line := fmt.Sprintf(`{"uuid":"u1","parentUuid":null,"type":"user","message":{"role":"user","content":%q}}`, sent)
+	log := filepath.Join(t.TempDir(), "s.jsonl")
+	if err := os.WriteFile(log, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reader := transcript.NewFile(log)
+	if _, err := reader.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	items, _, _ := reader.PageTurns(0, 1, 2000)
+	if len(items) != 1 {
+		t.Fatalf("node transcript did not retain the scheduled prompt: %+v", items)
+	}
+	current := items[0]
+	prior := task
+	prior.promptRunID = "run_previous"
+	another := proto.Item{ID: "other", Role: "user", Kind: proto.KindText, Text: render(prior)}
+	user := proto.Item{ID: "user", Role: "user", Kind: proto.KindText, Text: "Did the notes get reviewed?"}
+	end := proto.Item{ID: "end", Role: "system", Kind: "turn_duration", TurnDuration: &proto.TurnDuration{DurationMS: 300}}
+	for _, tc := range []struct {
+		name  string
+		items []proto.Item
+		ran   bool
+		want  bool
+	}{
+		{"ended", []proto.Item{current, end}, false, true},
+		{"seen working then idle", []proto.Item{current}, true, true},
+		{"prompt only with no end evidence", []proto.Item{current}, false, false},
+		{"different scheduled run with identical title and selections", []proto.Item{current, end, another, end}, true, false},
+		{"user follow-up", []proto.Item{current, end, user, end}, true, false},
+		{"nonempty reply", []proto.Item{current, {Role: "assistant", Kind: proto.KindText, Text: "Reviewed."}, end}, true, false},
+		{"tool call", []proto.Item{current, {Role: "assistant", Kind: proto.KindToolUse, ToolName: "Read"}, end}, true, false},
+		{"user interrupted", []proto.Item{current, {Role: "system", Kind: proto.KindNotice, Text: userStoppedNotice}, end}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := silentRun(tc.items, task, tc.ran); got != tc.want {
+				t.Fatalf("silentRun = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// In a chat the task reuses, the node's one-turn page reaches back past this run's prompt (an injected one, not counted
+// as a turn) into the previous run, with its reply: the silent run is still found. Paged by the node's own reader
+// (transcript.PageTurns), not the fake hub, which counts every prompt as a turn (#8901).
+func TestSilentRunInAReusedChat(t *testing.T) {
+	task := Task{Title: "早报", Prompt: "给我今天的早报"}
+	at := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	run := taskPrompt(task, at, at, time.UTC, false, false, true)
+	if prompts.ParseInjected(run) == nil {
+		t.Fatal("the run's prompt is not an injected one: the page would stop at it")
+	}
+	n := 0
+	line := func(b *strings.Builder, format string, args ...any) {
+		parent := "null"
+		if n > 0 {
+			parent = fmt.Sprintf(`"l%d"`, n)
+		}
+		n++
+		fmt.Fprintf(b, `{"uuid":"l%d","parentUuid":%s,"timestamp":"2026-11-16T08:%02d:00Z",`+format+"}\n", append([]any{n, parent, n}, args...)...)
+	}
+	user := func(b *strings.Builder, text string) {
+		line(b, `"type":"user","message":{"role":"user","content":%q}`, text)
+	}
+	reply := func(b *strings.Builder, text string) {
+		line(b, `"type":"assistant","message":{"role":"assistant","id":"m%d","content":[{"type":"text","text":%q}]}`, n+1, text)
+	}
+	tool := func(b *strings.Builder) {
+		line(b, `"type":"assistant","message":{"role":"assistant","id":"m%d","content":[{"type":"tool_use","id":"tu%d","name":"Read","input":{"file_path":"a.md"}}]}`, n+1, n+1)
+	}
+	end := func(b *strings.Builder) { line(b, `"type":"system","subtype":"turn_duration","durationMs":900`) }
+	page := func(build func(b *strings.Builder)) []proto.Item {
+		var b strings.Builder
+		build(&b)
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		if err := os.WriteFile(p, []byte(b.String()), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f := transcript.NewFile(p)
+		if _, err := f.Refresh(); err != nil {
+			t.Fatal(err)
+		}
+		items, _, _ := f.PageTurns(0, 1, 2000)
+		return items
+	}
+	previous := func(b *strings.Builder) { user(b, run); reply(b, "今天三个会"); end(b) }
+	for _, c := range []struct {
+		name  string
+		build func(b *strings.Builder)
+		want  bool
+	}{
+		{"a fresh chat", func(b *strings.Builder) { user(b, run); end(b) }, true},
+		{"after a run that replied", func(b *strings.Builder) { previous(b); user(b, run); end(b) }, true},
+		{"after a run that replied, seen working only", func(b *strings.Builder) { previous(b); user(b, run) }, true},
+		{"this run replied", func(b *strings.Builder) { previous(b); user(b, run); reply(b, "今天两个会"); end(b) }, false},
+		{"this run called a tool", func(b *strings.Builder) { previous(b); user(b, run); tool(b); end(b) }, false},
+		{"the user wrote since", func(b *strings.Builder) {
+			previous(b)
+			user(b, run)
+			end(b)
+			user(b, "顺便看下明天的会")
+			end(b)
+		}, false},
+	} {
+		items := page(c.build)
+		if got := silentRun(items, task, true); got != c.want {
+			t.Errorf("%s: silentRun = %v, want %v (page %+v)", c.name, got, c.want, items)
+		}
+	}
+	// The page did reach back: without the split, the previous run's reply hid the silence.
+	if items := page(func(b *strings.Builder) { previous(b); user(b, run); end(b) }); !slices.ContainsFunc(items, func(it proto.Item) bool { return it.Text == "今天三个会" }) {
+		t.Fatalf("the page did not reach the previous run: %+v", items)
+	}
+}
+
 // A run where the turn ends and the session carries a TurnError (e.g. a Codex turn failure on the model service)
 // is failed, pushed and retried once (#2571).
 func TestTaskTurnEndingInSessionTurnErrorFailsAndRetriesOnce(t *testing.T) {
 	n := newFakeHub().withMachine()
 	h := newStorelessService(t, n)
+	h.work.switches = &TriageSwitches{TransientRetry: new(false)}
 	h.runRetry = 50 * time.Millisecond
 	h.turnPoll = 200 * time.Millisecond
 	setTasks(h, Task{ID: "p", Title: "值守", Prompt: "go", Repeat: repeatInterval, EveryMinutes: 30, At: time.Now().Add(-time.Minute), Enabled: true, MachineID: "server", CreatedBy: "assistant"})
@@ -714,5 +1043,17 @@ func TestDailyRunHintNamesTheKnowledgeDir(t *testing.T) {
 	}
 	if strings.Contains(text, "~/.persona/data") || !strings.Contains(text, "（知识库 "+dir+"：") {
 		t.Fatalf("the hint should name %s: %q", dir, text)
+	}
+}
+
+// goroutineGone reports whether goroutine id ("goroutine N") has ended.
+func goroutineGone(id string) bool {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return !strings.Contains("\n\n"+string(buf[:n]), "\n\n"+id+" [")
+		}
+		buf = make([]byte, 2*len(buf))
 	}
 }

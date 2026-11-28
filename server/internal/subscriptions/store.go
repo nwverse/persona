@@ -27,18 +27,21 @@ type Store interface {
 	UpdateSubscription(ctx context.Context, s Subscription, prev int64) (bool, error)
 	// DeleteSubscription removes it with its dedup keys and pending items.
 	DeleteSubscription(ctx context.Context, id string) error
+	// DeleteSubscriptionAt removes it only while its stored revision is prev.
+	DeleteSubscriptionAt(ctx context.Context, id string, prev int64) (bool, error)
 	// LeaseSubscription holds id for a run until until, if no other run holds it at now; false when one does.
 	LeaseSubscription(ctx context.Context, id string, now, until time.Time) (bool, error)
 	// SeenKeys says which of uids the subscription has seen.
 	SeenKeys(ctx context.Context, id string, uids []string) (map[string]bool, error)
-	// CommitRun writes a run's outcome in one transaction (RunCommit).
-	CommitRun(ctx context.Context, c RunCommit) error
+	// CommitRun writes a run's outcome in one transaction (RunCommit) and returns the outcome whose dedup keys this
+	// transaction actually claimed. Its items and new counts exclude keys another manager claimed first.
+	CommitRun(ctx context.Context, c RunCommit) (RunCommit, error)
 	// HeldItems are the subscription's held items q picks, in the order they were stored (#2039).
 	HeldItems(ctx context.Context, id string, q ItemQuery) ([]Held, error)
 	// HeldItem is the subscription's held item uid (the newest stored, if several); nil when it holds none (#6198).
 	HeldItem(ctx context.Context, id, uid string) (*Held, error)
-	// PruneItems removes the subscription's held items stored before before (their dedup keys stay).
-	PruneItems(ctx context.Context, id string, before time.Time) error
+	// PruneItems removes the subscription's held items stored before before, except keep's (their dedup keys stay).
+	PruneItems(ctx context.Context, id string, before time.Time, keep []string) error
 }
 
 // ItemQuery picks held items: those stored at or after Since, after the stored order After, at most Limit (the
@@ -48,6 +51,8 @@ type ItemQuery struct {
 	Since  time.Time
 	Limit  int
 	Newest bool
+	// UIDs, when not nil, picks only those (a things recipe's latest answer, #13637); none when empty.
+	UIDs []string
 }
 
 // Held is an item as it waits for the destinations: its place in the stored order and when its run stored it.
@@ -135,10 +140,25 @@ func (m *MemStore) UpdateSubscription(_ context.Context, s Subscription, prev in
 func (m *MemStore) DeleteSubscription(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.delete(id)
+	return nil
+}
+
+func (m *MemStore) DeleteSubscriptionAt(_ context.Context, id string, prev int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.subs[id]
+	if !ok || cur.Revision != prev {
+		return false, nil
+	}
+	m.delete(id)
+	return true, nil
+}
+
+func (m *MemStore) delete(id string) {
 	delete(m.subs, id)
 	delete(m.seen, id)
 	m.items = slices.DeleteFunc(m.items, func(it Held) bool { return it.SubscriptionID == id })
-	return nil
 }
 
 func (m *MemStore) LeaseSubscription(_ context.Context, id string, now, until time.Time) (bool, error) {
@@ -165,24 +185,27 @@ func (m *MemStore) SeenKeys(_ context.Context, id string, uids []string) (map[st
 	return out, nil
 }
 
-func (m *MemStore) CommitRun(_ context.Context, c RunCommit) error {
+func (m *MemStore) CommitRun(_ context.Context, c RunCommit) (RunCommit, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.FailCommit != nil {
-		return m.FailCommit
+		return RunCommit{}, m.FailCommit
 	}
 	cur, ok := m.subs[c.Sub.ID]
 	if !ok {
-		return nil // deleted while it ran: nothing is kept
+		return claimedRun(c, nil), nil // deleted while it ran: nothing is kept
 	}
 	if m.seen[c.Sub.ID] == nil {
 		m.seen[c.Sub.ID] = map[string]time.Time{}
 	}
+	claimed := map[string]bool{}
 	for _, k := range c.Seen {
 		if _, had := m.seen[c.Sub.ID][k.UID]; !had {
 			m.seen[c.Sub.ID][k.UID] = c.Now
+			claimed[k.UID] = true
 		}
 	}
+	c = claimedRun(c, claimed)
 	for _, it := range c.Items {
 		it.SubscriptionID = c.Sub.ID
 		m.seq++
@@ -197,7 +220,41 @@ func (m *MemStore) CommitRun(_ context.Context, c RunCommit) error {
 	applyRun(&cur, c, cur.Revision == c.Revision)
 	cur.LeaseUntil = nil
 	m.subs[c.Sub.ID] = cur
-	return nil
+	return c, nil
+}
+
+// claimedRun limits a run to the dedup keys its transaction inserted. Items without a Seen candidate keep their
+// legacy low-level behavior; every service run with fresh items supplies Seen candidates for them.
+func claimedRun(c RunCommit, claimed map[string]bool) RunCommit {
+	if len(c.Seen) == 0 {
+		return c
+	}
+	candidates := make(map[string]bool, len(c.Seen))
+	seen := make([]Seen, 0, len(c.Seen))
+	for _, k := range c.Seen {
+		candidates[k.UID] = true
+		if claimed[k.UID] {
+			seen = append(seen, k)
+		}
+	}
+	c.Seen = seen
+	items := make([]Item, 0, len(c.Items))
+	for _, it := range c.Items {
+		if !candidates[it.UID] || claimed[it.UID] {
+			items = append(items, it)
+		}
+	}
+	c.Items = items
+	c.Sub.LastNewCount = len(items)
+	c.Sub.Runs = slices.Clone(c.Sub.Runs)
+	if len(c.Sub.Runs) > 0 {
+		run := &c.Sub.Runs[len(c.Sub.Runs)-1]
+		run.New = len(items)
+		if run.Baseline > 0 {
+			run.Baseline = len(seen)
+		}
+	}
+	return c
 }
 
 func (m *MemStore) pruneSeen(id string, now time.Time) {
@@ -228,7 +285,7 @@ func (m *MemStore) HeldItems(_ context.Context, id string, q ItemQuery) ([]Held,
 	defer m.mu.Unlock()
 	var out []Held
 	for _, it := range m.items {
-		if it.SubscriptionID == id && it.Seq > q.After && !it.Stored.Before(q.Since) {
+		if it.SubscriptionID == id && it.Seq > q.After && !it.Stored.Before(q.Since) && (q.UIDs == nil || slices.Contains(q.UIDs, it.UID)) {
 			out = append(out, it)
 		}
 	}
@@ -253,10 +310,12 @@ func (m *MemStore) HeldItem(_ context.Context, id, uid string) (*Held, error) {
 	return nil, nil
 }
 
-func (m *MemStore) PruneItems(_ context.Context, id string, before time.Time) error {
+func (m *MemStore) PruneItems(_ context.Context, id string, before time.Time, keep []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.items = slices.DeleteFunc(m.items, func(it Held) bool { return it.SubscriptionID == id && it.Stored.Before(before) })
+	m.items = slices.DeleteFunc(m.items, func(it Held) bool {
+		return it.SubscriptionID == id && it.Stored.Before(before) && !slices.Contains(keep, it.UID)
+	})
 	return nil
 }
 
@@ -286,6 +345,7 @@ func applyRun(cur *Subscription, c RunCommit, withState bool) {
 	}
 	cur.SnapshotHash, cur.Runs = out.SnapshotHash, out.Runs
 	if SameRecipe(cur.Recipe, out.Recipe) {
+		cur.Answer, cur.AnswerAt = slices.Clone(out.Answer), out.AnswerAt // a things recipe's latest answer (#13637)
 		cur.SinceAt, cur.Continuation = out.SinceAt, cloneContinuation(out.Continuation)
 		if !on(*cur) && cur.Continuation != nil && !cur.Continuation.Manual {
 			cur.Continuation = nil // turned off while this page ran: the position went with it (#6310)

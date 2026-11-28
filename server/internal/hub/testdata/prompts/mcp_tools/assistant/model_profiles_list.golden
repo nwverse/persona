@@ -1,0 +1,9 @@
+{
+  "name": "model_profiles_list",
+  "description": "List saved profiles, active profile, drift, rollback previews and audit events.",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}

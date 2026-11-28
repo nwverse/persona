@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   coresNow,
   loadAxis,
@@ -109,13 +109,35 @@ describe("scales", () => {
 
   it("put at most four round times on the local clock", () => {
     const t1 = 1_790_000_000;
-    const hour = timeTicks(t1 - 3600, t1, 4, 0);
+    const hour = timeTicks(t1 - 3600, t1, 4);
     expect(hour.length).toBeLessThanOrEqual(4);
     expect(hour.every((t) => t % (15 * 60) === 0)).toBe(true);
-    const day = timeTicks(t1 - 86400, t1, 4, 8 * 3600);
+    const day = timeTicks(t1 - 86400, t1, 4);
     expect(day.length).toBeLessThanOrEqual(4);
-    expect(day.every((t) => (t + 8 * 3600) % (6 * 3600) === 0)).toBe(true); // 00:00, 06:00… local
-    expect(hm(day[0], 8 * 3600)).toMatch(/^(00|06|12|18):00$/);
+    for (const t of day) expect(hm(t)).toMatch(/^(00|06|12|18):00$/); // 00:00, 06:00… local
+  });
+
+  describe("across a daylight-saving change (#9863)", () => {
+    // America/New_York: 02:00 EDT became 01:00 EST on 2026-11-01; 02:00 EST becomes 03:00 EDT on 2027-03-14.
+    const savedTZ = process.env.TZ;
+    beforeAll(() => { process.env.TZ = "America/New_York"; });
+    afterAll(() => { if (savedTZ === undefined) delete process.env.TZ; else process.env.TZ = savedTZ; });
+    const at = (iso: string) => Date.parse(iso) / 1000;
+
+    it("read each time with the offset it had", () => {
+      expect(hm(at("2026-10-31T16:00:00Z"))).toBe("12:00");
+      expect(hm(at("2026-11-02T17:00:00Z"))).toBe("12:00");
+      expect(hm(at("2027-03-13T17:00:00Z"))).toBe("12:00");
+      expect(hm(at("2027-03-15T16:00:00Z"))).toBe("12:00");
+    });
+
+    it("keep the ticks on round local times on both sides", () => {
+      expect(timeTicks(at("2026-10-31T16:00:00Z"), at("2026-11-01T16:00:00Z"), 4).map((t) => hm(t))).toEqual(["12:00", "18:00", "00:00", "06:00"]);
+      expect(timeTicks(at("2027-03-13T17:00:00Z"), at("2027-03-14T15:00:00Z"), 4).map((t) => hm(t))).toEqual(["12:00", "18:00", "00:00", "06:00"]);
+      // the hour the clocks repeat gets one tick, the hour they skip none
+      expect(timeTicks(at("2026-11-01T04:00:00Z"), at("2026-11-01T08:00:00Z"), 4).map((t) => hm(t))).toEqual(["00:00", "01:00", "02:00", "03:00"]);
+      expect(timeTicks(at("2027-03-14T05:00:00Z"), at("2027-03-14T09:00:00Z"), 4).map((t) => hm(t))).toEqual(["00:00", "01:00", "03:00", "04:00", "05:00"]);
+    });
   });
 });
 
@@ -128,6 +150,22 @@ describe("formats", () => {
     expect(usedOfTotal(800, 1000)).toBe("800 / 1000 B");
     expect(usedOfTotal(undefined, 64 * GB)).toBe("— / 64.0 GB");
     expect(usedOfTotal(5 * GB, undefined)).toBe("5.00 GB / —");
+  });
+
+  // apple/Shared/MachineMetrics.swift bytes: the unit and the decimals follow the number as it is shown, after rounding (#8497).
+  it("step to the next unit when the value rounds to 1024, like the app's bytes (#8497)", () => {
+    expect(bytesBin(1023.4 * 1024)).toBe("1023 KB");
+    expect(bytesBin(1023.6 * 1024)).toBe("1.00 MB");
+    expect(bytesBin(1023.6 * MB)).toBe("1.00 GB");
+    expect(bytesBin(1023.6 * GB)).toBe("1.00 TB");
+    expect(bytesBin(1023.6 * 1024 * GB)).toBe("1024 TB");
+  });
+
+  it("choose the decimals from the rounded value, like the app's bytes (#8497)", () => {
+    expect(bytesBin(99.96 * MB)).toBe("100 MB");
+    expect(bytesBin(99.94 * MB)).toBe("99.9 MB");
+    expect(bytesBin(9.999 * MB)).toBe("10.0 MB");
+    expect(bytesBin(9.99 * MB)).toBe("9.99 MB");
   });
 
   it("say bytes, rates, percents and uptimes like the app", () => {
@@ -148,7 +186,7 @@ describe("formats", () => {
     expect(uptime(0, 3 * 86400 + 4 * 3600 + 60)).toBe("3 天 4 小时");
     expect(uptime(0, 5 * 3600 + 12 * 60)).toBe("5 小时 12 分钟");
     expect(uptime(0, 8 * 60 + 5)).toBe("8 分钟");
-    expect(hm(13 * 3600 + 5 * 60)).toBe("13:05");
+    expect(hm(13 * 3600 + 5 * 60, 0)).toBe("13:05");
     expect(hm(23 * 3600, 2 * 3600)).toBe("01:00");
   });
 
@@ -172,7 +210,7 @@ describe("agents by space", () => {
       sess("gone", { space_id: "w1", space_name: "weather", space_index: 1, state: "offline" }),
       sess("helper", { assistant: true, space_id: "w1", space_index: 1 }),
     ]);
-    expect(groups.map((g) => g.name)).toEqual(["weather", "blog", "不在空间里"]);
+    expect(groups.map((g) => g.name)).toEqual(["weather", "blog", "未加入空间"]);
     expect(groups[1].sessions.map((s) => s.session_id)).toEqual(["b1", "b2"]);
     expect(groups[0].sessions.map((s) => s.session_id)).toEqual(["a1"]);
     expect(groups[0].counts).toEqual({ needs: 1, working: 0, unread: 0 });
@@ -182,6 +220,7 @@ describe("agents by space", () => {
 
   it("label the tab and a non-Claude agent", () => {
     expect(agentMeta(sess("x", { slot_name: "2", agent: "codex" }))).toBe("#2 · Codex");
+    expect(agentMeta(sess("x", { slot_name: "2", agent: "traex", agent_label: "traex" }))).toBe("#2 · TRAE CLI");
     expect(agentMeta(sess("x", { slot_name: "widget", agent: "claude" }))).toBe("widget");
     expect(agentMeta(sess("x", { agent: "dsh", agent_label: "DSH" }))).toBe("DSH");
   });
@@ -202,11 +241,11 @@ describe("system", () => {
     expect(get("系统")).toBe("macOS 26.1（25B78）");
     expect(get("型号")).toBe("MacBook Pro");
     expect(get("核心")).toBe("14 核");
-    expect(get("开机于")).toContain("已运行 3 天 4 小时");
+    expect(get("开机时间")).toContain("已运行 3 天 4 小时");
     expect(get("Claude Code")).toBe("2.1.320");
-    expect(get("接入")).toBe("hub 通过 ssh macbook 接入");
+    expect(get("连接方式")).toBe("hub 通过 ssh macbook 连接");
     const off = systemFacts(sys, { ...m, online: false }, 1_790_000_000 + 100, 0);
-    expect(off.find((f) => f[0] === "开机于")?.[1]).not.toContain("已运行");
+    expect(off.find((f) => f[0] === "开机时间")?.[1]).not.toContain("已运行");
     expect(connectionText({ ...m, kind: "local" })).toBe("hub 所在的机器，直接运行 node");
   });
 });

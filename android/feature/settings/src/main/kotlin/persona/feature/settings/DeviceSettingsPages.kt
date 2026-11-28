@@ -10,6 +10,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.contracts.api.*
 import kotlinx.coroutines.launch
@@ -28,8 +29,20 @@ internal fun DevicesPage(
     /** "Connect a new device"'s hub calls (a code for another device); null where it cannot be made (demo mode). */
     connect: DeviceSettings? = null,
 ) {
+    val features = LocalHubFeatures.current
+    val feedback = LocalAppFeedback.current
+    val invalidBrowserLogin = stringResource(R.string.settings_browser_login_invalid)
+    var loginRequest by remember { mutableStateOf<BrowserLoginRequest?>(null) }
+    val scanner = androidx.activity.compose.rememberLauncherForActivityResult(com.journeyapps.barcodescanner.ScanContract()) { result ->
+        result.contents?.let { value ->
+            val request = browserLoginRequest(value)
+            if (request != null) loginRequest = request
+            else feedback?.notice(invalidBrowserLogin)
+        }
+    }
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
+    loginRequest?.let { request -> if (connect != null) BrowserLoginApproval(connect, request, scope) { if (loginRequest == request) loginRequest = null } }
     var pending by remember { mutableStateOf<PairedDevice?>(null) }
     var connecting by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(controller) { if (available) controller.loadDevices() }
@@ -40,6 +53,13 @@ internal fun DevicesPage(
     JListPage(title = stringResource(R.string.settings_devices_title), onBack = onBack) {
         if (!available) item { JEmptyState(stringResource(R.string.settings_devices_unavailable), stringResource(R.string.settings_check_pairing_and_hub)) }
         else {
+            if (connect != null && "browser_qr_login" in features) item("scan-browser") {
+                JButton(stringResource(R.string.settings_browser_login_scan), {
+                    scanner.launch(com.journeyapps.barcodescanner.ScanOptions().setCaptureActivity(PairingScanActivity::class.java)
+                        .addExtra(PairingScanActivity.DisablePhoto, true)
+                        .setOrientationLocked(false).setDesiredBarcodeFormats(com.journeyapps.barcodescanner.ScanOptions.QR_CODE).setPrompt("").setBeepEnabled(false))
+                }, kind = JButtonKind.Secondary, icon = PersonaIcons.scanCode)
+            }
             if (connect != null) item("connect") {
                 JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
                     JRow(stringResource(R.string.settings_onb_connect_title), leadingIcon = PhIcons.QrCode,
@@ -48,17 +68,34 @@ internal fun DevicesPage(
             }
             if (state.devices == null && state.busy) item { JLoading(text = stringResource(R.string.settings_devices_loading)) }
             if (state.devices?.devices?.isEmpty() == true) item { JEmptyState(stringResource(R.string.settings_devices_empty), stringResource(R.string.settings_devices_empty_detail)) }
-            items(state.devices?.devices.orEmpty(), key = { it.id }) { device ->
-                val current = device.id == state.devices?.currentId
-                JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
-                    JRow(device.name.ifBlank { stringResource(R.string.settings_devices_unnamed) }, leadingIcon = PhIcons.DeviceMobile,
-                        value = if (current) stringResource(R.string.settings_devices_this) else null,
-                        subtitle = stringResource(R.string.settings_devices_platform_role, device.platformLabel(current),
-                            stringResource(when (device.role) { "full" -> R.string.settings_devices_role_full; "answer" -> R.string.settings_devices_role_answer; else -> R.string.settings_devices_role_unknown })))
-                    SettingsCaption(if (device.lastSeen.isNullOrBlank() && !device.createdAt.isNullOrBlank()) stringResource(R.string.settings_devices_added, lastUsed(device.createdAt))
-                        else stringResource(R.string.settings_devices_last_used, lastUsed(device.lastSeen)), Modifier.padding(horizontal = Tokens.Space.m))
-                    JButton(stringResource(if (current) R.string.settings_devices_revoke_this else R.string.settings_devices_revoke), { pending = device }, Modifier.padding(Tokens.Space.m),
-                        kind = JButtonKind.Secondary, size = JButtonSize.Small, enabled = !state.busy && !state.needsCleanup)
+            val onlineIds = state.devices?.onlineIds.orEmpty()
+            val groups = state.devices?.let(::groupPairedDevices).orEmpty()
+            groups.forEach { group ->
+                item("group-${group.kind.name}") {
+                    JSectionHeader(stringResource(group.kind.titleRes()), count = group.devices.size)
+                }
+                items(group.devices, key = { it.id }) { device ->
+                    val current = device.id == state.devices?.currentId
+                    val online = !current && device.id in onlineIds
+                    JGroupItem(GroupPosition.Single, Modifier.padding(bottom = Tokens.Space.m)) {
+                        JRow(device.name.ifBlank { stringResource(R.string.settings_devices_unnamed) }, leadingIcon = device.deviceIcon(),
+                            value = when {
+                                current -> stringResource(R.string.settings_devices_this)
+                                online -> stringResource(R.string.settings_devices_online)
+                                else -> null
+                            },
+                            subtitle = stringResource(R.string.settings_devices_platform_role, device.platformLabel(current),
+                                stringResource(when (device.role) {
+                                    "full" -> R.string.settings_devices_role_full
+                                    "answer" -> R.string.settings_devices_role_answer
+                                    "scoped" -> R.string.settings_devices_role_scoped
+                                    else -> R.string.settings_devices_role_unknown
+                                })))
+                        SettingsCaption(if (device.lastSeen.isNullOrBlank() && !device.createdAt.isNullOrBlank()) stringResource(R.string.settings_devices_added, lastUsed(device.createdAt))
+                            else stringResource(R.string.settings_devices_last_used, lastUsed(device.lastSeen)), Modifier.padding(horizontal = Tokens.Space.m))
+                        JButton(stringResource(if (current) R.string.settings_devices_revoke_this else R.string.settings_devices_revoke), { pending = device }, Modifier.padding(Tokens.Space.m),
+                            kind = JButtonKind.Secondary, size = JButtonSize.Small, enabled = !state.busy && !state.needsCleanup)
+                    }
                 }
             }
             item { Action(stringResource(if (state.busy) R.string.settings_devices_working else R.string.settings_devices_refresh), enabled = !state.busy && !state.needsCleanup) { scope.launch { controller.loadDevices() } } }
@@ -67,7 +104,7 @@ internal fun DevicesPage(
             if (revoked.isNotEmpty()) item("revoked-title") { JSectionHeader(stringResource(R.string.settings_devices_revoked), count = revoked.size) }
             itemsIndexed(revoked, key = { _, device -> "revoked-${device.id}" }) { index, device ->
                 JGroupItem(GroupPosition.of(index, revoked.size)) {
-                    JRow(device.name.ifBlank { stringResource(R.string.settings_devices_unnamed) }, leadingIcon = PhIcons.DeviceMobile, enabled = false,
+                    JRow(device.name.ifBlank { stringResource(R.string.settings_devices_unnamed) }, leadingIcon = device.deviceIcon(), enabled = false,
                         subtitle = stringResource(R.string.settings_devices_revoked_at, lastUsed(device.revokedAt)))
                 }
             }
@@ -97,7 +134,12 @@ internal fun NotificationPreferences(
     val state by controller.state.collectAsState()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    LaunchedEffect(controller) { if (available) controller.loadPreferences() }
+    LaunchedEffect(controller) {
+        if (available) {
+            controller.loadPreferences()
+            controller.loadLowDistraction()
+        }
+    }
     // The system's switch for the whole app (iOS: "Notifications are off" first): read again whenever the page comes back.
     var systemOff by remember { mutableStateOf(false) }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
@@ -159,6 +201,17 @@ internal fun NotificationPreferences(
             // Older hubs still expose signed-in computers even when phone muting preferences are unavailable.
             DesktopPresenceRow(desktops, muted = false, selected = false, position = GroupPosition.Single, onClick = onDesktops)
         }
+        // The hub's switch, for every device (#8157): after this phone's own rows.
+        val lowDistraction = state.lowDistraction?.takeIf { available }
+        if (lowDistraction != null) item("low-distraction") {
+            Column(Modifier.padding(top = Tokens.Space.m)) {
+                JGroupItem(GroupPosition.Single) {
+                    JSwitchRow(stringResource(R.string.settings_notify_low_distraction), lowDistraction, { scope.launch { controller.saveLowDistraction(it) } },
+                        subtitle = stringResource(R.string.settings_notify_low_distraction_subtitle), enabled = enabled)
+                }
+                SettingsCaption(stringResource(R.string.settings_notify_low_distraction_footer), Modifier.padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.s))
+            }
+        }
         if (available && state.preferences == null) item {
             Action(stringResource(if (state.busy) R.string.settings_reading else R.string.settings_retry_read), enabled = !state.busy) { scope.launch { controller.loadPreferences() } }
         }
@@ -218,11 +271,40 @@ private fun elsewhere(tz: String): String? {
 }
 
 @Composable
-internal fun AboutSettingsPage() {
+internal fun AboutSettingsPage(
+    commit: BuildCommit? = rememberBuildCommit(),
+    developing: DevelopingDiagnostics? = null,
+    onExport: () -> Unit = {},
+    /** A test-only Build-row comparison; null preserves the existing handwritten row. */
+    buildRow: (@Composable () -> Unit)? = null,
+) {
     val context = LocalContext.current
     val info = remember(context) { context.packageManager.getPackageInfo(context.packageName, 0) }
-    JGroupItem(GroupPosition.of(0, 2)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
-    JGroupItem(GroupPosition.of(1, 2)) { JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) }) }
+    val count = if (developing == null) 3 else 4
+    JGroupItem(GroupPosition.of(0, count)) { JRow(stringResource(R.string.settings_about_version), value = info.versionName ?: stringResource(R.string.settings_not_provided)) }
+    JGroupItem(GroupPosition.of(1, count)) {
+        if (buildRow == null) {
+            JRow(stringResource(R.string.settings_about_build), trailing = { Text("${info.longVersionCode}", style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3) })
+        } else {
+            buildRow()
+        }
+    }
+    JGroupItem(GroupPosition.of(2, count)) { AboutBuildCommitRow(commit) }
+    developing?.let { DevelopingPersonaAbout(it, GroupPosition.of(3, count), onExport) }
+}
+
+private fun DeviceGroupKind.titleRes(): Int = when (this) {
+    DeviceGroupKind.Devices -> R.string.settings_devices_group_devices
+    DeviceGroupKind.Browsers -> R.string.settings_devices_group_browsers
+    DeviceGroupKind.Links -> R.string.settings_devices_group_links
+    DeviceGroupKind.Integrations -> R.string.settings_devices_group_integrations
+}
+
+private fun PairedDevice.deviceIcon() = when (kind) {
+    "phone", "watch" -> PersonaIcons.phone
+    "web" -> PersonaIcons.safari
+    "link" -> PersonaIcons.laptop
+    else -> PersonaIcons.credentials
 }
 
 @Composable
@@ -231,6 +313,8 @@ private fun PairedDevice.platformLabel(current: Boolean): String = when {
     platform == "android" || kind == "android" -> "Android"
     platform == "ios" || platform == "iphone" || kind == "iphone" -> "iPhone"
     platform == "watchos" || kind == "watch" -> stringResource(R.string.settings_devices_watch)
+    kind == "web" -> stringResource(R.string.settings_devices_web)
+    kind == "link" -> stringResource(R.string.settings_devices_link)
     kind == "phone" -> stringResource(R.string.settings_devices_phone_unknown)
     else -> stringResource(R.string.settings_devices_platform_unknown)
 }

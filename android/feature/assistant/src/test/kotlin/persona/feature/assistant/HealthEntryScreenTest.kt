@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -23,8 +24,8 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 
 /**
- * The sidebar's Health (#4329): the newest health chat opens in the assistant's chat; with none, the health space's
- * new-chat page, whose first message starts a health chat (never the main one). New on a health chat opens that page.
+ * The sidebar's Health (#13273) opens the home with its history, without waiting for the list.
+ * The first message starts a health chat (never the main one). New on a health chat returns to the home.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h900dp-xhdpi")
@@ -49,9 +50,15 @@ class HealthEntryScreenTest {
         val starts = mutableListOf<SessionKey>()
         val targets = mutableListOf<SessionKey>()
         val toMain = mutableListOf<String>()
+        val embeddedHealth = mutableMapOf<SessionKey, Boolean>()
+        var historyReady: CompletableDeferred<Unit>? = null
         override suspend fun refresh() = Unit
         override suspend fun startConversation(): SessionKey = SessionKey("mac", "new-${starts.size + 1}").also { starts += it }
-        override suspend fun spaceConversations(space: String): List<Session> { listed += space; return health }
+        override suspend fun spaceConversations(space: String): List<Session> {
+            listed += space
+            historyReady?.await()
+            return health
+        }
         override suspend fun startConversationIn(space: String): SessionKey {
             spaceStarts += space
             return SessionKey("mac", "h-${spaceStarts.size}")
@@ -66,7 +73,10 @@ class HealthEntryScreenTest {
             PersonaTheme(reduceMotion = true) {
                 CompositionLocalProvider(LocalAssistantSidebarHost provides sidebar) {
                     AssistantScreen(navigator, hub, hub, hub::startConversation, composerService = null, mainConversationSender = hub,
-                        chatContent = { Text("chat:${it.sessionId}") })
+                        assistantChatContent = { key, options ->
+                            hub.embeddedHealth[key] = options.healthChat
+                            Text("chat:${key.sessionId}")
+                        })
                 }
             }
         }
@@ -87,13 +97,22 @@ class HealthEntryScreenTest {
     private fun chat(id: String, updated: String, archived: Boolean = false) = Session(machineId = "mac", sessionId = id,
         title = "Health $id", updatedAt = updated, assistant = true, archived = archived, space = AssistantSpace.HEALTH)
 
-    @Test fun healthOpensTheNewestChatAndItsNewOpensTheHealthPage() {
+    @Test fun healthOpensTheHomeWithHistoryAndNewReturnsToIt() {
         val hub = Hub(listOf(chat("older", "2026-11-01T08:00:00Z"), chat("newest", "2026-11-10T08:00:00Z"),
             chat("put-away", "2026-11-11T08:00:00Z", archived = true)))
         val sidebar = mount(hub)
         health(sidebar)
+        waitFor("Ask about your health")
+        waitFor("Health older")
+        rule.onAllNodesWithText("chat:newest").assertCountEquals(0)
+        rule.onAllNodesWithText("Health put-away").assertCountEquals(0)
+        assertEquals(emptyList<String>(), hub.spaceStarts)
+        rule.onNodeWithText("Health newest").performClick()
+        rule.waitForIdle()
         waitFor("chat:newest")
         assertEquals(listOf(AssistantSpace.HEALTH), hub.listed)
+        assertEquals(false, hub.embeddedHealth[main])
+        assertEquals(true, hub.embeddedHealth[SessionKey("mac", "newest")])
 
         // New on a health chat: the health space's page, with its history; nothing is started yet.
         rule.onNodeWithContentDescription("New health chat").performClick()
@@ -105,10 +124,25 @@ class HealthEntryScreenTest {
 
         send("How did I sleep?")
         waitFor("chat:h-1")
+        assertEquals(true, hub.embeddedHealth[SessionKey("mac", "h-1")])
         assertEquals(listOf(AssistantSpace.HEALTH), hub.spaceStarts)
         assertEquals(listOf(SessionKey("mac", "h-1")), hub.targets)
         assertEquals("never the main chat or a plain new one", emptyList<String>(), hub.toMain)
         assertEquals(emptyList<SessionKey>(), hub.starts)
+    }
+
+    @Test fun healthOpensTheHomeWhileItsHistoryIsStillLoading() {
+        val ready = CompletableDeferred<Unit>()
+        val hub = Hub(listOf(chat("newest", "2026-11-10T08:00:00Z"))).apply { historyReady = ready }
+        val sidebar = mount(hub)
+        health(sidebar)
+        waitFor("Ask about your health")
+        rule.onAllNodesWithText("chat:main").assertCountEquals(0)
+        rule.onAllNodesWithText("chat:newest").assertCountEquals(0)
+        assertEquals(emptyList<String>(), hub.spaceStarts)
+        rule.runOnIdle { ready.complete(Unit) }
+        waitFor("Health newest")
+        rule.onAllNodesWithText("chat:newest").assertCountEquals(0)
     }
 
     @Test fun noHealthChatOpensTheHealthNewPage() {
@@ -120,6 +154,7 @@ class HealthEntryScreenTest {
         assertEquals(emptyList<String>(), hub.spaceStarts)
         send("Log my weight")
         waitFor("chat:h-1")
+        assertEquals(true, hub.embeddedHealth[SessionKey("mac", "h-1")])
         assertEquals(listOf(AssistantSpace.HEALTH), hub.spaceStarts)
         assertEquals(emptyList<String>(), hub.toMain)
     }

@@ -3,6 +3,7 @@ package hub
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
@@ -60,7 +61,7 @@ func inheritedListeners() []net.Listener {
 			closeOnExec(fd)
 			inherited.files = append(inherited.files, f)
 			inherited.fds = append(inherited.fds, fd)
-			if ln, err := net.FileListener(f); err == nil { // a dup; f stays for execListenEnv
+			if ln, err := osproc.FileListener(f); err == nil { // a dup; f stays for execListenEnv
 				inherited.lns = append(inherited.lns, ln)
 			}
 		}
@@ -110,10 +111,20 @@ func execListenEnv() []string {
 	return env
 }
 
+// tcpNetworkForListenHost keeps an IPv4 host, 0.0.0.0 included, on an IPv4 socket. net.Listen's "tcp" turns an
+// IPv4 wildcard into a dual-stack IPv6 socket, while collectEndpoints publishes an IPv4-bound listener as IPv4-only
+// (#16600). An empty host keeps "tcp"'s previous behavior, and an IPv6 host is unchanged.
+func tcpNetworkForListenHost(host string) string {
+	if ip, err := netip.ParseAddr(host); err == nil && ip.Is4() {
+		return "tcp4"
+	}
+	return "tcp"
+}
+
 // listenTCP is the listener for addr (host:port as in hub.json): a socket systemd passed on the same port, else a
 // new one. Each passed socket is handed out once.
 func listenTCP(addr string) (net.Listener, bool, error) {
-	_, port, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, false, fmt.Errorf("listen %q: %w", addr, err)
 	}
@@ -127,7 +138,7 @@ func listenTCP(addr string) (net.Listener, bool, error) {
 		}
 	}
 	inherited.mu.Unlock()
-	ln, err := net.Listen("tcp", addr)
+	ln, err := osproc.Listen(tcpNetworkForListenHost(host), addr)
 	return ln, false, err
 }
 

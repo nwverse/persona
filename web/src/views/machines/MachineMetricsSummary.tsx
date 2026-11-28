@@ -1,12 +1,20 @@
 import { useId, type ReactNode } from "react";
 import { t } from "../../i18n";
-import { level, load, memPercent, percent, rate, runs, usedOfTotal, type Level } from "../../lib/machine-detail";
+import { perCoreText } from "../../lib/machine-alerts";
+import { level, load, memPercent, percent, rate, runs, temperature, usedOfTotal, type Level } from "../../lib/machine-detail";
 import { formatTokens, totalTokens } from "../../lib/tokens";
 import type { Machine, MachineMetrics, MetricPoint } from "../../lib/types";
 import { cx } from "../../ui/atoms";
 
 const known = (value: number | undefined): number | undefined => typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const positive = (value: number | undefined): number | undefined => value !== undefined && value > 0 && Number.isFinite(value) ? value : undefined;
+
+/** The line under CPU (#12519): load per core, the figure the alert chip and the apps show ("Load 1.4 per core"); the
+ *  raw load average ("Load 25.4") only while the core count is unknown. */
+export function loadLine(value: number | undefined, cores: number | undefined): string {
+  if (value !== undefined && cores) return t("machines.load_per_core_value", { value: perCoreText(value / cores) });
+  return t("machines.load_value", { value: load(value) });
+}
 
 type SparkSeries = { color: string; read: (point: MetricPoint) => number | undefined };
 const CPU: SparkSeries[] = [{ color: "var(--accent)", read: (p) => p.cpu }];
@@ -21,25 +29,55 @@ export function MachineMetricsSummary({ machine, metrics }: { machine: Machine; 
   const total = positive(latest?.mem_total) ?? positive(metrics?.system?.memory) ?? positive(machine.system?.memory);
   const cpu = known(latest?.cpu);
   const memory = memPercent(known(latest?.mem_used), total);
+  const battery = known(latest?.battery_percent);
+  const charging = latest?.battery_charging === true;
+  const temp = known(latest?.temp_c);
   const now = Date.now() / 1000;
   const usage = metrics?.usage;
   const minute = Math.floor(now / 60) * 60;
   const tokenPoints = usage?.recent.map((cpu, i) => ({ t: minute - (usage.recent.length - 1 - i) * 60, cpu })) ?? [];
+  // The metrics are one row when each column holds the widest value it can show ("↓ 1023 MB/s", 97.7 px at the standard
+  // text size: a rate keeps four digits up to 1023 before the next unit, as the app's MetricFormat), so 98 px a column
+  // with its 12 px gaps: 26.75rem for four, 19.875rem for three. Narrower, a card at 1024 px cut the network's unit
+  // ("↓ 2.58 M…") and read as another number. Below that two columns, never three with one left alone on a second row
+  // (a card at 1280 px, 428 px inside, keeps its four in a row).
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(5.5rem,1fr))] gap-x-3 gap-y-3 px-4 py-3" data-testid="machine-metrics-summary">
-      <MetricCell label="CPU" value={percent(cpu)} detail={t("machines.load_value", { value: load(known(latest?.load)) })} severity={level(cpu, 75, 90)}>
-        <Spark points={points} end={now} />
-      </MetricCell>
-      <MetricCell label={t("machines.memory")} value={percent(memory)} detail={usedOfTotal(known(latest?.mem_used), total)} severity={level(memory, 80, 90)}>
-        <Spark points={points} end={now} series={[{ color: "var(--green)", read: (p) => memPercent(known(p.mem), total) }]} label={t("machines.memory_last_hour")} />
-      </MetricCell>
-      <MetricCell label={t("machines.network")} value={`↓ ${rate(known(latest?.net_rx))}`} detail={`↑ ${rate(known(latest?.net_tx))}`} valueColor="var(--orange)" detailColor="var(--ai)">
-        <Spark points={points} end={now} series={NETWORK} minimumMax={1} label={t("machines.network_last_hour")} />
-      </MetricCell>
-      {usage && (
-        <MetricCell label={t("machines-usage.tokens")} value={t("machines-usage.per_minute_value", { n: formatTokens(usage.per_minute) })} detail={t("machines-usage.today_value", { n: formatTokens(totalTokens(usage.today)) })}>
-          <Spark points={tokenPoints} end={now} minimumMax={1} label={t("machines-usage.tokens_last_hour")} />
+    <div className="@container px-4 py-3">
+      <div className={cx("grid grid-cols-2 gap-3", usage ? "@min-[26.75rem]:grid-cols-4" : "@min-[19.875rem]:grid-cols-3")} data-testid="machine-metrics-summary">
+        <MetricCell label="CPU" value={percent(cpu)} detail={loadLine(known(latest?.load), positive(metrics?.system?.cores) ?? positive(machine.system?.cores))} severity={level(cpu, 75, 90)}>
+          <Spark points={points} end={now} />
         </MetricCell>
+        <MetricCell label={t("machines.memory")} value={percent(memory)} detail={usedOfTotal(known(latest?.mem_used), total)} severity={level(memory, 80, 90)}>
+          <Spark points={points} end={now} series={[{ color: "var(--green)", read: (p) => memPercent(known(p.mem), total) }]} label={t("machines.memory_last_hour")} />
+        </MetricCell>
+        <MetricCell label={t("machines.network")} value={`↓ ${rate(known(latest?.net_rx))}`} detail={`↑ ${rate(known(latest?.net_tx))}`} valueColor="var(--orange)" detailColor="var(--ai)">
+          <Spark points={points} end={now} series={NETWORK} minimumMax={1} label={t("machines.network_last_hour")} />
+        </MetricCell>
+        {usage && (
+          <MetricCell label={t("machines-usage.tokens")} value={t("machines-usage.per_minute_value", { n: formatTokens(usage.per_minute) })} detail={t("machines-usage.today_value", { n: formatTokens(totalTokens(usage.today)) })}>
+            <Spark points={tokenPoints} end={now} minimumMax={1} label={t("machines-usage.tokens_last_hour")} />
+          </MetricCell>
+        )}
+      </div>
+      {(battery !== undefined || temp !== undefined) && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line/60 pt-2 text-xs text-ink-3 tabular-nums" data-testid="machine-power-thermal">
+          {battery !== undefined && (
+            <span data-testid="metric-battery">
+              {t("machines.battery")}{" "}
+              <span className={cx("font-medium", battery <= 15 && !charging ? "text-red" : battery <= 25 && !charging ? "text-orange" : "text-ink")}>
+                {percent(battery)}{charging ? ` · ${t("machines.charging")}` : ""}
+              </span>
+            </span>
+          )}
+          {temp !== undefined && (
+            <span data-testid="metric-temp">
+              {t("machines.temperature")}{" "}
+              <span className={cx("font-medium", temp >= 90 ? "text-red" : temp >= 75 ? "text-orange" : "text-ink")}>
+                {temperature(temp)}
+              </span>
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

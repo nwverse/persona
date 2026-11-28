@@ -6,14 +6,17 @@
 // the poisoned file and never came up. scripts/test/test-server.sh already runs with a throw-away HOME; a plain
 // `go test` did not.
 //
-// A package whose tests start Persona processes calls Main from its TestMain: the tests run with HOME set to an empty
-// directory and PERSONA_HOME unset, and the run fails if anything created <HOME>/.persona. A test that needs state
-// sets PERSONA_HOME (t.Setenv) to a directory of its own.
+// A package whose tests start Persona processes, or reach the node's socket, calls Main from its TestMain: the tests
+// run with HOME set to an empty directory and PERSONA_HOME (and its former name) unset, and the run fails if anything
+// created <HOME>/.persona. A test that needs state sets PERSONA_HOME (t.Setenv) to a directory of its own.
 //
 // Go tools a test starts (`go list` in the hub's architecture guard) still find the developer's Go env file, module
 // cache and build cache: Main pins GOENV, GOPATH, GOMODCACHE and GOCACHE to what they were under the real HOME.
 // Without that a child lost settings such as `go env -w GOPROXY=…`, fell back to the default proxy with an empty
 // cache and timed out where that proxy is unreachable (#5191).
+//
+// Nor do the tests' git commands reach the developer's repository: Main unsets git's repository variables for the run
+// (ClearGit; a package that does not use Main calls that from its TestMain).
 package testhome
 
 import (
@@ -28,6 +31,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/compat"
 )
 
 // isolated names the throw-away home once Main made it: a test binary a test starts again inherits the variable and
@@ -59,7 +64,12 @@ func runIn(run func() int, stderr io.Writer) int {
 		home = resolved
 	}
 	defer os.RemoveAll(home)
-	vars := map[string]string{"HOME": home, "USERPROFILE": home, "PERSONA_HOME": "", isolated: home}
+	// PERSONA_HOME's former name too: with PERSONA_HOME unset, identity reads that one (compat.EnvNames).
+	_, legacyHome := compat.EnvNames("PERSONA_HOME")
+	vars := map[string]string{"HOME": home, "USERPROFILE": home, "PERSONA_HOME": "", legacyHome: "", isolated: home}
+	for _, k := range gitLocators {
+		vars[k] = ""
+	}
 	for k, v := range goEnv() { // read under the real HOME, before it changes
 		vars[k] = v
 	}
@@ -75,6 +85,26 @@ func runIn(run func() int, stderr io.Writer) int {
 		}
 	}
 	return code
+}
+
+// gitLocators are the variables that point git at a repository (`git rev-parse --local-env-vars`, less the `-c`
+// settings). A test binary started from inside git inherits them (`git bisect run` exports GIT_DIR), and a test's git
+// commands in its own temporary directory then act on that repository instead: `git init` made the developer's
+// repository bare, or pointed all its worktrees at one directory, and `git worktree add` registered the test's
+// worktree there (#13610).
+var gitLocators = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_PREFIX",
+	"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE",
+	"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
+}
+
+// ClearGit unsets git's repository variables for the rest of the process, so a test's git commands act only on the
+// repositories the test made. Main does this for its run; a package whose tests run git without Main calls it first
+// in its TestMain. A test that wants one of them sets it with t.Setenv.
+func ClearGit() {
+	for _, k := range gitLocators {
+		_ = os.Unsetenv(k)
+	}
 }
 
 // goPaths are the Go settings whose defaults come from the home directory.

@@ -3,9 +3,11 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -58,8 +60,9 @@ func TestCodexRolloutItemsReadAsARollout(t *testing.T) {
 	if len(edit) != 2 || edit[0].ToolName != "Edit" || !strings.Contains(string(edit[0].ToolInput), "/w/a.go") || edit[1].Text != "update /w/a.go" {
 		t.Fatalf("file change = %+v", edit)
 	}
-	mcp := parse("mcpToolCall", `{"type":"mcpToolCall","id":"m1","server":"docs","tool":"search","status":"completed","arguments":{"q":"csv"},"result":{"content":[{"type":"text","text":"3 hits"}]},"error":null}`)
-	if len(mcp) != 2 || mcp[0].ToolName != "mcp__docs__search" || mcp[1].Text != "3 hits" {
+	mcp := parse("mcpToolCall", `{"type":"mcpToolCall","id":"m1","server":"docs","tool":"search","status":"completed","arguments":{"q":"csv"},"result":{"content":[{"type":"text","text":"3 hits"},{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"}],"isError":false},"error":null}`)
+	if len(mcp) != 3 || mcp[0].ToolName != "mcp__docs__search" || mcp[1].Text != "3 hits" ||
+		mcp[2].Image == nil || mcp[2].Image.Data != "iVBORw0KGgo=" || mcp[2].Image.Mime != "image/png" {
 		t.Fatalf("mcp = %+v", mcp)
 	}
 	web := parse("webSearch", `{"type":"webSearch","id":"w1","query":"utf-8 bom csv","action":{"type":"search","url":""},"results":[{"title":"BOM","url":"https://example.com/bom","domain":"example.com","snippet":"…"}]}`)
@@ -75,7 +78,7 @@ func TestCodexRolloutItemsReadAsARollout(t *testing.T) {
 	if c := parse("contextCompaction", `{"type":"contextCompaction","id":"k1"}`); len(c) != 1 || c[0].Kind != proto.KindNotice {
 		t.Fatalf("compaction = %+v", c)
 	}
-	for _, kind := range []string{"sleep", "subAgentActivity", "somethingNew"} {
+	for _, kind := range []string{"sleep", "somethingNew"} {
 		if item := codexRolloutItem(kind, []byte(`{"type":"`+kind+`","id":"x"}`)); item != nil {
 			t.Errorf("%s = %v, want left out", kind, item)
 		}
@@ -268,6 +271,56 @@ func TestCodexAppChatHistoryComesFromTheAppsDatabase(t *testing.T) {
 	}
 }
 
+func TestCodexAppHistoryRebuildsLegacyMarks(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	project := t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Image chat", time.Now(), 0))
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{
+		userItem("u0", "show the frame"),
+		{"mcpToolCall", `{"type":"mcpToolCall","id":"m1","server":"persona","tool":"frames","status":"completed","arguments":{},"result":{"content":[{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"}],"isError":false}}`},
+	}}})
+	var id string
+	for _, s := range n.codexSessions(map[string]bool{}) {
+		if s.SourceThreadID == appChat {
+			id = s.SessionID
+		}
+	}
+	if id == "" {
+		t.Fatal("the chat is not listed")
+	}
+	if _, err := n.file(id); err != nil {
+		t.Fatal(err)
+	}
+	p := n.transcriptPath(id)
+	const withImage = `{"type":"image","text":"","data":"iVBORw0KGgo=","mimeType":"image/png"}`
+	raw, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(raw), withImage) {
+		t.Fatalf("the current history did not retain its image: %v", err)
+	}
+	// A pre-image converter wrote this same row without data/mimeType. Keep every other mark field and the size
+	// current so only its missing format version can force the rebuild.
+	legacy := strings.Replace(string(raw), withImage, `{"type":"image","text":""}`, 1)
+	if err := os.WriteFile(p, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mark, size := readCodexHistoryMark(p)
+	mark.Version, mark.Size = 0, size
+	if err := writeCodexHistoryMark(p, mark); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.refreshCodexAppHistory(id); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := os.ReadFile(p)
+	if err != nil || !strings.Contains(string(rebuilt), withImage) {
+		t.Fatalf("a legacy mark kept the image-less history: %v; %s", err, rebuilt)
+	}
+	if got, _ := readCodexHistoryMark(p); got.Version != codexAppHistoryVersion {
+		t.Fatalf("the rebuilt history did not advance its mark: %+v", got)
+	}
+}
+
 // A chat registered with its rollout, which the App then deleted: its history comes from the database (the registry
 // keeps the path it knew).
 func TestCodexAppChatHistoryAfterItsRolloutWasDeleted(t *testing.T) {
@@ -284,7 +337,7 @@ func TestCodexAppChatHistoryAfterItsRolloutWasDeleted(t *testing.T) {
 			id = s.SessionID
 		}
 	}
-	if src, _ := n.codexSource(id); src.path != rollout {
+	if src, _ := n.codexSource(id); src.path != resolved(t, rollout) { // the node names it resolved (#9138)
 		t.Fatalf("registered with %q, want its rollout", src.path)
 	}
 	if err := os.Remove(rollout); err != nil {
@@ -582,8 +635,14 @@ func TestCodexDBTargetIsThePathUnlessClosedInWALMode(t *testing.T) {
 		t.Fatalf("rollback journal: %q", got)
 	}
 	closeLikeTheApp(t, db)
-	if got, want := codexDBTarget(db), "file://"+filepath.ToSlash(strings.ReplaceAll(db, " ", "%20"))+"?immutable=1"; got != want {
-		t.Fatalf("closed: %q, want %q", got, want)
+	target := codexDBTarget(db)
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "file" || u.Host != "" || u.Query().Get("immutable") != "1" ||
+		strings.TrimPrefix(u.Path, "/") != strings.TrimPrefix(filepath.ToSlash(db), "/") {
+		t.Fatalf("closed: %q is not the immutable URI for %q: %v", target, db, err)
+	}
+	if out, err := exec.Command(sqlite3WithJSON(t), "-readonly", target, "SELECT count(*) FROM x;").CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "0" {
+		t.Fatalf("closed database is not readable: %v: %s", err, out)
 	}
 	os.WriteFile(db+"-shm", nil, 0o600)
 	if got := codexDBTarget(db); got != db {
@@ -688,7 +747,7 @@ func TestAWatchedCodexAppChatWhoseRolloutGoes(t *testing.T) {
 	turns := []historyTurn{{thread: appChat, id: "t0", status: "completed", ordinal: 0, items: [][2]string{userItem("u0", "first")}}}
 	writeCodexHistory(t, home, turns)
 	id, _ := readChat(t, n, appChat)
-	if src, _ := n.codexSource(id); src.path != rollout {
+	if src, _ := n.codexSource(id); src.path != resolved(t, rollout) { // the node names it resolved (#9138)
 		t.Fatalf("registered with %q, want its rollout", src.path)
 	}
 	hub := withHub(t, n)
@@ -756,5 +815,41 @@ func TestCodexAppChatHistoryFailureBackoffAndLockErrors(t *testing.T) {
 	n.file(id)
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("waited %v on a lock that cannot be taken", d)
+	}
+}
+
+func TestCodexRolloutCollaborationAndPlanItems(t *testing.T) {
+	for _, tc := range []struct{ kind, raw, want string }{
+		{"collabAgentToolCall", `{"id":"c1","tool":"wait","status":"completed","senderThreadId":"parent","receiverThreadIds":["child"],"receiverAgents":[],"agentsStates":{"child":{"status":"running"}}}`, `{"id":"c1","type":"CollabAgentToolCall","tool":"wait","status":"completed","sender_thread_id":"parent","receiver_thread_ids":["child"],"receiver_agents":[],"agents_states":{"child":{"status":"running"}}}`},
+		{"subAgentActivity", `{"id":"s1","kind":"started","agentThreadId":"child","agentPath":"/review","model":"example-model","reasoningEffort":"high"}`, `{"id":"s1","type":"SubAgentActivity","kind":"started","agent_thread_id":"child","agent_path":"/review","model":"example-model","reasoning_effort":"high"}`},
+		{"plan", `{"id":"p1","text":"Inspect then fix"}`, `{"id":"p1","type":"Plan","text":"Inspect then fix"}`},
+	} {
+		var want map[string]any
+		if err := json.Unmarshal([]byte(tc.want), &want); err != nil {
+			t.Fatal(err)
+		}
+		if got := codexRolloutItem(tc.kind, []byte(tc.raw)); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %#v, want %#v", tc.kind, got, want)
+		}
+	}
+}
+
+func TestCodexAppTerminalPaginatedRunningTurn(t *testing.T) {
+	n := remoteTestNode(t)
+	home, project := n.codexHome(), t.TempDir()
+	writeCodexApp(t, home, project, codexAppSchema+codexAppRow(appChat, "", project, "Terminal", time.Now(), 0, "codex-tui")+
+		"ALTER TABLE threads ADD COLUMN history_mode TEXT; UPDATE threads SET source = 'cli', history_mode = 'paginated';")
+	writeCodexHistory(t, home, []historyTurn{{thread: appChat, id: "running", status: "inProgress", ordinal: 0,
+		items: [][2]string{userItem("u1", "keep working"), answerItem("a1", "Checking files")}}})
+	if row := codexPaginatedThreads(home)[appChat]; !row.includeRunning || row.Originator != "codex-tui" {
+		t.Fatalf("terminal row = %+v", row)
+	}
+	id, text := readChat(t, n, appChat)
+	if !strings.Contains(text, "keep working") || !strings.Contains(text, "Checking files") {
+		t.Fatalf("running transcript = %q", text)
+	}
+	src, _, _ := n.codexAppHistoryChat(id)
+	if data, err := os.ReadFile(n.codexAppHistoryFile(src)); err != nil || strings.Contains(string(data), "task_complete") {
+		t.Fatalf("running turn was completed: %s, %v", data, err)
 	}
 }

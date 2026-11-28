@@ -18,7 +18,15 @@ Persona 算好的事实（这次开跑时的快照，数字以此为准，别改
 - 收件箱里今天到点的（含已经到点但还没回看的，以及看过 3 次没动静或到了再看时间的；同样只给你看，要在回答里逐条提）：{{range .}}
   - {{.Title}}{{with .Who}}；在等：{{.}}{{end}}{{with .Next}}；下一步：{{.}}{{end}}{{end}}{{end}}{{with .Leaders}}
 - 各方向（每个主管一行；有工作记账的进度卡工具就发卡，没有才在早晚报里每个方向照着各写一行，卡住的写明卡在哪、谁来解）：{{range .}}
-  - {{.Name}}：在办 {{.Open}} 件{{if .Waiting}}，等用户拍板 {{.Waiting}} 件{{end}}{{if .Stuck}}，卡住超过一天 {{.Stuck}} 件{{end}}{{if or .Reached .Doing .NeedsYou}}；主管今天的小结：{{with .Reached}}达成 {{.}}；{{end}}{{with .Doing}}在做 {{.}}；{{end}}{{with .NeedsYou}}要用户做 {{.}}{{end}}{{else}}；主管今天还没写小结{{end}}{{end}}{{end}}{{with .Briefs}}
+  - {{.Name}}：在办 {{.Open}} 件{{if .Waiting}}，等用户拍板 {{.Waiting}} 件{{end}}{{if .Stuck}}，卡住 {{.Stuck}} 件{{end}}{{if or .Reached .Doing .NeedsYou}}；主管今天的小结：{{with .Reached}}达成 {{.}}；{{end}}{{with .Doing}}在做 {{.}}；{{end}}{{with .NeedsYou}}要用户做 {{.}}{{end}}{{else}}；主管今天还没写小结{{end}}{{end}}{{end}}{{with .DeferredSupervision}}
+- {{$.DeferredSupervisionHeading}}:{{range .}}
+  - {{.}}{{end}}{{end}}{{with .Directions}}
+- 各方向停着的事（这些是 Persona 按任务账本、会话和卡片算好的，不要漏掉、不要改数字；等用户的行优先，owner 行全部列出，非 owner 行折叠时会写「另 N 件」）：{{range .}}
+  - {{.Name}}：在办 {{.Open}} 件，活动 {{.Active}} 件，未派发 {{.Undispatched}} 件{{range .Waits}}
+    - {{.Line}}{{with .Link}} {{.}}{{end}}{{end}}{{if .More}}
+    - 另 {{.More}} 件，打开该方向查看：{{.Link}}{{end}}{{end}}{{end}}{{with .DisabledRoutines}}
+- 已关闭的每日收尾和巡检（每个一行；没记到关闭时间的必须照写「关闭时间未记录」，不能拿最后运行时间代替）：{{range .}}
+  - {{.Line}}{{end}}{{end}}{{with .Briefs}}
 - 派出去的事里要说的（用用户当初的原话开头，每件一行；没列出来的不需要用户做什么、也没有变化，不要提）：{{range .}}
   - {{if .Words}}{{.Date}} 你说：「{{.Words}}」{{else}}{{.Date}} {{if eq .By "leader"}}主管{{else if eq .By "routine"}}定时任务{{else if eq .By "hub"}}Persona{{else if eq .By "unknown"}}（没记下是谁要的）{{else}}助手{{end}}发起：{{.Goal}}{{end}} → {{.Now}}{{with .Status}}（Agent 自己的说法：{{if eq . "done"}}做完了{{else if eq . "blocked"}}卡住了{{else}}没做完{{end}}）{{end}}{{with .Need}}；要用户：{{.}}{{end}}{{if .Decide}}；等用户拍板{{end}}{{with .Parked}}；搁置中，等你定优先级：{{.}}{{end}}{{if .Overdue}}；已超过约定时间{{end}}{{range .Scope}}；范围调整：{{.}}{{end}}{{end}}{{end}}{{with .BriefsDone}}
 - 上次简报以来结束的（只在这一次说，逐条标准的结果照写）：{{range .}}
@@ -32,6 +40,8 @@ Persona 算好的事实（这次开跑时的快照，数字以此为准，别改
   - 时间线（只有标题，按时间）{{if $.Day.Left}}，中间省略了 {{$.Day.Left}} 段{{end}}：{{range .}}
     - {{.From}}–{{.To}} {{if .Meeting}}会议{{else}}会议以外{{end}}：{{.Title}}{{end}}{{end}}{{with .Actions}}
   - 还没确认的建议待办{{if $.Day.ActionsLeft}}（另有 {{$.Day.ActionsLeft}} 条没列）{{end}}：{{range .}}
-    - {{if .Who}}{{.Who}}：{{end}}{{.What}}{{end}}{{end}}{{end}}{{with .Setup}}
+    - {{if .Who}}{{.Who}}：{{end}}{{.What}}{{end}}{{end}}{{end}}{{with .Captures}}
+- 随手记（Persona 算好的；带敏感类别的只给条数，不要猜它的内容、标题或归到了哪里{{if $.Card}}；飞书卡片里已经原样列出，你不用再列{{end}}）：{{range .}}
+  - {{.}}{{end}}{{end}}{{with .Setup}}
 - 建议的设置（Persona 按过去 7 天的记录算出来的：哪个还没开的机制本可以让用户少被问几次、或让对话少跑几轮后台任务，后面是代价和在哪里开；也可能有一行说后台督办用的模型可以换低一档，那一行按过去 30 天算，依据写在那一行里。{{if $.Card}}飞书卡片里已经原样列出，你不用再列。{{else}}请在回答的最后把这几行原样列出来，数字和措辞都不要改。{{end}}开不开、换不换由用户自己决定：你不要替用户打开或改动其中任何一项，也不要为此调用设置工具）：{{range .}}
   - {{.}}{{end}}{{end}}

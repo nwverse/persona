@@ -7,14 +7,15 @@ import (
 	"sort"
 	"time"
 
-	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // References in an extension's secrets (docs/extensions/secret-providers.md "References in an extension's secrets"):
-// saving one in Settings is the owner's standing approval for that extension, so it is resolved, without a card, each
-// time the manager hands the extension its secrets, and the extension gets the value as if it had been typed in.
+// saving one in Settings is the owner's standing approval for that extension, so it is resolved, without a card, the
+// first time the manager hands the extension its secrets, and the extension gets the value as if it had been typed in.
+// The value is kept sealed from then on (secret_kept.go): a later start (a restart, an upgrade) asks the provider
+// nothing, so it never has the user authorize it again.
 
 // secretDescribeForView bounds asking a provider for a reference's words while a details page is drawn.
 const secretDescribeForView = 2 * time.Second
@@ -39,6 +40,7 @@ type SecretUserView struct {
 	ExtensionName string `json:"extension_name,omitempty"`
 	Secret        string `json:"secret,omitempty"`
 	SecretTitle   string `json:"secret_title,omitempty"`
+	EntryTitle    string `json:"entry_title,omitempty"`
 	Launcher      string `json:"launcher,omitempty"`
 	LauncherName  string `json:"launcher_name,omitempty"`
 	Machine       string `json:"machine,omitempty"`
@@ -60,7 +62,12 @@ func (ps *extensions) programSecrets(ctx context.Context, id string) (map[string
 	if err != nil || stored == nil {
 		return stored, err
 	}
-	return ps.resolveStored(ctx, id, stored)
+	out, err := ps.resolveStored(ctx, id, stored)
+	if err == nil {
+		_, refs := extension.SplitSecrets(stored)
+		ps.retainExtensionSecrets(ctx, id, refs) // what it holds now: a reference it no longer names is not kept
+	}
+	return out, err
 }
 
 // resolveStored resolves the references among stored (extension id's secrets, or the ones a change would leave it).
@@ -72,7 +79,7 @@ func (ps *extensions) resolveStored(ctx context.Context, id string, stored map[s
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		v, err := ps.resolveSecret(ctx, refs[name], wire.SecretPurpose{Kind: "extension", ID: id}, "settings")
+		v, err := ps.extensionSecret(ctx, id, refs[name]) // kept once resolved (secret_kept.go)
 		if err != nil {
 			return nil, err
 		}
@@ -111,13 +118,12 @@ func (ps *extensions) secretUsers(ctx context.Context, p *extension.Extension, l
 	var out []SecretUserView
 	for _, r := range ps.reg.ReferencesTo(ctx, schemes) {
 		u := SecretUserView{Kind: "extension", Extension: r.Extension, ExtensionName: r.Extension, Secret: r.Name, SecretTitle: r.Name, Reference: r.Reference}
-		if holder := ps.reg.Get(r.Extension); holder != nil {
+		if holder := ps.reg.Snapshot(r.Extension); holder != nil {
 			u.ExtensionName = holder.L10n.Name(l, holder.Full.Name)
-			for _, s := range holder.Full.Secrets {
-				if s.Name == r.Name {
-					u.SecretTitle = holder.L10n.Secret(l, s).Title
-				}
+			if spec, ok := holder.SecretDeclaration(r.Name); ok {
+				u.SecretTitle = holder.L10n.Secret(l, spec).Title
 			}
+			u.EntryTitle, _ = holder.EntrySecretTitle(r.Name, l)
 		}
 		out = append(out, u)
 	}

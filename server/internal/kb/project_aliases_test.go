@@ -21,7 +21,7 @@ func TestEvolveProjectAliasesAreValidated(t *testing.T) {
 	c := &Chat{ID: "lark-f1", Kind: "group", Name: "示例群"}
 	now := time.Now().UTC()
 
-	slug := e.evolveProject("Beta 迁移", "short", []string{"alpha 发布", "阿尔法", "ss", "项目", "Beta迁移", "贝塔", "贝塔"}, "", c, "", now)
+	slug := e.evolveProject("Beta 迁移", "short", []string{"alpha 发布", "阿尔法", "ss", "项目", "Beta迁移", "贝塔", "贝塔"}, "", c, true, "", now)
 	if slug != "beta" {
 		t.Fatalf("slug = %q", slug)
 	}
@@ -38,7 +38,7 @@ func TestEvolveProjectAliasesAreValidated(t *testing.T) {
 	for i := range 30 {
 		many = append(many, fmt.Sprintf("贝塔%02d", i))
 	}
-	e.evolveProject("Beta 迁移", "short", many, "", c, "", now)
+	e.evolveProject("Beta 迁移", "short", many, "", c, true, "", now)
 	beta, _ = e.Store.Project("beta")
 	if len(beta.Aliases) != maxProjectAliases || beta.Aliases[0] != "贝塔" {
 		t.Fatalf("beta has %d aliases: %v", len(beta.Aliases), beta.Aliases)
@@ -51,7 +51,7 @@ func TestEvolveProjectDoesNotSnowball(t *testing.T) {
 	_ = e.Store.PutProject(&Project{Slug: "alpha", Name: "Alpha 发布", Status: "active"})
 	_ = e.Store.PutProject(&Project{Slug: "beta", Name: "Beta 迁移", Aliases: []string{"迁移二期"}, Status: "active"})
 	c := &Chat{ID: "lark-f1", Kind: "group", Name: "示例群"}
-	slug := e.evolveProject("新叫法", "short", []string{"迁移二期", "Alpha 发布"}, "", c, "", time.Now().UTC())
+	slug := e.evolveProject("新叫法", "short", []string{"迁移二期", "Alpha 发布"}, "", c, true, "", time.Now().UTC())
 	if slug != "beta" {
 		t.Fatalf("slug = %q", slug)
 	}
@@ -88,9 +88,22 @@ func TestFindProjectPrefersNameThenRecent(t *testing.T) {
 // A "same" the model is not sure of, or whose reason hedges, is not merged and is kept as different.
 func TestDedupeSkipsDoubtfulMerges(t *testing.T) {
 	for name, reply := range map[string]string{
-		"not sure": `{"same":true,"sure":false,"keep":"A","reason":"共同人少"}`,
-		"no sure":  `{"same":true,"keep":"A","reason":"同一个需求"}`,
-		"hedged":   `{"same":true,"sure":true,"keep":"A","reason":"方向是否一致存疑"}`,
+		"not sure":              `{"same":true,"sure":false,"keep":"A","reason":"共同人少"}`,
+		"no sure":               `{"same":true,"keep":"A","reason":"同一个需求"}`,
+		"hedged":                `{"same":true,"sure":true,"keep":"A","reason":"方向是否一致存疑"}`,
+		"English uncertain":     `{"same":true,"sure":true,"keep":"A","reason":"Uncertain direction"}`,
+		"English not sure":      `{"same":true,"sure":true,"keep":"A","reason":"Not sure it is the same"}`,
+		"English perhaps":       `{"same":true,"sure":true,"keep":"A","reason":"Perhaps the same goal"}`,
+		"English probably not":  `{"same":true,"sure":true,"keep":"A","reason":"Probably not the same project"}`,
+		"English may not":       `{"same":true,"sure":true,"keep":"A","reason":"May not be the same work"}`,
+		"English seems":         `{"same":true,"sure":true,"keep":"A","reason":"Seems different"}`,
+		"English not same":      `{"same":true,"sure":true,"keep":"A","reason":"Not same project"}`,
+		"English not identical": `{"same":true,"sure":true,"keep":"A","reason":"Not identical"}`,
+		"English can't tell":    `{"same":true,"sure":true,"keep":"A","reason":"I can't tell if these are the same"}`,
+		"English can’t tell":    `{"same":true,"sure":true,"keep":"A","reason":"I can’t tell if these are the same"}`,
+		"Japanese uncertain":    `{"same":true,"sure":true,"keep":"A","reason":"同じ仕事か不確か"}`,
+		"Japanese possibility":  `{"same":true,"sure":true,"keep":"A","reason":"別の要件かもしれない"}`,
+		"Japanese cannot tell":  `{"same":true,"sure":true,"keep":"A","reason":"同一か判断できない"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := &scriptModel{replies: []string{reply}}

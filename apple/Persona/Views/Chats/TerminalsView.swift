@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 // Agents › ⋯ › Terminals (#4754, docs/integrations/engines.md「Agents run in a terminal」): every pane of each computer's
 // terminal engine, the Agents' and plain terminals alike, to open in the terminal (watch and type) and close. A plain pane
@@ -81,16 +82,16 @@ struct TerminalsView: View {
         #endif
         .renameTerminalAlert($renaming) { t, name in Task { await rename(t, to: name) } }
         .renameSessionAlert($renamingSession)
-        .confirmationDialog(closing.map { String(localized: "Close \"\($0.title)\"?") } ?? "", isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }),
-                            titleVisibility: .visible, presenting: closing) { c in
+        .accessibleConfirmationDialog(closing.map { String(localized: "Close \"\($0.title)\"?") } ?? "", isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }),
+                            titleVisibility: .visible, hasCancel: true, presenting: closing) { c in
             Button(String(localized: "Close Terminal"), role: .destructive) { close(c) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Whatever runs in it stops. This can't be undone.")
         }
-        .confirmationDialog(finished.map { String(localized: "Close \($0.panes.count) finished terminals on \($0.name)?") } ?? "",
+        .accessibleConfirmationDialog(finished.map { String(localized: "Close \($0.panes.count) finished terminals on \($0.name)?") } ?? "",
                             isPresented: Binding(get: { finished != nil }, set: { if !$0 { finished = nil } }),
-                            titleVisibility: .visible, presenting: finished) { f in
+                            titleVisibility: .visible, hasCancel: true, presenting: finished) { f in
             Button(String(localized: "Close Terminals"), role: .destructive) { closeFinished(f) }
             Button("Cancel", role: .cancel) {}
         } message: { f in
@@ -232,6 +233,7 @@ struct TerminalsView: View {
         switch r.kind {
         case .agent:
             let s = agentSession(r, on: ref)
+            if let s, let tab = s.displayTabName(preferTab: model.prefersHerdrTabName(for: s)) { return tab }
             return s?.title.nilIfEmpty ?? r.pane.title?.nilIfEmpty ?? NodeMenu.shellTitle(r.pane, in: list)
         case .finished:
             return title(finished: r.pane.agentSession ?? "", on: ref)
@@ -494,7 +496,7 @@ nonisolated enum TerminalsList {
         switch (raw ?? "").lowercased() {
         case "", "claude": "Claude"
         case "codex": "Codex"
-        case "traex": "TRAEX"
+        case "traex", "traecli", "trae-cli": Session.traeCLIName
         default: raw ?? ""
         }
     }
@@ -632,8 +634,8 @@ nonisolated enum TabRename {
         var id: String { machine.path + "|" + host + "|" + tabID }
     }
 
-    /// The engines that rename tabs: herdr and Tern (the web's `canRenameIn`); Orca and the others are not asked.
-    static func canRename(host: String) -> Bool { host.isEmpty || host == "herdr" || host == "tern" }
+    /// The engines that rename tabs: herdr, Tern and Rex (the web's `canRenameIn`); Orca and the others are not asked.
+    static func canRename(host: String) -> Bool { host.isEmpty || host == "herdr" || host == "tern" || host == "rex" }
 
     /// A plain terminal's tab on an engine that renames; nil for an Agent's row (its own Rename Agent…) and a stopped
     /// Agent's leftover (titled by that Agent, not its tab).

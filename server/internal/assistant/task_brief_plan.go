@@ -12,8 +12,9 @@ import (
 // ---- the brief of a task_plan task (#3822) ----
 
 // briefRequired refuses a plan's task that does not say what done is: a writable task needs done_when (one criterion
-// that can be checked, at least) and expect_minutes, a read-only one a goal and expect_minutes. A task that continues
-// another (continues) takes that task's brief instead and says why it takes over. The refusal names what is missing.
+// that can be checked, at least), a read-only one a goal. The hub supplies an automatic estimate for every task_plan
+// task; expect_minutes is only an optional override. A continuation takes its brief instead and says why.
+// The refusal names what is missing.
 func briefRequired(t *PlanTask) error {
 	if t.Continues != "" {
 		if t.ContinuesWhy == "" {
@@ -28,9 +29,6 @@ func briefRequired(t *PlanTask) error {
 		}
 	} else if len(t.DoneWhen) == 0 {
 		missing = append(missing, "done_when (at least one result that can be checked)")
-	}
-	if t.ExpectMinutes <= 0 {
-		missing = append(missing, "expect_minutes (about how long it should take)")
 	}
 	if len(missing) == 0 {
 		return nil
@@ -79,35 +77,37 @@ func errContinued(prev string, succ Todo) error {
 		"(agent_send)", prev, succ.ID, succ.Title, succ.ID)
 }
 
-// takeOver settles where a task that continues another runs (#6427), before its todo_id is checked: an earlier to-do
-// still open whose agents all stopped is carried on in itself (todo_id), not in a new to-do; one another open to-do
-// already carries on is refused (that one is where the work goes on). An earlier to-do that is closed, one whose agent
-// may still run (a retry elsewhere while its computer is offline), or one this conversation may not take, gets a new
-// to-do with its brief as before.
+// takeOver binds a continuation to its original to-do, without stopping Agents or reopening it before Start.
+// An unsafe or unauthorized handoff is refused, never replaced with a second to-do.
 func (s *Service) takeOver(ctx context.Context, conversation string, t *PlanTask) error {
-	if t.Continues == "" || t.ReuseTodo != "" {
+	if t.Continues == "" {
 		return nil
+	}
+	if t.ReuseTodo != "" && t.ReuseTodo != t.Continues {
+		return fmt.Errorf("continues and todo_id must name the same to-do")
 	}
 	if succ, ok := s.openSuccessor(t.Continues); ok {
 		return errContinued(t.Continues, succ)
 	}
-	prev, ok := s.todoNow(t.Continues)
-	if !ok || prev.DoneAt != nil || prev.Cancelled() {
-		return nil
+	if _, err := s.taskTodoForConversation(conversation, t.Continues); err != nil {
+		return err
 	}
-	if _, err := s.reusableTodo(ctx, conversation, prev.ID, false); err == nil {
-		t.ReuseTodo = prev.ID
-	}
+	t.ReuseTodo = t.Continues
 	return nil
 }
 
 // planBriefs gives each task of a plan from conversation (on machine) its brief as it will be kept, for the card to
 // show before "Start": who asked is read off the conversation once (briefOrigin); a task that continues another takes
-// that task's brief, with its criteria and expected time as they stand.
-func (s *Service) planBriefs(ctx context.Context, machine, conversation string, tasks []PlanTask) error {
+// that task's brief, with its criteria and expected time as they stand. The optional contracts from task_plan
+// are in task order.
+func (s *Service) planBriefs(ctx context.Context, machine, conversation string, tasks []PlanTask, contracts ...taskContract) error {
 	var origin *briefRecord
 	for i := range tasks {
 		t := &tasks[i]
+		var contract taskContract
+		if i < len(contracts) {
+			contract = contracts[i]
+		}
 		if t.Continues != "" {
 			prev, ok := s.todoNow(t.Continues)
 			if !ok {
@@ -120,8 +120,26 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 			if err != nil {
 				return fmt.Errorf("task %d: continues: %v", i+1, err)
 			}
+			if t.ScopeRevision != "" && t.ScopeRevision != brief.scopeRevision().Format(time.RFC3339Nano) {
+				return fmt.Errorf("task %d: the scope of %s changed; read its brief and plan the continuation again", i+1, prev.ID)
+			}
+			if contract.changesFrom(brief) != (taskContract{}) {
+				return fmt.Errorf("task %d: a continuation keeps its task contract. Use task_scope to change work_mode or completion_mode first", i+1)
+			}
 			// Its own prompt stays its own; what done means is the brief's, as its scope changes left it.
-			t.DoneWhen, t.ExpectMinutes = brief.Criteria, brief.ExpectNow
+			// A continuation of an automatic brief keeps its current estimate. A manual or legacy brief becomes
+			// automatic only now, through this task_plan dispatch, with the system default unless explicitly overridden.
+			if t.EstimateSource == "" {
+				if brief.EstimateSourceNow != "" {
+					t.ExpectMinutes, t.EstimateSource = automaticEstimate(brief.ExpectNow, brief.EstimateSourceNow)
+					t.EstimateEvidence = brief.EstimateEvidenceNow
+				} else {
+					t.ExpectMinutes, t.EstimateSource = automaticEstimate(0, "")
+				}
+			} else {
+				t.ExpectMinutes, t.EstimateSource = automaticEstimate(t.ExpectMinutes, t.EstimateSource)
+			}
+			t.DoneWhen = brief.Criteria
 			t.Brief = &brief
 			continue
 		}
@@ -130,8 +148,24 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 			origin = &o
 		}
 		rec := *origin
+		if current, ok := s.briefOfTodo(t.ReuseTodo); ok {
+			if contract.changesFrom(current) != (taskContract{}) {
+				return fmt.Errorf("task %d: this to-do already has a task contract. Use task_scope to change work_mode or completion_mode", i+1)
+			}
+			rec.taskContract = taskContract{WorkMode: current.WorkModeNow, CompletionMode: current.CompletionModeNow,
+				WorkModeDeclared: current.workModeDeclared()}
+		} else {
+			rec.taskContract = contract.withDefaultWorkMode(t.Readonly)
+		}
+		if t.EstimateCalibration {
+			s.estimateNewPlanTask(ctx, conversation, t)
+		} else {
+			t.ExpectMinutes, t.EstimateSource = automaticEstimate(t.ExpectMinutes, t.EstimateSource)
+		}
 		rec.ID, rec.CreatedAt = "brief_"+randomHex(8), time.Now().UTC()
-		rec.Goal, rec.DoneWhen, rec.ExpectMinutes, rec.OutOfBounds = firstNonEmpty(t.Goal, t.Title), t.DoneWhen, t.ExpectMinutes, t.OutOfBounds
+		rec.EstimateEvidence = t.EstimateEvidence
+		rec.DistinctFrom = slices.Clone(t.DistinctFrom)
+		rec.Goal, rec.DoneWhen, rec.ExpectMinutes, rec.EstimateSource, rec.OutOfBounds = firstNonEmpty(t.Goal, t.Title), t.DoneWhen, t.ExpectMinutes, t.EstimateSource, t.OutOfBounds
 		if rec.StartedBy != briefByOwner {
 			rec.Reason = t.StartedWhy
 		}
@@ -141,32 +175,79 @@ func (s *Service) planBriefs(ctx context.Context, machine, conversation string, 
 	return nil
 }
 
-// briefStarted keeps the brief of plan p's task t now that it is to-do todo: the one its card showed, dated from the
-// start, or the brief of the task it continues. A plan saved before briefs has none on its tasks: it gets one from
-// what the task says, with nobody named as having asked.
-func (s *Service) briefStarted(ctx context.Context, p *TaskPlan, t *PlanTask, todo Todo) {
-	if _, ok := s.briefOfTodo(todo.ID); ok {
-		return // a to-do the task runs on (reuse_todo) that has its brief already
+// checkContinuationScope rejects a plan that was prepared against a different
+// revision of the original brief. A later estimate updates the dispatch clock only.
+func (s *Service) checkContinuationScope(t *PlanTask) error {
+	if t.Continues == "" {
+		return nil
 	}
-	if t.Continues != "" {
+	current, ok := s.briefOfTodo(t.Continues)
+	if !ok || t.Brief == nil || current.ID != t.Brief.ID || !current.scopeRevision().Equal(t.Brief.scopeRevision()) {
+		return fmt.Errorf("the scope of %s changed or is unavailable; read its brief and plan the continuation again", t.Continues)
+	}
+	if !current.ClockAt.Equal(t.Brief.ClockAt) {
+		t.ExpectMinutes, t.EstimateSource = automaticEstimate(current.ExpectNow, current.EstimateSourceNow)
+		t.EstimateEvidence, t.Brief = current.EstimateEvidenceNow, &current
+	}
+	return nil
+}
+
+// briefStarted keeps the brief of plan p's task t and appends one dispatch round: the card's brief, dated from the
+// start for new work, or the brief it continues. Every task_plan dispatch, including reuse of a manual/legacy to-do,
+// gets an explicit round id and estimate source. A plan saved before briefs gets a reconstructed brief.
+func (s *Service) briefStarted(ctx context.Context, p *TaskPlan, t *PlanTask, todo Todo) {
+	startedAt := time.Now().UTC()
+	t.ExpectMinutes, t.EstimateSource = automaticEstimate(t.ExpectMinutes, t.EstimateSource)
+	briefID := ""
+	if current, ok := s.briefOfTodo(todo.ID); ok {
+		briefID = current.ID // a reused to-do keeps its brief and gains a new dispatch round below
+	} else if t.Continues != "" {
 		prev, ok := s.todoNow(t.Continues)
 		if ok {
 			if brief, err := s.ensureTaskBrief(ctx, prev); err == nil {
 				if err := s.linkTaskBrief(ctx, brief.ID, todo.ID, prev.ID, t.ContinuesWhy); err != nil {
 					s.logf("task %s: brief of %s: %v", todo.ID, prev.ID, err)
+					return
 				}
-				return
+				briefID = brief.ID
 			}
 		}
-		s.logf("task %s: the task it continues (%s) is gone: it gets a brief of its own", todo.ID, t.Continues)
+		if briefID == "" {
+			s.logf("task %s: the task it continues (%s) is gone: it gets a brief of its own", todo.ID, t.Continues)
+		}
 	}
-	rec := briefRecord{StartedBy: briefByUnknown, Conversation: p.Conversation, Goal: firstNonEmpty(t.Goal, t.Title),
-		DoneWhen: t.DoneWhen, ExpectMinutes: t.ExpectMinutes, OutOfBounds: t.OutOfBounds}
-	if t.Brief != nil && !t.Brief.Reconstructed && t.Continues == "" {
-		rec = t.Brief.briefRecord
+	if briefID == "" {
+		rec := briefRecord{StartedBy: briefByUnknown, Conversation: p.Conversation, Goal: firstNonEmpty(t.Goal, t.Title),
+			DoneWhen: t.DoneWhen, ExpectMinutes: t.ExpectMinutes, EstimateSource: t.EstimateSource,
+			EstimateEvidence: t.EstimateEvidence, OutOfBounds: t.OutOfBounds, DistinctFrom: slices.Clone(t.DistinctFrom)}
+		if t.Brief != nil && !t.Brief.Reconstructed && t.Continues == "" {
+			rec = t.Brief.briefRecord
+		}
+		rec.CreatedAt = startedAt // the clock starts when the work is handed out, not when it was proposed
+		v, err := s.putTaskBrief(ctx, rec, todo.ID)
+		if err != nil {
+			s.logf("task %s: brief: %v", todo.ID, err)
+			return
+		}
+		briefID = v.ID
 	}
-	rec.CreatedAt = time.Now().UTC() // the clock starts when the work is handed out, not when it was proposed
-	if _, err := s.putTaskBrief(ctx, rec, todo.ID); err != nil {
-		s.logf("task %s: brief: %v", todo.ID, err)
+	roundID := p.ID + "/" + todo.ID + "@" + startedAt.Format(time.RFC3339Nano)
+	_, changed, err := s.changeBrief(ctx, briefID, func(tb *taskBrief) bool {
+		for _, e := range tb.st.Log {
+			if e.Kind == briefEventDispatch && e.RoundID == roundID {
+				return false
+			}
+		}
+		tb.st.Log = append(tb.st.Log, BriefEvent{At: startedAt, Kind: briefEventDispatch, Todo: todo.ID,
+			Source: "task_plan", PlanID: p.ID, RoundID: roundID, ExpectMinutes: t.ExpectMinutes,
+			EstimateSource: t.EstimateSource, EstimateEvidence: t.EstimateEvidence})
+		return true
+	})
+	if err != nil {
+		s.logf("task %s: dispatch record: %v", todo.ID, err)
+		return
+	}
+	if changed && t.EstimateCalibration {
+		s.estimateDispatch(ctx, p, t, todo.ID, briefID, roundID, startedAt)
 	}
 }

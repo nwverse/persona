@@ -21,6 +21,11 @@ only extensions may name). A hit says what kind of value matched and where it co
 `machines.id`, private-words.txt, CLAUDE.local.md, the home directory), never the value. Install as a hook:
 scripts/hooks/pre-commit (docs/operations/testing.md).
 
+Values match as substrings, ignoring case, with two narrower rules: a short value (under six letters and digits) only as
+a word of its own, and an app identifier (a reverse-DNS value held only under a `bundle_id`, `application_id` or
+`app_group` key) only as a whole identifier, so what is derived from it with dots (group.<id>, <id>.widgets) matches
+and a longer identifier that merely starts the same way (<id>d, <id>-node) does not (#9461).
+
 Not private: loopback addresses (127.0.0.0/8, ::1, also with a port or as a URL's host) even when the config or
 CLAUDE.local.md holds one, hosts under the example domains (RFC 2606, RFC 6761: example and example.com/.net/.org,
 and the .test, .invalid and .localhost TLDs) held there as placeholders, the documentation and IETF protocol ranges
@@ -41,7 +46,7 @@ from pathlib import PurePosixPath
 from urllib.parse import unquote, urlsplit
 from xml.parsers.expat import ExpatError
 
-ROOT = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+ROOT = subprocess.run(["git", "-C", os.environ.get("PERSONA_PRIVACY_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True).stdout.strip()
 HOME = os.path.expanduser("~")
 # Environment variables that name a build config, current name first (config_values reads each one set).
@@ -95,7 +100,8 @@ def strings(o, key=()):
 
 def example_values():
     try:
-        return {v for _, v in strings(json.load(open(os.path.join(ROOT, "config.example.json"))))}
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.example.json")) as source:
+            return {v for _, v in strings(json.load(source))}
     except (OSError, ValueError):
         return set()
 
@@ -173,6 +179,10 @@ def config_values():
     paths.update(os.path.expanduser(os.environ[key]) for key in CONFIG_ENV if os.environ.get(key))
     defaults = example_values()
     for path in paths:
+        # The runtime's hub.json contains credentials. A build config override
+        # or symlink must never make the repository scanner open that file.
+        if any(os.path.normcase(os.path.basename(p)) == "hub.json" for p in (path, os.path.realpath(path))):
+            continue
         try:
             with open(path) as source:
                 cfg = json.load(source)
@@ -219,6 +229,18 @@ WAIVABLE = re.compile(r"[A-Za-z]+")
 # How a hit names a config key. Schema keys are snake_case words; any other key (provisioning_profiles is keyed by
 # bundle ids), or one that is itself a private value, shows as `*`: the report never carries a value.
 KEY_NAME = re.compile(r"[a-z][a-z0-9_]*")
+
+# App identifiers (#9461): a config value held only under one of these keys (app.bundle_id,
+# app.watch_widget_bundle_id, android.application_id, app.app_group, …) and shaped like a reverse-DNS id. Everything
+# the apps derive from one adds dot-separated parts (group.<id>, <id>.watchkitapp.widgets, <TEAM ID>.<id>), so it is
+# matched as a whole identifier: not continued by a letter, digit, `_` or `-`. A substring match also flagged another
+# identifier that only starts the same way, a public default committed on purpose, failing every whole-repo scan.
+APP_ID_KEY = re.compile(r"(?:[a-z0-9_]*_)?(?:bundle_id|application_id|app_group)")
+REVERSE_DNS = re.compile(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+
+
+class AppIdentifier(str):
+    """A private value problems() matches as a whole identifier (APP_ID_KEY); otherwise the plain value."""
 
 
 def word_list():
@@ -320,6 +342,11 @@ def term_sources():
         found.setdefault(v, set()).update(files)
     found = {v: where for v, where in found.items()
              if len(v) >= 4 and v.lower() not in IGNORE and not loopback(v) and not reserved(v)}
+    # held only under app-identifier keys and not also listed plainly: matched as a whole identifier (#9461)
+    app_ids = {v for v, paths in config.items()
+               if v in found and v.lower() not in plain and REVERSE_DNS.fullmatch(v)
+               and all(path and APP_ID_KEY.fullmatch(path[-1]) for path in paths)}
+    found = {(AppIdentifier(v) if v in app_ids else v): where for v, where in found.items()}
     user = os.path.basename(HOME)
     if len(user) >= 3:
         for v in ("/Users/" + user, "/home/" + user):
@@ -350,6 +377,9 @@ def regular_governance_files(head=None):
             if b"\t" in record and record.split(b" ", 1)[0] in (b"100644", b"100755")}
 
 
+PUBLIC_ADMIN_OWNER = re.compile(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)")
+
+
 def public_admin_lines():
     """Exact published references by path; missing/unreadable evidence grants no exception."""
     try:
@@ -357,11 +387,14 @@ def public_admin_lines():
                               capture_output=True, check=True, text=True, timeout=10).stdout.strip()
         regular = regular_governance_files(base)
         published = git_file_data(list(regular), base + ":")
-        owner = re.fullmatch(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
-                             published.get(".github/CODEOWNERS", b"").decode("utf-8").strip())
-        if not owner:
+        # The reference line sits among .github/CODEOWNERS's generated owner block, so only a whole line is
+        # one; an unmatched line (two owners, trailing text) and two different owners both grant nothing.
+        logins = {owner.group(1)
+                  for line in published.get(".github/CODEOWNERS", b"").decode("utf-8").splitlines()
+                  for owner in (PUBLIC_ADMIN_OWNER.fullmatch(line),) if owner}
+        if len(logins) != 1:
             return {}
-        login = owner.group(1)
+        login = logins.pop()
         return {path: {line: login for template in templates
                        for line in (template.format(login=login),)
                        if line in published.get(path, b"").decode("utf-8").splitlines()}
@@ -454,9 +487,13 @@ def problems(text, words, emails=True):
     found = []
     low = text.lower()
     for w in words:
+        if isinstance(w, AppIdentifier):
+            # a whole identifier, with what is derived from it by dot-separated parts (#9461)
+            if re.search(r"(?<![a-z0-9_-])" + re.escape(w.lower()) + r"(?![a-z0-9_-])", low):
+                found.append(w)
         # Short values (a name of 4–5 letters) only as a word of their own: inside identifiers ("inboxItem") they
         # matched by accident and flagged whole files.
-        if len(w) < 6 and w.isalnum():
+        elif len(w) < 6 and w.isalnum():
             if re.search(r"(?<![a-z0-9])" + re.escape(w.lower()) + r"(?![a-z0-9])", low):
                 found.append(w)
         elif w.lower() in low and not only_in_camel_joins(text, w):

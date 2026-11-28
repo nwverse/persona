@@ -1,4 +1,5 @@
 import Foundation
+import PersonaWire
 
 /// A phone capability Claude can call through the hub (`phone_*` MCP tools).
 struct PhoneTool {
@@ -22,10 +23,9 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
 
     /// The sources this device has tools for, in order (Settings › Phone Data).
     static var onThisDevice: [PhoneDataSource] {
-        #if os(macOS)
-        allCases.filter { $0 != .health && !iPhoneOnly.contains($0) } // no health data on a Mac (PhoneToolRegistry.healthTools)
-        #elseif os(iOS)
-        allCases.filter { $0 != .home || HomeAccess.isBuilt } // Home needs the HomeKit capability in the build (#2285)
+        #if os(iOS)
+        // Home needs the HomeKit capability in the build (#2285), alarms AlarmKit (iOS 26).
+        allCases.filter { ($0 != .home || HomeAccess.isBuilt) && ($0 != .alarms || AlarmsAccess.isSupported) }
         #else
         allCases.filter { !iPhoneOnly.contains($0) }
         #endif
@@ -37,7 +37,7 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
         case .calendar: String(localized: "Calendar")
         case .reminders: String(localized: "Reminders")
         case .location: String(localized: "Location")
-        case .health: String(localized: "Health")
+        case .health: String(localized: "Apple Health")
         case .photos: String(localized: "Photos")
         case .device: String(localized: "Device Info")
         case .clipboard: String(localized: "Clipboard")
@@ -90,7 +90,7 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
         case .calendar: String(localized: "View events, and create them once you confirm")
         case .reminders: String(localized: "View and create reminders")
         case .location: String(localized: "Current location and address")
-        case .health: String(localized: "Summaries of steps, heart rate, sleep, and more; saves once you confirm")
+        case .health: String(localized: "Reads steps, heart rate, sleep, and more from Apple Health; saves to it once you confirm")
         case .photos: String(localized: "Recent photos and screenshots")
         case .device: String(localized: "Battery, storage, OS version, network")
         case .clipboard: String(localized: "Read and write the clipboard")
@@ -106,9 +106,30 @@ enum PhoneDataSource: String, CaseIterable, Identifiable, Codable {
 
     private var defaultsKey: String { "phoneSource.\(rawValue)" }
 
-    /// On and allowed: what the switch in Settings shows and what is declared to the hub (2026-11-01: the switch says both,
-    /// no separate Allowed label). One turned on before it was allowed stays off until it is.
-    var isActive: Bool { isEnabled && PhoneAuthorization.status(self).isUsable }
+    /// On and offered: what the switch in Settings shows and what is declared to the hub (2026-11-01: the switch says both,
+    /// no separate Allowed label). One turned on but refused stays off until it is allowed in iOS Settings.
+    var isActive: Bool { isEnabled && offered(PhoneAuthorization.status(self)) }
+
+    /// Sources whose permission iOS asks for the first time a tool uses one, while Persona is in front (#7659): their tools
+    /// are offered before iOS has asked, so "remind me…" works without a visit to Settings. Health asks only from Settings
+    /// (its sheet lists every type, and iOS never says what was allowed); the iPhone integrations stay off until turned on
+    /// (#2276–#2286). The Mac app is frozen and keeps asking only from Settings.
+    var asksWhenUsed: Bool {
+        #if os(iOS)
+        switch self {
+        case .contacts, .calendar, .reminders, .location, .photos, .notifications: true
+        default: false
+        }
+        #else
+        false
+        #endif
+    }
+
+    /// Whether a source that is on is offered to the hub with this permission state: allowed, or not asked yet when the
+    /// first use asks.
+    func offered(_ status: PhoneAuthStatus) -> Bool {
+        status.isUsable || (status == .notDetermined && asksWhenUsed)
+    }
 
     var isEnabled: Bool {
         // The iPhone integrations act outside Persona: off until the user turns them on (#2276–#2286).

@@ -110,9 +110,9 @@
     <string name="chat_answered_entered">（已输入）</string>
     <string name="chat_answered_separator">，</string>
     <string name="chat_answered_labeled">%1$s：%2$s</string>
-    <string name="chat_answered_mode_accept_edits">自动接受编辑</string>
-    <string name="chat_answered_mode_bypass">全部放行</string>
-    <string name="chat_answered_mode_default">每步确认</string>
+    <string name="chat_answered_mode_accept_edits">允许编辑</string>
+    <string name="chat_answered_mode_bypass">完全访问</string>
+    <string name="chat_answered_mode_default">默认权限</string>
     <string name="chat_context_ai_edit">AI 修改</string>
     <string name="chat_context_linked">关联上下文</string>
     <string name="chat_context_web_selection">网页选文</string>
@@ -122,6 +122,7 @@
     <string name="chat_source_no_phone_approval">这个会话不允许在手机上审批，请到电脑上处理。</string>
     <string name="chat_source_read_only_reason">仅查看：%1$s</string>
     <string name="chat_starting_failed">没有启动起来：%1$s</string>
+    <string name="chat_start_failed_title">启动失败</string>
     <string name="chat_starting">正在启动 %1$s，消息会在它就绪后发出</string>
     <string name="chat_tabs_tab_description">%1$s，%2$s</string>
     <string name="chat_tabs_launcher_chip">%1$s 发起</string>
@@ -167,6 +168,7 @@
     <string name="chat_screen_added_context">已作为上下文，随下一条消息发送</string>
     <string name="chat_search_category_event">系统事件</string>
     <string name="chat_search_category_text">正文</string>
+    <string name="chat_search_category_quoted">引用</string>
     <string name="chat_search_category_thinking">思考</string>
     <string name="chat_search_category_tool_input">工具输入</string>
     <string name="chat_search_category_tool_output">工具输出</string>
@@ -242,6 +244,11 @@
     <plurals name="chat_content_show_all_lines">
         <item quantity="other">展开全部（%1$d 行）</item>
     </plurals>
+    <plurals name="chat_diff_unchanged_lines">
+        <item quantity="other">… %1$d 行没变</item>
+    </plurals>
+    <string name="chat_diff_line_added">新增</string>
+    <string name="chat_diff_line_removed">删除</string>
     <plurals name="chat_todos_progress">
         <item quantity="other">%1$d/%2$d 项待办已完成</item>
     </plurals>
@@ -267,11 +274,11 @@
     <string name="chat_tasks_collapsed">已收起</string>
     <string name="chat_tasks_open_task">打开任务</string>
     <string name="chat_tasks_answered_default">回答了</string>
-    <string name="chat_tasks_permission_accept_edits">可以改文件</string>
-    <string name="chat_tasks_permission_plan">先出方案</string>
-    <string name="chat_tasks_permission_auto">自动判断</string>
-    <string name="chat_tasks_permission_bypass">全部放行</string>
-    <string name="chat_tasks_permission_default">每步都问</string>
+    <string name="chat_tasks_permission_accept_edits">允许编辑</string>
+    <string name="chat_tasks_permission_plan">计划模式</string>
+    <string name="chat_tasks_permission_auto">自动审批</string>
+    <string name="chat_tasks_permission_bypass">完全访问</string>
+    <string name="chat_tasks_permission_default">默认权限</string>
     <plurals name="chat_tasks_plan_started">
         <item quantity="other">✓ 开了 %1$d 个任务</item>
     </plurals>
@@ -285,8 +292,10 @@
     </plurals>
     <string name="chat_tasks_plan_single">这样开</string>
     <string name="chat_tasks_default_model">默认模型</string>
+    <string name="chat_tasks_preset">预设 %1$s</string>
+    <string name="chat_tasks_launcher_preset">%1$s · %2$s</string>
     <string name="chat_tasks_read_only">已要求只读</string>
-    <string name="chat_tasks_plan_remember">这类以后直接开</string>
+    <string name="chat_tasks_plan_remember">这些目录及子目录以后直接开</string>
     <plurals name="chat_tasks_plan_start_count">
         <item quantity="other">开始 %1$d 个任务</item>
     </plurals>
@@ -328,13 +337,16 @@
     <string name="chat_tasks_interrupt_cause_auth">登录或密钥失效</string>
     <string name="chat_tasks_interrupt_cause_model_route">模型名不对</string>
     <string name="chat_tasks_interrupt_cause_no_output">一轮没有输出</string>
+    <string name="chat_tasks_interrupt_cause_stopped">随对话一起停下</string>
     <string name="chat_tasks_interrupt_batch">%1$s，%2$d 个任务被打断</string>
     <string name="chat_tasks_interrupt_batch_on">%2$s %1$s，%3$d 个任务被打断</string>
     <string name="chat_tasks_interrupt_counts">→ 已处理 %1$d / 待处理 %2$d</string>
     <string name="chat_tasks_interrupt_all_handled">→ 都处理了</string>
     <string name="chat_tasks_quick_reminder">已加提醒</string>
     <string name="chat_tasks_quick_calendar">已加到日历</string>
-    <string name="chat_tasks_quick_on_iphone">在 iPhone 上</string>
+    <string name="chat_tasks_quick_undo">撤销</string>
+    <string name="chat_tasks_quick_undone">已撤销</string>
+    <string name="chat_tasks_quick_undo_failed">没撤销成功</string>
     <string name="chat_today_done_one">做完了：%1$s</string>
     <plurals name="chat_today_done_many">
         <item quantity="other">做完了 %1$d 个任务</item>
@@ -480,6 +492,7 @@
     <string name="chat_review_pending">待验收</string>
     <string name="chat_review_rework">返工第 %1$d 轮</string>
     <string name="chat_review_needs_user">等你决定</string>
+    <string name="chat_review_user_check">待你验收</string>
     <string name="chat_review_accepted">已验收</string>
     <string name="chat_review_cancelled">已取消</string>
     <string name="chat_review_line">验收</string>

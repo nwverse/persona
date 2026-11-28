@@ -1,6 +1,7 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 /// What a message renderer needs from the chat around it.
 struct LarkRenderContext {
@@ -25,7 +26,7 @@ extension MarkdownUI.Theme {
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) } // the body level, as Lark messages are (LarkTextBase)
             .link { ForegroundColor(LarkColor.blue) }
             .paragraph { config in
-                config.label.fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(0.15)).markdownMargin(top: 0, bottom: 6)
+                config.label.lookUpWords(config.content).fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(0.15)).markdownMargin(top: 0, bottom: 6)
             }
     }
 }
@@ -331,7 +332,7 @@ struct LarkBlockPartView: View {
             if part.metaBool("system") {
                 LarkSystemText(part: part)
             } else {
-                Markdown(Links.markdown(part.text ?? "")).markdownTheme(.larkMessage).readingContent().textSelection(.enabled)
+                Markdown(Links.markdown(part.text ?? "")).markdownTheme(.larkMessage).asksBeforePictures().readingContent().textSelection(.enabled)
             }
         default:
             Text(part.text ?? "[\(part.kind)]").foregroundStyle(.secondary)

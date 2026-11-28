@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The navigation decisions behind Inbox Back: a pushed route carries the item's manager, every nil-push path keeps its
 /// previous destination, automatic main-chat selection preserves pushed pages, and a real hub-group change clears them.
@@ -140,7 +141,7 @@ struct InboxBackNavigationTests {
                 handOff: { _, _, _ in agent },
                 record: { _, _, _, _, _ in },
                 showMain: { _, _, _ in },
-                plainToMain: { _ in agent },
+                plainToMain: { _, _ in agent },
                 startNew: { _ in agent },
                 sendToAgent: { _, _, _ in .sent },
                 open: { _, _ in fallback += 1 },

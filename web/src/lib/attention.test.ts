@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answeredTags, badgeText, BATCH_MAX_MS, BATCH_QUIET_MS, batchDue, finishedBatch, detectNewCards, FORGET_CARD_MS, detectTransitions, MIN_GAP_MS, pickEvent, rateLimiter, SETTLE_MS, suppressed, tabTitle, trackTurns } from "./attention";
+import { answeredTags, badgeText, BATCH_MAX_MS, BATCH_QUIET_MS, batchDue, cardArrivalKey, finishedBatch, detectNewCards, FORGET_CARD_MS, detectTransitions, heldOnlyNeeds, isHeldLevel, MIN_GAP_MS, pickEvent, rateLimiter, SETTLE_MS, suppressed, tabTitle, trackTurns } from "./attention";
 import { stateCounts } from "./sessions";
 import { agentKey } from "./pins";
 import type { AgentMutes } from "./agent-groups";
@@ -158,12 +158,12 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   const sessions = [session("a", "needs_you"), session("b", "needs_you")];
   const T = 1_000_000;
   const none = new Set<string>();
-  const seen = (ids: string[]) => new Map(ids.map((id) => [id, T - 1000] as const));
+  const seen = (ids: string[]) => new Map(ids.map((id) => [cardArrivalKey(card(id, "a")), T - 1000] as const));
 
   it("第一次拿到的卡片只作基线，不算新卡", () => {
     const { ids, events } = detectNewCards(undefined, [card("1", "a")], waiting, waiting, sessions, none, T);
     expect(events).toEqual([]);
-    expect([...ids.keys()]).toEqual(["1"]);
+    expect([...ids.keys()]).toEqual([cardArrivalKey(card("1", "a"))]);
   });
   it("会话一直在需要你，又来一张没见过的卡：算一次", () => {
     const { events } = detectNewCards(seen(["1"]), [card("1", "a"), card("2", "a")], waiting, waiting, sessions, none, T);
@@ -198,6 +198,13 @@ describe("已在需要你时又来一张卡（#4058）", () => {
   it("需要你先到、卡后到：这张卡算同一次等你（follows），不另响一声", () => {
     const { events } = detectNewCards(seen([]), [card("1", "a")], waiting, waiting, sessions, new Set(["m/a"]), T);
     expect(events).toEqual([{ kind: "needs", key: "m/a", card: card("1", "a"), follows: true }]);
+  });
+  it("同 ID 的新 occurrence 是新卡，不被十分钟的旧卡记忆压住", () => {
+    const first = card("1", "a");
+    const { ids } = detectNewCards(undefined, [first], waiting, waiting, sessions, none, T);
+    const replacement = card("1", "a", "2026-01-01T10:00:00.000000001Z");
+    expect(detectNewCards(ids, [replacement], waiting, waiting, sessions, none, T + 1000).events)
+      .toEqual([{ kind: "needs", key: "m/a", card: replacement }]);
   });
   it("卡短暂消失又回来（重连、重读屏幕）不算新卡；很久以前见过的才忘掉", () => {
     const { ids } = detectNewCards(seen(["1"]), [], waiting, waiting, sessions, none, T);
@@ -236,7 +243,7 @@ describe("助手还在看的问题先不响（#544）", () => {
     const waiting = prevOf(["a", "needs_you"]);
     const sessions = [session("a", "needs_you")];
     const T = 1_000_000;
-    const first = detectNewCards(new Map([["p", T - 1000]]), [perm("p", "a"), ask("1", "a", { delegating: true })], waiting, waiting, sessions, new Set(), T);
+    const first = detectNewCards(new Map([[cardArrivalKey(perm("p", "a")), T - 1000]]), [perm("p", "a"), ask("1", "a", { delegating: true })], waiting, waiting, sessions, new Set(), T);
     expect(first.events).toEqual([]);
     const back = detectNewCards(first.ids, [perm("p", "a"), ask("1", "a")], waiting, waiting, sessions, new Set(), T + 1000);
     expect(back.events).toEqual([{ kind: "needs", key: "m/a", card: ask("1", "a") }]);
@@ -264,5 +271,56 @@ describe("一批做完的怎么显示（#4945）", () => {
     expect(batchDue(0, 0)).toBe(BATCH_QUIET_MS);
     expect(batchDue(0, 1000)).toBe(1000 + BATCH_QUIET_MS);
     expect(batchDue(0, BATCH_MAX_MS)).toBe(BATCH_MAX_MS);
+  });
+});
+
+it("does not notify about a directory-hidden question or completion", () => {
+  const r = detectTransitions(prevOf(["a", "working"], ["b", "working"]), [session("a", "needs_you", { hidden_by_directory: true }), session("b", "unread", { hidden_by_directory: true })], noMutes);
+  expect(r.events).toEqual([]);
+  expect(r.next.size).toBe(0);
+});
+
+describe("push grading levels (#11771)", () => {
+  const p0: Interaction = { id: "p0", machine_id: "m", session_id: "a", kind: "question" };
+  const p1: Interaction = { id: "p1", machine_id: "m", session_id: "a", kind: "permission", push_level: "P1" };
+  const p2: Interaction = { id: "p2", machine_id: "m", session_id: "a", kind: "question", push_level: "P2" };
+
+  it("classifies P1/P2-only needs_you sessions as held and treats P0/mixed/cardless as immediate", () => {
+    expect(isHeldLevel("P1")).toBe(true);
+    expect(isHeldLevel("P2")).toBe(true);
+    expect(isHeldLevel("P0")).toBe(false);
+    expect(isHeldLevel(undefined)).toBe(false);
+
+    const a = session("a", "needs_you");
+    expect(heldOnlyNeeds(a, [])).toBe(false);
+    expect(heldOnlyNeeds(a, [p1])).toBe(true);
+    expect(heldOnlyNeeds(a, [p1, p2])).toBe(true);
+    expect(heldOnlyNeeds(a, [p1, p0])).toBe(false);
+    expect(heldOnlyNeeds(a, [p1, { ...p0, delegating: true }])).toBe(true);
+  });
+
+  it("suppresses P1 needs and finished (P2) transitions when grading is on, preserving off-mode behavior", () => {
+    const base = prevOf(["a", "working"], ["b", "working"], ["c", "working"]);
+    const next = [session("a", "needs_you"), session("b", "needs_you"), session("c", "unread")];
+    const cards: Interaction[] = [p1, { id: "b0", machine_id: "m", session_id: "b", kind: "question" }];
+
+    expect(detectTransitions(base, next, noMutes, cards, false).events).toEqual([
+      { kind: "needs", key: "m/a" },
+      { kind: "needs", key: "m/b" },
+      { kind: "finished", key: "m/c" },
+    ]);
+    expect(detectTransitions(base, next, noMutes, cards, true).events).toEqual([
+      { kind: "needs", key: "m/b" },
+    ]);
+  });
+
+  it("ignores new P1/P2 cards when grading is on while still alerting on new P0 cards", () => {
+    const waiting = prevOf(["a", "needs_you"]);
+    const known = new Map([["old", 100]]);
+    const rOn = detectNewCards(known, [{ id: "old", machine_id: "m", session_id: "a", kind: "question", push_level: "P1" }, p1, p2, p0], waiting, waiting, [session("a", "needs_you")], new Set(), 200, true);
+    expect(rOn.events).toEqual([{ kind: "needs", key: "m/a", card: p0 }]);
+
+    const rOff = detectNewCards(known, [{ id: "old", machine_id: "m", session_id: "a", kind: "question" }, p1], waiting, waiting, [session("a", "needs_you")], new Set(), 200, false);
+    expect(rOff.events).toEqual([{ kind: "needs", key: "m/a", card: p1 }]);
   });
 });

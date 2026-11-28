@@ -10,5 +10,9 @@
   "draw_failed": "Extension didn't load",
   "retry": "Retry",
   "confirm_title": "Confirm",
-  "ok": "OK"
+  "ok": "OK",
+  "updating": "Updating…",
+  "setup_title": "Set up {name}",
+  "missing_settings": "Required settings",
+  "open_settings": "Open extension settings"
 }

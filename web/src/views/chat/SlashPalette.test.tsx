@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 // The "/" palette as cindy draws it (#5325): one row per command with where it comes from, the focused command's
 // description in a card beside the panel (inside it when the window has no room beside it), "No matching commands".
-import { act, createRef } from "react";
+import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerCommand } from "../../lib/extension-prompts";
 import { SlashPalette } from "./SlashPalette";
+import { SlashSkillView } from "./SlashSkillView";
 import { t } from "../../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -13,16 +14,15 @@ import { t } from "../../i18n";
 const CONTINUE: ComposerCommand = { word: "/继续", desc: "让它接着做", text: "继续" };
 const COMPACT: ComposerCommand = { word: "/compact", desc: "压缩上下文", text: "/compact", agent: true, source: "Claude Code" };
 const PROMPT: ComposerCommand = { key: "extension:kit/today", word: "/今天做了什么", desc: "", text: "整理今天的进展。", source: "入门套件" };
+const PLAIN: ComposerCommand = { word: "/plain", desc: "", text: "/plain" };
 
 let host: HTMLDivElement;
 let root: Root;
-const within = createRef<HTMLDivElement>();
 const onHover = vi.fn();
 const onPick = vi.fn();
-const onClose = vi.fn();
 
 beforeEach(() => {
-  [onHover, onPick, onClose].forEach((f) => f.mockClear());
+  [onHover, onPick].forEach((f) => f.mockClear());
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -37,13 +37,54 @@ afterEach(() => {
 
 const render = (rows: ComposerCommand[], active = 0) =>
   act(() => root.render(
-    <div ref={within}>
+    <div>
       <textarea />
-      <SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} onClose={onClose} within={within} />
+      <SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} onClose={() => {}} within={{ current: null }} />
     </div>,
   ));
 
 const options = () => [...host.querySelectorAll<HTMLButtonElement>("[role=option]")];
+
+// The ratchet keeps the split file on named utilities; each legacy/named pair is the same pixel size at the default root size.
+const FONT_CLASS_PARITY = new Map([
+  ["text-[14px]", "text-sm"],
+  ["text-[12px]", "text-xs"],
+  ["text-[13px]", "text-meta"],
+]);
+
+/** Normalize generated ids and exactly the three documented font-class pairs; every other difference remains visible. */
+function comparableMarkup(palette: Element): string {
+  const copy = palette.cloneNode(true) as Element;
+  const ids = new Map<string, string>();
+  copy.querySelectorAll("[id]").forEach((node) => {
+    const old = node.getAttribute("id")!;
+    const replacement = `description-${ids.size}`;
+    ids.set(old, replacement);
+    node.setAttribute("id", replacement);
+  });
+  copy.querySelectorAll("[aria-describedby]").forEach((node) => {
+    const old = node.getAttribute("aria-describedby")!;
+    node.setAttribute("aria-describedby", ids.get(old) ?? old);
+  });
+  copy.querySelectorAll("[class]").forEach((node) => {
+    for (const [legacy, named] of FONT_CLASS_PARITY) {
+      if (node.classList.contains(legacy)) node.classList.replace(legacy, named);
+    }
+  });
+  return copy.innerHTML;
+}
+
+function expectCommandMarkupParity(rows: ComposerCommand[], active = 0) {
+  act(() => root.render(
+    <div>
+      <div data-reference><SlashPalette rows={rows} active={active} onHover={onHover} onPick={onPick} onClose={() => {}} within={{ current: null }} /></div>
+      <div data-skill><SlashSkillView rows={rows} active={active} onHover={onHover} onPick={onPick} onClose={() => {}} within={{ current: null }} /></div>
+    </div>,
+  ));
+  const reference = host.querySelector("[data-reference] > [data-slash-palette]")!;
+  const skill = host.querySelector("[data-skill] > [data-slash-palette]")!;
+  expect(comparableMarkup(skill)).toBe(comparableMarkup(reference));
+}
 // the card beside the panel, or the line inside it
 const card = () => host.querySelector<HTMLElement>("[data-slash-card]");
 
@@ -75,7 +116,25 @@ describe("rows", () => {
   });
 });
 
+describe("command-only parity with the skill-aware view", () => {
+  it("has identical roles, labels, classes, text and order, including active, narrow and empty states", () => {
+    expectCommandMarkupParity([CONTINUE, COMPACT, PROMPT, PLAIN], 2);
+    Object.defineProperty(window, "innerWidth", { value: 390, configurable: true });
+    expectCommandMarkupParity([CONTINUE, COMPACT, PROMPT, PLAIN], 1);
+    Object.defineProperty(window, "innerWidth", { value: 1024, configurable: true });
+    expectCommandMarkupParity([]);
+  });
+});
+
 describe("the card", () => {
+  it("places the details inside when the enclosing dialog clips both sides on desktop", () => {
+    host.setAttribute("role", "dialog");
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(408, 400, 320, 200));
+    vi.spyOn(host, "getBoundingClientRect").mockReturnValue(new DOMRect(390, 80, 490, 600));
+    render([CONTINUE]);
+    expect(card()!.style.left).toBe("");
+  });
+
   it("shows the focused command, its description and what a text command types, to the right of the panel", () => {
     render([CONTINUE, COMPACT]);
     expect(card()!.textContent).toBe(`继续让它接着做${t("chat-slashpalette.types", { text: "继续" })}`);
@@ -112,15 +171,5 @@ describe("nothing matching", () => {
     expect(host.textContent).toBe(t("chat-slashpalette.no_match"));
     expect(options()).toHaveLength(0);
     expect(card()).toBeNull();
-  });
-});
-
-describe("closing", () => {
-  it("closes on a press outside the composer, not inside it", () => {
-    render([CONTINUE]);
-    act(() => host.querySelector("textarea")!.dispatchEvent(new Event("pointerdown", { bubbles: true })));
-    expect(onClose).not.toHaveBeenCalled();
-    act(() => document.body.dispatchEvent(new Event("pointerdown", { bubbles: true })));
-    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

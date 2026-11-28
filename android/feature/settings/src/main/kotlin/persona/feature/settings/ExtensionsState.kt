@@ -44,22 +44,69 @@ import kotlinx.serialization.json.contentOrNull
 /** What an extension is called and says in the settings. */
 internal object ExtensionText {
     /** Running or idle until something needs it (stopped) is all one to the user: it is on. */
-    fun state(res: Resources, p: HubExtension): String = when (p.status) {
-        "running", "stopped" -> res.getString(R.string.settings_ext_state_on)
-        "starting" -> res.getString(R.string.settings_ext_state_starting)
-        "needs_setup" -> res.getString(R.string.settings_ext_state_needs_setup)
-        "disabled" -> res.getString(R.string.settings_ext_state_off)
-        "incompatible" -> res.getString(R.string.settings_ext_state_incompatible)
-        "error" -> res.getString(R.string.settings_ext_state_error)
-        else -> res.getString(R.string.settings_ext_state_unknown)
+    fun state(res: Resources, p: HubExtension): String =
+        nodeStatusNote(res, p) ?: when (p.status) {
+            "running", "stopped" -> res.getString(R.string.settings_ext_state_on)
+            "starting" -> res.getString(R.string.settings_ext_state_starting)
+            "needs_setup" -> res.getString(R.string.settings_ext_state_needs_setup)
+            "disabled" -> res.getString(R.string.settings_ext_state_off)
+            "incompatible" -> res.getString(R.string.settings_ext_state_incompatible)
+            "error" -> res.getString(R.string.settings_ext_state_error)
+            else -> res.getString(R.string.settings_ext_state_unknown)
+        }
+
+    /**
+     * One line for an extension whose work happens on computers, from the hub's aggregate: "Running on 2 machines",
+     * with the abnormal or offline count when there is one. Null without a node summary, so the hub-process wording stands.
+     * The hub ships node_status only while the aggregate drives status, so each headline count is non-zero.
+     */
+    fun nodeStatusNote(res: Resources, p: HubExtension): String? {
+        val s = p.nodeStatus ?: return null
+        if (s.total == 0) return null
+        fun q(plural: Int, count: Int) = res.getQuantityString(plural, count, count)
+        fun offline() = if (s.offline > 0) " · " + q(R.plurals.settings_ext_node_offline, s.offline) else ""
+        return when (p.status) {
+            "running" -> buildList {
+                add(q(R.plurals.settings_ext_node_running, s.running))
+                if (s.abnormal > 0) add(q(R.plurals.settings_ext_node_abnormal, s.abnormal))
+                if (s.offline > 0) add(q(R.plurals.settings_ext_node_offline, s.offline))
+            }.joinToString(" · ")
+            "error" -> buildList {
+                add(q(R.plurals.settings_ext_node_abnormal, s.abnormal))
+                if (s.offline > 0) add(q(R.plurals.settings_ext_node_offline, s.offline))
+            }.joinToString(" · ")
+            "starting" -> q(R.plurals.settings_ext_node_starting, s.starting) + offline()
+            "stopped" ->
+                // All offline: no machine is merely stopped, so the offline count is the headline rather than "Stopped on 0".
+                if (s.stopped == 0 && s.offline > 0) {
+                    q(R.plurals.settings_ext_node_offline, s.offline)
+                } else {
+                    q(R.plurals.settings_ext_node_stopped, s.stopped) + offline()
+                }
+            else -> null
+        }
     }
 
     /** Whether an enabled extension's program runs right now (the detail page's small print); null for any other state. */
-    fun runNote(res: Resources, p: HubExtension): String? = when {
-        p.kind == "extension_pack" -> res.getString(R.string.settings_ext_run_pack)
+    fun runNote(res: Resources, p: HubExtension, packMembersFollow: Boolean = false): String? = when {
+        p.nodeStatus != null -> null // the node status line already says where it runs
+        p.kind == "extension_pack" -> res.getString(if (packMembersFollow) R.string.settings_ext_run_pack_members_follow else R.string.settings_ext_run_pack)
         p.status == "running" -> res.getString(R.string.settings_ext_run_running)
         p.status == "stopped" -> res.getString(R.string.settings_ext_run_idle)
         else -> null
+    }
+
+    /** The Enabled switch's explanation, matching the web's pack decisions and the older-hub fallback. */
+    fun enabledFooter(res: Resources, detail: ExtensionDetail, memberNames: Map<String, String> = emptyMap()): String {
+        if (detail.extensionPack.isEmpty()) return res.getString(R.string.settings_extension_enabled_note)
+        if (!detail.packMembersFollow) return res.getString(R.string.settings_ext_enable_footer_pack_alone)
+        if (detail.extension.enabled == false && detail.packOff.isNotEmpty()) {
+            val names = detail.packOff.joinToString(res.getString(R.string.settings_ext_list_separator)) { id ->
+                memberNames[id]?.takeIf { it.isNotBlank() } ?: id
+            }
+            return res.getString(R.string.settings_ext_enable_footer_pack_off, names)
+        }
+        return res.getString(R.string.settings_ext_enable_footer_pack)
     }
 
     /** Broken: drawn in the danger colour, not as a status dot. */
@@ -159,10 +206,46 @@ internal object ExtensionText {
         return if (text.isNullOrEmpty()) res.getString(R.string.settings_ext_not_set) else res.getString(R.string.settings_ext_default_value, text)
     }
 
-    fun secretState(res: Resources, secret: persona.core.contracts.api.ExtensionSecret): String = when {
-        secret.set -> res.getString(R.string.settings_ext_secret_set)
-        secret.required == true -> res.getString(R.string.settings_ext_secret_required)
-        else -> res.getString(R.string.settings_ext_not_set)
+    fun secretState(res: Resources, secret: persona.core.contracts.api.ExtensionSecret): String {
+        secret.reference?.let { reference ->
+            if (reference.providerLabel.isNotBlank()) return res.getString(
+                R.string.settings_ext_secret_from_provider, reference.providerLabel, reference.reference)
+            return reference.title?.takeIf { it.isNotBlank() } ?: reference.reference
+        }
+        return when {
+            secret.set -> secret.hint?.takeIf { it.isNotBlank() }
+                ?.let { res.getString(R.string.settings_ext_secret_set_hint, it) }
+                ?: res.getString(R.string.settings_ext_secret_set)
+            secret.required == true -> res.getString(R.string.settings_ext_secret_required)
+            else -> res.getString(R.string.settings_ext_not_set)
+        }
+    }
+
+    /** An entry card's title: its `name`, else its first nonempty text field, else a localized numbered label. */
+    fun entryTitle(res: Resources, list: ExtensionField, entry: JsonObject, index: Int): String {
+        val fields = list.items?.fields.orEmpty()
+        for (preferred in listOf(true, false)) {
+            for (field in fields) {
+                if (preferred && field.name != "name") continue
+                val value = (entry[field.name] as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
+                if (!value.isNullOrEmpty()) return value
+            }
+        }
+        return res.getString(R.string.settings_ext_entry_untitled, index + 1)
+    }
+
+    /** The secret sheet's title: both entry and secret for a dynamic entry secret, or the secret's own label. */
+    fun secretSheetTitle(secret: persona.core.contracts.api.ExtensionSecret, fallbackEntryTitle: String? = null): String {
+        if (!secret.isEntrySecret) return secret.label
+        val entry = secret.entryTitle?.takeIf { it.isNotBlank() } ?: fallbackEntryTitle?.takeIf { it.isNotBlank() }
+        return if (entry != null) "$entry · ${secret.label}" else secret.label
+    }
+
+    /** The provider-described item beneath a saved reference, or its raw reference when the provider is gone. */
+    fun secretReferenceDetail(secret: persona.core.contracts.api.ExtensionSecret): String? {
+        val reference = secret.reference ?: return null
+        return if (reference.providerLabel.isNotBlank()) reference.title?.takeIf { it.isNotBlank() }
+        else reference.reference.takeIf { reference.title?.isNotBlank() == true && it != reference.title }
     }
 
     /**
@@ -329,7 +412,12 @@ internal object ExtensionPickers {
     /** A whole number one step down or up from [current] (else the default, else the minimum, else 0), within the field's bounds. */
     fun stepped(field: ExtensionField, current: Long?, up: Boolean): Long {
         val from = current ?: (field.fallback as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.toLong() ?: field.minimum?.let { kotlin.math.ceil(it).toLong() } ?: 0L
-        var next = if (up) from + 1 else from - 1
+        val step = field.step ?: 1L
+        var next = if (up) {
+            if (from > Long.MAX_VALUE - step) Long.MAX_VALUE else from + step
+        } else {
+            if (from < Long.MIN_VALUE + step) Long.MIN_VALUE else from - step
+        }
         field.minimum?.let { next = maxOf(next, kotlin.math.ceil(it).toLong()) }
         field.maximum?.let { next = minOf(next, kotlin.math.floor(it).toLong()) }
         return next
@@ -342,37 +430,105 @@ internal object ExtensionPickers {
     }
 }
 
-/** The configuration being edited, by dotted path ("proxy.host"); an empty group goes with its last value. */
+/** The configuration being edited, by path ("proxy.host", "accounts[0].address"); an empty group goes with its last value. */
 internal object ExtensionDraft {
+    private val ArrayIndex = Regex("0|[1-9]\\d*")
+
+    /** Dotted path with entry indexes in the hub's validation-error form: `accounts[0].address`. */
+    fun fieldPath(path: List<String>): String = buildString {
+        for (part in path) {
+            when {
+                ArrayIndex.matches(part) -> append('[').append(part).append(']')
+                isEmpty() -> append(part)
+                else -> append('.').append(part)
+            }
+        }
+    }
+
+    fun entryItems(draft: JsonObject, path: List<String>): List<JsonObject> =
+        (value(draft, path) as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+
+    fun entryId(entry: JsonObject): String? =
+        (entry["_id"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+
     fun value(draft: JsonObject, path: List<String>): JsonElement? {
         var current: JsonElement = draft
-        for (key in path) current = (current as? JsonObject)?.get(key) ?: return null
+        for (key in path) {
+            current = when (current) {
+                is JsonArray -> {
+                    val index = key.takeIf { ArrayIndex.matches(it) }?.toIntOrNull() ?: return null
+                    current.getOrNull(index) ?: return null
+                }
+                is JsonObject -> current[key] ?: return null
+                else -> return null
+            }
+        }
         return current.takeIf { it != JsonNull }
     }
 
-    fun set(draft: JsonObject, path: List<String>, value: JsonElement?): JsonObject {
-        val key = path.firstOrNull() ?: return draft
-        val out = draft.toMutableMap()
-        val next = if (path.size == 1) value else set(draft[key] as? JsonObject ?: JsonObject(emptyMap()), path.drop(1), value).takeIf { it.isNotEmpty() }
-        if (next == null) out.remove(key) else out[key] = next
+    fun set(draft: JsonObject, path: List<String>, value: JsonElement?): JsonObject =
+        (setNested(draft, path, value) as? JsonObject) ?: JsonObject(emptyMap())
+
+    private fun setNested(current: JsonElement?, path: List<String>, value: JsonElement?): JsonElement? {
+        val key = path.firstOrNull() ?: return value
+        val rest = path.drop(1)
+        if (current is JsonArray) {
+            val index = key.takeIf { ArrayIndex.matches(it) }?.toIntOrNull() ?: return current
+            if (index !in current.indices) return current
+            val out = current.toMutableList()
+            val next = if (rest.isNotEmpty()) setNested(out[index], rest, value) else value
+            // Clearing all fields on an entry returns JsonObject(emptyMap()), never null, so rows stay until explicitly removed.
+            if (next == null) out.removeAt(index) else out[index] = next
+            return JsonArray(out)
+        }
+        val out = (current as? JsonObject)?.toMutableMap() ?: mutableMapOf()
+        if (rest.isEmpty()) {
+            if (value == null) out.remove(key) else out[key] = value
+            return JsonObject(out)
+        }
+        val existing = out[key]
+        val next = setNested(existing, rest, value)
+        if (existing is JsonArray) {
+            if (next != null) out[key] = next
+            return JsonObject(out)
+        }
+        // Only nested object groups (e.g. "proxy") collapse when emptied; entry-list arrays are never pruned here.
+        if (next == null || (next is JsonObject && next.isEmpty())) out.remove(key) else out[key] = next
         return JsonObject(out)
     }
 
-    /** Without empty strings and lists the user cleared: "not set" (the schema's default applies). */
-    fun compact(obj: JsonObject): JsonObject = JsonObject(obj.mapNotNull { (key, value) ->
+    /**
+     * Without empty strings and lists the user cleared: "not set" (the schema's default applies). A required entry list
+     * named in [requiredEntryLists] is the exception: its explicit `[]` is a present, valid value the hub must receive.
+     */
+    fun compact(obj: JsonObject, requiredEntryLists: Set<String> = emptySet()): JsonObject = JsonObject(obj.mapNotNull { (key, value) ->
         when {
             value == JsonNull -> null
             value is JsonPrimitive && value.isString && value.content.isEmpty() -> null
-            value is JsonArray && value.isEmpty() -> null
+            value is JsonArray && value.isEmpty() && key !in requiredEntryLists -> null
             value is JsonObject -> compact(value).takeIf { it.isNotEmpty() }?.let { key to it }
             else -> key to value
         }
     }.toMap())
 
-    /** The dotted path of every field the form draws (an object's fields under its name). */
-    fun paths(form: List<persona.core.contracts.api.ExtensionField>): Set<String> = form.flatMap { field ->
-        if (field.type == "object") field.fields.orEmpty().map { "${field.name}.${it.name}" } else listOf(field.name)
-    }.toSet()
+    /** The validation-error path of every field the form draws (groups, plain fields, and entry-list rows). */
+    fun paths(form: List<persona.core.contracts.api.ExtensionField>, draft: JsonObject = JsonObject(emptyMap())): Set<String> = buildSet {
+        for (field in form) {
+            when {
+                field.type == "object" -> field.fields.orEmpty().forEach { add("${field.name}.${it.name}") }
+                field.isEntryList -> {
+                    add(field.name)
+                    val entries = entryItems(draft, listOf(field.name))
+                    val subFields = field.items?.fields.orEmpty()
+                    entries.indices.forEach { index ->
+                        add("${field.name}[$index]._id")
+                        subFields.forEach { sub -> add("${field.name}[$index].${sub.name}") }
+                    }
+                }
+                else -> add(field.name)
+            }
+        }
+    }
 
     /** A number as typed: its value, or why it is not one (blank is "not set"). */
     fun number(res: Resources, text: String, integer: Boolean): Pair<JsonPrimitive?, String?> {
@@ -420,12 +576,23 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
     private val mutable = MutableStateFlow(ExtensionListState())
     val state = mutable.asStateFlow()
 
+    /** Identity distinguishes every push, even when it repeats the same auth. */
+    private class AuthPush(val auth: ExtensionAuth)
+    private val authPushes = MutableStateFlow<Map<Pair<String, String>, AuthPush>>(emptyMap())
+
     suspend fun load() {
         if (state.value.loading) return
+        val authAtStart = authPushes.value
         mutable.update { it.copy(loading = true) }
         try {
             val listing = api.listing()
-            mutable.update { it.copy(extensions = listing.extensions, markets = listing.markets, error = null) }
+            mutable.update {
+                val pushes = authPushes.value
+                it.copy(extensions = listing.extensions.map { extension ->
+                    val key = extension.id to ExtensionOwners.of(extension.manager)
+                    pushes[key]?.takeIf { push -> push !== authAtStart[key] }?.let { push -> extension.copy(auth = push.auth) } ?: extension
+                }, markets = listing.markets, error = null)
+            }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { mutable.update { it.copy(error = res.getString(R.string.settings_ext_load_failed, failureReasonText(error).resolve(res))) } }
         finally { mutable.update { it.copy(loading = false) } }
@@ -433,6 +600,7 @@ internal class ExtensionListModel(private val api: ExtensionManagement, private 
 
     /** Follows the hub's `extension_auth` pushes while the list is open: each changes its own manager's copy (#1834). */
     suspend fun watchAuth() = api.authUpdates.collect { event ->
+        authPushes.update { it + ((event.extension to pushManager(event.manager)) to AuthPush(event.auth)) }
         mutable.update { s ->
             s.copy(extensions = s.extensions?.map {
                 if (it.id == event.extension && ExtensionOwners.of(it.manager) == pushManager(event.manager)) it.copy(auth = event.auth) else it
@@ -456,6 +624,8 @@ internal data class ExtensionState(
     val updates: ExtensionSettingsUpdates = ExtensionSettingsUpdates(),
     /** The configuration being edited; saved as a whole (PUT replaces it). */
     val draft: JsonObject = JsonObject(emptyMap()),
+    /** UI-only stable keys for each entry list's rows (saved entries use `_id`, unsaved ones a local key); never enters JSON. */
+    val entryKeys: Map<String, List<String>> = emptyMap(),
     /** What number fields hold as typed, by path, until saved. */
     val numberText: Map<String, String> = emptyMap(),
     /** Number fields typed into that do not read as one, by path. */
@@ -469,16 +639,26 @@ internal data class ExtensionState(
     val error: String? = null,
     /** The hub would switch others off with it (409 `has_dependents`): asked before going on with `cascade`. */
     val cascade: ExtensionCascade? = null,
+    /** A new hub would switch the named pack members off too; nothing is sent before the user confirms. */
+    val packOff: Boolean = false,
     /** The pack's members were partly uninstalled (#1154): said in a dialog. */
     val partial: PackPartial? = null,
+    /** Cleanup left after a successful uninstall: shown until its OK, before leaving this page. */
+    val removalNotice: ExtensionRemovalNotice? = null,
 ) {
     val editable: Boolean get() = detail?.readOnly == false
-    val dirty: Boolean get() = detail != null && (draft != detail.config || numberProblems.isNotEmpty())
+    val requiredEntryLists: Set<String>
+        get() = detail?.form.orEmpty().filter { it.isEntryList && it.required == true }.mapTo(mutableSetOf()) { it.name }
+    val dirty: Boolean
+        get() = detail != null && (ExtensionDraft.compact(draft, requiredEntryLists) != ExtensionDraft.compact(detail.config, requiredEntryLists) || numberProblems.isNotEmpty())
     val canSave: Boolean get() = editable && dirty && numberProblems.isEmpty() && !saving && !busy && !loading && !loadFailed && !updates.checking
 
     fun value(path: List<String>): JsonElement? = ExtensionDraft.value(draft, path)
 
-    fun fieldError(path: List<String>): String? = path.joinToString(".").let { fieldErrors[it] ?: numberProblems[it] }
+    fun fieldError(path: List<String>): String? = ExtensionDraft.fieldPath(path).let { fieldErrors[it] ?: numberProblems[it] }
+
+    fun entryKeyFor(listName: String, index: Int, entry: JsonObject): String =
+        entryKeys[listName]?.getOrNull(index) ?: ExtensionDraft.entryId(entry) ?: "entry-$index"
 }
 
 /** The dependents named by `has_dependents`; [keepData] is the removal asked about, null switching it off. */
@@ -499,6 +679,16 @@ internal class ExtensionModel(
 ) {
     private val mutable = MutableStateFlow(ExtensionState())
     val state = mutable.asStateFlow()
+    private var nextEntryKey = 0
+
+    private fun nextLocalEntryKey(): String = "new-entry-${++nextEntryKey}"
+
+    private fun keysFor(detail: ExtensionDetail, config: JsonObject): Map<String, List<String>> =
+        detail.form.filter { it.isEntryList }.associate { field ->
+            field.name to ExtensionDraft.entryItems(config, listOf(field.name)).map { entry ->
+                ExtensionDraft.entryId(entry) ?: nextLocalEntryKey()
+            }
+        }
 
     suspend fun load() {
         if (state.value.loading) return
@@ -540,6 +730,26 @@ internal class ExtensionModel(
 
     suspend fun setEnabled(on: Boolean, cascade: Boolean = false) = busy { run { api.setEnabled(id, on, cascade) } }
 
+    /** A new hub's pack switch asks before taking enabled members off; every other switch writes directly. */
+    suspend fun requestEnabled(on: Boolean): Boolean {
+        val detail = state.value.detail
+        if (!on && detail?.packMembersFollow == true && detail.packOn.isNotEmpty()) {
+            mutable.update { it.copy(packOff = true) }
+            return false
+        }
+        mutable.update { it.copy(packOff = false) }
+        return setEnabled(on)
+    }
+
+    /** Confirms the pack member switch-off; a dependent refusal may still ask its own question. */
+    suspend fun confirmPackOff(): Boolean {
+        if (!state.value.packOff) return false
+        mutable.update { it.copy(packOff = false) }
+        return setEnabled(false, cascade = false)
+    }
+
+    fun dismissPackOff() = mutable.update { it.copy(packOff = false) }
+
     /** Asked about the dependents: switches them off with it and goes on with what was refused. */
     suspend fun confirmCascade(): Boolean {
         val ask = state.value.cascade ?: return false
@@ -550,6 +760,12 @@ internal class ExtensionModel(
     fun dismissPartial() = mutable.update { it.copy(partial = null) }
 
     fun dismissCascade() = mutable.update { it.copy(cascade = null) }
+
+    /** The cleanup sheet's OK: the page may leave after the warnings have been seen. */
+    fun dismissRemovalNotice() {
+        removal = null
+        mutable.update { it.copy(removalNotice = null) }
+    }
 
     /** Follows the hub's `extension_auth` pushes for this extension while the page is open (#4507), its manager's only (#1834). */
     suspend fun watchAuth() = api.authUpdates.collect { event ->
@@ -566,13 +782,45 @@ internal class ExtensionModel(
     }
 
     fun edit(path: List<String>, value: JsonElement?) = mutable.update {
-        val key = path.joinToString(".")
+        val key = ExtensionDraft.fieldPath(path)
         it.copy(draft = ExtensionDraft.set(it.draft, path, value), fieldErrors = it.fieldErrors - key)
+    }
+
+    /** Appends an empty unsaved entry to [listName], keeping a stable UI-only key that never enters JSON. */
+    fun addEntry(listName: String) = mutable.update {
+        val field = it.detail?.form?.firstOrNull { f -> f.name == listName && f.isEntryList } ?: return@update it
+        val entries = ExtensionDraft.entryItems(it.draft, listOf(listName))
+        val max = field.maxItems ?: DEFAULT_MAX_ENTRIES
+        if (entries.size >= max) return@update it
+        val existingKeys = it.entryKeys[listName] ?: entries.map { entry -> ExtensionDraft.entryId(entry) ?: nextLocalEntryKey() }
+        val nextEntries = JsonArray(entries + JsonObject(emptyMap()))
+        it.copy(
+            draft = ExtensionDraft.set(it.draft, listOf(listName), nextEntries),
+            entryKeys = it.entryKeys + (listName to (existingKeys + nextLocalEntryKey())),
+            fieldErrors = it.fieldErrors - listName,
+        )
+    }
+
+    /** Removes the entry identified by its stable [key] from [listName] in the draft only (saved on Save). */
+    fun removeEntryByKey(listName: String, key: String, required: Boolean) = mutable.update {
+        val entries = ExtensionDraft.entryItems(it.draft, listOf(listName))
+        val existingKeys = it.entryKeys[listName] ?: entries.mapIndexed { i, entry -> it.entryKeyFor(listName, i, entry) }
+        val index = existingKeys.indexOf(key)
+        if (index !in entries.indices) return@update it
+        val remaining = entries.filterIndexed { i, _ -> i != index }
+        val remainingKeys = existingKeys.filterIndexed { i, _ -> i != index }
+        val nextValue = if (remaining.isNotEmpty() || required) JsonArray(remaining) else null
+        val prefix = "$listName["
+        it.copy(
+            draft = ExtensionDraft.set(it.draft, listOf(listName), nextValue),
+            entryKeys = it.entryKeys + (listName to remainingKeys),
+            fieldErrors = it.fieldErrors.filterKeys { k -> k != listName && !k.startsWith(prefix) },
+        )
     }
 
     /** A number field as typed: kept as text, its value put in the draft once it reads as one. */
     fun editNumber(path: List<String>, text: String, integer: Boolean) = mutable.update {
-        val key = path.joinToString(".")
+        val key = ExtensionDraft.fieldPath(path)
         val (number, problem) = ExtensionDraft.number(res, text, integer)
         it.copy(
             draft = if (problem == null) ExtensionDraft.set(it.draft, path, number) else it.draft,
@@ -587,7 +835,8 @@ internal class ExtensionModel(
         if (!state.value.canSave) return false
         mutable.update { it.copy(saving = true, fieldErrors = emptyMap(), error = null) }
         return try {
-            run(saved = true) { api.setConfig(id, ExtensionDraft.compact(state.value.draft)) }.also { if (it) ExtensionChanges.changed(api) }
+            val payload = ExtensionDraft.compact(state.value.draft, state.value.requiredEntryLists)
+            run(saved = true) { api.setConfig(id, payload) }.also { if (it) ExtensionChanges.changed(api) }
         } finally { mutable.update { it.copy(saving = false) } }
     }
 
@@ -597,7 +846,16 @@ internal class ExtensionModel(
         return busy { run { api.setSecret(id, name, trimmed) } }
     }
 
+    suspend fun setSecretReference(name: String, reference: String): Boolean {
+        val trimmed = reference.trim()
+        if (trimmed.isEmpty()) return false
+        return busy { run { api.setSecretReference(id, name, trimmed) } }
+    }
+
     suspend fun clearSecret(name: String): Boolean = busy { run { api.clearSecret(id, name) } }
+
+    suspend fun removeHandoffRule(rule: persona.core.contracts.api.HandoffRule): Boolean =
+        busy { run { api.removeHandoffRule(id, rule.id) } }
 
     /** A market extension's own auto-upgrade switch (docs/extensions/extensions.md "Auto-upgrade"). */
     suspend fun setAutoUpgrade(on: Boolean): Boolean = busy {
@@ -606,15 +864,21 @@ internal class ExtensionModel(
 
     /**
      * A switch that takes effect at once (a machine of a machine list): the saved configuration with this one value
-     * changed goes to the hub; any other edit stays in the draft, unsaved. Refused, the switch goes back.
+     * changed goes to the hub with `preserve_entries=1`, so stale immediate writes never clobber entries added
+     * elsewhere; any other edit stays in the draft, unsaved. Refused, the switch goes back.
      */
     suspend fun saveNow(path: List<String>, value: JsonElement?): Boolean {
         val saved = state.value.detail?.config ?: return false
         if (state.value.busy || state.value.saving || state.value.loading || state.value.loadFailed || state.value.updates.checking) return false
+        val requiredLists = state.value.requiredEntryLists
+        val wasDirty = state.value.dirty
         mutable.update { it.copy(busy = true, error = null, draft = ExtensionDraft.set(it.draft, path, value)) }
         return try {
-            val detail = api.setConfig(id, ExtensionDraft.compact(ExtensionDraft.set(saved, path, value)))
-            mutable.update { it.copy(detail = detail, draft = ExtensionDraft.set(it.draft, path, ExtensionDraft.value(detail.config, path))) }
+            val detail = api.setConfigPreservingEntries(id, ExtensionDraft.compact(ExtensionDraft.set(saved, path, value), requiredLists))
+            mutable.update {
+                if (wasDirty) it.copy(detail = detail, draft = ExtensionDraft.set(it.draft, path, ExtensionDraft.value(detail.config, path)))
+                else it.copy(detail = detail, draft = detail.config, entryKeys = keysFor(detail, detail.config))
+            }
             ExtensionChanges.changed(api)
             true
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -636,9 +900,14 @@ internal class ExtensionModel(
      */
     suspend fun uninstall(keepData: Boolean, cascade: Boolean = false, members: Boolean = false): Boolean {
         if (state.value.busy || state.value.saving || state.value.loading || state.value.loadFailed || state.value.updates.checking) return false
-        mutable.update { it.copy(busy = true, error = null, partial = null) }
+        removal = null
+        mutable.update { it.copy(busy = true, error = null, partial = null, removalNotice = null) }
         return try {
-            removal = api.uninstall(id, keepData, cascade, members)
+            val completed = api.uninstall(id, keepData, cascade, members)
+            removal = completed
+            val name = state.value.detail?.extension?.name?.ifBlank { null } ?: id
+            val notice = extensionRemovalNotice(res, name, members, completed)
+            mutable.update { it.copy(removalNotice = notice) }
             ExtensionChanges.changed(api)
             true
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -674,6 +943,7 @@ internal class ExtensionModel(
                 detail = detail, error = null,
                 updates = if (it.detail?.extension?.version != detail.extension.version) it.updates.copy(checked = false, candidate = null) else it.updates,
                 draft = if (follow) detail.config else it.draft,
+                entryKeys = if (follow) keysFor(detail, detail.config) else it.entryKeys,
                 numberText = if (follow) emptyMap() else it.numberText,
                 numberProblems = if (follow) emptyMap() else it.numberProblems,
             )
@@ -683,7 +953,7 @@ internal class ExtensionModel(
     catch (refused: ExtensionConfigRejected) {
         val reason = refused.message ?: res.getString(R.string.settings_ext_config_wrong)
         // A field the form does not draw (an older form, a whole-object rule) has nowhere to show: it goes on top.
-        val drawn = refused.field in ExtensionDraft.paths(state.value.detail?.form.orEmpty())
+        val drawn = refused.field in ExtensionDraft.paths(state.value.detail?.form.orEmpty(), state.value.draft)
         mutable.update {
             if (drawn) it.copy(fieldErrors = mapOf(refused.field to reason), error = null)
             else it.copy(fieldErrors = emptyMap(), error = res.getString(R.string.settings_ext_not_saved,
@@ -697,5 +967,9 @@ internal class ExtensionModel(
     } catch (error: Exception) {
         mutable.update { it.copy(error = res.getString(failed ?: if (it.detail == null) R.string.settings_ext_load_failed else R.string.settings_ext_not_changed, failureReasonText(error).resolve(res))) }
         false
+    }
+
+    companion object {
+        internal const val DEFAULT_MAX_ENTRIES = 32
     }
 }

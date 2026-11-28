@@ -90,6 +90,14 @@ describe("navRailPreview", () => {
     expect(out).toHaveLength(NAV_RAIL_PREVIEW_MAX);
     expect(out.endsWith("…")).toBe(true);
   });
+
+  it("cuts on whole characters: an emoji at the cut goes entirely", () => {
+    // the emoji is two UTF-16 units, at NAV_RAIL_PREVIEW_MAX - 2 and NAV_RAIL_PREVIEW_MAX - 1
+    const line = "a".repeat(NAV_RAIL_PREVIEW_MAX - 2) + "😀" + "b".repeat(20);
+    expect(navRailPreview(line)).toBe("a".repeat(NAV_RAIL_PREVIEW_MAX - 2) + "…");
+    // one unit earlier it fits whole
+    expect(navRailPreview("a".repeat(NAV_RAIL_PREVIEW_MAX - 3) + "😀" + "b".repeat(20))).toBe("a".repeat(NAV_RAIL_PREVIEW_MAX - 3) + "😀…");
+  });
 });
 
 describe("navRailExcerpt", () => {
@@ -102,17 +110,25 @@ describe("navRailExcerpt", () => {
   it("caps the excerpt at its limit", () => {
     expect(navRailExcerpt("答".repeat(500))).toHaveLength(200);
   });
+
+  it("cuts on whole characters: an emoji at the limit goes entirely", () => {
+    // the emoji is two UTF-16 units, at 199 and 200; a long answer is read from its head, a short one whole
+    for (const tail of ["b".repeat(20), "b".repeat(1100) + "\nmore"]) {
+      expect(navRailExcerpt("a".repeat(199) + "😀" + tail)).toBe("a".repeat(199));
+      expect(navRailExcerpt("a".repeat(198) + "😀" + tail)).toBe("a".repeat(198) + "😀");
+    }
+  });
 });
 
 describe("navRailMark", () => {
-  it("keeps every idle mark equally short, with only color emphasis for the current input", () => {
+  it("keeps idle marks short and gives the current input a distinct resting mark", () => {
     for (const count of [1, 2, 25, 240]) {
       for (const current of [null, 0, Math.floor(count / 2), count - 1]) {
         for (let index = 0; index < count; index++) {
           expect(navRailMark(index, count, current, null)).toEqual({
             state: index === current ? "current" : "idle",
-            width: M.tickWidth,
-            height: M.tickHeight,
+            width: index === current ? M.currentWidth : M.tickWidth,
+            height: index === current ? M.currentHeight : M.tickHeight,
             opacity: index === current ? 1 : M.tailOpacity,
           });
         }
@@ -133,7 +149,7 @@ describe("navRailMark", () => {
       previous = left;
     }
     expect(previous.width).toBeLessThan(7);
-    expect(previous.opacity).toBeLessThan(0.42);
+    expect(previous.opacity).toBeLessThan(M.tailOpacity + 0.02);
   });
 
   it("moves the bell with hover without independently widening the viewport owner's marker", () => {
@@ -158,20 +174,21 @@ describe("navRailMark", () => {
 });
 
 describe("planNavRailTicks", () => {
-  it("keeps the normal pitch while the ticks fit", () => {
-    expect(planNavRailTicks(10, 200)).toEqual({ start: 0, pitch: 10, hidden: 0, count: 10 });
-    expect(planNavRailTicks(0, 0)).toEqual({ start: 0, pitch: 10, hidden: 0, count: 0 });
+  it("uses one 8 px row per input while the ticks fit", () => {
+    expect(planNavRailTicks(10, 200)).toEqual({ start: 0, pitch: 8, count: 10, content: 80, viewport: 80 });
+    expect(planNavRailTicks(0, 0)).toEqual({ start: 0, pitch: 8, count: 0, content: 0, viewport: 0 });
   });
 
-  it("compresses the pitch before windowing ticks", () => {
-    expect(planNavRailTicks(20, 100)).toEqual({ start: 0, pitch: 5, hidden: 0, count: 20 });
+  it("compresses to a 7 px pitch in a short pane", () => {
+    expect(planNavRailTicks(20, 140)).toEqual({ start: 0, pitch: 7, count: 20, content: 140, viewport: 140 });
   });
 
-  it("keeps every selected input accessible in a bounded moving window", () => {
-    expect(planNavRailTicks(30, 40)).toEqual({ start: 22, pitch: 5, hidden: 22, count: 8 });
+  it("mounts only the viewport plus overscan while every input has a scroll position", () => {
     for (let focus = 0; focus < 1000; focus++) {
-      const plan = planNavRailTicks(1000, 200, focus);
-      expect(plan.count).toBe(40);
+      const plan = planNavRailTicks(1000, 200, focus * M.minTickPitch);
+      expect(plan.content).toBe(7000);
+      expect(plan.viewport).toBe(200);
+      expect(plan.count).toBeLessThanOrEqual(Math.ceil(plan.viewport / plan.pitch) + M.overscan * 2 + 1);
       expect(plan.start).toBeLessThanOrEqual(focus);
       expect(plan.start + plan.count).toBeGreaterThan(focus);
     }

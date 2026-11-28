@@ -27,18 +27,59 @@ class MachineHealthTest {
     @Test fun featuresTakeTheWorstOfTheirChecksAndOptionalOnesAreOff() {
         val report = DoctorReport(checks = listOf(check("node.sock"), check("claude-settings.json", "warn", "stale"), check("command-paths"),
             check("herdr", "warn"), check("runtime.sock", "warn"), check("mcp.json"), check("odd-one", "fail", hint = "do this")))
-        val features = deriveFeatures(report, engine = "orca").associateBy { it.id }
+        val features = deriveFeatures(report, hosts = listOf("paseo")).associateBy { it.id }
         assertEquals(FeatureState.Partial, features.getValue("approvals").state)
         assertEquals(HealthNote.Res(R.string.machines_health_note_stale), features.getValue("approvals").note)
         assertEquals(FeatureState.Ready, features.getValue("status").state)
         assertEquals("not this computer's engine", FeatureState.Off, features.getValue("terminal").state)
-        assertEquals(FeatureState.Broken, deriveFeatures(report, engine = "herdr").first { it.id == "terminal" }.state)
+        assertEquals(FeatureState.Broken, deriveFeatures(report, hosts = listOf("herdr")).first { it.id == "terminal" }.state)
         assertEquals(FeatureState.Off, features.getValue("runtimes").state)
         assertFalse("no skill checks reported", "skills" in features)
         assertEquals(FeatureState.Broken, features.getValue("other").state)
         assertEquals(HealthNote.Plain("do this"), features.getValue("other").note)
         assertEquals(2, attentionCount(features.values.toList()))
         assertEquals(listOf("claude-settings.json"), fixableChecks(report).map { it.name })
+    }
+
+    /** No terminal engine keeps `engine` herdr (the empty host set); the features are judged by the choice, not by herdr. */
+    @Test fun aMachineWithNoTerminalEngineIsNotJudgedByHerdr() {
+        val herdrMachine = Machine("desk", engine = "herdr", engineHosts = listOf("herdr"))
+        val none = herdrMachine.copy(engineHosts = emptyList())
+        val warn = DoctorReport(checks = listOf(check("node.sock"), check("command-paths"), check("herdr", "warn")))
+        val fail = DoctorReport(checks = listOf(check("node.sock"), check("command-paths"), check("herdr", "fail")))
+        fun terminal(report: DoctorReport, machine: Machine) = deriveFeatures(report, healthHosts(machine)).first { it.id == "terminal" }
+        assertEquals(FeatureState.Broken, terminal(warn, herdrMachine).state)
+        assertEquals(FeatureState.Off, terminal(warn, none).state)
+        assertEquals(FeatureState.Broken, terminal(fail, herdrMachine).state)
+        assertEquals(FeatureState.Off, terminal(fail, none).state)
+        // The check itself is still reported as found; only the feature's state follows the choice.
+        assertEquals(listOf("herdr"), terminal(fail, none).checks.map { it.name })
+        assertEquals("nothing needs attention for it", 0, attentionCount(listOf(terminal(warn, none))))
+        // A machine that does have herdr, or a hub with no host sets, stays as before.
+        assertEquals(FeatureState.Broken, terminal(warn, herdrMachine.copy(engineHosts = null)).state)
+        assertEquals(FeatureState.Ready, terminal(DoctorReport(checks = listOf(check("herdr"))), none).state)
+        // Choosing herdr again brings the judgement back.
+        assertEquals(FeatureState.Broken, terminal(warn, none.copy(engineHosts = listOf("herdr"))).state)
+    }
+
+    /** An Orca computer stands on Orca's doctor line, not herdr's (#17037): the engine is not "off" there. */
+    @Test fun orcaCountsAsTheEngineWhereTheSetEnablesIt() {
+        val orca = Machine("desk", online = true, engine = "orca", engineHosts = listOf("orca"), engineDefault = "orca")
+        fun terminal(orcaStatus: String?, machine: Machine = orca): FeatureView? {
+            val checks = listOf(check("node.sock"), check("command-paths"), check("herdr", "warn")) +
+                listOfNotNull(orcaStatus?.let { check("orca", it, hint = if (it == "warn") "open Orca" else "") })
+            return deriveFeatures(DoctorReport(checks = checks), healthHosts(machine)).firstOrNull { it.id == "terminal" }
+        }
+        assertEquals("herdr's socket does not matter", FeatureState.Ready, terminal("ok")?.state)
+        assertEquals(FeatureState.Broken, terminal("warn")?.state)
+        assertEquals(HealthNote.Plain("open Orca"), terminal("warn")?.note)
+        assertNull("no orca line (an older node): left out, not \"off\"", terminal(null))
+        assertEquals("herdr in the set too", FeatureState.Broken,
+            terminal("ok", orca.copy(engineHosts = listOf("herdr", "orca")))?.state)
+        assertEquals("an older hub: its single engine", FeatureState.Ready, terminal("ok", orca.copy(engineHosts = null))?.state)
+        val herdrOnly = orca.copy(engine = "herdr", engineHosts = listOf("herdr"))
+        val report = DoctorReport(checks = listOf(check("herdr"), check("orca", "warn")))
+        assertFalse("never \"Other checks\"", deriveFeatures(report, healthHosts(herdrOnly)).any { it.id == "other" })
     }
 
     @Test fun unavailableSelfChecksSayWhy() {

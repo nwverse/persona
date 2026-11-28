@@ -3,11 +3,12 @@
 // `?view=chat|term`; an address without it shows what that agent's page showed last (kept per browser), else the
 // conversation. Pure helpers here, so they are tested without a DOM; the hook is the page's side of it.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { isStoppedAgent, sessionCan, stateOf } from "./format";
+import { isStoppedAgent, sessionCan, activityOf } from "./format";
 import { paneRoute } from "./herdr-tree";
 import { navigate, useRoute, type Route, type SessionView } from "./router";
 import { isPaneAddress } from "./terminals";
-import type { Session } from "./types";
+import type { OutboxEntry } from "./outbox";
+import type { Interaction, Session } from "./types";
 
 const KEY = "persona.sessionView";
 /** How many agents' last view are kept; the oldest go first. */
@@ -20,7 +21,26 @@ export const otherView = (v: SessionView): SessionView => (v === "term" ? "chat"
 /** The agent has a terminal to show in place: its source lets a terminal open, and its pane is live or it is a stopped
  *  Agent (#4754), whose terminal is the shell it left, or Resume when that is gone. */
 export function canShowTerminal(s: Session | undefined): boolean {
-  return Boolean(s && sessionCan(s, "terminal") && (stateOf(s) !== "offline" || isStoppedAgent(s)));
+  return Boolean(s && sessionCan(s, "terminal") && (activityOf(s) !== "offline" || isStoppedAgent(s)));
+}
+
+/** The agent's terminal waits on a dialog (#7343): herdr calls the agent blocked, a screen card stands for what its
+ *  terminal shows, or the newest message sent here was refused because a dialog had the terminal (dialog_open). What
+ *  lights the terminal button while the conversation is shown. */
+export function terminalWaits(
+  s: Session | undefined,
+  interactions: readonly Pick<Interaction, "kind">[],
+  outbox: readonly Pick<OutboxEntry, "state" | "code" | "at">[] = [],
+): boolean {
+  if (!s || !canShowTerminal(s)) return false;
+  const newest = outbox.reduce<Pick<OutboxEntry, "state" | "code" | "at"> | undefined>((a, e) => (!a || e.at >= a.at ? e : a), undefined);
+  return s.status === "blocked" || interactions.some((ix) => ix.kind === "screen") || (newest?.state === "failed" && newest.code === "dialog_open");
+}
+
+/** A chat that cannot show its terminal in place but has one (the side panel, #7343): its terminal button opens the
+ *  agent's page in the terminal view. Not the assistant's chats, not an embedded one, not a page (it switches in place). */
+export function terminalJump(s: Session | undefined, o: { inPanel?: boolean; assistant?: boolean }): boolean {
+  return Boolean(o.inPanel && !o.assistant && canShowTerminal(s));
 }
 
 /** What sits where an agent chat's composer goes: the composer, or a stopped Agent's read-only line (#4754) with

@@ -32,10 +32,12 @@ private struct ChannelStateDot: View {
 /// Settings' row before Connectors: Channels, how many are connected (red when one went wrong). Only with a hub that has channels.
 struct ChannelsEntryRow: View {
     @Environment(AppModel.self) private var model
-    @State private var channels: [HubChannel]?
+    @State private var loaded: [HubChannel]?
 
     var body: some View {
         if model.hubFeatures.contains("channels") {
+            // Counted without the Lark bot's channel while the hub's Lark module is off (#15995); offered, the very list.
+            let channels = loaded.map(LarkModule.botEntry.listing)
             Section {
                 Group {
                     NavigationLink(value: SettingsPage.channels) {
@@ -58,10 +60,10 @@ struct ChannelsEntryRow: View {
                 Text("Where you can talk to Persona: its own apps, WeChat, the Lark bot…")
             }
             .task(id: "\(model.assistantManagerID ?? "")|\(model.settingsPath.count)|\(model.config?.url.absoluteString ?? "")") {
-                channels = nil
+                loaded = nil
                 guard let api = model.api?.currentAssistantSettings(), let l = try? await api.channels(),
                       !Task.isCancelled, api.sameSettingsScope(as: model.api) else { return }
-                channels = l
+                loaded = l
             }
         }
     }
@@ -103,7 +105,7 @@ struct ChannelsView: View {
         .overlay { if page.channels == nil && page.loading { ProgressView() } }
         .detailTitle(String(localized: "Channels"))
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(app.assistantManagerID ?? "")|\(app.config?.url.absoluteString ?? "")") { await page.load() }
+        .task(id: "\(app.assistantManagerID ?? "")|\(app.config?.url.absoluteString ?? "")|\(LarkModule.botEntry.isOffered)") { await page.load() }
         .refreshable { await page.load() }
     }
 
@@ -193,7 +195,7 @@ struct ChannelDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.config) { await page.load() }
         .refreshable { await page.load() }
-        .confirmationDialog("Unbind \(unbindName)?", isPresented: $confirmUnbind, titleVisibility: .visible) {
+        .accessibleConfirmationDialog("Unbind \(unbindName)?", isPresented: $confirmUnbind, titleVisibility: .visible) {
             Button("Unbind", role: .destructive) { Task { await page.unbind() } }
         } message: {
             Text("It will stop passing messages to Persona, and pending answers and questions are cleared. To use it again, bind it again.")
@@ -548,12 +550,14 @@ private struct ChannelDirectoryLoader: ViewModifier {
 struct ConversationSourceMark: View {
     var source: AutoConversationSource?
     var channels: [String]?
+    /// The extension that opened it (`ConversationOpener.of`), whose own icon the mark draws once it can (#10358).
+    var opener: ConversationOpener? = nil
 
     var body: some View {
         if let source {
-            AutoSourceMark(source: source)
+            AutoSourceMark(source: source, opener: opener)
                 .accessibilityElement()
-                .accessibilityLabel(source.markLabel)
+                .accessibilityLabel(source.markLabel(opener: OpenerIcons.shared.name(for: opener, source: source)))
         } else {
             ConversationChannelMark(ids: channels)
         }
@@ -561,12 +565,24 @@ struct ConversationSourceMark: View {
 }
 
 /// What opened a conversation Persona opened by itself, as a mark of `side` points: the source's brand where it has one
-/// (Lark's for Lark /agent, #3758), else its symbol, the one All Chats' filter for it shows (#5195).
+/// (Lark's for Lark /agent, #3758), else its symbol, the one All Chats' filter for it shows (#5195). One an extension
+/// opened (`opener`) draws that extension's own icon once it is drawn (`OpenerMark`, #10358), this mark until then and
+/// whenever it is not.
 struct AutoSourceMark: View {
     var source: AutoConversationSource
     var side: CGFloat = Theme.Size.markS
+    var opener: ConversationOpener? = nil
 
     var body: some View {
+        if let opener {
+            OpenerMark(opener: opener, brand: source.brand, side: side) { origin }
+        } else {
+            origin
+        }
+    }
+
+    /// The origin's own mark.
+    @ViewBuilder private var origin: some View {
         if let brand = source.brand {
             BrandMark(brand, side: side)
         } else {
@@ -578,14 +594,16 @@ struct AutoSourceMark: View {
 }
 
 /// 「来自 飞书 /agent」 under the message an extension opened a conversation with (#3758), as a channel's message has
-/// 「来自 微信」 (`ChannelSourceLine`).
+/// 「来自 微信」 (`ChannelSourceLine`); 「来自 <the extension>」 while its mark draws that extension's own icon (#10358).
 struct ExternalSourceLine: View {
     var source: AutoConversationSource
+    var opener: ConversationOpener? = nil
 
     var body: some View {
         HStack(spacing: Theme.Space.xs) {
-            AutoSourceMark(source: source)
-            Text(source.from).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+            AutoSourceMark(source: source, opener: opener)
+            Text(source.from(opener: OpenerIcons.shared.name(for: opener, source: source)))
+                .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("message-external-source")

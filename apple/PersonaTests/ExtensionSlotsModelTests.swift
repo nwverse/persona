@@ -1,6 +1,8 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The plugins' UI slots (docs/extensions/extensions.md「UI slots」): what the hub lists and the app keeps (entries, cards, badges),
 /// the new items (chart, stat_grid), refresh_after, and the plugin_ui event.
@@ -47,6 +49,66 @@ import Testing
         // A card's model draws compact, and is kept while the card is listed.
         let m = s.model(for: s.cards[0])
         #expect(m.context.size == "compact" && s.model(for: s.cards[0]) === m)
+    }
+
+    @Test func slotsWithTheSameLocalIDHaveDistinctListIdentities() throws {
+        let slots = try JSON.decoder.decode([ExtensionUIPlace].self, from: Data(
+            #"[{"extension":"example-a","id":"status","title":"A","placement":"overview_card"},{"plugin":"example-b","id":"status","title":"B","placement":"overview_card"}]"#.utf8
+        ))
+        #expect(slots.map(\.id) == ["status", "status"])
+        #expect(slots.map(\.scopedID) == ["example-a/status", "example-b/status"])
+    }
+
+    @Test func duplicateLocalNavPageIDsShowSelectAndOpenIndependently() async throws {
+        let hub = FakeHub()
+        hub.on("GET", "/api/v1/extensions/-/ui", json: #"""
+        {"ui":[
+          {"extension":"example-alpha","id":"home","title":"Alpha Home","placement":"nav_page","icon":"house"},
+          {"extension":"example-beta","id":"home","title":"Beta Home","placement":"nav_page","icon":"sparkles"}
+        ]}
+        """#)
+        hub.on("POST", "/api/v1/extensions/example-alpha/-/ui/home", json: #"{"view":{"title":"Alpha View","sections":[]}}"#)
+        hub.on("POST", "/api/v1/extensions/example-beta/-/ui/home", json: #"{"view":{"title":"Beta View","sections":[]}}"#)
+        var api = hub.client
+        api.extensionsAPI = true
+        let client = api
+        let s = ExtensionSlots(deps: .init(api: { client }), features: { ["extensions", "extension_ui_slots"] })
+        await s.reload(for: "https://dup.example")
+
+        #expect(s.pages.count == 2)
+        #expect(s.pages.map(\.id) == ["home", "home"])
+        #expect(s.pages.map(\.scopedID) == ["example-alpha/home", "example-beta/home"])
+
+        let routeA = ExtensionNavRoute(s.pages[0])
+        let routeB = ExtensionNavRoute(s.pages[1])
+        #expect(routeA.id == "example-alpha/home" && routeB.id == "example-beta/home")
+        #expect(routeA != routeB)
+
+        let rootA = try #require(SidebarPageRoot.of(.extensionPage(routeA)))
+        let rootB = try #require(SidebarPageRoot.of(.extensionPage(routeB)))
+        #expect(rootA != rootB)
+
+        var roots = SidebarPageRoots()
+        let openA = roots.select(rootA, path: NavigationPath())
+        #expect(openA.move == .switchRoot && openA.root == rootA)
+        #expect(AssistantSidebar.isExtensionSelected(s.pages[0], shown: openA.root.place))
+        #expect(!AssistantSidebar.isExtensionSelected(s.pages[1], shown: openA.root.place))
+
+        let openB = roots.select(rootB, path: NavigationPath())
+        #expect(openB.move == .switchRoot && openB.root == rootB)
+        #expect(!AssistantSidebar.isExtensionSelected(s.pages[0], shown: openB.root.place))
+        #expect(AssistantSidebar.isExtensionSelected(s.pages[1], shown: openB.root.place))
+
+        let viewA = ExtensionViewModel(plugin: routeA.owner, ui: routeA.ui, deps: .init(api: { client }))
+        let viewB = ExtensionViewModel(plugin: routeB.owner, ui: routeB.ui, deps: .init(api: { client }))
+        await viewA.load()
+        await viewB.load()
+        #expect(viewA.view?.title == "Alpha View" && viewB.view?.title == "Beta View")
+        #expect(hub.sent("POST", "/api/v1/extensions/example-alpha/-/ui/home").count == 1)
+        #expect(hub.sent("POST", "/api/v1/extensions/example-beta/-/ui/home").count == 1)
+
+        s.received(plugin: "example-beta", id: "home", badge: ExtensionBadge(text: "2", tone: "danger"))
+        #expect(s.pages[0].badge == nil && s.pages[1].badge?.text == "2")
     }
 
     @Test func anOlderHubIsNotAsked() async throws {
@@ -183,7 +245,7 @@ import Testing
         // The context: the machine, the card's size, the app's time zone, platform and UI version.
         let body = try JSON.decoder.decode(JSONValue.self, from: hub.sent("POST", "/api/v1/plugins/example-gateway/-/ui/today")[0].body ?? Data())
         #expect(body["context"]?["machine"] == .string("macbook") && body["context"]?["size"] == .string("compact"))
-        #expect(body["context"]?["ui_version"] == .number(6), "a card is drawn by the app's renderer (cardVersion)")
+        #expect(body["context"]?["ui_version"] == .number(12), "a card is drawn by the app's renderer (cardVersion)")
 
         // refresh_after: due that long after it was drawn; drawn again, what the user typed stays.
         #expect(v.refreshAfter == 300)

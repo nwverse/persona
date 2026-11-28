@@ -1,6 +1,6 @@
 // Package herdrcore talks to herdr-core (`hc`), the terminal runtime behind the Herdr desktop app: JSON-RPC 2.0, one
 // message per line on its unix socket. It is a different program from classic herdr (internal/herdr): its own socket,
-// methods (terminal.*), and environment (HC_TERMINAL_ID). See docs/plans/plan-orca-support.md "herdr-core host".
+// methods (terminal.*), and environment (HC_TERMINAL_ID). See docs/integrations/herdr-core.md "herdr-core host".
 //
 // herdr-core being absent (not installed, not running) is normal: calls fail fast with ErrNoSocket and log at most
 // one line per episode.
@@ -21,8 +21,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Client is one herdr-core server, reached at Socket.
@@ -40,11 +41,39 @@ type Client struct {
 // New is a client of the herdr-core server this user's hc would talk to.
 func New() *Client { return &Client{Socket: SocketPath()} }
 
-// SocketPath is where herdr-core listens, by hc's own rules (paths.rs): $HC_SOCKET, else `socket` in
+// SocketPath is where herdr-core listens. On Windows that is a named pipe, \\.\pipe\herdr-core-<user>-<session>.sock
+// (pipeName), not a file. Elsewhere it is a unix socket by hc's own rules (unixSocketPath).
+func SocketPath() string { return socketPath() }
+
+// sessionName is the hc session: $HC_SESSION, "default"; "" when the name could not be part of a path or pipe name.
+func sessionName() string {
+	session := strings.TrimSpace(os.Getenv("HC_SESSION"))
+	if session == "" {
+		session = "default"
+	}
+	if strings.ContainsAny(session, `/\:*?"<>|`) || session == "." || session == ".." {
+		return ""
+	}
+	return session
+}
+
+// pipeName is the named pipe herdr-core serves its API on, on Windows: herdr-core-<user>-<session>.sock in the pipe
+// namespace (the unix socket's file name, prefixed), the user being %USERNAME% (a core of another user or session is
+// another pipe). "" when either is empty. Taken from the Windows build of hc 0.1.21 (it builds the name from USERNAME
+// and the session) and a running core there (`\\.\pipe\herdr-core-alice-default.sock`, beside its holder's
+// `herdr-core-alice-default.holder.<id>.sock`).
+func pipeName(user, session string) string {
+	if user == "" || session == "" {
+		return ""
+	}
+	return `\\.\pipe\herdr-core-` + user + "-" + session + ".sock"
+}
+
+// unixSocketPath is where herdr-core listens off Windows, by hc's own rules (paths.rs): $HC_SOCKET, else `socket` in
 // $XDG_CONFIG_HOME/herdr-core/config.toml, else <session>.sock in the user's runtime directory
 // ($XDG_RUNTIME_DIR/herdr-core, else /run/user/<uid>/herdr-core when that exists), else in the state directory
 // ($XDG_STATE_HOME/herdr-core/<session>, ~/.local/state by default — macOS). The session is $HC_SESSION, "default".
-func SocketPath() string {
+func unixSocketPath() string {
 	if p := os.Getenv("HC_SOCKET"); p != "" {
 		return p
 	}
@@ -63,11 +92,8 @@ func SocketPath() string {
 			return p
 		}
 	}
-	session := strings.TrimSpace(os.Getenv("HC_SESSION"))
+	session := sessionName()
 	if session == "" {
-		session = "default"
-	}
-	if strings.ContainsAny(session, `/\:*?"<>|`) || session == "." || session == ".." {
 		return ""
 	}
 	run := os.Getenv("XDG_RUNTIME_DIR")
@@ -91,34 +117,19 @@ func isDir(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-// configSocket reads the top-level `socket = "…"` of hc's config.toml ("" when there is none). Only that one key is
-// read, so this is a line scan, not a TOML parser: a key inside a [table] does not count.
+// configSocket reads the top-level `socket = "…"` string of hc's config.toml ("" when absent or invalid TOML).
+// Keys inside a [table] do not count.
 func configSocket(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	for line := range strings.SplitSeq(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") {
-			return ""
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(k) != "socket" {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if i := strings.Index(v, " #"); i >= 0 && !strings.HasPrefix(v, `"`) && !strings.HasPrefix(v, "'") {
-			v = strings.TrimSpace(v[:i])
-		}
-		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
-			if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
-				return v[1 : 1+end]
-			}
-		}
+	var cfg map[string]any
+	if err := toml.Unmarshal(b, &cfg); err != nil {
 		return ""
 	}
-	return ""
+	s, _ := cfg["socket"].(string)
+	return s
 }
 
 // Error is herdr-core's JSON-RPC error; Kind is its stable data.kind ("not_found", "blocked", "unknown_method"…).
@@ -202,20 +213,20 @@ func (c *Client) note(method string, err error) {
 	}
 }
 
-// dial connects within dialTimeout (and ctx). A socket file that is not there fails without a dial.
+// dial connects within dialTimeout (and ctx). A socket (a pipe on Windows) that is not there fails without a dial.
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
 	if c.Socket == "" {
 		return nil, ErrNoSocket
 	}
-	if _, err := os.Stat(c.Socket); err != nil {
+	if err := socketStat(c.Socket); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoSocket, err)
 	}
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(dctx, "unix", c.Socket)
+	conn, err := dialSocket(dctx, c.Socket)
 	if err != nil {
 		// Only a socket nobody listens on means not running; a core too busy to accept in time still runs.
-		if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) {
+		if socketGone(err) {
 			return nil, fmt.Errorf("%w: %v", ErrNoSocket, err)
 		}
 		return nil, fmt.Errorf("herdr-core: %w", err)
@@ -233,34 +244,54 @@ func (c *Client) Call(ctx context.Context, timeout time.Duration, method string,
 }
 
 func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method string, params, out any) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("herdr-core %s: %w", method, err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := c.dial(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+		}
 		return err
 	}
 	defer conn.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
-	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 	id := c.seq.Add(1)
+	idStr := strconv.FormatInt(id, 10)
 	if err := writeRequest(conn, id, method, params); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+		}
 		return fmt.Errorf("herdr-core %s: %w", method, err)
 	}
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, err)
+		}
 		line, err := readLine(r, maxLine)
 		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+			}
 			return fmt.Errorf("herdr-core %s: %w", method, err)
 		}
 		var env response
 		if err := json.Unmarshal(line, &env); err != nil {
 			return fmt.Errorf("herdr-core %s: decode: %v", method, err)
 		}
-		if env.ID == nil || string(env.ID) != strconv.FormatInt(id, 10) {
-			continue // a notification
+		if env.Method != "" {
+			continue // a notification or server-initiated request
+		}
+		rawID := bytes.TrimSpace(env.ID)
+		if env.Error != nil && (len(rawID) == 0 || string(rawID) == "null") {
+			return env.decode(out)
+		}
+		if len(rawID) == 0 || string(rawID) != idStr {
+			continue // an unrelated response
 		}
 		return env.decode(out)
 	}
@@ -284,17 +315,21 @@ type response struct {
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			Kind string `json:"kind"`
-		} `json:"data"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	} `json:"error"`
 }
 
 func (r response) decode(out any) error {
 	if r.Error != nil {
-		return &Error{Code: r.Error.Code, Message: r.Error.Message, Kind: r.Error.Data.Kind}
+		var data struct {
+			Kind string `json:"kind"`
+		}
+		if len(r.Error.Data) > 0 {
+			_ = json.Unmarshal(r.Error.Data, &data)
+		}
+		return &Error{Code: r.Error.Code, Message: r.Error.Message, Kind: data.Kind}
 	}
 	if out == nil || len(r.Result) == 0 {
 		return nil

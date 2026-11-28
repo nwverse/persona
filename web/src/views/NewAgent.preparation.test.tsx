@@ -10,8 +10,12 @@ import { resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
 import { refreshWorkspaceCatalog } from "../lib/workspace-catalog";
 import { NewAgent } from "./NewAgent";
 import { resetModelListsForTests } from "../lib/session-models";
+import type { LauncherModels, PickerTier } from "../lib/launcher-models";
 import { Toasts } from "../ui/atoms";
 import { t } from "../i18n";
+
+// no decoder in jsdom: a picture within the limits goes as it is, as lib/image-scale.ts sends one (#12973)
+vi.mock("../lib/image-scale", () => ({ fitPicture: async (b: Blob) => ({ mime: b.type, data: "AQID" }) }));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const before = { ...getState() };
@@ -27,11 +31,14 @@ let closes: number;
 let configured: boolean;
 let configuredProvider: string;
 let launcherRows: import("../lib/types").Launcher[];
+let launcherTiers: PickerTier[];
+let launcherModels: Record<string, Omit<LauncherModels, "agent">>;
+let modelsStatus: number;
 let unauthorized: ReturnType<typeof vi.fn<() => void>>;
 // the hub's workspace catalog (#7259); empty unless a test lists some
 let catalogRows: Record<string, unknown>[] = [];
 const flush = () => act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); });
-const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(0); await vi.dynamicImportSettled(); await vi.advanceTimersByTimeAsync(ms); });
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === text)!;
 const textarea = () => document.querySelector<HTMLTextAreaElement>("textarea")!;
 const starts = () => calls.filter((c) => c.url.endsWith("/sessions"));
@@ -91,6 +98,9 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   calls = []; pending = []; closes = 0; configured = false; configuredProvider = "claude"; launcherRows = [{ name: "claude", agent: "claude" }]; catalogRows = [];
+  launcherTiers = [];
+  launcherModels = {};
+  modelsStatus = 200;
   let preview = 0;
   vi.stubGlobal("URL", class extends URL {
     static createObjectURL = vi.fn(() => `blob:synthetic-preview-${++preview}`);
@@ -114,8 +124,15 @@ beforeEach(async () => {
     if (url.includes("/model-config/purposes/")) return configured
       ? json({ purpose: { id: "agent.new", name: "New agent", effective: { provider: `launcher.${configuredProvider}`, model: "synthetic-model", effort: "high" } }, providers: [] })
       : json({ error: "not found" }, 404);
-    if (url.includes("/launchers/") && url.includes("/models")) return json({ agent: launcherRows.find((l) => url.includes(`/launchers/${l.name}/`))?.agent_type || "claude", models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] });
-    if (url.endsWith("/launchers")) return json({ launchers: launcherRows });
+    if (url.includes("/launchers/") && url.includes("/models")) {
+      const launcher = launcherRows.find((l) => url.includes(`/launchers/${l.name}/`));
+      if (modelsStatus !== 200) return json({ error: "Synthetic model list unavailable" }, modelsStatus);
+      const catalog = launcherModels[launcher?.name ?? ""] ?? { models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] };
+      const host = new URL(url, "http://localhost").searchParams.get("host");
+      return json({ agent: launcher?.agent_type || launcher?.agent || "claude", ...catalog,
+        supports_start_model: host === "herdr" || host === "orca" ? catalog.supports_start_model : undefined });
+    }
+    if (url.endsWith("/launchers")) return json({ launchers: launcherRows, tiers: launcherTiers });
     if (url.includes("/dirs?")) return json({ path: "/projects", entries: [] });
     if (url.endsWith("/worktree/status")) return json({ path: call.body!.cwd, dirty: 0, unmerged: 0 });
     if (url.endsWith("/worktree/add")) return new Promise<Response>((resolve, reject) => {
@@ -273,6 +290,8 @@ describe("New Agent preparation ownership", () => {
     expect(launch.attachments[0].url).not.toBe(original);
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(launch.attachments[0].url);
     await tick();
+    // the scaler (lib/image-scale.ts) is a lazy chunk that loads in real time
+    await act(async () => void (await vi.waitFor(() => expect(messages().length).toBeGreaterThan(0))));
     expect(messages()[0].body).toMatchObject({ text: "Submitted task", images: [{ mime: "image/png" }] });
     await click("Reopen start");
     expect(document.querySelector('img[alt="later.png"]')).not.toBeNull();
@@ -291,6 +310,7 @@ describe("New Agent preparation ownership", () => {
     await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="start-host"] button')!.click());
     // a model picked in the panel after admission changes the form, not the start on its way
     await act(async () => document.querySelector<HTMLButtonElement>("[data-testid=new-agent-model] [data-model-pill]")!.click());
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     await act(async () => [...document.querySelectorAll<HTMLElement>("[data-panel-row]")].find((r) => r.dataset.panelRow === "model:claude\nsynthetic-model")!.click());
     await flush();
@@ -470,11 +490,53 @@ describe("New Agent workspace list (#7259)", () => {
     expect(document.querySelector('[data-testid="new-agent-workspaces"]')).toBeNull();
     expect(document.querySelector('input[placeholder="' + t("newagent.folder_placeholder") + '"]')).toBeNull();
     await tick(401);
-    expect(document.querySelector('[data-testid="new-agent-worktree"]')).toBeNull();
+    // its repository can still give the Agent a worktree of its own (#8856), off until turned on
+    expect(document.querySelector('[data-testid="new-agent-worktree"] [role="switch"]')!.getAttribute("aria-checked")).toBe("false");
     expect(button("Second computer").disabled).toBe(false);
     await click(t("newagent.start")); await tick();
     expect(starts()).toHaveLength(1);
     expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/projects/fix-login", workspace_id: "fix-login", host: "paseo" });
+    expect(pending).toHaveLength(0);
+  });
+
+  it("starts in a new worktree Paseo makes from the Paseo workspace chosen (#8856)", async () => {
+    await list([paseo("demo-main", { title: "demo", branch: "main", is_main: true })]);
+    await act(async () => choices()[0].click());
+    const request = await prepare();
+    // Paseo says where its worktree goes and makes it, from the workspace's folder
+    expect(calls.filter((c) => c.url.endsWith("/worktree/status")).at(-1)?.body).toEqual({ cwd: "/projects/demo-main", kind: "paseo" });
+    expect(request.body).toMatchObject({ cwd: "/projects/demo-main", kind: "paseo" });
+    await answer(request, { path: "/paseo/demo/persona-submitted-task", branch: "persona/submitted-task", root: "/projects/demo-main", workspace_id: "made-for-it" });
+    expect(starts()).toHaveLength(1);
+    // into the workspace made for the worktree, not the one chosen
+    expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/paseo/demo/persona-submitted-task", workspace_id: "made-for-it", host: "paseo" });
+  });
+
+  it("starts in a new worktree Orca makes under the Orca workspace chosen (#17050)", async () => {
+    await list([{ ...paseo("orca-row"), source: "orca" }]);
+    await act(async () => choices()[0].click());
+    const request = await prepare();
+    // Orca says where its worktree goes and makes it, as a child of the workspace chosen
+    expect(calls.filter((c) => c.url.endsWith("/worktree/status")).at(-1)?.body).toEqual({ cwd: "/projects/orca-row", kind: "orca" });
+    expect(request.body).toMatchObject({ cwd: "/projects/orca-row", kind: "orca" });
+    await answer(request, { path: "/orca/workspaces/demo/persona-submitted-task", branch: "persona/submitted-task", root: "/projects/orca-row", workspace_id: "made-for-it" });
+    expect(starts()).toHaveLength(1);
+    // into the worktree Orca made, not the one chosen
+    expect(starts()[0].body).toMatchObject({ machine_id: "computer", cwd: "/orca/workspaces/demo/persona-submitted-task", workspace_id: "made-for-it", host: "orca" });
+  });
+
+  it("offers a chosen Orca workspace's worktree off, and a switch turned on does not carry to the next choice", async () => {
+    await list([paseo("fix-login"), { ...paseo("orca-row"), source: "orca" }]);
+    await act(async () => choices().find((b) => b.textContent?.includes("fix-login"))!.click());
+    await tick(401);
+    await act(async () => document.querySelector<HTMLButtonElement>('[data-testid="new-agent-worktree"] [role="switch"]')!.click());
+    await click(t("newagent-workspace.choose_folder"));
+    await act(async () => choices().find((b) => b.textContent?.includes("orca-row"))!.click());
+    await tick(401);
+    expect(document.querySelector('[data-testid="new-agent-worktree"] [role="switch"]')!.getAttribute("aria-checked")).toBe("false");
+    await click(t("newagent.start")); await tick();
+    expect(pending).toHaveLength(0);
+    expect(starts()[0].body).toMatchObject({ cwd: "/projects/orca-row", workspace_id: "orca-row", host: "orca" });
   });
 
   it("goes back to a folder, and another computer drops the choice", async () => {
@@ -497,6 +559,189 @@ describe("New Agent workspace list (#7259)", () => {
     await list([{ ...paseo("space"), source: "herdr" }, paseo("offline", { online: false })]);
     expect(document.querySelector('[data-testid="new-agent-workspaces"]')).toBeNull();
     expect(document.querySelector('input[placeholder="' + t("newagent.folder_placeholder") + '"]')).not.toBeNull();
+  });
+});
+
+describe("New Agent with an omp launcher (#11964)", () => {
+  const launcher = "omp";
+  const model = "openai/gpt-5.2";
+  const pill = () => document.querySelector<HTMLButtonElement>("[data-testid=new-agent-model] [data-model-pill]")!;
+  const row = (id: string) => [...document.querySelectorAll<HTMLElement>("[data-panel-row]")].find((el) => el.dataset.panelRow === id);
+
+  async function openPanel(name = launcher) {
+    await act(async () => pill().click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+    const header = document.querySelector<HTMLButtonElement>(`[data-panel-launcher="${name}"][aria-expanded=false]`);
+    if (header) await act(async () => header.click());
+  }
+
+  it.each(["typed", "listed", "preset", "launcher default"] as const)("sends the %s choice to the ordinary sessions endpoint", async (choice) => {
+    await click("Close externally");
+    launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }];
+    launcherModels[launcher] = { supports_start_model: true, models: choice === "listed" ? [{ id: model, name: "Catalog model", efforts: ["high"] }] : [] };
+    launcherTiers = [{ name: "Research", launcher, model, effort: "high" }];
+    localStorage.setItem("new.mode.computer", "plan");
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    await openPanel();
+    if (choice === "typed") {
+      await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
+      const typed = row(`typed:${launcher}\n${model}`);
+      expect(typed).toBeDefined();
+      await act(async () => typed!.click());
+      await openPanel();
+      expect(row(`model:${launcher}\n${model}`)?.getAttribute("aria-pressed")).toBe("true");
+      await act(async () => pill().click());
+    } else {
+      const rows = { preset: "preset:Research", listed: `model:${launcher}\n${model}`, "launcher default": `model:${launcher}\ndefault` };
+      const pick = row(rows[choice]);
+      expect(pick).toBeDefined();
+      await act(async () => pick!.click());
+    }
+    await click(t("newagent.start")); await tick();
+    expect(starts()).toHaveLength(1);
+    const body = starts()[0].body!;
+    expect(body).toMatchObject({ machine_id: "computer", launcher });
+    if (choice === "launcher default") expect(body).not.toHaveProperty("model");
+    else expect(body.model).toBe(model);
+    for (const field of ["effort", "launcher_default_effort", "permission_mode", "ultracode", "work_session"]) {
+      expect(body).not.toHaveProperty(field);
+    }
+  });
+
+  it("drops a typed omp model when the user changes from herdr to another host", async () => {
+    await click("Close externally");
+    launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }];
+    launcherModels[launcher] = { models: [], supports_start_model: true };
+    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "paseo"], engine_default: "herdr" }));
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    await openPanel();
+    await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
+    const typed = row(`typed:${launcher}\n${model}`);
+    expect(typed).toBeDefined();
+    await act(async () => typed!.click());
+    expect(pill().title).toContain(model);
+    await click("Paseo"); await flush();
+    expect(pill().title).not.toContain(model);
+    await openPanel();
+    await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
+    expect(row(`typed:${launcher}\n${model}`)).toBeUndefined();
+    await act(async () => pill().click());
+    await click(t("newagent.start")); await tick();
+    expect(starts()[0].body).toMatchObject({ launcher, host: "paseo" });
+    expect(starts()[0].body).not.toHaveProperty("model");
+  });
+
+  it("checks the terminal host for omp even while a desktop launcher has its own destination", async () => {
+    await click("Close externally");
+    launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }, { name: "codex-app", agent: "codex", source: "codex_app" }];
+    launcherModels[launcher] = { models: [], supports_start_model: true };
+    launcherModels["codex-app"] = { models: [] };
+    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "paseo"], engine_default: "herdr" }));
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    await click("Paseo"); await flush();
+    await openPanel("codex-app");
+    const desktop = row("model:codex-app\ndefault");
+    expect(desktop).toBeDefined();
+    await act(async () => desktop!.click());
+    await openPanel();
+    await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
+    expect(row(`typed:codex-app\n${model}`)).toBeDefined();
+    expect(row(`typed:${launcher}\n${model}`)).toBeUndefined();
+  });
+
+  it.each([
+    ["older node with an empty catalog", 200, { models: [] }],
+    ["unadvertised catalog entry", 200, { models: [{ id: model, name: "Listed" }] }],
+    ["locked launcher", 200, { models: [{ id: model, name: "Listed" }], supports_start_model: true, locked: "Fixed by launcher" }],
+    ["missing endpoint", 404, { models: [] }],
+    ["failed catalog read", 503, { models: [] }],
+  ] as const)("on %s offers its default and omits a preset's unsupported model", async (_node, status, catalog) => {
+    await click("Close externally");
+    launcherRows = [{ name: launcher, agent: "omp" }];
+    launcherTiers = [{ name: "Research", launcher, model }];
+    launcherModels[launcher] = { ...catalog, models: [...catalog.models] };
+    modelsStatus = status;
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    await openPanel();
+    expect(row(`model:${launcher}\ndefault`)).toBeDefined();
+    expect(row(`model:${launcher}\n${model}`)).toBeUndefined();
+    const search = document.querySelector<HTMLInputElement>("[data-model-panel] input")!;
+    await input(search, model);
+    expect(row(`typed:${launcher}\n${model}`)).toBeUndefined();
+    await input(search, "");
+    await act(async () => row("preset:Research")!.click());
+    expect(pill().title).not.toContain(model);
+    await click(t("newagent.start")); await tick();
+    expect(starts()[0].body).toMatchObject({ launcher });
+    expect(starts()[0].body).not.toHaveProperty("model");
+  });
+
+  it("retires previously advertised omp support after a failed refresh", async () => {
+    await click("Close externally");
+    launcherRows = [{ name: launcher, agent: "omp" }];
+    launcherModels[launcher] = { models: [], supports_start_model: true };
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    await openPanel();
+    await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
+    await act(async () => row(`typed:${launcher}\n${model}`)!.click());
+    expect(pill().title).toContain(model);
+    modelsStatus = 503;
+    await openPanel();
+    expect(row(`model:${launcher}\n${model}`)).toBeUndefined();
+    await act(async () => pill().click());
+    expect(pill().title).not.toContain(model);
+    await click(t("newagent.start")); await tick();
+    expect(starts()[0].body).not.toHaveProperty("model");
+  });
+
+  it.each(["launcher default", "follow model settings"] as const)("shows and submits the %s when both refer to omp", async (choice) => {
+    await click("Close externally");
+    configured = true; configuredProvider = launcher;
+    launcherRows = [{ name: launcher, agent: "omp", model: "omp-local-default" }];
+    launcherModels[launcher] = { models: [], supports_start_model: true };
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    expect(pill().title).toContain("synthetic-model");
+    await openPanel();
+    const local = row(`model:${launcher}\ndefault`)!;
+    const follow = document.querySelector<HTMLElement>("[data-follow-row]")!;
+    expect(local.textContent).toContain("omp-local-default");
+    expect(local.textContent).not.toContain("synthetic-model");
+    expect(follow.textContent).toContain("synthetic-model");
+    await act(async () => (choice === "launcher default" ? local : follow).click());
+    expect(pill().title).toContain(choice === "launcher default" ? "omp-local-default" : "synthetic-model");
+    await click(t("newagent.start")); await tick();
+    const body = starts()[0].body!;
+    expect(body.launcher).toBe(choice === "launcher default" ? launcher : undefined);
+    expect(body).not.toHaveProperty("model");
+    expect(body).not.toHaveProperty("effort");
+  });
+
+  it("keeps a runtime-owned omp catalog and its advertised effort without enabling typed IDs", async () => {
+    await click("Close externally");
+    const runtime = "omp-provider";
+    launcherRows = [{ name: runtime, agent: "omp", source: runtime, permission_modes: ["default"] }];
+    launcherModels[runtime] = { models: [{ id: "runtime-model", name: "Runtime model", efforts: ["high"] }] };
+    launcherTiers = [{ name: "Runtime", launcher: runtime, model: "runtime-model", effort: "high" }];
+    resetModelListsForTests();
+    await click("Reopen start"); await flush();
+    await openPanel(runtime);
+    expect(row(`model:${runtime}\nruntime-model`)).toBeDefined();
+    const search = document.querySelector<HTMLInputElement>("[data-model-panel] input")!;
+    await input(search, model);
+    expect(row(`typed:${runtime}\n${model}`)).toBeUndefined();
+    await input(search, "");
+    await act(async () => row("preset:Runtime")!.click());
+    expect(pill().title).toContain("Runtime model");
+    await click(t("newagent.start")); await tick();
+    expect(starts()[0].body).toMatchObject({ launcher: runtime, model: "runtime-model", effort: "high" });
+    expect(starts()[0].body).not.toHaveProperty("permission_mode");
   });
 });
 

@@ -8,7 +8,35 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/modelhttp"
 )
+
+func TestDoUserAgent(t *testing.T) {
+	var got string
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+	}))
+	defer gw.Close()
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{"default", nil, modelhttp.UserAgent()},
+		{"plugin", map[string]string{"user-agent": "plugin/1"}, "plugin/1"},
+		{"empty plugin", map[string]string{"user-agent": ""}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Do(context.Background(), nil, gw.URL, "", Request{URL: "/usage", Headers: tc.headers}); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("User-Agent = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 // A plugin's request goes to the launcher's own gateway with the key put in, and the key never comes back.
 func TestDoPutsTheKeyInAndTakesItOut(t *testing.T) {
@@ -154,6 +182,32 @@ func TestDoPutsTheKeyInThePath(t *testing.T) {
 			if strings.Contains(resp.Body, c.key) || strings.Contains(resp.Body, url.PathEscape(c.key)) || !strings.Contains(resp.Body, KeyPlaceholder) {
 				t.Fatalf("key %q, address %q: the key came back or was not marked: %+v", c.key, address, resp)
 			}
+		}
+	}
+}
+
+// A quota or usage read is Persona's background request at an allowed gateway, whatever source headers the extension
+// sent; at a gateway outside the allowlist no source goes at all.
+func TestDoMarksItsSourceAsBackground(t *testing.T) {
+	var got http.Header
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.Header.Clone() }))
+	defer gw.Close()
+	forged := map[string]string{"x-persona-role": "main", "X-Persona-Todo": "todo_forged", "User-Agent": ""}
+	u, _ := url.Parse(gw.URL)
+	t.Setenv(modelhttp.SourceHostsEnv, u.Hostname())
+	if _, err := Do(context.Background(), nil, gw.URL, "", Request{URL: "/usage", Headers: forged}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Get(modelhttp.RoleHeader) != "background" || got.Get(modelhttp.TodoHeader) != "" || got.Get(modelhttp.SessionHeader) != "" {
+		t.Fatalf("allowed gateway: headers %v", got)
+	}
+	t.Setenv(modelhttp.SourceHostsEnv, "")
+	if _, err := Do(context.Background(), nil, gw.URL, "", Request{URL: "/usage", Headers: forged}); err != nil {
+		t.Fatal(err)
+	}
+	for name := range got {
+		if modelhttp.SourceHeader(name) {
+			t.Fatalf("source sent outside the allowlist: %v", got)
 		}
 	}
 }

@@ -4,13 +4,17 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
 
 type Pending = { method: string; json?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const pending: Pending[] = [];
+// The hub-wide push grading switch at the end of the page reads the legacy route (#8157, LowDistractionSettings.test.tsx):
+// kept apart, so pending is this device's prefs as before.
+const lnMode: Pending[] = [];
 vi.mock("../../lib/api", async (original) => ({
   ...(await original<typeof import("../../lib/api")>()),
-  api: (_path: string, init?: { method?: string; json?: unknown }) =>
-    new Promise((resolve, reject) => pending.push({ method: init?.method ?? "GET", json: init?.json, resolve, reject })),
+  api: (path: string, init?: { method?: string; json?: unknown }) =>
+    new Promise((resolve, reject) => (path === "/push/ln-mode" ? lnMode : pending).push({ method: init?.method ?? "GET", json: init?.json, resolve, reject })),
   enc: encodeURIComponent,
   errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
@@ -25,6 +29,7 @@ let host: HTMLDivElement;
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   pending.length = 0;
+  lnMode.length = 0;
   toast.mockClear();
   localStorage.clear();
   host = document.createElement("div");
@@ -53,23 +58,23 @@ describe("设置 › 通知", () => {
     await answer(0, { input: false, done: "always" });
     expect(named("需要你处理时")).toBeDefined();
     expect(inputSwitch().getAttribute("aria-checked")).toBe("false");
-    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("每次都推");
+    expect(host.querySelector('[role="radio"][aria-checked="true"]')?.textContent).toBe("每次都通知");
   });
 
   it("读不到时说为什么，点重试再读", async () => {
     await render();
     await fail(0, new Error("hub 没回答"));
-    expect(host.textContent).toContain("读不到通知设置");
+    expect(host.textContent).toContain("无法加载通知设置");
     expect(host.textContent).toContain("hub 没回答");
     const retry = [...host.querySelectorAll("button")].find((b) => b.textContent === "重试")!;
     await act(async () => retry.click());
     expect(pending).toHaveLength(2);
     await answer(1, { input: true, done: "long" });
     expect(named("需要你处理时")).toBeDefined();
-    expect(host.textContent).not.toContain("读不到通知设置");
+    expect(host.textContent).not.toContain("无法加载通知设置");
   });
 
-  it("hub 不让保存：开关回到原来的样子，并提示没保存上", async () => {
+  it("hub 不让保存：开关回到原来的样子，并提示保存失败", async () => {
     await render();
     await answer(0, { input: true, done: "long" });
     await act(async () => inputSwitch().click());
@@ -77,7 +82,7 @@ describe("设置 › 通知", () => {
     expect(pending[1].method).toBe("PUT");
     await fail(1, new Error("500"));
     expect(inputSwitch().getAttribute("aria-checked")).toBe("true");
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("没保存上"), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("保存失败"), "error");
   });
 
   it("does not show a failed-save toast from a retired login", async () => {
@@ -109,7 +114,7 @@ describe("设置 › 通知", () => {
     vi.stubGlobal("Notification", undefined);
     await render();
     expect(named("弹出系统通知")!.disabled).toBe(true);
-    expect(host.textContent).toContain("这个浏览器不支持系统通知");
+    expect(host.textContent).toContain("当前浏览器不支持系统通知");
   });
 
   it("提示音在这一页：hub 还没答就能开关，存在这个浏览器，不发请求", async () => {
@@ -160,7 +165,7 @@ describe("设置 › 通知", () => {
       await render();
       expect(always().disabled).toBe(true);
       expect(always().getAttribute("aria-checked")).toBe("false");
-      expect(host.textContent).toContain("先打开上面的系统通知");
+      expect(host.textContent).toContain("请先开启系统通知");
     });
 
     it("turns on and off once they are, kept in this browser, and the texts say so", async () => {
@@ -173,7 +178,7 @@ describe("设置 › 通知", () => {
       expect(always().getAttribute("aria-checked")).toBe("true");
       expect(localStorage.getItem("persona.systemNotifyAlways")).toBe("1");
       expect(host.textContent).toContain("网页在前台时也弹出");
-      expect(host.textContent).toContain("Persona 标签页在前台时也弹，开着几个标签页也只弹一次");
+      expect(host.textContent).toContain("即使 Persona 标签页在前台也不例外；无论打开多少个标签页，都只弹出一次");
       expect(pending).toHaveLength(1); // only the prefs load: this switch is not the hub's
       await act(async () => always().click());
       expect(localStorage.getItem("persona.systemNotifyAlways")).toBeNull();
@@ -191,5 +196,29 @@ describe("设置 › 通知", () => {
       await act(async () => named("弹出系统通知")!.click());
       expect(always().getAttribute("aria-checked")).toBe("true");
     });
+  });
+});
+
+describe("Settings › Notifications › Push grading", () => {
+  const pushGrading = () => named(t("settings-notifications.low_distraction"));
+
+  it("comes after the browser-only settings and reflects the hub's answer", async () => {
+    await render();
+    expect(pushGrading()).toBeUndefined();
+    expect(lnMode).toHaveLength(1);
+    expect(lnMode[0].method).toBe("GET");
+    await act(async () => lnMode[0].resolve({ enabled: true }));
+    expect(pushGrading()?.getAttribute("aria-checked")).toBe("true");
+    const text = host.textContent ?? "";
+    const deviceNote = text.indexOf(t("settings-notifications.device_note"));
+    expect(deviceNote).toBeGreaterThan(-1);
+    expect(text.indexOf(t("settings-notifications.low_distraction_footer"))).toBeGreaterThan(deviceNote);
+  });
+
+  it.each([404, 405])("explains unsupported push grading on an older hub (HTTP %s)", async (status) => {
+    await render();
+    await act(async () => lnMode[0].reject(Object.assign(new Error("not supported"), { status })));
+    expect(pushGrading()).toBeUndefined();
+    expect(host.textContent).toContain(t("settings-notifications.low_distraction_unsupported"));
   });
 });

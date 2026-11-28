@@ -1,4 +1,5 @@
 import SwiftUI
+import PersonaWire
 
 /// An MCP server's form or link (docs/protocol/protocol.md "MCP elicitation"; the rules are `Elicitation`'s, as on the
 /// web and Android). A form in the subset the app can draw: a row per field, Decline / Submit, and Cancel under them. A
@@ -219,7 +220,7 @@ struct ElicitationForm: View {
                     .themedButton(prominent: true)
                     .disabled(!ready)
                     .accessibilityIdentifier(isLink ? "elicitation.continue" : "elicitation.submit")
-                } else {
+                } else if interaction.noHandBack != true {
                     Button { handBack() } label: {
                         Text("Hand Back to Computer").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
                     }
@@ -229,9 +230,6 @@ struct ElicitationForm: View {
             }
             .controlSize(.large)
             Button { act(.cancel) } label: { Text("Cancel").lineLimit(1) }
-                #if os(macOS)
-                .buttonStyle(.link)
-                #endif
                 .font(Theme.Font.caption)
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("elicitation.cancel")

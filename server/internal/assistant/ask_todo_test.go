@@ -16,7 +16,7 @@ import (
 // An ask_user nobody answers in time becomes a to-do that waits for the owner's call, and the call goes back to the
 // conversation that asked (#1617, ask_todo.go). All ids are placeholders.
 
-const askTodoArgs = `{"questions":[{"question":"Merge the release PR now?","header":"Merge","options":[` +
+const askTodoArgs = `{"why_owner":"priority","questions":[{"question":"Merge the release PR now?","header":"Merge","options":[` +
 	`{"label":"Merge (Recommended)","description":"CI is green"},{"label":"Wait","description":"until the review is in"}]}]}`
 
 // askTodoEnv is threadEnv (a paired bot, the main conversation m1 and the conversation c1x1x1 on server) where c1x1x1 asks.
@@ -178,14 +178,15 @@ func TestOnlyAnExpiredAskUserBecomesATodo(t *testing.T) {
 
 // The to-do waits for the owner's call where they look: the next briefing's "Can wait" rows and the live snapshot.
 func TestAskTodoWaitsInTheBriefingAndTheSnapshot(t *testing.T) {
+	needsBriefingModule(t)
 	e := newAskTodoEnv(t, nil)
 	e.expire()
 	todo := e.onlyAskTodo()
 	f := e.s.briefFactsAt(context.Background(), time.Now(), "")
-	if f.LaterTotal != 1 || len(f.Later) != 1 || f.Later[0].summary != "Merge the release PR now?" {
+	if f.LaterTotal != 1 || len(f.Later) != 1 || f.Later[0].Summary != "Merge the release PR now?" {
 		t.Fatalf("can wait: %d %+v", f.LaterTotal, f.Later)
 	}
-	snap := e.s.contextSnapshot(context.Background())
+	snap := e.s.contextSnapshot(context.Background(), "", false)
 	if !strings.Contains(snap, "Merge the release PR now?") || !strings.Contains(snap, todo.ID) {
 		t.Fatalf("the snapshot does not list it:\n%s", snap)
 	}
@@ -194,7 +195,7 @@ func TestAskTodoWaitsInTheBriefingAndTheSnapshot(t *testing.T) {
 		t.Fatalf("a closed one still waits: %+v", f.Later)
 	}
 	e.s.ProfileChanged(context.Background()) // a fresh snapshot
-	if snap := e.s.contextSnapshot(context.Background()); strings.Contains(snap, todo.ID) {
+	if snap := e.s.contextSnapshot(context.Background(), "", false); strings.Contains(snap, todo.ID) {
 		t.Fatalf("a closed one is still in the snapshot:\n%s", snap)
 	}
 }
@@ -252,6 +253,7 @@ func TestAskTodoAnswerLostInARestartLetsTheNextOneGo(t *testing.T) {
 // A reply in the Lark topic the to-do is bound to is its decision too: one message to the asking conversation (the
 // bot's send, so the answer comes back into the topic), and the to-do closes.
 func TestAskTodoTopicReplyGoesBackToTheConversation(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	database := todoTestDB(t)
 	e := newAskTodoEnv(t, database)
 	e.expire()
@@ -289,7 +291,7 @@ func TestAskTodoHandedToAnAgentIsNoTask(t *testing.T) {
 			proto.Session{SessionID: "a1", Agent: "claude", Cwd: "/code/app", Status: status, State: state, LastText: text, UpdatedAt: time.Now()})
 	}
 	agent(proto.StatusWorking, proto.StateWorking, "")
-	e.s.taskWorking(ctx, "server", "a1")
+	e.s.taskWorking(ctx, "server", "a1", startRow{})
 	if got, ok := e.s.taskOf(ctx, "server", "a1"); ok {
 		t.Fatalf("the agent counts as working on task %+v", got)
 	}
@@ -301,7 +303,7 @@ func TestAskTodoHandedToAnAgentIsNoTask(t *testing.T) {
 	if kinds := feedKinds(e.s, "c1x1x1"); strings.Contains(kinds, "receipt") {
 		t.Fatalf("a task receipt in the asking conversation: %s", kinds)
 	}
-	if snap := e.s.contextSnapshot(ctx); !strings.Contains(snap, todo.ID) {
+	if snap := e.s.contextSnapshot(ctx, "", false); !strings.Contains(snap, todo.ID) {
 		t.Fatalf("the question no longer waits in the snapshot:\n%s", snap)
 	}
 	e.must("PATCH", "/api/v1/todos/"+todo.ID, `{"done":true}`)
@@ -315,6 +317,7 @@ func TestAskTodoHandedToAnAgentIsNoTask(t *testing.T) {
 // closing its to-do does (#1854): the to-do closes, the snapshot stops holding the question, and the conversation that
 // asked is told once that it was dropped. Pressed again, it is "already handled" and tells nothing more.
 func TestAskTodoHandledInTheBriefingClosesIt(t *testing.T) {
+	needsBriefingModule(t)
 	e := newAskTodoEnv(t, nil)
 	e.expire()
 	todo := e.onlyAskTodo()
@@ -323,7 +326,7 @@ func TestAskTodoHandledInTheBriefingClosesIt(t *testing.T) {
 	if len(f.Later) != 1 {
 		t.Fatalf("can wait: %+v", f.Later)
 	}
-	row := f.Later[0].id
+	row := f.Later[0].ID
 	e.must("POST", "/api/v1/later/"+row+"/handled", "")
 	if cur := e.get(todo.ID); cur == nil || cur.DoneAt == nil {
 		t.Fatalf("the to-do is still open: %+v", cur)
@@ -333,7 +336,7 @@ func TestAskTodoHandledInTheBriefingClosesIt(t *testing.T) {
 		t.Fatalf("told %q, want one dropped notice", got)
 	}
 	e.s.ProfileChanged(ctx) // a fresh snapshot
-	if snap := e.s.contextSnapshot(ctx); strings.Contains(snap, todo.ID) {
+	if snap := e.s.contextSnapshot(ctx, "", false); strings.Contains(snap, todo.ID) {
 		t.Fatalf("the question still waits in the snapshot:\n%s", snap)
 	}
 	if w := e.do("POST", "/api/v1/later/"+row+"/handled", ""); w.Code != http.StatusConflict {
@@ -380,6 +383,7 @@ func TestAskTodoDeletedTellsTheConversation(t *testing.T) {
 // Through the real queue: the card expires on its own, the tool gets the to-do, and its Lark card says it moved to the
 // to-dos instead of "Ended".
 func TestAskUserExpiringOnTheQueueMovesToTodos(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	old := askUserWait
 	askUserWait = 300 * time.Millisecond
 	t.Cleanup(func() { askUserWait = old })

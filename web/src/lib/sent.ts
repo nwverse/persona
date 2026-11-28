@@ -27,8 +27,13 @@ export interface SentLetThrough {
   /** card: the card the user was asked on, and "assistant" when the assistant answered it for them. */
   interaction_id?: string;
   answered_by?: string;
+  /** The card's original text when the user allowed an edited version; text keeps what was actually sent. */
+  edited_from?: string;
   /** auto: the extension setting that let it send without asking. */
   setting?: string;
+  authorization_id?: string;
+  scenario?: string;
+  outcome?: "pending" | "sent" | "failed_or_unknown" | "already_delivered";
 }
 
 /** The conversation that asked: both ids when the request named one, `extension` for a send an extension recorded. */
@@ -306,7 +311,14 @@ export function ruleText(r: SentRule | undefined): string {
  */
 export function allowedBy(lt: SentLetThrough | undefined): { label: string; tone: AllowedTone; detail: string } {
   const kind = lt?.kind ?? "";
+  if (lt?.outcome === "pending" || lt?.outcome === "failed_or_unknown" || lt?.outcome === "already_delivered") {
+    return { label: t(`settings-outbound.${lt.outcome === "pending" ? "delivery_pending" : lt.outcome}`), tone: "orange",
+      detail: `${t("settings-outbound.audit_basis")}: ${lt.authorization_id ?? ""}` };
+  }
   switch (kind) {
+    case "standing_authorization":
+      return { label: t("settings-outbound.authorized_send"), tone: "neutral",
+        detail: `${t("settings-outbound.audit_basis")}: ${lt?.authorization_id ?? ""} / ${t(`settings-outbound.${lt?.scenario}`)}` };
     case "rule":
       return { label: t("settings-sent.by_rule"), tone: "neutral", detail: ruleText(lt?.rule) || t("settings-sent.detail_rule") };
     case "conversation_always":

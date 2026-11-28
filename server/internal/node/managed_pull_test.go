@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,9 @@ type pullHub struct {
 	mu     sync.Mutex
 	asked  []map[string]any
 	answer func(name string) (any, error)
+	// agentsDefault answers launchers.agents_default (Model Settings › Agents for pi, pi_providers.go); nil: an older
+	// manager that does not know it.
+	agentsDefault map[string]any
 }
 
 func withPullHub(t *testing.T, n *Node, h *pullHub) {
@@ -31,6 +35,9 @@ func withPullHub(t *testing.T, n *Node, h *pullHub) {
 	n.peer = peer
 	hub := rpc.New("h", h2nW)
 	hub.OnRequest = func(_ context.Context, method string, params json.RawMessage) (any, error) {
+		if method == "launchers.agents_default" && h.agentsDefault != nil {
+			return h.agentsDefault, nil
+		}
 		if method != "launchers.pull" {
 			return nil, errors.New("unknown method " + method)
 		}
@@ -169,5 +176,53 @@ func TestOwnLauncherCountsOnlyTheUsersOwn(t *testing.T) {
 	list = append(list, proto.Launcher{Name: "cc_work", Source: "zshrc"}, proto.Launcher{Name: "cx", Agent: "codex", Source: "zshrc"})
 	if !ownLauncher(list, "claude") || !ownLauncher(list, "codex") {
 		t.Fatal("an rc-file launcher is a service of one's own")
+	}
+}
+
+// An on-demand managed agy launcher is NOT prefetched on catalog push: catalog updates only refresh the index/rev,
+// and secrets are pulled on demand when a session or probe resolves its channel pool (agyChannelFor).
+func TestOnDemandAgyProviderWaitsUntilSessionUsesIt(t *testing.T) {
+	n := &Node{bin: "/usr/local/bin/personad"}
+	var mu sync.Mutex
+	var asked []string
+	h := &pullHub{answer: func(name string) (any, error) {
+		mu.Lock()
+		asked = append(asked, name)
+		mu.Unlock()
+		return map[string]any{"launcher": proto.ManagedLauncher{Name: name, Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", APIKey: "agy-pulled-key"}}, nil
+	}}
+	withPullHub(t, n, h)
+	entry := proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", Delivery: proto.DeliveryOnDemand, Rev: "r1"}
+	pushed := proto.ManagedLauncher{Name: "push-sentinel", BaseURL: "https://push.example.com", Model: "m1", Delivery: proto.DeliveryPush, Rev: "r1"}
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"},
+		entry.Public(),
+		pushed.Public(),
+	})
+
+	// Wait for the background prefetch goroutine to finish pulling the pushed sentinel listed after agy-gw.
+	waitWithin(t, 5*time.Second, "pushed sentinel prefetched", func() bool {
+		l, ok := n.managedLauncher(pushed.Name)
+		return ok && !l.Withheld
+	})
+	mu.Lock()
+	prefetched := slices.Clone(asked)
+	mu.Unlock()
+	if !slices.Equal(prefetched, []string{pushed.Name}) {
+		t.Fatalf("on-demand agy launcher was prefetched on catalog push: asked %v, want only [%s]", prefetched, pushed.Name)
+	}
+
+	// Resolving the channel on demand triggers launchers.pull and returns the isolated channel spec.
+	ch, err := n.agyChannelFor(t.Context(), entry.Name)
+	if err != nil || ch == nil {
+		t.Fatalf("agyChannelFor(%q) = %+v, %v", entry.Name, ch, err)
+	}
+	if ch.ID != entry.Name || ch.AuthMode != "gemini-api-key" || ch.Rev != "r1" || ch.Env["GEMINI_API_KEY"] != "agy-pulled-key" {
+		t.Fatalf("unexpected channel spec: %+v", ch)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(asked, []string{pushed.Name, entry.Name}) {
+		t.Fatalf("expected on-demand pull for %s after sentinel, got %v", entry.Name, asked)
 	}
 }

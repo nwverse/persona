@@ -9,7 +9,7 @@ enum class FailureAction {
 }
 enum class FailureReason {
     Demo, PairingExpired, CertificateChanged, Incompatible, LocalPermission,
-    InputDraft, DialogOpen, StaleSession, Invalid, IdReused, PromptChanged, Expired,
+    AgentStopped, InputDraft, DialogOpen, StaleSession, Invalid, IdReused, PromptChanged, Expired,
     RateLimited, NotDelivered, Unknown, Delivered, Failed,
     // The hub's coded refusals of the main conversation (docs/assistant/onboarding.md 4.6, 5.2).
     NoMachine, MachinePending, ComputerOffline, ClaudeMissing, LauncherMissing, NotLoggedIn, AuthFailed, AssistantRestarting,
@@ -50,6 +50,7 @@ fun mapOperationFailure(
     if (delivered == "unknown") return result(FailureReason.Unknown, FailureAction.Verify)
     if (delivered == "yes") return result(FailureReason.Delivered, FailureAction.Verify)
     val business = when (code) {
+        "agent_stopped" -> result(FailureReason.AgentStopped, FailureAction.OpenTerminal)
         "kb_disabled" -> result(FailureReason.KnowledgeDisabled, FailureAction.None)
         "kb_unavailable" -> result(FailureReason.KnowledgeUnavailable, FailureAction.Retry)
         "kb_read_only" -> result(FailureReason.KnowledgeReadOnly, FailureAction.None)
@@ -67,7 +68,7 @@ fun mapOperationFailure(
         "node_unreachable" -> result(FailureReason.ComputerOffline, FailureAction.WakeComputer)
         "claude_missing" -> result(FailureReason.ClaudeMissing, FailureAction.InstallClaude)
         "launcher_missing" -> result(FailureReason.LauncherMissing, FailureAction.ConnectModel)
-        "not_logged_in" -> result(FailureReason.NotLoggedIn, FailureAction.LoginClaude)
+        "not_logged_in" -> result(FailureReason.NotLoggedIn, FailureAction.ConnectModel)
         "auth_failed" -> result(FailureReason.AuthFailed, FailureAction.EditProvider)
         "launcher_out_of_scope", "launcher_own_service" -> result(FailureReason.ProviderOutOfScope, FailureAction.EditProvider)
         // The assistant's process restarting: it comes back by itself in a few seconds.

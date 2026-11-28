@@ -67,6 +67,9 @@ beforeEach(() => {
     const url = String(input);
     if (url.includes("/model-config/purposes/")) return purpose ? json(purpose) : json({ error: "not found" }, 404);
     if (url.includes("/launchers/fast/models")) return json(fastList);
+    if (url.includes("/launchers/codex/models")) return json({ agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", default: true }] });
+    if (url.includes("/launchers/grok/models")) return json({ agent: "grok", models: [{ id: "grok-4", name: "Grok 4", default: true }] });
+    if (url.includes("/launchers/agy/models")) return json({ agent: "agy", models: [{ id: "gemini-3", name: "Gemini 3", default: true }] });
     if (url.includes("/launchers/") && url.includes("/models")) return json(claudeList);
     if (url.includes("/launchers")) return json({ launchers, tiers, tiers_profile: tiers ? { id: "performance", name: "性能" } : undefined });
     return json({ path: "/code", entries: [] });
@@ -89,6 +92,10 @@ async function open() {
 
 async function openPanel() {
   act(() => pill().click());
+  await act(async () => vi.dynamicImportSettled());
+  await flush();
+  // These caller tests inspect model actions; disclose the catalog first.
+  for (const header of document.body.querySelectorAll<HTMLButtonElement>('[data-panel-launcher][aria-expanded="false"]')) act(() => header.click());
   await flush();
 }
 
@@ -114,8 +121,8 @@ describe("New agent: presets (#2225)", () => {
     expect(hint()?.textContent).toBe("预设 review · 代码审查和设计");
     // the model it runs is lit in its launcher's group (a preset row itself never is)
     await openPanel();
-    expect(row("model:fast\nm-review")!.getAttribute("aria-selected")).toBe("true");
-    expect(preset("review")!.getAttribute("aria-selected")).toBe("false");
+    expect(row("model:fast\nm-review")!.getAttribute("aria-pressed")).toBe("true");
+    expect(preset("review")!.getAttribute("aria-pressed")).toBe("false");
     act(() => pill().click());
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "fast", model: "m-review", effort: "high" });
@@ -147,7 +154,7 @@ describe("New agent: presets (#2225)", () => {
     tiers = [{ name: "deepest", launcher: "fast", model: "m-review", effort: "max" }];
     await open();
     await pick("preset:deepest");
-    expect(hint()?.textContent).toBe("这里用不上：最高，会按启动器或模型自己的设置运行。");
+    expect(hint()?.textContent).toBe("以下设置在此不适用：Max，将沿用启动器或模型自身的设置。");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review" });
     expect(launched[0]?.effort).toBeUndefined();
@@ -183,7 +190,7 @@ describe("New agent: presets (#2225)", () => {
     await pick("preset:review");
     expect(hint()?.textContent).toBe("预设 review · 代码审查和设计");
     await openPanel();
-    expect(document.body.querySelector("[data-follow-row]")!.getAttribute("aria-selected")).toBe("false");
+    expect(document.body.querySelector("[data-follow-row]")!.getAttribute("aria-pressed")).toBe("false");
     act(() => document.body.querySelector<HTMLElement>("[data-follow-row]")!.click());
     await flush();
     expect(hint()).toBeNull();
@@ -199,7 +206,7 @@ describe("New agent: presets (#2225)", () => {
     await openPanel();
     const review = preset("review")!;
     expect(review.getAttribute("aria-disabled")).toBe("true");
-    expect(review.title).toBe("Key 或登录被拒绝了");
+    expect(review.title).toBe("Key 或登录凭证已被拒绝");
     act(() => review.click());
     await flush();
     expect(panel()).not.toBeNull();
@@ -215,5 +222,165 @@ describe("New agent: presets (#2225)", () => {
     expect(launched[0]).toMatchObject({ launcher: "claude" });
     expect(launched[0]?.model).toBeUndefined();
     expect(launched[0]?.effort).toBeUndefined();
+  });
+
+  it("applies a preset's permission_mode when picked and launches with it", async () => {
+    tiers = [{ name: "guarded", launcher: "fast", model: "m-review", effort: "high", permission_mode: "plan" }];
+    await open();
+    await pick("preset:guarded");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review", effort: "high", permissionMode: "plan" });
+  });
+
+  it("respects explicit Follow launcher and filters unlisted preset modes on listed-mode launchers", async () => {
+    launchers = [
+      { name: "claude", agent: "claude" },
+      { name: "grok", agent: "grok", permission_modes: ["default", "bypassPermissions"] },
+    ];
+    tiers = [
+      { name: "grok-bypass", launcher: "grok", permission_mode: "bypassPermissions" },
+      { name: "grok-unlisted", launcher: "grok", permission_mode: "plan" },
+    ];
+    await open();
+
+    // Pick a listed-mode preset, then explicitly reset to Follow launcher: must NOT fall back to tier.permission_mode.
+    await pick("preset:grok-bypass");
+    const followBtn = [...document.body.querySelectorAll<HTMLButtonElement>('[data-testid="new-agent-provider-modes"] button')]
+      .find((b) => b.textContent?.trim() === "跟随启动器")!;
+    act(() => followBtn.click());
+    await flush();
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "grok" });
+    expect(launched[0]?.permissionMode).toBeUndefined();
+
+    // Reopen and pick a preset carrying an unlisted mode: must NOT send the unlisted mode.
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:grok-unlisted");
+    act(() => button("启动").click());
+    expect(launched[1]).toMatchObject({ launcher: "grok" });
+    expect(launched[1]?.permissionMode).toBeUndefined();
+  });
+
+  it("preserves explicit default mode from a listed-mode preset over agent.new bypassPermissions", async () => {
+    purpose = {
+      purpose: { id: "agent.new", effective: { provider: "launcher.grok", permission_mode: "bypassPermissions" } },
+      providers: [{ id: "launcher.grok", name: "Grok", kind: "launcher", agent: "grok", permission_modes: ["default", "bypassPermissions"] }],
+    };
+    launchers = [
+      { name: "claude", agent: "claude" },
+      { name: "grok", agent: "grok", permission_modes: ["default", "bypassPermissions"] },
+    ];
+    tiers = [
+      { name: "grok-default", launcher: "grok", permission_mode: "default" },
+    ];
+    await open();
+
+    // Picking a listed-mode preset with explicit "default" sends permissionMode: "default" so it overrides agent.new.
+    await pick("preset:grok-default");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "grok", permissionMode: "default" });
+
+    // Reopen, pick preset, then explicitly click Follow launcher: clears permissionMode to undefined.
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:grok-default");
+    const followBtn = [...document.body.querySelectorAll<HTMLButtonElement>('[data-testid="new-agent-provider-modes"] button')]
+      .find((b) => b.textContent?.trim() === "跟随启动器")!;
+    act(() => followBtn.click());
+    await flush();
+    act(() => button("启动").click());
+    expect(launched[1]).toMatchObject({ launcher: "grok" });
+    expect(launched[1]?.permissionMode).toBeUndefined();
+  });
+
+  it("passes permissionMode on Codex presets without leaking into Claude mode on manual switch", async () => {
+    localStorage.setItem("new.mode.mac", "default");
+    launchers = [
+      { name: "claude", agent: "claude" },
+      { name: "fast", agent: "claude" },
+      { name: "codex", agent: "codex", prompt_optional: true },
+    ];
+    tiers = [
+      { name: "codex-bypass", launcher: "codex", permission_mode: "bypassPermissions" },
+      { name: "fast-plan", launcher: "fast", permission_mode: "plan" },
+    ];
+    await open();
+
+    // Codex preset sends inlinePrompt + permissionMode, and does not overwrite Claude's remembered mode.
+    await pick("preset:codex-bypass");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "codex", agentType: "codex", inlinePrompt: true, permissionMode: "bypassPermissions" });
+
+    // Reopen: pick Codex preset, then switch manually to Claude -> Claude keeps its remembered "default", NOT "bypassPermissions".
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:codex-bypass");
+    await pick("model:claude\ndefault");
+    act(() => button("启动").click());
+    expect(launched[1]).toMatchObject({ launcher: "claude", permissionMode: "default" });
+
+    // Reopen: pick Claude preset with "plan", then drop preset by picking another Claude launcher -> restores prior "default".
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:fast-plan");
+    await pick("model:claude\ndefault");
+    act(() => button("启动").click());
+    expect(launched[2]).toMatchObject({ launcher: "claude", permissionMode: "default" });
+  });
+
+  it("applies allowed preset modes and filters unavailable auto for restricted Antigravity (#17239)", async () => {
+    localStorage.setItem("new.mode.mac", "plan");
+    launchers = [
+      { name: "claude", agent: "claude" },
+      { name: "agy", agent: "agy", source: "agy", display_name: "Antigravity", permission_modes: ["default", "acceptEdits", "plan", "bypassPermissions"] },
+    ];
+    tiers = [
+      { name: "agy-accept", launcher: "agy", permission_mode: "acceptEdits" },
+      { name: "agy-auto", launcher: "agy", permission_mode: "auto" },
+    ];
+    await open();
+
+    // Picking a restricted agy preset with an allowed mode applies that mode (not the prior remembered mode).
+    await pick("preset:agy-accept");
+    act(() => button("启动").click());
+    expect(launched[0]).toMatchObject({ launcher: "agy", permissionMode: "acceptEdits" });
+
+    // Dropping the preset by switching back to Claude restores the prior remembered mode without leaking acceptEdits.
+    localStorage.setItem("new.mode.mac", "plan");
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:agy-accept");
+    await pick("model:claude\ndefault");
+    act(() => button("启动").click());
+    expect(launched[1]).toMatchObject({ launcher: "claude", permissionMode: "plan" });
+
+    // Picking a restricted agy preset carrying unavailable "auto" clears to launcher default and keeps remembered mode intact.
+    localStorage.setItem("new.mode.mac", "plan");
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:agy-auto");
+    act(() => button("启动").click());
+    expect(launched[2]).toMatchObject({ launcher: "agy" });
+    expect(launched[2]?.permissionMode).toBeUndefined();
+    expect(localStorage.getItem("new.mode.mac")).toBe("plan");
+
+    // Picking a restricted agy preset then explicitly clicking Follow launcher clears permissionMode to undefined.
+    localStorage.setItem("new.mode.mac", "plan");
+    act(() => root.render(<><NewAgent open={false} onClose={() => {}} /><Toasts /></>));
+    await flush();
+    await open();
+    await pick("preset:agy-accept");
+    act(() => button("跟随启动器").click());
+    await flush();
+    act(() => button("启动").click());
+    expect(launched[3]).toMatchObject({ launcher: "agy" });
+    expect(launched[3]?.permissionMode).toBeUndefined();
   });
 });

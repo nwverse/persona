@@ -17,7 +17,7 @@ import (
 
 // Live replies of the Claude sessions Persona starts (#1309, docs/integrations/claude-integration.md "MessageDisplay").
 //
-// Their live replies plugin has Claude Code's MessageDisplay hook (hooksplugin.go, doctor.go displayHooks; loaded while
+// Their live replies plugin has Claude Code's MessageDisplay hook (hooksplugin.go, generated.go displayHooks; loaded while
 // the machine's setting is on, setLiveReplies): as Claude shows a reply in the
 // terminal it hands the hook each batch of newly completed lines, often seconds before the transcript has them (a
 // reply that ends in a tool call is written only once the tool is done). The hook passes the batch to the node
@@ -334,14 +334,27 @@ func (n *Node) displayHook(raw json.RawMessage) {
 	mu := n.pushLock(in.SessionID)
 	mu.Lock()
 	defer mu.Unlock()
-	if n.live.take(in, time.Now()) {
+	now := time.Now()
+	if in.Delta != "" {
+		n.ttft.firstToken(in.SessionID, now, in.PromptID)
+	}
+	if n.live.take(in, now) {
 		n.showLive(in.SessionID)
 	}
 }
 
 // liveTurnHook is what UserPromptSubmit and Stop, from Persona's own hooks, mean for the live text.
 func (n *Node) liveTurnHook(in hookInput) {
-	if in.AgentID != "" || !n.live.has(in.SessionID) {
+	if in.AgentID != "" {
+		return
+	}
+	switch in.HookEventName {
+	case "UserPromptSubmit":
+		n.ttft.arm(in.SessionID, time.Now(), in.PromptID)
+	case "Stop":
+		n.ttft.clearPending(in.SessionID)
+	}
+	if !n.live.has(in.SessionID) {
 		return
 	}
 	switch in.HookEventName {

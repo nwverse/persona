@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Machines: a sessions push re-renders only the card of the computer it is about. Every card reads its own computer's agent
-// counts from the store and is memoized (MachineCard), so a push about another computer leaves it alone.
+// Machines: a sessions push re-renders only the card of the computer it is about. Every card gets its own computer's agent
+// counts as numbers from the page and is memoized (MachineCard), so a push about another computer leaves it alone.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,7 @@ vi.mock("../lib/machine-deploy", async (load) => {
   };
 });
 import { getState, refresh, reset, upsertSession } from "../lib/store";
+import { resetRoster, setRoster } from "../lib/managers";
 import type { Machine, Session } from "../lib/types";
 import { Machines } from "./Machines";
 
@@ -58,6 +59,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   reset();
+  resetRoster();
   vi.unstubAllGlobals();
 });
 
@@ -67,14 +69,14 @@ describe("a sessions push on the machines page", () => {
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
     expect(card("MacBook")).toContain("2 个 Agent");
-    expect(card("NAS")).toContain("1 个 Agent，1 个在工作");
+    expect(card("NAS")).toContain("1 个 Agent，1 个正在工作");
     expect([...renders.keys()].sort()).toEqual(["mac", "nas"]);
     renders.clear();
 
     // MacBook's agent starts working: its card says so, the NAS card does not render
     act(() => upsertSession({ ...getState().sessions.mac[0], status: "working", state: "working" }));
     await flush();
-    expect(card("MacBook")).toContain("2 个 Agent，1 个在工作");
+    expect(card("MacBook")).toContain("2 个 Agent，1 个正在工作");
     expect(renders.has("mac")).toBe(true);
     expect(renders.has("nas")).toBe(false);
     renders.clear();
@@ -108,5 +110,35 @@ describe("a sessions push on the machines page", () => {
     } finally {
       answers["/api/v1/machines"] = { machines };
     }
+  });
+
+  it("re-renders only the host card when a co-located manager's displayed state changes, and ignores unrelated roster updates", async () => {
+    setRoster({
+      default: "assistant",
+      managers: [{ id: "assistant", name: "主助手", online: true, host: "mac", version: "v1-202611241200" }],
+    });
+    await act(() => refresh());
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    expect(card("MacBook")).toContain("主助手");
+    expect(card("NAS")).not.toContain("主助手");
+    renders.clear();
+
+    // Unrelated roster change (inbox_needs_you): neither card re-renders
+    act(() => setRoster({
+      default: "assistant",
+      managers: [{ id: "assistant", name: "主助手", online: true, host: "mac", version: "v1-202611241200", inbox_needs_you: 3 }],
+    }));
+    await flush();
+    expect([...renders.keys()]).toEqual([]);
+
+    // Hosted manager enters pending_restart: only MacBook re-renders
+    act(() => setRoster({
+      default: "assistant",
+      managers: [{ id: "assistant", name: "主助手", online: true, host: "mac", version: "v1-202611241200", pending_restart: true }],
+    }));
+    await flush();
+    expect(card("MacBook")).toContain("待空闲重启");
+    expect([...renders.keys()]).toEqual(["mac"]);
   });
 });

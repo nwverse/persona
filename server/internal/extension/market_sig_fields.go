@@ -12,6 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
+var catalogIndexType = reflect.TypeFor[MarketIndex]()
+
 // catalogFields checks names only where encoding/json decodes a known struct.
 // strictJSON already rejects exact duplicates everywhere. Arbitrary maps and raw
 // schemas keep case-sensitive keys; unknown catalog metadata remains extensible.
@@ -78,7 +80,7 @@ func catalogFields(raw []byte, typ reflect.Type) error {
 	if typ == reflect.TypeFor[MarketIndex]() {
 		known["extensions"] = reflect.TypeFor[[]MarketEntry]()
 	}
-	if typ == reflect.TypeFor[MarketEntry]() {
+	if typ == reflect.TypeFor[MarketEntry]() || typ == reflect.TypeFor[MarketRelease]() {
 		known["manifest"] = reflect.TypeFor[Manifest]()
 	}
 	for name, value := range fields {
@@ -128,6 +130,7 @@ var catalogItemTypes = map[string]reflect.Type{
 	"looks":            reflect.TypeFor[LookItem](),
 	"connectors":       reflect.TypeFor[ConnectorItem](),
 	"quota":            reflect.TypeFor[QuotaItem](),
+	"usage":            reflect.TypeFor[UsageItem](),
 	"agent_sources":    reflect.TypeFor[AgentSourceItem](),
 	"providers":        reflect.TypeFor[ProviderItem](),
 	"api":              reflect.TypeFor[APIItem](),
@@ -135,21 +138,26 @@ var catalogItemTypes = map[string]reflect.Type{
 	"mcp_servers":      reflect.TypeFor[MCPServerItem](),
 	"messaging":        reflect.TypeFor[wire.MessagingItem](),
 	"ui":               reflect.TypeFor[UIItem](),
+	"track_kinds":      reflect.TypeFor[TrackKindItem](),
 	"events":           reflect.TypeFor[EventsItem](),
 	"error_reports":    reflect.TypeFor[ErrorReportsItem](),
 	"auth_relay":       reflect.TypeFor[AuthRelayItem](),
 	"secret_providers": reflect.TypeFor[SecretProviderItem](),
 	"voice":            reflect.TypeFor[VoiceItem](),
 	"transcription":    reflect.TypeFor[TranscriptionItem](),
+	"speech":           reflect.TypeFor[SpeechItem](),
 	"browser":          reflect.TypeFor[ComputerItem](),
 	"channel":          reflect.TypeFor[channel.Item](),
 	"shortcuts":        reflect.TypeFor[ShortcutItem](),
 	"computer":         reflect.TypeFor[ComputerItem](),
 	"iphone":           reflect.TypeFor[ComputerItem](),
+
+	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
+	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
+	"text_lookup":          reflect.TypeFor[TextLookupItem](),
 }
 
-// Include the parsed projection as well as the signed entry fields: callers may
-// copy an entry, but cannot replace its package or parsed manifest and retain proof.
+// Bind the active release, its parsed projection, and the other releases to the proof.
 func entryFingerprint(e *MarketEntry) [sha256.Size]byte {
 	raw, _ := json.Marshal(struct {
 		Entry  *MarketEntry

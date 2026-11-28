@@ -6,7 +6,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getState, reset } from "../lib/store";
-import { dropPick, NEW_CONVERSATION, pickedFast, pickEffort, pickFast, pickLauncher, pickModel } from "../lib/assistant-chat";
+import { sendDraft } from "../lib/drafts";
+import { dropPick, NEW_CONVERSATION, pickEffort, pickLauncher, pickModel, pickedServiceTier, pickServiceTier } from "../lib/assistant-chat";
 import { ASSISTANT_START_SERVICE_TIER_FEATURE } from "../lib/assistant-models";
 import { chooseManager } from "../lib/manager-choice";
 import type { Session } from "../lib/types";
@@ -96,7 +97,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
   it("立刻换成对话页的样子：页头「新对话」、气泡、「正在准备」，欢迎语收起，输入框不能发", async () => {
     await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("有什么要我做的？");
+    expect(host.textContent).toContain("有什么我可以帮你的？");
 
     await send();
     expect(starts).toHaveLength(1);
@@ -105,7 +106,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     expect(headerTitle()).not.toContain(WORDS);
     expect(waiting()!.querySelector("[data-user-bubble]")?.textContent).toContain(WORDS);
     expect(waiting()!.textContent).toContain("正在准备");
-    expect(host.textContent).not.toContain("有什么要我做的？");
+    expect(host.textContent).not.toContain("有什么我可以帮你的？");
     expect(host.querySelector("textarea")!.disabled).toBe(true);
   });
 
@@ -117,7 +118,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     act(() => vi.advanceTimersByTime(SLOW_START_MS - 100));
     expect(waiting()!.textContent).toContain("正在准备");
     act(() => vi.advanceTimersByTime(200));
-    expect(waiting()!.textContent).toContain("还在启动");
+    expect(waiting()!.textContent).toContain("仍在启动");
   });
 
   it("开起来了：去那个会话", async () => {
@@ -136,25 +137,25 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     await act(async () => starts[0].reject(new Error("no launcher")));
     await flush();
     expect(waiting()).toBeNull();
-    expect(host.textContent).toContain("有什么要我做的？");
+    expect(host.textContent).toContain("有什么我可以帮你的？");
     expect(host.querySelector("textarea")!.value).toBe(WORDS);
     expect(host.querySelector("textarea")!.disabled).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it("sends an explicit Fast choice with the first request, independently of effort, then clears it", async () => {
+  it.each(["priority", "ultrafast"])("sends the explicit %s tier with the first request, independently of effort, then clears it", async (tier) => {
     Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
     pickLauncher(NEW_CONVERSATION, "codex");
     pickModel(NEW_CONVERSATION, "gpt-fast");
     pickEffort(NEW_CONVERSATION, "high");
-    pickFast(true);
+    pickServiceTier(tier);
     await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
     await flush();
     await send();
-    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast", effort: "high", service_tier: "priority" });
+    expect(sentBody()).toMatchObject({ launcher: "codex", model: "gpt-fast", effort: "high", service_tier: tier });
     await act(async () => starts[0].resolve({ session: { machine_id: "hub", session_id: "c2", title: "" } as Session }));
     await flush();
-    expect(pickedFast()).toBe(false);
+    expect(pickedServiceTier()).toBeUndefined();
   });
 
   it("a Fast-only Recent pick names the displayed launcher, model and effort in the first request", async () => {
@@ -179,8 +180,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     await act(async () => pill.click());
     await act(async () => vi.dynamicImportSettled());
     await flush();
-    const rail = document.querySelector<HTMLButtonElement>('[data-rail-cell="recent"]')!;
-    await act(async () => rail.click());
+    expect(document.querySelector("[data-panel-quick]")).not.toBeNull();
     await flush();
     const recent = document.querySelector<HTMLElement>('[data-panel-row="recent:0"]')!;
     expect(recent.getAttribute("aria-disabled")).toBeNull();
@@ -202,7 +202,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     Object.assign(getState(), { features: [] });
     pickLauncher(NEW_CONVERSATION, "codex");
     pickModel(NEW_CONVERSATION, "gpt-fast");
-    pickFast(true);
+    pickServiceTier("priority");
     await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
     await flush();
     await send();
@@ -214,12 +214,12 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
     pickLauncher(NEW_CONVERSATION, "codex");
     pickModel(NEW_CONVERSATION, "gpt-fast");
-    pickFast(true);
+    pickServiceTier("priority");
     await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
     await flush();
     act(() => chooseManager("other-manager"));
     await flush();
-    expect(pickedFast()).toBe(false);
+    expect(pickedServiceTier()).toBeUndefined();
     await send();
     expect(sentBody()).not.toHaveProperty("service_tier");
   });
@@ -228,13 +228,73 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     Object.assign(getState(), { features: [ASSISTANT_START_SERVICE_TIER_FEATURE] });
     pickLauncher(NEW_CONVERSATION, "codex");
     pickModel(NEW_CONVERSATION, "gpt-fast");
-    pickFast(true);
+    pickServiceTier("priority");
     await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
     await flush();
     await send();
     await act(async () => starts[0].reject(new Error("no launcher")));
     await flush();
-    expect(pickedFast()).toBe(true);
+    expect(pickedServiceTier()).toBe("priority");
     expect(sentBody()).toHaveProperty("service_tier", "priority");
+  });
+
+  it("picking the displayed concrete default model pins it in the first request (including with an image), while Follow default clears it (#13567)", async () => {
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => "blob:test/photo");
+    URL.revokeObjectURL = vi.fn();
+    try {
+      Object.assign(getState(), {
+        assistant: { machine_id: "hub-opus", main: "c1", conversations: [{ machine_id: "hub-opus", session_id: "c1", title: "" }] },
+      });
+      const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/claude/models")) return json({ agent: "claude", models: [
+          { id: "default", name: "Default (recommended)", default: false, resolved: "claude-opus-5-5", efforts: ["low", "medium", "high"] },
+          { id: "opus", name: "Opus 5.5", default: true, resolved: "claude-opus-5-5", efforts: ["low", "medium", "high"] },
+          { id: "haiku", name: "Haiku 5.5", resolved: "claude-haiku-5-5" },
+        ] });
+        if (url.includes("/launchers?purpose=assistant")) return json({
+          launchers: [{ name: "claude", source: "builtin" }],
+          default: { provider: "claude", model: "opus", effort: "high" },
+        });
+        return json({ ok: true });
+      }));
+      await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
+      await flush();
+      const pill = host.querySelector<HTMLButtonElement>("[data-new-conversation] button[data-model-pill]")!;
+      expect(pill.textContent).toContain("Opus 5.5");
+      await act(async () => pill.click());
+      await act(async () => vi.dynamicImportSettled());
+      await flush();
+      const opusRow = [...document.querySelectorAll<HTMLElement>("[data-panel-row]")].find((r) => r.getAttribute("data-panel-row")?.includes("opus"))!;
+      expect(opusRow).toBeDefined();
+      await act(async () => opusRow.click());
+      await flush();
+      const imageData = btoa("sample-image");
+      act(() => void sendDraft("persona-new", { type: "image", image: { name: "photo.png", mime: "image/png", data: imageData } }));
+      await flush();
+      await send();
+      expect(sentBody()).toMatchObject({ launcher: "claude", model: "opus", effort: "high", images: [{ mime: "image/png", data: imageData }] });
+      // Refusing the start keeps the draft; opening the panel and clicking Follow default returns to following default.
+      await act(async () => starts[0].reject(new Error("unresolved")));
+      await flush();
+      await act(async () => host.querySelector<HTMLButtonElement>("[data-new-conversation] button[data-model-pill]")!.click());
+      await flush();
+      const followBtn = document.querySelector<HTMLButtonElement>('[data-pick-strip="pick"] button')!;
+      expect(followBtn).not.toBeNull();
+      await act(async () => followBtn.click());
+      await flush();
+      await send();
+      expect(starts).toHaveLength(2);
+      const secondBody = JSON.parse(JSON.stringify(starts[1].body)) as Record<string, unknown>;
+      expect(secondBody).not.toHaveProperty("launcher");
+      expect(secondBody).not.toHaveProperty("model");
+      expect(secondBody).not.toHaveProperty("effort");
+    } finally {
+      URL.createObjectURL = origCreate;
+      URL.revokeObjectURL = origRevoke;
+    }
   });
 });

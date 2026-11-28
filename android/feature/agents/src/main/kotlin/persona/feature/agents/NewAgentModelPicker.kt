@@ -6,16 +6,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import persona.core.contracts.PaseoAgent
 import persona.core.contracts.api.AgentModel
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcons
 
 /**
  * "Model": what the launcher that will run starts with, picked from the list its agent shows in /model (the sheet).
- * Nothing when that launcher has no list (a compatible CLI, a runtime's, older hubs); starting never waits for it.
+ * omp also takes a typed ID without a list. Starting with the default never waits for discovery.
  */
 internal fun LazyListScope.newAgentModelItems(state: NewAgentState, editable: Boolean, onOpen: () -> Unit, onRetry: () -> Unit) {
     val models = state.models
+    if (state.ompCli && !state.ompStart) return
     if (state.modelLauncher.isEmpty() || models.machineId != state.machineId || models.launcher != state.modelLauncher) return
     val list = state.modelList
     if (list == null && !models.loading && models.error == null) return
@@ -25,10 +27,14 @@ internal fun LazyListScope.newAgentModelItems(state: NewAgentState, editable: Bo
             when {
                 list?.locked != null -> JRow(stringResource(R.string.agents_mode_follow), enabled = false, chevron = false,
                     trailing = { JIcon(PhIcons.LockSimple, stringResource(R.string.agents_model_locked), tint = PersonaTheme.palette.ink3) })
-                list != null -> JRow(state.pickedModel?.label ?: stringResource(R.string.agents_model_default),
-                    subtitle = state.pickedModel.let { picked -> if (picked != null) modelDetail(picked) else defaultModelDetail(agentResources(), state) },
+                list != null -> JRow(state.pickedModel?.label ?: state.sentModel ?: stringResource(R.string.agents_model_default),
+                    subtitle = state.pickedModel.let { picked -> when {
+                        picked != null -> modelDetail(picked)
+                        state.sentModel != null -> null
+                        else -> defaultModelDetail(agentResources(), state)
+                    } },
                     enabled = editable, onClick = onOpen, trailing = if (models.loading) ({ JSpinner() }) else null)
-                models.loading -> JRow(stringResource(R.string.agents_model_loading), subtitle = stringResource(R.string.agents_model_loading_detail, state.modelLauncher), chevron = false, trailing = { JSpinner() })
+                models.loading -> JRow(stringResource(R.string.agents_model_loading), subtitle = stringResource(R.string.agents_model_loading_detail, state.modelLauncherTitle), chevron = false, trailing = { JSpinner() })
                 else -> JRow(stringResource(R.string.agents_model_failed), subtitle = stringResource(R.string.agents_model_failed_detail, models.error?.text().orEmpty()), subtitleLines = 4, chevron = false,
                     trailing = { JButton(stringResource(R.string.agents_model_retry), onRetry, enabled = editable, kind = JButtonKind.Secondary, size = JButtonSize.Small) })
             }
@@ -54,10 +60,20 @@ internal fun NewAgentModelSheet(
         LaunchedEffect(Unit) { onDismiss() }
         return
     }
+    // A Paseo provider has no terminal and its own name: its note names only it, by its label (#8261), never the engine (#8143).
+    val agent = list.agent.ifBlank { state.agentType }
     JModelSheet(
-        note = stringResource(R.string.agents_model_sheet_note, state.modelLauncher, list.agent.ifBlank { state.agentType }.agentLabel()),
+        note = when {
+            state.ompStart -> stringResource(R.string.agents_model_sheet_note_omp, state.modelLauncherTitle)
+            agent == PaseoAgent -> stringResource(R.string.agents_model_sheet_note_provider, state.modelLauncherTitle)
+            else -> stringResource(R.string.agents_model_sheet_note, state.modelLauncherTitle, agent.agentLabel())
+        },
+        owner = state.launchers.firstOrNull { it.name == state.modelLauncher }?.title ?: state.modelLauncher,
         models = list.models, selected = state.model, defaultDetail = defaultModelDetail(agentResources(), state),
         loading = state.models.loading, error = state.models.error?.text(),
+        custom = state.ompStart,
+        customDetail = stringResource(persona.core.designsystem.R.string.designsystem_modelpanel_use_typed_note),
+        acceptsCustomId = { state.typedModel(it) != null },
         onPick = onPick, onRefresh = onRefresh, onDismiss = onDismiss, initialQuery = initialQuery,
     )
 }
@@ -68,6 +84,7 @@ internal fun modelDetail(model: AgentModel): String? = model.detailLine()
 /** What runs with no pick: "Model configuration"'s model, else the one the agent defaults to. */
 internal fun defaultModelDetail(res: android.content.res.Resources, state: NewAgentState): String? {
     if (state.configuredModel.isNotEmpty()) return res.getString(R.string.agents_model_configured, state.configuredModel)
+    if (state.ompStart) return res.getString(R.string.agents_model_omp_machine_default)
     val default = state.modelList?.models?.firstOrNull { it.isDefault } ?: return null
     return default.resolved?.takeIf { it.isNotBlank() } ?: default.label
 }

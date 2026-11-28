@@ -1,16 +1,39 @@
 package persona.feature.agents
 
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.performClick
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.navigation3.runtime.NavKey
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonObject
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.designsystem.HomeChrome
+import persona.core.designsystem.NavItem
+import persona.core.designsystem.icons.PhIcons
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
+
+/** The compact home navigation when the Agents tab is already open. */
+internal val agentsHomeChrome = HomeChrome(
+    items = listOf(
+        NavItem(AppTab.Persona.name, "Assistant", PhIcons.Sparkle),
+        NavItem(AppTab.Agents.name, "Agents", PhIcons.SquaresFour),
+    ),
+    selected = AppTab.Agents.name,
+    onSelect = {},
+    leading = {},
+)
+
+internal fun ComposeContentTestRule.reselectAgentsTab() {
+    onNode(hasText("Agents") and isSelected()).performClick()
+}
 
 /**
  * The Agents screens' dependencies over fixed [sessions] and [machines], with some of them [pins]ned or [mutes]d (session ids
@@ -49,7 +72,9 @@ internal fun agentsDependencies(
         override suspend fun refresh() = Unit
         override suspend fun togglePin(path: String, space: Boolean) = Unit
         override suspend fun toggleMute(path: String, space: Boolean) = Unit
-        override suspend fun markSeen(session: SessionKey, version: String) = Unit
+        override suspend fun markSeen(session: SessionKey, version: String) {
+            preferences.update { it.copy(seen = it.seen + (session.path to version)) }
+        }
     })
     override fun sessions() = repository
     override fun interactions() = center

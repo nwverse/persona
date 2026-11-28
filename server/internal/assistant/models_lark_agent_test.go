@@ -28,7 +28,7 @@ func TestLarkAgentModelOverrideAndReset(t *testing.T) {
 		t.Helper()
 		p := purposeOf(t, s, purposeLarkAgent)
 		if p.Effective != want || p.Revision != revision || p.CategoryID != "agent.new" || p.Parent != "agent.new" ||
-			!slices.Equal(p.Fields, []string{"provider", "model", "effort"}) {
+			!slices.Equal(p.Fields, []string{"provider", "model", "effort", "permission_mode"}) {
 			t.Fatalf("purpose: %+v; want binding %+v at revision %d", p, want, revision)
 		}
 		if overridden {
@@ -108,7 +108,6 @@ func TestLarkAgentModelValidationAndProviderUse(t *testing.T) {
 	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "lark-custom"}})
 	for _, body := range []string{
 		`{"provider":"launcher.lark-custom"}`,
-		`{"revision":0,"runtime":"agentsdk"}`,
 		`{"revision":0,"provider":"launcher.missing"}`,
 		`{"revision":0,"effort":"unsupported"}`,
 		`{"revision":0,"effort":"off"}`,

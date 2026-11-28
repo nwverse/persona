@@ -9,7 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.layout.FirstBaseline
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -85,7 +84,7 @@ internal fun FileMarkdown(
                         val section = index > 0 && node.type in sectionHeadings
                         // A column: the element puts its block spacer above itself, a Box would stack the two.
                         Column(Modifier.padding(horizontal = side).then(if (section) Modifier.padding(top = Tokens.Space.s) else Modifier)) {
-                            MarkdownElement(node, components, success.content, includeSpacer = index > 0)
+                            ReadingContent { MarkdownElement(node, components, success.content, includeSpacer = index > 0) }
                         }
                     }
                 }
@@ -164,11 +163,12 @@ private fun fileMarkdownTypography() = PersonaTheme.type.let { type ->
 @Composable
 private fun fileMarkdownComponents() = markdownComponents(
     orderedList = { model -> MarkdownOrderedList(model.content, model.node, depth = model.listDepth,
-        markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = Tokens.Space.s) },
-        listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+        markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
+        listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
     unorderedList = { model -> MarkdownBulletList(model.content, model.node, depth = model.listDepth,
-        markerModifier = { Modifier.alignBy(FirstBaseline).padding(end = Tokens.Space.s) },
-        listModifier = { Modifier.weight(1f).alignBy(FirstBaseline) }) },
+        markerModifier = { firstBaselineAligned().padding(end = Tokens.Space.s) },
+        listModifier = { firstBaselineAligned(Modifier.weight(1f)) }) },
+    table = { model -> ReadableMarkdownTable(model.content, model.node, model.typography.table) },
     codeFence = { model ->
         MarkdownFence(model.content.substring(model.node.startOffset, model.node.endOffset)) { JCodeBlock(it.code, small = true) }
     },

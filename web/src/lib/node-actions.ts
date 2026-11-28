@@ -9,21 +9,27 @@ import type { Launcher, Machine, Session } from "./types";
 import { copyText, toast } from "../ui/atoms";
 import { openNewAgent } from "./new-agent";
 import { navigate } from "./router";
-import { openNewWorktree } from "./worktree";
+import { openNewWorktree } from "./worktree-request";
 import type { MenuItem } from "../ui/menu-model";
 import { launcherBlock, usableFirst } from "./launcher-health";
 import { providerIdNote, providerTitle } from "./provider-names";
 import { closeListedAgent } from "./close-agent";
+import { hostAbilities, type HostAbilities } from "./host-abilities";
 
 export type NodeKind = "machine" | "workspace" | "tab" | "pane";
 
 export interface MenuNode {
   kind: NodeKind;
+  /** Session rows describe the conversation, never operations on its terminal pane. */
+  sessionOnly?: boolean;
   mid: string;
   /** The machine is online; a node of one that is away is only copied from. */
   online?: boolean;
   /** The kind of terminal host the node is on ("herdr"); "" or unset: herdr, the one most machines have. */
   host?: string;
+  /** What the node's host can do here (the panes list's abilities, lib/host-abilities.ts); unset: what the computer last
+   *  reported for that host, else the fallback for its kind. */
+  abilities?: HostAbilities;
   /** What the node is called: a workspace's or tab's name is what "Rename" starts from. */
   label?: string;
   workspaceId?: string;
@@ -95,12 +101,9 @@ export interface NodeActionOptions {
   omit?: readonly string[];
 }
 
-/** Closing, splitting, git and running an agent in a shell are herdr's: another host (Orca, herdr-core, Tern, botmux) is
- *  not asked to do them. */
-export const canChangeHost = (host: string | undefined) => !host || host === "herdr";
-
-/** Renaming a workspace or a tab is herdr's and Tern's (the capability table in docs/integrations/engines.md). */
-export const canRenameIn = (host: string | undefined) => canChangeHost(host) || host === "tern";
+/** What a node's host can do (#17053): what the panes list said for it, else what its computer last reported for that host,
+ *  else the fallback for its kind (lib/host-abilities.ts). Never decided by the host's name here. */
+export const nodeAbilities = (node: Pick<MenuNode, "mid" | "host" | "abilities">): HostAbilities => node.abilities ?? hostAbilities(node.mid, node.host);
 
 /** Claude Code, and a launcher the computer says it starts in a pane the user picked, keeping that pane when the start
  *  fails (`run_here`: its Codex launchers, #5504). An older computer's failed Codex start closes its pane, here the
@@ -142,8 +145,9 @@ export function gitOutcomeText(res: PaneGitResult | undefined): string {
 export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActionOptions = {}): MenuItem[] {
   const { mid } = node;
   const online = node.online !== false;
-  const writes = online && canChangeHost(node.host);
-  const renames = online && canRenameIn(node.host);
+  // each item where the host does it, and only while the computer is online (#17053)
+  const can = nodeAbilities(node);
+  const renames = online && can.rename;
   const kind = node.host ? { kind: node.host } : {};
   const fail = (key: string, e: unknown) => new Error(t(key, { error: errorText(e) }));
 
@@ -255,7 +259,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       },
     };
   };
-  const gitMenu = writes && node.kind !== "machine" && Boolean(gitTarget);
+  const gitMenu = online && can.git && node.kind !== "machine" && Boolean(gitTarget);
   const newWorktree = deps.newWorktree;
   // a pane closes with the pane's own actions, next to New pane (#7125); one an agent runs in asks as the agent's
   // Close… does, so a busy agent is never closed by the menu's second click alone
@@ -277,14 +281,14 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
     }),
   };
   group(
-    node.kind === "workspace" && writes && node.canWorktree && Boolean(node.workspaceId) && newWorktree && {
+    node.kind === "workspace" && online && node.canWorktree && Boolean(node.workspaceId) && newWorktree && {
       key: "node-worktree",
       label: t("worktree.menu_new"),
       icon: "git",
       accel: "w",
       onSelect: () => newWorktree(node),
     },
-    writes && Boolean(node.paneId) && node.kind !== "machine" && node.kind !== "workspace" && {
+    online && can.split && Boolean(node.paneId) && node.kind !== "machine" && node.kind !== "workspace" && {
       key: "node-split",
       label: t("lib-node-actions.new_pane"),
       icon: "layers",
@@ -292,8 +296,8 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
       onSelect: noop,
       children: [split("right", t("lib-node-actions.split_right"), "r"), split("down", t("lib-node-actions.split_down"), "d")],
     },
-    node.kind === "pane" && writes && Boolean(node.paneId) && closePane,
-    writes && isShell && Boolean(node.paneId) && {
+    node.kind === "pane" && online && can.closePane && Boolean(node.paneId) && closePane,
+    online && can.runHere && isShell && Boolean(node.paneId) && {
       key: "node-agent",
       label: t("lib-node-actions.run_agent_here"),
       icon: "agent",
@@ -313,18 +317,21 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   // ── copy ──
-  const herdrId = node.kind === "pane" ? node.paneId : node.kind === "tab" ? node.tabId : node.kind === "workspace" ? node.workspaceId : undefined;
+  // the engine's own id of the space, tab or pane, named by what it is: a menu never says the engine's name
+  const [engineId, engineIdLabel] = node.kind === "pane" ? [node.paneId, t("lib-node-actions.copy_pane_id")]
+    : node.kind === "tab" ? [node.tabId, t("lib-node-actions.copy_tab_id")]
+    : node.kind === "workspace" ? [node.workspaceId, t("lib-node-actions.copy_workspace_id")] : [undefined, ""];
   group(
     node.kind !== "machine" && copy("node-copy-path", t("lib-node-actions.copy_path"), "c", node.cwd),
     node.kind !== "machine" && node.kind !== "workspace" && copy("node-copy-session", t("lib-node-actions.copy_session_id"), "s", node.sessionId),
-    node.kind !== "machine" && copy("node-copy-id", t("lib-node-actions.copy_herdr_id"), "i", herdrId),
+    node.kind !== "machine" && copy("node-copy-id", engineIdLabel, "i", engineId),
     node.kind !== "machine" && !gitMenu && copy("node-copy-branch", t("lib-node-actions.copy_branch"), "b", node.branch),
     node.kind === "machine" && copy("node-copy-machine", t("lib-node-actions.copy_machine_id"), "i", mid),
   );
 
   // ── close the tab ──
   group(
-    node.kind === "tab" && writes && Boolean(node.tabId) && {
+    node.kind === "tab" && online && can.closeTab && Boolean(node.tabId) && {
       key: "node-close-tab",
       label: t("lib-node-actions.close_tab"),
       icon: "x",
@@ -341,6 +348,7 @@ export function nodeActions(node: MenuNode, deps: NodeActionDeps, opts: NodeActi
   );
 
   const omit = new Set(opts.omit);
+  if (node.sessionOnly) for (const key of ["node-split", "node-close-pane", "node-copy-id"]) omit.add(key);
   return groups
     .map((g) => g.filter((it) => !omit.has(it.key)))
     .filter((g) => g.length)
@@ -358,6 +366,7 @@ export function machineNode(m: Machine, extra: Partial<MenuNode> = {}): MenuNode
 export function sessionNode(s: Session, online: boolean, extra: Partial<MenuNode> = {}): MenuNode {
   return {
     kind: "pane",
+    sessionOnly: true,
     mid: s.machine_id,
     online,
     host: s.space_kind,
@@ -374,7 +383,7 @@ export function sessionNode(s: Session, online: boolean, extra: Partial<MenuNode
 
 /** A workspace of the "Terminal" page. */
 export function termSpaceNode(mid: string, sp: TermSpace, online: boolean, extra: Partial<MenuNode> = {}): MenuNode {
-  return { kind: "workspace", mid, online, host: sp.host, label: sp.label, workspaceId: sp.id, cwd: sp.cwd, branch: sp.branch, canWorktree: sp.canWorktree, ...extra };
+  return { kind: "workspace", mid, online, host: sp.host, abilities: sp.abilities, label: sp.label, workspaceId: sp.id, cwd: sp.cwd, branch: sp.branch, canWorktree: sp.canWorktree, ...extra };
 }
 
 /** A tab of the "Terminal" page; a tab with one pane is that pane too (its agent or shell, its session). */
@@ -386,6 +395,7 @@ export function termTabNode(mid: string, sp: TermSpace, tab: TermTab, online: bo
     mid,
     online,
     host: sp.host,
+    abilities: sp.abilities,
     label: tab.label,
     workspaceId: sp.id,
     tabId: tab.id,
@@ -404,6 +414,7 @@ export function termPaneNode(mid: string, sp: TermSpace, tab: TermTab, pane: Ter
     mid,
     online,
     host: sp.host,
+    abilities: sp.abilities,
     workspaceId: sp.id,
     tabId: tab.id,
     paneId: pane.pane,

@@ -6,6 +6,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.core.app.ApplicationProvider
+import persona.core.inbox.*
 
 @RunWith(AndroidJUnit4::class)
 @org.robolectric.annotation.Config(sdk = [35])
@@ -55,7 +56,13 @@ class MailHtmlTest {
         val allImages = doc.select("img")
         assertEquals(3, allImages.size)
         assertFalse(allImages[2].hasAttr("src"))
-        assertTrue(html.contains("img-src http: https: data:"))
+        val (page, permitted) = mailImageDocument(html)
+        val sources = Jsoup.parse(page).select("img[src]").map { it.attr("src") }
+        assertEquals(listOf("https://mail-images.invalid/0", "data:image/png;base64,abc"), sources)
+        assertEquals(mapOf(sources[0] to "https://example.com/photo.png"), permitted)
+        assertTrue(page.contains("img-src https://mail-images.invalid data:"))
+        assertFalse(page.contains("example.com"))
+        assertTrue(mailImageDocument(safeMailHtml(html, "#111", "#fff", "#222")).second.isEmpty())
     }
 
     @Test fun mailDetailsShowReadableSizesAndLocalTimes() {

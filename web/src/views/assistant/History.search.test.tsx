@@ -125,7 +125,7 @@ describe("All chats' search with the manager's (#6283)", () => {
     expect(row("keep")).toBeDefined(); // its title, matched here
     expect(row("keep")?.getAttribute("href")).not.toContain("at=");
     expect(row("trip")?.querySelector("mark")).not.toBeNull();
-    expect(host.textContent).toContain("较早的对话还在整理");
+    expect(host.textContent).toContain("正在索引较早的对话");
   });
 
   it("filters titles and last messages as before on a hub without it", async () => {
@@ -134,7 +134,7 @@ describe("All chats' search with the manager's (#6283)", () => {
     root = createRoot(host);
     act(() => root.render(<History onToggleSidebar={() => {}} />));
     await flush();
-    expect((host.querySelector("input") as HTMLInputElement).placeholder).toBe("搜索标题或最后一句");
+    expect((host.querySelector("input") as HTMLInputElement).placeholder).toBe("搜索标题或最新消息");
     await type("路线");
     expect(hub.searched).toEqual([]);
     expect(row("trip")?.textContent).toContain("路线已发你。");
@@ -147,4 +147,12 @@ describe("All chats' search with the manager's (#6283)", () => {
     expect(row("trip")?.textContent).toContain("路线已发你。");
     expect(host.querySelector("mark")).toBeNull();
   });
+});
+
+it("finds the main conversation by its displayed Main chat label and keeps the home symbol", async () => {
+  await type("主对话");
+  const main = [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("主对话"));
+  expect(main).toBeDefined();
+  expect(main?.querySelector('path[d^="M3 10.5 12 3"]')).not.toBeNull();
+  expect(main?.textContent).not.toContain("对话 main");
 });

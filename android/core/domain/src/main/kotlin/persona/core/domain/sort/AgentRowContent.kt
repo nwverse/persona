@@ -4,6 +4,7 @@ import persona.core.contracts.AgentState
 import persona.core.contracts.CoreText
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.Session
+import persona.core.domain.engines.Engines
 import persona.core.domain.modelShortName
 
 // What an Agents row says beside its title and its latest words, as iOS's default row draws it (the Avatar style:
@@ -15,7 +16,8 @@ import persona.core.domain.modelShortName
  */
 data class AgentRowContent(
     /**
-     * Before the latest words: Needs you, Awaiting reply or Waiting in the background; null where its mark says it alone.
+     * Before the latest words: Needs you, Awaiting reply, Just finished or Waiting in the background; null where its mark
+     * says it alone.
      * State Cards spell every state but Seen out at the card's foot instead ([cardStateWord]).
      */
     val stateWord: CoreText?,
@@ -67,6 +69,8 @@ data class AgentRowContext(
     val slot: String? = null,
     /** Under a By Status section that names its state (iOS `inStateSection`): no state word. */
     val stateSection: Boolean = false,
+    /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to title and moves the CLI title to the detail line. */
+    val preferHerdrTabName: Boolean = false,
 )
 
 /**
@@ -81,13 +85,16 @@ fun AgentSession.rowContent(
     val s = session
     val place = mutableListOf<CoreText>()
     val pane = context.pane
+    val primaryTab = s.displayTabName(context.preferHerdrTabName)
+    s.displayTitleDetail(context.preferHerdrTabName)?.let { place += CoreText.plain(it) }
     val source = s.source?.let { CoreText.joined(" · ", listOfNotNull(it.label, it.agentName?.let(CoreText::plain))) }
     (pane?.name?.let(CoreText::plain) ?: source)?.let {
         place += it
         if (pane?.launcher == true) place += CoreText.of(Key.AgentsStartedTab)
     }
-    if (context.host) s.hostKind.takeIf { it.isNotEmpty() && it != "herdr" }?.let { place += CoreText.plain(it) }
-    val slot = if (pane == null) context.slot ?: s.slotLabel else null
+    // the host by its name ("Orca", "Herdr App"), never its id (#17054)
+    if (context.host) s.hostKind.takeIf { it.isNotEmpty() && it != "herdr" }?.let { place += CoreText.plain(Engines.displayName(it)) }
+    val slot = if (pane == null && primaryTab == null) context.slot ?: s.slotLabel else null
     val space = if (context.located) s.spaceName?.takeIf(String::isNotBlank) ?: s.folderName.takeIf(String::isNotBlank) else null
     when {
         space != null -> place += CoreText.plain(slot?.let { "$space › $it" } ?: space)
@@ -95,7 +102,12 @@ fun AgentSession.rowContent(
     }
     if (context.located) context.machine?.takeIf(String::isNotBlank)?.let { place += CoreText.plain(it) }
     return AgentRowContent(
-        stateWord = (if (display.rowParts.stateAtFoot) cardStateWord(muted) else rowStateWord(muted)).takeUnless { context.stateSection },
+        stateWord = when {
+            seenPlace != null -> CoreText.of(Key.StateIdle)
+            context.stateSection -> null
+            display.rowParts.stateAtFoot -> cardStateWord(muted)
+            else -> rowStateWord(muted)
+        },
         source = s.agentSource?.takeIf { !s.assistant },
         place = place,
         model = s.rowModel,
@@ -106,12 +118,14 @@ fun AgentSession.rowContent(
 
 /**
  * The row's state in words, as iOS's default row: only what its dot doesn't say alone, Needs you (unless muted),
- * Awaiting reply and Waiting in the background. Working, Unread and the rest are the dot's.
+ * Awaiting reply, Just finished (#9786: Unread's color, as Awaiting reply) and Waiting in the background. Working, Unread
+ * and the rest are the dot's.
  */
 fun AgentSession.rowStateWord(muted: Boolean): CoreText? = when {
     muted -> null
     state == AgentState.NeedsYou -> CoreText.of(Key.StateNeedsYou)
     asksYou -> CoreText.of(Key.StateAwaitingReply)
+    showsJustFinished -> CoreText.of(Key.StateJustFinished)
     waitsInBackground -> CoreText.of(Key.StateBackgroundWaiting)
     else -> null
 }

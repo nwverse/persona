@@ -139,7 +139,6 @@ struct InboxLineSection: View {
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
                 Text("Thread").font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                 ForEach(rows) { lineRow($0) }
-                #if !os(macOS)
                 if tree?.item != nil {
                     Button { sameMatter = true } label: {
                         HStack(spacing: Theme.Space.s) {
@@ -152,41 +151,32 @@ struct InboxLineSection: View {
                     .tapTargetHeight()
                     .accessibilityIdentifier("inbox.line.same")
                 }
-                #endif
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("inbox.line")
-            #if !os(macOS)
             .sheet(isPresented: $sameMatter) {
                 if let tree, let item = tree.item {
                     InboxSameMatterPicker(item: item, tree: tree)
                 }
             }
-            #endif
             .sheet(item: $todo, onDismiss: {
                 guard let key = pendingAgent else { return }
                 pendingAgent = nil
                 InboxLineOpen.agent(key, owner: tree?.item?.manager, model: model, push: pushChat)
             }) { r in
                 NavigationStack {
-                    TodoDetailView(todoID: r.id, openAgent: pushChat == nil ? nil : { key in
+                    TodoDetailView(todoID: r.id, onOpenAgent: pushChat == nil ? nil : { key in
                         pendingAgent = key
                         todo = nil
-                    }).macSheetDone { todo = nil }
+                    }).sheetDone { todo = nil }
                 }
-                #if os(macOS)
-                .macSheet()
-                #endif
             }
         }
     }
 
     /// Navigation and detaching are siblings, so VoiceOver never folds the write into the row's destination.
     @ViewBuilder private func lineRow(_ r: InboxLine.Row) -> some View {
-        #if os(macOS)
-        row(r)
-        #else
         // Measure at every width and text size: a long translation can need the vertical layout before accessibility sizes.
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: Theme.Space.xs) {
@@ -198,12 +188,10 @@ struct InboxLineSection: View {
                 detachButton(r)
             }
         }
-        #endif
     }
 
     /// On iOS the write stays outside the row's combined navigation accessibility element.
     @ViewBuilder private func detachButton(_ r: InboxLine.Row) -> some View {
-        #if !os(macOS)
         if let target = r.detach {
             Button { detach(target) } label: {
                 HStack(spacing: Theme.Space.xs) {
@@ -217,7 +205,6 @@ struct InboxLineSection: View {
             .disabled(detaching != nil)
             .accessibilityIdentifier("inbox.line.notSame.\(target.id)")
         }
-        #endif
     }
 
     private func detach(_ target: InboxParentTarget) {

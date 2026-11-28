@@ -37,6 +37,7 @@ import persona.core.designsystem.PersonaTheme
 import persona.core.domain.inbox.InboxItem
 import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 /** Item-row gesture regressions that remain relevant after conversation rows leave the main list. */
 @RunWith(AndroidJUnit4::class)
@@ -121,7 +122,7 @@ class InboxItemSwipeTest {
 
     private fun screen(inbox: FakeInbox) {
         inbox.conversationInbox.value = InboxConversations(inbox, "synthetic-pairing", owner, ReplyComposers(inbox, owner))
-        rule.setContent { PersonaTheme(reduceMotion = true) { InboxScreen(inbox, navigator) } }
+        rule.setContent { PersonaTheme(reduceMotion = true) { OnAll { InboxScreen(inbox, navigator) } } }
         rule.waitForIdle()
     }
 

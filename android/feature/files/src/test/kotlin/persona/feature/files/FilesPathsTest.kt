@@ -71,6 +71,16 @@ class FilesPathsTest {
         assertEquals("~/a", joinRemotePath("~", "a"))
     }
 
+    @Test fun moveRejectsTheSameFolderAndAnyDestinationInsideTheSourceFolder() {
+        val folder = MoveSource("/work/Sources", directory = true)
+        assertFalse(folder.canMoveInto("/work/./"))
+        assertFalse(folder.canMoveInto("/work/Sources/"))
+        assertFalse(folder.canMoveInto("/work/Other/../Sources/Nested"))
+        assertTrue(folder.canMoveInto("/work/Sources-archive"))
+        assertTrue(folder.canMoveInto("/"))
+        assertFalse(MoveSource("~/work/file.txt", directory = false).canMoveInto("~/work/"))
+    }
+
     @Test fun nodeTimesWithTheMachinesOffsetAreRead() {
         // Shapes as a node sends them: RFC 3339 with the machine's own offset, nanoseconds on file times.
         assertEquals(Instant.parse("2026-10-31T05:58:40.205893083Z"), fileTime("2026-10-31T13:58:40.205893083+08:00"))
@@ -96,6 +106,20 @@ class FilesPathsTest {
         assertEquals("2025年12月30日", relativeTime(res, Instant.parse("2025-12-30T09:00:00Z"), now, zone))
         assertEquals("3 小时前", fileDate(res, "2026-11-02T17:00:00+08:00", now, zone))
         assertNull(fileDate(res, "0001-01-01T00:00:00Z", now, zone))
+    }
+
+    /** As the web's `ago` (#9889): past a day, days count the phone's midnights, not 24-hour spans, and from seven it is the date. */
+    @Test fun daysAreCountedByTheCalendar() {
+        val zone = ZoneOffset.UTC
+        // 30 hours back, two midnights ago
+        assertEquals("2 天前", relativeTime(res, Instant.parse("2026-11-03T19:00:00Z"), Instant.parse("2026-11-05T01:00:00Z"), zone))
+        // 40 hours back, one midnight ago
+        assertEquals("1 天前", relativeTime(res, Instant.parse("2026-11-04T07:00:00Z"), Instant.parse("2026-11-05T23:00:00Z"), zone))
+        // 6 days and 2 hours back, seven midnights ago: the date
+        assertEquals("11月1日", relativeTime(res, Instant.parse("2026-11-01T23:00:00Z"), Instant.parse("2026-11-08T01:00:00Z"), zone))
+        assertEquals("6 天前", relativeTime(res, Instant.parse("2026-11-02T01:00:00Z"), Instant.parse("2026-11-08T23:00:00Z"), zone))
+        // The phone's calendar: the first case eight hours east is Nov 4 03:00 seen on Nov 5 09:00
+        assertEquals("1 天前", relativeTime(res, Instant.parse("2026-11-03T19:00:00Z"), Instant.parse("2026-11-05T01:00:00Z"), ZoneOffset.ofHours(8)))
     }
 
     @Test fun aCommitsWholeDateIsInThePhonesZone() {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { agentTreeState, buildTodoTree, groupTodosByProject, nestAgents, projectOf, STALE_MS, todoTreeState, treeStateLabel } from "./todo-tree";
-import { makeSessionLookup, todoStatus, todoStatusLabel, type Todo } from "./todos";
+import { buildV2SidebarTree } from "../features/todos/board-sidebar-tree";
+import { groupTodosByProject, projectOf } from "../features/todos/project-groups";
+import { agentGroupLabel, agentTreeState, buildTodoTree, nestAgents, STALE_MS, todoTreeState, treeStateLabel, worstTreeState } from "./todo-tree";
+import { makeSessionLookup, todoStatus, type Todo } from "./todos";
+import { todoLook, waitOf } from "./todo-wait-reason";
 import { matchesFilter } from "./agent-filter";
 import { sessionSource } from "./agent-groups";
 import type { Machine, Session } from "./types";
@@ -17,13 +20,13 @@ const link = (sid: string, patch: object = {}) => ({ machine_id: "m1", session_i
 const noMutes = { spaces: [], sessions: [] };
 
 describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)", () => {
-  it("lists the to-dos in sortTodos's order with no repository over them, and the agents on no to-do directly under their group", () => {
+  it("lists the to-dos in static sortTodos order with live states in place, and no repository or extra loose-Agent group", () => {
     const all = [s("a", "working", "/code/persona"), s("b", "unread", "/code/persona/.worktrees/x"), s("c", "needs_you", "/code/botmux"), s("loose", "idle", "/code/persona"), s("loose2", "idle", "/code/other")];
     const todos = [todo("t1", [link("a")]), todo("t2", [link("b")]), todo("t3", [link("c")])];
     const tree = buildTodoTree(all, machines, todos, noMutes, NOW);
     expect(tree.projects).toEqual([]);
-    // the task board's order: Needs you (t3), Working (t1), Finished (t2), #4896
-    expect(tree.todos.map((td) => [td.todoId, td.state])).toEqual([["t3", "needs_you"], ["t1", "working"], ["t2", "done"]]);
+    // Live Agent rank does not move a to-do group; each group's state still updates (#11801).
+    expect(tree.todos.map((td) => [td.todoId, td.state])).toEqual([["t1", "working"], ["t2", "done"], ["t3", "needs_you"]]);
     expect(tree.loose.map((g) => [g.key, g.agents.map((a) => a.session.session_id)])).toEqual([["todo:none", ["loose", "loose2"]]]);
   });
 
@@ -59,7 +62,7 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     const tree = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW);
     expect(tree.loose.map((g) => [g.key, g.sessions.map((x) => x.session_id).sort()])).toEqual([["todo:none", ["bot", "hand"]]]);
     // what the group holds, for its ⓘ and its empty state (#3057, #6458); no engine name (DESIGN_SYSTEM 5.6)
-    expect(tree.loose[0].hint).toContain("没挂在任何待办上");
+    expect(tree.loose[0].hint).toContain("未关联到任何待办");
     expect(tree.loose[0].hint).toContain("终端");
     expect(tree.loose[0].hint).not.toMatch(/herdr/i);
     // where it came from stays on the row: the Terminal source mark
@@ -80,21 +83,23 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     const all = [s("a", "working", "/code/p")];
     expect(buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW).loose).toEqual([]);
     const tree = buildTodoTree(all, machines, [todo("t1", [link("a")])], noMutes, NOW, { keepEmpty: true });
-    expect(tree.loose.map((g) => [g.key, g.name, g.agents.length, g.folded])).toEqual([["todo:none", "没挂待办的", 0, true]]);
+    expect(tree.loose.map((g) => [g.key, g.name, g.agents.length, g.folded])).toEqual([["todo:none", "未关联待办", 0, true]]);
     expect(tree.loose[0].hint.length).toBeGreaterThan(0);
   });
 
   it("a to-do says the To-dos page's word for its state, ranked as the tree ranks it (#6458)", () => {
-    // its agents ended their turns and one waits on CI: the To-dos page's Waiting, never Done
-    const all = [s("ci", "idle", "/code/p", { work: { phase: "blocked", on: "external", line: "CI" } }), s("seen", "idle", "/code/q"), s("new", "unread", "/code/r")];
+    // its agents ended their turns and one waits on CI: the To-dos page's word for that wait (#11090), never Done
+    const all = [s("ci", "idle", "/code/p", { work: { phase: "blocked", on: "external", line: "CI", wait: "CI" } }), s("seen", "idle", "/code/q"), s("new", "unread", "/code/r")];
     const tree = buildTodoTree(all, machines, [todo("wait", [link("ci")]), todo("follow", [link("seen")]), todo("fresh", [link("new")])], noMutes, NOW);
     const byId = Object.fromEntries(tree.todos.map((td) => [td.todoId, td]));
     const lookup = makeSessionLookup(all);
     for (const id of ["wait", "follow", "fresh"]) {
       const td = todo(id, [link({ wait: "ci", follow: "seen", fresh: "new" }[id]!)]);
-      expect(byId[id]!.statusLabel).toBe(todoStatusLabel(td, todoStatus(td, lookup)));
+      const status = todoStatus(td, lookup);
+      expect(byId[id]!.statusLabel).toBe(todoLook(td, status, waitOf(td, status, lookup)).label);
     }
-    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等待中", "待跟进", "完成未看"]);
+    expect([byId.wait!.statusLabel, byId.follow!.statusLabel, byId.fresh!.statusLabel]).toEqual(["等外部", "待跟进", "完成未看"]);
+    expect([byId.wait!.wait, byId.follow!.wait]).toEqual(["external", undefined]);
     expect(byId.wait!.state).toBe("bg_waiting");
     expect(todoTreeState("waiting")).toBe("bg_waiting");
   });
@@ -115,6 +120,15 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
     const all = [s("a", "working", "/code/persona")];
     const groups = groupTodosByProject([todo("t1", [link("a")]), todo("t2", [])], makeSessionLookup(all), NOW);
     expect(groups.map((g) => [g.name, g.state, g.todos.map((t) => t.id)])).toEqual([["persona", "working", ["t1"]], ["未归类", "done", ["t2"]]]);
+  });
+
+  it("a folder holding a to-do the page has in Needs you says so, a failed start the hub closed too (audit item 13)", () => {
+    const old = new Date(NOW - 3 * STALE_MS).toISOString();
+    const failedStart = todo("f1", [], { done_at: old, updated_at: old, start_error: "machine offline", origin: "conv" });
+    // by its agents alone it reads Done, and a quiet folder of it folds away
+    expect(groupTodosByProject([failedStart], makeSessionLookup([]), NOW).map((g) => [g.state, g.folded])).toEqual([["done", true]]);
+    const waiting = groupTodosByProject([failedStart, todo("t2", [])], makeSessionLookup([]), NOW, undefined, (td) => td.id === "f1");
+    expect(waiting.map((g) => [g.state, g.folded, g.todos.map((t) => t.id)])).toEqual([["needs_you", false, ["f1", "t2"]]]);
   });
 
   it("待办页先按待办所属的知识库项目分段，再按仓库，都没有的最后 (#2581)", () => {
@@ -145,6 +159,26 @@ describe("By to-do: to-dos at the top level, no repository rows (#2526, #6458)",
   });
 });
 
+describe("a group's word says what its rows say, never Done over agents that are not", () => {
+  const label = (all: Session[]) => agentGroupLabel(all, worstTreeState(all.map(agentTreeState)));
+  it("Not on a to-do holding a finished agent not looked at yet says 完成未看, as By status and the quick filter do", () => {
+    const tree = buildTodoTree([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")], machines, [], noMutes, NOW);
+    expect(tree.loose.map((g) => [g.state, g.label])).toEqual([["done", "完成未看"]]);
+    expect(label([s("seen", "idle", "/code/a"), s("new", "unread", "/code/b")])).toBe("完成未看");
+  });
+  it("Recent (not running) of stopped agents says 未运行", () => {
+    expect(label([s("gone", "offline", "/code/a"), s("gone2", "offline", "/code/b")])).toBe("未运行");
+  });
+  it("keeps the state's own word otherwise: Done for seen agents, Needs you / Working above it", () => {
+    expect(label([s("seen", "idle", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([s("asks", "needs_you", "/code/a"), s("new", "unread", "/code/b")])).toBeUndefined();
+    expect(label([s("runs", "working", "/code/a"), s("gone", "offline", "/code/b")])).toBeUndefined();
+    expect(label([])).toBeUndefined();
+    const seen = buildTodoTree([s("seen", "idle", "/code/a")], machines, [], noMutes, NOW);
+    expect(seen.loose[0]).not.toHaveProperty("label");
+  });
+});
+
 describe("来源：飞书群 / 终端 / 桌面端 (#2526)", () => {
   it("botmux 是飞书群，终端引擎的窗格是终端，桌面 App 自己的对话是桌面端，其余没有", () => {
     expect(sessionSource(s("b", "idle", "/", { pane_id: "botmux:abc" }))).toBe("feishu");
@@ -155,6 +189,7 @@ describe("来源：飞书群 / 终端 / 桌面端 (#2526)", () => {
     expect(sessionSource(s("x", "idle", "/", { space_kind: "codex_app", source_kind: "codex_history" }))).toBe("desktop");
     expect(sessionSource(s("p", "idle", "/", { host: "paseo", source_kind: "runtime", source_instance_id: "paseo" }))).toBe("desktop");
     expect(sessionSource(s("cy", "idle", "/", { host: "cindy", source_kind: "runtime", source_instance_id: "cindy" }))).toBe("desktop");
+    expect(sessionSource(s("t3", "idle", "/", { host: "t3code", source_kind: "runtime", source_instance_id: "t3code" }))).toBe("desktop");
     expect(sessionSource(s("q", "idle", "/", { source_kind: "runtime", source_instance_id: "orca", space_kind: "orca" }))).toBe("desktop");
     expect(sessionSource(s("d", "idle", "/", { source_kind: "runtime", source_instance_id: "dsh" }))).toBeUndefined();
     expect(sessionSource(s("n", "idle", "/"))).toBeUndefined();
@@ -194,5 +229,114 @@ describe("waiting in the background in the tree (#6045)", () => {
     expect(todoTreeState("working", [waiting, busy])).toBe("working");
     expect(todoTreeState("working")).toBe("working");
     expect(todoTreeState("needs_you", [waiting])).toBe("needs_you");
+  });
+});
+
+describe("todos_v2 top-level goal folding in By to-do (#14831)", () => {
+  it("keeps branches flat in the standard tree", () => {
+    const all = [s("a", "working", "/code/p"), s("b", "idle", "/code/p")];
+    const list: Todo[] = [
+      todo("goal", [], { title: "Launch" }),
+      todo("c1", [link("a")], { title: "API", part_of: "goal" }),
+      todo("c2", [link("b")], { title: "Docs", part_of: "goal" }),
+    ];
+    const tree = buildTodoTree(all, machines, list, noMutes, NOW);
+    expect(tree.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
+    expect(tree.todos.every((td) => td.goalProgress === undefined)).toBe(true);
+  });
+
+  it("folds non-urgent part_of subtasks (including grandchildren) under their open parent goal with done/total progress", () => {
+    const all = [s("a", "working", "/code/p"), s("b", "idle", "/code/p")];
+    const list: Todo[] = [
+      todo("goal", [], { title: "Ship v2" }),
+      todo("done1", [], { title: "Spec", part_of: "goal", done_at: fresh }),
+      todo("c1", [link("a")], { title: "Backend", part_of: "goal" }),
+      todo("gc1", [link("b")], { title: "Migration", part_of: "c1" }),
+      todo("open-no-agent", [], { title: "Checklist", part_of: "goal" }),
+    ];
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
+    expect(tree.todos.map((td) => td.todoId)).toEqual(["goal"]);
+    const goal = tree.todos[0]!;
+    expect(goal.name).toBe("Ship v2");
+    expect(goal.goalProgress).toEqual({ done: 1, total: 4 });
+    expect(goal.state).toBe("working");
+    expect(goal.sessions.map((x) => x.session_id).sort()).toEqual(["a", "b"]);
+    expect(goal.folded).toBe(false);
+  });
+
+  it("merges folded children into a parent goal that also has its own agents and updates aggregated state", () => {
+    const all = [s("p", "idle", "/code/p"), s("c", "working", "/code/p")];
+    const list: Todo[] = [
+      todo("goal", [link("p")], { title: "Main goal" }),
+      todo("c1", [link("c")], { title: "Subtask", part_of: "goal" }),
+    ];
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
+    expect(tree.todos).toHaveLength(1);
+    const goal = tree.todos[0]!;
+    expect(goal.todoId).toBe("goal");
+    expect(goal.state).toBe("working");
+    expect(goal.statusLabel).toBeUndefined();
+    expect(goal.goalProgress).toEqual({ done: 0, total: 1 });
+    expect(goal.sessions.map((x) => x.session_id).sort()).toEqual(["c", "p"]);
+  });
+
+  it("surfaces needs_you and active-ask child blockers at the top without duplicating them in the parent fold", () => {
+    const all = [
+      s("w", "working", "/code/p"),
+      s("n", "needs_you", "/code/p"),
+      s("ask", "idle", "/code/p", { updated_at: old }),
+    ];
+    const list: Todo[] = [
+      todo("goal", [], { title: "Release" }),
+      todo("done1", [], { title: "Prep", part_of: "goal", done_at: fresh }),
+      todo("work", [link("w")], { title: "Build", part_of: "goal" }),
+      todo("blocked", [link("n")], { title: "Approve schema", part_of: "goal" }),
+      todo("asking", [link("ask")], { title: "Pick rollout", part_of: "goal", ask: { verdict: "Roll out?", outcome: "decide", asked_at: fresh } }),
+    ];
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
+    // Surfaced blockers appear first and unfolded (in sortTodos order), followed by the folded parent goal
+    expect(tree.todos.map((td) => td.todoId)).toEqual(["asking", "blocked", "goal"]);
+    expect(tree.todos[0]!.folded).toBe(false);
+    expect(tree.todos[1]!.folded).toBe(false);
+    const goal = tree.todos[2]!;
+    expect(goal.goalProgress).toEqual({ done: 1, total: 4 });
+    expect(goal.sessions.map((x) => x.session_id)).toEqual(["w"]);
+  });
+
+  it("keeps cyclic, self-referential, orphan, and closed-parent items unfolded and never drops them", () => {
+    const all = [
+      s("a", "working", "/code/p"),
+      s("b", "working", "/code/p"),
+      s("self", "working", "/code/p"),
+      s("orphan", "working", "/code/p"),
+      s("closed-child", "working", "/code/p"),
+    ];
+    const list: Todo[] = [
+      todo("cycA", [link("a")], { part_of: "cycB" }),
+      todo("cycB", [link("b")], { part_of: "cycA" }),
+      todo("selfT", [link("self")], { part_of: "selfT" }),
+      todo("orphanT", [link("orphan")], { part_of: "missing-parent" }),
+      todo("closedGoal", [], { done_at: fresh }),
+      todo("closedChildT", [link("closed-child")], { part_of: "closedGoal" }),
+    ];
+    const tree = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
+    expect(tree.todos.map((td) => td.todoId).sort()).toEqual(["closedChildT", "cycA", "cycB", "orphanT", "selfT"]);
+    expect(tree.todos.every((td) => td.goalProgress === undefined)).toBe(true);
+  });
+
+  it("reverts immediately when todosV2 switches back to false", () => {
+    const all = [s("a", "working", "/code/p"), s("b", "working", "/code/p")];
+    const list: Todo[] = [
+      todo("goal", [], { title: "Goal" }),
+      todo("c1", [link("a")], { title: "One", part_of: "goal" }),
+      todo("c2", [link("b")], { title: "Two", part_of: "goal" }),
+    ];
+    const on = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: true });
+    expect(on.todos.map((td) => td.todoId)).toEqual(["goal"]);
+    const unfolded = buildV2SidebarTree(all, machines, list, noMutes, NOW, { board: null, foldChildren: false });
+    expect(unfolded.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
+    const off = buildTodoTree(all, machines, list, noMutes, NOW);
+    expect(off.todos.map((td) => td.todoId)).toEqual(["c1", "c2"]);
+    expect(off).toEqual(unfolded);
   });
 });

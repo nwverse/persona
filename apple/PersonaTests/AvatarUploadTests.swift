@@ -4,6 +4,7 @@ import ImageIO
 import Testing
 import UniformTypeIdentifiers
 @testable import Persona
+import PersonaWire
 
 /// New from Photo (#2405, docs/apple/persona.md "Uploading an image"): offered only by hubs with `look_uploads`, the crop
 /// sent square and upright, the hub's refusals shown as it words them, the new avatar chosen here, and deleting one.
@@ -43,7 +44,7 @@ struct AvatarUploadTests {
     private func uploads(_ hub: FakeHub, _ store: PersonaStore, features: Set<String> = [AvatarUploadsModel.feature],
                          demo: Bool = false) -> AvatarUploadsModel {
         AvatarUploadsModel(deps: .init(api: { hub.client }, features: { features }, isDemo: { demo }, store: { store },
-                                       crop: { AvatarUploadModel(image: $0, deps: .init(api: { hub.client }, store: { store })) }))
+                                       crop: { AvatarUploadModel(picture: $0, states: $1, deps: .init(api: { hub.client }, store: { store })) }))
     }
 
     /// A w×h image: a gradient, opaque unless `alpha`.

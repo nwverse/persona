@@ -1,19 +1,45 @@
 package persona.android.di
 
+import androidx.test.core.app.ApplicationProvider
+import java.lang.reflect.Proxy
+import java.security.Security
+import persona.android.PersonaApp
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.data.HubCredentials
+import persona.core.data.HubDataStore
+import persona.core.data.StoredScope
+import persona.core.data.addPairedHub
+import persona.core.hub.HeartbeatPolicy
 import persona.core.hub.HubError
 import persona.core.hub.HubFailure
+import persona.core.hub.HttpAgentCreationService
 import persona.feature.agents.AgentsDraftSource
 import persona.feature.agents.AgentsOperationsBindings
 import persona.feature.agents.AgentsWiringState
+import persona.feature.chat.ChatAppBindings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** Hub groups in the app layer (docs/android/android.md "Multiple hubs"): ids between a group and the merged lists, and routing. */
 class GroupRoutingTest {
@@ -46,6 +72,8 @@ class GroupRoutingTest {
         // So are alert ids (#5614): the same id from two hubs replaces nothing on the other's.
         assertEquals("p1~g0a1b2c3d", (other.event(NotifyEvent("alert", "", "", id = "p1")) as NotifyEvent).id)
         assertEquals("i1", GroupKeys.raw(interaction.id))
+        assertEquals(Interaction("i1", "macbook", "s1"), other.rawInteraction(interaction))
+        assertSame(interaction, primary.rawInteraction(interaction))
         val events: List<ServerEvent> = listOf(ItemsEvent("m", "s"), SessionsEvent("m", listOf(Session("m", "s"))),
             MachinesEvent(listOf(Machine("m"))), RevsEvent("m"), InteractionEvent(Interaction("i", "m", "s")),
             NotifyEvent("done", "m", "s"), DeltaEvent("m", "s"), ScreenEvent("m", "s"), HookEvent("m", "s"),
@@ -87,6 +115,26 @@ class GroupRoutingTest {
         } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel() }
     }
 
+    @Test fun assistantOutsideTargetsUseTheirGroupsMergedMachineIds() = runBlocking<Unit> {
+        val snapshot = AssistantSnapshot(
+            directionTree = DirectionTree(listOf(Direction("dir-tree", external = ExternalDirection("work", "tree-agent")))),
+            externalDirections = mapOf("dir-fallback" to ExternalDirection("work", "fallback-agent")),
+        )
+        val source = object : AssistantConversations {
+            override val assistant = MutableStateFlow(snapshot)
+            override val pinned = MutableStateFlow(emptySet<SessionKey>())
+            override suspend fun refresh() = Unit
+            override suspend fun startConversation() = SessionKey("work", "main")
+        }
+        val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Unconfined)
+        try {
+            val translated = source.inGroup(other, scope).assistant.value
+            assertEquals(SessionKey("work~g0a1b2c3d", "tree-agent"), translated.directionTree?.direction("dir-tree")?.external?.target)
+            assertEquals(SessionKey("work~g0a1b2c3d", "fallback-agent"), translated.externalDirections["dir-fallback"]?.target)
+            assertEquals(listOf("dir-tree"), translated.directionTree?.ids)
+        } finally { scope.coroutineContext[kotlinx.coroutines.Job]?.cancel() }
+    }
+
     @Test fun anotherGroupsFilesReachItsMachineByThePlainId() = runBlocking<Unit> {
         val calls = mutableListOf<String>()
         val files = object : SessionFiles {
@@ -122,7 +170,7 @@ class GroupRoutingTest {
         assertEquals(listOf("download macbook a.mp3", "stat macbook", "thumbnail macbook a.pdf 256", "convert macbook a.docx", "preview macbook a.mp4"), calls)
     }
 
-    /** Renaming and trashing (docs/protocol/protocol.md "Changing files"): both wrappers pass them on, or the app only ever sees the interface's "not supported". */
+    /** Both wrappers forward the file changes supported by the hub. */
     private class EditingFiles(val calls: MutableList<String>) : SessionFiles {
         override suspend fun directory(machineId: String, cwd: String, path: String) = error("unused")
         override suspend fun file(machineId: String, cwd: String, path: String) = error("unused")
@@ -132,6 +180,8 @@ class GroupRoutingTest {
         override suspend fun show(machineId: String, cwd: String, hash: String) = error("unused")
         override fun editsFiles(machineId: String) = true.also { calls += "edits $machineId" }
         override suspend fun rename(machineId: String, cwd: String, path: String, name: String) = "~/b".also { calls += "rename $machineId $path $name" }
+        override suspend fun move(machineId: String, cwd: String, path: String, directory: String, conflict: SessionMoveConflictPolicy?) =
+            SessionMovedFile(path, "$directory/a").also { calls += "move $machineId $cwd $path $directory $conflict" }
         override suspend fun trash(machineId: String, cwd: String, paths: List<String>) =
             listOf(SessionTrashedFile(paths.single(), "t1")).also { calls += "trash $machineId ${paths.single()}" }
         override suspend fun restore(machineId: String, trashIds: List<String>) = listOf("~/a").also { calls += "restore $machineId ${trashIds.single()}" }
@@ -140,6 +190,7 @@ class GroupRoutingTest {
     private suspend fun SessionFiles.editAll(machineId: String) {
         assertTrue(editsFiles(machineId))
         assertEquals("~/b", rename(machineId, "/w", "~/a", "b"))
+        assertEquals(SessionMovedFile("~/a", "~/folder/a"), move(machineId, "/w", "~/a", "~/folder", SessionMoveConflictPolicy.KeepBoth))
         assertEquals(listOf("t1"), trash(machineId, "/w", listOf("~/a")).map { it.trashId })
         assertEquals(listOf("~/a"), restore(machineId, listOf("t1")))
     }
@@ -147,7 +198,7 @@ class GroupRoutingTest {
     @Test fun anotherGroupsFileEditsReachItsMachineByThePlainId() = runBlocking<Unit> {
         val calls = mutableListOf<String>()
         EditingFiles(calls).inGroup(other).editAll("macbook~g0a1b2c3d")
-        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "trash macbook ~/a", "restore macbook t1"), calls)
+        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "trash macbook ~/a", "restore macbook t1"), calls)
     }
 
     @Test fun theMergedFilesSendEditsToTheMachinesGroup() = runBlocking<Unit> {
@@ -161,12 +212,57 @@ class GroupRoutingTest {
         }
         merged.editAll("macbook")
         merged.editAll("studio~g0a1b2c3d")
-        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "trash macbook ~/a", "restore macbook t1"), home)
-        assertEquals(listOf("edits studio", "rename studio ~/a b", "trash studio ~/a", "restore studio t1"), work)
+        assertEquals(listOf("edits macbook", "rename macbook ~/a b", "move macbook /w ~/a ~/folder KeepBoth", "trash macbook ~/a", "restore macbook t1"), home)
+        assertEquals(listOf("edits studio", "rename studio ~/a b", "move studio /w ~/a ~/folder KeepBoth", "trash studio ~/a", "restore studio t1"), work)
         // No open group: not offered, and a change fails as offline.
         assertFalse(merged.editsFiles("mini~gffffffff"))
-        try { merged.trash("mini~gffffffff", "/w", listOf("a")); fail("Expected offline") }
+        try { merged.move("mini~gffffffff", "/w", "~/a", "~/folder"); fail("Expected offline") }
         catch (failure: HubFailure) { assertEquals(HubError.NoNetwork, failure.kind) }
+    }
+    @Test fun keptMessageActionsReachTheirGroupWithPlainSessionIds() = runBlocking<Unit> {
+        val calls = mutableListOf<String>()
+        val source = object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun retryUndelivered(session: Session, messageId: String) {
+                calls += "retry ${session.key.path} $messageId"
+            }
+            override suspend fun deleteUndelivered(session: Session, messageId: String) {
+                calls += "delete ${session.key.path} $messageId"
+            }
+        }
+        val wrapped = source.inGroup(other)
+        val merged = Session("macbook~g0a1b2c3d", "conversation")
+        wrapped.retryUndelivered(merged, "message")
+        wrapped.deleteUndelivered(merged, "message")
+        assertEquals(listOf("retry macbook/conversation message", "delete macbook/conversation message"), calls)
+    }
+
+    @Test fun continuingAGroupedStartUsesRawIdsAndNamespacesTheReturnedRow() = runBlocking<Unit> {
+        var asked: Session? = null
+        var answer: String? = null
+        val rawReturned = Session("macbook", "kept-session", title = "Kept tab", status = "idle", starting = true)
+        val source = object : ChatActions {
+            override suspend fun isMuted(session: Session) = false
+            override suspend fun execute(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun verify(session: Session, action: ChatAction) = ChatActionResult.Done
+            override suspend fun continueStart(session: Session, choice: String): Session {
+                asked = session
+                answer = choice
+                return rawReturned
+            }
+        }
+        val merged = Session("macbook~g0a1b2c3d", "failed-session", title = "Failed start",
+            status = "offline", startError = "Question", startErrorCode = "shell_waiting")
+
+        val returned = source.inGroup(other).continueStart(merged, "y")
+
+        assertEquals(merged.copy(machineId = "macbook"), asked)
+        assertEquals("y", answer)
+        assertEquals(SessionKey("macbook~g0a1b2c3d", "kept-session"), returned.key)
+        assertEquals(rawReturned.copy(machineId = "macbook~g0a1b2c3d"), returned)
+        assertSame(source, source.inGroup(primary))
     }
 
 
@@ -189,11 +285,71 @@ class GroupRoutingTest {
         assertSame(repository, repository.inGroup(primary))
     }
 
+    @Test fun groupedChatLaunchersAndModelsUseTheHubsPlainMachineId() = runBlocking<Unit> {
+        MockWebServer().use { server ->
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            try {
+                val connection = object : HubConnection {
+                    override val state = MutableStateFlow(ConnectionState.Online)
+                    override val events = MutableSharedFlow<ServerEvent>()
+                    override fun reconnect() = error("unused")
+                    override fun send(message: JsonObject) = error("unused")
+                }
+                val composer = object : ChatComposerService {
+                    override val deliveries = MutableStateFlow<Map<String, ComposerDelivery>>(emptyMap())
+                    override suspend fun upload(session: SessionKey, name: String, file: java.io.File) = error("unused")
+                    override suspend fun interrupt(session: SessionKey) = error("unused")
+                    override suspend fun retryRefused(clientMessageId: String, clearDraft: Boolean) = error("unused")
+                }
+                val sender = object : MainConversationSender {
+                    override val outbox = MutableStateFlow(emptyList<OutboxMessage>())
+                    override suspend fun sendToMain(text: String, clientMessageId: String, draft: DraftSnapshot?) = error("unused")
+                }
+                val hub = HubScope("synthetic-hub", "synthetic-generation")
+                fun service() = HttpAgentCreationService(hub.path, server.url("/").toString(), "test-token", OkHttpClient())
+                var activeService: AgentCreationService? = service()
+                val bindings = ChatAppBindings(hub, scope, unused(), connection, unused(), composer, unused(), unused(),
+                    sender, worktrees = { activeService })
+
+                assertSame(bindings, bindings.inGroup(primary))
+                for (group in listOf(primary, other)) {
+                    val provider = requireNotNull(bindings.inGroup(group).worktrees)
+                    val previous = requireNotNull(provider())
+                    assertSame(previous, provider())
+                    activeService = null
+                    assertNull(provider())
+                    activeService = service()
+                    val service = requireNotNull(provider())
+                    assertNotSame(previous, service)
+                    assertSame(service, provider())
+                    val machineId = group.session(Session("machine", "session")).machineId
+                    server.enqueue(MockResponse().setBody("""{"agent":"claude","models":[{"id":"test-model"}]}"""))
+                    server.enqueue(MockResponse().setBody("""{"launchers":[{"name":"claude"}]}"""))
+
+                    assertEquals("test-model", service.launcherModels(machineId, "claude")?.models?.single()?.id)
+                    assertEquals("/api/v1/machines/machine/launchers/claude/models", server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)?.path)
+                    assertEquals("claude", service.launchers(machineId).single().name)
+                    assertEquals("/api/v1/machines/machine/launchers", server.takeRequest(5, java.util.concurrent.TimeUnit.SECONDS)?.path)
+                }
+            } finally {
+                scope.cancel()
+            }
+        }
+    }
+
+    private inline fun <reified T> unused(): T =
+        Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, method, _ ->
+            error("Unexpected call to ${method.name}")
+        } as T
+
     @Test fun creatingAnAgentReachesTheGroupWithItsPlainMachineAndComesBackSuffixed() = runBlocking<Unit> {
         var requested: AgentStartRequest? = null
+        var modelQuery: Triple<String, String, String?>? = null
         val service = object : AgentCreationService {
             override val scope = "hub/gen"
             override suspend fun launchers(machineId: String) = listOf(AgentLauncher(machineId))
+            override suspend fun launcherList(machineId: String) =
+                AssistantLaunchers(launchers(machineId), unavailable = listOf(UnavailableLauncher("left-$machineId", code = "launcher_own_service")))
             override suspend fun directories(machineId: String, path: String) = AgentDirectories(machineId)
             override suspend fun start(request: AgentStartRequest, operationId: String): AgentStartResult {
                 requested = request
@@ -202,10 +358,21 @@ class GroupRoutingTest {
             override suspend fun operation(operationId: String) = AgentStartResult.Pending
             override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
                 LauncherModels(machineId, listOf(AgentModel(launcher)))
+            override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?): LauncherModels {
+                modelQuery = Triple(machineId, launcher, host)
+                return LauncherModels(launcher)
+            }
         }
         val wrapped = service.inGroup(other)
         assertEquals("m", wrapped.launchers("m~g0a1b2c3d").single().name)
+        // New Agent's list with what it lists off there (#8109): asked with the plain machine, what is left out kept
+        assertEquals(AssistantLaunchers(listOf(AgentLauncher("m")), unavailable = listOf(UnavailableLauncher("left-m", code = "launcher_own_service"))),
+            wrapped.launcherList("m~g0a1b2c3d"))
         assertEquals(LauncherModels("m", listOf(AgentModel("claude"))), wrapped.launcherModels("m~g0a1b2c3d", "claude"))
+        val merged = mergedAgentsState(listOf(primary, other),
+            listOf(AgentsWiringState("a"), AgentsWiringState("b", creation = wrapped)), 0)
+        assertEquals(LauncherModels("omp"), requireNotNull(merged.creation).launcherModels("m~g0a1b2c3d", "omp", false, "herdr"))
+        assertEquals(Triple("m", "omp", "herdr"), modelQuery)
         val created = wrapped.start(AgentStartRequest("m~g0a1b2c3d", "/", "claude"), "op") as AgentStartResult.Created
         assertEquals("m", requested!!.machineId)
         assertEquals(SessionKey("m~g0a1b2c3d", "new"), created.session.key)
@@ -215,6 +382,8 @@ class GroupRoutingTest {
         fun hub(answer: AgentStartResult, asked: MutableList<String>) = object : AgentCreationService {
             override val scope = "hub/gen"
             override suspend fun launchers(machineId: String) = emptyList<AgentLauncher>()
+            override suspend fun launcherList(machineId: String) =
+                AssistantLaunchers(unavailable = listOf(UnavailableLauncher("left", reason = "${if (answer == AgentStartResult.Unknown) "home" else "work"} $machineId")))
             override suspend fun directories(machineId: String, path: String) = AgentDirectories(path)
             override suspend fun start(request: AgentStartRequest, operationId: String) = AgentStartResult.Unknown
             override suspend fun operation(operationId: String): AgentStartResult { asked += operationId; return answer }
@@ -229,6 +398,8 @@ class GroupRoutingTest {
         // A route change rebuilds the merged state (and process death loses it): the pending start is checked anew.
         val rebuilt = requireNotNull(mergedAgentsState(listOf(primary, other), states, 0).creation)
         assertEquals(created, rebuilt.operation("op", request.machineId))
+        // New Agent's list with what it lists off there (#8109) comes from the hub that owns the computer
+        assertEquals("work mac~g0a1b2c3d", rebuilt.launcherList(request.machineId).unavailable.single().reason)
         assertEquals(listOf("op"), workAsked)
         assertTrue(homeAsked.isEmpty())
     }
@@ -271,6 +442,23 @@ class GroupRoutingTest {
         assertEquals("s+s", merged.scope)
     }
 
+    @Test fun aTargetedSessionRefreshReadsOnlyItsHubAndKeepsThatHubsFailure() = runBlocking<Unit> {
+        val calls = mutableListOf<String>()
+        val failed = assertThrows(java.io.IOException::class.java) {
+            runBlocking {
+                refreshOwnedSessions("macbook~g0a1b2c3d") { namespace, raw ->
+                    calls += "$namespace:$raw"
+                    // Another hub's healthy all-hubs refresh must not turn this owning-hub failure into success.
+                    throw java.io.IOException("owning hub unavailable")
+                }
+            }
+        }
+        assertEquals("owning hub unavailable", failed.message)
+        assertEquals(listOf("g0a1b2c3d:macbook"), calls)
+        refreshOwnedSessions("macbook") { namespace, raw -> calls += "$namespace:$raw" }
+        assertEquals(listOf("g0a1b2c3d:macbook", "null:macbook"), calls)
+    }
+
     /** A hub's machine management that records what it was asked (plain ids only), as a group's fake hub. */
     private class FakeMachines(val hub: String) : MachineManagement {
         val calls = mutableListOf<String>()
@@ -278,6 +466,8 @@ class GroupRoutingTest {
         override suspend fun launcherQuota(machineId: String, name: String, refresh: Boolean) =
             persona.core.contracts.api.LauncherQuotaAnswer(machine = machineId).also { calls += "quota $machineId $name $refresh" }
         override suspend fun reconnect(machineId: String) { calls += "reconnect $machineId" }
+        override suspend fun startLinkSwitch(machineId: String) =
+            MachineLinkSwitch(available = false, phase = "checking").also { calls += "link switch $machineId" }
         override suspend fun deploy(machineId: String) { calls += "deploy $machineId" }
         override suspend fun herdr(machineId: String) = HerdrState(false, false, true).also { calls += "herdr $machineId" }
         override suspend fun startHerdr(machineId: String) = HerdrState(false, true, true).also { calls += "start herdr $machineId" }
@@ -288,6 +478,9 @@ class GroupRoutingTest {
         override suspend fun codexSettings(machineId: String) = emptyList<ClaudeSetting>().also { calls += "codex settings $machineId" }
         override suspend fun setCodexSetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
             emptyList<ClaudeSetting>().also { calls += "set codex $machineId $key" }
+        override suspend fun agySettings(machineId: String) = emptyList<ClaudeSetting>().also { calls += "agy settings $machineId" }
+        override suspend fun setAgySetting(machineId: String, key: String, value: kotlinx.serialization.json.JsonElement) =
+            emptyList<ClaudeSetting>().also { calls += "set agy $machineId $key" }
         override suspend fun doctor(machineId: String) =
             persona.core.contracts.api.DoctorReport(dir = hub).also { calls += "doctor $machineId" }
         override suspend fun fixDoctor(machineId: String) =
@@ -311,6 +504,7 @@ class GroupRoutingTest {
                 if (other.owns(machineId)) call(work.inGroup(other)) else call(home.inGroup(primary))
         })
         managed.reconnect("macbook~g0a1b2c3d")
+        assertEquals("checking", managed.startLinkSwitch("macbook~g0a1b2c3d").phase)
         managed.deploy("macbook~g0a1b2c3d")
         managed.launchers("macbook~g0a1b2c3d")
         managed.claudeSettings("macbook~g0a1b2c3d")
@@ -319,11 +513,14 @@ class GroupRoutingTest {
         managed.setClaudeSetting("macbook~g0a1b2c3d", "model", kotlinx.serialization.json.JsonPrimitive("opus"))
         managed.codexSettings("macbook~g0a1b2c3d")
         managed.setCodexSetting("macbook~g0a1b2c3d", "model", kotlinx.serialization.json.JsonPrimitive("gpt-5.5"))
+        managed.agySettings("macbook~g0a1b2c3d")
+        managed.setAgySetting("macbook~g0a1b2c3d", "toolPermission", kotlinx.serialization.json.JsonPrimitive("always-proceed"))
         assertEquals(HerdrState(false, false, true), managed.herdr("macbook~g0a1b2c3d"))
         assertEquals(HerdrState(false, true, true), managed.startHerdr("macbook~g0a1b2c3d"))
         val changed = managed.setEngine("macbook~g0a1b2c3d", "orca")
-        assertEquals(listOf("reconnect macbook", "deploy macbook", "launchers macbook", "settings macbook",
+        assertEquals(listOf("reconnect macbook", "link switch macbook", "deploy macbook", "launchers macbook", "settings macbook",
             "quota macbook cc_main true", "set macbook model", "codex settings macbook", "set codex macbook model",
+            "agy settings macbook", "set agy macbook toolPermission",
             "herdr macbook", "start herdr macbook", "engine macbook orca"), work.calls)
         // the machine it hands back is the merged list's, so the page finds it again
         assertEquals("macbook~g0a1b2c3d", changed.id)
@@ -477,4 +674,122 @@ class GroupRoutingTest {
         val alone = mutableMapOf("work" to other.fleet(FleetState(phase = "needsYou", needsYou = 1, items = listOf(FleetItem("macbook/s1")))))
         assertEquals(FleetState(), alone.retainFleets(listOf("home"), "home"))
     }
+}
+
+/** The production grouped MessageSender over two real durable outboxes, each with a synthetic offline hub. */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35], application = PersonaApp::class, shadows = [ShadowConnectionRuntimePersonaApp::class])
+class GroupStartRetryRoutingTest {
+    private val app: PersonaApp = ApplicationProvider.getApplicationContext()
+
+    @Test fun retryRefusedRoutesByGroupAndStripsOnlyTheMachineNamespace() = runBlocking {
+        Security.removeProvider("AndroidKeyStore")
+        Security.addProvider(FakeAndroidKeyStoreProvider())
+        val parent = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val homeTransport = RefusingStartTransport()
+        val workTransport = RefusingStartTransport()
+        val transports = mapOf("home-hub" to homeTransport, "work-hub" to workTransport)
+        val store = HubDataStore(app, parent) { scope, _ -> checkNotNull(transports[scope.hubId]) }
+        val runtime = ConnectionRuntime(app)
+        val openedGroups = mutableListOf<GroupRuntime>()
+        try {
+            val homeScope = store.storeHub(credentials("home-hub"))
+            store.change { document ->
+                document.addPairedHub(StoredScope.of(homeScope), null, 1) { "g00000001" }
+            }
+            val workScope = store.storeHub(credentials("work-hub"))
+            store.change { document ->
+                document.addPairedHub(StoredScope.of(workScope), null, 2) { "g0a1b2c3d" }
+            }
+            val registry = store.registry()
+            val homeData = store.openGroup(homeScope, homeScope)
+            val workData = store.openGroup(workScope, workScope)
+            val settings = GroupConnectionSettings(
+                "test", JsonPrimitive(1), buildJsonObject { }, HeartbeatPolicy(), 1_000,
+            )
+            val homeGroup = GroupRuntime(checkNotNull(registry.group("g00000001")), null, app, settings, runtime).also {
+                routingSetField(it, "data", homeData)
+                openedGroups += it
+            }
+            val workGroup = GroupRuntime(checkNotNull(registry.group("g0a1b2c3d")), "g0a1b2c3d", app, settings, runtime).also {
+                routingSetField(it, "data", workData)
+                openedGroups += it
+            }
+            routingField<MutableStateFlow<List<GroupRuntime>>>(runtime, "mutableGroups").value = listOf(homeGroup, workGroup)
+
+            val homeKey = SessionKey("home-machine", "shared-session")
+            val workRawKey = SessionKey("work-machine", "shared-session")
+            val workMergedKey = SessionKey("work-machine~g0a1b2c3d", "shared-session")
+            homeData.messages.send(homeKey, "Home message", "home-refusal")
+            workData.messages.send(workRawKey, "Work message", "work-refusal")
+            awaitDelivery(homeData.messages, "home-refusal", DeliveryState.Refused)
+            awaitDelivery(workData.messages, "work-refusal", DeliveryState.Refused)
+            assertEquals(listOf(homeKey), homeTransport.requests.map { it.session })
+            assertEquals(listOf(workRawKey), workTransport.requests.map { it.session })
+            // Keep requeued rows durable and observable instead of immediately sending them again.
+            homeTransport.readyToSend.value = false
+            workTransport.readyToSend.value = false
+
+            assertEquals(0, runtime.messages.retryRefused(workMergedKey, "dialog_open"))
+            assertEquals(0, runtime.messages.retryRefused(SessionKey("work-machine~gffffffff", "shared-session"), "shell_waiting"))
+            assertEquals(1, runtime.messages.retryRefused(workMergedKey, "shell_waiting"))
+            awaitRequeued(workData.messages, "work-refusal")
+            assertEquals(DeliveryState.Refused, homeData.messages.outbox.value.single().state)
+
+            assertEquals(1, runtime.messages.retryRefused(homeKey, "shell_waiting"))
+            awaitRequeued(homeData.messages, "home-refusal")
+            assertEquals("No offline requeue reaches the network", 1, homeTransport.requests.size)
+            assertEquals("No offline requeue reaches the network", 1, workTransport.requests.size)
+        } finally {
+            openedGroups.forEach { it.close() }
+            val _ = runCatching { store.close() }
+            val _ = runCatching { runtime.dataStore.close() }
+            parent.cancel()
+            Security.removeProvider("AndroidKeyStore")
+            app.scope.cancel()
+        }
+    }
+
+    private fun credentials(hubId: String) = HubCredentials(
+        "https://$hubId.invalid", hubId, null, emptyList(), "synthetic-token-$hubId",
+    )
+}
+
+private class RefusingStartTransport : MessageTransport {
+    override val readyToSend = MutableStateFlow(true)
+    override val supportsClientOps = false
+    val requests = mutableListOf<MessageRequest>()
+
+    override suspend fun send(request: MessageRequest): MessageTransportResult {
+        requests += request
+        return MessageTransportResult.HubError(
+            code = "shell_waiting", delivered = "none", error = "Synthetic terminal question", retryable = false,
+        )
+    }
+}
+
+private suspend fun awaitDelivery(sender: MessageSender, clientMessageId: String, state: DeliveryState) {
+    withTimeout(5_000) {
+        sender.outbox.first { entries ->
+            entries.any { it.clientMessageId == clientMessageId && it.state == state }
+        }
+    }
+}
+
+private suspend fun awaitRequeued(sender: MessageSender, clientMessageId: String) {
+    withTimeout(5_000) {
+        sender.outbox.first { entries ->
+            entries.any {
+                it.clientMessageId == clientMessageId && it.state in setOf(DeliveryState.Queued, DeliveryState.WaitingForNetwork)
+            }
+        }
+    }
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun <T> routingField(target: Any, name: String): T =
+    target.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(target) as T
+
+private fun routingSetField(target: Any, name: String, value: Any?) {
+    target.javaClass.getDeclaredField(name).apply { isAccessible = true }.set(target, value)
 }

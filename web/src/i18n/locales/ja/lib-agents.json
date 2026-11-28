@@ -3,6 +3,7 @@
   "setup_disabled": "個人エージェントを提供する拡張機能で有効になっていません。拡張機能の説明に従って有効にしてから再起動してください",
   "setup_no_accounts": "個人エージェントのアカウントが未接続です。Lark ゲートウェイ の設定で Cue か Grok Bot を追加してください",
   "other": "その他",
+  "bot": "ボット",
   "group_date": "日付",
   "group_provider": "ソース",
   "group_none": "グループなし",
@@ -20,12 +21,15 @@
   "pinned": "ピン留め",
   "remove": "リストから削除",
   "removed_toast": "「{title}」を削除しました。新しいメッセージが届くとリストに戻ります",
-  "restore": "元に戻す",
   "restored_toast": "「{title}」を元に戻しました",
   "undo": "取り消す",
   "hide_failed": "削除できませんでした：{error}",
   "unhide_failed": "元に戻せませんでした：{error}",
   "prefs_save_failed": "リストの設定を保存できませんでした：{error}",
   "removed_count": "削除済み（{count}）",
-  "removed_footer": "削除したチャットは Lark ゲートウェイに残り、新しいメッセージが届くと自動でリストに戻ります。"
+  "removed_footer": "削除したチャットは Lark ゲートウェイに残り、新しいメッセージが届くと自動でリストに戻ります。",
+  "quota_left": "残り {percent}%",
+  "quota_exhausted": "使い切りました",
+  "quota_stale": "最新ではありません",
+  "quota_resets": "{time} にリセット"
 }

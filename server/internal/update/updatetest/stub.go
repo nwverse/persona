@@ -1,11 +1,13 @@
 // Package updatetest builds tiny Go programs whose build info names their package the way builds of server/cmd/personad
-// and server/cmd/persona-node do, for tests of update.ProgramOf and of what refuses or picks a program by it.
+// and server/cmd/persona-node do, for tests of update.ProgramOf and of what refuses or picks a program by it; and serves
+// releases the way an update source does (Releases), for tests of what is downloaded while a newer one comes out.
 package updatetest
 
 import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,8 +32,35 @@ func Program(t testing.TB, name, goos, goarch string) string {
 	return ProgramSource(t, name, goos, goarch, "package main\n\nfunc main() {}\n")
 }
 
+// VersionedProgram is Program linked with version, as a release links main.version: the build carries its version's
+// bytes, which the manager looks for before it takes a local build for the hub's own (internal/devices).
+func VersionedProgram(t testing.TB, name, goos, goarch, version string) string {
+	t.Helper()
+	return ProgramSource(t, name, goos, goarch, "package main\n\nimport \"os\"\n\nvar version = "+strconv.Quote(version)+
+		"\n\nfunc main() { os.Stdout.WriteString(version + \"\\n\") }\n")
+}
+
+// CoreProgram is VersionedProgram built with the persona_core_only tag, as a core-only release builds its programs:
+// its build info says the core edition (update.EditionOf).
+func CoreProgram(t testing.TB, name, goos, goarch, version string) string {
+	t.Helper()
+	return CoreProgramSource(t, name, goos, goarch, "package main\n\nimport \"os\"\n\nvar version = "+strconv.Quote(version)+
+		"\n\nfunc main() { os.Stdout.WriteString(version + \"\\n\") }\n")
+}
+
+// CoreProgramSource is ProgramSource built with the persona_core_only tag, for a test that needs its own main program.
+func CoreProgramSource(t testing.TB, name, goos, goarch, mainGo string) string {
+	t.Helper()
+	return programSource(t, name, goos, goarch, mainGo, "persona_core_only")
+}
+
 // ProgramSource is Program with main.go's source given.
 func ProgramSource(t testing.TB, name, goos, goarch, mainGo string) string {
+	t.Helper()
+	return programSource(t, name, goos, goarch, mainGo, "")
+}
+
+func programSource(t testing.TB, name, goos, goarch, mainGo, tags string) string {
 	t.Helper()
 	goBin, err := exec.LookPath("go")
 	if err != nil {
@@ -51,7 +80,7 @@ func ProgramSource(t testing.TB, name, goos, goarch, mainGo string) string {
 	out := filepath.Join(t.TempDir(), name)
 	// The synthetic module has no repository provenance. Ambient fake Git
 	// commands from service tests must not stamp or break this fixture build.
-	cmd := exec.Command(goBin, "build", "-buildvcs=false", "-trimpath", "-o", out, "./cmd/"+name)
+	cmd := exec.Command(goBin, "build", "-buildvcs=false", "-trimpath", "-tags", tags, "-o", out, "./cmd/"+name)
 	cmd.Dir = src
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOFLAGS=", "GOWORK=off")
 	if goCache != "" {

@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// draw() imports Markdown afresh below. Evaluate its module graph once while collecting this file: under the complete
+// parallel suite a cold first import can exceed the unchanged five-second test deadline and leave later draws empty.
+beforeAll(async () => {
+  await import("./Markdown");
+});
 
 // What a click copies (atoms.copyText, which also says "Copied").
 const copied = vi.hoisted(() => vi.fn(async (_text: string) => true));
@@ -48,6 +54,23 @@ describe("reply blocks (#2984)", () => {
     const linked = host.querySelector("a code") as HTMLElement;
     expect(linked.hasAttribute("data-copy-code")).toBe(false);
     expect(linked.hasAttribute("data-linked")).toBe(false);
+  });
+
+  it("leaves room where inline code meets a CJK letter, none beside a space or CJK punctuation (#9477)", async () => {
+    await draw("用`pnpm`装依赖，提交是 `3854bdc`，写成`设置`。见[`docs`](https://example.com)里\n\n**注意**`HOME`要指向 v`x1`\n\n```\n用`x`装\n```");
+    const sides = (text: string) => {
+      const code = [...host.querySelectorAll("code")].find((c) => c.textContent === text)!;
+      const gap = code.getAttribute("data-gap") ?? "";
+      return [gap.includes("s"), gap.includes("e")];
+    };
+    expect(sides("pnpm")).toEqual([true, true]);
+    expect(sides("3854bdc")).toEqual([false, false]);
+    expect(sides("设置")).toEqual([true, false]);
+    // only plain words beside it count: code alone in a link, or after bold words, gets none on that side
+    expect(sides("docs")).toEqual([false, false]);
+    expect(sides("HOME")).toEqual([false, true]);
+    expect(sides("x1")).toEqual([false, false]); // a Latin letter: no room added
+    expect(host.querySelector("pre code")!.hasAttribute("data-gap")).toBe(false);
   });
 
   it("a quote has its mark; a long one folds, opens on a click and folds again", async () => {

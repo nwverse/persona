@@ -20,6 +20,14 @@ The general performance rules (main-thread IO, `@State`, images, launch, memory)
 Background: `docs/archive/apple/live-updates.md` (three instances of "push interrupts an action").
 The root causes, the staged plan and the measurements after each step are in `docs/archive/apple/ios-state-records.md`.
 
+## Switching hubs with reads in flight
+
+The sidebar can show cached conversations for the selected hub as soon as the owner switches. Inbox rows, counters, task sheets and pending actions belong to the visit that requested them. Leaving the hub clears the visible state and releases its in-flight work, so the new hub can start loading immediately.
+
+A saved Inbox list carries its source pairing. On cold launch the list can appear offline when that pairing belongs to the selected group. Older records with an address are usable when the address identifies that group unambiguously. A successful refresh replaces an unattributed record. Pending Agent handoffs also carry the source pairing so delivery to an Agent on another hub can file the original Inbox item.
+
+A group ID alone cannot identify a request after a quick switch from Home to Work and back to Home. Each completion must still belong to the current visit before publishing data, changing a badge, reporting an error, or releasing a pending operation. This also applies to a follow-up write scheduled after a successful request. The hub switch and Inbox store tests delay responses across the switch to exercise these cases.
+
 ## Current data flow
 
 ```
@@ -124,7 +132,11 @@ Truthfulness: time updates on every push (`AgentTime` lands with `show()` and is
 - The list's derived data is an immutable `AgentListProjection` (#1231): filters and counts, pins, the Repository/Project tree,
   repository headers, quiet flags and those sections' row entries, built once per published key (`AgentListProjectionCache.Key`:
   the feed's structural `revision`, every hub group's link identity, address and token, and small settings such as grouping,
-  filter, search, pins, mutes and the held row). An unchanged retained page reads the published value without touching the
+  filter, search, pins, mutes, the held row and the rows held after they were read during the visit, `heldSeen`, #12514).
+  The rows the list shows as Unread or Just finished come out of the projection (`needsSeen`) into
+  `AppModel.shownThisVisit`, which no view watches; only a row that is seen since moves into `seenThisVisit`, the part of
+  the key (`markSeen`, or `holdNotedSeen` where the lists land). A row that finishes derives the list once, as before
+  #12514; a row read changes the key in the same turn as its state, so it too derives the list once. An unchanged retained page reads the published value without touching the
   inventory. The first value, settings changes, critical landings, appended pages and credential changes are derived at once
   on the main actor. Ordinary structural revisions, including what a released hold lands, are derived off the main actor from
   a value snapshot by one serial worker. One derivation runs at a time and only the newest request waits behind it, so a
@@ -158,7 +170,7 @@ Two checks preserve steps 1–3; regressions turn tests red:
 - `RenderBudgetTests` fails above budget: with the page at rest, a push changes one field in one session (average of 5 per type); views recomputed per push must stay within budget.
   Budgets are the numbers in "Cost of one push" above: Agents list `rev` 1 (that row's time), `last` 2 (that row and its time), Agent chat and Persona chat both 0;
   one extra call across 5 pushes is allowed (0.2, a row's time happens to cross its refresh boundary); two extra calls count as regression.
-- `AllSessionsReadersTests` (PersonaTests, source scan): only Agent-listing views under `Persona/Views` and `Mac` may read `allSessions`; each file's read count and reason are registered in the test,
+- `AllSessionsReadersTests` (PersonaTests, source scan): only Agent-listing views under `Persona/Views` may read `allSessions`; each file's read count and reason are registered in the test,
   and adding or removing a read requires updating the registration:
   - single-session displays read `model.session(_:)` cells;
   - actions needing all sessions only when tapped (@ menus, quoting another session, next / previous Agent, terminal space switching) read `model.sessionsNow`: the same data as `allSessions`, unobserved,
@@ -215,7 +227,9 @@ After any push sequence combined with any actions ends, the screen returns to hu
 
 ### Snapshot refresh ownership (#1634)
 
-Todo and session invalidations use `apple/Persona/App/CoalescedRefresh.swift`: one active read and one latest dirty follow-up, without a fixed cooldown or a new freshness delay. Hints received during a read merge; the trailing read reconciles them. A fast read that finishes before the next hint may still produce one GET per hint. Single-flight is not a request-rate quota, and reducing full todo bodies further depends on a compatibility-preserving manager-side delta/conditional protocol.
+Todo and session invalidations use `apple/Persona/App/CoalescedRefresh.swift`: one active read and one latest dirty follow-up, without a fixed cooldown or a new freshness delay. The to-do pushes (`{"type":"todos"}`, and the assistant feed's task / receipt / review / report items) go through `TodoStore.pushed` first (#16760): a pushed read starts at once after a quiet spell, and the pushes during it and the wait after it end become one read after that wait; the wait starts at 2 s and doubles while pushes keep coming (2, 4, 8, at most 10 s), back to 2 s after a whole wait without a push, so a minute of reports reads the list about 9 times instead of 60; while the hello lists `todo_revision` it asks `GET /api/v1/todos/revision` with the revision the held rows are current at (the list's `X-Persona-Todos-Revision`) and reads nothing on 304; while the Persona tab is not in front a push waits for it, at most 30 s, so badges and widgets still catch up. Connecting, switching hubs, pull to refresh and a write's confirmation read at once as before. A busy Agent's progress reports used to read the whole list (megabytes on a big hub) once each. The direction tree's pushes re-read the assistant settings only for a conversation-backed direction id not read for before (`AppModel.directionsReadFor`): a direction whose conversation the settings never list (archived, on another computer, in another space) re-read them on every push. The hub's session lists add one bound (#9487, the web's #9042): their hint reads go at most once per window (`apple/Persona/App/HintWindow.swift`), 2 s while no Agents list is in sight and 1 s while one is (#16758); the first hint after a quiet window reads at once, the hints inside a window share one read at its end (so the last change of a burst is always read), and a list coming into sight reads what waits at once (`RuntimeSessionLists.listInSight`, from `AgentsCoverWatch`). In sight a hint waits at most 1 s, about what a read already in flight cost before, so the timeliness table keeps its meaning for what is on screen. A busy hub sends about one hint a second per busy machine; before #16758 a list in sight read for each one, and out of sight before #9487 that was a list read and a counts read for each. Hints received during a read merge; the trailing read reconciles them. A fast read that finishes before the next hint may still produce one GET per hint. Single-flight is not a request-rate quota, and reducing full todo bodies further depends on a compatibility-preserving manager-side delta/conditional protocol.
+
+Seen reconciliation has the same independent-read boundary (#12770). The first list that proves a mark recorded starts a 15-second settling window; `SeenOutbox` holds only rows with the pre-open `seen_at`, no send path resends it, and new activity ends it immediately. Expiry is evaluated by the existing landings and local actions, with no new timer. `SessionListPage.counts` is requested only for an unfiltered root or a filtered section on a `sessions_page_counts` hub, on first / initial `since` reads. `SessionListModel` publishes those counts with their row IDs and `keepSeen` adjusts only that coupled set; a filtered root keeps its separate all-state count read, and every standalone count remains unadjusted. Cursor continuations retain the first answer's coupled counts rather than replacing them with a separate read.
 
 Manual reads share an eligible active or queued read. Post-write confirmation cannot join a GET started before the write; todo publication is fenced by hub generation and local mutation revision. A cancelled UI waiter does not cancel another owner's shared read. Reset ends old waits and rejects late old-generation data. Session refresh preserves its frozen paging window and delta checkpoint; a manual refresh absorbs the existing short hint-merging task without swallowing its last invalidation.
 

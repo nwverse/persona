@@ -9,6 +9,8 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func init() { nodeRPC("assistant.cancel_supervision", (*Node).assistantCancelSupervisionRPC) }
+
 // A Persona conversation's queue (#4342). A message to a headless claude that is busy waits in Claude Code's own
 // queue until its next step takes it in (mid-turn) or its turn ends. Its transcript notes the wait with no words
 // (queue-operation enqueue without content, unlike a terminal's), so the node follows its stdout instead: every user
@@ -23,8 +25,7 @@ import (
 //     whatever the turn was doing goes to the background or stops ("stopped"), and they start the next request.
 //
 // Measured on Claude Code 2.1.322. One that sends no command_lifecycle shows no queue, as before; one without these
-// control requests answers them with an error, which the strip shows. The Agent SDK bridge forwards neither
-// (integrations/agent-sdk, CONTROLS): a conversation on it says so.
+// control requests answers them with an error, which the strip shows.
 
 // assistantInput is one user message written to claude: its id, what the user wrote and the message's content
 // (the live snapshot, any images, the words) to write it again.
@@ -35,46 +36,62 @@ type assistantInput struct {
 	content []map[string]any
 	queued  bool      // Claude Code said it queued it, and has not started it yet
 	at      time.Time // when it was written
+	// supervision: the message came from the manager as a supervision message (its structured message source, not its
+	// words), so the manager can take it back while it has not started (assistantCancelSupervision).
+	supervision bool
 }
 
 // assistantInputKeep is how long a message whose lifecycle never comes (a Claude Code without command_lifecycle,
 // or one that started it before saying anything) is remembered; one it queued is kept until it says more.
 const assistantInputKeep = time.Minute
 
-// writeInput writes in as a user message with a new id and remembers it until Claude says what became of it.
+// writeInput writes in as a user message with a new id and remembers it until Claude says what became of it. It is
+// remembered before it is written: Claude Code says it queued it within a millisecond (measured on 2.1.322), and the
+// reader drops a lifecycle line of an id it does not know. A message whose write failed is forgotten again.
 func (p *assistantProc) writeInput(in assistantInput) error {
 	in.id, in.queued, in.at = newUUID(), false, time.Now()
 	line, _ := json.Marshal(map[string]any{"type": "user", "uuid": in.id,
 		"message": map[string]any{"role": "user", "content": in.content}})
-	if err := p.write(line); err != nil {
-		return err
-	}
 	p.mu.Lock()
 	p.written = slices.DeleteFunc(p.written, func(w assistantInput) bool { return !w.queued && time.Since(w.at) > assistantInputKeep })
 	p.written = append(p.written, in)
 	p.mu.Unlock()
+	if err := p.write(line); err != nil {
+		p.mu.Lock()
+		p.written = slices.DeleteFunc(p.written, func(w assistantInput) bool { return w.id == in.id })
+		p.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
 // commandLifecycle applies a command_lifecycle line: queued marks the message as waiting, any later state forgets
-// it. True when the queue changed.
+// it, and started makes the process busy, also for a message it no longer knows (one written over
+// assistantInputKeep ago): a turn starts either way. True when the queue or busy changed.
 func (p *assistantProc) commandLifecycle(id, state string) bool {
 	if id == "" {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	i := slices.IndexFunc(p.written, func(w assistantInput) bool { return w.id == id })
-	if i < 0 {
-		return false
+	p.lifecycle = true
+	was := false
+	if i := slices.IndexFunc(p.written, func(w assistantInput) bool { return w.id == id }); i >= 0 {
+		if state == "queued" {
+			changed := !p.written[i].queued
+			p.written[i].queued = true
+			return changed
+		}
+		was = p.written[i].queued
+		p.written = slices.Delete(p.written, i, i+1)
 	}
-	if state == "queued" {
-		changed := !p.written[i].queued
-		p.written[i].queued = true
-		return changed
+	if state == "started" && !p.busy {
+		// A message queued behind a turn starts its own once that turn's result cleared busy (measured on 2.1.322:
+		// started 3 ms after the result, the model's first token seconds later). Its turn is under way from here: the
+		// next result ends it, and one taken into a turn still running finds busy set already.
+		p.busy, p.lastActive = true, time.Now()
+		return true
 	}
-	was := p.written[i].queued
-	p.written = slices.Delete(p.written, i, i+1)
 	return was
 }
 
@@ -126,6 +143,10 @@ func (n *Node) assistantQueueProc(id string) (*assistantProc, error) {
 // and when it was one to take out the answer is a refusal (it went to Persona).
 func (n *Node) assistantEditQueue(ctx context.Context, id string, keep []int) (assistantQueueEdit, error) {
 	defer n.typing.lock(id)() // not while a message is on its way in
+	// Nor while the process is taken or let go (assistantLife: a round's process retiring, assistant_round.go
+	// roundSettled): between the last cancel and the first write again nothing is queued and it may look settled, and
+	// the messages cancelled would be written into a process let go.
+	defer n.assistantLife.lock(id)()
 	p, err := n.assistantQueueProc(id)
 	if err != nil {
 		return assistantQueueEdit{}, err
@@ -218,6 +239,54 @@ func (n *Node) writeQueuedAgain(p *assistantProc, w assistantInput) error {
 	p.lastActive = time.Now()
 	p.mu.Unlock()
 	return p.writeInput(w)
+}
+
+type cancelSupervisionParams struct {
+	SessionID string `json:"session_id"`
+}
+
+func (n *Node) assistantCancelSupervisionRPC(ctx context.Context, p cancelSupervisionParams) (map[string]any, error) {
+	cancelled, err := n.assistantCancelSupervision(ctx, p.SessionID)
+	return map[string]any{"cancelled": cancelled}, err
+}
+
+// assistantCancelSupervision takes back the supervision messages written to conversation id that have not started
+// yet (the manager's switch for automatic supervision messages, assistant.cancel_supervision): the ones Claude Code
+// queued and the ones it has not acknowledged yet. cancel_async_message answers whether each was still waiting, so a
+// message that started meanwhile stays where it went, and a turn that has started or what a transcript already shows
+// is never taken back. It answers how many were cancelled; a conversation with nothing written, no live process or not
+// on claude has none.
+func (n *Node) assistantCancelSupervision(ctx context.Context, id string) (int, error) {
+	defer n.typing.lock(id)() // not while a message is on its way in
+	defer n.assistantLife.lock(id)()
+	n.mu.Lock()
+	p := n.procs[id]
+	n.mu.Unlock()
+	if p == nil || !p.alive() || p.agent != "claude" {
+		return 0, nil
+	}
+	p.mu.Lock()
+	var waiting []assistantInput
+	for _, w := range p.written {
+		if w.supervision {
+			waiting = append(waiting, w)
+		}
+	}
+	p.mu.Unlock()
+	cancelled := 0
+	for _, w := range waiting {
+		ok, err := p.cancelQueued(ctx, w.id)
+		if err != nil {
+			return cancelled, err
+		}
+		if ok {
+			cancelled++
+		}
+	}
+	if cancelled > 0 {
+		n.notifySessions()
+	}
+	return cancelled, nil
 }
 
 // assistantSendNow gives claude what waits in its queue now (#4342), with Claude Code's own send-now: an interrupt with

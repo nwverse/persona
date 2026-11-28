@@ -31,19 +31,28 @@ Prints the file and the kind of hit, never the value.
 For public Go builds, narrowly scoped dependency constants are classified separately from private data. This requires
 a build with exactly the tags of server/build-tags.txt (the public marker and ts_omit_ feature tags), and unreplaced
 dependencies whose build-info checksums match server/go.sum; registered personal values always win.
-Two exact Go rodata contexts are classified too (#6314): larkcli's two adjacent constants that read as a banned name,
-and wireguard-go's handshake identifier (its author string), the latter only with that unreplaced dependency.
+Two exact Go rodata contexts are classified too (#6314): larkcli's chat-link path and its display name, in their
+observed public constant prefixes, read as a banned name; wireguard-go's handshake identifier (its author string) is
+classified only with that unreplaced dependency.
 The seven known swift-nio-ssh algorithm/certificate names are also classified as a complete original printable field
 or a complete comma-separated list; that fallback excludes URLs, surrounding context and normalized fragments.
 """
+from __future__ import annotations
+
+import base64
+import datetime
 import hashlib
 import ipaddress
 import itertools
 import os
+import plistlib
 import re
 import struct
 import subprocess
 import sys
+import tarfile
+import threading
+import zipfile
 import zlib
 from urllib.parse import urlsplit
 
@@ -90,16 +99,25 @@ SSH_ALGORITHM_NAMES = frozenset(name + "@" + domain for name, domain in (
     ("ecdsa-sha2-nistp521-cert-v01", "openssh.com"), ("ssh-ed25519-cert-v01", "openssh.com"),
 ))
 TAILSCALE_CONTACT = re.compile(r'<a href="mailto:support\+webclient@tailscale[.]com" class="link">contact us</a>')
+# persona-iphone-bridge (Rust, native/iphone-bridge): aws-lc's assembly credits ("SHA256 block transform for ARMv8,
+# CRYPTOGAMS by <…@openssl.org>", "AES GCM module for ARMv8, SPDX BSD-3-Clause by <…@arm.com>", the two authors below).
+# Upstream author strings, not accounts; only right after "by <" and before ">".
+RUST_TLS_CONSTANTS = re.compile(r"(?<=by <)(?:appro@openssl[.]org|xiaokang[.]qian@arm[.]com)(?=>)")
 # Go lays string constants out back to back in rodata. larkcli's chat-link path ends where its display name begins
-# (the path, then the display name), which reads as a banned name that neither constant holds. Exact join only.
+# (the path, then the display name), which reads as a banned name that neither constant holds. Only the exact observed
+# public prefixes count: the full public chat URL, or the iMessage parser's error next to the path (#14310).
 # The name is split here because this file must not spell it either.
-GO_ADJACENT_CONSTANTS = re.compile(r"(?<=applink[.]feishu[.]cn)/client/chat/" + "open" + "Lark via lark-cli")
+GO_ADJACENT_CONSTANTS = re.compile(
+    r"(?:(?<=applink[.]feishu[.]cn)|(?<=not a typedstream))/client/chat/" + "open" + "Lark via lark-cli")
 # wireguard-go's handshake identifier (device/noise-protocol.go): an upstream author string, not an account.
 WIREGUARD_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9._%+-])WireGuard v1 zx2c4 Jason@zx2c4[.]com(?![.][A-Za-z])")
 WIREGUARD_MODULES = frozenset({"github.com/tailscale/wireguard-go", "golang.zx2c4.com/wireguard"})
 # Go rodata also joins the unrelated title_mail field identifier with the
 # domain constant @gmail.com. Only that exact join is not an email address.
 GO_ADJACENT_MAIL_FIELD = re.compile(r'(?<![A-Za-z0-9._%+-])title_mail@gmail[.]com(?![A-Za-z0-9._%+-])')
+# The repository identity adapter's generic SSH remote, not a person's email. Match only this exact public constant,
+# not the GitLab domain, another account or surrounding text.
+GITLAB_SSH_IDENTITY = re.compile(r'(?<![A-Za-z0-9._%+-])git@gitlab[.]com(?![A-Za-z0-9._%+-])')
 RFC1918_NETWORKS = tuple(ipaddress.ip_network((address, prefix)) for address, prefix in (
     (0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16),
 ))
@@ -171,8 +189,10 @@ def generic_text(text, dependencies, original_text=None):
         text = GO_ADJACENT_CONSTANTS.sub("", text)
     if WIREGUARD_MODULES & set(dependencies):
         text = WIREGUARD_IDENTIFIER.sub("", text)
+    text = RUST_TLS_CONSTANTS.sub("", text)
     text = pc.EMAIL.sub(lambda m: "" if binary_noise_email(m.group(1)) else m.group(0), text)
     text = GO_ADJACENT_MAIL_FIELD.sub("", text)
+    text = GITLAB_SSH_IDENTITY.sub("", text)
     if "golang.org/x/crypto" in dependencies:
         text = GO_SSH_IDENTIFIERS.sub("", text)
     if "github.com/tailscale/web-client-prebuilt" in dependencies:
@@ -333,7 +353,7 @@ def plist_references(data):
 
     Check every indexed object, including unreachable ones, before trusting any range. Unknown types, overlaps,
     bad lengths/references and cycles fall back to raw scanning. Data, scalar payloads, gaps and offset/trailer bytes
-    are never excluded. Decode every string object too: plutil's root traversal misses unreachable UTF-16 strings.
+    are never excluded. Decode every string object too: plist_xml's root traversal misses unreachable UTF-16 strings.
     """
     if data[:8] != b"bplist00" or len(data) < 40:
         return [], []
@@ -417,13 +437,407 @@ def plist_references(data):
     return sorted(ranges), list(strings.values())
 
 
-def texts(path: str, data=None, *, private_only=False):
-    if data is None:
-        with open(path, "rb") as source:
-            data = source.read()
-    if data[:3] == b"bvx":  # lzfse (App Intents metadata): compressed, values would be split across matches
-        data = subprocess.run(["compression_tool", "-decode", "-a", "lzfse", "-i", path, "-o", "/dev/stdout"],
-                              capture_output=True).stdout
+PLIST_XML_HEAD = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                  '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n')
+
+
+def plist_xml(data):
+    """The text `plutil -convert xml1` prints for a binary plist, read in text mode (a CR line end reads as LF), built
+    with plistlib so the scan is the same where plutil doesn't exist (Linux, #7571). CoreFoundation's layout: keys in
+    UTF-16 order, reals as %.17g, a UID as a CF$UID dictionary, data in base64 lines of 76 columns less 8 per tab (at
+    most 8 tabs). Empty for bytes plistlib can't read and, as plutil prints nothing for them, a cycle, a non-string
+    key or a NUL in a string."""
+    lines = [PLIST_XML_HEAD]
+    try:
+        plist_xml_lines(plistlib.loads(data, fmt=plistlib.FMT_BINARY), 0, lines, set())
+    except (ValueError, TypeError, RecursionError):  # plistlib.InvalidFileException is a ValueError
+        return ""
+    return "".join(lines) + "</plist>\n"
+
+
+def plist_xml_text(text):
+    if "\0" in text:
+        raise ValueError("a NUL in a string")
+    return (text.replace("\r\n", "\n").replace("\r", "\n")
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def plist_xml_lines(value, depth, lines, open_containers):
+    pad = "\t" * depth
+    if isinstance(value, plistlib.UID):
+        value = {"CF$UID": value.data}
+    if isinstance(value, (list, dict)):
+        tag = "array" if isinstance(value, list) else "dict"
+        if not value:
+            lines.append("%s<%s/>\n" % (pad, tag))
+            return
+        if id(value) in open_containers:
+            raise ValueError("a cycle")
+        open_containers.add(id(value))
+        lines.append("%s<%s>\n" % (pad, tag))
+        if tag == "array":
+            for item in value:
+                plist_xml_lines(item, depth + 1, lines, open_containers)
+        else:
+            if not all(isinstance(key, str) for key in value):
+                raise TypeError("a non-string key")
+            for key in sorted(value, key=lambda key: key.encode("utf-16-be")):
+                lines.append("%s\t<key>%s</key>\n" % (pad, plist_xml_text(key)))
+                plist_xml_lines(value[key], depth + 1, lines, open_containers)
+        lines.append("%s</%s>\n" % (pad, tag))
+        open_containers.discard(id(value))
+    elif isinstance(value, str):
+        lines.append("%s<string>%s</string>\n" % (pad, plist_xml_text(value)))
+    elif isinstance(value, bool):
+        lines.append("%s<%s/>\n" % (pad, "true" if value else "false"))
+    elif isinstance(value, int):
+        lines.append("%s<integer>%d</integer>\n" % (pad, value))
+    elif isinstance(value, float):
+        real = ("nan" if value != value else "+infinity" if value == float("inf") else
+                "-infinity" if value == float("-inf") else "0.0" if value == 0 else "%.17g" % value)
+        lines.append("%s<real>%s</real>\n" % (pad, real))
+    elif isinstance(value, datetime.datetime):
+        lines.append("%s<date>%04d-%02d-%02dT%02d:%02d:%02dZ</date>\n" % (
+            pad, value.year, value.month, value.day, value.hour, value.minute, value.second))
+    elif isinstance(value, bytes):
+        indent = min(depth, 8)
+        encoded, width = base64.b64encode(value).decode("ascii"), 76 - 8 * indent
+        lines.append("%s<data>\n" % pad)
+        lines.extend("%s%s\n" % ("\t" * indent, encoded[i:i + width]) for i in range(0, len(encoded), width))
+        lines.append("%s</data>\n" % pad)
+    else:
+        raise TypeError("an unsupported plist value")
+
+
+LZFSE_MAGICS = (b"bvx1", b"bvx2", b"bvxn", b"bvx-")
+LZFSE_MAGIC_RE = re.compile(rb"bvx[12n-]")
+LZFSE_EOS = b"bvx$"
+LZFSE_V1_HEADER_SIZE = 772
+LZFSE_OUTPUT_LIMIT = 64 << 20
+LZFSE_MAX_DEPTH = 4
+LZFSE_MAX_STREAMS = 16
+LZFSE_MAX_BLOCKS = 4096
+LZFSE_TIMEOUT = 30.0
+LZFSE_CHUNK = 64 << 10
+
+
+class LzfseDecodeError(ValueError):
+    """Raised when an LZFSE-prefixed payload cannot be decoded safely."""
+
+
+def _is_lzfse_prefix(data: bytes) -> bool:
+    return data[:4] in LZFSE_MAGICS or data[:4] == LZFSE_EOS
+
+
+def parse_lzfse_stream(data: bytes, offset: int = 0, *, limit: int | None = None) -> tuple[int, int, bool]:
+    """Validate Apple LZFSE block headers from offset to the true block-boundary bvx$ marker.
+
+    Returns (end_offset, declared_raw_bytes, all_literal_empty). Raises LzfseDecodeError on any
+    truncated/malformed header, excessive block count, or declared output exceeding limit.
+    """
+    if limit is None:
+        limit = LZFSE_OUTPUT_LIMIT
+    pos = offset
+    length = len(data)
+    total_raw = 0
+    all_literal_empty = True
+    for _ in range(LZFSE_MAX_BLOCKS):
+        if pos + 4 > length:
+            raise LzfseDecodeError("truncated lzfse block header")
+        magic = data[pos:pos + 4]
+        if magic == LZFSE_EOS:
+            return pos + 4, total_raw, all_literal_empty
+        if magic == b"bvx-":
+            if pos + 8 > length:
+                raise LzfseDecodeError("truncated lzfse literal block")
+            (n_raw,) = struct.unpack_from("<I", data, pos + 4)
+            nxt = pos + 8 + n_raw
+            if nxt > length or total_raw + n_raw > limit:
+                raise LzfseDecodeError("lzfse literal block out of bounds or over limit")
+            if n_raw > 0:
+                all_literal_empty = False
+            total_raw += n_raw
+            pos = nxt
+        elif magic == b"bvxn":
+            if pos + 12 > length:
+                raise LzfseDecodeError("truncated lzvn block")
+            n_raw, n_pay = struct.unpack_from("<II", data, pos + 4)
+            nxt = pos + 12 + n_pay
+            if nxt > length or total_raw + n_raw > limit:
+                raise LzfseDecodeError("lzvn block out of bounds or over limit")
+            all_literal_empty = False
+            total_raw += n_raw
+            pos = nxt
+        elif magic == b"bvx2":
+            if pos + 32 > length:
+                raise LzfseDecodeError("truncated lzfse v2 block")
+            n_raw, v0, v1, v2 = struct.unpack_from("<IQQQ", data, pos + 4)
+            n_lit_pay = (v0 >> 20) & 0xFFFFF
+            n_lmd_pay = (v1 >> 40) & 0xFFFFF
+            hdr_size = v2 & 0xFFFFFFFF
+            if hdr_size < 32:
+                raise LzfseDecodeError("invalid lzfse v2 header size")
+            nxt = pos + hdr_size + n_lit_pay + n_lmd_pay
+            if nxt > length or total_raw + n_raw > limit:
+                raise LzfseDecodeError("lzfse v2 block out of bounds or over limit")
+            all_literal_empty = False
+            total_raw += n_raw
+            pos = nxt
+        elif magic == b"bvx1":
+            if pos + LZFSE_V1_HEADER_SIZE > length:
+                raise LzfseDecodeError("truncated lzfse v1 block")
+            n_raw, _n_pay, _n_lit, _n_mat, n_lit_pay, n_lmd_pay = struct.unpack_from("<IIIIII", data, pos + 4)
+            nxt = pos + LZFSE_V1_HEADER_SIZE + n_lit_pay + n_lmd_pay
+            if nxt > length or total_raw + n_raw > limit:
+                raise LzfseDecodeError("lzfse v1 block out of bounds or over limit")
+            all_literal_empty = False
+            total_raw += n_raw
+            pos = nxt
+        else:
+            raise LzfseDecodeError("unknown lzfse block magic")
+    raise LzfseDecodeError("lzfse stream exceeds block limit")
+
+
+def _run_lzfse_decode(payload: bytes, *, limit: int | None = None, timeout: float = LZFSE_TIMEOUT) -> bytes:
+    if limit is None:
+        limit = LZFSE_OUTPUT_LIMIT
+    try:
+        proc = subprocess.Popen(
+            ["compression_tool", "-decode", "-a", "lzfse"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        raise LzfseDecodeError("compression_tool failed to start") from error
+
+    timed_out = threading.Event()
+
+    def _kill_on_timeout():
+        timed_out.set()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    def _write_stdin():
+        try:
+            if proc.stdin is not None:
+                proc.stdin.write(payload)
+        except OSError:
+            pass
+        finally:
+            if proc.stdin is not None:
+                try:
+                    proc.stdin.close()
+                except OSError:
+                    pass
+
+    stderr_chunks = []
+
+    def _drain_stderr():
+        if proc.stderr is None:
+            return
+        remaining = 4096
+        try:
+            while remaining > 0:
+                chunk = proc.stderr.read(min(remaining, 1024))
+                if not chunk:
+                    break
+                stderr_chunks.append(chunk)
+                remaining -= len(chunk)
+            while proc.stderr.read(4096):
+                pass
+        except OSError:
+            pass
+
+    timer = threading.Timer(timeout, _kill_on_timeout)
+    timer.daemon = True
+    writer = threading.Thread(target=_write_stdin, daemon=True)
+    err_reader = threading.Thread(target=_drain_stderr, daemon=True)
+    timer.start()
+    writer.start()
+    err_reader.start()
+    pieces = []
+    size = 0
+    try:
+        assert proc.stdout is not None
+        while True:
+            chunk = proc.stdout.read(LZFSE_CHUNK)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > limit:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                raise LzfseDecodeError("lzfse output exceeds size limit")
+            pieces.append(chunk)
+        returncode = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        try:
+            proc.kill()
+            proc.wait()
+        except OSError:
+            pass
+        raise LzfseDecodeError("compression_tool timed out") from error
+    finally:
+        timer.cancel()
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+        if proc.poll() is None:
+            try:
+                proc.kill()
+                proc.wait()
+            except OSError:
+                pass
+        writer.join(timeout=1.0)
+        err_reader.join(timeout=1.0)
+        if proc.stderr is not None:
+            try:
+                proc.stderr.close()
+            except OSError:
+                pass
+    if timed_out.is_set():
+        raise LzfseDecodeError("compression_tool timed out")
+    if returncode != 0:
+        detail = b"".join(stderr_chunks).decode("utf-8", errors="replace").strip()
+        raise LzfseDecodeError(detail or "invalid lzfse stream")
+    return b"".join(pieces)
+
+
+def plist_data_blobs(data: bytes):
+    """Extract deduplicated <data> byte objects from a binary plist, including unreferenced objects and plists with sets."""
+    if data[:6] != b"bplist":
+        return []
+    blobs = []
+    seen_blobs = set()
+
+    def _add(blob: bytes):
+        if blob and blob not in seen_blobs:
+            seen_blobs.add(blob)
+            blobs.append(blob)
+
+    # Walk the raw bplist00 object table directly so unreferenced <data> objects and plists containing
+    # types plistlib rejects (such as set 0xC_) are still extracted without losing deduplication.
+    if data[:8] == b"bplist00" and len(data) >= 40:
+        offset_size, _ref_size, count, _root, table = struct.unpack_from(">6xBBQQQ", data, len(data) - 32)
+        if (data[-32:-26] == b"\0" * 6 and offset_size in (1, 2, 4, 8)
+                and 0 < count <= (len(data) - 32 - table) // offset_size and table >= 8):
+            seen_offsets = set()
+            for i in range(count):
+                offset = int.from_bytes(data[table + i * offset_size:table + (i + 1) * offset_size], "big")
+                if offset in seen_offsets or not 8 <= offset < table:
+                    continue
+                seen_offsets.add(offset)
+                marker = data[offset]
+                if (marker >> 4) != 4:
+                    continue
+                length = marker & 15
+                start = offset + 1
+                if length == 15:
+                    if start >= table or data[start] >> 4 != 1 or data[start] & 15 > 3:
+                        continue
+                    width = 1 << (data[start] & 15)
+                    start += 1
+                    if start + width > table:
+                        continue
+                    length = int.from_bytes(data[start:start + width], "big")
+                    start += width
+                end = start + length
+                if end <= table:
+                    _add(data[start:end])
+
+    try:
+        root = plistlib.loads(data, fmt=plistlib.FMT_BINARY)
+    except (ValueError, TypeError, RecursionError):
+        return blobs
+    seen_nodes = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, bytes):
+            _add(node)
+        elif isinstance(node, list):
+            if id(node) in seen_nodes:
+                continue
+            seen_nodes.add(id(node))
+            stack.extend(node)
+        elif isinstance(node, dict):
+            if id(node) in seen_nodes:
+                continue
+            seen_nodes.add(id(node))
+            stack.extend(node.values())
+    return blobs
+
+
+def decode_lzfse_streams(
+    data: bytes,
+    *,
+    depth: int = 0,
+    budget: list[int] | None = None,
+    limit: int | None = None,
+    byte_budget: list[int] | None = None,
+):
+    """Decode LZFSE streams in memory (including trailing, nested, and plist-<data>-embedded streams)."""
+    if not _is_lzfse_prefix(data) and data[:6] != b"bplist":
+        return
+    if depth > LZFSE_MAX_DEPTH:
+        raise LzfseDecodeError("lzfse nesting exceeds depth limit")
+    if budget is None:
+        budget = [LZFSE_MAX_STREAMS]
+    if byte_budget is None:
+        byte_budget = [LZFSE_OUTPUT_LIMIT if limit is None else limit]
+
+    def _expand_decoded(decoded: bytes):
+        if _is_lzfse_prefix(decoded) or decoded[:6] == b"bplist":
+            yield from decode_lzfse_streams(decoded, depth=depth + 1, budget=budget, byte_budget=byte_budget)
+
+    if data[:6] == b"bplist":
+        for blob in plist_data_blobs(data):
+            if _is_lzfse_prefix(blob):
+                yield from decode_lzfse_streams(blob, depth=depth + 1, budget=budget, byte_budget=byte_budget)
+            elif blob[:6] == b"bplist":
+                yield blob
+                yield from decode_lzfse_streams(blob, depth=depth + 1, budget=budget, byte_budget=byte_budget)
+        return
+
+    def _consume(start: int):
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise LzfseDecodeError("too many lzfse streams in one file")
+        remaining = byte_budget[0]
+        if remaining < 0:
+            raise LzfseDecodeError("lzfse output exceeds cumulative size limit")
+        end, _declared, all_literal_empty = parse_lzfse_stream(data, start, limit=remaining)
+        decoded = b"" if all_literal_empty else _run_lzfse_decode(data[start:end], limit=remaining)
+        byte_budget[0] -= len(decoded)
+        if byte_budget[0] < 0:
+            raise LzfseDecodeError("lzfse output exceeds cumulative size limit")
+        return end, decoded
+
+    cursor, decoded = _consume(0)
+    yield decoded
+    yield from _expand_decoded(decoded)
+
+    while cursor < len(data):
+        if _is_lzfse_prefix(data[cursor:cursor + 4]):
+            nxt = cursor
+        else:
+            match = LZFSE_MAGIC_RE.search(data, cursor)
+            if match is None:
+                break
+            nxt = match.start()
+        cursor, decoded = _consume(nxt)
+        yield decoded
+        yield from _expand_decoded(decoded)
+
+
+def _bytes_texts(data: bytes, *, private_only=False):
     references, strings = plist_references(data) if not private_only else ([], [])
     binary_plist = data[:6] == b"bplist"
     # Do not truncate at the first slice's signature: later slices and trailing bytes must remain visible.
@@ -437,7 +851,22 @@ def texts(path: str, data=None, *, private_only=False):
         cursor = end
     yield from strings
     if binary_plist and not private_only:
-        yield subprocess.run(["plutil", "-convert", "xml1", "-o", "-", path], capture_output=True, text=True).stdout
+        yield plist_xml(data)
+
+
+def texts(path: str, data=None, *, private_only=False, lzfse_payloads=None):
+    if data is None:
+        with open(path, "rb") as source:
+            data = source.read()
+    # Always scan raw bytes too so non-LZFSE bvx-prefixed files and trailing bytes after bvx$ stay visible.
+    yield from _bytes_texts(data, private_only=private_only)
+    if lzfse_payloads is None:
+        if _is_lzfse_prefix(data) or data[:6] == b"bplist":
+            for decoded in decode_lzfse_streams(data):
+                yield from _bytes_texts(decoded, private_only=private_only)
+    else:
+        for decoded in lzfse_payloads:
+            yield from _bytes_texts(decoded, private_only=private_only)
 
 
 GZIP_MAGIC = b"\x1f\x8b\x08"
@@ -473,10 +902,23 @@ def gzip_members(data, limit=GZIP_MEMBER_LIMIT):
         start = data.find(GZIP_MAGIC, end if end is not None else start + 1)
 
 
-def member_texts(data):
-    """Printable strings of every gzip member in data, read as the file's own bytes are."""
+def member_texts(data, *, private_only=False, depth=0, budget=None, byte_budget=None):
+    """Printable strings of every gzip member in data, including bounded recursive LZFSE and plist payloads."""
+    if depth > LZFSE_MAX_DEPTH:
+        raise LzfseDecodeError("gzip/lzfse nesting exceeds depth limit")
+    if budget is None:
+        budget = [LZFSE_MAX_STREAMS]
+    if byte_budget is None:
+        byte_budget = [LZFSE_OUTPUT_LIMIT]
     for member in gzip_members(data):
         yield from (m.group(0).decode("ascii") for m in PRINTABLE.finditer(member))
+        if _is_lzfse_prefix(member) or member[:6] == b"bplist":
+            for decoded in decode_lzfse_streams(member, depth=depth + 1, budget=budget, byte_budget=byte_budget):
+                yield from _bytes_texts(decoded, private_only=private_only)
+                if GZIP_MAGIC in decoded:
+                    yield from member_texts(
+                        decoded, private_only=private_only, depth=depth + 1, budget=budget, byte_budget=byte_budget
+                    )
 
 
 def remove_public_relay_url(text, configured_url, path="/relay"):
@@ -509,12 +951,73 @@ def verified_public_file(path):
 
 
 def public_download_url(cfg):
-    """The update URL every published personad carries and the one path it may have: publish.update_url as configured
-    (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl (persona_config.update_url)."""
-    url = persona_config.update_url(cfg)
-    if url and persona_config.get(cfg, "publish.update_url", "") not in ("", None):
+    """The update URL every published personad carries and the one path it may have: an inherited environment override,
+    then publish.update_url (a GitHub repository's releases/latest/download, say), else publish.site_url's /dl."""
+    override = os.environ.get("PERSONA_UPDATE_URL")
+    url = persona_config.update_url(cfg, override)
+    if url and (override or persona_config.get(cfg, "publish.update_url", "") not in ("", None)):
         return url, urlsplit(url).path
     return url, "/dl"
+
+
+def public_download_urls(cfg):
+    """Both legitimate public feeds: the update base and the site's own /dl publication feed."""
+    urls = [public_download_url(cfg)]
+    site = persona_config.get(cfg, "publish.site_url", "")
+    if isinstance(site, str) and site.strip():
+        urls.append((site.rstrip("/") + "/dl", "/dl"))
+    return urls
+
+
+def public_archive_dependencies(path, whole_short):
+    """Only a named public CLI member gets its own verified Go dependency context, never a whole archive."""
+    if not whole_short:
+        return set()
+    name = os.path.basename(path)
+    if name in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link"}:
+        return go_dependencies(path)
+    match = re.fullmatch(r"(personad|persona-hub|persona-manager|persona-node|persona-link)(?:-windows-(?:amd64|arm64))?[.]exe", name)
+    return go_dependencies(path) if match else set()
+
+
+def archive_members(path):
+    """Yield safe, bounded executable members only, keeping archive traversal out of the release scanner."""
+    if path.endswith(".zip"):
+        with zipfile.ZipFile(path) as archive:
+            seen = set()
+            for entry in archive.infolist():
+                name = entry.filename
+                parts = name.split("/")
+                if (not name or name.startswith("/") or "\\" in name or any(part in ("", ".", "..") for part in parts)
+                        or len(parts) != 2 or name.casefold() in seen):
+                    raise ValueError("unsafe path in release ZIP")
+                seen.add(name.casefold())
+                if entry.is_dir() or entry.file_size > 512 * 1024 * 1024:
+                    continue
+                program = parts[1]
+                if program in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link"}:
+                    yield name, archive.read(entry)
+                elif re.fullmatch(r"(?:personad|persona-hub|persona-manager|persona-node|persona-link)(?:-windows-(?:amd64|arm64))?[.]exe", program):
+                    yield name, archive.read(entry)
+    elif path.endswith(".tar.gz"):
+        with tarfile.open(path, "r:gz") as archive:
+            seen = set()
+            for entry in archive:
+                name = entry.name
+                parts = name.split("/")
+                if (not name or name.startswith("/") or "\\" in name or any(part in ("", ".", "..") for part in parts)
+                        or len(parts) != 2 or name.casefold() in seen):
+                    raise ValueError("unsafe path in release archive")
+                seen.add(name.casefold())
+                if not entry.isfile() or entry.size > 512 * 1024 * 1024:
+                    continue
+                program = parts[1]
+                if program in {"personad", "persona-hub", "persona-manager", "persona-node", "persona-link", "persona-iphone-bridge"}:
+                    stream = archive.extractfile(entry)
+                    if stream is None:
+                        continue
+                    with stream:
+                        yield name, stream.read()
 
 
 def main():
@@ -541,31 +1044,89 @@ def main():
             if f in SKIP:
                 continue
             path = os.path.join(dirpath, f)
-            kinds = set()
-            dependencies = go_dependencies(path) if whole_short else set()
-            with open(path, "rb") as source:
-                data = source.read()
-            public_js = (not whole_short and verified_public_js(path, data)) or (
-                hermes_public_js and f == "Persona")
-            # Reference bytes can spell a configured value too; only generic IP/email detection skips them.
-            modes = (False, True) if data[:6] == b"bplist" or data[:3] == b"bvx" else (False,)
-            for private_only in modes:
-                found = texts(path, data, private_only=private_only)
-                if whole_short and not private_only:
-                    found = itertools.chain(found, member_texts(data))
-                for t in found:
-                    original_text = t
-                    if not whole_short:
-                        t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
-                    else:  # the update URL every published personad carries (-X main.updateURL, scripts/release/publish.sh)
-                        t = remove_public_relay_url(t, *public_download_url(cfg))
-                    for v in inherent:
-                        t = t.replace(v, "")
-                    if modules:
-                        t = modules.sub("", t)
-                    kinds.update(text_kinds(t, words, whole_short, dependencies, original_text, public_js=public_js,
-                                            generic=not private_only))
-            bad += [(os.path.relpath(path, root), k) for k in sorted(kinds)]
+            members = [(path, None)]
+            archive = whole_short and path.endswith(".zip") or whole_short and path.endswith(".tar.gz") and not path.endswith("-web.tar.gz")
+            if archive:
+                try:
+                    members = [(os.path.join(dirpath, name), data) for name, data in archive_members(path)]
+                except (OSError, ValueError, zipfile.BadZipFile, tarfile.TarError) as error:
+                    bad.append((os.path.relpath(path, root), "invalid release archive"))
+                    continue
+            for member_path, member_data in members:
+                kinds = set()
+                dependencies = go_dependencies(member_path) if whole_short and not archive else set()
+                if member_data is not None and archive:
+                    # A nested member needs a real executable file for Go's metadata reader, not an archive-name exemption.
+                    import tempfile
+                    with tempfile.TemporaryDirectory(prefix="persona-release-scan-") as temporary:
+                        executable = os.path.join(temporary, os.path.basename(member_path))
+                        with open(executable, "wb") as output:
+                            output.write(member_data)
+                        dependencies = go_dependencies(executable)
+                data = member_data
+                if data is None:
+                    with open(path, "rb") as source:
+                        data = source.read()
+                public_js = (not whole_short and verified_public_js(member_path, data)) or (
+                    hermes_public_js and f == "Persona")
+                is_lzfse = _is_lzfse_prefix(data)
+                file_budget = [LZFSE_MAX_STREAMS]
+                file_byte_budget = [LZFSE_OUTPUT_LIMIT]
+                lzfse_payloads = []
+                if is_lzfse or data[:6] == b"bplist":
+                    try:
+                        for decoded in decode_lzfse_streams(data, budget=file_budget, byte_budget=file_byte_budget):
+                            lzfse_payloads.append(decoded)
+                    except LzfseDecodeError:
+                        kinds.add("unreadable lzfse stream")
+                has_bplist = data[:6] == b"bplist" or any(p[:6] == b"bplist" for p in lzfse_payloads)
+                modes = (False, True) if has_bplist or is_lzfse else (False,)
+
+                def scan_stream(stream, *, generic):
+                    for t in stream:
+                        original_text = t
+                        if not whole_short:
+                            t = remove_public_relay_url(t, persona_config.get(cfg, "app.push_relay", ""))
+                        else:
+                            for public_url, public_path in public_download_urls(cfg):
+                                t = remove_public_relay_url(t, public_url, public_path)
+                        for v in inherent:
+                            t = t.replace(v, "")
+                        if modules:
+                            t = modules.sub("", t)
+                        kinds.update(text_kinds(t, words, whole_short, dependencies, original_text, public_js=public_js,
+                                                generic=generic))
+
+                for private_only in modes:
+                    scan_stream(
+                        texts(member_path, data, private_only=private_only, lzfse_payloads=lzfse_payloads),
+                        generic=not private_only,
+                    )
+                if whole_short:
+                    # Scan gzip members in raw data AND in LZFSE-decoded payloads, with bounded gzip<->LZFSE nesting.
+                    gzip_queue = [(data, 0)] + [(p, 1) for p in lzfse_payloads if GZIP_MAGIC in p]
+                    while gzip_queue:
+                        src, src_depth = gzip_queue.pop(0)
+                        if src_depth > LZFSE_MAX_DEPTH:
+                            kinds.add("unreadable lzfse stream")
+                            continue
+                        for member in gzip_members(src):
+                            scan_stream((m.group(0).decode("ascii") for m in PRINTABLE.finditer(member)), generic=True)
+                            if _is_lzfse_prefix(member) or member[:6] == b"bplist":
+                                gz_decoded = []
+                                try:
+                                    for decoded in decode_lzfse_streams(
+                                        member, depth=src_depth + 1, budget=file_budget, byte_budget=file_byte_budget
+                                    ):
+                                        gz_decoded.append(decoded)
+                                except LzfseDecodeError:
+                                    kinds.add("unreadable lzfse stream")
+                                for decoded in gz_decoded:
+                                    scan_stream(_bytes_texts(decoded, private_only=False), generic=True)
+                                    scan_stream(_bytes_texts(decoded, private_only=True), generic=False)
+                                    if GZIP_MAGIC in decoded:
+                                        gzip_queue.append((decoded, src_depth + 1))
+                bad += [(os.path.relpath(member_path, root), k) for k in sorted(kinds)]
     for f, k in bad:
         print("%s: %s" % (f, k))
     if bad:

@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +55,7 @@ import persona.core.domain.sort.AgentListDisplay
 import persona.core.domain.sort.AgentRowLeading
 import persona.core.domain.sort.AgentRowStyle
 import persona.core.domain.sort.rowParts
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PhIcons
 
@@ -69,6 +71,10 @@ data class RowFlag(val label: String, val icon: PhIcon, val caution: Boolean = f
 @Immutable
 data class RowFact(val text: String, val caution: Boolean = false)
 
+/** Single-line subagent rollup under a parent session row (Needs you priority > Running; null when all ended). */
+@Immutable
+data class RowSubagent(val text: String, val needsYou: Boolean, val onClick: (() -> Unit)? = null)
+
 /**
  * An Agents row's third line on Glass (iOS `SlotRow.placeLine` in the Avatar style, #4338 A9), after the row's source tag:
  * where it runs ([words]: the tab, space › tab, the computer, joined with " · "), the [model] it runs on, its [todo]'s
@@ -83,6 +89,21 @@ data class RowPlace(val words: String = "", val model: String? = null, val todo:
  */
 @Immutable
 data class RowNote(val fields: List<CoreText>, val icon: PhIcon)
+
+/**
+ * A side session folded under a parent row that keeps it Unread (#13524): the [PersonaIcons.sideSessions] mark,
+ * [label] (the most recent unread side's title, or a count line before side rows are read), optional [more] ("+N"
+ * for other unread sides), accessibility description [spoken], and [onClick] to open that side directly in one tap
+ * (null when only a count is known).
+ */
+@Immutable
+data class RowSideUnread(
+    val label: String,
+    val more: String? = null,
+    val spoken: String = label,
+    val clickLabel: String? = null,
+    val onClick: (() -> Unit)? = null,
+)
 
 // ------------------------------------------------------------------ measures
 
@@ -251,6 +272,7 @@ fun AgentTreeHeader(
     onAction: (() -> Unit)? = null,
     actionIcon: PhIcon? = null,
     actionLabel: String? = null,
+    actionText: String? = null,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -282,7 +304,11 @@ fun AgentTreeHeader(
             }
             StateCounts(counts, waiting, lighter)
             if (onMonitor != null) { Spacer(Modifier.width(Tokens.Space.xs)); HeadingAction(PhIcons.Gauge, stringResource(R.string.designsystem_machine_monitor), onMonitor) }
-            if (onAction != null) { Spacer(Modifier.width(Tokens.Space.xs)); HeadingAction(actionIcon ?: PhIcons.CaretRight, actionLabel ?: stringResource(R.string.designsystem_details), onAction) }
+            if (onAction != null) {
+                Spacer(Modifier.width(Tokens.Space.xs))
+                if (actionText != null) JTextButton(actionText, onAction)
+                else HeadingAction(actionIcon ?: PhIcons.CaretRight, actionLabel ?: stringResource(R.string.designsystem_details), onAction)
+            }
         }
     }
 }
@@ -314,6 +340,7 @@ fun AgentSpaceHeader(
     menu: (@Composable () -> Unit)? = null,
     icon: PhIcon? = null,
     kind: String = stringResource(R.string.designsystem_space),
+    qualifier: String? = null,
 ) {
     val palette = PersonaTheme.palette
     val foldState = stringResource(if (folded) R.string.designsystem_folded else R.string.designsystem_expanded)
@@ -329,7 +356,14 @@ fun AgentSpaceHeader(
         icon?.let { JIcon(it, kind, size = Caret, tint = palette.ink2); Spacer(Modifier.width(Tokens.Space.xs)) }
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                title, style = if (quiet) type.callout else type.label, color = if (quiet) palette.ink2 else palette.ink,
+                buildAnnotatedString {
+                    append(title)
+                    if (qualifier != null) withStyle(SpanStyle(color = palette.ink3, fontWeight = FontWeight.Normal)) {
+                        append(" · ")
+                        append(qualifier)
+                    }
+                },
+                style = if (quiet) type.callout else type.label, color = if (quiet) palette.ink2 else palette.ink,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
             )
             flags.forEach { Spacer(Modifier.width(Tokens.Space.xs)); JIcon(it.icon, it.label, size = Caret, tint = palette.ink3) }
@@ -484,6 +518,12 @@ fun AgentRow(
     waiting: Boolean = false,
     /** Glass's row style while not [compact] (iOS `AgentRowStyle`); Brief and Board keep their row. */
     style: AgentRowStyle = AgentRowStyle.Avatar,
+    /** A folded child's request must stay visible even when Board's metadata normally takes the preview's line. */
+    showPreviewWithMetadata: Boolean = false,
+    /** Single-line subagent rollup under the parent row; tapping opens Session Overview's Subagents section. */
+    subagent: RowSubagent? = null,
+    /** An unread side session keeping this parent row Unread (#13524); null leaves the row unchanged. */
+    sideUnread: RowSideUnread? = null,
     end: (@Composable () -> Unit)? = null,
 ) {
     val palette = PersonaTheme.palette
@@ -502,7 +542,8 @@ fun AgentRow(
     val start = if (board) Step * depth else (Step * depth + (Caret - mark) / 2).coerceAtLeast(None)
     val gap = if (avatar) AvatarGap else Tokens.Space.s - Tokens.Space.xxs
     val hasMetadata = note != null || facts.isNotEmpty()
-    val boardMetadata = board && hasMetadata && !compact
+    val hasSubagent = subagent != null && !compact
+    val boardMetadata = board && (hasMetadata || hasSubagent) && !compact
     val statusLabel = stringResource(shown.labelRes)
     val press = Modifier.onSecondaryClick(onLongClick).combinedClickable(role = Role.Button, onClick = onClick, onLongClick = onLongClick)
         // Compact rows and Board's two-line metadata rows have no visible state line: TalkBack still says it (#3902).
@@ -510,17 +551,17 @@ fun AgentRow(
         // state is its dot's alone ([statusText] null, #4338 A9) is told it by name too.
         .then(if (compact || boardMetadata) Modifier.semantics {
             stateDescription = statusText ?: statusLabel
-            if (boardMetadata && !preview.isNullOrBlank()) text = AnnotatedString(preview.replace('\n', ' '))
+            if (boardMetadata && !showPreviewWithMetadata && !preview.isNullOrBlank()) text = AnnotatedString(preview.replace('\n', ' '))
         } else if (statusText == null) Modifier.semantics { stateDescription = statusLabel } else Modifier)
     val click = Modifier.selectedRow(selected).then(press)
     if (glass && parts.leading == AgentRowLeading.Dot) {
         TwoLineRow(title, shown, strong, muted, waiting, depth, position, preview, time, statusText, label, launcher, flags, note, facts,
-            source, agentMark, place, branch, modifier.then(click), end)
+            source, agentMark, place, branch, sideUnread, subagent, onLongClick, modifier.then(click), end)
         return
     }
     if (glass && parts.card) {
         StateCardRow(title, shown, strong, muted, waiting, depth, preview, time, statusText, label, launcher, flags, note, facts, source,
-            agentMark, place, selected, modifier, press, end)
+            agentMark, place, selected, sideUnread, subagent, onLongClick, modifier, press, end)
         return
     }
     val text: @Composable ColumnScope.() -> Unit = {
@@ -553,7 +594,7 @@ fun AgentRow(
             val lineText: @Composable () -> Unit = {
                 Text(line, style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = wordLines, overflow = TextOverflow.Ellipsis)
             }
-            if (!boardMetadata) {
+            if (!boardMetadata || showPreviewWithMetadata) {
                 if (source != null && !placeLine) Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { if (line.isNotEmpty()) lineText() }
                     Spacer(Modifier.width(Tokens.Space.s))
@@ -561,6 +602,7 @@ fun AgentRow(
                 } else if (line.isNotEmpty()) lineText()
             }
         }
+        if (sideUnread != null) SideUnreadLine(sideUnread, tone)
     }
     // a branch hangs off its initiator one step up: a hairline down from under that row's mark
     val guide = if (!branch) Modifier else Modifier.drawBehind {
@@ -587,7 +629,8 @@ fun AgentRow(
             }
             if (boardMetadata) {
                 val indent = (if (agentMark != null) Tokens.Space.s + Caret else None) + Holder + Tokens.Space.m
-                RowMetadata(note, facts, indent, Modifier.padding(bottom = Tokens.Space.s - Tokens.Space.xxs))
+                if (hasMetadata) RowMetadata(note, facts, indent, Modifier.padding(bottom = if (hasSubagent) None else Tokens.Space.s - Tokens.Space.xxs))
+                if (hasSubagent && subagent != null) RowSubagentLine(subagent, indent, onLongClick, Modifier.padding(bottom = Tokens.Space.s - Tokens.Space.xxs))
             }
         }
         return
@@ -600,7 +643,7 @@ fun AgentRow(
             .stableAlpha(if (muted) 0.72f else 1f),
     ) {
         Row(
-            Modifier.padding(start = start, top = Tokens.Space.s, bottom = if ((hasMetadata || placeLine) && !compact) None else Tokens.Space.s),
+            Modifier.padding(start = start, top = Tokens.Space.s, bottom = if ((hasMetadata || hasSubagent || placeLine) && !compact) None else Tokens.Space.s),
             verticalAlignment = if (compact) Alignment.CenterVertically else Alignment.Top,
         ) {
             if (avatar) AgentAvatar(requireNotNull(agentMark), shown, waiting) else {
@@ -612,9 +655,12 @@ fun AgentRow(
             Column(Modifier.weight(1f).padding(top = if (compact) None else Tokens.Space.xxs), content = text)
             end?.let { Box(Modifier.align(Alignment.CenterVertically)) { it() } }
         }
+        val metaIndent = (if (agentMark != null && !avatar) Caret + Tokens.Space.xs else None) + mark + gap
         if (hasMetadata && !compact) {
-            val indent = (if (agentMark != null && !avatar) Caret + Tokens.Space.xs else None) + mark + gap
-            RowMetadata(note, facts, indent, Modifier.padding(start = start, bottom = if (placeLine) None else Tokens.Space.s))
+            RowMetadata(note, facts, metaIndent, Modifier.padding(start = start, bottom = if (hasSubagent || placeLine) None else Tokens.Space.s))
+        }
+        if (hasSubagent && subagent != null) {
+            RowSubagentLine(subagent, metaIndent, onLongClick, Modifier.padding(start = start, bottom = if (placeLine) None else Tokens.Space.s))
         }
         if (placeLine) PlaceLine(requireNotNull(place), source, Modifier.padding(start = start + mark + gap, top = Tokens.Space.xs, bottom = Tokens.Space.s))
     }
@@ -686,7 +732,7 @@ private fun TwoLineRow(
     title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, position: GroupPosition,
     preview: String?, time: String?, statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>,
     note: RowNote?, facts: List<RowFact>, source: RowSource?, agentMark: AgentMarkSpec?, place: RowPlace?, branch: Boolean,
-    modifier: Modifier, end: (@Composable () -> Unit)?,
+    sideUnread: RowSideUnread?, subagent: RowSubagent?, onLongClick: (() -> Unit)?, modifier: Modifier, end: (@Composable () -> Unit)?,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -694,6 +740,7 @@ private fun TwoLineRow(
     val start = Step * depth
     val words = start + Caret + TwoLineGap
     val hasMetadata = note != null || facts.isNotEmpty()
+    val hasSubagent = subagent != null
     // a branch hangs off its initiator one step up: a hairline down from under that row's dot
     val guide = if (!branch) Modifier else Modifier.drawBehind {
         val x = (Step * (depth - 1) + Caret / 2).toPx()
@@ -704,7 +751,7 @@ private fun TwoLineRow(
             .drawBehind { if (!position.first) drawLine(palette.line, Offset(words.toPx(), 0f), Offset(size.width, 0f), Hairline.toPx()) }
             .stableAlpha(if (muted) 0.72f else 1f),
     ) {
-        Row(Modifier.padding(start = start, top = Tokens.Space.s, bottom = if (hasMetadata) None else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = start, top = Tokens.Space.s, bottom = if (hasMetadata || hasSubagent) None else Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
                 StyledTitleLine(title, strong, muted, label, launcher, flags, agentMark, time, leading = {
                     Box(Modifier.width(Caret), contentAlignment = Alignment.Center) { RowStateDot(shown, waiting) }
@@ -724,10 +771,12 @@ private fun TwoLineRow(
                     }
                     source?.let { Spacer(Modifier.width(Tokens.Space.s)); SourceTag(it) }
                 }
+                if (sideUnread != null) SideUnreadLine(sideUnread, tone, Modifier.padding(start = Caret + TwoLineGap))
             }
             end?.let { Box { it() } }
         }
-        if (hasMetadata) RowMetadata(note, facts, Caret + TwoLineGap, Modifier.padding(start = start, bottom = Tokens.Space.s))
+        if (hasMetadata) RowMetadata(note, facts, Caret + TwoLineGap, Modifier.padding(start = start, bottom = if (hasSubagent) None else Tokens.Space.s))
+        if (subagent != null) RowSubagentLine(subagent, Caret + TwoLineGap, onLongClick, Modifier.padding(start = start, bottom = Tokens.Space.s))
     }
 }
 
@@ -742,7 +791,8 @@ private fun TwoLineRow(
 private fun StateCardRow(
     title: String, shown: Status, strong: Boolean, muted: Boolean, waiting: Boolean, depth: Int, preview: String?, time: String?,
     statusText: String?, label: String?, launcher: Boolean, flags: List<RowFlag>, note: RowNote?, facts: List<RowFact>, source: RowSource?,
-    agentMark: AgentMarkSpec?, place: RowPlace?, selected: Boolean, modifier: Modifier, press: Modifier, end: (@Composable () -> Unit)?,
+    agentMark: AgentMarkSpec?, place: RowPlace?, selected: Boolean, sideUnread: RowSideUnread?, subagent: RowSubagent?, onLongClick: (() -> Unit)?,
+    modifier: Modifier, press: Modifier, end: (@Composable () -> Unit)?,
 ) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
@@ -770,13 +820,90 @@ private fun StateCardRow(
         preview?.takeIf { it.isNotBlank() }?.let {
             Text(it.replace('\n', ' '), style = type.caption.copy(fontWeight = FontWeight.Normal), color = palette.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
+        if (sideUnread != null) SideUnreadLine(sideUnread, tone)
         if (note != null || facts.isNotEmpty()) RowMetadata(note, facts, None, Modifier.padding(top = None))
+        if (subagent != null) RowSubagentLine(subagent, None, onLongClick)
         if (statusText != null || place != null || source != null) Row(verticalAlignment = Alignment.CenterVertically) {
             statusText?.let {
                 Text(it, style = type.caption.copy(fontWeight = FontWeight.Medium), color = tone.text, maxLines = 1)
                 Spacer(Modifier.width(Tokens.Space.s))
             }
             PlaceLine(place ?: RowPlace(), source, Modifier.weight(1f))
+        }
+    }
+}
+
+/**
+ * Unread side-session indicator under a parent row's title (#13524): the [PersonaIcons.sideSessions] mark, the most
+ * recent unread side's label, and an optional "+N" count in the unread tint. When [RowSideUnread.onClick] is set,
+ * tapping it opens that side session directly without triggering the parent row.
+ */
+@Composable
+private fun SideUnreadLine(sideUnread: RowSideUnread, tone: StatusColors, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(PersonaTheme.shapes.chip)
+    val interactive = sideUnread.onClick != null
+    val tap = sideUnread.onClick?.let {
+        Modifier.clickable(role = Role.Button, onClickLabel = sideUnread.clickLabel, onClick = it)
+    } ?: Modifier
+    Row(
+        modifier
+            .then(if (interactive) Modifier.minimumInteractiveComponentSize() else Modifier.padding(top = Tokens.Space.xxs))
+            .clip(shape)
+            .then(if (interactive) Modifier.background(tone.tint) else Modifier)
+            .then(tap)
+            .semantics(mergeDescendants = true) { contentDescription = sideUnread.spoken }
+            .then(if (interactive) Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs) else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        JIcon(PersonaIcons.sideSessions, null, size = Caret, tint = tone.text, decorative = true)
+        Spacer(Modifier.width(Tokens.Space.xs))
+        Text(
+            sideUnread.label,
+            Modifier.weight(1f, fill = false),
+            style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Medium),
+            color = tone.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        sideUnread.more?.let { extra ->
+            Spacer(Modifier.width(Tokens.Space.xs))
+            Text(
+                extra,
+                style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.SemiBold),
+                color = tone.text,
+                maxLines = 1,
+                softWrap = false,
+            )
+        }
+        if (interactive) {
+            Spacer(Modifier.width(Tokens.Space.xxs))
+            JIcon(PhIcons.CaretRight, null, size = Caret, tint = tone.text, decorative = true)
+        }
+    }
+}
+
+/** Single-line subagent rollup subtitle under a parent row: attention icon/color for Needs you, working mark for Running. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RowSubagentLine(subagent: RowSubagent, indent: Dp, onLongClick: (() -> Unit)? = null, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    val tap = subagent.onClick?.let { click ->
+        Modifier.onSecondaryClick(onLongClick).combinedClickable(role = Role.Button, onClick = click, onLongClick = onLongClick)
+    } ?: Modifier
+    Row(
+        modifier.padding(start = indent, top = Tokens.Space.xxs).then(tap),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+    ) {
+        if (subagent.needsYou) {
+            JIcon(persona.core.designsystem.icons.PersonaIcons.agents, null, size = Tokens.Size.markS,
+                tint = palette.needsYou.text, decorative = true)
+            Text(subagent.text, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Medium),
+                color = palette.needsYou.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        } else {
+            JStatusDot(Status.Working, breathes = false)
+            Text(subagent.text, style = PersonaTheme.type.caption.copy(fontWeight = FontWeight.Normal),
+                color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -1082,26 +1209,80 @@ private const val BoardBayPeek = 0.4f
 /**
  * A quick filter: its words, count and state ([status]'s dot, or [icon] in its color: Waiting in the background's clock).
  * [waiting]: it lists the agents that only wait in the background, so the Glass home draws it in that state's lighter tone.
+ * [countTone]: the count as a badge in that state's colours (Needs you's for what waits for the user, [Status.Idle]'s for a
+ * neutral total; none at 0, 99+ past 99) and part of the spoken name, as the Inbox's section bar draws its counts (#9053).
  */
 data class Bay(
     val label: String, val count: Int? = null, val status: Status? = null, val icon: persona.core.designsystem.icons.PhIcon? = null,
-    val waiting: Boolean = false,
+    val waiting: Boolean = false, val countTone: Status? = null,
 )
 
 /**
  * The quick filters of a list. Glass shows glass chips; brief underlined tabs; the board a counter board with
  * one big number per bay — tapping a cell filters to it. A Needs You dot is still, as on iOS's `QuickFilterBar`.
+ * [revealSelected]: when the choice changes, also from outside the bar (a search, a link: the Inbox's section bar,
+ * #9053), a bar that scrolls sideways scrolls it whole into sight ([revealWhenSelected]).
+ * [pinFirst]: the first bay stays at the bar's start and only the rest scroll beside it, so its count is in sight
+ * whichever bay is chosen (the Inbox's Needs you, #9053); a bar that fits looks the same either way.
+ * [fadeCut]: an edge of the part that scrolls fades where it cuts bays off, as the Agents capsule's (#9121): the trailing
+ * edge while more lie past it, the leading one once it has moved from its start, so a strip that runs past the screen
+ * reads as one that scrolls (the Inbox's section bar, #9053). A bar that fits draws as it would without it.
  */
 @Composable
-fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, revealSelected: Boolean = false,
+                   pinFirst: Boolean = false, fadeCut: Boolean = false) {
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
+    val scroll = rememberScrollState()
+    val reveal = scroll.takeIf { revealSelected }
+    // How many bays sit outside the part that scrolls: the first, when pinned.
+    val pinned = if (pinFirst && bays.size > 1) 1 else 0
+    // How far a cut edge fades: the Agents capsule's width, growing with the text; a chosen bay is kept clear of it.
+    val fadeWidth = if (fadeCut) AgentFilterTokens.fade * androidx.compose.ui.platform.LocalDensity.current.fontScale.coerceAtLeast(1f) else Tokens.Space.flush
+    // Read in drawing only: the fade's frames redraw the strip and never recompose it. A strip not yet measured counts
+    // as one that fits, and one with nothing to fade draws without the fade's layer, exactly as without the option.
+    val fade: Modifier = if (!fadeCut) Modifier else {
+        val spec: androidx.compose.animation.core.AnimationSpec<Float> =
+            if (PersonaTheme.reduceMotion) androidx.compose.animation.core.snap() else androidx.compose.animation.core.tween(Tokens.Motion.State.duration)
+        val measured = scroll.viewportSize > 0
+        val leading = androidx.compose.animation.core.animateFloatAsState(if (measured && scroll.canScrollBackward) 1f else 0f, spec, label = "quick-filter-fade-leading")
+        val trailing = androidx.compose.animation.core.animateFloatAsState(if (measured && scroll.canScrollForward) 1f else 0f, spec, label = "quick-filter-fade-trailing")
+        val fading by androidx.compose.runtime.remember { androidx.compose.runtime.derivedStateOf { leading.value > 0f || trailing.value > 0f } }
+        if (fading) Modifier.agentFilterEdgeFade(palette.surfaceOpaque, fadeWidth, { leading.value }, { trailing.value }) else Modifier
+    }
     when (PersonaTheme.style) {
-        AppStyle.Glass -> Row(modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp.dense)) {
-            bays.forEachIndexed { index, bay -> JChip(bay.label, selected = index == selected, onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false) }
+        AppStyle.Glass -> {
+            val gap = 8.dp.dense
+            @Composable fun chip(index: Int) {
+                val bay = bays[index]
+                JChip(bay.label, Modifier.revealWhenSelected(reveal?.takeIf { index >= pinned }, index == selected, fadeWidth), selected = index == selected,
+                    onClick = { onSelect(index) }, status = bay.status, count = bay.count, breathes = false, countTone = bay.countTone)
+            }
+            if (pinned == 0) Row(modifier.fillMaxWidth().then(fade).horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                bays.indices.forEach { chip(it) }
+            } else Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                chip(0)
+                Row(Modifier.weight(1f).then(fade).horizontalScroll(scroll), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                    (pinned until bays.size).forEach { chip(it) }
+                }
+            }
         }
-        // Tabs that do not fit scroll sideways rather than being cut off at the edge.
-        AppStyle.Brief -> JSegmented(bays.map { JSegment(it.label, it.count) }, selected, onSelect, modifier.horizontalScroll(rememberScrollState()))
+        // Tabs that do not fit scroll sideways rather than being cut off at the edge. Fading the cut edge, the tabs keep
+        // part of the next one in sight under the fade (TabPeek): an edge that fell between two tabs showed none of it.
+        AppStyle.Brief -> {
+            val segments = bays.map { JSegment(it.label, it.count, countTone = it.countTone) }
+            @Composable fun strip(shown: List<JSegment>, chosen: Int, pick: (Int) -> Unit, place: Modifier) =
+                if (!fadeCut) JSegmentedStrip(shown, chosen, pick, place.horizontalScroll(scroll), revealIn = reveal)
+                else BoxWithConstraints(place) {
+                    JSegmentedStrip(shown, chosen, pick, Modifier.then(fade).horizontalScroll(scroll), revealIn = reveal, revealMargin = fadeWidth,
+                        peek = TabPeek(constraints.maxWidth, fadeWidth / 2))
+                }
+            if (pinned == 0) strip(segments, selected, onSelect, modifier)
+            else Row(modifier) {
+                JSegmented(segments.take(pinned), if (selected < pinned) selected else -1, onSelect)
+                strip(segments.drop(pinned), selected - pinned, { onSelect(it + pinned) }, Modifier.weight(1f).padding(start = JSegmentedBriefGap))
+            }
+        }
         AppStyle.Board -> BoxWithConstraints(modifier.fillMaxWidth()) {
             val shape = RoundedCornerShape(10.dp.corner)
             // Each bay is a share of the width while its label fits; more bays than that (the Agents list's six) keep
@@ -1111,23 +1292,47 @@ fun QuickFilterBar(bays: List<Bay>, selected: Int, onSelect: (Int) -> Unit, modi
             val whole = (maxWidth / BoardBayMinWidth).toInt().coerceAtLeast(1)
             val bayWidth = maxWidth / (whole + BoardBayPeek)
             val frame = Modifier.fillMaxWidth().clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
-            val row = if (fits) frame.height(IntrinsicSize.Min) else frame.horizontalScroll(rememberScrollState()).height(IntrinsicSize.Min)
-            Row(row) {
-                bays.forEachIndexed { index, bay ->
-                    if (index > 0) Box(Modifier.width(1.dp).fillMaxHeight().background(palette.line))
-                    val on = index == selected
-                    val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
-                    val cell = if (fits) Modifier.weight(1f) else Modifier.widthIn(min = bayWidth)
-                    Box(cell.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on }) {
-                        Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
-                            Text("${bay.count ?: "—"}", style = type.number, color = if ((bay.count ?: 0) == 0) palette.ink3 else palette.ink, maxLines = 1)
-                            Spacer(Modifier.height(2.dp.dense))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }
-                                Text(bay.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+            @Composable fun rule() = Box(Modifier.width(1.dp).fillMaxHeight().background(palette.line))
+            @Composable fun cell(index: Int, place: Modifier) {
+                val bay = bays[index]
+                val on = index == selected
+                val color = bay.status?.let { palette.status(it).dot } ?: palette.ink
+                // A toned count (the Inbox's section bar, #9053) shows no number at 0 and 99+ past 99, Needs you's in its
+                // state's ink, and is spoken with the label.
+                val toned = bay.countTone?.let { tone -> bay.count?.takeIf { it > 0 }?.let { it to tone } }
+                val spoken = bay.countTone?.let { spokenCount(bay.label, bay.count) }
+                Box(place.clickable(role = Role.Tab) { onSelect(index) }.semantics { this.selected = on; spoken?.let { contentDescription = it } }) {
+                    Column(Modifier.padding(start = 12.dp.dense, top = 10.dp.dense, bottom = 12.dp.dense, end = 6.dp.dense)) {
+                        if (bay.countTone == null && bay.count != null) Text("${bay.count}", style = type.number, color = if (bay.count == 0) palette.ink3 else palette.ink, maxLines = 1)
+                        else if (toned != null) Text(countBadgeText(toned.first), style = type.number, maxLines = 1,
+                            color = if (toned.second == Status.Idle) palette.ink else palette.status(toned.second).text)
+                        // No number to show (the Inbox's Done and All, a toned 0): the line keeps its height so the labels
+                        // stay in one row, and is neither seen nor heard.
+                        else Text("—", Modifier.clearAndSetSemantics { }, style = type.number, color = palette.ink.copy(alpha = 0f), maxLines = 1)
+                        Spacer(Modifier.height(2.dp.dense))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (bay.status != null) { Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(color)); Spacer(Modifier.width(5.dp.dense)) }
+                            Text(bay.label, style = type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp)), color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        if (on) Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(color))
+                    }
+                    // Over the cell's measured size: a cell of a board that scrolls has no bounded width of its own, and a
+                    // fillMaxWidth bar in it drew nothing.
+                    if (on) Box(Modifier.matchParentSize(), contentAlignment = Alignment.BottomStart) {
+                        Box(Modifier.fillMaxWidth().height(3.dp).background(color))
+                    }
+                }
+            }
+            if (fits) Row(frame.height(IntrinsicSize.Min)) {
+                bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.weight(1f)) }
+            } else if (pinned == 0) Row(frame.then(fade).horizontalScroll(scroll).height(IntrinsicSize.Min)) {
+                bays.indices.forEach { index -> if (index > 0) rule(); cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected, fadeWidth)) }
+            } else Row(frame.height(IntrinsicSize.Min)) {
+                cell(0, Modifier.widthIn(min = bayWidth))
+                rule()
+                Row(Modifier.weight(1f).then(fade).horizontalScroll(scroll).height(IntrinsicSize.Min)) {
+                    (pinned until bays.size).forEach { index ->
+                        if (index > pinned) rule()
+                        cell(index, Modifier.widthIn(min = bayWidth).revealWhenSelected(reveal, index == selected, fadeWidth))
                     }
                 }
             }

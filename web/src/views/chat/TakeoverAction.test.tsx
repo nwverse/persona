@@ -12,7 +12,7 @@ vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof impor
 import { ApiError } from "../../lib/api";
 import type { Session } from "../../lib/types";
 import { t } from "../../i18n";
-import TakeoverAction from "./TakeoverAction";
+import TakeoverAction, { takeoverMenuLabels } from "./TakeoverAction";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -49,13 +49,41 @@ describe("TakeoverAction interactions", () => {
     expect(state.api.mock.calls).toHaveLength(1);
   });
 
-  it("posts exactly once after running confirmation", async () => {
-    state.api.mockImplementation(async (_path: string, options?: { method?: string }) => options?.method === "POST" ? { session: baseSession } : plan());
+  it.each([false, true])("posts exactly once after running confirmation (app_owned=%s)", async (app_owned) => {
+    state.api.mockImplementation(async (_path: string, options?: { method?: string }) => options?.method === "POST" ? { session: baseSession } : plan({ app_owned }));
     render();
     await act(async () => button(host, t("chat-takeover.takeover")).click()); await flush();
+    expect(state.api).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain(t("chat-takeover.takeover_running_confirm"));
+    expect(document.body.textContent).not.toContain(t("chat-takeover.takeover_app_confirm"));
     await act(async () => button(document.body, t("chat-takeover.takeover_confirm")).click()); await flush();
     expect(state.api.mock.calls.map(([, options]) => options?.method ?? "GET")).toEqual(["GET", "POST"]);
     expect(state.api.mock.calls[1][1]).toMatchObject({ json: { token: "token-1", confirm_stop: true } });
+  });
+
+  it("an idle app-owned session shows app confirmation and cancel never posts", async () => {
+    state.api.mockResolvedValue(plan({ running: false, app_owned: true }));
+    render();
+    await act(async () => button(host, t("chat-takeover.takeover")).click()); await flush();
+    expect(state.api.mock.calls.map(([, options]) => options?.method ?? "GET")).toEqual(["GET"]);
+    expect(document.body.textContent).toContain(t("chat-takeover.takeover_app_confirm"));
+    expect(document.body.textContent).not.toContain(t("chat-takeover.takeover_running_confirm"));
+    await act(async () => button(document.body, t("chat-chatview.not_now")).click()); await flush();
+    expect(state.api).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(state.launch).not.toHaveBeenCalled();
+  });
+
+  it("an idle app-owned session posts confirm_stop true only after confirmation", async () => {
+    state.api.mockImplementation(async (_path: string, options?: { method?: string }) => options?.method === "POST" ? { session: baseSession } : plan({ running: false, app_owned: true }));
+    render();
+    await act(async () => button(host, t("chat-takeover.takeover")).click()); await flush();
+    expect(state.api).toHaveBeenCalledTimes(1);
+    await act(async () => button(document.body, t("chat-takeover.takeover_confirm")).click()); await flush();
+    expect(state.api.mock.calls.map(([, options]) => options?.method ?? "GET")).toEqual(["GET", "POST"]);
+    expect(state.api.mock.calls[1][1]).toMatchObject({ json: { token: "token-1", confirm_stop: true } });
+    expect(state.upsert).toHaveBeenCalledTimes(1);
+    expect(state.toast).toHaveBeenCalledWith(t("chat-takeover.takeover_done"), "ok");
   });
 
   it("an exited session takes over with GET followed by an unconfirmed POST", async () => {
@@ -85,12 +113,14 @@ describe("TakeoverAction interactions", () => {
     expect(button(document.body, t("chat-takeover.takeover_confirm"))).toBeFalsy();
   });
 
-  it("localizes unavailable reason codes instead of displaying the enum", async () => {
-    state.api.mockResolvedValue(plan({ can_resume: false, reason: "unavailable" }));
+  it.each(["unavailable", "app_running"])("localizes %s reason codes instead of displaying the enum", async (reason) => {
+    state.api.mockResolvedValue(plan({ can_resume: false, reason }));
     render({ ...baseSession, capabilities: { takeover: { running: false, can_resume: false } } } as Session);
     await act(async () => button(host, t("chat-takeover.takeover_new")).click()); await flush();
-    expect(document.body.textContent).toContain(t("chat-takeover.reason_unavailable"));
-    expect(document.body.textContent).not.toContain("unavailable");
+    expect(document.body.textContent).toContain(t(`chat-takeover.reason_${reason}`));
+    expect(document.body.textContent).not.toContain(reason);
+    expect(button(document.body, t("chat-takeover.takeover_confirm"))).toBeFalsy();
+    expect(state.api).toHaveBeenCalledTimes(1);
   });
 
   it("continue-only POST refusal switches to sealed continuation without retrying the token", async () => {
@@ -152,5 +182,76 @@ describe("TakeoverAction interactions", () => {
   it("renders no takeover controls for an ordinary live Codex session without a capability", () => {
     render({ ...baseSession, source_kind: "codex_app_server", capabilities: undefined } as Session);
     expect(host.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("compact variant renders primary Take over plus overflow menu for Continue in a new session", async () => {
+    state.api.mockResolvedValue(plan());
+    act(() => root.render(<TakeoverAction session={baseSession} variant="compact" />));
+    expect(button(host, t("chat-takeover.takeover"))).toBeTruthy();
+    expect(button(host, t("chat-takeover.takeover_new"))).toBeFalsy();
+    const more = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`);
+    expect(more).toBeTruthy();
+    await act(async () => more!.click());
+    const menuItem = [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) => el.textContent?.includes(t("chat-takeover.takeover_new")));
+    expect(menuItem).toBeTruthy();
+    await act(async () => menuItem!.click());
+    await flush();
+    expect(state.launch).toHaveBeenCalledTimes(1);
+  });
+
+  it("compact variant with can_resume false renders single short button without overflow menu", async () => {
+    state.api.mockResolvedValue(plan({ can_resume: false, reason: "unavailable" }));
+    const continueOnly = { ...baseSession, capabilities: { takeover: { running: false, can_resume: false } } } as Session;
+    act(() => root.render(<TakeoverAction session={continueOnly} variant="compact" />));
+    expect(button(host, t("chat-takeover.takeover"))).toBeFalsy();
+    expect(button(host, t("chat-takeover.takeover_new_short"))).toBeTruthy();
+    expect(host.querySelector(`button[aria-label="${t("chat-chatview.more_actions")}"]`)).toBeNull();
+    await act(async () => button(host, t("chat-takeover.takeover_new_short")).click());
+    await flush();
+    expect(document.body.textContent).toContain(t("chat-takeover.reason_unavailable"));
+  });
+
+  it("continueRequested is one-shot consumed and never replays after cancel and remount", async () => {
+    const pendingChanges: boolean[] = [];
+    let requested = true;
+    const consume = vi.fn(() => { requested = false; });
+    state.api.mockResolvedValue(plan({ can_resume: false, reason: "encrypted_context" }));
+    act(() => root.render(
+      <TakeoverAction session={baseSession} variant="compact" continueRequested={requested} onContinueConsumed={consume} onPendingChange={(p) => pendingChanges.push(p)} />,
+    ));
+    await flush();
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(requested).toBe(false);
+    expect(state.api).toHaveBeenCalledTimes(1);
+    expect(pendingChanges.at(-1)).toBe(true);
+    expect(document.body.textContent).toContain(t("chat-takeover.reason_encrypted_context"));
+
+    // Simulate offline unmount followed by reconnect remount with the consumed prop: no duplicate GET or launch.
+    act(() => root.unmount());
+    root = createRoot(host);
+    act(() => root.render(
+      <TakeoverAction session={baseSession} variant="compact" continueRequested={requested} onContinueConsumed={consume} onPendingChange={(p) => pendingChanges.push(p)} />,
+    ));
+    await flush();
+    expect(state.api).toHaveBeenCalledTimes(1);
+    expect(state.launch).not.toHaveBeenCalled();
+  });
+
+  it("takeOverRequested is one-shot consumed and takeoverMenuLabels exposes both menu strings", async () => {
+    expect(takeoverMenuLabels()).toEqual({
+      takeOver: t("chat-takeover.takeover"),
+      continueNew: t("chat-takeover.takeover_new"),
+    });
+    let requested = true;
+    const consume = vi.fn(() => { requested = false; });
+    state.api.mockResolvedValue(plan({ running: true, can_resume: true }));
+    act(() => root.render(
+      <TakeoverAction session={baseSession} variant="compact" takeOverRequested={requested} onTakeOverConsumed={consume} />,
+    ));
+    await flush();
+    expect(consume).toHaveBeenCalledTimes(1);
+    expect(requested).toBe(false);
+    expect(state.api.mock.calls.map(([, opts]) => opts?.method ?? "GET")).toEqual(["GET"]);
+    expect(document.body.textContent).toContain(t("chat-takeover.takeover_running_confirm"));
   });
 });

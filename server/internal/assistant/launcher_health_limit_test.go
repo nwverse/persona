@@ -139,7 +139,7 @@ func TestLauncherHealthUsageLimitWaitsForTheReset(t *testing.T) {
 	if !r.unusable() || r.State != healthFailing || r.Repairs != 0 || len(f.starts) != 0 || len(f.repairs) != 0 || checkedCount(f, "l4/work") != n {
 		t.Fatalf("before the reset: %+v, starts %v, checks %d → %d", r, f.starts, n, checkedCount(f, "l4/work"))
 	}
-	s.repairMachine(ctx, Device{ID: "l4", Reachable: true}, s.healthConfig(ctx))
+	s.repairMachine(ctx, Device{ID: "l4", Reachable: true}, s.healthConfig(ctx), []string{"work"})
 	if r := healthState(s, "l4", "work"); r.State != healthFailing || len(f.starts) != 0 {
 		t.Fatalf("repaired: %+v, starts %v", r, f.starts)
 	}
@@ -155,6 +155,10 @@ func TestLauncherHealthUsageLimitWaitsForTheReset(t *testing.T) {
 	if len(f.starts) != 1 || f.starts[0]["cwd"] != "/home/me/code/app" || !strings.Contains(res, "usage limit on l4 ("+resets) || !strings.Contains(res, "runs on server instead") {
 		t.Fatalf("start %v: %s", f.starts, res)
 	}
+	if checkedCount(f, "l4/work") != n+1 {
+		t.Fatal("the start did not recheck the known usage limit")
+	}
+	n++ // the on-demand probe failed; the following detour shares its throttle
 	if alt, note, moved := s.healthDetour(ctx, Device{ID: "l4"}, "work"); !moved || alt.ID != "server" || !strings.Contains(note, resets) {
 		t.Fatalf("detour: %s %q %v", alt.ID, note, moved)
 	}

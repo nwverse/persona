@@ -10,14 +10,18 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantskills"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/toolschema"
 )
 
 type request struct {
@@ -57,12 +61,29 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64*1024), 32*1024*1024)
 	enc := json.NewEncoder(out)
+	type inflightCall struct {
+		cancel context.CancelFunc
+	}
 	var (
-		mu       sync.Mutex // enc, inflight
-		inflight = map[string]context.CancelFunc{}
-		wg       sync.WaitGroup
-		werr     error
+		mu        sync.Mutex // enc, inflight, werr, watching
+		inflight  = map[string][]*inflightCall{}
+		wg        sync.WaitGroup
+		werr      error
+		watching  bool
+		onCleanup = afterInflightCleanup
 	)
+	writeNotificationFor := func(nctx context.Context) func(notification) {
+		return func(n notification) {
+			mu.Lock()
+			defer mu.Unlock()
+			if nctx.Err() != nil {
+				return
+			}
+			if err := enc.Encode(n); err != nil && werr == nil {
+				werr = err
+			}
+		}
+	}
 	for sc.Scan() {
 		var req request
 		if err := json.Unmarshal(sc.Bytes(), &req); err != nil || req.Method == "" {
@@ -81,9 +102,12 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 					RequestID json.RawMessage `json:"requestId"`
 				}
 				_ = json.Unmarshal(req.Params, &p)
+				key := idKey(p.RequestID)
 				mu.Lock()
-				if cancel := inflight[idKey(p.RequestID)]; cancel != nil {
-					cancel()
+				calls := inflight[key]
+				delete(inflight, key)
+				for _, c := range calls {
+					c.cancel()
 				}
 				mu.Unlock()
 			}
@@ -91,8 +115,9 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 		}
 		rctx, cancel := context.WithCancel(ctx)
 		key := idKey(req.ID)
+		call := &inflightCall{cancel: cancel}
 		mu.Lock()
-		inflight[key] = cancel
+		inflight[key] = append(inflight[key], call)
 		mu.Unlock()
 		wg.Add(1)
 		go func() {
@@ -101,20 +126,30 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 			if token != nil {
 				rctx = withMCPWait(rctx)
 			}
-			stopProgress := keepAlive(rctx, token, func(n notification) {
-				mu.Lock()
-				defer mu.Unlock()
-				if err := enc.Encode(n); err != nil && werr == nil {
-					werr = err
-				}
-			})
+			stopProgress := keepAlive(rctx, token, writeNotificationFor(rctx))
+			var listed *toolSnapshot
+			rctx = context.WithValue(rctx, toolsListedKey{}, func(snapshot toolSnapshot) { listed = &snapshot })
 			res, rerr := handle(rctx, version, req)
 			stopProgress() // no progress line after the answer
+			if onCleanup != nil {
+				defer onCleanup(key)
+			}
 			mu.Lock()
 			defer mu.Unlock()
 			cancelled := rctx.Err() != nil
-			if inflight[key] != nil {
-				delete(inflight, key)
+			if list := inflight[key]; len(list) > 0 {
+				kept := list[:0]
+				for _, c := range list {
+					if c != call {
+						kept = append(kept, c)
+					}
+				}
+				if len(kept) == 0 {
+					delete(inflight, key)
+				} else {
+					clear(list[len(kept):])
+					inflight[key] = kept
+				}
 			}
 			cancel()
 			if cancelled { // the client gave up on it: no answer (MCP: a cancelled request is not responded to)
@@ -122,6 +157,16 @@ func Serve(ctx context.Context, version string, in io.Reader, out io.Writer) err
 			}
 			if err := enc.Encode(response{JSONRPC: "2.0", ID: req.ID, Result: res, Error: rerr}); err != nil && werr == nil {
 				werr = err
+			}
+			// Start only after the first successful list was sent. Older nodes/managers
+			// return no revision and retain their original one-shot behavior.
+			if listed != nil && listed.Revision != "" && !watching && werr == nil {
+				watching = true
+				wg.Add(1)
+				go func(snapshot toolSnapshot) {
+					defer wg.Done()
+					watchTools(ctx, snapshot, writeNotificationFor(ctx))
+				}(*listed)
 			}
 		}()
 	}
@@ -278,7 +323,7 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		}
 		return map[string]any{
 			"protocolVersion": p.ProtocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
+			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 			"serverInfo":      map[string]any{"name": "persona", "version": version},
 			"instructions": "Persona tools reach the user's iPhone (phone_* tools: contacts, calendar, reminders, location, health, photos, " +
 				"clipboard, notifications) and email accounts (mail_* tools). phone_* tools need the Persona app to be open on the iPhone. " +
@@ -289,12 +334,14 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 	case "tools/list":
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		tools, err := listTools(ctx)
+		snapshot, err := listTools(ctx)
 		if err != nil {
-			// listChanged is false, so an empty list would stick for the whole conversation: fail with the reason instead.
 			return nil, &rpcError{Code: -32603, Message: "Persona tools are unavailable: " + err.Error()}
 		}
-		return map[string]any{"tools": tools}, nil
+		if listed, ok := ctx.Value(toolsListedKey{}).(func(toolSnapshot)); ok {
+			listed(snapshot)
+		}
+		return map[string]any{"tools": snapshot.Tools}, nil
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -305,6 +352,14 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		}
 		if rerr := checkCallParams(&p.Name, &p.Arguments); rerr != nil {
 			return nil, rerr
+		}
+		if p.Name == workSearchName && isAssistant() && !isGuest() && toolSet() == "" {
+			if result := searchWorkTools(ctx, p.Arguments); result != nil {
+				return result, nil
+			}
+		}
+		if p.Name == fileTransferTool { // a path on this computer relative to the agent's directory (file_transfer.go)
+			p.Arguments = fileTransferArgs(p.Arguments, workingDir())
 		}
 		var copied *clipboardCopy // phone_clipboard_set with file: read here, on the agent's machine (clipboard_file.go)
 		if p.Name == clipboardSetTool {
@@ -321,6 +376,12 @@ func handle(ctx context.Context, version string, req request) (any, *rpcError) {
 		// (report_to_supervisor and the todo tools need to know whose call it is: node callerTools).
 		call := map[string]any{"kind": "mcp.call", "away_ok": true, "name": p.Name, "args": p.Arguments,
 			"session_id": sessionID(), "assistant": isAssistant(), "guest": isGuest(), "pane": nodeclient.HookPane(os.Getenv)}
+		if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
+			call["a2a_token"] = token
+		}
+		if set := toolSet(); set != "" {
+			call["tool_set"] = set // the node runs no tool outside the narrower set here (node/hooks.go)
+		}
 		if mcpWaitFrom(ctx) != nil {
 			call["wait_updates"] = true // an older node ignores this and returns only its final line
 		}
@@ -358,11 +419,12 @@ func checkCallParams(name *string, args *json.RawMessage) *rpcError {
 	return nil
 }
 
-// dialNode and retryEvery are swapped out by tests. dialNode hangs up when its ctx is cancelled, so a cancelled tool
-// call ends on the node too (and with it the hub's call and its card, rpc.Peer.Cancels).
+// dialNode, retryEvery, and afterInflightCleanup are swapped out by tests. dialNode hangs up when its ctx is
+// cancelled, so a cancelled tool call ends on the node too (and with it the hub's call and its card, rpc.Peer.Cancels).
 var (
-	dialNode   = nodeclient.DialInterruptible
-	retryEvery = 500 * time.Millisecond
+	dialNode             = nodeclient.DialInterruptible
+	retryEvery           = 500 * time.Millisecond
+	afterInflightCleanup func(key string)
 )
 
 // callNode is dialNode for a tool call, tried again only while no node listens (nothing was sent): a resident node's
@@ -400,53 +462,95 @@ func callFailure(ctx context.Context, err error) string {
 var callRedialFor = 15 * time.Second
 
 // listTools asks the local node for the tools until ctx ends: the node may still be starting or reconnecting to the hub.
-func listTools(ctx context.Context) ([]map[string]any, error) {
+func listTools(ctx context.Context) (toolSnapshot, error) {
 	for {
-		tools, err := listToolsOnce(ctx)
+		tools, err := listToolsOnce(ctx, toolSnapshot{})
 		if err == nil {
 			return tools, nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil, err
+			return toolSnapshot{}, err
 		case <-time.After(retryEvery):
 		}
 	}
 }
 
-func listToolsOnce(ctx context.Context) ([]map[string]any, error) {
-	line, err := dialNode(ctx, map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
-		"pane": nodeclient.HookPane(os.Getenv)}) // the pane names the agent whose tools these are (a task leader's task_plan)
+func listToolsOnce(ctx context.Context, previous toolSnapshot) (toolSnapshot, error) {
+	req := map[string]any{"kind": "mcp.tools", "away_ok": true, "assistant": isAssistant(), "session_id": sessionID(), "guest": isGuest(),
+		"pane": nodeclient.HookPane(os.Getenv), "input": map[string]string{"revision": previous.Revision, "session": previous.Session}}
+	if token := os.Getenv("PERSONA_A2A_TOKEN"); token != "" {
+		req["a2a_token"] = token
+	}
+	if set := toolSet(); set != "" {
+		req["tool_set"] = set // a supervision round's narrower set (node/assistant_round.go)
+	}
+	line, err := dialNode(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("Persona node is not reachable: %w", err)
+		return toolSnapshot{}, fmt.Errorf("Persona node is not reachable: %w", err)
 	}
 	var res struct {
-		Tools []proto.Tool `json:"tools"`
-		Error string       `json:"error"`
+		Tools     []proto.Tool `json:"tools"`
+		Error     string       `json:"error"`
+		Revision  string       `json:"revision"`
+		Session   string       `json:"session"`
+		Unchanged bool         `json:"unchanged"`
 	}
 	if err := json.Unmarshal(line, &res); err != nil {
-		return nil, fmt.Errorf("bad response from Persona node: %w", err)
+		return toolSnapshot{}, fmt.Errorf("bad response from Persona node: %w", err)
 	}
 	if res.Error != "" { // the node could not reach the hub (node/hooks.go)
-		return nil, fmt.Errorf("Persona node could not list tools: %s", res.Error)
+		return toolSnapshot{}, fmt.Errorf("Persona node could not list tools: %s", res.Error)
+	}
+	if res.Unchanged {
+		previous.Revision, previous.Session = res.Revision, res.Session
+		return previous, nil
 	}
 	tools := []map[string]any{}
+	var work map[string]bool
 	for _, t := range res.Tools {
+		if os.Getenv("PERSONA_MCP_EXCLUDE_A2A") == "1" && assistantwire.IsA2ATool(t.Name) {
+			continue
+		}
+		if t.WorkGuideTool && isAssistant() && !isGuest() && toolSet() == "" {
+			if work == nil {
+				work = make(map[string]bool)
+			}
+			work[t.Name] = true
+		}
 		schema, description := t.InputSchema, t.Description
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object","properties":{}}`)
 		}
+		// Gemini (Agy) refuses every request of a session if one tool's schema has an empty string in an enum, so
+		// what it rejects leaves the schema here, whoever declared the tool (internal/toolschema).
+		schema = toolschema.Portable(schema)
 		if t.Name == clipboardSetTool && !isGuest() { // its file argument is read here (clipboard_file.go)
 			schema, description = withClipboardFile(schema, description)
 		}
 		tool := map[string]any{"name": t.Name, "description": description, "inputSchema": schema}
-		if isAssistant() {
-			// Claude Code keeps these loaded up front while other MCP servers stay behind ToolSearch (#5838).
+		if isAssistant() && !t.DeferLoading {
+			// Claude Code keeps these loaded up front (#5838); the tools the manager deferred and other MCP servers'
+			// stay behind ToolSearch (#7317).
 			tool["_meta"] = map[string]any{"anthropic/alwaysLoad": true}
 		}
 		tools = append(tools, tool)
 	}
-	return tools, nil
+	if len(work) > 0 {
+		cwd, err := os.Getwd()
+		if err != nil || !assistantskills.WorkGuideReady(cwd) || slices.ContainsFunc(res.Tools, func(t proto.Tool) bool { return t.Name == workSearchName }) {
+			// Keep the original list if prepare fell back to full instructions, or an extension owns the search name.
+			work = nil
+		} else {
+			// Reconnects can return the same tools in a different order. Claude caches
+			// the ordered definitions, so advertise a canonical list for the guide.
+			slices.SortStableFunc(tools, func(a, b map[string]any) int {
+				return strings.Compare(a["name"].(string), b["name"].(string))
+			})
+			tools = append(tools, workSearchTool)
+		}
+	}
+	return toolSnapshot{Tools: tools, WorkGuide: work, Revision: res.Revision, Session: res.Session}, nil
 }
 
 // The assistant's processes start this server with PERSONA_ASSISTANT / PERSONA_SESSION_ID (node/assistant.go): it
@@ -457,6 +561,10 @@ func isAssistant() bool { return identity.Getenv("PERSONA_ASSISTANT") == "1" }
 // isGuest: a guest conversation's process (node/assistant_guest.go). The hub knows its guests itself; this is its word
 // for one the hub cannot tell about, which then gets nothing.
 func isGuest() bool { return identity.Getenv("PERSONA_GUEST") == "1" }
+
+// toolSet is the narrower tool set the process was started with (PERSONA_TOOL_SET: "supervise", a background
+// supervisor's round, node/assistant_round.go); "" for the whole list.
+func toolSet() string { return identity.Getenv("PERSONA_TOOL_SET") }
 
 func sessionID() string {
 	if id := identity.Getenv("PERSONA_SESSION_ID"); id != "" {

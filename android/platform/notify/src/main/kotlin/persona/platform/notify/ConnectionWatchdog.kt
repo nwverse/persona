@@ -15,6 +15,7 @@ open class ConnectionWatchdog(context: Context, parameters: WorkerParameters) : 
     override suspend fun doWork(): Result {
         val dependencies = Notify.dependencies(applicationContext)
         dependencies.journal().capture()
+        dependencies.pairing().restore()
         val exempt = applicationContext.getSystemService(PowerManager::class.java)
             .isIgnoringBatteryOptimizations(applicationContext.packageName)
         return watchdogResult(
@@ -31,7 +32,9 @@ open class ConnectionWatchdog(context: Context, parameters: WorkerParameters) : 
                     { NotificationPolicy.suppressed(it, Notify.foreground.value, Notify.visibleSession.value) },
                     notifier::postInteraction, notifier::postNotify, notifier::retract,
                     preferences::refreshPreferences, notifier::deliveredRequests, preferences::desktopOnline,
-                    catchUpPreferences = preferences::refreshPreferencesForCatchUp).catchUp()
+                    catchUpPreferences = preferences::refreshPreferencesForCatchUp,
+                    retractOccurrence = { id, occurrence -> notifier.retract(id, occurrence) },
+                    notifiedOccurrences = notifier::deliveredOccurrences).catchUp()
             },
         )
     }

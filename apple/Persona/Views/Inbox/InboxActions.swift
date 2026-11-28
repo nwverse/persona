@@ -14,16 +14,20 @@ struct InboxActionBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if let s = item.summary, !s.isEmpty {
+            if let s = item.lineSummary, !s.isEmpty {
                 (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                     .font(Theme.Font.secondary)
                     .lineLimit(3)
+                    .lookUpWords(plain: "\u{FFFC} " + s) // the mark is one attachment character (#10977)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             InboxLineSection(tree: line)
             HStack(spacing: Theme.Space.s) {
                 // A connector's thread that cannot be answered (a CI run) has only Hand to AI.
-                if item.connector.map({ $0.canReply == true }) ?? true {
+                // Nor has a mail while the hub's mail module is off: its reply could not go out (#15995).
+                if !MailModule.access.offersReply(to: item) {
+                    EmptyView()
+                } else if item.connector.map({ $0.canReply == true }) ?? true {
                     action(item.agentDraft == nil ? String(localized: "AI Draft Reply") : String(localized: "View Draft"), symbol: Theme.Icon.draftReply, prominent: true, perform: draft)
                 } else if let open = item.connector?.openURL, let url = Self.systemURL(open, draft: item.agentDraft) {
                     // Answered in the source's own app (Reply in Messages: Messages with the number, and the AI twin's draft;
@@ -147,7 +151,7 @@ struct InboxDraftSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
                         Text("Send").lineLimit(1)
@@ -304,13 +308,7 @@ struct InboxHandOffSheet: View {
         NavigationStack {
             Form {
                 Section("Instructions") {
-                    #if os(macOS)
-                    // A grouped Mac form shows a titled field as label + trailing value: the request took the right half.
-                    TextField(Self.presets[0], text: $instruction, prompt: Text(Self.presets[0]), axis: .vertical)
-                        .labelsHidden().lineLimit(2...6)
-                    #else
                     TextField(Self.presets[0], text: $instruction, axis: .vertical).lineLimit(2...6)
-                    #endif
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: Theme.Space.s) {
                             ForEach(Self.presets, id: \.self) { p in
@@ -372,13 +370,12 @@ struct InboxHandOffSheet: View {
             }
             .sheet(item: $newAgent, onDismiss: finishNewAgent) { p in
                 NewChatView(initialPrompt: p.prompt, contextBlock: p.contextBlock, forwarded: [p.card], forwardedIcon: Theme.Icon.inbox,
-                            nameHint: p.nameHint, onlyGroup: p.group) { s in
+                            nameHint: p.nameHint, onlyGroup: p.group, onFirstMessage: { s, message in
+                    handOff.newAgentFirstMessage(message, for: s.key)
+                }) { s in
                     startedAgent = (s.key, p)
                     newAgent = nil
                 }
-                #if os(macOS)
-                .macSheet()
-                #endif
             }
             #if DEBUG
             // `-showHandOffNewAgent YES`: New Agent… picked (screenshots). `-showHandOffNewAgent <machine>/<session>`: then,
@@ -397,7 +394,7 @@ struct InboxHandOffSheet: View {
             .navigationTitle("Hand to AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                SheetClose { dismiss() }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { Task { await send() } } label: {
                         if handOff.sending { ProgressView() } else { Text("Send").lineLimit(1) }
@@ -414,12 +411,7 @@ struct InboxHandOffSheet: View {
         guard await handOff.send(ask: ask.isEmpty ? Self.presets[0] : ask) else { return }
         if let key = InboxHandOffMemory.key(item) { memory.remember(key, target: handOff.target) }
         Haptics.success()
-        #if os(macOS)
-        // The sheet closes first and `onDisappear` opens where it went: opening first left the sheet up for good (#5921).
-        handOff.openWhenClosed()
-        #else
         handOff.open() // the tab changes under the sheet as it slides away
-        #endif
         dismiss()
     }
 
@@ -469,11 +461,7 @@ struct InboxHandOffSheet: View {
         memory.rememberStarted(item, agent: key)
         handOff.started(key, markDone: prefill.markDone)
         Haptics.success()
-        #if os(macOS)
-        handOff.openWhenClosed() // as `send()`: the Agent opens once this sheet has closed (#5921)
-        #else
         handOff.open()
-        #endif
         dismiss()
     }
 
@@ -491,7 +479,7 @@ struct InboxHandOffSheet: View {
         }
         if let c = it.connector, let url = c.url { text += "\n\n（\(it.accountName)：\(url)）" } // i18n-ignore: context for the agent
         if let m = it.mail, let uid = m.uids.last {
-            text += "\n\n（邮件 account_id \(m.accountID)，mailbox \(m.mailbox)，uid \(uid)，可用 mail_read 读全文、mail_send 回复）" // i18n-ignore
+            text += "\n\n（邮件 account_id \(m.accountID)，mailbox \(m.sourceMailbox ?? "INBOX")，uid \(uid)，可用 mail_read 读全文、mail_send 回复）" // i18n-ignore
         }
         return ContextRef(kind: "context", title: title, url: "", text: text)
     }

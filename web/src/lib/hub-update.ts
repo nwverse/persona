@@ -12,10 +12,46 @@ export interface BusyItem {
   title: string;
 }
 
+export interface HubDevelopmentProgress {
+  phase: "building" | "backing_up" | "applying_backup";
+  step: string;
+  step_index: number;
+  step_total: number;
+  steps?: string[];
+  elapsed_seconds: number;
+  item_label?: string;
+  item_done?: number;
+  item_total?: number;
+  bytes_done?: number;
+  bytes_total?: number;
+  bytes_per_second?: number;
+  percent?: number;
+}
+
 export interface HubUpdateStatus {
+  can_cancel?: boolean;
+  cancelling?: boolean;
+  supports_preview?: boolean;
+  source?: "release" | "beta" | "web-dev";
+  development?: {
+    configured: boolean;
+    /** Why it cannot be selected (localized by the hub). */
+    why?: string;
+    branch: string;
+    current_commit?: string;
+    current_updated_at?: string;
+    /** The snapshot folder in effect, the recommended one, and how many are kept. */
+    backup_directory?: string;
+    backup_default_directory?: string;
+    backup_directory_is_default?: boolean;
+    backup_retain?: number;
+    /** The hub pauses its own writers instead of running hub.json hooks. */
+    builtin_quiesce?: boolean;
+  };
+  backup?: { id: string; retained: number; pruned: string[] | null };
   version: string;
   build: number;
-  channel: string; // release | docker | dev
+  channel: string; // release | beta | docker | dev
   can_update: boolean;
   why_not?: string;
   latest?: {
@@ -28,25 +64,40 @@ export interface HubUpdateStatus {
     bad: boolean;
     /** Why auto-update does not install this newer one. */
     held?: string;
+    commit?: string;
+    updated_at?: string;
+    branch?: string;
+    backup_id?: string;
   };
   state: string;
   progress?: string;
+  development_progress?: HubDevelopmentProgress;
   busy: BusyItem[];
   error?: string;
   auto: boolean;
+  auto_update_nodes?: boolean;
   auto_notice: boolean;
   last_check?: string;
   confirmed: boolean;
   image?: { name: string; tag: string; pinned: boolean };
+  /** Where the hub reads its releases now, and whether hub.json's update.url or the build says so. */
+  update_url?: string;
+  update_url_from?: string; // hub.json | build
+  /** The source's newest release (`latest`) is older than this hub and the release its code contains: the source
+   *  looks stopped (#8108). */
+  source_behind?: boolean;
 }
 
 export interface HubUpdateRecord {
+  source?: string;
+  commit?: string;
+  backup?: HubUpdateStatus["backup"];
   from_version: string;
   to_version: string;
   to_build: number;
   started?: string;
   ended?: string;
-  result: string; // updated | rolled_back | failed | held
+  result: string; // updated | rolled_back | failed | cancelled | held
   reason?: string;
   auto: boolean;
 }
@@ -58,104 +109,44 @@ export interface Skill {
 }
 
 export const hubUpdate = () => api<HubUpdateStatus>("/hub/update");
-export const checkHubUpdate = () => api<HubUpdateStatus>("/hub/update/check", { method: "POST" });
 /** `now`: don't wait for the assistant and the agents to be idle. */
 export const startHubUpdate = (now: boolean) => api<HubUpdateStatus>("/hub/update", { method: "POST", json: now ? { now: true } : {} });
-export const setHubUpdateSettings = (s: { auto?: boolean; auto_notice_seen?: boolean }) => api<HubUpdateStatus>("/hub/update/settings", { method: "PUT", json: s });
-export const hubUpdateHistory = () => api<{ history: HubUpdateRecord[] | null }>("/hub/update/history").then((r) => r.history ?? []);
+export const setHubUpdateSettings = (s: {
+  auto?: boolean;
+  auto_notice_seen?: boolean;
+  auto_update_nodes?: boolean;
+  source?: "release" | "beta" | "web-dev";
+  /** Declarative snapshot settings; "" restores the recommended folder. */
+  development_backup_directory?: string;
+  development_backup_retain?: number;
+}) => api<HubUpdateStatus>("/hub/update/settings", { method: "PUT", json: s });
+export interface HubUpdateBackup {
+  id: string;
+  version: string;
+  build: number;
+  commit: string;
+  updated_at: string;
+  created_at: string;
+}
 export const skills = (manager?: string) => api<{ machine_id: string; machine?: string; skills: Skill[] | null }>("/skills", { headers: manager ? { [MANAGER_HEADER]: manager } : undefined });
 
-export const DOCKER_COMMAND = "docker compose pull && docker compose up -d";
-
-/** An update is under way (the progress row, no buttons). */
-export function updateWorking(s: HubUpdateStatus): boolean {
-  return ["downloading", "waiting_idle", "restarting", "confirming"].includes(s.state);
-}
-
-/** A state that ends an update: the history has a new line. */
-export function updateFinished(prev: string | undefined, next: string): boolean {
-  return prev !== next && ["updated", "rolled_back", "failed"].includes(next);
-}
-
-export function channelTitle(channel: string): string {
-  return channel === "release" ? t("lib-hub-update.channel_release") : channel === "docker" ? "Docker" : t("lib-hub-update.channel_dev");
-}
-
-export function updateStateTitle(s: HubUpdateStatus): string {
+/** Titles shared by the sidebar notice and the Settings progress row. */
+export function workingUpdateTitle(s: HubUpdateStatus): string | undefined {
   switch (s.state) {
-    case "checking":
+    case "resolving":
       return t("lib-hub-update.state_checking");
+    case "applying_backup":
+    case "building":
+    case "backing_up":
     case "downloading":
-      return t("lib-hub-update.state_downloading");
+    case "confirming":
+      return t(`lib-hub-update.state_${s.state}`);
     case "waiting_idle":
       return s.busy.length ? t("lib-hub-update.state_waiting_busy", { count: s.busy.length }) : t("lib-hub-update.state_waiting_idle");
+    case "installing":
     case "restarting":
       return t("lib-hub-update.state_restarting");
-    case "confirming":
-      return t("lib-hub-update.state_confirming");
-    case "updated":
-      return t("lib-hub-update.result_updated");
-    case "rolled_back":
-      return t("lib-hub-update.result_rolled_back");
-    case "failed":
-      return t("lib-hub-update.result_failed");
-    case "available":
-      return t("lib-hub-update.state_available");
-    default:
-      return t("lib-hub-update.state_current");
   }
-}
-
-export function recordTitle(result: string): string {
-  return t(result === "updated" ? "lib-hub-update.result_updated" : result === "rolled_back" ? "lib-hub-update.result_rolled_back" : result === "held" ? "lib-hub-update.result_held" : "lib-hub-update.result_failed");
-}
-
-export function recordTone(result: string): "green" | "orange" | "red" {
-  return result === "updated" ? "green" : result === "rolled_back" || result === "held" ? "orange" : "red";
-}
-
-/** What the "Update" group shows: a Docker hub's instructions, why it doesn't update itself, a newer release, an update
- *  under way, or "Up to date". */
-export type UpdateView =
-  | { kind: "docker" }
-  | { kind: "cannot"; why: string }
-  | { kind: "newer"; working: boolean }
-  | { kind: "working" }
-  | { kind: "current" };
-
-export function updateView(s: HubUpdateStatus): UpdateView {
-  if (s.channel === "docker") return { kind: "docker" };
-  if (!s.can_update) return { kind: "cannot", why: s.why_not ? t("lib-hub-update.cannot_update_why", { why: s.why_not }) : t("lib-hub-update.cannot_update") };
-  const working = updateWorking(s);
-  if (s.latest?.newer) return { kind: "newer", working };
-  return working ? { kind: "working" } : { kind: "current" };
-}
-
-/** The warning under a newer release: it went back before, or auto-update holds it back. */
-export function latestWarning(s: HubUpdateStatus): string | null {
-  const l = s.latest;
-  if (!l?.newer) return null;
-  if (l.bad) return t("lib-hub-update.warning_bad");
-  if (l.held && s.auto) return t("lib-hub-update.warning_held", { why: l.held });
-  return null;
-}
-
-/** The lines for a Docker hub: what to say and what to copy. */
-export function dockerSteps(s: HubUpdateStatus): { headline?: string; steps: { text: string; copy: string }[] } {
-  const l = s.latest;
-  if (l?.newer) {
-    if (s.image?.pinned) {
-      return {
-        headline: t("lib-hub-update.new_image", { version: l.version }),
-        steps: [
-          { text: t("lib-hub-update.docker_set_image"), copy: `${s.image.name}:${l.version}` },
-          { text: t("lib-hub-update.docker_then_run"), copy: DOCKER_COMMAND },
-        ],
-      };
-    }
-    return { headline: t("lib-hub-update.new_image", { version: l.version }), steps: [{ text: t("lib-hub-update.docker_run"), copy: DOCKER_COMMAND }] };
-  }
-  return { steps: [{ text: t("lib-hub-update.docker_how"), copy: DOCKER_COMMAND }] };
 }
 
 /** The one quiet line over the Agents list about the hub (docs/operations/hub-update.md "In the app", iOS / Android `HubNotice`),
@@ -186,7 +177,8 @@ export function hubNoticeKey(n: HubNotice): string | null {
 export function hubNoticeCandidates(s: HubUpdateStatus | null | undefined): HubNotice[] {
   if (!s) return [];
   const out: HubNotice[] = [];
-  if (updateWorking(s)) out.push({ kind: "updating", what: updateStateTitle(s) });
+  const workingTitle = workingUpdateTitle(s);
+  if (workingTitle) out.push({ kind: "updating", what: workingTitle });
   if (s.state === "rolled_back" && s.error && s.latest?.build != null) out.push({ kind: "rolled_back", why: s.error, build: s.latest.build });
   if (s.auto_notice) out.push({ kind: "auto_on" });
   const l = s.latest;
@@ -206,20 +198,7 @@ export function hubNotice(s: HubUpdateStatus | null | undefined, dismissed: read
   }) ?? null;
 }
 
-export function hubNoticeText(n: HubNotice): string {
-  switch (n.kind) {
-    case "updating":
-      return t("lib-hub-update.notice_updating", { what: n.what });
-    case "rolled_back":
-      return n.why; // the hub's own words
-    case "auto_on":
-      return t("lib-hub-update.notice_auto_on");
-    case "available":
-      return t("lib-hub-update.notice_available", { version: n.version });
-    case "new_image":
-      return t("lib-hub-update.notice_new_image", { version: n.version });
-  }
-}
+export { hubNoticeText } from "./hub-notice-text";
 
 const DISMISSED_KEY = "persona.hubNotice.dismissed";
 

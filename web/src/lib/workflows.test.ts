@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Session, Workflow, WorkflowAgent } from "./types";
 import {
+  backgroundCommandLine,
   backgroundWaitLine,
   agentDetail,
   agentElapsed,
@@ -60,7 +61,7 @@ const session = (over: Partial<Session>): Session => ({ machine_id: "m", session
 describe("workflows (#2935)", () => {
   it("sums up a running run in one line", () => {
     const s = session({ workflows: [run], background: [{ id: "wdp5zxh37", kind: "workflow", run_id: run.run_id }] });
-    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分");
+    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分钟");
     expect(workflowPhase(run)).toBe("Verify 2/2");
     expect(workflowShortLine(s)).toBe("169/185+ · parity-audit · Verify");
   });
@@ -82,7 +83,7 @@ describe("workflows (#2935)", () => {
     const { agents: _agents, phases: _phases, ...progress } = run;
     const s = session({ waiting: true, background_count: 1, running_workflows: 1, workflow_progress: { ...progress, phase_count: 2 } });
     expect(workflowShortLine(s)).toBe("169/185+ · parity-audit · Verify");
-    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分");
+    expect(workflowLine(s, start + 14 * 60_000)).toBe("后台 workflow「parity-audit」 · Verify 2/2 · 169/185+ · 14 分钟");
     expect(backgroundCount(s)).toBe(1); // the summary's own count, not the run again
     // merged over an older complete row (the store keeps its workflows), the summary's own counts still win
     expect(workflowShortLine({ ...s, workflows: [] })).toBe("169/185+ · parity-audit · Verify");
@@ -251,7 +252,7 @@ describe("the run's card (#3434)", () => {
     expect(agentRunState({ ...a, status: "stopped" })).toBe("stopped");
     expect(agentRunState({ ...a, status: "failed" })).toBe("failed");
     expect(agentRunState({ ...a, running: true })).toBe("running");
-    expect(agentElapsed(a, start)).toBe("1 分");
+    expect(agentElapsed(a, start)).toBe("1 分钟");
     expect(agentElapsed({ ...a, running: true }, start + 1000 + 30_000)).toBe("30 秒");
     expect(agentElapsed({ ...a, started_at: undefined }, start)).toBe("");
     expect(agentDetail(a)).toBe("claude-example · Reading example.go");
@@ -282,7 +283,7 @@ describe("the run's card (#3434)", () => {
     const s = session({ workflows: [{ ...run, tool_use_id: "tu1" }, { ...run, task_id: "w2", tool_use_id: "tu2" }], background_working: true });
     expect(backgroundLine(s)).toMatchObject({ run: { task_id: run.task_id }, more: 1, since: run.started_at, guessed: false });
     expect(waitingOnWorkflow(s)).toBe(true);
-    // other background work (a command, a subagent) leaves the bar and the turn as they were
+    // a shell or subagent is not a workflow line; it has its own background kind
     const shell = session({ background_working: true, background: [{ id: "b1", kind: "shell", started_at: "2026-11-05T13:00:00Z" }], subagents: [{ id: "x", session_id: "s1@x", running: true }] });
     expect(backgroundLine(shell)).toBeNull();
     expect(waitingOnWorkflow(shell)).toBe(false);
@@ -305,6 +306,32 @@ describe("backgroundWaitLine (#6045)", () => {
     expect(backgroundWaitLine(s)).toEqual({ what: "until gh pr checks 7 --watch", more: 1, since: "2026-01-01T00:00:00Z" });
     expect(backgroundWaitLine({ ...s, background_waiting: false })).toBeNull();
     expect(backgroundWaitLine({ ...s, state: "idle" })).toBeNull();
+  });
+});
+
+describe("backgroundCommandLine (#7341)", () => {
+  const first = { id: "b1", kind: "shell", command: "make release\nmake sign", started_at: "2026-11-05T13:00:00Z" };
+  const s = session({ background_working: true, state_since: "2026-11-05T12:00:00Z",
+    background: [first, { id: "b2", kind: "monitor", description: "tail the log", started_at: "2026-11-05T13:02:00Z" }, { id: "b3", kind: "agent" }] });
+
+  it("uses the first shell or Monitor, one command line, N more and that command's own start", () => {
+    expect(backgroundCommandLine(s)).toEqual({ what: "make release", more: 1, since: first.started_at });
+    expect(backgroundCommandLine({ ...s, background: [{ ...first, description: "Package the release" }] })).toEqual({ what: "Package the release", more: 0, since: first.started_at });
+  });
+
+  it("uses the scheduled prompt as the label, including schedules with commas or multiline prompts", () => {
+    for (const description of ["Cron: 0,30 * * * *, Prompt: Check the build\nReport failures", "Cron: */30 * * * *\nPrompt: Check the build"]) {
+      expect(backgroundCommandLine({ ...s, background: [{ ...first, description }] })?.what).toBe("Check the build");
+    }
+    expect(backgroundCommandLine({ ...s, background: [{ ...first, description: "Cron: */30 * * * *" }] })?.what).toBe("");
+    expect(backgroundCommandLine({ ...s, background: [{ ...first, description: "Display the Cron: configuration" }] })?.what).toBe("Display the Cron: configuration");
+  });
+
+  it("has no clock without the command's start, keeps the label without a listed command, and needs the explicit flag", () => {
+    expect(backgroundCommandLine({ ...s, background: [{ ...first, started_at: undefined }] })).toEqual({ what: "make release", more: 0 });
+    expect(backgroundCommandLine({ ...s, background: [] })).toEqual({ what: "", more: 0 });
+    expect(backgroundCommandLine({ ...s, background_working: false })).toBeNull();
+    expect(backgroundCommandLine({ ...s, background_working: undefined })).toBeNull();
   });
 });
 
@@ -340,7 +367,7 @@ describe("the run's task card (#5030)", () => {
       { id: "a2", session_id: "s@a2", label: "two", running: false, status: "failed" },
       { id: "a3", session_id: "s@a3", running: true, status: "running" },
     ] };
-    expect(workflowStrip(small)).toEqual({ cells: [{ state: "done", label: "one" }, { state: "failed", label: "two" }, { state: "running", label: "agent" }], more: 0 });
+    expect(workflowStrip(small)).toEqual({ cells: [{ state: "done", label: "one" }, { state: "failed", label: "two" }, { state: "running", label: "Agent" }], more: 0 });
   });
 
   it("draws the agents the hub no longer lists from the run's counts, first, and stops at 40 with the rest as more", () => {

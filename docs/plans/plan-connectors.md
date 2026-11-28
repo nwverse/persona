@@ -32,7 +32,7 @@ Out of scope: source-specific browsing pages (`docs/extensions/feishu.md` ("Pers
 
 ## I. `Connector` interface
 
-Code lives in `server/internal/connector` (interfaces, `Registry`, generic `gate` and status), with one subpackage per built-in `connector` (`connector/github`, `connector/imessage`).
+Code lives in `server/internal/connector` (interfaces, `Registry`, generic `gate` and status), and the SPI in `server/internal/connectorwire`; the built-in GitHub and iMessage connectors are modules (`modules/github`, `modules/imessage`).
 During migration, Lark, Moments and `mail` initially stay in `hub` behind adapters to avoid moving too much at once. `connector` depends on `kb` data types (`SourceChat`, `SourceMessage`, `Item`),
 not `hub`; hub owns the `Registry`.
 
@@ -68,7 +68,7 @@ type Credentials interface {
 ```
 
 - Credentials live on the hub: AES-GCM encryption with `secret.key` (the same master key as launcher keys and `mail` credentials, `internal/secretkey`), in a new Postgres table
-  `connector_accounts(connector, account, config jsonb, secret_enc text, created_at, updated_at)`; check every worktree before selecting a migration number.
+  `connector_accounts(connector, account, config jsonb, secret_enc text, created_at, updated_at)`; its migration is named by the UTC second it is written (`docs/server/server.md` "Migrations").
   Plaintext exists only in memory and is never returned by an API (only "configured" and the account name). A hub.json `<connector>.token_file` (0600) is also available for people who do not want to use the App.
 - States such as `not_signed_in` appear consistently in Settings › Connectors, the `Inbox`'s top `error` bar, and assistant snapshots (it will not call tools when "GitHub is not signed in").
   In the App (`ConnectorText.state` / `tone`), only `error` says "Something went wrong"; red dots are only for `error` and `no_permission`. Disabled ("Off"), unconfigured and unsigned-in states have grey dots;
@@ -162,7 +162,7 @@ type ReadTools interface {
 
 - Descriptions and schemas live in `server/internal/prompts/mcp/<connector>/<tool name>.md` (unchanged format from `docs/assistant/prompts.md` ("MCP tools")), read by `prompts.Tool(name)`.
 - The hub tool list comes from `Registry`: only `ok` connectors expose tools (today's two booleans in `assistantTools(withLark, withMail)` are a special case);
-  `callTool` / `runAssistantTool` dispatch by prefix. `mcp_tools.*` goldens must remain byte-for-byte identical across migration.
+  `callTool` / `runAssistantTool` dispatch by prefix. `mcp_tools/` goldens must remain byte-for-byte identical across migration.
 - Read-only tools need no approval under `--allowedTools mcp__persona` (like today's `lark_*`); writes do not belong here.
 
 ### 7. Writes (`Actions`)
@@ -246,7 +246,7 @@ remote plugins that only connect to the socket (`ssh -R`) still work. The plugin
 ### Third form: node as a local `connector` (data on Mac)
 
 Some data exists only on a computer (iMessage `chat.db`, future local notes, photos…), inaccessible to the hub. The node already connects to the hub over ssh with bidirectional RPC,
-so it reads local data while the hub registers a `connector` (`connector/imessage/remote.go`: an RPC-forwarding adapter).
+so it reads local data while the hub registers a `connector` (`modules/imessage/remote.go`: an RPC-forwarding adapter).
 
 New hub → node methods (old nodes return `unknown method`, treated as no local connectors):
 
@@ -268,7 +268,7 @@ A `connector` uses only **one** machine (configured as `imessage.machine`), not 
 One PR per step, with the same checks before merging:
 
 - **All existing tests pass**: `./scripts/test/test-server.sh` (hub machine, real Postgres), `go test ./...`, App `PersonaTests` and `Inbox` / knowledge-base UI tests.
-- **Byte-identical goldens**: prompts, MCP tool lists (`mcp_tools.*`, `mail_tools`).
+- **Byte-identical goldens**: prompts, MCP tool lists (`mcp_tools/`, `mail_tools`).
 - **New comparison tests** (write in M0, baseline generated with old code): fake Lark gateway + fake `mail` (synthetic data), one archive + `Inbox` collection round,
   saving results (knowledge-base directory tree and every file's content, `InboxItem` JSON) as goldens; every subsequent step must match.
 - **Real-data comparison** (read-only, print numbers only): `personad dev connector-diff` (DEBUG builds / tests only), using real Lark gateway and `mail` on the hub machine;
@@ -314,6 +314,7 @@ Later activity merges into the unresolved item; activity after completion opens 
 
 - **`Conversations`**: one per PR / `issue`, `chats/github-<owner>-<repo>-<number>` (`kind: pr | issue`), description first, then `issue` comments, reviews ("`alice` approved", "bob requested `changes`: …"),
   inline comments (with file:line), chronologically ordered. Bots (`[bot]` accounts, CI comments) are marked as bots and excluded from real people by `HasPeople`.
+  The chat carries the thread's state, and a merge, close or reopen adds one line (`docs/assistant/knowledge.md` "Chat state and finished projects", #9427).
 - **What is collected**: only `threads` "related to me" (seen in notifications + search `involves:@me` updated in the last 30 days), not entire repositories. Cursor uses thread `updated_at`
   + `since` per `comment` type (`StreamSource`); backfill reads all comments on first fetch (like Moments, no `Older` needed).
 - **Repositories link to projects**: project `dirs` (`<machine>:<path>`) are code directories; node `git.status` gains optional `remotes` (skip old nodes without it).
@@ -361,7 +362,7 @@ It shares the `connector` `threads` capability with Telegram (`docs/extensions/c
   - `Reply`: bottom composer; long-press "Quote reply" turns a `comment` into a Markdown quote (no @, to avoid notifying its `author`).
     Sending uses `github_comment` (accepts both `{chat, text}` and the assistant's `{repo, number, body}`). User sends `comment` directly, without gate/card (#1190); assistant calls remain gated.
   - "AI draft reply" and "Hand to AI" stay in the `Inbox` top bar. CI-failure notifications that are not PRs/issues still show hub-collected text.
-- **Data** (`server/internal/connector/github/thread.go`):
+- **Data** (`server/internal/modules/github/thread.go`):
   - Each read fetches `issue`, comments, events; PRs additionally fetch PR, reviews, inline comments; `open` PRs additionally fetch head-commit check runs. Each list capped at 5 pages × 100 entries.
   - Merge chronologically, paginate in memory; cursor is the oldest entry's id from the previous page.
 - **Cache**:
@@ -423,12 +424,12 @@ and `repo` is sufficient, so users need not generate another token.
 
 Hand to AI (#528, user 2026-11-03: "iMessage text can be given to AI, like Lark"): node `connector.changes` returns new messages incrementally by `ROWID` (first fetch starts 30 days back), `connector.search` supports assistant search;
 by default, expose only conversations with a contact-book member or in which I have spoken (exclude unsaved short-code senders such as codes, banks and delivery services). Redact verification codes in AI text, not in App-only viewing.
-Hub side (`connector/imessage/persona.go`): with "Share with Persona" enabled (hub setting `imessage.ai`, on by default), implement `Archive` (knowledge-base conversations `imessage-<conversation hash>`, people `imessage-<number hash>`),
+Hub side (`modules/imessage/persona.go`): with "Share with Persona" enabled (hub setting `imessage.ai`, on by default), implement `Archive` (knowledge-base conversations `imessage-<conversation hash>`, people `imessage-<number hash>`),
 `Inbox` (check recent conversations every 2 minutes: unread enters `Inbox`, direct chats need you, groups are FYI; reading elsewhere or my reply completes it; "`Reply` in Messages" is an `sms:` link, Persona does not send),
 `ReadTools` (`imessage_chats` / `imessage_read` / `imessage_search`). Disabled means none are exposed; stored data is deleted separately: `DELETE /api/v1/imessage/data` (only while disabled) calls `kb.Engine.ForgetSource("imessage")`
 to remove conversations, people, project references and their timeline entries, cursors (projects marked for rewriting, summaries rebuilt from remaining data), then index rows and `Inbox` items. Deleted conversations under compression cannot be written back.
 
-Implemented (#449, `server/internal/connector/imessage`, node `connector.*` RPC in `docs/protocol/protocol.md`): merge conversations by person (multiple iMessage / SMS / RCS `chat`s for one number form one conversation; groups use `guid`),
+Implemented (#449, `server/internal/modules/imessage`, node `connector.*` RPC in `docs/protocol/protocol.md`): merge conversations by person (multiple iMessage / SMS / RCS `chat`s for one number form one conversation; groups use `guid`),
 with hashed ids; contact matching uses the last 10 phone digits, then last 7 if unique. On missing permission, `connector.list` gives guidance by node execution `model`: ssh requires "Remote Login › Allow full disk access for remote users";
 launchd-resident node (`scripts/deploy/node-launchd.sh`) requires permission for `personad` itself (deployment replaces the binary, possibly requiring reauthorization; the helper step fixes this).
 Fixtures are `testdata/home` (synthetic `chat.db` and contacts, macOS 26 schemas; generated by `blobs.swift` + `make.py` in `testdata/gen`); real data is read only by `TestRealMessagesCounts`, printing counts.
@@ -442,7 +443,7 @@ Fixtures are `testdata/home` (synthetic `chat.db` and contacts, macOS 26 schemas
   ("Existing behavior to watch" above). `date` cannot be the cursor: late old messages would be skipped. Phase one does not track edits/recalls (append-only archive, like Lark);
   later, if needed, inspect `changed` `date_edited` / `date_retracted` in the last 7 days each round.
 - **typedstream** (`attributedBody`): `NSArchiver` streamtyped format (starts `\x04\x0bstreamtyped`), containing `NSAttributedString`; its first `NSString` is the body.
-  Write a minimal decoder (`connector/imessage/typedstream.go`): read class chains and objects, extract first string (length prefix: one byte below 0x80;
+  Write a minimal decoder (`modules/imessage/typedstream.go`): read class chains and objects, extract first string (length prefix: one byte below 0x80;
   2 bytes after `0x81`, 4 after `0x82`, little-endian), plus `__kIMMentionConfirmedMention` (mentions) and links in attributes.
   Unparseable messages get one line `[无法解析的消息]` (unable to parse message) and a counter (shown in status); **never print or log raw data**.
 - Fixtures: a small Swift script on Mac (`NSArchiver` archiving `NSAttributedString`, synthetic body `示例消息` (example message)) generates blobs (plain text, long text, mentions, links, emoji),
@@ -497,7 +498,7 @@ Implemented (#449): Settings › Connectors › Messages (which Mac, status, ste
 3. **Settings › Connectors status**: below existing "This iPhone / `Mail` / Lark", add rows from `/api/v1/connectors`:
    - GitHub: state, account, pasted token (instructions for methods A / B, `SecureField`, only "Configured" after saving), `base_url`, last sync, remaining rate limit.
    - Messages: source Mac, permissions (step-by-step setup when missing), conversations to collect (contacts only / all), exclusions, retention days.
-   - DEBUG entries `openConnectorGitHub`, `openConnectorMessages` (like `openConnectorFeishu`; names cannot clash with Swift identifiers and must be added to `release.sh`).
+   - DEBUG entries `openConnectorGitHub`, `openConnectorMessages` (like `openConnectorFeishu`; names cannot clash with Swift identifiers and must be added to `scripts/release/debug_switches.txt`).
    - Mock hub (`scripts/mock/mock_hub.py`) adds two connectors and synthetic items; use it for UI tests and dark/light screenshots.
 
 ## VII. Privacy

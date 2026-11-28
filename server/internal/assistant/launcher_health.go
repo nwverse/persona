@@ -2,7 +2,9 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"sync"
@@ -11,6 +13,9 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // Launcher health (docs/server/launcher-health.md): every launcher on every machine is checked now and then with the same
@@ -43,6 +48,9 @@ const (
 	// errKindUsageLimit: the subscription's usage limit is used up (LauncherHealth.ResetsAt, when known). Unusable until
 	// it resets, then checked again; never repaired: nothing on the machine is broken.
 	errKindUsageLimit = "usage_limit"
+	// errKindUpstream: the gateway reported an exhausted upstream account pool (#13372). Never repaired: nothing on the
+	// machine is broken.
+	errKindUpstream = "upstream"
 	// errKindNotInTerminal: a start's new terminal tab could not run the launcher, or its claude (node/shellmiss.go,
 	// #1642): the terminal reads other startup files than the login shell the launchers are listed and checked in, so
 	// a check passing says nothing of it, and no repair the manager has reaches it. Blocked at once; a start with it
@@ -57,7 +65,7 @@ var (
 	// hub's restarts would otherwise check everything each time).
 	healthOnlineRecheck = 10 * time.Minute
 	// healthStale: a failure older than this no longer keeps a launcher from being used (a usage limit with a known
-	// reset: until the reset instead).
+	// reset, its own or one of its families': until the reset instead). An agent's turn counts from its own time.
 	healthStale = 6 * time.Hour
 	// healthLimitMax: a usage limit said to reset further ahead than this was misread (a weekly limit resets within 7
 	// days): the record counts as one without a reset.
@@ -68,11 +76,17 @@ var (
 	// has not stopped by the deadline is rechecked anyway.
 	repairSettle   = 2 * time.Minute
 	repairDeadline = 45 * time.Minute
-	// healthCheckTimeout bounds one check (the node's own is 90 seconds).
-	healthCheckTimeout = 100 * time.Second
 	// healthRecheckThrottle: how long a failing launcher keeps the on-demand probe's answer instead of probing again,
 	// so a burst of starts does not turn into a burst of probes.
 	healthRecheckThrottle = 30 * time.Second
+	// healthCheckTimeout bounds one check (the node's own is 150 seconds).
+	healthCheckTimeout = 170 * time.Second
+	// healthStagger delays each machine's checks a bit more than the one before, so the same probe prompt does not
+	// reach a model gateway once per machine at the same moment: every machine runs the same prompt, and a gateway
+	// that pins a prompt to one upstream account serves a burst of them behind one another (2026-11-13: seven
+	// machines at once queued for 90 seconds and every check timed out). The first machine starts at once, the
+	// others 12, 24, … seconds later; one probe takes a few seconds, so the later ones find its prompt cached.
+	healthStagger = 12 * time.Second
 )
 
 const defaultHealthInterval = 30 * time.Minute
@@ -94,13 +108,26 @@ type LauncherHealth struct {
 	CheckedAt time.Time `json:"checked_at"`
 	Source    string    `json:"source"`          // check | start (an agent's start failed) | session (an agent's turn met a usage limit)
 	Fails     int       `json:"fails,omitempty"` // failures in a row
+	// MissingFails: of those, the latest ones in a row that found no claude command ("command not found: claude"); any
+	// other outcome resets it. Readiness tells one such miss, which a Claude Code self-update can cause, from a removal.
+	MissingFails int `json:"missing_fails,omitempty"`
 	// Repairs are this run of failures' repair rounds; BlockedReason says why it was given up on.
 	Repairs       int            `json:"repairs,omitempty"`
 	Repair        *LauncherFixed `json:"repair,omitempty"`
 	BlockedReason string         `json:"blocked_reason,omitempty"`
 	// ResetsAt: Kind is errKindUsageLimit and this is when the limit resets (read off the check's words when they name a
 	// time zone, or an agent's own record of the limit): the launcher counts as unusable until then, and no longer after.
+	// With LimitModels it is the latest of their resets, unknown while any of theirs is.
 	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// LimitModels: Kind is errKindUsageLimit and these model families' own limits are used up (opus, sonnet, haiku);
+	// none: the limit names no family, and any model's answer shows it is over (recordHealth's merge rules).
+	LimitModels []string `json:"limit_models,omitempty"`
+	// LimitResets: when each of LimitModels resets, for those whose reset is known. Without it a known ResetsAt is every
+	// family's reset (limitResets: records from before it).
+	LimitResets map[string]time.Time `json:"limit_resets,omitempty"`
+	// rev is the record's version in this hub (healthBook.rev): a probe's result is current only against the version
+	// it read.
+	rev uint64
 }
 
 // LauncherFixed is the latest repair of a launcher.
@@ -137,6 +164,7 @@ type healthBook struct {
 	mu       sync.Mutex
 	loaded   bool
 	recs     map[string]*LauncherHealth // by healthKey
+	rev      uint64                     // the latest LauncherHealth.rev given
 	repairs  map[string]*machineRepair  // by broken machine
 	online   map[string]bool            // reachable at the last look
 	checking map[string]bool            // machines being checked now
@@ -264,7 +292,7 @@ func (s *Service) healthRecords(ctx context.Context, state, machine string) []La
 	out := []LauncherHealth{}
 	for _, r := range b.recs {
 		if (state == "" || r.State == state) && (machine == "" || r.Machine == machine) {
-			out = append(out, *r)
+			out = append(out, cleanHealth(*r))
 		}
 	}
 	b.mu.Unlock()
@@ -281,13 +309,35 @@ func (s *Service) launcherHealth(ctx context.Context, machine, launcher string) 
 	defer b.mu.Unlock()
 	s.healthLoadLocked(ctx)
 	if r := b.recs[healthKey(machine, launcher)]; r != nil {
-		return *r, true
+		return cleanHealth(*r), true
 	}
 	return LauncherHealth{}, false
 }
 
+// cleanHealth is a copy of r whose text is safe to show: records written before the cleanup (an older hub, a raw
+// start's error) can still carry terminal escapes and shell startup noise in Postgres, and every list hands them out.
+func cleanHealth(r LauncherHealth) LauncherHealth {
+	if r.Error != "" {
+		r.Error = textfmt.LauncherErrorSummary(r.Error, 400)
+	}
+	if r.BlockedReason != "" {
+		r.BlockedReason = textfmt.Clip(textfmt.OneLine(textfmt.StripTerminalEscapes(r.BlockedReason)), 600)
+	}
+	return r
+}
+
+// cleanCheck cleans a check's answer as it is handed on: a node from before the cleanup still sends the terminal's
+// escapes and shell startup noise in it.
+func cleanCheck(c *proto.LauncherCheck) {
+	if c.Error != "" {
+		c.Error = textfmt.LauncherErrorSummary(c.Error, 400)
+	}
+	c.Answer = textfmt.StripTerminalEscapes(c.Answer)
+}
+
 // unusable: the record says the launcher does not work (its latest result, failed within healthStale). A usage limit
-// whose reset is known holds until that reset, however far off, and no longer.
+// whose reset is known holds until that reset, however far off, and no longer. One whose reset is unknown holds
+// within healthStale, and until any of its families' known resets (familyResetAhead).
 func (r LauncherHealth) unusable() bool {
 	if r.State == "" || r.State == healthOK {
 		return false
@@ -295,7 +345,24 @@ func (r LauncherHealth) unusable() bool {
 	if reset, ok := r.limitReset(); ok {
 		return time.Now().Before(reset)
 	}
-	return time.Since(r.CheckedAt) < healthStale
+	return time.Since(r.CheckedAt) < healthStale || r.familyResetAhead()
+}
+
+// familyResetAhead: r's usage limit has a family whose own reset is known and still ahead (and not past
+// healthLimitMax from the record's evidence). Another family whose reset is unknown makes the limit's reset unknown
+// (familiesReset), and that family's evidence goes stale, but it takes nothing from this one: nothing a failure adds
+// shortens a limit (foldLimit, #9646).
+func (r LauncherHealth) familyResetAhead() bool {
+	if r.Kind != errKindUsageLimit {
+		return false
+	}
+	now := time.Now()
+	for _, t := range r.LimitResets {
+		if now.Before(t) && t.Sub(r.CheckedAt) <= healthLimitMax {
+			return true
+		}
+	}
+	return false
 }
 
 // limitReset is when the usage limit r records resets: r failed on the subscription's usage limit, and its reset is
@@ -305,6 +372,47 @@ func (r LauncherHealth) limitReset() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return *r.ResetsAt, true
+}
+
+// limitModels are the model families r's usage limit holds for; a record from before limit_models has them in its
+// error's words.
+func (r LauncherHealth) limitModels() []string {
+	if len(r.LimitModels) > 0 {
+		return r.LimitModels
+	}
+	return limitFamilies(r.Error)
+}
+
+// limitResets are the known resets of r's limitModels, a copy. A record without limit_resets has its known resets_at
+// for each family: main's format (no limit_models either, the families in its error's words). A record that has
+// families and no limit_resets has no resets_at but from that format, since every family's reset is known whenever
+// resets_at is (familiesReset).
+func (r LauncherHealth) limitResets() map[string]time.Time {
+	out := maps.Clone(r.LimitResets)
+	if out == nil {
+		out = map[string]time.Time{}
+	}
+	if len(out) == 0 && r.ResetsAt != nil {
+		for _, f := range r.limitModels() {
+			out[f] = *r.ResetsAt
+		}
+	}
+	return out
+}
+
+// familiesReset is when a limit on families resets: the latest of their resets, nil while any is unknown.
+func familiesReset(families []string, resets map[string]time.Time) *time.Time {
+	var latest *time.Time
+	for _, f := range families {
+		t, ok := resets[f]
+		if !ok {
+			return nil
+		}
+		if latest == nil || t.After(*latest) {
+			latest = &t
+		}
+	}
+	return latest
 }
 
 // resetNote is how agents_list's lines and a detour's reason say when r's usage limit resets ("" without one):
@@ -337,9 +445,14 @@ var launcherErrorKinds = []struct {
 	// Codex's (its message, its error kinds in a rollout and the app-server). A gateway's 429, "rate limit" or "quota"
 	// is not a subscription's limit and stays in its class.
 	{errKindUsageLimit, lazyre.New(`(?i)\byou(?:'|’)ve hit your [^·\n.]{0,40}\blimit\b|usage limit reached|usage_limit_exceeded|usageLimitExceeded`)},
+	// Before model_route: an exhausted upstream pool message may also name the requested model ("no eligible upstream
+	// account for model …"), which is a pool outage rather than a bad model name (#13372).
+	{errKindUpstream, lazyre.New(`(?i)no other eligible account|no eligible upstream|upstream attempt budget`)},
 	{errKindModelRoute, lazyre.New(`(?i)bare claude model name|cannot be routed|no account match|model[^.\n]{0,60}(not found|not supported|not available|does not exist|unknown)|unknown model|invalid model`)},
 	{errKindAuth, lazyre.New(`(?i)\b40[13]\b|invalid (or missing )?(api[ _-]?key|x-api-key|token|bearer)|authentication_error|unauthori[sz]ed|not logged in|please run /login|token (has )?expired|permission_error|forbidden|requires \w+ auth|no \w+ auth token|auth login`)},
-	{errKindCLIOutdated, lazyre.New(`(?i)unknown option|unrecognized option|unexpected argument|please (update|upgrade)|(update|upgrade) (claude|codex|your)|version[^.\n]{0,40}(too old|no longer supported|not supported|outdated)|minimum (required )?version|requires (a )?newer`)},
+	// A JSON-RPC "Method not found" is a CLI that predates a method its runtime calls (an Antigravity CLI without
+	// session/set_mode, #14533): updating the CLI is the fix.
+	{errKindCLIOutdated, lazyre.New(`(?i)unknown option|unrecognized option|unexpected argument|method not found|please (update|upgrade)|(update|upgrade) (claude|codex|your)|version[^.\n]{0,40}(too old|no longer supported|not supported|outdated)|minimum (required )?version|requires (a )?newer`)},
 	{errKindTimeout, lazyre.New(`(?i)context deadline exceeded|deadline exceeded|timed? ?out|秒内没有回答`)},
 }
 
@@ -353,12 +466,31 @@ func classifyLauncherError(text string) string {
 	return errKindOther
 }
 
-// repairNow: a failure the repairs know right away; the others wait for a second one in a row. Never a usage limit,
-// however many in a row: nothing on the machine is broken, it waits for the reset. The same for an unfinished
-// first-run setup: only a person at the machine can finish it.
+// codedLauncherErrorKinds are the node's coded start failures that name their class themselves. Their words are in the
+// node's language, so the class comes from the code, never from a guess at the text.
+var codedLauncherErrorKinds = map[string]string{
+	proto.CodeCodexNotLoggedIn: errKindAuth, // Codex opened on its sign-in screen (node/codex_start.go)
+}
+
+// codedLauncherErrorKind is the class err's code names (codedLauncherErrorKinds), "" when it names none: its words
+// are then what classifyLauncherError reads.
+func codedLauncherErrorKind(err error) string {
+	var re *rpc.Error
+	if errors.As(err, &re) {
+		return codedLauncherErrorKinds[re.Code]
+	}
+	return ""
+}
+
+// repairNow: a current failure the repairs know right away; the others wait for a second one in a row. Never a usage limit or
+// an exhausted upstream account pool, however many in a row: nothing on the machine is broken. The same for an
+// unfinished first-run setup: only a person at the machine can finish it.
 func (r LauncherHealth) repairNow() bool {
+	if r.State != healthFailing || !r.unusable() {
+		return false
+	}
 	switch r.Kind {
-	case errKindUsageLimit, errKindOnboarding:
+	case errKindUsageLimit, errKindOnboarding, errKindUpstream:
 		return false
 	case errKindModelRoute, errKindAuth, errKindCLIOutdated:
 		return true
@@ -402,7 +534,8 @@ func (s *Service) launcherHealthRoutes() {
 			if (machine != "" && d.ID != machine) || !d.Reachable {
 				continue
 			}
-			out = append(out, s.checkMachine(ctx, d, cfg, false, launcher)...)
+			records, _ := s.checkMachine(ctx, d, cfg, false, launcher)
+			out = append(out, records...)
 		}
 		if out == nil {
 			out = []LauncherHealth{}

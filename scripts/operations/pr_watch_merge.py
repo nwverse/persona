@@ -1,10 +1,16 @@
 """The only generic merge exit: scan and squash exactly the reviewed head."""
 import argparse
-import fcntl
+import os
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pr_watch_common import WatchError, checked, pr_snapshot, repository, run
@@ -40,11 +46,22 @@ def merge_lock(root):
     directory = Path(root, common).resolve()
     directory.mkdir(parents=True, exist_ok=True)
     handle = (directory / "persona-pr-merge.lock").open("a+")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    if os.name == "nt":
+        # Windows Python has no fcntl: lock the first byte, as merge-pr.sh does, trying again each second while held.
+        handle.seek(0)
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except PermissionError:
+                time.sleep(1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
     return handle
 
 
-def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, expected_base=None):
+def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, expected_base=None,
+          require_issue_link=True):
     """Do not read or merge PR metadata outside one exact-head decision."""
     repo = repository(repo)
     pr = pr_snapshot(repo, number)
@@ -58,7 +75,7 @@ def merge(repo, number, root, privacy=None, timeout=300, expected_head=None, exp
         raise WatchError("PR is not mergeable; update its branch or resolve conflicts")
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         raise WatchError("PR has an outstanding changes request")
-    if not linked_issue(pr["body"], repo):
+    if require_issue_link and not linked_issue(pr["body"], repo):
         raise WatchError("PR does not link an issue in its own repository")
     head, base = pr["headRefOid"], pr["baseRefOid"]
     with tempfile.TemporaryDirectory(prefix="pr-watch-merge-") as temporary:

@@ -51,7 +51,7 @@ func storeProfiles(t *testing.T, st *downStore, profiles ...ModelProfile) {
 	}
 }
 
-func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
+func TestModelProfilesCaptureCurrentConfiguration(t *testing.T) {
 	s, f, st := modelService(t)
 	ctx := context.Background()
 	sealed, err := s.sealKey("test-secret-key")
@@ -63,7 +63,7 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 		FableModel: "test-fable", Effort: "high", BaseURL: "https://example.invalid", Args: []string{"test-argument"}}, KeySealed: sealed}
 	putLaunchers(t, s, l)
 	for id, binding := range map[string]ModelBinding{
-		"assistant":      {Provider: "launcher.current", Model: "test-chat", Runtime: proto.AssistantRuntimeAgentSDK},
+		"assistant":      {Provider: "launcher.current", Model: "test-chat", ConfigDir: assistantConfigDirLegacy},
 		"agent.new":      {Provider: "launcher.current", Model: "test-agents"},
 		"agent.delegate": {Model: "test-delegate"},
 	} {
@@ -72,17 +72,21 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 		}
 	}
 	before, puts := profileStoreSnapshot(st.memStore)
+	for revision, id := range []string{"performance", "economy"} {
+		body := fmt.Sprintf(`{"revision":%d,"name":%q,"capture":true}`, revision, id)
+		if r := request(s, http.MethodPut, "/api/v1/model-profiles/"+id, body); r.Code != http.StatusOK {
+			t.Fatalf("creating a profile from current settings: %d %s", r.Code, r.Body.String())
+		}
+	}
 	v := profilesOf(t, s)
-	// The templates are copies of the configuration: performance is marked in use (its tiers work from the start),
-	// nothing switches and there is nothing to roll back.
-	if v.Revision != 1 || v.Active != seededProfile || v.Rollback != nil || len(v.Events) != 1 || v.Events[0].Action != "seed" ||
-		v.Events[0].By.Kind != "system" || len(v.Profiles) != 2 {
-		t.Fatalf("seeding: %+v", v)
+	if v.Revision != 2 || v.Active != "" || v.Rollback != nil || len(v.Events) != 2 || v.Events[0].Action != "save" ||
+		len(v.Profiles) != 2 {
+		t.Fatalf("captured profiles: %+v", v)
 	}
 	for _, p := range v.Profiles {
-		if p.Purposes["assistant"].Model != "test-chat" || p.Purposes["assistant"].Runtime != "" ||
+		if p.Purposes["assistant"].Model != "test-chat" || p.Purposes["assistant"].ConfigDir != "" ||
 			p.Purposes["agent.delegate"].Model != "test-delegate" || len(p.Changes) != 0 {
-			t.Fatalf("template is not the current model-only configuration: %+v", p)
+			t.Fatalf("capture differs from the current model-only configuration: %+v", p)
 		}
 		m := p.Launchers["current"]
 		for _, field := range m.fields(&l.ManagedLauncher) {
@@ -90,23 +94,26 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 				t.Fatalf("capture lost launcher field %s", field.name)
 			}
 		}
-		strong, standard := p.Tiers["strong"], p.Tiers["standard"]
-		if strong.Description == "" || standard.Description == "" {
-			t.Fatalf("seeded tiers say nothing of when to use them: %+v", p.Tiers)
+		// Core is the main chat's choice and dev the Agents'.
+		core, dev := p.Tiers["core"], p.Tiers["dev"]
+		if core.Description == "" || dev.Description == "" || len(p.Tiers) != 2 {
+			t.Fatalf("captured tiers lack descriptions: %+v", p.Tiers)
 		}
-		strong.Description, standard.Description = "", ""
-		if strong != (ModelTier{Launcher: "current", Model: "test-chat"}) || standard != (ModelTier{Launcher: "current", Model: "test-agents"}) {
+		core.Description, dev.Description = "", ""
+		// Each answers to its older name too, as a migrated one does (#15010).
+		if !core.equal(ModelTier{Launcher: "current", Model: "test-chat", Aliases: []string{"strong"}}) ||
+			!dev.equal(ModelTier{Launcher: "current", Model: "test-agents", Aliases: []string{"standard"}}) {
 			t.Fatalf("tiers are not the current configuration: %+v", p.Tiers)
 		}
 	}
 	after, n := profileStoreSnapshot(st.memStore)
 	delete(after, modelProfilesKey)
 	delete(after, modelProfileStateKey)
-	if !reflect.DeepEqual(before, after) || n != puts+2 { // the profiles and the state, in one transaction
-		t.Fatal("seeding reset model defaults or changed another setting")
+	if !reflect.DeepEqual(before, after) || n != puts+4 {
+		t.Fatal("capturing reset model defaults or changed another setting")
 	}
-	if f.eventTypes() != "" || len(f.managed) != 0 {
-		t.Fatal("seeding caused switch side effects")
+	if f.eventTypes() != "model_profile model_profile" || len(f.managed) != 0 {
+		t.Fatal("capturing did not publish catalog changes or pushed launcher settings")
 	}
 	before, puts = profileStoreSnapshot(st.memStore)
 	profilesOf(t, s)
@@ -114,7 +121,7 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 
 	// Capture changes only the selected profile, retaining its existing tier definitions.
 	if err := st.PutSetting(ctx, modelRecordKey("assistant"), modelRecord{Revision: 4,
-		Binding: ModelBinding{Provider: "launcher.current", Model: "test-later", Runtime: proto.AssistantRuntimeAgentSDK}}); err != nil {
+		Binding: ModelBinding{Provider: "launcher.current", Model: "test-later", ConfigDir: assistantConfigDirLegacy}}); err != nil {
 		t.Fatal(err)
 	}
 	customTiers := map[string]ModelTier{"custom": {Launcher: "current", Model: "test-custom"}}
@@ -124,13 +131,13 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	r := request(s, "PUT", "/api/v1/model-profiles/performance", `{"revision":2,"name":"Captured","capture":true}`)
+	r := request(s, "PUT", "/api/v1/model-profiles/performance", `{"revision":3,"name":"Captured","capture":true}`)
 	if r.Code != http.StatusOK {
 		t.Fatalf("capture: %d %s", r.Code, r.Body.String())
 	}
 	v = profilesOf(t, s)
 	if v.Profiles[0].Purposes["assistant"].Model != "test-later" ||
-		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != seededProfile {
+		!reflect.DeepEqual(v.Profiles[0].Tiers, customTiers) || v.Profiles[1].Purposes["assistant"].Model != "test-chat" || v.Active != "" {
 		t.Fatalf("capture applied or overwrote other profile data: %+v", v)
 	}
 	if got, err := s.modelRecord(ctx, "assistant"); err != nil || got.Binding.Model != "test-later" || got.Revision != 4 {
@@ -138,7 +145,7 @@ func TestModelProfilesSeedAndCaptureCurrentConfiguration(t *testing.T) {
 	}
 }
 
-func TestModelProfileSwitchRollbackPreservesSecretsAndRuntime(t *testing.T) {
+func TestModelProfileSwitchRollbackPreservesSecretsAndNewConversationProfile(t *testing.T) {
 	s, f, st := modelService(t)
 	ctx := context.Background()
 	sealed, err := s.sealKey("test-key")
@@ -160,7 +167,7 @@ func TestModelProfileSwitchRollbackPreservesSecretsAndRuntime(t *testing.T) {
 		Models: []proto.ProviderModel{{ID: "test-original"}}}, KeySealed: sealed, HeadersSealed: headers, EnvSealed: env,
 		Preset: "test-preset", DisplayName: "Current gateway", Created: time.Now().UTC()}
 	putLaunchers(t, s, l)
-	original := modelRecord{Revision: 7, Binding: ModelBinding{Provider: "launcher.gw", Model: "test-chat", Runtime: proto.AssistantRuntimeAgentSDK}}
+	original := modelRecord{Revision: 7, Binding: ModelBinding{Provider: "launcher.gw", Model: "test-chat", ConfigDir: assistantConfigDirLegacy}}
 	if err := st.PutSetting(ctx, modelRecordKey("assistant"), original); err != nil {
 		t.Fatal(err)
 	}
@@ -177,8 +184,8 @@ func TestModelProfileSwitchRollbackPreservesSecretsAndRuntime(t *testing.T) {
 		t.Fatalf("changes: %+v", sw)
 	}
 	r, err := s.modelRecord(ctx, "assistant")
-	if err != nil || r.Revision != 8 || r.Binding != (ModelBinding{Model: "test-selected", Runtime: proto.AssistantRuntimeAgentSDK}) {
-		t.Fatalf("switch lost model-only inheritance or runtime: %+v %v", r, err)
+	if err != nil || r.Revision != 8 || r.Binding != (ModelBinding{Provider: "launcher.gw", Model: "test-selected", ConfigDir: assistantConfigDirLegacy}) {
+		t.Fatalf("switch did not migrate legacy model-only binding or lost the new conversations' profile: %+v %v", r, err)
 	}
 	got := s.storedLaunchers(ctx)[0]
 	want := l
@@ -218,8 +225,8 @@ func TestModelProfileSwitchRollbackPreservesSecretsAndRuntime(t *testing.T) {
 	}
 	f.mu.Unlock()
 
-	// Runtime and credentials edited after the switch must survive rollback and redo.
-	r.Binding.Runtime = ""
+	// The new conversations' profile and credentials edited after the switch must survive rollback and redo.
+	r.Binding.ConfigDir = ""
 	if err := st.PutSetting(ctx, modelRecordKey("assistant"), r); err != nil {
 		t.Fatal(err)
 	}
@@ -234,13 +241,13 @@ func TestModelProfileSwitchRollbackPreservesSecretsAndRuntime(t *testing.T) {
 			t.Fatal(err)
 		}
 		r, err = s.modelRecord(ctx, "assistant")
-		if err != nil || r.Binding.Runtime != "" {
-			t.Fatalf("rollback restored obsolete runtime: %+v %v", r, err)
+		if err != nil || r.Binding.ConfigDir != "" {
+			t.Fatalf("rollback restored an obsolete profile for new conversations: %+v %v", r, err)
 		}
 		wantBinding, wantModel := original.Binding, l.Model
-		wantBinding.Runtime = ""
+		wantBinding.ConfigDir = ""
 		if redo {
-			wantBinding, wantModel = ModelBinding{Model: "test-selected"}, "test-economy"
+			wantBinding, wantModel = ModelBinding{Provider: "launcher.gw", Model: "test-selected"}, "test-economy"
 		}
 		if r.Binding != wantBinding {
 			t.Fatalf("rollback/redo binding: %+v", r.Binding)
@@ -270,16 +277,16 @@ func TestModelProfilesInheritedOverridesAndValidation(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		b         ModelBinding
+		want      ModelBinding
 		api       string
 		wantError bool
 	}{
-		{"inherited model", ModelBinding{Model: "test-selected"}, "responses", false},
-		{"inherited effort", ModelBinding{Effort: "high"}, "responses", false},
-		{"messages effort", ModelBinding{Effort: "high"}, "messages", false},
-		{"chat effort", ModelBinding{Effort: "high"}, "chat", true},
-		{"missing provider", ModelBinding{Provider: "launcher.missing", Model: "test-selected"}, "responses", true},
-		{"bad effort", ModelBinding{Effort: "invalid"}, "responses", true},
-		{"runtime", ModelBinding{Runtime: proto.AssistantRuntimeAgentSDK}, "responses", true},
+		{"inherited model", ModelBinding{Model: "test-selected"}, ModelBinding{Provider: "legacy.triage", Model: "test-selected"}, "responses", false},
+		{"inherited effort", ModelBinding{Effort: "high"}, ModelBinding{Effort: "high"}, "responses", false},
+		{"messages effort", ModelBinding{Effort: "high"}, ModelBinding{Effort: "high"}, "messages", false},
+		{"chat effort", ModelBinding{Effort: "high"}, ModelBinding{Effort: "high"}, "chat", false},
+		{"missing provider", ModelBinding{Provider: "launcher.missing", Model: "test-selected"}, ModelBinding{}, "responses", true},
+		{"bad effort", ModelBinding{Effort: "invalid"}, ModelBinding{}, "responses", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s, f, st := modelService(t)
@@ -296,8 +303,8 @@ func TestModelProfilesInheritedOverridesAndValidation(t *testing.T) {
 				if f.eventTypes() != "" {
 					t.Fatal("failed validation broadcast an event")
 				}
-			} else if r, err := s.modelRecord(ctx, "inbox.triage"); err != nil || r.Binding != tt.b {
-				t.Fatalf("model-only override: %+v %v", r, err)
+			} else if r, err := s.modelRecord(ctx, "inbox.triage"); err != nil || r.Binding != tt.want {
+				t.Fatalf("binding = %+v, want %+v (err=%v)", r, tt.want, err)
 			}
 		})
 	}
@@ -332,44 +339,46 @@ type nonAtomicProfileStore struct{ Store }
 
 func TestModelProfilesFailuresAreAtomicAndPropagated(t *testing.T) {
 	ctx := context.Background()
-	for _, operation := range []string{"view", "capture", "switch", "rollback", "save", "delete"} {
-		for _, failure := range []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant"), "write", "non-atomic"} {
-			if operation == "rollback" && failure == modelProfilesKey || operation == "delete" && (failure == launchersManagedKey || failure == modelRecordKey("assistant")) ||
-				(operation == "save" || operation == "delete") && failure == modelRecordKey("assistant") || operation == "capture" && (failure == modelProfilesKey || failure == modelProfileStateKey || failure == "write" || failure == "non-atomic") {
-				continue
-			}
-			t.Run(operation+"/"+failure, func(t *testing.T) {
+	for _, tc := range []struct {
+		operation string
+		failures  []string
+	}{
+		{"view", []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant")}},
+		{"capture", []string{launchersManagedKey, modelRecordKey("assistant")}},
+		{"switch", []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant"), "write", "non-atomic"}},
+		{"rollback", []string{modelProfileStateKey, launchersManagedKey, modelRecordKey("assistant"), "write", "non-atomic"}},
+		{"save", []string{modelProfilesKey, modelProfileStateKey, launchersManagedKey, "write", "non-atomic"}},
+		{"delete", []string{modelProfilesKey, modelProfileStateKey, "write", "non-atomic"}},
+		{"deactivate", []string{modelProfileStateKey, "write", "non-atomic"}},
+		{"clear", []string{modelProfilesKey, modelProfileStateKey, "write", "non-atomic"}},
+	} {
+		for _, failure := range tc.failures {
+			t.Run(tc.operation+"/"+failure, func(t *testing.T) {
 				s, f, st := modelService(t)
 				f.hello.Models.AI = ai.Config{API: "responses", BaseURL: "https://example.invalid", APIKey: "test-key", Model: "test-original"}
 				putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", Model: "test-original"}})
 				storeProfiles(t, st, ModelProfile{ID: "selected", Name: "Selected", Purposes: map[string]ModelBinding{"assistant": {Model: "test-selected"}},
 					Launchers: map[string]LauncherModels{"gw": {Model: profileValue("test-selected")}}})
-				if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "another", Previous: &modelProfileImage{Profile: "before",
+				if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "selected", Previous: &modelProfileImage{Profile: "before",
 					Purposes: map[string]ModelBinding{"assistant": {Model: "test-before"}}, Launchers: map[string]LauncherModels{"gw": {Model: profileValue("test-before")}}}}); err != nil {
 					t.Fatal(err)
 				}
 				failed := errors.New("test database failure")
 				failing := &profileFailureStore{memStore: st.memStore, readError: failed}
-				s.store = func() Store { return failing }
+				s.setStore(func() Store { return failing })
 				switch failure {
 				case "write":
 					failing.writeError = failed
 				case "non-atomic":
-					s.store = func() Store { return nonAtomicProfileStore{Store: failing} }
+					s.setStore(func() Store { return nonAtomicProfileStore{Store: failing} })
 				default:
 					failing.readKey = failure
-				}
-				// View reads existing profiles, so explicitly force seeding for atomic-write failures.
-				if operation == "view" && (failure == "write" || failure == "non-atomic") {
-					st.memStore.mu.Lock()
-					delete(st.vals, modelProfilesKey)
-					st.memStore.mu.Unlock()
 				}
 				before, puts := profileStoreSnapshot(st.memStore)
 				cached := &prompts.Snapshot{Now: time.Now(), Zone: "UTC"}
 				s.live.snap = cached
 				var err error
-				switch operation {
+				switch tc.operation {
 				case "view":
 					_, err = s.modelProfilesView(ctx)
 				case "capture":
@@ -382,6 +391,10 @@ func TestModelProfilesFailuresAreAtomicAndPropagated(t *testing.T) {
 					_, err = s.saveModelProfile(ctx, nil, "selected", ProfileActor{}, func(p *ModelProfile, _ bool) error { p.Name = "Edited"; return nil })
 				case "delete":
 					err = s.deleteModelProfile(ctx, nil, "selected", ProfileActor{})
+				case "deactivate":
+					err = s.deactivateModelProfile(ctx, ProfileActor{})
+				case "clear":
+					err = s.clearModelProfiles(ctx, nil, ProfileActor{})
 				}
 				want := failed
 				if failure == "non-atomic" {
@@ -417,7 +430,7 @@ func TestModelProfileMissingLauncherRejectedBeforeTransaction(t *testing.T) {
 					t.Fatal(err)
 				}
 				fs := &profileFailureStore{memStore: st.memStore}
-				s.store = func() Store { return fs }
+				s.setStore(func() Store { return fs })
 				before, puts := profileStoreSnapshot(st.memStore)
 				var err error
 				if rollback {
@@ -439,9 +452,9 @@ func TestModelProfileMissingLauncherRejectedBeforeTransaction(t *testing.T) {
 
 func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 	s, _, st := modelService(t)
-	profilesOf(t, s)
 	for _, path := range []string{"GET /api/v1/model-profiles", "PUT /api/v1/model-profiles/{id}", "DELETE /api/v1/model-profiles/{id}",
-		"POST /api/v1/model-profiles/{id}/apply", "POST /api/v1/model-profiles/rollback"} {
+		"DELETE /api/v1/model-profiles", "POST /api/v1/model-profiles/{id}/apply",
+		"POST /api/v1/model-profiles/rollback", "POST /api/v1/model-profiles/deactivate"} {
 		if !slices.Contains(s.Routes(), path) {
 			t.Fatalf("unregistered route: %s", path)
 		}
@@ -451,11 +464,13 @@ func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 		status             int
 	}{
 		{"PUT", "/api/v1/model-profiles/custom", `{"name":"Custom"}`, 400},
-		{"PUT", "/api/v1/model-profiles/custom", `{"revision":0,"name":"Custom"}`, 409},
-		{"PUT", "/api/v1/model-profiles/custom", `{"revision":1,"name":"Custom","api_key":"secret"}`, 400},
-		{"PUT", "/api/v1/model-profiles/rollback", `{"revision":1,"name":"Invalid"}`, 400},
+		{"PUT", "/api/v1/model-profiles/custom", `{"revision":1,"name":"Custom"}`, 409},
+		{"PUT", "/api/v1/model-profiles/custom", `{"revision":0,"name":"Custom","api_key":"secret"}`, 400},
+		{"PUT", "/api/v1/model-profiles/rollback", `{"revision":0,"name":"Invalid"}`, 400},
 		{"POST", "/api/v1/model-profiles/missing/apply", "", 404},
 		{"POST", "/api/v1/model-profiles/rollback", "", 409},
+		{"DELETE", "/api/v1/model-profiles?revision=invalid", "", 400},
+		{"DELETE", "/api/v1/model-profiles?revision=-1", "", 400},
 	} {
 		before, puts := profileStoreSnapshot(st.memStore)
 		r := request(s, tt.method, tt.path, tt.body)
@@ -465,12 +480,14 @@ func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 		requireProfileStoreUnchanged(t, st.memStore, before, puts)
 	}
 	for _, lang := range i18n.Langs {
-		for _, method := range []string{"PUT", "DELETE", "POST"} {
-			path := "/api/v1/model-profiles/performance"
-			if method == "POST" {
-				path += "/apply"
-			}
-			res, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{Method: method, Path: path,
+		for _, route := range []struct{ method, path string }{
+			{"PUT", "/api/v1/model-profiles/performance"},
+			{"DELETE", "/api/v1/model-profiles/performance"},
+			{"DELETE", "/api/v1/model-profiles"},
+			{"POST", "/api/v1/model-profiles/performance/apply"},
+			{"POST", "/api/v1/model-profiles/deactivate"},
+		} {
+			res, err := serveHTTP(context.Background(), s, assistantwire.HTTPRequest{Method: route.method, Path: route.path,
 				Header: map[string][]string{RoleHeader: {"answer"}, "Accept-Language": {string(lang)}},
 				Body:   json.RawMessage(`{"revision":1,"name":"Edited"}`)}, s.lang)
 			if err != nil {
@@ -481,18 +498,18 @@ func TestModelProfilesRoutesRolesRevisionsAndLocales(t *testing.T) {
 			}
 		}
 	}
-	if r := request(s, "PUT", "/api/v1/model-profiles/custom", `{"revision":1,"name":"Custom","purposes":{"agent.new":{"model":"test-inherited"}}}`); r.Code != 200 {
+	if r := request(s, "PUT", "/api/v1/model-profiles/custom", `{"revision":0,"name":"Custom","purposes":{"agent.new":{"model":"test-inherited"}}}`); r.Code != 200 {
 		t.Fatalf("saving inherited model-only override: %d %s", r.Code, r.Body.String())
 	}
-	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=1", ""); r.Code != 409 {
+	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=0", ""); r.Code != 409 {
 		t.Fatalf("stale delete: %d %s", r.Code, r.Body.String())
 	}
-	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=2", ""); r.Code != 200 {
+	if r := request(s, "DELETE", "/api/v1/model-profiles/custom?revision=1", ""); r.Code != 200 {
 		t.Fatalf("delete: %d %s", r.Code, r.Body.String())
 	}
 }
 
-func TestModelProfileInitialFailureDoesNotSeedTemplates(t *testing.T) {
+func TestUnconfiguredModelProfileFailureDoesNotWrite(t *testing.T) {
 	s, _, st := modelService(t)
 	before, puts := profileStoreSnapshot(st.memStore)
 	if _, err := s.applyModelProfile(context.Background(), "missing", ProfileActor{}); !errors.Is(err, errModelProfileNotFound) {
@@ -540,7 +557,7 @@ func TestModelProfileAtomicMemoryStoreAndDownStore(t *testing.T) {
 func TestModelProfileRollbackNoOpPreservesPreviousAndCaches(t *testing.T) {
 	s, f, st := modelService(t)
 	ctx := context.Background()
-	binding := ModelBinding{Model: "test-current", Runtime: proto.AssistantRuntimeAgentSDK}
+	binding := ModelBinding{Model: "test-current", ConfigDir: assistantConfigDirLegacy}
 	if err := st.PutSetting(ctx, modelRecordKey("assistant"), modelRecord{Revision: 4, Binding: binding}); err != nil {
 		t.Fatal(err)
 	}
@@ -582,6 +599,33 @@ func TestModelProfileCaptureDirectAPIAndUnrelatedLaunchers(t *testing.T) {
 	}
 }
 
+func TestModelProfileCaptureDoesNotTurnMissingAliasesIntoClears(t *testing.T) {
+	s, _, store := modelService(t)
+	ctx := t.Context()
+	launcher := storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "work", Model: "vendor/main", SonnetModel: "vendor/standard"}}
+	putLaunchers(t, s, launcher)
+	if err := s.saveModel(ctx, "agent.new", modelRecord{Binding: ModelBinding{Provider: "launcher.work"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, launchers, _, err := s.captureModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := launchers["work"]
+	if models.SonnetModel == nil || *models.SonnetModel != "vendor/standard" || models.OpusModel != nil || models.FableModel != nil {
+		t.Fatal("capture did not distinguish configured aliases from missing aliases")
+	}
+	storeProfiles(t, store, ModelProfile{ID: "captured", Name: "Captured", Launchers: launchers})
+	launcher.OpusModel = "vendor/strong"
+	putLaunchers(t, s, launcher)
+	if _, err := s.applyModelProfile(ctx, "captured", ProfileActor{Kind: "hub"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.storedLaunchers(ctx)[0].OpusModel; got != "vendor/strong" {
+		t.Fatalf("profile switch erased alias set after capture: %s", got)
+	}
+}
+
 func TestModelProfileSwitchAllowsMessagesEffort(t *testing.T) {
 	for _, tc := range []struct{ name, api, effort string }{
 		{name: "messages", api: "messages", effort: "low"},
@@ -616,7 +660,7 @@ func TestModelProfileUnrelatedDefaultsStayIntact(t *testing.T) {
 	ctx := context.Background()
 	f.hello.Models.AI = ai.Config{API: "responses", BaseURL: "https://example.invalid", APIKey: "test-key", Model: "test-default"}
 	for id, b := range map[string]ModelBinding{
-		"assistant":      {Provider: "launcher.claude", Model: "test-current-sol", Runtime: proto.AssistantRuntimeAgentSDK},
+		"assistant":      {Provider: "launcher.claude", Model: "test-current-sol", ConfigDir: assistantConfigDirLegacy},
 		"agent.new":      {Provider: "launcher.claude", Model: "test-new-sol"},
 		"agent.delegate": {Model: "test-delegate"},
 	} {
@@ -688,22 +732,23 @@ func (st *recordReadStore) takeReads() map[string]int {
 // countRecordReads makes s read its settings through a recordReadStore on st.
 func countRecordReads(s *Service, st *downStore) *recordReadStore {
 	counter := &recordReadStore{downStore: st, reads: map[string]int{}}
-	s.store = func() Store { return counter }
+	s.setStore(func() Store { return counter })
 	return counter
 }
 
 // storeManyProfiles stores a record for every category and n profiles that each name every category: the even ones
-// as the records are (the main chat's runtime aside), the odd ones with other kb and agent.delegate choices. It
-// returns the Changes each profile's view shows.
+// as the records are (the main chat's profile for new conversations aside), the odd ones with other kb and
+// agent.delegate choices. It returns the Changes each profile's view shows.
 func storeManyProfiles(tb testing.TB, st *downStore, n int) [][]string {
 	tb.Helper()
 	ctx := context.Background()
 	records := map[string]ModelBinding{
-		"assistant":      {Provider: "launcher.current", Model: "test-chat", Runtime: proto.AssistantRuntimeAgentSDK},
+		"assistant":      {Provider: "launcher.current", Model: "test-chat", ConfigDir: assistantConfigDirLegacy},
 		"agent.new":      {Provider: "launcher.current", Model: "test-agents"},
 		"kb":             {Model: "test-kb"},
 		"inbox.triage":   {Effort: "high"},
 		"agent.delegate": {Model: "test-delegate"},
+		"translate":      {Model: "test-translation"},
 	}
 	for id, b := range records {
 		if err := st.PutSetting(ctx, modelRecordKey(id), modelRecord{Revision: 2, Binding: b}); err != nil {
@@ -763,26 +808,21 @@ func TestModelProfilesViewReadsEachRecordOnce(t *testing.T) {
 		t.Fatalf("changes = %v, %v", v.Profiles[0].Changes, v.Profiles[1].Changes)
 	}
 
-	// Seeding captures every record once for the templates (inbox.triage once more: agent.delegate's default is resolved
-	// from its connection), then the view reads each once to compare the two templates with it.
+	// An explicit capture reads every record once (inbox.triage twice more for the delegation and translation defaults).
 	s, _, st = modelService(t)
 	counter = countRecordReads(s, st)
-	capture := map[string]int{"assistant": 1, "agent.new": 1, "kb": 1, "inbox.triage": 2, "agent.delegate": 1}
+	capture := map[string]int{"assistant": 1, "agent.new": 1, "kb": 1, "inbox.triage": 3, "agent.delegate": 1, "translate": 1}
 	if _, _, _, err := s.captureModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if reads := counter.takeReads(); !maps.Equal(reads, capture) {
 		t.Fatalf("capture record reads = %v, want %v", reads, capture)
 	}
-	if v := profilesOf(t, s); len(v.Profiles) != 2 || len(v.Profiles[0].Changes) != 0 || len(v.Profiles[1].Changes) != 0 {
-		t.Fatalf("seeded view: %+v", v.Profiles)
+	if v := profilesOf(t, s); len(v.Profiles) != 0 {
+		t.Fatalf("unconfigured view: %+v", v.Profiles)
 	}
-	seed := maps.Clone(capture)
-	for id := range seed {
-		seed[id]++
-	}
-	if reads := counter.takeReads(); !maps.Equal(reads, seed) {
-		t.Fatalf("seeding view record reads = %v, want %v", reads, seed)
+	if reads := counter.takeReads(); len(reads) != 0 {
+		t.Fatalf("empty profile view read live model records: %v", reads)
 	}
 }
 
@@ -809,4 +849,532 @@ func BenchmarkModelProfilesView(b *testing.B) {
 			b.ReportMetric(float64(reads)/float64(b.N), "record-reads/op")
 		})
 	}
+}
+
+func TestModelProfileRoundTripRollbackPreservesPreSwitchConfig(t *testing.T) {
+	t.Run("identical stale templates A->B->A step-by-step rollback", func(t *testing.T) {
+		s, _, st := modelService(t)
+		ctx := context.Background()
+		key, err := s.sealKey("test-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		putLaunchers(t, s, storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "gw", API: "messages", Model: "test-default", BaseURL: "https://example.invalid"},
+			KeySealed:       key,
+		})
+		// Store legacy templates with explicit empty bindings, as installed hubs did in #14060.
+		purposes, launchers, tiers, err := s.captureModels(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		storeProfiles(t, st, ModelProfile{ID: "performance", Name: "Performance", Purposes: purposes, Launchers: launchers, Tiers: tiers},
+			ModelProfile{ID: "economy", Name: "Economy", Purposes: purposes, Launchers: launchers, Tiers: tiers})
+		if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "performance"}); err != nil {
+			t.Fatal(err)
+		}
+		// User customizes five live categories without updating the stale templates.
+		live0 := map[string]ModelBinding{
+			"assistant":      {Provider: "launcher.gw", Model: "live-chat"},
+			"agent.new":      {Provider: "launcher.gw", Model: "live-agents"},
+			"kb":             {Provider: "launcher.gw", Model: "live-kb"},
+			"inbox.triage":   {Provider: "launcher.gw", Model: "live-triage", Effort: "off"},
+			"agent.delegate": {Provider: "launcher.gw", Model: "live-delegate"},
+		}
+		for id, b := range live0 {
+			if err := st.PutSetting(ctx, modelRecordKey(id), modelRecord{Revision: 3, Binding: b}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Quick round-trip switch: performance -> economy -> performance overwrites all 5 purposes with empty bindings.
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/economy/apply", ""); r.Code != http.StatusOK {
+			t.Fatalf("apply economy: %d %s", r.Code, r.Body.String())
+		}
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/performance/apply", ""); r.Code != http.StatusOK {
+			t.Fatalf("apply performance: %d %s", r.Code, r.Body.String())
+		}
+		for id := range live0 {
+			if got, err := s.modelRecord(ctx, id); err != nil || got.Binding != (ModelBinding{}) {
+				t.Fatalf("expected stale template to clear %s, got %+v (%v)", id, got, err)
+			}
+		}
+
+		v := profilesOf(t, s)
+		if v.Active != "performance" || len(v.Rollbacks) != 2 || v.Rollback == nil {
+			t.Fatalf("expected 2 rollback points after A->B->A: %+v", v)
+		}
+		if v.Rollbacks[0].To != "economy" || len(v.Rollbacks[0].Changes) != 0 ||
+			v.Rollbacks[1].To != "performance" || !slices.Equal(v.Rollbacks[1].Changes, []string{"agent.delegate", "agent.new", "assistant", "inbox.triage", "kb"}) {
+			t.Fatalf("unexpected rollback previews: %+v", v.Rollbacks)
+		}
+
+		// Step-by-step rollback through the existing body-less endpoint restores economy, then original live0.
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/rollback", ""); r.Code != http.StatusOK {
+			t.Fatalf("first rollback: %d %s", r.Code, r.Body.String())
+		}
+		v = profilesOf(t, s)
+		if v.Active != "economy" || len(v.Rollbacks) != 1 || v.Rollback == nil || v.Rollback.To != "performance" || len(v.Rollback.Changes) != 5 {
+			t.Fatalf("after first rollback: %+v", v)
+		}
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/rollback", ""); r.Code != http.StatusOK {
+			t.Fatalf("second rollback: %d %s", r.Code, r.Body.String())
+		}
+		v = profilesOf(t, s)
+		if v.Active != "performance" || v.Rollback == nil || !v.Rollback.Redo {
+			t.Fatalf("after second rollback: %+v", v)
+		}
+		for id, want := range live0 {
+			if got, err := s.modelRecord(ctx, id); err != nil || got.Binding != want {
+				t.Fatalf("pre-switch %s not restored: got %+v, want %+v (%v)", id, got, want, err)
+			}
+		}
+	})
+
+	t.Run("distinct templates direct jump composes purposes and launcher fields", func(t *testing.T) {
+		s, _, st := modelService(t)
+		ctx := context.Background()
+		key, err := s.sealKey("test-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		putLaunchers(t, s, storedLauncher{
+			ManagedLauncher: proto.ManagedLauncher{Name: "gw", API: "messages", Model: "live-gw", SmallModel: "live-small", BaseURL: "https://example.invalid"},
+			KeySealed:       key,
+		})
+		live0 := map[string]ModelBinding{
+			"assistant": {Provider: "launcher.gw", Model: "live-chat"},
+			"agent.new": {Provider: "launcher.gw", Model: "live-agent"},
+			"kb":        {Provider: "launcher.gw", Model: "live-kb"},
+		}
+		for id, b := range live0 {
+			if err := st.PutSetting(ctx, modelRecordKey(id), modelRecord{Revision: 2, Binding: b}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		storeProfiles(t, st,
+			ModelProfile{
+				ID: "performance", Name: "Performance",
+				Purposes:  map[string]ModelBinding{"assistant": {Provider: "launcher.gw", Model: "perf-chat"}, "agent.new": {Provider: "launcher.gw", Model: "perf-agent"}},
+				Launchers: map[string]LauncherModels{"gw": {SmallModel: profileValue("perf-small")}},
+			},
+			ModelProfile{
+				ID: "economy", Name: "Economy",
+				Purposes:  map[string]ModelBinding{"assistant": {Provider: "launcher.gw", Model: "econ-chat"}, "kb": {Provider: "launcher.gw", Model: "econ-kb"}},
+				Launchers: map[string]LauncherModels{"gw": {Model: profileValue("econ-gw")}},
+			},
+		)
+		if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{Active: "performance"}); err != nil {
+			t.Fatal(err)
+		}
+
+		// performance (live0) -> economy -> performance (stale perf) touches overlapping and disjoint fields.
+		if _, err := s.applyModelProfile(ctx, "economy", ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.applyModelProfile(ctx, "performance", ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		v := profilesOf(t, s)
+		if len(v.Rollbacks) != 2 {
+			t.Fatalf("rollbacks = %+v, want 2", v.Rollbacks)
+		}
+		oldest := v.Rollbacks[1]
+		wantChanges := []string{"agent.new", "assistant", "kb", "gw.model", "gw.small_model"}
+		if oldest.To != "performance" || !slices.Equal(oldest.Changes, wantChanges) {
+			t.Fatalf("composed rollback preview = %+v, want To=performance Changes=%v", oldest, wantChanges)
+		}
+
+		// Jump directly to the pre-round-trip point with an extra unknown optional field from a newer client.
+		body := fmt.Sprintf(`{"id":%q,"future_client_hint":"v2"}`, oldest.ID)
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/rollback", body); r.Code != http.StatusOK {
+			t.Fatalf("direct rollback: %d %s", r.Code, r.Body.String())
+		}
+		for id, want := range live0 {
+			if got, err := s.modelRecord(ctx, id); err != nil || got.Binding != want {
+				t.Fatalf("direct rollback %s = %+v, want %+v (%v)", id, got, want, err)
+			}
+		}
+		gw := s.storedLaunchers(ctx)[0]
+		if gw.Model != "live-gw" || gw.SmallModel != "live-small" {
+			t.Fatalf("direct rollback launcher = %+v, want live-gw/live-small", gw.ManagedLauncher)
+		}
+		// A second rollback redoes back to the post-switch state cleanly.
+		if _, err := s.rollbackModelProfile(ctx, ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.modelRecord(ctx, "assistant"); got.Binding.Model != "perf-chat" {
+			t.Fatalf("redo assistant = %+v, want perf-chat", got)
+		}
+		if got, _ := s.modelRecord(ctx, "kb"); got.Binding.Model != "econ-kb" {
+			t.Fatalf("redo kb = %+v, want econ-kb", got)
+		}
+	})
+
+	t.Run("new forward switch clears redo entry", func(t *testing.T) {
+		s, _, st := modelService(t)
+		ctx := context.Background()
+		putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", Model: "live-model"}})
+		storeProfiles(t, st,
+			ModelProfile{ID: "economy", Name: "Economy", Launchers: map[string]LauncherModels{"gw": {Model: profileValue("econ-model")}}},
+			ModelProfile{ID: "budget", Name: "Budget", Launchers: map[string]LauncherModels{"gw": {Model: profileValue("budget-model")}}},
+		)
+		if _, err := s.applyModelProfile(ctx, "economy", ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.rollbackModelProfile(ctx, ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		if v := profilesOf(t, s); v.Rollback == nil || !v.Rollback.Redo {
+			t.Fatalf("expected redo entry after rolling back only switch: %+v", v)
+		}
+		if _, err := s.applyModelProfile(ctx, "budget", ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		v := profilesOf(t, s)
+		if len(v.Rollbacks) != 1 || v.Rollbacks[0].Redo || v.Rollbacks[0].To != "" {
+			t.Fatalf("expected forward switch to replace redo branch: %+v", v.Rollbacks)
+		}
+		if _, err := s.rollbackModelProfile(ctx, ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := s.storedLaunchers(ctx)[0].Model; got != "live-model" {
+			t.Fatalf("rollback after forward switch restored %q, want live-model", got)
+		}
+	})
+
+	t.Run("legacy Previous-only storage and unknown rollback id", func(t *testing.T) {
+		s, _, st := modelService(t)
+		ctx := context.Background()
+		putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", Model: "after"}})
+		if err := st.PutSetting(ctx, modelProfileStateKey, modelProfileState{
+			Active: "economy",
+			Previous: &modelProfileImage{
+				Profile:   "performance",
+				At:        time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC),
+				Launchers: map[string]LauncherModels{"gw": {Model: profileValue("before")}},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		v := profilesOf(t, s)
+		if v.Rollback == nil || v.Rollback.ID != legacyRollbackID || len(v.Rollbacks) != 1 || v.Rollbacks[0].To != "performance" {
+			t.Fatalf("legacy Previous view: %+v", v)
+		}
+		before, puts := profileStoreSnapshot(st.memStore)
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/rollback", `{"id":"missing"}`); r.Code != http.StatusConflict {
+			t.Fatalf("unknown rollback id: %d %s", r.Code, r.Body.String())
+		}
+		requireProfileStoreUnchanged(t, st.memStore, before, puts)
+		if r := request(s, http.MethodPost, "/api/v1/model-profiles/rollback", `{"id":"previous"}`); r.Code != http.StatusOK {
+			t.Fatalf("legacy rollback id: %d %s", r.Code, r.Body.String())
+		}
+		if got := s.storedLaunchers(ctx)[0].Model; got != "before" {
+			t.Fatalf("legacy rollback model = %q, want before", got)
+		}
+	})
+}
+
+func TestModelProfileRollbackHistoryBounded(t *testing.T) {
+	s, _, st := modelService(t)
+	ctx := context.Background()
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", Model: "m-0"}})
+	profiles := make([]ModelProfile, 0, maxProfileRollbacks+4)
+	for i := 1; i <= maxProfileRollbacks+4; i++ {
+		profiles = append(profiles, ModelProfile{
+			ID:        fmt.Sprintf("p%d", i),
+			Name:      fmt.Sprintf("Profile %d", i),
+			Launchers: map[string]LauncherModels{"gw": {Model: profileValue(fmt.Sprintf("m-%d", i))}},
+		})
+	}
+	storeProfiles(t, st, profiles...)
+	var droppedID string
+	for i := 1; i <= maxProfileRollbacks+4; i++ {
+		if _, err := s.applyModelProfile(ctx, fmt.Sprintf("p%d", i), ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatalf("switch %d: %v", i, err)
+		}
+		if i == 1 {
+			droppedID = profilesOf(t, s).Rollbacks[0].ID
+		}
+	}
+	state, err := s.readModelProfileState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Rollbacks) != maxProfileRollbacks {
+		t.Fatalf("stored rollbacks = %d, want %d", len(state.Rollbacks), maxProfileRollbacks)
+	}
+	if state.Previous == nil || state.Previous.ID != state.Rollbacks[maxProfileRollbacks-1].ID {
+		t.Fatalf("Previous out of sync with top rollback: prev=%+v top=%+v", state.Previous, state.Rollbacks[maxProfileRollbacks-1])
+	}
+	v := profilesOf(t, s)
+	if len(v.Rollbacks) != maxProfileRollbacks || v.Rollback == nil || v.Rollback.ID != v.Rollbacks[0].ID {
+		t.Fatalf("view rollbacks = %d, want %d", len(v.Rollbacks), maxProfileRollbacks)
+	}
+	// Evicted rollback ID is rejected cleanly with 409.
+	if r := request(s, http.MethodPost, "/api/v1/model-profiles/rollback", fmt.Sprintf(`{"id":%q}`, droppedID)); r.Code != http.StatusConflict {
+		t.Fatalf("evicted rollback id %q: %d %s", droppedID, r.Code, r.Body.String())
+	}
+	// Unwinding all maxProfileRollbacks steps reaches m-4 (the state before switch 5).
+	for step := maxProfileRollbacks + 3; step >= 4; step-- {
+		if _, err := s.rollbackModelProfile(ctx, ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatalf("rollback to m-%d: %v", step, err)
+		}
+		if got := s.storedLaunchers(ctx)[0].Model; got != fmt.Sprintf("m-%d", step) {
+			t.Fatalf("after rollback got %q, want m-%d", got, step)
+		}
+	}
+}
+
+func TestPresetHostProfileRoundTrip(t *testing.T) {
+	s, _, _ := modelService(t)
+	for _, tc := range []struct {
+		name, fields, want string
+		status             int
+	}{
+		{name: "set", fields: `,"host":" herdr "`, want: "herdr", status: http.StatusOK},
+		{name: "omit", want: "herdr", status: http.StatusOK},
+		{name: "invalid", fields: `,"host":"tmux"`, want: "herdr", status: http.StatusBadRequest},
+		{name: "clear", fields: `,"host":""`, status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"revision":%d,"name":"Host preset","tiers":{"agy-work":{"launcher":"agy"%s}}}`, profilesOf(t, s).Revision, tc.fields)
+			res := request(s, http.MethodPut, "/api/v1/model-profiles/host-preset", body)
+			if res.Code != tc.status {
+				t.Fatalf("PUT = %d %s, want %d", res.Code, res.Body, tc.status)
+			}
+			ps, _ := storedTiers(t, s)
+			tier, ok := tierOf(ps, "host-preset", "agy-work")
+			if !ok || tier.startHost() != tc.want {
+				t.Fatalf("stored tier = %+v, want host %q", tier, tc.want)
+			}
+		})
+	}
+}
+
+func TestModelProfilePutCrossVersionTolerantDecoding(t *testing.T) {
+	s, _, st := modelService(t)
+	key, err := s.sealKey("test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	putLaunchers(t, s, storedLauncher{
+		ManagedLauncher: proto.ManagedLauncher{Name: "gw", API: "messages", Model: "base-model", BaseURL: "https://example.invalid"},
+		KeySealed:       key,
+	})
+	v := profilesOf(t, s)
+
+	// Unknown optional fields from newer clients at top level, purposes, launchers, and tiers are ignored cleanly.
+	tolerantBody := fmt.Sprintf(`{
+		"revision": %d,
+		"name": "Cross Version",
+		"description": "Saved from newer client",
+		"schema_version": 2,
+		"ui_color": "amber",
+		"purposes": {
+			"assistant": {"provider": "launcher.gw", "model": "claude-opus-5-5", "effort": "high", "permission_mode": "auto", "thinking_budget": 4096, "future_flags": {"streaming": true}},
+			"kb": {"provider": "launcher.gw", "model": "claude-haiku-5-5", "future_opt": "ignored"}
+		},
+		"launchers": {
+			"gw": {"model": "base-model", "future_alias": "experimental"}
+		},
+		"tiers": {
+			"strong": {"launcher": "gw", "model": "claude-opus-5-5", "speed": "fast", "description": "Primary tier", "future_tier_opt": 123}
+		}
+	}`, v.Revision)
+	r := request(s, http.MethodPut, "/api/v1/model-profiles/cross", tolerantBody)
+	if r.Code != http.StatusOK {
+		t.Fatalf("tolerant PUT failed: %d %s", r.Code, r.Body.String())
+	}
+	rawStored := rawSetting(t, s, modelProfilesKey)
+	for _, unknown := range []string{"schema_version", "ui_color", "thinking_budget", "future_flags", "future_opt", "future_alias", "future_tier_opt"} {
+		if strings.Contains(rawStored, unknown) {
+			t.Fatalf("unknown field %q was persisted: %s", unknown, rawStored)
+		}
+	}
+	v = profilesOf(t, s)
+	idx := slices.IndexFunc(v.Profiles, func(p ModelProfileView) bool { return p.ID == "cross" })
+	if idx < 0 || v.Profiles[idx].Purposes["assistant"].Model != "claude-opus-5-5" ||
+		v.Profiles[idx].Purposes["assistant"].PermissionMode != "auto" ||
+		v.Profiles[idx].Tiers["core"].Speed != "fast" || !slices.Contains(v.Profiles[idx].Tiers["core"].Aliases, "strong") {
+		// a tier named strong is read back as core, with strong kept as its alias (#14700)
+		t.Fatalf("known fields lost on tolerant save: %+v", v.Profiles)
+	}
+
+	// Capture with unknown optional fields also succeeds.
+	captureBody := fmt.Sprintf(`{"revision":%d,"name":"Captured Future","capture":true,"future_capture_mode":"full"}`, v.Revision)
+	if r := request(s, http.MethodPut, "/api/v1/model-profiles/cross", captureBody); r.Code != http.StatusOK {
+		t.Fatalf("tolerant capture PUT failed: %d %s", r.Code, r.Body.String())
+	}
+	rev := profilesOf(t, s).Revision
+
+	// Invalid JSON, trailing junk, non-object shapes, invalid known fields, and forbidden credential/endpoint fields are rejected.
+	rejectCases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{"empty body", http.MethodPut, "/api/v1/model-profiles/cross", "", http.StatusBadRequest},
+		{"null body", http.MethodPut, "/api/v1/model-profiles/cross", "null", http.StatusBadRequest},
+		{"array body", http.MethodPut, "/api/v1/model-profiles/cross", "[]", http.StatusBadRequest},
+		{"malformed json", http.MethodPut, "/api/v1/model-profiles/cross", `{"revision":1,"name":"X"`, http.StatusBadRequest},
+		{"trailing junk", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X"} trailing`, rev), http.StatusBadRequest},
+		{"second json object", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X"}{"extra":1}`, rev), http.StatusBadRequest},
+		{"wrong revision type", http.MethodPut, "/api/v1/model-profiles/cross", `{"revision":"1","name":"X"}`, http.StatusBadRequest},
+		{"negative revision", http.MethodPut, "/api/v1/model-profiles/cross", `{"revision":-1,"name":"X"}`, http.StatusBadRequest},
+		{"wrong name type", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":123}`, rev), http.StatusBadRequest},
+		{"invalid effort with unknown field", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","future_opt":true,"purposes":{"assistant":{"provider":"launcher.gw","effort":"bogus"}}}`, rev), http.StatusBadRequest},
+		{"invalid speed with unknown field", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","future_opt":true,"tiers":{"strong":{"launcher":"gw","speed":"warp"}}}`, rev), http.StatusBadRequest},
+		{"invalid category with unknown field", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","future_opt":true,"purposes":{"unknown.cat":{"model":"m"}}}`, rev), http.StatusBadRequest},
+		{"config_dir still rejected", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","purposes":{"assistant":{"config_dir":"legacy"}}}`, rev), http.StatusBadRequest},
+		{"forbidden top-level api_key", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","api_key":"secret"}`, rev), http.StatusBadRequest},
+		{"forbidden uppercase API_KEY", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","API_KEY":"secret"}`, rev), http.StatusBadRequest},
+		{"forbidden nested launcher base_url", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","launchers":{"gw":{"model":"m","base_url":"https://evil.invalid"}}}`, rev), http.StatusBadRequest},
+		{"forbidden nested purpose token", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","purposes":{"assistant":{"model":"m","token":"secret"}}}`, rev), http.StatusBadRequest},
+		{"forbidden nested tier headers", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","tiers":{"strong":{"launcher":"gw","headers":"X-Key: 1"}}}`, rev), http.StatusBadRequest},
+		{"oversized body", http.MethodPut, "/api/v1/model-profiles/cross", fmt.Sprintf(`{"revision":%d,"name":"X","pad":%q}`, rev, strings.Repeat("a", 70<<10)), http.StatusRequestEntityTooLarge},
+		{"rollback malformed json", http.MethodPost, "/api/v1/model-profiles/rollback", `{bad`, http.StatusBadRequest},
+		{"rollback null body", http.MethodPost, "/api/v1/model-profiles/rollback", `null`, http.StatusBadRequest},
+		{"rollback trailing junk", http.MethodPost, "/api/v1/model-profiles/rollback", `{} extra`, http.StatusBadRequest},
+	}
+	for _, tc := range rejectCases {
+		t.Run(tc.name, func(t *testing.T) {
+			before, puts := profileStoreSnapshot(st.memStore)
+			res := request(s, tc.method, tc.path, tc.body)
+			if res.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", res.Code, tc.status, res.Body.String())
+			}
+			requireProfileStoreUnchanged(t, st.memStore, before, puts)
+		})
+	}
+}
+
+func TestModelProfileLegacyModelOnlyBindingMigration(t *testing.T) {
+	t.Run("display save capture apply and rollback normalize legacy model-only bindings", func(t *testing.T) {
+		s, _, st := modelService(t)
+		ctx := context.Background()
+		key, err := s.sealKey("test-key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		putLaunchers(t, s,
+			storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", API: "messages", Model: "gw-default", BaseURL: "https://gw.example.invalid"}, KeySealed: key},
+			storedLauncher{ManagedLauncher: proto.ManagedLauncher{Kind: "api", Name: "api-default", API: "messages", Model: "api-model", BaseURL: "https://api.example.invalid"}, KeySealed: key},
+			storedLauncher{ManagedLauncher: proto.ManagedLauncher{Kind: "api", Name: "triage-gw", API: "messages", Model: "triage-model", BaseURL: "https://triage.example.invalid"}, KeySealed: key},
+		)
+		setSettings(t, s, func(p *Settings) { p.Launcher = "gw" })
+
+		// Live assistant already has the explicit provider+model; live inbox.triage points to api-default.
+		if err := st.PutSetting(ctx, modelRecordKey("assistant"), modelRecord{Revision: 1, Binding: ModelBinding{Provider: "launcher.gw", Model: "chat-model"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.PutSetting(ctx, modelRecordKey("inbox.triage"), modelRecord{Revision: 1, Binding: ModelBinding{Provider: "launcher.api-default", Model: "old-triage"}}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Stored legacy profile carries model-only bindings (no provider), an empty "follow default" binding, and an effort-only binding.
+		storeProfiles(t, st,
+			ModelProfile{
+				ID: "legacy", Name: "Legacy",
+				Purposes: map[string]ModelBinding{
+					"assistant":      {Model: "chat-model"},                             // resolves to launcher.gw (matches live!)
+					"agent.new":      {Model: "agent-model"},                            // resolves to launcher.claude
+					"kb":             {Model: "kb-model"},                               // resolves to launcher.api-default
+					"inbox.triage":   {Provider: "launcher.triage-gw", Model: "fast-m"}, // explicit provider in profile
+					"agent.delegate": {Model: "delegate-model"},                         // must follow profile's inbox.triage (launcher.triage-gw), not live!
+					"translate":      {Model: "translate-model"},                        // must follow profile's inbox.triage (launcher.triage-gw)
+				},
+			},
+			ModelProfile{
+				ID: "preserve", Name: "Preserve",
+				Purposes: map[string]ModelBinding{
+					"assistant":    {},               // empty = follow default, must stay empty
+					"inbox.triage": {Effort: "high"}, // effort-only, must stay inherited
+				},
+			},
+		)
+
+		// 1. Read/display normalizes legacy model-only bindings without writing to storage or reporting phantom drift.
+		before, puts := profileStoreSnapshot(st.memStore)
+		v := profilesOf(t, s)
+		requireProfileStoreUnchanged(t, st.memStore, before, puts)
+
+		legacyView := v.Profiles[0]
+		wantPurposes := map[string]ModelBinding{
+			"assistant":      {Provider: "launcher.gw", Model: "chat-model"},
+			"agent.new":      {Provider: "launcher.claude", Model: "agent-model"},
+			"kb":             {Provider: "launcher.api-default", Model: "kb-model"},
+			"inbox.triage":   {Provider: "launcher.triage-gw", Model: "fast-m"},
+			"agent.delegate": {Provider: "launcher.triage-gw", Model: "delegate-model"},
+			"translate":      {Provider: "launcher.triage-gw", Model: "translate-model"},
+		}
+		if !reflect.DeepEqual(legacyView.Purposes, wantPurposes) {
+			t.Fatalf("normalized display purposes = %+v, want %+v", legacyView.Purposes, wantPurposes)
+		}
+		// assistant matches live {Provider: "launcher.gw", Model: "chat-model"}, so no phantom drift on assistant.
+		if slices.Contains(legacyView.Changes, "assistant") {
+			t.Fatalf("phantom drift reported on matching legacy assistant binding: %v", legacyView.Changes)
+		}
+		// Empty and effort-only bindings are preserved untouched.
+		preserveView := v.Profiles[1]
+		if preserveView.Purposes["assistant"] != (ModelBinding{}) || preserveView.Purposes["inbox.triage"] != (ModelBinding{Effort: "high"}) {
+			t.Fatalf("non-model-only bindings mutated: %+v", preserveView.Purposes)
+		}
+
+		// 2. Apply writes explicit providers to live records and keeps assistant untouched (no downgrade to "").
+		if _, err := s.applyModelProfile(ctx, "legacy", ProfileActor{Kind: "hub"}); err != nil {
+			t.Fatalf("apply legacy: %v", err)
+		}
+		for id, want := range wantPurposes {
+			if got, err := s.modelRecord(ctx, id); err != nil || got.Binding != want {
+				t.Fatalf("applied %s = %+v, want %+v (%v)", id, got, want, err)
+			}
+		}
+
+		// 3. PUT with legacy model-only bindings persists explicit providers in storage.
+		putBody := fmt.Sprintf(`{"revision":%d,"name":"Migrated","purposes":{"assistant":{"model":"saved-chat"},"agent.delegate":{"model":"saved-del"}}}`, profilesOf(t, s).Revision)
+		if r := request(s, http.MethodPut, "/api/v1/model-profiles/migrated", putBody); r.Code != http.StatusOK {
+			t.Fatalf("PUT migrated: %d %s", r.Code, r.Body.String())
+		}
+		storedProfiles, _, err := s.readModelProfiles(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mi := slices.IndexFunc(storedProfiles.Profiles, func(p ModelProfile) bool { return p.ID == "migrated" })
+		if mi < 0 || storedProfiles.Profiles[mi].Purposes["assistant"] != (ModelBinding{Provider: "launcher.gw", Model: "saved-chat"}) ||
+			storedProfiles.Profiles[mi].Purposes["agent.delegate"] != (ModelBinding{Provider: "launcher.triage-gw", Model: "saved-del"}) {
+			t.Fatalf("persisted migrated profile = %+v", storedProfiles.Profiles[mi])
+		}
+
+		// 4. capture: true migrates live legacy model-only records into explicit providers.
+		if err := st.PutSetting(ctx, modelRecordKey("kb"), modelRecord{Revision: 5, Binding: ModelBinding{Model: "live-legacy-kb"}}); err != nil {
+			t.Fatal(err)
+		}
+		captureBody := fmt.Sprintf(`{"revision":%d,"name":"Migrated","capture":true}`, profilesOf(t, s).Revision)
+		if r := request(s, http.MethodPut, "/api/v1/model-profiles/migrated", captureBody); r.Code != http.StatusOK {
+			t.Fatalf("capture migrated: %d %s", r.Code, r.Body.String())
+		}
+		storedProfiles, _, err = s.readModelProfiles(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mi = slices.IndexFunc(storedProfiles.Profiles, func(p ModelProfile) bool { return p.ID == "migrated" })
+		if storedProfiles.Profiles[mi].Purposes["kb"] != (ModelBinding{Provider: "launcher.api-default", Model: "live-legacy-kb"}) {
+			t.Fatalf("captured legacy live kb = %+v", storedProfiles.Profiles[mi].Purposes["kb"])
+		}
+	})
+
+	t.Run("unconfigured API baseline preserves model without inventing ghost legacy provider", func(t *testing.T) {
+		s, _, st := modelService(t)
+		storeProfiles(t, st, ModelProfile{
+			ID: "no-api", Name: "No API",
+			Purposes: map[string]ModelBinding{"kb": {Model: "custom-kb-model"}},
+		})
+		v := profilesOf(t, s)
+		if got := v.Profiles[0].Purposes["kb"]; got != (ModelBinding{Model: "custom-kb-model"}) {
+			t.Fatalf("unconfigured API binding = %+v, want Provider empty and Model preserved", got)
+		}
+	})
 }

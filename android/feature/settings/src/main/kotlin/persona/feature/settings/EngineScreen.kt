@@ -20,7 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
- * Which terminal engine a machine uses (docs/integrations/engines.md), as on iOS `EngineSelectionView`. Right after pairing
+ * Which terminal engine a machine uses, or none (docs/integrations/engines.md), as on iOS `EngineSelectionView`. Right after pairing
  * ([pairing]) an engine must be chosen: no back, no skip, and a failed save stays on the step; from the machine page
  * it is an ordinary page that saves and goes back.
  */
@@ -40,9 +40,12 @@ fun EngineSelectionScreen(
     // Built once the machine is known; pushes about it keep the picker in step until the user picks something.
     val model = remember(machineId, management, machine != null) {
         if (machine == null || management == null) null
-        else EngineSelectionModel(machine, put = management::setEngine, applied = sessions::applyMachine)
+        else EngineSelectionModel(machine, put = management::setEngine, applied = sessions::applyMachine,
+            putDefault = management::setEngineHosts, pairing = pairing)
     }
     LaunchedEffect(machine) { machine?.let { model?.synchronize(it) } }
+    // "Start new Agents as Orca chats" (#17650): saved at once, apart from the engine choice and its Save
+    val orcaChats = remember(machineId, management) { management?.let { OrcaChatStartsModel(machine?.orcaChatSwitch, it::setOrcaChatStarts) } }
     val state = model?.state?.collectAsState()?.value ?: EngineSelectionState()
     var reading by remember(machineId) { mutableStateOf(machine == null) }
     LaunchedEffect(machineId, reading) {
@@ -74,12 +77,13 @@ fun EngineSelectionScreen(
                 JButton(stringResource(label), {
                     scope.launch {
                         if (model.save(machine.id)) {
-                            if (!pairing) feedback?.notice(Engines.saved(machine).shown)
+                            if (!pairing) feedback?.notice(Engines.saved(machine, model.lastSaved).shown)
                             onDone()
                         }
                     }
                 }, Modifier.fillMaxWidth(), loading = state.saving,
-                    enabled = !state.saving && Engines.canSelect(state.selected, machine))
+                    // Outside pairing only a change can be saved (#17052): an unchanged Save would rewrite a set chosen elsewhere.
+                    enabled = !state.saving && Engines.canSave(state.selected, machine, pairing))
             }
         }),
     ) {
@@ -100,6 +104,10 @@ fun EngineSelectionScreen(
             }
             return@EnginePage
         }
+        // Several engines no option stands for (set up on the web): which ones, the default, and where to change the set.
+        Engines.setNotice(machine)?.let { notice ->
+            item("set") { JNotice(notice.text(), Modifier.padding(vertical = Tokens.Space.s)) }
+        }
         if (!pairing) item("title") { JSectionHeader(machine.displayName) }
         val options = Engines.options(machine)
         itemsIndexed(options, key = { _, it -> "engine-${it.id}" }) { index, found ->
@@ -108,7 +116,11 @@ fun EngineSelectionScreen(
                     enabled = !state.saving && Engines.canSelect(found.id, machine)) { model.choose(found.id) }
             }
         }
-        item("footer") { SettingsCaption(Engines.footer(machine).text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
+        item("footer") { SettingsCaption(Engines.footer(machine, state.selected).text(), Modifier.padding(horizontal = rowPadding, vertical = Tokens.Space.s)) }
+        // Only where the hub sends the switch (Orca in the computer's engine set), and not while pairing
+        if (!pairing && orcaChats != null && machine.orcaChatSwitch != null) item("orca-chats") {
+            JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) { OrcaChatStartsRow(machine, orcaChats) }
+        }
     }
 }
 
@@ -144,9 +156,11 @@ private fun EngineOption(found: DetectedEngine, machine: Machine, selected: Bool
         JRadio(selected, null, enabled = enabled)
         Spacer(Modifier.width(Tokens.Space.m))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
-            Text(found.name.ifBlank { found.id }, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // No terminal engine is named in the app's language, not by the hub; there is nothing to detect for it.
+            val title = if (found.id == Engines.NONE) Engines.label(found.id, machine).text() else found.name.ifBlank { found.id }
+            Text(title, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Engines.detail(found.id)?.let { Text(it.text(), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            Text(Engines.detection(found.id, machine).text(), style = PersonaTheme.type.caption,
+            if (Engines.showsDetection(found.id)) Text(Engines.detection(found.id, machine).text(), style = PersonaTheme.type.caption,
                 color = if (found.available && machine.online) PersonaTheme.palette.tone(Tone.Positive).text else PersonaTheme.palette.ink3, maxLines = 1)
             found.note?.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = PersonaTheme.type.caption, color = PersonaTheme.palette.cautionText, maxLines = 2, overflow = TextOverflow.Ellipsis)

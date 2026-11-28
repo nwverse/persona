@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// The voice extension's socket contract on the app's side (docs/assistant/voice.md 3, 6.10「帧」): frames in, frames out, the
 /// address, PCM16 and what is held before `ready`. Pure: no audio, no hub.
@@ -119,6 +120,15 @@ struct VoiceWireTests {
             == .transcript(VoiceTranscript(id: "u2", role: "user", text: "它到哪了？", final: false)))
         #expect(VoiceFrame.parse(#"{"type":"tool","id":"t1","label":"查知识库","done":true}"#) == .tool(id: "t1", label: "查知识库", done: true))
         #expect(VoiceFrame.parse(#"{"type":"clear"}"#) == .clear)
+    }
+
+    /// #14933: the extension's reply edges (feature `reply`, #14932); a state this app does not know is kept, not dropped.
+    @Test func replyEdges() {
+        #expect(VoiceFrame.parse(#"{"type":"reply","state":"start"}"#) == .reply(.start))
+        #expect(VoiceFrame.parse(#"{"type":"reply","state":"end"}"#) == .reply(.end))
+        #expect(VoiceFrame.parse(#"{"type":"reply","state":"paused"}"#) == .reply(.other("paused")))
+        #expect(VoiceFrame.parse(#"{"type":"reply"}"#) == .reply(.other("")))
+        #expect(VoiceFrame.parse(#"{"type":"reply","state":7}"#) == .reply(.other("")), "an odd field falls back, never fails")
     }
 
     @Test func unknownFramesAndGarbage() {

@@ -1,17 +1,41 @@
 import SwiftUI
+import PersonaWire
 
 /// Claude Code's /config options (a whitelist of ~/.claude/settings.json keys) on each machine.
-/// Which agent's settings a page edits: Claude Code's settings.json or Codex's config.toml (the node keeps a whitelist
-/// of each, claudeconfig.go / codexconfig.go).
+/// Which agent's settings a page edits: Claude Code's settings.json, Codex's config.toml, or Antigravity's settings.json
+/// (the node keeps a whitelist of each, claudeconfig.go / codexconfig.go / agyompconfig.go).
 enum AgentSettingsKind {
-    case claude, codex
+    case claude, codex, agy
 
-    var title: String { self == .claude ? String(localized: "Claude Code Settings") : String(localized: "Codex Settings") }
+    var title: String {
+        switch self {
+        case .claude: String(localized: "Claude Code Settings")
+        case .codex: String(localized: "Codex Settings")
+        case .agy: String(localized: "Antigravity Settings")
+        }
+    }
 
     var footer: String {
         switch self {
         case .claude: String(localized: "This edits ~/.claude/settings.json on that machine and changes only the settings below. New Claude sessions pick them up; running sessions usually need a restart.")
         case .codex: String(localized: "This edits ~/.codex/config.toml on that machine and changes only the settings below; everything else in the file (model providers, project trust, and so on) stays as is. New Codex sessions pick them up.")
+        case .agy: String(localized: "This edits ~/.gemini/antigravity-cli/settings.json on that machine and changes only the settings below. New Antigravity (agy) sessions pick them up.")
+        }
+    }
+
+    func read(from api: APIClient, machine: String) async throws -> [APIClient.ClaudeSetting] {
+        switch self {
+        case .claude: try await api.claudeSettings(machine: machine)
+        case .codex: try await api.codexSettings(machine: machine)
+        case .agy: try await api.agySettings(machine: machine)
+        }
+    }
+
+    func write(to api: APIClient, machine: String, key: String, value: JSONValue) async throws -> [APIClient.ClaudeSetting] {
+        switch self {
+        case .claude: try await api.setClaudeSetting(machine: machine, key: key, value: value)
+        case .codex: try await api.setCodexSetting(machine: machine, key: key, value: value)
+        case .agy: try await api.setAgySetting(machine: machine, key: key, value: value)
         }
     }
 }
@@ -52,18 +76,15 @@ struct ClaudeSettingsView: View {
             if let error {
                 Section { Text(error).foregroundStyle(Theme.danger).font(Theme.Font.caption) }
             }
-            #if os(macOS)
-            // An empty group draws as a blank gap in a Mac form (while loading, or a machine with nothing to set).
-            if !settings.isEmpty { Section { ForEach(settings) { s in row(s) } } }
-            #else
             Section {
                 ForEach(settings) { s in row(s) }
             }
-            #endif
             if agent == .claude, let live = liveReplies, live.ref == ref, !live.unsupported {
                 LiveRepliesSection(model: live, others: applyAll ? onlineMachines.filter { $0.ref != ref }.map(\.ref) : [])
             }
-            if agent == .claude, !machineID.isEmpty { ClaudeDirsSection(ref: ref) }
+            // `.id(ref)` drops the previous computer's rows, input and busy at once; without it Block / Unblock
+            // would build a list from the old state and send it to the computer just picked (#9276).
+            if agent == .claude, !machineID.isEmpty { ClaudeDirsSection(ref: ref).id(ref) }
         }
         .themedPage()
         .detailTitle(agent.title)
@@ -110,9 +131,6 @@ struct ClaudeSettingsView: View {
                           text: Binding(get: { strings[s.key] ?? value?.string ?? "" }, set: { strings[s.key] = $0 }))
                     .onSubmit { Task { await set(s.key, .string(strings[s.key] ?? "")) } }
                     .submitLabel(.done)
-                    #if os(macOS)
-                    .labelsHidden() // a Mac form shows a field's title as its label; here it is the prompt (#1221)
-                    #endif
             }
         }
         .padding(.vertical, Theme.Space.xxs)
@@ -142,7 +160,7 @@ struct ClaudeSettingsView: View {
         loading = true
         defer { loading = false }
         do {
-            let result = agent == .claude ? try await api.claudeSettings(machine: ref.id) : try await api.codexSettings(machine: ref.id)
+            let result = try await agent.read(from: api, machine: ref.id)
             guard ref == self.ref, !Task.isCancelled else { return }
             settings = result
             settingsRef = ref
@@ -161,8 +179,7 @@ struct ClaudeSettingsView: View {
         var failed: [String] = []
         for target in targets {
             do {
-                let list = agent == .claude ? try await api.setClaudeSetting(machine: target.id, key: key, value: value)
-                    : try await api.setCodexSetting(machine: target.id, key: key, value: value)
+                let list = try await agent.write(to: api, machine: target.id, key: key, value: value)
                 if target == selected, selected == ref { settings = list }
             } catch {
                 if !error.isCancellation { failed.append(String(localized: "\(model.machine(target)?.title ?? target.id): \(error.localizedDescription)")) }

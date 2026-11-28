@@ -4,10 +4,17 @@
 
 
 
+## Why this must change the core
+
+<!-- Only when the PR changes a path in schema/core-paths.txt (tests-only changes excepted): add the label `core-change` and say in a line or two why a module or an extension point cannot do it. Otherwise delete this section. -->
+
+
+
 ## Verification
 
-<!-- Commands you ran and their results; screenshots for UI changes (light and dark). Say what was not run. -->
+<!-- Commands you ran and their results; screenshots for UI changes (light and dark), shown here and not committed. Say what was not run. -->
 
+Domain model: a new server package declares its layer; each declared package it changes passes `go test ./<pkg>/...` (its domain rules); no getter, exported field, primitive or untyped seam added; or N/A.
 
 
 ## Apple performance
@@ -32,3 +39,5 @@
 - [ ] 5 Model and product separate: names which of speed, model, persona and features it touches; the others are unaffected.
 - [ ] 6 Checkable: the issue's acceptance criteria are met, with evidence for each item above.
 - [ ] 7 Fast, local-first and stateful: immediate local feedback, hub-confirmed Processing, recoverable failure; isolated before/after feedback and execution timings, with light/dark screenshots.
+- [ ] Other platforms: done / issue #N / not applicable (reason)
+- [ ] Parity list row updated

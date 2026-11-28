@@ -15,6 +15,16 @@ type Loader = () => Promise<unknown>;
 const loaders: Loader[] = [];
 const idleLoaders: Loader[] = [];
 const routeLoaders = new Map<Route["name"], Loader>();
+// Pages chosen by the route's contents, not its name (a feature module's, core/ModulePage.tsx): asked with the route,
+// they load nothing when it is not theirs to load (an off module never routes here at all).
+const routeIntents = new Map<Route["name"], (r: Route) => Promise<unknown> | undefined>();
+
+/** Loads what a link to a `name` route opens when the pointer, the focus or a finger reaches it, as `routes` does for
+ *  a lazyPage; `load` gets the route and returns undefined for nothing to load. */
+export function preloadOnIntent(name: Route["name"], load: (r: Route) => Promise<unknown> | undefined): void {
+  routeIntents.set(name, load);
+}
+
 const still = () => () => {};
 
 export interface LazyPageOptions {
@@ -22,10 +32,21 @@ export interface LazyPageOptions {
   idle?: boolean;
   /** The routes it is the page of: a link to one loads it when the pointer, the focus or a finger reaches it. */
   routes?: Route["name"][];
+  /** false: only its own render or `preload` loads it, never loadPages (a feature module's page, core/ModulePage.tsx,
+   *  whose chunk must not be requested while the module is off). */
+  listed?: boolean;
 }
 
-/** A page from a chunk loaded on its first render, or by preloadPages as `opts` says. */
-export function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>, opts: LazyPageOptions = {}): ComponentType<P> {
+/** A lazy page, with its chunk's load on hand for a caller that knows sooner than a render or a link that it is next. */
+export type LazyPageComponent<P extends object> = ComponentType<P> & {
+  /** Loads the chunk now (once; again after a failure), so a later render draws the page at once. */
+  preload: () => Promise<unknown>;
+  /** Whether the chunk is in: a render now draws the page, not the Suspense fallback. */
+  ready: () => boolean;
+};
+
+/** A page from a chunk loaded on its first render, or by preloadPages as `opts` says, or by its own `preload`. */
+export function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>, opts: LazyPageOptions = {}): LazyPageComponent<P> {
   let page: ComponentType<P> | null = null;
   let loading: Promise<ComponentType<P>> | null = null;
   const once = () =>
@@ -36,7 +57,7 @@ export function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>
         throw e;
       },
     ));
-  loaders.push(once);
+  if (opts.listed !== false) loaders.push(once);
   if (opts.idle) idleLoaders.push(once);
   for (const r of opts.routes ?? []) routeLoaders.set(r, once);
   function LazyPage(props: P) {
@@ -69,12 +90,17 @@ export function lazyPage<P extends object>(load: () => Promise<ComponentType<P>>
     if (!held && !server) return null;
     return createElement(use(once()), props);
   }
-  return LazyPage;
+  return Object.assign(LazyPage, { preload: once, ready: () => page !== null });
 }
 
-/** Loads every lazy page's chunk now, for a test that draws without waiting (renderToStaticMarkup). */
-export function loadPages(): Promise<unknown> {
-  return Promise.all(loaders.map((l) => l()));
+/** Loads every lazy page's chunk now (including nested lazy pages they register), for tests that draw without waiting. */
+export async function loadPages(): Promise<void> {
+  let done = 0;
+  while (done < loaders.length) {
+    const batch = loaders.slice(done);
+    done = loaders.length;
+    await Promise.all(batch.map((l) => l()));
+  }
 }
 
 interface IntentTarget {
@@ -101,6 +127,7 @@ function onIntent(e: Event) {
   const r = routeAt(a.href);
   const load = r && routeLoaders.get(r.name);
   if (load) void load().catch(() => {});
+  else if (r) void routeIntents.get(r.name)?.(r)?.catch(() => {});
 }
 
 /**

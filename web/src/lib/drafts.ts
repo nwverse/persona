@@ -1,4 +1,5 @@
-import { storedValue, storeValue, removeStoredValue } from "./compatibility";
+import { conversationKeyDeleted, onConversationDeleted } from "./conversation-deleted";
+import { canonicalStorageKey, storedKeyAlias, storedValue, storeValue, removeStoredValue } from "./compatibility";
 // Changes to a composer's draft from outside it: the message menu's "Quote" / "Edit", a queued message pulled back, an
 // edited image put in for the next message (iOS: ChatView.bindMenu, AppModel.editQueued, ImageViewer's attach).
 // The composer for that draft key listens; with none mounted, text goes to the stored draft (it is read on mount).
@@ -10,12 +11,21 @@ import { useSyncExternalStore } from "react";
 import { clampComment, commentBlock, isCommentHead, parseCommentBlock, type QuoteComment } from "./comments";
 import { uuid } from "./format";
 import type { EditedImage } from "./image-edit";
+import { draftText, joinInline, readInlineDraft, writeInlineDraft } from "./inline-mentions";
+import { skillDraft, splitSkillDraft } from "./skill-mentions";
 
 export interface DraftImage {
   name: string;
   mime: string;
   data: string; // base64
 }
+
+export interface CommentImage extends DraftImage {
+  id: string;
+}
+
+/** A selection without a saved quote can supply its id when the first picture is ready. */
+export type CommentImagePicker = (target: string | (() => string | undefined), files: File[], signal: AbortSignal) => Promise<void>;
 
 /** What "Quote" holds above the input: the quoted words, who said them, when; for a task's card, which task. */
 export interface DraftQuote {
@@ -25,6 +35,8 @@ export interface DraftQuote {
   task?: QuotedTask;
   /** Set on a comment (the note, where it sits); the quote then carries the picked words or the code in `text`. */
   comment?: QuoteComment;
+  /** Images held in this browser tab, like the composer's other pictures. */
+  images?: readonly CommentImage[];
   /** Which entry of the list (set when it joins it). */
   id?: string;
 }
@@ -76,16 +88,20 @@ function quoteBody(q: DraftQuote): string {
 }
 
 /** The quotes waiting as the blocks that lead the message: the message quote first, then the comments numbered in order. */
-export function quoteBlocks(quotes: DraftQuote | readonly DraftQuote[] | null): string[] {
+export function quoteBlocks(quotes: DraftQuote | readonly DraftQuote[] | null, imageOffset = 0): string[] {
   const list = quotes === null ? [] : "text" in quotes ? [quotes] : quotes;
   let n = 0;
-  const bodies = [...list.filter((q) => !q.comment), ...list.filter((q) => q.comment)].map((q) => (q.comment ? commentBlock(q, ++n) : quoteBody(q)));
+  const bodies = [...list.filter((q) => !q.comment), ...list.filter((q) => q.comment)].map((q) => {
+    if (!q.comment) return quoteBody(q);
+    const images = q.images?.map(() => ++imageOffset);
+    return commentBlock(q, ++n, images);
+  });
   return bodies.filter(Boolean).map((b) => withQuote("", b).trimEnd());
 }
 
 /** The message as sent with its quotes: their blocks, a blank line, then what was typed (just the blocks when nothing was). */
-export function withQuoteBlock(quotes: DraftQuote | readonly DraftQuote[] | null, text: string): string {
-  const blocks = quoteBlocks(quotes);
+export function withQuoteBlock(quotes: DraftQuote | readonly DraftQuote[] | null, text: string, imageOffset = 0): string {
+  const blocks = quoteBlocks(quotes, imageOffset);
   if (!blocks.length) return text;
   const lead = blocks.join("\n\n");
   return text.trim() ? `${lead}\n\n${text}` : lead;
@@ -121,7 +137,12 @@ export function parseQuotes(blocks: readonly string[]): DraftQuote[] {
   return blocks.map((b) => (isCommentHead(b.split("\n")[0]) ? parseCommentBlock(b) : null) ?? parseQuote(b)).map((q) => ({ ...q, id: uuid() }));
 }
 
-const quoteKey = (key: string) => `quote:${key}`;
+const DRAFT_PREFIX = "draft:";
+const QUOTE_PREFIX = "quote:";
+const quoteKey = (key: string) => `${QUOTE_PREFIX}${key}`;
+
+/** How many conversations' unsent words and quotes one browser keeps; the oldest unmounted ones are dropped first. */
+export const MAX_STORED_DRAFTS = 50;
 
 function validQuote(q: unknown): q is DraftQuote {
   const x = q as DraftQuote | null;
@@ -130,6 +151,7 @@ function validQuote(q: unknown): q is DraftQuote {
 
 /** The quotes kept for a composer's draft key (read on mount, like the draft). An older build kept just one object. */
 export function storedQuotes(key: string): DraftQuote[] {
+  if (conversationKeyDeleted(key)) return [];
   try {
     const v: unknown = JSON.parse(localStorage.getItem(quoteKey(key)) ?? "null");
     return (Array.isArray(v) ? v : [v]).filter(validQuote).map((q) => (q.id ? q : { ...q, id: uuid() }));
@@ -139,8 +161,10 @@ export function storedQuotes(key: string): DraftQuote[] {
 }
 
 export function storeQuotes(key: string, list: readonly DraftQuote[]) {
-  if (list.length) localStorage.setItem(quoteKey(key), JSON.stringify(list));
-  else localStorage.removeItem(quoteKey(key));
+  if (conversationKeyDeleted(key)) list = [];
+  const stored = quoteKey(key);
+  if (list.length) safeDraftWrite(stored, () => localStorage.setItem(stored, JSON.stringify(list.map((q) => q.images ? { ...q, images: undefined } : q))));
+  else safeDraftRemove(stored);
 }
 
 /** What a composer's quote list is right now, and which comment card is being written in. */
@@ -168,6 +192,7 @@ export function getQuotes(key: string): QuoteState {
 }
 
 function putQuotes(key: string, st: QuoteState) {
+  if (conversationKeyDeleted(key)) st = EMPTY;
   quoteStates.set(key, st.list.length ? st : EMPTY);
   storeQuotes(key, st.list);
   quoteListeners.forEach((l) => l());
@@ -199,6 +224,20 @@ export function setQuotes(key: string, list: readonly DraftQuote[]) {
   putQuotes(key, { list, editing: null, fresh: false });
 }
 
+/** A refused send puts its comments back ahead of any written while it was in flight. */
+export function restoreQuotes(key: string, sent: readonly DraftQuote[]) {
+  if (!sent.length) return;
+  const st = getQuotes(key);
+  const restored = sent.filter((q) => q.comment ? !st.list.some((x) => x.id === q.id) : !st.list.some((x) => !x.comment));
+  putQuotes(key, { ...st, list: [...restored, ...st.list] });
+}
+
+export function setCommentImages(key: string, id: string, update: (images: readonly CommentImage[]) => readonly CommentImage[]) {
+  const st = getQuotes(key);
+  const list = st.list.map((q) => q.id === id && q.comment ? { ...q, images: update(q.images ?? []) } : q);
+  putQuotes(key, { ...st, list });
+}
+
 export function removeQuote(key: string, id: string) {
   const st = getQuotes(key);
   const list = st.list.filter((q) => q.id !== id);
@@ -218,23 +257,31 @@ export function editNote(key: string, id: string) {
   if (st.editing !== id) putQuotes(key, { ...st, editing: id, fresh: false });
 }
 
-/** Esc in a note: a new card goes, an older one keeps its last note (the caller restores it). */
-export function cancelNote(key: string, id: string, previous: string) {
+/** Esc in a note: a new card goes, an older one goes back to the start of this edit. */
+export function cancelNote(key: string, id: string, previous: string, images?: readonly CommentImage[]) {
   const st = getQuotes(key);
   if (st.fresh && st.editing === id) removeQuote(key, id);
-  else setNote(key, id, previous, true);
+  else {
+    const list = st.list.map((q) => q.id === id && q.comment ? { ...q, images, comment: { ...q.comment, body: clampComment(previous) } } : q);
+    putQuotes(key, { list, editing: null, fresh: false });
+  }
 }
 
 /** A pulled-back queued message goes under what is typed, on its own line (AppModel.editQueued). */
 export function withAppended(draft: string, text: string): string {
-  return draft ? `${draft}\n${text}` : text;
+  if (!draft) return text;
+  if (draftText(draft) !== draft || draftText(text) !== text) {
+    const first = splitSkillDraft(draft), second = splitSkillDraft(text);
+    return skillDraft([...first.skills, ...second.skills], writeInlineDraft(joinInline(readInlineDraft(first.text), ["\n"], readInlineDraft(second.text))));
+  }
+  return `${draft}\n${text}`;
 }
 
 /** The draft after a send failed: the composer emptied itself when the message went out, so the text comes back;
  * what was typed while it was on its way stays, under it on its own line. */
 export function withUnsent(draft: string, unsent: string): string {
   if (!unsent) return draft;
-  return draft ? `${unsent}\n${draft}` : unsent;
+  return draft ? withAppended(unsent, draft) : unsent;
 }
 
 /** The draft after a text event (an image changes the attachments and a quote the bar above, not the text). */
@@ -293,16 +340,141 @@ export function draftListenerKeysForTests() {
 }
 
 export function storeDraft(key: string, text: string) {
-  if (text) storeValue(`draft:${key}`, text);
-  else removeStoredValue(`draft:${key}`);
+  if (conversationKeyDeleted(key)) text = "";
+  const stored = `${DRAFT_PREFIX}${key}`;
+  if (text) safeDraftWrite(stored, () => storeValue(stored, text));
+  else safeDraftRemove(stored);
   tellRows();
+}
+
+// Storage pressure: a full or blocked localStorage must never break typing or throw out of the save timer. A failed
+// write drops the oldest other conversations' drafts and quotes first — the mounted composers' keys are protected —
+// and is retried; what still cannot be written is swallowed.
+const KEY_PREFIXES = [DRAFT_PREFIX, QUOTE_PREFIX] as const;
+
+function draftStorage(): Storage | null {
+  try {
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Storage keys of every mounted composer's draft and quote list: eviction never touches the conversation on screen. */
+function protectedDraftKeys(): Set<string> {
+  const keep = new Set<string>();
+  listeners.forEach((_set, key) => KEY_PREFIXES.forEach((prefix) => keep.add(prefix + key)));
+  return keep;
+}
+
+/** The conversation id a stored draft/quote key belongs to; a legacy alias key shares its canonical key's id. */
+function storedConversationId(stored: string): string | null {
+  const key = canonicalStorageKey(stored);
+  const prefix = KEY_PREFIXES.find((p) => key.startsWith(p));
+  return prefix ? key.slice(prefix.length) : null;
+}
+
+/** Conversation ids holding a stored draft or quote, oldest first in storage order; protected ids are skipped. A
+ *  key and its legacy alias (compatibility.ts) are one conversation, so it is never counted twice. */
+function evictableConversations(keep: ReadonlySet<string>): string[] {
+  const store = draftStorage();
+  const ids: string[] = [];
+  if (!store) return ids;
+  try {
+    for (let i = 0; i < store.length; i++) {
+      const stored = store.key(i);
+      if (!stored || keep.has(stored)) continue;
+      // the mounted conversation's canonical key is protected even when this entry is its legacy alias
+      const alias = storedKeyAlias(stored);
+      if (alias && keep.has(alias)) continue;
+      const id = storedConversationId(stored);
+      if (id !== null && !ids.includes(id)) ids.push(id);
+    }
+  } catch {
+    // storage became unreadable: return what was gathered
+  }
+  return ids;
+}
+
+function dropConversation(store: Storage, id: string) {
+  // the legacy alias copy leaves with its canonical key, so no orphaned entry stays behind
+  for (const prefix of KEY_PREFIXES) {
+    const key = prefix + id;
+    for (const k of [key, storedKeyAlias(key)]) {
+      if (!k) continue;
+      try {
+        store.removeItem(k);
+      } catch {
+        // blocked storage: nothing to do
+      }
+    }
+  }
+}
+
+/** Keep the retained drafts of unmounted conversations within MAX_STORED_DRAFTS, oldest first. */
+function enforceDraftBound(store: Storage, targetKey: string) {
+  const ids = evictableConversations(protectedDraftKeys());
+  const targetId = storedConversationId(targetKey);
+  const victims = ids.filter((id) => id !== targetId);
+  // The target counts toward the bound even though it cannot be its own victim.
+  for (let i = 0; i < ids.length - MAX_STORED_DRAFTS; i++) dropConversation(store, victims[i]);
+}
+
+/** Write a draft or quote entry, evicting older unmounted conversations' entries and retrying when storage is full.
+ *  The target key itself and every mounted composer's keys survive; a write that still fails stays quiet. Other draft
+ *  writers (page-level prompt boxes) route their raw localStorage writes through this so a full quota never throws. */
+export function safeDraftWrite(targetKey: string, write: () => void) {
+  const store = draftStorage();
+  if (!store) return;
+  try {
+    write();
+    enforceDraftBound(store, targetKey);
+    return;
+  } catch {
+    // quota exceeded or storage blocked: make room below and retry
+  }
+  const keep = protectedDraftKeys();
+  keep.add(targetKey);
+  for (const id of evictableConversations(keep)) {
+    dropConversation(store, id);
+    try {
+      write();
+      return;
+    } catch {
+      // still full: drop the next oldest conversation
+    }
+  }
+}
+
+/** Remove a draft or quote entry without throwing when storage is blocked (drafts keep their alias write path). */
+export function safeDraftRemove(storedKey: string) {
+  if (!draftStorage()) return;
+  try {
+    if (storedKey.startsWith(DRAFT_PREFIX)) removeStoredValue(storedKey);
+    else localStorage.removeItem(storedKey);
+  } catch {
+    // the stale entry stays, but typing and sending keep working
+  }
+}
+
+/** Words of a composer that belongs to no conversation row (the Agents page box): kept under a key the sidebar
+ *  never asks useLeftDraft for, so a half-written instruction never marks a row, but a reload still restores it. */
+export function storedPageDraft(key: string): string {
+  return storedValue(`draft:${key}`) ?? "";
+}
+
+export function storePageDraft(key: string, text: string) {
+  const stored = `draft:${key}`;
+  // route through the quota-safe path so a full localStorage cannot throw inside the composer
+  if (text) safeDraftWrite(stored, () => storeValue(stored, text));
+  else safeDraftRemove(stored);
 }
 
 /** What waits unsent for a conversation whose box is not on screen: its stored words, and whether quotes wait on its
  *  bar. Nothing while its box is mounted (you are in it; typing there does not re-render the list), or for `null`. */
 export function useLeftDraft(key: string | null): { text: string; quoted: boolean } {
   const away = () => key !== null && !listeners.get(key)?.size;
-  const read = () => (away() ? (storedValue(`draft:${key}`) ?? "") : "");
+  const read = () => (away() ? draftText(storedValue(`draft:${key}`) ?? "") : "");
   const hasQuotes = () => away() && getQuotes(key!).list.length > 0;
   const text = useSyncExternalStore(subscribeRows, read, read);
   const quoted = useSyncExternalStore(subscribeRows, hasQuotes, hasQuotes);
@@ -311,6 +483,7 @@ export function useLeftDraft(key: string | null): { text: string; quoted: boolea
 
 /** Sends an event to the composer of `key`. False when none is mounted and it could not be kept (an image). */
 export function sendDraft(key: string, e: DraftEvent): boolean {
+  if (conversationKeyDeleted(key)) return false;
   const ls = listeners.get(key);
   if (ls?.size) {
     ls.forEach((l) => l(e));
@@ -329,3 +502,9 @@ export function sendDraft(key: string, e: DraftEvent): boolean {
   storeDraft(key, next);
   return true;
 }
+
+onConversationDeleted((mid, sid) => {
+  const key = `${mid}/${sid}`;
+  try { storeDraft(key, ""); } catch { /* Storage can be unavailable. */ }
+  try { setQuotes(key, []); } catch { /* Its memory copy was already cleared. */ }
+});

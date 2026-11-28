@@ -219,6 +219,7 @@ func TestRoutineNotReadySkipsNeverPush(t *testing.T) {
 func TestRoutineWaitsOnlyForWhatItNeeds(t *testing.T) {
 	f := newFakeHub().withMachine()
 	f.sessions["laptop"] = []proto.Session{{SessionID: "c1"}}
+	f.known["c1"] = true // the listed source conversation has a resumable transcript
 	f.devices = []Device{{ID: "server", Name: "server"}, {ID: "laptop", Name: "laptop", Online: true, Reachable: true}}
 	f.settings = &Settings{Timezone: "UTC"}
 	s := newStorelessService(t, f)
@@ -239,8 +240,8 @@ func TestRoutineWaitsOnlyForWhatItNeeds(t *testing.T) {
 		t.Fatal("a computer that is only asleep marks no wait: its waking is not news")
 	}
 	own, _ := taskByID(s, "own")
-	if _, err := s.runTask(own, at, at, true, false); err != nil || lastRunOf(t, s, "own").Status == runSkipped || len(f.sends) != 2 {
-		t.Fatalf("立即运行 is sent as before: %v %+v", err, lastRunOf(t, s, "own"))
+	if _, err := s.runTask(own, at, at, true, false); err == nil || lastRunOf(t, s, "own").Status != runFailed || len(f.sends) != 1 {
+		t.Fatalf("Run now reports the offline computer without sending: %v %+v", err, lastRunOf(t, s, "own"))
 	}
 }
 
@@ -297,5 +298,34 @@ func TestRoutineGoesOnceANewerHealthCheckAnswers(t *testing.T) {
 	s.sched.inflight.Wait()
 	if r := lastRunOf(t, s, "morning"); r.Status != runOK || len(f.sends) != 1 {
 		t.Fatalf("the newer health check lets it go: %+v, sent %v", r, f.sends)
+	}
+}
+
+// The main conversation keeps a pick on another launcher than Main chat's, and its turn there failed: readiness judges
+// that launcher, the one its next turn runs (readinessTurnLauncher), and the chat waits for another model. A routine
+// on Main chat's launcher does not wait on that launcher's failure, as a task on a launcher of its own does not; one
+// on the pick's launcher does.
+func TestRoutineOnMainChatsLauncherDoesNotWaitOnThePicksFailure(t *testing.T) {
+	_, s, _ := readyMachine(t, proto.Session{SessionID: "m1", Assistant: true, Launcher: "gw", Model: "vendor/m2", State: proto.StateIdle,
+		LastText: routeText, UpdatedAt: time.Now().Add(-time.Minute)})
+	ctx := context.Background()
+	putLaunchers(t, s, storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "gw", BaseURL: "https://gw.example", Model: "m1"}})
+	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.claude", Model: "model-a"})
+	morning := Task{ID: "morning", Title: "早报", Prompt: "x", Repeat: repeatDaily, Time: "09:00", Enabled: true}
+	gwJob := Task{ID: "gwjob", Title: "巡检", Prompt: "y", Repeat: repeatDaily, Time: "10:00", Enabled: true}
+	setTasks(s, morning, gwJob)
+	setModel(t, s, "task.gwjob", ModelBinding{Provider: "launcher.gw", Model: "vendor/m2"})
+	if err := s.setModelPick(ctx, "m1", &modelPick{MachineID: "server", Launcher: "gw", Model: "vendor/m2", At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	r := s.readiness(ctx, false, readinessWaitGet)
+	if m := readinessStep(t, r, StepModel); r.Mode != ReadinessSetup || m.Code != proto.TurnErrorModelRoute || m.Launcher != "gw" || r.Launcher != "claude" {
+		t.Fatalf("the pick's failed turn: %s %s %+v", r.Mode, r.Launcher, m)
+	}
+	if ok, st := s.readyFor(ctx, morning, r); !ok {
+		t.Fatalf("a routine on Main chat's launcher waits on the pick's failure: %+v", st)
+	}
+	if ok, st := s.readyFor(ctx, gwJob, r); ok || st.ID != StepModel {
+		t.Fatalf("a routine on the pick's launcher goes: %+v", st)
 	}
 }

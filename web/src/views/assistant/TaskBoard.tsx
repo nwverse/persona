@@ -6,26 +6,31 @@ import { startFailure, useFeed } from "../../lib/feed";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { getState, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
-import { dockAgents, isRemovable, mostUrgentAgent, openAsk, type Todo, type TodoStatus } from "../../lib/todos";
+import { dockAgents, isRemovable, mostUrgentAgent, openAsk, todoSupervisorLabel, type Todo, type TodoStatus } from "../../lib/todos";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { sessionTitle } from "../../lib/format";
 import { stateName } from "../../lib/state-labels";
+import { openMergePRs, triage } from "../../lib/todo-triage";
 import { t } from "../../i18n";
+import { TaskWaitInfo } from "./TaskWaitInfo";
 import { Dialog, IconButton, Menu } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { answeredSessions } from "./answered-lookup";
 import { Empty } from "./parts";
 import { openAgent, openTask } from "../../lib/handoff";
+import { sameManager, useShownManager } from "../../lib/manager-choice";
 import { place, progressOf, removeTaskNow, statusOf, TaskMark, taskAsk, taskInteraction, useTaskLookup } from "./Tasks";
 
 const BOARD_TITLE: Record<BoardSectionKey, string> = {
   waiting: stateName("needs_you"),
   review: t("assistant-tasks.review_pending"),
   working: stateName("working"),
+  parked: t("todos.section_parked"),
   unread: stateName("unread"),
   stopped: stateName("follow_up"),
   done: stateName("done"),
+  cancelled: t("lib-todos.review_cancelled"),
   failed: stateName("failed"),
 };
 
@@ -44,6 +49,7 @@ function agentLine(s: Session): string {
 // Mounted only while open (TodayCard / TaskDock render it conditionally), so the store subscriptions and the
 // session lookup below don't run for every "Today" card in the history on each session update.
 export function TaskBoard({ open, conversation, onClose }: { open: boolean; conversation: string; onClose: () => void }) {
+  const manager = useShownManager();
   const todos = useStore((s) => s.todos);
   const sessions = useStore((s) => s.sessions);
   const main = useStore((s) => s.assistant?.main);
@@ -54,9 +60,13 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
   const [menuFor, setMenuFor] = useState<{ todo: Todo; el: HTMLElement } | null>(null);
   const sections = useMemo(() => {
     if (!open) return [];
-    const rows = todos.filter((td) => td.origin === conversation).map((todo) => ({ todo, status: statusOf(todo, lookup, plans) }));
-    return boardSections(rows, dockAgents(answeredSessions(Object.values(sessions).flat(), interactions, answered), todos, conversation, main));
-  }, [open, todos, sessions, conversation, main, lookup, plans, interactions, answered]);
+    const now = Date.now();
+    const scopedTodos = todos.filter((td) => sameManager(td.manager, manager));
+    const scopedSessions = Object.values(sessions).flat().filter((s) => sameManager(s.manager, manager));
+    const scopedInteractions = interactions.filter((ix) => sameManager(ix.manager, manager));
+    const rows = scopedTodos.filter((td) => td.origin === conversation).map((todo) => ({ todo, status: statusOf(todo, lookup, plans), parked: triage(todo, lookup, now).section === "parked" }));
+    return boardSections(rows, dockAgents(answeredSessions(scopedSessions, scopedInteractions, answered), scopedTodos, conversation, main));
+  }, [open, manager, todos, sessions, conversation, main, lookup, plans, interactions, answered]);
   const subtitle = (todo: Todo, status: TodoStatus) => {
     const lead = mostUrgentAgent(todo, lookup)?.session;
     const where = place(todo, lead);
@@ -65,25 +75,26 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
     const limit = status === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined;
     // what its result waits on from the user (#2056), before its agent's last step
     const verdict = openAsk(todo)?.verdict;
-    const now = failure ?? ask ?? limit ?? verdict ?? progressOf(lead)?.text;
+    const now = failure ?? ask ?? limit ?? todoSupervisorLabel(todo, status, lookup) ?? verdict ?? progressOf(lead)?.text;
     return [where, now].filter(Boolean).join(" · ");
   };
   return (
-    <Dialog open={open} onClose={onClose} title={t("assistant-tasks.board_title")} width={480}>
+    <Dialog open={open} onClose={onClose} title={t("assistant-task-actions.board_title")} width={480}>
       {sections.length === 0 ? (
-        <Empty icon="todo" title={t("assistant-tasks.board_empty_title")}>
-          {t("assistant-tasks.board_empty_body")}
+        <Empty icon="todo" title={t("assistant-task-actions.board_empty_title")}>
+          {t("assistant-task-actions.board_empty_body")}
         </Empty>
       ) : (
         <div className="flex flex-col gap-4" data-testid="task-board">
           {sections.map((sec) => (
-            <section key={sec.key} aria-label={BOARD_TITLE[sec.key]}>
+            <section key={sec.key} data-board-section={sec.key} aria-label={BOARD_TITLE[sec.key]}>
               <h3 className="mb-1 px-1 text-[12px] font-medium text-ink-3">
-                {t("assistant-tasks.board_section", { title: BOARD_TITLE[sec.key], count: sec.rows.length + sec.agents.length })}
+                {t("assistant-task-actions.board_section", { title: BOARD_TITLE[sec.key], count: sec.rows.length + sec.agents.length })}
               </h3>
               <div className="divide-y divide-line overflow-hidden rounded-card bg-field">
                 {sec.rows.map(({ todo, status }) => (
-                  <div key={todo.id} className="flex items-center hover:bg-hover">
+                  <div key={todo.id} className="min-w-0 hover:bg-hover">
+                    <div className="flex items-center">
                     <button
                       type="button"
                       onClick={() => {
@@ -95,20 +106,23 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
                         e.preventDefault();
                         setMenuFor({ todo, el: e.currentTarget });
                       }}
-                      className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left"
+                      className={`flex min-w-0 flex-1 items-center gap-3 px-3 text-left ${sec.key === "parked" ? "pt-2.5 pb-1" : "py-2.5"}`}
                     >
                       <span className="flex w-4 shrink-0 justify-center">
-                        <TaskMark status={status} />
+                        <TaskMark status={sec.key === "parked" ? "waiting" : status} />
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="truncate text-[13.5px] font-medium text-ink">{todo.title}</span>
-                        <span className="truncate text-[12px] text-ink-3">{subtitle(todo, status)}</span>
+                        {todo.wait == null && sec.key !== "parked" && <span className="truncate text-[12px] text-ink-3">{subtitle(todo, status)}</span>}
                       </span>
                       <Icon name="chevronRight" size={13} className="shrink-0 text-ink-3" />
                     </button>
                     {isRemovable(status) && (
-                      <IconButton icon="trash" label={t("assistant-tasks.board_remove", { title: todo.title })} onClick={() => removeTaskNow(todo)} className="mr-1.5" />
+                      <IconButton icon="trash" label={t("assistant-task-actions.board_remove", { title: todo.title })} onClick={() => removeTaskNow(todo)} className="mr-1.5" />
                     )}
+                    </div>
+                    {(todo.wait != null || sec.key === "parked") &&
+                      <div className="px-3 pb-2.5"><TaskWaitInfo todo={todo} merges={todo.wait == null ? openMergePRs(todo, Date.now()) : undefined} /></div>}
                   </div>
                 ))}
                 {sec.agents.map(({ session: s, state }) => (

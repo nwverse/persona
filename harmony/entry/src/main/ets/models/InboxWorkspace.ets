@@ -183,10 +183,18 @@ function genericConversation(detail: Record<string, Object>, row: ResourceRow): 
 
 function itemSource(row: ResourceRow, detail: Record<string, Object> = row.data()): string {
   const source = Wire.text(detail, 'source', Wire.text(row.data(), 'source'));
-  if (source) return source;
+  if (source) return source==='feishu' ? 'lark' : source;
   if (Object.keys(Wire.object(detail, 'mail')).length) return 'mail';
   if (Object.keys(Wire.object(detail, 'lark')).length) return 'lark';
   return Object.keys(Wire.object(detail, 'connector')).length ? 'connector' : '';
+}
+
+/** Account and source folder as shown on both the inbox row and its detail header. */
+export function inboxRowSourceLabel(data: Record<string, Object>, source: string): string {
+  const account = Wire.text(data, 'account_name', Wire.text(data, 'account'));
+  const mailbox = Wire.text(Wire.object(data, 'mail'), 'mailbox');
+  const label = source + ' · ' + account;
+  return mailbox && mailbox.toLowerCase() !== 'inbox' ? label + ' · ' + mailbox : label;
 }
 
 function updateResourceList(rows: ResourceRow[], updated: ResourceRow): ResourceRow[] {
@@ -204,20 +212,122 @@ function handoffConversation(session: Record<string, Object>, managerId: string)
   return row;
 }
 
+const INBOX_OPEN_TIERS:string[] = ['action','working','fyi','noise'];
+const INBOX_TIERS: string[] = INBOX_OPEN_TIERS.concat(['done']);
+
+export function inboxTier(data:Record<string,Object>):string {
+  if (Wire.text(data,'done_at')) return 'done';
+  const status = Wire.text(data,'status'), tier = Wire.text(data,'tier');
+  if (INBOX_OPEN_TIERS.includes(status)) return status;
+  return ['action','fyi','noise'].includes(tier) ? tier : 'action';
+}
+
+export function inboxTierLabel(key:string):string {
+  if (key === 'action') return 'needs_you';
+  if (key === 'working') return 'flow_inbox_progress';
+  if (key === 'fyi') return 'flow_inbox_fyi';
+  if (key === 'done') return 'phone_inbox_done';
+  return key === 'noise' ? 'flow_inbox_collapsed' : key;
+}
+
+export function inboxLineKey(row:ResourceRow):string {
+  return row.kind === 'session' ? JSON.stringify([row.key(),Wire.text(row.data(),'inbox_interaction')]) : row.key();
+}
+
+function inboxQuestionPreview(request:Record<string,Object>):string {
+  const summary=Wire.text(request,'summary').trim(), tool=Wire.text(request,'tool_name');
+  switch (Wire.text(request,'kind')) {
+    case 'question': return Wire.text(Wire.rows(request,'questions')[0] || {},'question') || summary;
+    case 'plan': return Wire.text(request,'plan').split('\n').map((line:string) => line.trim().replace(/^[#* ]+|[#* ]+$/g,''))
+      .find((line:string) => !!line) || summary;
+    case 'permission': {
+      if (summary || tool==='secret_run' || tool==='secret_handoff') return summary;
+      const input=Wire.object(request,'tool_input');
+      for (const key of ['command','file_path','notebook_path','description','path','url','query','prompt']) {
+        const target=Wire.text(input,key).trim(); if (target) return target;
+      }
+      return tool;
+    }
+    case 'screen': return Wire.text(Wire.object(request,'dialog'),'question') || summary;
+    case 'elicitation': return Wire.text(Wire.object(request,'elicitation'),'message') || summary;
+    default: return summary;
+  }
+}
+
+function inboxSourceGroup(row:ResourceRow):string {
+  if (row.kind==='session') return 'agents';
+  const data=row.data(), source=itemSource(row,data), account=Wire.text(data,'account');
+  if (Object.keys(Wire.object(data,'connector')).length) return 'c:'+account;
+  return source==='mail' ? 'mail:'+account : source || 'inbox';
+}
+
+// Calendar days keep local midnight boundaries across daylight-saving changes.
+function inboxTimeGroup(row: ResourceRow, now: Date): string {
+  if (row.kind === 'session') return 'agents';
+  const data = row.data();
+  const date = new Date(Wire.text(data, 'updated_at') || Wire.text(data, 'at') || Wire.text(data, 'created_at'));
+  if (!Number.isFinite(date.getTime())) return 'time:month';
+  const localDay = (value: Date): number => Date.UTC(value.getFullYear(), value.getMonth(), value.getDate()) / 86400000;
+  const days = localDay(now) - localDay(date);
+  if (days <= 0) return 'time:today';
+  if (days === 1) return 'time:yesterday';
+  if (days < 7) return 'time:d:' + date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0') + '-' + String(date.getDate()).padStart(2,'0');
+  return days < 30 ? 'time:week' : 'time:month';
+}
+
+function inboxTimeOrder(key: string): number {
+  if (key === 'agents') return 0;
+  if (key === 'time:today') return 1;
+  if (key === 'time:yesterday') return 2;
+  if (key.startsWith('time:d:')) return 3;
+  return key === 'time:week' ? 4 : 5;
+}
+
+export class InboxListSection {
+  key:string;
+  rows:ResourceRow[] = [];
+  groups:InboxListSection[] = [];
+  constructor(key:string) { this.key=key; }
+}
+
+export class InboxQuickFilter {
+  key:string;
+  count:number;
+  constructor(key:string,count:number) { this.key=key; this.count=count; }
+}
+
+export class InboxListView {
+  choices:InboxQuickFilter[] = [];
+  sections:InboxListSection[] = [];
+}
+
 @ObservedV2
 export class InboxWorkspace {
   @Trace items: ResourceRow[] = [];
   @Trace selected: ResourceRow = new ResourceRow();
   @Trace detail: Record<string, Object> = {};
+  @Trace kbChat: Record<string, Object> = {};
   @Trace sourceFilter: string = 'all';
   @Trace accountFilter: string = 'all';
-  @Trace statusFilter: string = 'open';
+  @Trace kindFilter:string = '';
+  @Trace filterAddresses:Record<string,string> = {};
+  @Trace statusFilter: string = 'action';
+  private beforeSearch: string = '';
+  @Trace doneItems: ResourceRow[] = [];
+  @Trace waitingAgents:ResourceRow[] = [];
+  @Trace haveDoneDays: boolean = false;
+  @Trace historyBusy: boolean = false;
+  @Trace historyEnded: boolean = false;
+  private historyBefore: string = '';
+  private historyBeforeID: string = '';
+  private historyRevision: number = 0;
   @Trace search: string = '';
   @Trace loading: boolean = false;
   @Trace detailLoading: boolean = false;
   @Trace feedLoading: boolean = false;
   @Trace error: string = '';
   @Trace writeState: string = '';
+  private writeOutbound: boolean = false;
   @Trace replyDraft: string = '';
   @Trace replyTargetChanged: boolean = false;
   @Trace draftLoading: boolean = false;
@@ -288,15 +398,157 @@ export class InboxWorkspace {
   private currentThreadCanReply: boolean = false;
   private referenceThreadLoaded: boolean = false;
 
-  get filteredItems(): ResourceRow[] {
-    return this.items.filter((row: ResourceRow) => {
-      const data = row.data(), source = itemSource(row), account = Wire.text(data, 'account'), handled = done(row);
-      const text = (row.title + ' ' + row.detail + ' ' + Wire.text(data, 'sender')).toLowerCase();
-      return (this.sourceFilter === 'all' || source === this.sourceFilter || (this.sourceFilter === 'connector' && !!Object.keys(Wire.object(data, 'connector')).length)) &&
-        (this.accountFilter === 'all' || account === this.accountFilter) &&
-        (this.statusFilter === 'all' || this.statusFilter === 'open' && !handled || this.statusFilter === 'done' && handled) &&
-        (!this.search || text.includes(this.search.toLowerCase()));
-    });
+  setSearch(value:string):void {
+    const previous = !!this.search.trim(), next = !!value.trim();
+    if (!previous && next) { this.beforeSearch = this.statusFilter; this.statusFilter = 'all'; }
+    if (previous && !next) { this.statusFilter = this.beforeSearch || 'action'; this.beforeSearch = ''; }
+    this.search = value;
+  }
+
+  private kindMatches(data:Record<string,Object>,mentionLabel:string):boolean {
+    if (!this.kindFilter) return true;
+    const kind=Wire.text(data,'kind');
+    if (this.kindFilter==='agent') return false;
+    if (kind===this.kindFilter) return true;
+    if (this.kindFilter==='group') return kind==='bot';
+    return this.kindFilter==='mention' && (kind==='doc' || kind==='moment' &&
+      (Wire.bool(data,'mentioned') || !!mentionLabel && Wire.text(data,'kind_label')===mentionLabel));
+  }
+
+  listView(mentionLabel:string='', requestLabel:(row:ResourceRow)=>string=() => '', byTime:boolean=false, now:Date=new Date()):InboxListView {
+    const buckets = new Map<string,InboxListSection>(), seen = new Set<string>(), query = this.search.trim().toLocaleLowerCase();
+    for (const key of INBOX_TIERS) buckets.set(key,new InboxListSection(key));
+    if (this.sourceFilter === 'all' && this.accountFilter === 'all' && (!this.kindFilter || this.kindFilter==='agent')) {
+      for (const session of this.waitingAgents) {
+        if (!query || [session.title,session.detail,requestLabel(session)].join(' ').toLocaleLowerCase().includes(query)) buckets.get('action')!.rows.push(session);
+      }
+    }
+    for (const row of this.items.concat(this.doneItems)) {
+      const identity = row.key();
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+      const data = row.data(), source = itemSource(row,data), account = Wire.text(data,'account');
+      if (!this.kindMatches(data,mentionLabel)) continue;
+      if (this.sourceFilter !== 'all' && source !== this.sourceFilter &&
+        !(this.sourceFilter === 'connector' && Object.keys(Wire.object(data,'connector')).length > 0)) continue;
+      if (this.accountFilter !== 'all' && account !== this.accountFilter) continue;
+      if (query && ![row.title,row.detail,Wire.text(data,'sender'),Wire.text(data,'where'),Wire.text(data,'preview'),Wire.text(data,'account_name')].join(' ').toLocaleLowerCase().includes(query)) continue;
+      buckets.get(inboxTier(data))!.rows.push(row);
+    }
+    const result = new InboxListView();
+    const chosen = this.statusFilter;
+    for (const key of INBOX_TIERS) {
+      const section = buckets.get(key)!;
+      if (key === 'action' || key !== 'noise' && (section.rows.length || chosen === key ||
+        key === 'done' && this.haveDoneDays && !query && !this.kindFilter && this.sourceFilter === 'all' && this.accountFilter === 'all')) {
+        result.choices.push(new InboxQuickFilter(key,section.rows.length));
+      }
+      if (chosen === 'all' || chosen === key || chosen === 'open' && key !== 'done') {
+        if (key === 'done') section.rows.sort((a:ResourceRow,b:ResourceRow) => Wire.text(b.data(),'done_at').localeCompare(Wire.text(a.data(),'done_at')));
+        if (section.rows.length) {
+          if (key!=='working' && key!=='done') {
+            const groups = new Map<string,InboxListSection>();
+            for (const row of section.rows) {
+              const groupKey = byTime ? inboxTimeGroup(row, now) : inboxSourceGroup(row);
+              let group = groups.get(groupKey);
+              if (!group) { group = new InboxListSection(groupKey); groups.set(groupKey, group); }
+              group.rows.push(row);
+            }
+            if (groups.size > 1) section.groups = Array.from(groups.values()).sort((a:InboxListSection,b:InboxListSection) =>
+              byTime ? inboxTimeOrder(a.key) - inboxTimeOrder(b.key) || b.key.localeCompare(a.key) :
+                this.sourceGroupOrder(a.key) - this.sourceGroupOrder(b.key));
+          }
+          result.sections.push(section);
+        }
+      }
+    }
+    result.choices.push(new InboxQuickFilter('all',0));
+    return result;
+  }
+  private sourceGroupOrder(key:string):number {
+    if (key==='agents') return 0;
+    if (key==='lark' || key==='feishu') return 1;
+    if (key.startsWith('mail:')) return 2;
+    return 3;
+  }
+  get filteredItems():ResourceRow[] {
+    // Legacy callers may explicitly request every open row in the Hub's list order.
+    if (this.statusFilter === 'open') {
+      const keys = new Set<string>(this.listView().sections.flatMap((s:InboxListSection) => s.rows.map((r:ResourceRow) => r.key())));
+      return this.items.filter((r:ResourceRow) => keys.has(r.key()));
+    }
+    return this.listView().sections.flatMap((section:InboxListSection) => section.rows);
+  }
+
+  private historyRow(data:Record<string,Object>,owner:OwnerSnapshot):ResourceRow | undefined {
+    const id = Wire.text(data,'id');
+    if (!id || !Wire.text(data,'done_at')) return undefined;
+    const row=ResourceRow.from(data,'inbox'); if (!row.manager) row.manager = owner.managerId; return row;
+  }
+  async loadOlderDone():Promise<void> {
+    if (this.historyBusy || this.historyEnded || this.referenceMode) return;
+    let owner:OwnerSnapshot;
+    try { owner = this.capture(undefined); } catch (_) { return; }
+    const rev = this.historyRevision;
+    const admit = ():boolean => this.owns(owner,false) && this.historyRevision === rev;
+    const query = Wire.payload(['sources','limit'],['all','100']);
+    if (this.historyBefore && this.historyBeforeID) { query['before']=this.historyBefore; query['before_id']=this.historyBeforeID; }
+    this.historyBusy = true;
+    try {
+      const result = await owner.repo.call('/api/v1/inbox/done' + managerQuery(owner.managerId,query));
+      if (!admit()) return;
+      const next = this.doneItems.slice(), known = new Set<string>(next.map((r:ResourceRow) => r.key()));
+      for (const item of Wire.rows(result,'items')) {
+        const row = this.historyRow(item,owner);
+        if (row && !known.has(row.key())) { known.add(row.key()); next.push(row); }
+      }
+      const cursor = Wire.object(result,'next'), before = Wire.text(cursor,'before'), id=Wire.text(cursor,'before_id');
+      this.historyEnded = !before || !id || before === this.historyBefore && id === this.historyBeforeID;
+      this.historyBefore=before; this.historyBeforeID=id; this.doneItems=next;
+    } catch (error) {
+      if (admit()) {
+        if (error instanceof HttpFailure && [404,501].includes(error.status)) this.historyEnded=true;
+        else this.error=this.errorCode(error as Error);
+      }
+    } finally { if (admit()) this.historyBusy=false; }
+  }
+  private async readWaitingAgents(owner:OwnerSnapshot,current:() => boolean):Promise<void> {
+    if (!owner.client.sessions?.length) { if (current()) this.waitingAgents=[]; return; }
+    try {
+      const requests=await owner.repo.decisions();
+      if (!current()) return;
+      const found:ResourceRow[] = [], ids=new Set<string>();
+      for (const item of requests) {
+        const nested=Wire.object(item,'interaction'), id=Wire.text(item,'id') || Wire.text(nested,'id');
+        const machine=Wire.text(item,'machine_id') || Wire.text(nested,'machine_id'), session=Wire.text(item,'session_id') || Wire.text(nested,'session_id');
+        const manager=Wire.text(item,'manager') || Wire.text(item,'manager_id') || Wire.text(nested,'manager') || owner.managerId;
+        const identity=JSON.stringify([manager,machine,session,id]);
+        if (!id || !session || !machine || ids.has(identity) || manager !== owner.managerId || Wire.bool(item,'muted') || Wire.bool(nested,'muted')) continue;
+        const origin=owner.client.sessions.find((row:ResourceRow) => row.machine === machine && (row.session || row.id) === session &&
+          (!row.group || row.group === owner.groupId) && (!row.manager || row.manager === manager));
+        if (!origin || Wire.bool(origin.data(),'muted')) continue;
+        ids.add(identity);
+        const request=Object.keys(nested).length ? nested : item, body=origin.data();
+        body['inbox_interaction']=id;
+        body['inbox_request_kind']=Wire.text(request,'kind');
+        body['inbox_request_tool']=Wire.text(request,'tool_name');
+        body['inbox_asked_at']=Wire.text(request,'created_at') || Wire.text(item,'created_at');
+        const target=ResourceRow.from(body,'session'); target.group=owner.groupId; target.manager=manager;
+        target.title=Wire.text(request,'session_title') || Wire.text(item,'session_title') || origin.title;
+        target.detail=inboxQuestionPreview(request);
+        found.push(target);
+      }
+      this.waitingAgents=found.sort((a:ResourceRow,b:ResourceRow) =>
+        (Date.parse(Wire.text(a.data(),'inbox_asked_at')) || 0)-(Date.parse(Wire.text(b.data(),'inbox_asked_at')) || 0));
+    } catch (_) { if (current()) this.waitingAgents=[]; }
+  }
+  private async readDoneDays(owner:OwnerSnapshot,current:() => boolean):Promise<void> {
+    try {
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const result = await owner.repo.call('/api/v1/inbox/done/days' + managerQuery(owner.managerId,Wire.payload(['sources','tz'],['all',zone])));
+      if (current()) this.haveDoneDays=Wire.rows(result,'days').some((day:Record<string,Object>) =>
+        /^\d{4}-\d{2}-\d{2}$/.test(Wire.text(day,'day')) && Wire.number(day,'count')>0);
+    } catch (_) { /* Older Hubs still list recent completed items in the main response. */ }
   }
 
   get sourceOptions(): string[] {
@@ -307,6 +559,39 @@ export class InboxWorkspace {
     const values = this.items.map((row: ResourceRow) => Wire.text(row.data(), 'account')).filter((value: string, index: number, all: string[]) => value && all.indexOf(value) === index);
     return ['all'].concat(values);
   }
+  get sourceAccounts():string[] {
+    return this.accountOptions.filter((key:string) => key!=='all' && this.items.some((row:ResourceRow) => {
+      const data=row.data();
+      return Wire.text(data,'account')===key && (itemSource(row,data)==='mail' || Object.keys(Wire.object(data,'connector')).length>0);
+    }));
+  }
+  get channelOptions():string[] {
+    return this.sourceOptions.filter((key:string) => key==='all' || key==='lark' || this.items.some((row:ResourceRow) => {
+      const data=row.data();
+      return itemSource(row,data)===key && (!Wire.text(data,'account') || key!=='mail' && !Object.keys(Wire.object(data,'connector')).length);
+    }));
+  }
+  filterAccountName(key:string):string { return this.filterAddresses[key] || this.accountName(key); }
+  private mailAllowed(client: ClientModel | undefined = this.client): boolean {
+    return !client || typeof client.mailModuleAllowed !== 'function' || client.mailModuleAllowed();
+  }
+  private async readFilterAccounts(owner:OwnerSnapshot,current:() => boolean):Promise<void> {
+    if (!this.mailAllowed(owner.client)) {
+      if (current()) this.filterAddresses = {};
+      return;
+    }
+    try {
+      const result=await owner.repo.call('/api/v1/mail/accounts'+managerQuery(owner.managerId));
+      if (!current()) return;
+      const names:Record<string,string>={};
+      for (const value of Wire.rows(result,'accounts')) {
+        const key=Wire.text(value,'id'), address=Wire.text(value,'email');
+        if (key) names[key]=address || Wire.text(value,'name') || key;
+      }
+      this.filterAddresses=names;
+    } catch (_) { if (current()) this.filterAddresses={}; }
+  }
+  canComposeMail():boolean { return this.mailAllowed() && this.active && !!this.client?.connected && Object.keys(this.filterAddresses).length>0 && this.canWrite(); }
   sourceName(value: string): string {
     if (value === 'all') return 'all';
     if (value === 'mail') return 'mail';
@@ -331,10 +616,13 @@ export class InboxWorkspace {
   isGeneric(): boolean { return this.currentIsGeneric; }
   capability(name: string): boolean { return this.sourceCapabilities.includes(name); }
   hasConversation(): boolean { return !!this.currentConversation && !!this.currentSource && (!this.isThreadReference() || this.referenceThreadLoaded); }
+  canWrite(): boolean {
+    return !this.handoffBusy && !this.attachmentBusy && !['sending', 'saving', 'pending', 'unknown'].includes(this.writeState);
+  }
   canSendGeneric(): boolean {
     const threadTargetReady = !this.isThreadReference() || this.referenceThreadLoaded && !!this.currentThreadRootMessage &&
       this.currentThreadCanReply && this.threadReply && this.threadReplyTo === this.currentThreadRootMessage;
-    return !!this.client?.connected && !!this.boundRepo && threadTargetReady && (!this.referenceMode || !this.replyTargetChanged) &&
+    return this.canWrite() && !!this.client?.connected && !!this.boundRepo && threadTargetReady && (!this.referenceMode || !this.replyTargetChanged) &&
       this.currentIsGeneric && !!Wire.text(this.sourceMe, 'user_id') && Wire.bool(this.sourceStatus, 'configured') &&
       Wire.bool(this.sourceStatus, 'connected') && Wire.bool(this.sourceStatus, 'signed_in');
   }
@@ -375,6 +663,7 @@ export class InboxWorkspace {
     if (this.referenceMode) return false;
     const source = itemSource(this.selected, this.detail), connector = Wire.object(this.detail, 'connector');
     if (source === 'mail') {
+      if (!this.mailAllowed()) return false;
       const target = Wire.object(this.detail, 'reply_target');
       return !!this.selected.id && !done(this.selected) && Wire.number(target, 'uid') > 0 && !!Wire.text(target, 'version');
     }
@@ -384,6 +673,12 @@ export class InboxWorkspace {
   }
   private targetPath(row: ResourceRow): string { return '/api/v1/inbox/' + segment(row.id) + managerQuery(row.manager); }
   private targetActionPath(row: ResourceRow, action: string): string { return '/api/v1/inbox/' + segment(row.id) + '/' + action + managerQuery(row.manager); }
+  private detailRow(data: Record<string, Object>, row: ResourceRow): ResourceRow {
+    const next = ResourceRow.from(data, 'inbox');
+    if (next.id && next.id !== row.id) throw new Error('identity_changed');
+    next.id = row.id; next.group = row.group; next.manager = row.manager;
+    next.machine = row.machine; next.session = row.session; return next;
+  }
   private cloneRow(row: ResourceRow): ResourceRow {
     const next = ResourceRow.from(row.data(), row.kind || 'inbox');
     next.id = row.id || next.id; next.title = row.title || next.title; next.detail = row.detail || next.detail;
@@ -396,7 +691,8 @@ export class InboxWorkspace {
     this.revision++; this.active = true; this.client = client; this.boundRepo = undefined;
     this.pendingRow = row ? this.cloneRow(row) : undefined;
     this.selected = new ResourceRow(); this.selectedKey = ''; this.detail = {}; this.items = [];
-    this.error = ''; this.writeState = ''; this.sourceFilter = 'all'; this.accountFilter = 'all'; this.statusFilter = 'open'; this.search = '';
+    this.error = ''; this.writeState = ''; this.sourceFilter = 'all'; this.accountFilter = 'all'; this.kindFilter=''; this.filterAddresses={}; this.statusFilter = 'action'; this.search = ''; this.beforeSearch = '';
+    this.historyRevision++; this.historyBusy=false; this.historyEnded=false; this.historyBefore=''; this.historyBeforeID=''; this.doneItems=[]; this.waitingAgents=[]; this.haveDoneDays=false;
     this.clearDetailState();
     try { this.boundRepo = client.repo(); } catch (_) { this.error = client.demo ? 'demo_unavailable' : 'offline'; return; }
     if (row) await this.openRow(row); else await this.refresh();
@@ -414,7 +710,25 @@ export class InboxWorkspace {
     this.clearDetailState();
   }
 
+  private admitWrite(owner: OwnerSnapshot): boolean {
+    if (!this.owns(owner)) return false;
+    this.writeOutbound = true;
+    return true;
+  }
+  private writeFailureState(error: Error): string {
+    if (error instanceof HttpFailure) return error.resultPending ? 'pending' : error.resultUnknown ? 'unknown' : 'failed';
+    return this.writeOutbound ? 'unknown' : 'failed';
+  }
+  private interruptWrite(): void {
+    if (this.writeState === 'sending' || this.writeState === 'saving') {
+      this.writeState = this.writeOutbound ? 'unknown' : 'failed';
+      if (this.writeOutbound) this.error = 'result_unknown';
+    }
+    this.writeOutbound = false;
+  }
+
   onDisconnected(): void {
+    this.interruptWrite();
     this.revision++; this.boundRepo = undefined; this.error = 'offline'; this.loading = false; this.detailLoading = false; this.feedLoading = false; this.draftLoading = true; this.attachmentBusy = false; this.handoffBusy = false;
     if (this.readTimer !== -1) clearTimeout(this.readTimer); this.readTimer = -1;
     this.visibleReadTarget = ''; this.visibleReadOwner = undefined; this.visibleReadIds = []; this.visibleReadPositions = {}; this.visibleReadBadges = {};
@@ -426,6 +740,7 @@ export class InboxWorkspace {
     let repo: HubRepository;
     try { repo = this.client.repo(); }
     catch (error) { this.error = error instanceof Error ? error.message : 'offline'; return; }
+    this.interruptWrite();
     this.boundRepo = repo;
     this.revision++;
     if (this.readTimer !== -1) clearTimeout(this.readTimer); this.readTimer = -1;
@@ -489,10 +804,11 @@ export class InboxWorkspace {
     this.feedBefore = ''; this.threadRoot = ''; this.isTopicList = false; this.currentSource = ''; this.currentConversation = '';
     this.currentAccount = ''; this.currentAccountName = ''; this.currentIsGeneric = false; this.sourceCapabilities = [];
     this.sourceStatus = {}; this.sourceMe = {}; this.quickReactions = []; this.mailTranslation = {}; this.translationError = '';
-    this.translatedMailUid = 0; this.translationBusy = false; this.showOriginal = true; this.writeState = ''; this.attachment = undefined; this.attachmentBusy = false;
+    this.translatedMailUid = 0; this.translationBusy = false; this.showOriginal = true; this.writeState = ''; this.writeOutbound = false; this.attachment = undefined; this.attachmentBusy = false;
     this.threadReplyTo = ''; this.threadReply = false; this.handoffDraft = ''; this.handoffBusy = false;
     this.referenceMode = false; this.referenceThreadId = ''; this.referenceThreadTitle = '';
     this.currentThreadRootMessage = ''; this.currentThreadCanReply = false; this.referenceThreadLoaded = false;
+    this.kbChat = {};
   }
 
   private capture(row: ResourceRow | undefined = this.selected): OwnerSnapshot {
@@ -537,6 +853,12 @@ export class InboxWorkspace {
       });
       // List reads rebuild membership; detail acknowledgements patch their existing row.
       this.items = rows;
+      const recentIds=new Set<string>(rows.map((row:ResourceRow) => row.key()));
+      this.doneItems=this.doneItems.filter((row:ResourceRow) => !recentIds.has(row.key()));
+      if (!this.selectedKey) {
+        this.readDoneDays(owner,current); this.readWaitingAgents(owner,current);
+        this.readFilterAccounts(owner,current);
+      }
       try {
         const sources = await owner.repo.call('/api/v1/messaging' + managerQuery(owner.managerId));
         if (!current()) return;
@@ -759,16 +1081,21 @@ export class InboxWorkspace {
       const result = await owner.repo.call(this.targetPath(row));
       if (!this.owns(owner)) return;
       const item = Wire.object(result, 'item'); const data = Object.keys(item).length ? item : result;
-      const updated = ResourceRow.from(data, 'inbox'); updated.manager = row.manager;
+      const updated = this.detailRow(data, row);
       if (updated.id && updated.id !== row.id) { this.error = 'identity_changed'; return; }
       updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
+      const topKbChat = Wire.object(result, 'kb_chat');
+      this.kbChat = Object.keys(topKbChat).length ? topKbChat : Wire.object(data, 'kb_chat');
       const nextTargetRevision = targetRevision(updated, data);
       if (this.detailTargetRevision) this.replyTargetChanged = this.detailTargetRevision !== nextTargetRevision;
       this.detailTargetRevision = nextTargetRevision;
       this.items = updateResourceList(this.items, updated);
       this.error = '';
       const source = itemSource(updated, data);
-      if (source === 'mail') await this.loadMail(owner, updated, data);
+      if (source === 'mail') {
+        if (this.mailAllowed(owner.client)) await this.loadMail(owner, updated, data);
+        else this.mailMessages = [];
+      }
       else if (Object.keys(genericConversation(data, updated)).length || Object.keys(Wire.object(data, 'lark')).length) await this.loadConversation(owner, updated, data);
     } catch (error) { if (this.owns(owner)) this.error = this.errorCode(error as Error); }
     finally { if (this.owns(owner)) this.detailLoading = false; }
@@ -801,7 +1128,7 @@ export class InboxWorkspace {
   }
 
   async markMailVisible(uid: number): Promise<void> {
-    if (!this.isMail() || this.mailReadUids.includes(uid) || !Number.isSafeInteger(uid) || uid <= 0) return;
+    if (!this.isMail() || !this.mailAllowed() || this.mailReadUids.includes(uid) || !Number.isSafeInteger(uid) || uid <= 0) return;
     let owner: OwnerSnapshot;
     try { owner = this.capture(); } catch (_) { return; }
     const mail = Wire.object(this.detail, 'mail'), mailbox = Wire.text(mail, 'mailbox', 'INBOX'), account = Wire.text(mail, 'account_id');
@@ -1112,6 +1439,7 @@ export class InboxWorkspace {
     if (!value || !this.canSendGeneric() || !this.currentConversation) { this.error = 'write_unsupported'; return false; }
     const owner = this.capture(), source = this.currentSource, conversation = this.currentConversation, account = this.currentAccount;
     const clientId = util.generateRandomUUID();
+    this.writeOutbound = false; this.writeState = 'sending'; this.error = '';
     let me: Record<string, Object>;
     try { me = await this.readCurrentMe(owner); }
     catch (error) { if (this.owns(owner)) { this.error = this.errorCode(error as Error); this.writeState = 'failed'; } return false; }
@@ -1121,15 +1449,18 @@ export class InboxWorkspace {
     if (thread) body['thread'] = true;
     const path = '/api/v1/messaging/' + segment(source) + '/conversations/' + segment(conversation) + '/messages' + managerQuery(owner.managerId, Wire.payload(['account'], [account]));
     this.writeState = 'sending'; this.error = '';
+    let acknowledged = false;
     try {
-      await owner.repo.call(path, 'POST', body, clientId);
+      await owner.repo.call(path, 'POST', body, clientId, () => this.admitWrite(owner));
       if (!this.owns(owner)) return false;
+      acknowledged = true;
       this.replyDraft = ''; this.threadReplyTo = ''; this.threadReply = false; this.writeState = 'sent';
       if (this.draftReady) await this.persistDraft(owner, this.selected, '');
       if (!this.owns(owner)) return false;
       await this.refreshConversation(); return this.owns(owner);
     } catch (error) {
-      if (this.owns(owner)) { this.writeState = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'failed'; this.error = this.errorCode(error as Error); }
+      if (acknowledged) { if (this.owns(owner)) this.error = this.errorCode(error as Error); return this.owns(owner); }
+      if (this.owns(owner)) { this.writeState = this.writeFailureState(error as Error); this.error = this.errorCode(error as Error); }
       return false;
     }
   }
@@ -1160,7 +1491,22 @@ export class InboxWorkspace {
     else await this.loadLegacyLarkMessages(owner, this.currentConversation, this.currentAccount, start, this.isTopicList);
   }
 
+  private receiptEntry(receipt: Record<string, Object>): Record<string, Object> {
+    return Wire.has(receipt, 'item') ? Wire.object(receipt, 'item') : receipt;
+  }
+
+  private acknowledgeEntry(row: ResourceRow, requireItem: boolean = false): (receipt: Record<string, Object>) => boolean {
+    const expectedId = row.id;
+    return (receipt: Record<string, Object>): boolean => {
+      if ((requireItem && !Wire.has(receipt, 'item')) || !expectedId || Wire.text(this.receiptEntry(receipt), 'id') !== expectedId) {
+        throw new HttpFailure(200, 'result_unknown', true);
+      }
+      return true;
+    };
+  }
+
   async replyInbox(text: string, confirmation: string): Promise<boolean> {
+    if (!this.canWrite()) return false;
     if (this.referenceMode) return false;
     const value = text.trim(); if (!value || !this.canReplyToItem()) { this.error = 'reply_unsupported'; return false; }
     if (!confirmation || confirmation !== this.replyConfirmationSnapshot(value)) { this.error = 'confirmation_required'; return false; }
@@ -1173,20 +1519,23 @@ export class InboxWorkspace {
       body['expected_uid'] = uid; body['expected_version'] = version;
     }
     const path = this.targetActionPath(row, 'reply');
-    this.writeState = 'sending'; this.error = '';
+    this.writeOutbound = false; this.writeState = 'sending'; this.error = '';
+    let acknowledged = false;
     try {
-      const result = await owner.repo.call(path, 'POST', body, clientId);
+      const result = await owner.repo.call(path, 'POST', body, clientId, () => this.admitWrite(owner), false,
+        this.acknowledgeEntry(row));
       if (!this.owns(owner)) return false;
-      const item = Wire.object(result, 'item'), data = Object.keys(item).length ? item : result;
-      const updated = ResourceRow.from(data, 'inbox'); updated.manager = row.manager; this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
+      const data = this.receiptEntry(result);
+      const updated = this.detailRow(data, row); this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
       this.items = updateResourceList(this.items, updated);
-      this.replyDraft = ''; this.writeState = 'sent';
+      this.replyDraft = ''; this.writeState = 'sent'; acknowledged = true;
       if (this.draftReady) await this.persistDraft(owner, row, '');
       if (!this.owns(owner)) return false;
       return true;
     } catch (error) {
+      if (acknowledged) { if (this.owns(owner)) this.error = this.errorCode(error as Error); return this.owns(owner); }
       if (!this.owns(owner)) return false;
-      this.writeState = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'failed';
+      this.writeState = this.writeFailureState(error as Error);
       this.error = this.errorCode(error as Error);
       if (error instanceof HttpFailure && error.code === 'mail_reply_target_changed') {
         // A stale target is reread, but the retained text never gets submitted again without a new confirmation.
@@ -1198,36 +1547,36 @@ export class InboxWorkspace {
   }
 
   async processInbox(): Promise<boolean> {
+    if (!this.canWrite()) return false;
     if (this.referenceMode) return false;
     if (!this.selectedKey) return false;
     const row = this.selected, owner = this.capture(row), nextDone = !done(row), path = this.targetActionPath(row, 'done');
-    this.writeState = 'saving'; this.error = '';
+    this.writeOutbound = false; this.writeState = 'saving'; this.error = '';
     try {
-      const result = await owner.repo.call(path, 'POST', Wire.payload(['done'], [nextDone]));
+      const result = await owner.repo.call(path, 'POST', Wire.payload(['done'], [nextDone]), '', () => this.admitWrite(owner), false, this.acknowledgeEntry(row));
       if (!this.owns(owner)) return false;
-      const updated = ResourceRow.from(result, 'inbox'); updated.manager = row.manager;
-      if (updated.id && updated.id !== row.id) throw new Error('identity_changed');
-      updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = result; this.items = updateResourceList(this.items, updated);
+      const data = this.receiptEntry(result), updated = this.detailRow(data, row);
+      this.selected = updated; this.selectedKey = updated.key(); this.detail = data; this.items = updateResourceList(this.items, updated);
+      this.doneItems = done(updated) ? updateResourceList(this.doneItems,updated) : this.doneItems.filter((row:ResourceRow) => row.key() !== updated.key());
       this.writeState = ''; return true;
-    } catch (error) { if (this.owns(owner)) { this.writeState = 'failed'; this.error = this.errorCode(error as Error); } return false; }
+    } catch (error) { if (this.owns(owner)) { this.writeState = this.writeFailureState(error as Error); this.error = this.errorCode(error as Error); } return false; }
   }
 
   async handoff(text: string): Promise<ResourceRow | undefined> {
     if (this.referenceMode) return undefined;
-    if (this.handoffBusy || ['pending', 'unknown'].includes(this.writeState)) return undefined;
+    if (!this.canWrite()) return undefined;
     const value = text.trim(); if (!value || !this.selectedKey) { this.error = 'text_required'; return undefined; }
     const row = this.selected, owner = this.capture(row), clientId = util.generateRandomUUID();
-    const path = this.targetActionPath(row, 'handoff'); this.handoffBusy = true; this.handoffDraft = value; this.error = '';
+    const path = this.targetActionPath(row, 'handoff'); this.handoffBusy = true; this.writeOutbound = false; this.writeState = 'sending'; this.handoffDraft = value; this.error = '';
     try {
-      const response = await owner.repo.call(path, 'POST', Wire.payload(['text', 'client_id'], [value, clientId]), clientId);
+      const response = await owner.repo.call(path, 'POST', Wire.payload(['text', 'client_id'], [value, clientId]), clientId, () => this.admitWrite(owner), false, this.acknowledgeEntry(row, true));
       if (!this.owns(owner)) return undefined;
       this.writeState = 'handed_off'; this.handoffDraft = '';
 
       const acknowledgedItem = Wire.object(response, 'item');
       const acknowledgedId = Wire.text(acknowledgedItem, 'id');
       if (acknowledgedId === row.id) {
-        const updated = ResourceRow.from(acknowledgedItem, 'inbox'); updated.manager = row.manager;
-        updated.machine = row.machine; updated.session = row.session;
+        const updated = this.detailRow(acknowledgedItem, row);
         updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = acknowledgedItem;
         this.items = updateResourceList(this.items, updated);
       }
@@ -1243,8 +1592,7 @@ export class InboxWorkspace {
         const envelopeItem = Wire.object(refreshed, 'item');
         const detail = Object.keys(envelopeItem).length ? envelopeItem : refreshed;
         if (Wire.text(detail, 'id') === row.id) {
-          const updated = ResourceRow.from(detail, 'inbox'); updated.manager = row.manager;
-          updated.machine = row.machine; updated.session = row.session;
+          const updated = this.detailRow(detail, row);
           updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = detail;
           this.items = updateResourceList(this.items, updated);
           const handoffs = Wire.rows(detail, 'handoffs');
@@ -1256,11 +1604,12 @@ export class InboxWorkspace {
       }
       if (!target && this.owns(owner)) this.error = 'inbox_handoff_target_unavailable';
       return target;
-    } catch (error) { if (this.owns(owner)) { this.writeState = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'failed'; this.error = this.errorCode(error as Error); } return undefined; }
+    } catch (error) { if (this.owns(owner)) { this.writeState = this.writeFailureState(error as Error); this.error = this.errorCode(error as Error); } return undefined; }
     finally { if (this.owns(owner)) this.handoffBusy = false; }
   }
 
   async openMailCompose(): Promise<void> {
+    if (!this.mailAllowed()) return;
     let owner: OwnerSnapshot; try { owner = this.capture(undefined); } catch (error) { this.error = this.errorCode(error as Error); return; }
     this.mailComposeError = ''; this.mailComposeOpen = true; this.mailComposeBusy = true; this.mailComposeReady = false;
     this.mailComposeBlocked = false; this.mailComposeState = 'draft'; this.mailComposeAccount = '';
@@ -1400,49 +1749,61 @@ export class InboxWorkspace {
   toggleOriginal(): void { if (Object.keys(this.mailTranslation).length) this.showOriginal = !this.showOriginal; }
 
   setAttachment(value: InboxAttachmentDraft): void {
+    if (!this.canWrite()) return;
     if (!value.data.byteLength || value.data.byteLength > MAX_UPLOAD_BYTES || !value.name || !value.mime) { this.error = 'attachment_limit'; return; }
     if (value.kind === 'image' && (value.data.byteLength > 7.5 * 1024 * 1024 || !/^image\/(jpeg|png|webp|gif)$/.test(value.mime))) { this.error = 'attachment_limit'; return; }
     this.attachment = value; this.error = '';
   }
-  removeAttachment(): void { this.attachment = undefined; }
+  removeAttachment(): void { if (this.canWrite()) this.attachment = undefined; }
   canSendAttachment(): boolean { return !!this.attachment && this.canSendGeneric() && this.capability('attachments') && this.hasConversation(); }
 
   async sendAttachment(): Promise<boolean> {
     const attachment = this.attachment, row = this.selected;
     if (!attachment || !this.canSendAttachment()) { this.error = 'write_unsupported'; return false; }
     const owner = this.capture(row), source = this.currentSource, conversation = this.currentConversation, account = this.currentAccount;
+    this.writeOutbound = false; this.attachmentBusy = true; this.writeState = 'sending'; this.error = '';
+    const replyTo = this.threadReplyTo, thread = this.threadReply;
     let me: Record<string, Object>;
-    try { me = await this.readCurrentMe(owner); } catch (error) { if (this.owns(owner)) this.error = this.errorCode(error as Error); return false; }
+    try { me = await this.readCurrentMe(owner); } catch (error) { if (this.owns(owner)) { this.error = this.errorCode(error as Error); this.attachmentBusy = false; this.writeState = 'failed'; } return false; }
     if (!this.owns(owner)) return false;
     const clientId = util.generateRandomUUID();
     const queryValues: Record<string, Object> = Wire.payload(['client_id', 'name', 'mime', 'kind', 'account'], [clientId, attachment.name, attachment.mime, attachment.kind, account]);
-    if (this.threadReplyTo) {
-      if (!this.capability('attachment_replies')) { this.error = 'attachment_reply_unsupported'; return false; }
-      queryValues['reply_to'] = this.threadReplyTo; queryValues['thread'] = this.threadReply ? '1' : '';
+    if (replyTo) {
+      if (!this.capability('attachment_replies')) { this.error = 'attachment_reply_unsupported'; this.attachmentBusy = false; this.writeState = 'failed'; return false; }
+      queryValues['reply_to'] = replyTo; queryValues['thread'] = thread ? '1' : '';
     }
     const path = '/api/v1/messaging/' + segment(source) + '/conversations/' + segment(conversation) + '/attachments' + managerQuery(owner.managerId, queryValues);
     this.attachmentBusy = true; this.error = ''; this.writeState = 'sending';
     const mutations = owner.repo.mutations;
-    if (!mutations) { this.attachmentBusy = false; this.error = 'storage_unavailable'; return false; }
+    if (!mutations) { this.attachmentBusy = false; this.writeState = 'failed'; this.error = 'storage_unavailable'; return false; }
     let record: MutationRecord | undefined;
+    let acknowledged = false;
     try {
       const mutationPath = '/api/v1/messaging/' + segment(source) + '/conversations/' + segment(conversation) + '/attachments' + managerQuery(owner.managerId, Wire.payload(['account'], [account]));
       const admitted: MutationRecord = await mutations.begin(mutationPath, 'POST', '', clientId);
       record = admitted;
-      if (!this.owns(owner)) return false;
+      if (!this.owns(owner)) { await mutations.finish(admitted, 'failed'); return false; }
+      this.writeOutbound = true;
       const response = await owner.repo.transport.requestBytes(path, 'POST', attachment.data, attachment.mime, admitted.id);
       if (!this.owns(owner)) return false;
-      const result = Wire.parse(util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(new Uint8Array(response.data)));
+      if (response.data.byteLength > Wire.maxBytes) throw new HttpFailure(200, 'result_unknown', true);
+      const receipt: Object = JSON.parse(util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(new Uint8Array(response.data))) as Object;
+      if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) throw new HttpFailure(200, 'result_unknown', true);
+      const result = receipt as Record<string, Object>;
+      const messageId = result['message_id'];
+      if (messageId !== undefined && (typeof messageId !== 'string' || Array.from(messageId as string).length > 200)) throw new HttpFailure(200, 'result_unknown', true);
       // A generic attachment receipt may be accepted without a message_id; the protocol forbids resending it automatically.
       if (Wire.text(result, 'state') === 'pending' || Wire.text(result, 'state') === 'unknown') throw new HttpFailure(202, 'result_unknown', true, Wire.text(result, 'state') === 'pending');
+      acknowledged = true; this.attachment = undefined; this.writeState = 'sent';
       await mutations.finish(admitted, 'done');
       if (!this.owns(owner)) return false;
-      this.attachment = undefined; this.writeState = 'sent'; await this.refreshConversation(); return this.owns(owner);
+      await this.refreshConversation(); return this.owns(owner);
     } catch (error) {
+      if (acknowledged) { if (this.owns(owner)) this.error = this.errorCode(error as Error); return this.owns(owner); }
       if (record && record.state === 'pending') {
         try { await mutations.finish(record, error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && !error.resultUnknown ? 'failed' : 'unknown'); } catch (_) { }
       }
-      if (this.owns(owner)) { this.writeState = error instanceof HttpFailure && error.resultPending ? 'pending' : error instanceof HttpFailure && error.resultUnknown ? 'unknown' : 'failed'; this.error = this.errorCode(error as Error); }
+      if (this.owns(owner)) { this.writeState = this.writeFailureState(error as Error); this.error = this.errorCode(error as Error); }
       return false;
     } finally { if (this.owns(owner)) this.attachmentBusy = false; }
   }

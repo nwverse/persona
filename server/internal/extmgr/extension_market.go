@@ -2,11 +2,15 @@ package extmgr
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,20 +29,30 @@ import (
 // marketStale is how old an index may be before the catalog reads it again (in the background).
 const marketStale = 6 * time.Hour
 
+// marketCAFileMost bounds a configured CA bundle so a bad path cannot turn into an unbounded read.
+const marketCAFileMost = 1 << 20
+
+// marketSelfRefreshWindow is shared by every extension installed from one market: they share the market's upstream
+// token and API quota, so their accepted self-refresh requests share one window too.
+const marketSelfRefreshWindow = 10 * time.Minute
+
 type markets struct {
 	mu     sync.Mutex
 	loaded bool
 	byID   map[string]*marketState
 	// reading: the markets being read in the background, each with a channel closed when its read ends.
 	reading map[string]chan struct{}
-	// Client and GitHubAPI: tests point them at a fake.
+	// Client and GitHubAPI: tests point them at a fake. now is nil in production, and a clock in deterministic tests.
 	client    *http.Client
 	githubAPI string
+	now       func() time.Time
 }
 
 type marketState struct {
 	rec   extension.MarketRecord
 	index *extension.MarketIndex
+	// selfRefreshAt is when the last extension-initiated refresh was accepted, not when its network read finished.
+	selfRefreshAt time.Time
 }
 
 // errMarketSignature: a market's index was read but its signature refuses it (the last good one is kept but not
@@ -46,7 +60,7 @@ type marketState struct {
 var errMarketSignature = errors.New("market signature")
 
 // signedIndex enforces official identity independently of stored signature state.
-func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time) (extension.MarketRecord, *extension.MarketIndex, error) {
+func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time, build int64) (extension.MarketRecord, *extension.MarketIndex, error) {
 	key := ""
 	rec.FetchedAt = &now
 	if extension.IsOfficialMarket(rec.Spec) {
@@ -64,15 +78,28 @@ func signedIndex(rec extension.MarketRecord, f *extension.Fetched, now time.Time
 	} else {
 		rec.SigningKey = ""
 	}
-	verified, err := extension.ParseCatalog(f.Raw, key)
+	keys := rec.TrustedKeys
+	if key != "" {
+		keys = []string{key}
+	} else if len(keys) > 0 {
+		// A private market's owner keys (extension_market_keys.go): any one of them must sign the catalog.
+		normalized, err := extension.NormalizeMarketKeys(keys)
+		if err != nil || len(normalized) == 0 {
+			rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
+			rec.Error = i18n.T(i18n.Default, "extension-market_security.private_signature")
+			return rec, nil, fmt.Errorf("%w: %s", errMarketSignature, rec.Error)
+		}
+		keys = normalized
+	}
+	verified, err := extension.ParseCatalogKeysForBuild(f.Raw, keys, build)
 	if err != nil {
 		rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
 		rec.Error = err.Error()
 		return rec, nil, fmt.Errorf("%w: %s", errMarketSignature, rec.Error)
 	}
 	rec.Signature = extension.MarketSignature{State: extension.SigUnsigned}
-	if key != "" {
-		rec.Signature = extension.MarketSignature{State: extension.SigSigned, KeyID: keyIDOf(key)}
+	if verified.SignedBy != "" {
+		rec.Signature = extension.MarketSignature{State: extension.SigSigned, KeyID: keyIDOf(verified.SignedBy)}
 	}
 	// An empty owner pin is not silently rewritten. Runtime verification uses only
 	// the compiled-in key; approved pin migration belongs to the rotation workflow.
@@ -113,9 +140,9 @@ func (h *Manager) marketsLoad(ctx context.Context) error {
 		if len(r.Index) > 0 {
 			// Never trust a cached state flag: the complete envelope is verified again.
 			f := &extension.Fetched{Raw: r.Index}
-			rec, ix, verifyErr := signedIndex(r, f, time.Now())
+			rec, ix, verifyErr := signedIndex(r, f, time.Now(), h.build.Number)
 			rec.FetchedAt = r.FetchedAt
-			if r.Signature.Bad() && extension.IsOfficialMarket(r.Spec) {
+			if r.Signature.Bad() && requiresSignature(r) {
 				rec.Signature, rec.Error = r.Signature, r.Error
 				ix = nil
 			}
@@ -126,6 +153,10 @@ func (h *Manager) marketsLoad(ctx context.Context) error {
 		} else if extension.IsOfficialMarket(r.Spec) {
 			state.rec.Signature = extension.MarketSignature{State: extension.SigInvalid}
 			state.rec.Error = i18n.T(i18n.Default, "extension-market_security.cache")
+			state.rec.FetchedAt = nil
+		} else if len(r.TrustedKeys) > 0 {
+			// A private market with keys and no verified catalog yet: nothing to install from until it is read.
+			state.rec.SigningKey = ""
 			state.rec.FetchedAt = nil
 		} else {
 			state.rec.SigningKey = ""
@@ -235,9 +266,15 @@ func (h *Manager) market(rec extension.MarketRecord) (*extension.Market, error) 
 	if err != nil {
 		return nil, err
 	}
-	mk := &extension.Market{Spec: spec, TrustedKey: rec.SigningKey, Client: h.marketClient(), GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	client, err := h.marketClient()
+	if err != nil {
+		return nil, err
+	}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, TrustedKey: rec.SigningKey, Client: client, GitHubAPI: h.extensions.markets.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if extension.IsOfficialMarket(rec.Spec) {
 		mk.TrustedKey = extension.Official.SigningKey
+	} else {
+		mk.TrustedKeys = slices.Clone(rec.TrustedKeys)
 	}
 	if rec.TokenSealed != "" {
 		if mk.Token, err = (hubSealer{h}).Open(rec.TokenSealed); err != nil {
@@ -279,14 +316,14 @@ func (h *Manager) marketRead(ctx context.Context, id string) (MarketView, error)
 		return MarketView{}, errNoMarket
 	}
 	rec := s.rec
-	if rec.Spec != snapshot.Spec || rec.SigningKey != snapshot.SigningKey || rec.TokenSealed != snapshot.TokenSealed {
+	if !sameMarketTrust(rec, snapshot) {
 		return h.marketView(s), i18n.Err("extension-market_security.changed")
 	}
 	nextIndex := s.index
 	if err != nil {
 		rec.FetchedAt = &now
 		switch {
-		case errors.Is(err, extension.ErrCatalogUnverified) && extension.IsOfficialMarket(rec.Spec):
+		case errors.Is(err, extension.ErrCatalogUnverified) && requiresSignature(rec):
 			// A catalog was read and does not verify: quarantined, the last good index unusable too.
 			rec.Signature, rec.Error = extension.MarketSignature{State: extension.SigInvalid}, err.Error()
 			err = fmt.Errorf("%w: %w", errMarketSignature, err)
@@ -298,7 +335,7 @@ func (h *Manager) marketRead(ctx context.Context, id string) (MarketView, error)
 		}
 	} else {
 		var ix *extension.MarketIndex
-		if rec, ix, err = signedIndex(rec, f, now); ix != nil {
+		if rec, ix, err = signedIndex(rec, f, now, h.build.Number); ix != nil {
 			nextIndex = ix
 		} else {
 			h.logf("extension market %s: %v", id, err)
@@ -344,31 +381,89 @@ func (h *Manager) marketsDir() string { return filepath.Join(h.extensions.root, 
 // packageCache is where market packages are kept by their sha256, so installing one again does not download it again.
 func (h *Manager) packageCache() string { return filepath.Join(h.extensions.root, "cache", "packages") }
 
-// marketClient is how the hub reads markets: GitHub's hosts through hub.json's github.proxy when it is set (the
-// way the hub's other GitHub traffic goes; on a network that reaches GitHub badly a package download stalled for
-// minutes without it, #3277), everything else as the environment says (HTTPS_PROXY). Tests set their own.
-func (h *Manager) marketClient() *http.Client {
+// marketClient is how the hub reads markets. extension_market.proxy sends all of them through its HTTP or SOCKS5
+// proxy. Without one, GitHub's hosts use github.proxy when set (#3277), and everything else follows HTTPS_PROXY.
+// extension_market.ca_file appends private roots to this client's system pool, never to another client. Tests set
+// their own client. An invalid configured CA file fails instead of silently using the system-only pool.
+func (h *Manager) marketClient() (*http.Client, error) {
 	ms := h.marketsState()
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if ms.client != nil {
-		return ms.client
+		return ms.client, nil
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	var gh *url.URL
-	if h.cfg != nil && h.cfg.GitHub != nil {
-		gh, _ = netproxy.Parse(h.cfg.GitHub.Proxy) // a malformed one: as the environment says (the connector says it is wrong)
+	if h.cfg != nil && h.cfg.ExtensionMarket.CAFile != "" {
+		caFile := h.cfg.ExtensionMarket.CAFile
+		info, err := os.Stat(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: not a regular file", caFile)
+		}
+		if info.Size() > marketCAFileMost {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %d bytes exceeds %d-byte limit", caFile, info.Size(), marketCAFileMost)
+		}
+		f, err := os.Open(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, err)
+		}
+		pemBytes, readErr := io.ReadAll(io.LimitReader(f, marketCAFileMost+1))
+		closeErr := f.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %w", caFile, closeErr)
+		}
+		if len(pemBytes) > marketCAFileMost {
+			return nil, fmt.Errorf("extension_market.ca_file: read %q: %d bytes exceeds %d-byte limit", caFile, len(pemBytes), marketCAFileMost)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("extension_market.ca_file: load system roots: %w", err)
+		}
+		if roots == nil {
+			return nil, errors.New("extension_market.ca_file: load system roots: no system certificate pool")
+		}
+		if !roots.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("extension_market.ca_file: parse %q: no PEM certificates found", caFile)
+		}
+		tlsConfig := &tls.Config{}
+		if t.TLSClientConfig != nil {
+			tlsConfig = t.TLSClientConfig.Clone()
+		}
+		tlsConfig.RootCAs = roots
+		t.TLSClientConfig = tlsConfig
 	}
-	if gh != nil {
-		t.Proxy = func(r *http.Request) (*url.URL, error) {
-			if githubHost(r.URL.Hostname()) {
-				return gh, nil
+	var upstream *url.URL
+	var upstreamErr error
+	if h.cfg != nil {
+		upstream, upstreamErr = netproxy.ParseHTTPOrSOCKS5(h.cfg.ExtensionMarket.Proxy)
+	}
+	switch {
+	case upstreamErr != nil:
+		// An explicit but invalid proxy must never turn into a direct connection.
+		t.Proxy = func(*http.Request) (*url.URL, error) { return nil, upstreamErr }
+	case upstream != nil:
+		t.Proxy = http.ProxyURL(upstream)
+	default:
+		var gh *url.URL
+		if h.cfg != nil && h.cfg.GitHub != nil {
+			gh, _ = netproxy.Parse(h.cfg.GitHub.Proxy) // a malformed one: as the environment says (the connector says it is wrong)
+		}
+		if gh != nil {
+			t.Proxy = func(r *http.Request) (*url.URL, error) {
+				if githubHost(r.URL.Hostname()) {
+					return gh, nil
+				}
+				return envProxy(r)
 			}
-			return envProxy(r)
 		}
 	}
 	ms.client = &http.Client{Transport: t}
-	return ms.client
+	return ms.client, nil
 }
 
 // envProxy is where marketClient sends hosts other than GitHub's: the environment's proxy. A variable so tests do
@@ -421,6 +516,33 @@ func (h *Manager) refreshStale() {
 			ms.readLater(h, id)
 		}
 	}
+}
+
+// selfRefreshLater admits one extension-initiated read of id per marketSelfRefreshWindow. It returns the remaining
+// window for a call to refuse, or zero after starting (or joining) the existing deduplicated background read. ok is
+// false when id is not registered. Admission and scheduling share the market lock, so concurrent callers cannot pass
+// together and a 429 never moves the window.
+func (h *Manager) selfRefreshLater(id string) (retry time.Duration, ok bool) {
+	ms := h.marketsState()
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	s := ms.byID[id]
+	if s == nil {
+		return 0, false
+	}
+	now := time.Now()
+	if ms.now != nil {
+		now = ms.now()
+	}
+	if !s.selfRefreshAt.IsZero() {
+		elapsed := max(now.Sub(s.selfRefreshAt), time.Duration(0))
+		if elapsed < marketSelfRefreshWindow {
+			return marketSelfRefreshWindow - elapsed, true
+		}
+	}
+	s.selfRefreshAt = now
+	ms.readLater(h, id)
+	return 0, true
 }
 
 // readLater reads market id again in the background, unless it is being read already (ms.mu held).

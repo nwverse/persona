@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Health Trends (#3272): the phone's per-day steps, sleep and weight become the ```persona-card a health answer would draw.
 @MainActor
@@ -19,6 +20,14 @@ struct HealthTrendsTests {
         #expect(days == ["2026-10-30", "2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"])
         #expect(HealthTrends.dayKeys(30, now: Self.now, calendar: Self.utc).count == 30)
         #expect(HealthTrends.dayKeys(0, now: Self.now, calendar: Self.utc) == ["2026-11-05"])
+    }
+
+    @Test func homeHidesTrendsUntilThereIsDataAndWeightHasItsOwnTitle() async {
+        let model = HealthTrendsModel(deps: .init(access: { .granted }, requestAccess: { false }, daily: { _, _ in [:] }, now: { Self.now }))
+        #expect(!model.hasData)
+        await model.load()
+        #expect(model.state == .loaded([:]) && !model.hasData)
+        #expect(HealthTrendMetric.weight.title == "体重")
     }
 
     @Test func labels() {
@@ -86,6 +95,49 @@ struct HealthTrendsTests {
                                                   now: { Self.now }))
         await model.load()
         #expect(model.state == .unavailable)
+    }
+
+    @Test(arguments: [false, true]) func cancellingTheFirstDailyReadPreventsLaterQueriesAuthorizationAndPublication(queryFails: Bool) async {
+        var queries: [HealthTrendMetric] = []
+        var authorizations = 0
+        var release: CheckedContinuation<Void, Never>?
+        let model = HealthTrendsModel(deps: .init(
+            access: { .granted }, requestAccess: { authorizations += 1; return true },
+            daily: { metric, _ in
+                queries.append(metric)
+                if metric == .steps {
+                    await withCheckedContinuation { release = $0 }
+                    if queryFails { throw CancellationError() }
+                }
+                return [HealthTrends.dayKeys(1, now: Self.now).last!: 1234]
+            }, now: { Self.now }))
+        let work = Task { await model.load() }
+        let deadline = Date.now.addingTimeInterval(5)
+        while release == nil, Date.now < deadline { await Task.yield() }
+        #expect(release != nil)
+        #expect(queries == [.steps])
+        #expect(model.state == .loading)
+        work.cancel()
+        release?.resume()
+        await work.value
+        #expect(queries == [.steps], "sleep and weight must never start after cancellation")
+        #expect(authorizations == 0)
+        #expect(model.state == .loading, "cancelled reads must not publish a final state")
+        #expect(!model.hasData)
+    }
+
+    @Test func anAlreadyCancelledLoadDoesNotReadAccessOrChangeState() async {
+        let model = HealthTrendsModel(deps: .init(
+            access: { Issue.record("access read after cancellation"); return .notNeeded },
+            requestAccess: { Issue.record("authorization after cancellation"); return false },
+            daily: { _, _ in Issue.record("query after cancellation"); return [:] }, now: { Self.now }))
+        let work = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await model.load()
+            await model.requestAccess()
+        }
+        await work.value
+        #expect(model.state == .loading)
     }
 
     /// The summary keys days in Gregorian whatever the region's calendar is; the trends must match those keys.

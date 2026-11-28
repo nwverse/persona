@@ -1,0 +1,223 @@
+[
+  {
+    "name": "mail_accounts",
+    "description": "List the mail accounts the user has configured (name, address, provider). Call this before searching or sending mail so you know which account_id to use.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "mail_search",
+    "description": "Search mail summaries. Use account_id from mail_accounts. Single-account results include uid_validity for mail_move. Gmail accepts its own search syntax; others search full text. On no hits, scan recent headers for all words (case-insensitive) in subject, sender or recipients. Follow before_uid to scan older mail.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string",
+          "description": "Omit for all inboxes"
+        },
+        "mailbox": {
+          "type": "string",
+          "description": "Default INBOX"
+        },
+        "query": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Max results, default 20, max 200"
+        },
+        "before_uid": {
+          "type": "integer",
+          "description": "Page below this UID"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "mail_read",
+    "description": "Read one message in full: headers, plain text, HTML and the attachment list (each with its id for mail_save_attachment). Does not mark the message as read.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer"
+        },
+        "mailbox": {
+          "type": "string",
+          "description": "Mailbox name, default INBOX"
+        }
+      },
+      "required": [
+        "account_id",
+        "uid"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "mail_save_attachment",
+    "description": "Save one attachment (up to 25 MB) under attachments/mail on your computer and return its path. Use the attachment_id from mail_read. Existing names get a numbered suffix. Does not change read status.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer"
+        },
+        "mailbox": {
+          "type": "string",
+          "description": "Mailbox name, default INBOX"
+        },
+        "attachment_id": {
+          "type": "string",
+          "description": "ID from mail_read"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Subfolder to save into, relative (e.g. bills/2026-10); no absolute paths, '..' or hidden folders"
+        }
+      },
+      "required": [
+        "account_id",
+        "uid",
+        "attachment_id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "mail_send",
+    "description": "Send email after approval on the phone. Use a clear subject and body. For replies, pass the original Message-ID as in_reply_to and append it to the original References chain.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        },
+        "bcc": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/address"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "description": "Plain-text body"
+        },
+        "html": {
+          "type": "string",
+          "description": "Optional HTML body"
+        },
+        "in_reply_to": {
+          "type": "string",
+          "description": "Message-ID being replied to"
+        },
+        "references": {
+          "type": "string",
+          "description": "Space-separated Message-IDs from the original thread"
+        }
+      },
+      "required": [
+        "account_id",
+        "to",
+        "subject",
+        "text"
+      ],
+      "$defs": {
+        "address": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "email"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "mail_move",
+    "description": "Move one email after owner approval. Use uid_validity from mail_search for its account. On partial or unknown results, check both mailboxes before retrying. Undo using the returned mailbox, uid and uid_validity.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "mailbox": {
+          "type": "string"
+        },
+        "uid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "uid_validity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "to": {
+          "type": "string",
+          "enum": [
+            "archive",
+            "junk",
+            "trash",
+            "inbox"
+          ]
+        },
+        "to_mailbox": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "mailbox",
+        "uid",
+        "uid_validity"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "to"
+          ]
+        },
+        {
+          "required": [
+            "to_mailbox"
+          ]
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+]

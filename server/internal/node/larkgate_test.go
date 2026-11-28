@@ -45,9 +45,12 @@ func TestAssistantLarkAccountEnvironment(t *testing.T) {
 // ex is on the assistant's PATH only when the example skill is in the user's space (~/.persona/skills, linked into
 // the assistant's directory): skills are no longer inside personad (docs/operations/hub-update.md).
 func TestGatedCommandOnlyWithTheSkill(t *testing.T) {
-	user, cwd := t.TempDir(), t.TempDir()
+	user := t.TempDir()
 	t.Setenv("PERSONA_SKILLS_DIR", user)
-	n := &Node{dir: t.TempDir(), larkCfgAt: time.Now(), logger: log.New(io.Discard, "", 0), larkCfg: olCfg()}
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	n, _ := testNode(t)
+	n.dir, n.larkCfgAt, n.logger, n.larkCfg = t.TempDir(), time.Now(), log.New(io.Discard, "", 0), olCfg()
+	cwd := prepareAssistantForTest(t, n, ".persona/assistant", nil, nil)
 	ex := filepath.Join(n.assistantBin(cwd), "ex")
 	n.assistantLarkEnv(cwd, "")
 	if _, err := os.Stat(ex); !os.IsNotExist(err) {
@@ -56,8 +59,12 @@ func TestGatedCommandOnlyWithTheSkill(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(user, "example", "scripts"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_ = os.WriteFile(filepath.Join(user, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(user, "example", "scripts", "ex.sh"), []byte("#!/bin/bash\n"), 0o755)
+	if err := os.WriteFile(filepath.Join(user, "example", "SKILL.md"), []byte("---\nname: example\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(user, "example", "scripts", "ex.sh"), []byte("#!/bin/bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	n.assistantLarkEnv(cwd, "")
 	if _, err := os.Stat(ex); err != nil {
 		t.Fatalf("no ex with the skill: %v", err)
@@ -169,6 +176,93 @@ EOF`, "other"},
 		if got != tc.want {
 			t.Errorf("%s\n  got %s, want %s (%+v)", tc.cmd, got, tc.want, v)
 		}
+	}
+}
+
+// zsh precommand modifiers must not hide a gated call, and emulate -c is opaque when its code names a gate.
+func TestLarkGateZshPrecommandModifiersAndCodeBuiltins(t *testing.T) {
+	gates := olGate("")
+	for _, tc := range []struct {
+		name, command string
+		method        string
+		unknown       bool
+	}{
+		{"noglob read", `noglob ex GET /links/open`, "GET", false},
+		{"nocorrect read", `nocorrect ex GET /links/open`, "GET", false},
+		{"dash read", `- ex GET /links/open`, "GET", false},
+		{"noglob write", `noglob ex POST /conversations/7123/messages '{"text":"hi"}'`, "POST", false},
+		{"nocorrect write", `nocorrect ex POST /messages/99/recall`, "POST", false},
+		{"dash write", `- ex POST /conversations/7123/messages '{"text":"hi"}'`, "POST", false},
+		{"emulate read", `emulate zsh -c 'ex GET /links/open'`, "", true},
+		{"emulate write", `emulate sh -c 'ex POST /conversations/7123/messages'`, "", true},
+		{"emulate -- read", `emulate -- zsh -c 'ex GET /links/open'`, "", true},
+		{"emulate -- write", `emulate -- sh -c 'ex POST /messages/99/recall'`, "", true},
+		{"trap read", `trap 'ex GET /links/open' ZERR`, "", true},
+		{"trap write", `trap 'ex POST /messages/99/recall' ZERR`, "", true},
+		{"trap shell action", `trap 'sh -c "ex POST /messages/99/recall"' EXIT`, "", true},
+		{"trap -- action", `trap -- 'ex POST /messages/99/recall' EXIT`, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := classifyLark(tc.command, gates, "", nil)
+			if tc.unknown {
+				if !v.other || !v.unknown || len(v.calls) != 0 || v.deny != "" {
+					t.Fatalf("%s: got %+v, want an opaque whole command", tc.command, v)
+				}
+				return
+			}
+			if v.other || v.unknown || v.unparsed || v.unsure || v.deny != "" || len(v.calls) != 1 {
+				t.Fatalf("%s: got %+v, want one classified call", tc.command, v)
+			}
+			if v.calls[0].Method != tc.method {
+				t.Fatalf("%s: method %q, want %q", tc.command, v.calls[0].Method, tc.method)
+			}
+			if got := larkDecision(olCfg(), v.calls[0]); got != "confirm" {
+				t.Fatalf("%s: decision %q, want confirm", tc.command, got)
+			}
+			if tc.method == "POST" {
+				if _, write := gateWrite(gates, tc.command); !write {
+					t.Fatalf("%s: write was not classified as a write", tc.command)
+				}
+			}
+		})
+	}
+}
+
+// zsh's `=cmd` expansion names the same command: `=ex` is the gate and `=lark-cli` is the CLI, not ordinary text.
+func TestLarkGateZshEqualsExpansion(t *testing.T) {
+	gates := olGate("")
+	read := classifyLark(`=ex GET /links/open`, gates, "", nil)
+	if len(read.calls) != 1 || read.calls[0].Method != "GET" || read.other || read.unknown || read.deny != "" {
+		t.Fatalf("=ex read: %+v", read)
+	}
+	write := classifyLark(`=ex POST /messages/99/recall`, gates, "", nil)
+	if len(write.calls) != 1 || write.calls[0].Method != "POST" || write.deny != "" {
+		t.Fatalf("=ex write: %+v", write)
+	}
+	if got := larkDecision(olCfg(), write.calls[0]); got != "confirm" {
+		t.Fatalf("=ex write decision %q, want confirm", got)
+	}
+	cli := classifyLark(`=lark-cli im +messages-send --chat-id oc_x --text hi`, gates, "", nil)
+	if !cli.cliWrite && !cli.unknown && !cli.other {
+		t.Fatalf("=lark-cli write was treated as ordinary: %+v", cli)
+	}
+	// The expansion also names the program that runs the carried call: a shell, and a wrapper in front of the gate,
+	// must resolve to the same classification as their plain spelling.
+	for _, command := range []string{`=sh -c "ex POST /messages/99/recall"`, `=zsh -c "ex POST /messages/99/recall"`} {
+		v := classifyLark(command, gates, "", nil)
+		if len(v.calls) != 1 || v.calls[0].Method != "POST" || v.deny != "" || v.unparsed {
+			t.Fatalf("%s: got %+v, want the gated write inside the shell", command, v)
+		}
+		if got := larkDecision(olCfg(), v.calls[0]); got != "confirm" {
+			t.Fatalf("%s: decision %q, want confirm", command, got)
+		}
+	}
+	wrapped := classifyLark(`=env ex POST /messages/99/recall`, gates, "", nil)
+	if len(wrapped.calls) != 1 || wrapped.calls[0].Method != "POST" || wrapped.deny != "" || wrapped.unparsed {
+		t.Fatalf("=env: got %+v, want the gated write behind the wrapper", wrapped)
+	}
+	if got := larkDecision(olCfg(), wrapped.calls[0]); got != "confirm" {
+		t.Fatalf("=env: decision %q, want confirm", got)
 	}
 }
 

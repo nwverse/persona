@@ -1,8 +1,10 @@
 import { t } from "../i18n";
+import { stateOf } from "./format";
 import type { Session, Subagent, Workflow } from "./types";
 import type { SessionLookup, Todo } from "./todos";
-import { waitingOnWorkflow, workflowCounts } from "./workflows";
+import { backgroundCommandLine, backgroundWaitLine, waitingOnWorkflow, workflowCounts, type WaitLine } from "./workflows";
 import { runningChildren } from "./child-sessions";
+import { timeOrNaN } from "./times";
 
 /** Live work, not a waiting label: summary counts win over omitted detail arrays. */
 export interface BackgroundWork {
@@ -32,12 +34,61 @@ export function backgroundWork(session: Session | undefined): BackgroundWork | u
     ? { tasks, subagents, workflows, workflow } : undefined;
 }
 
+/** Background commands that look stuck (#13744, Session.background_stalled_since): the Agent is still Working (a running
+ *  tool is work), and this says how long they have used no CPU and written no output. Null when the hub says nothing. */
+export interface BackgroundStall {
+  /** The short line: "Background commands idle for 3 hr". */
+  text: string;
+  /** What it means, for a tooltip. */
+  title: string;
+}
+
+export function backgroundStall(s: Session | undefined, now = Date.now()): BackgroundStall | null {
+  if (!s || stateOf(s) !== "working" || !s.background_working || s.background_waiting) return null;
+  const text = stalledText(s.background_stalled_since, now);
+  return text ? { text, title: t("lib-state-labels.bg_stalled_hint") } : null;
+}
+
+/** "Background commands quiet for 3 hr" from the time they went quiet; "" when there is none (or it is Go's zero time). */
+export function stalledText(since: string | undefined, now = Date.now()): string {
+  const at = timeOrNaN(since);
+  if (!Number.isFinite(at) || at < 86400_000) return "";
+  const minutes = Math.max(1, Math.floor((now - at) / 60_000));
+  if (minutes < 60) return t("lib-state-labels.bg_stalled_minutes", { count: minutes });
+  return minutes < 2880 ? t("lib-state-labels.bg_stalled_hours", { count: Math.floor(minutes / 60) })
+    : t("lib-state-labels.bg_stalled_days", { count: Math.floor(minutes / 1440) });
+}
+
 /** The hub says the agent's turn is over and a subagent it launched in the background still runs (#5030, cindy's
  *  background subtasks): the chat draws that turn finished (its summary folded, the subagent's card running inside it),
  *  and the bar above the composer says model usage goes on. A running workflow says so first (workflows.ts
  *  backgroundLine). */
 export function waitingOnSubagents(s: Session | undefined, subagents: Subagent[] | undefined = s?.subagents): boolean {
   return Boolean(s?.background_working) && !waitingOnWorkflow(s) && (subagents ?? []).some((a) => a.running && a.background);
+}
+
+export type BackgroundTurnKind = "workflow" | "subtasks" | "waiting" | "command";
+
+export interface BackgroundActivity {
+  streaming: boolean;
+  outgoing: boolean;
+  awaiting: boolean;
+}
+
+/** The one background kind that represents an ended turn, in display priority order. Null leaves the turn live. A
+ *  command requires the hub's explicit background_working flag: a foreground turn, and an older hub without the flag,
+ *  keep their old rendering even when background tasks are listed. */
+export function backgroundTurn(s: Session | undefined, subagents: Subagent[] | undefined, activity: BackgroundActivity): { kind: BackgroundTurnKind; line?: WaitLine } | null {
+  if (!s || activity.streaming || activity.outgoing || activity.awaiting) return null;
+  if (waitingOnWorkflow(s)) return { kind: "workflow" };
+  if (waitingOnSubagents(s, subagents)) return { kind: "subtasks" };
+  const wait = backgroundWaitLine(s);
+  if (wait) return { kind: "waiting", line: wait };
+  // Some runtimes list delegated work only as background agents / workflows, without the detail arrays above. Those
+  // are not a shell-command fallback, and a runtime that sends only background_working still gets the label alone.
+  if (s.background?.some((b) => b.kind === "agent" || b.kind === "workflow")) return null;
+  const command = backgroundCommandLine(s);
+  return command ? { kind: "command", line: command } : null;
 }
 
 /** One task can have several active agents: do not mistake a quiet lead for an idle task. */

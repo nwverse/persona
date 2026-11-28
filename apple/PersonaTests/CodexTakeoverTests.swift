@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 struct CodexTakeoverTests {
     @Test func sessionCapabilitiesDecodeTakeoverAndRemainCompatible() throws {
@@ -85,5 +86,13 @@ struct CodexTakeoverTests {
 
         #expect(CodexTakeoverCoordinator.continuationOnlyInfo(for: apiError, original: original).map(\.canResume) == nil)
         #expect(CodexTakeoverCoordinator.continuationOnlyInfo(for: plainError, original: original).map(\.canResume) == nil)
+    }
+
+    @Test func takeoverIsEnabledAcrossIOSDevicesIncludingIPad() {
+        #if os(iOS)
+        #expect(AgentMenuFacts.supportsTakeover)
+        #else
+        #expect(!AgentMenuFacts.supportsTakeover)
+        #endif
     }
 }

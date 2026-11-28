@@ -90,7 +90,7 @@ val AgentListDisplay.rowParts: AgentRowParts get() = when (this) {
 /**
  * The state in words, plain (iOS `Session.stateLabel`): Waiting in the background, Working (Background) while a workflow runs
  * ([isBackgroundWorking]), else the state's own name: Needs you, Working, Unread, Seen, Not running (offline) or Unknown.
- * Never Awaiting reply, which needs to know whether the agent is muted ([stateWord]). A chat's header says it too.
+ * Never Awaiting reply or Just finished, which need to know whether the agent is muted ([stateWord]). A chat's header says it too.
  */
 val AgentSession.stateLabel: CoreText get() = CoreText.of(when {
     waitsInBackground -> Key.StateBackgroundWaiting
@@ -105,15 +105,32 @@ val AgentSession.stateLabel: CoreText get() = CoreText.of(when {
     }
 })
 
-/** [stateLabel], and Awaiting reply for a seen one that asks you (not when [muted]; iOS `Session.stateLabel(muted:)`). */
-fun AgentSession.stateWord(muted: Boolean): CoreText = if (asksYou && !muted) CoreText.of(Key.StateAwaitingReply) else stateLabel
+/**
+ * [stateLabel], and Awaiting reply for a seen one that asks you, Just finished for one nobody has seen yet (#9786), neither
+ * when [muted] (iOS `Session.stateLabel(muted:)`).
+ */
+fun AgentSession.stateWord(muted: Boolean): CoreText = when {
+    muted -> stateLabel
+    asksYou -> CoreText.of(Key.StateAwaitingReply)
+    showsJustFinished -> CoreText.of(Key.StateJustFinished)
+    else -> stateLabel
+}
 
 /**
- * State Cards' word at the card's foot (iOS `cardRow`): its [stateWord], every state but Seen (Awaiting reply, Waiting in
- * the background, Working (Background), Not running and Unknown included); none for a Seen one or a muted one.
+ * State Cards' word at the card's foot (iOS `cardRow`): its [stateWord], every state but Seen (Awaiting reply, Just finished,
+ * Waiting in the background, Working (Background), Not running and Unknown included); none for a Seen one or a muted one.
  */
 fun AgentSession.cardStateWord(muted: Boolean): CoreText? =
-    if (muted || state == AgentState.Idle && !asksYou) null else stateWord(muted)
+    if (seenPlace != null) CoreText.of(CoreText.Key.StateIdle)
+    else if (muted || state == AgentState.Idle && !asksYou && !showsJustFinished) null else stateWord(muted)
+
+enum class AgentSeenRows {
+    Stay, Leave;
+
+    companion object {
+        fun fromPreference(value: String?): AgentSeenRows = entries.firstOrNull { it.name == value } ?: Stay
+    }
+}
 
 /**
  * Where the list's display is kept (iOS `AgentListDisplayChoice`): the Agents page's ⋯ › Display and Settings › Interface
@@ -122,4 +139,14 @@ fun AgentSession.cardStateWord(muted: Boolean): CoreText? =
 interface AgentListDisplaySettings {
     val display: Flow<AgentListDisplay>
     suspend fun setDisplay(value: AgentListDisplay)
+    val seenRows: Flow<AgentSeenRows>
+    suspend fun setSeenRows(value: AgentSeenRows)
+    /** Selected hub's `use_herdr_tab_name` setting; null while unsupported (older hub) or unread. */
+    val useHerdrTabName: Flow<Boolean?> get() = kotlinx.coroutines.flow.flowOf(null)
+    /** Refreshes the selected hub's display settings. */
+    suspend fun refreshHerdrTabName() {}
+    /** Saves `use_herdr_tab_name` on the selected hub and caches the acknowledged value. */
+    suspend fun setUseHerdrTabName(enabled: Boolean) {
+        throw UnsupportedOperationException("Updating use_herdr_tab_name is unsupported")
+    }
 }

@@ -2,6 +2,7 @@
 <resources>
     <string name="chat_tray_entry_needs_you">Needs you</string>
     <string name="chat_tray_entry_running">In progress</string>
+    <string name="chat_tray_entry_finished">Finished</string>
     <plurals name="chat_tray_items">
         <item quantity="one">%1$d item</item>
         <item quantity="other">%1$d items</item>
@@ -38,6 +39,8 @@
     <string name="chat_tray_draft_changed">The draft changed. Review the latest version before sending.</string>
     <string name="chat_tray_caught_up">All caught up</string>
     <string name="chat_tray_accept">Accept</string>
+    <string name="chat_tray_pass">Pass</string>
+    <string name="chat_tray_ready_to_verify">ready to verify</string>
     <string name="chat_tray_finish_now">Finish now</string>
     <string name="chat_tray_follow_recommendation">Follow recommendation</string>
     <string name="chat_tray_finish_failed">Couldn\'t finish this task. Try again.</string>
@@ -45,10 +48,13 @@
     <string name="chat_tray_accept_changed">The acceptance request changed. Review the latest round.</string>
     <string name="chat_tray_cancelled">Cancelled</string>
     <string name="chat_tray_stopped_state">Stopped</string>
+    <string name="chat_tray_supervisor_review">Supervisor reviewing</string>
     <string name="chat_tray_stopped">Stopped, not done yet</string>
     <string name="chat_tray_stopped_reason">Stopped, not done yet · %1$s</string>
     <string name="chat_tray_pr_number">PR #%1$s</string>
     <string name="chat_tray_done">Completed</string>
+    <string name="chat_tray_finished_empty">Nothing finished in the last 24 hours</string>
+    <string name="chat_tray_finished_done">Done</string>
     <string name="chat_tray_accepted">Accepted</string>
     <string name="chat_tray_in_progress">In progress</string>
     <string name="chat_tasks_dismiss_draft">Don\'t handle</string>
@@ -59,4 +65,16 @@
         <item quantity="one">%1$d more</item>
         <item quantity="other">%1$d more</item>
     </plurals>
+    <string name="chat_tray_held_entry">Held pushes</string>
+    <string name="chat_tray_held_title">Held pushes today</string>
+    <string name="chat_tray_held_explanation">P1 needs your review. P2 is quiet and starts folded.</string>
+    <string name="chat_tray_held_p1">P1 · Needs your review (%1$d)</string>
+    <string name="chat_tray_held_p2">P2 · Quiet (%1$d)</string>
+    <string name="chat_tray_held_empty">No pushes were held today.</string>
+    <string name="chat_tray_held_untitled">No summary</string>
+    <string name="chat_tray_held_reason_p1">Held for the briefing</string>
+    <string name="chat_tray_held_reason_p2">Kept silent</string>
+    <string name="chat_tray_held_reason_dedup">A related push already alerted in the last 12 hours</string>
+    <string name="chat_tray_held_load_failed">Couldn\'t load held pushes. Check the connection and retry.</string>
+    <string name="chat_tray_held_p2_toggle">Show or hide quiet pushes</string>
 </resources>

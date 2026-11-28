@@ -72,6 +72,7 @@
     <string name="settings_ext_state_error">Something went wrong</string>
     <string name="settings_ext_state_unknown">Unknown state</string>
     <string name="settings_ext_run_pack">A pack runs no program itself; its members are turned on, set up and removed on their own.</string>
+    <string name="settings_ext_run_pack_members_follow">A pack runs no program itself; its members are set up and removed on their own.</string>
     <string name="settings_ext_run_running">Running</string>
     <string name="settings_ext_run_idle">Not running yet; starts when needed</string>
     <string name="settings_ext_source_builtin">Built-in</string>
@@ -168,6 +169,12 @@
     <string name="settings_ext_read_only">This extension is set in its assistant\'s manager.json. Turn it on or off and change its settings there, then restart the assistant.</string>
     <string name="settings_ext_enabled">Enabled</string>
     <string name="settings_ext_enabled_note">When turned off, it stops running and the connectors and other things it provides turn off too. Its settings and secrets are kept.</string>
+    <string name="settings_ext_enable_footer_pack">Turning the pack off turns off its members too, and they stop running. Turning it back on turns on the members it turned off; a member you turn on or off yourself stays as you set it.</string>
+    <string name="settings_ext_enable_footer_pack_off">Turning the pack back on turns on %1$s again. A member you turn on or off yourself stays as you set it.</string>
+    <string name="settings_ext_enable_footer_pack_alone">Turning the pack off turns off only the pack itself. Turn each member on or off on its own page.</string>
+    <string name="settings_ext_disable_pack_title">Turn off “%1$s” and its members?</string>
+    <string name="settings_ext_disable_pack_body">Its members are turned off too: %1$s. They\'re only turned off, not removed; settings and data are kept. Turning the pack back on turns them on again.</string>
+    <string name="settings_ext_disable_all">Turn off all</string>
     <string name="settings_ext_unavailable">Unavailable</string>
     <string name="settings_ext_still_needed">Still needed: %1$s</string>
     <string name="settings_ext_channel_link">This is a chat channel</string>
@@ -239,6 +246,12 @@
     <string name="settings_ext_preview_again">Preview Again</string>
     <string name="settings_ext_uninstall_title">Remove %1$s?</string>
     <string name="settings_ext_uninstall_text">This stops it and deletes its settings and secrets; the connectors it provides go too.</string>
+    <string name="settings_ext_uninstall_keep_result">The package will be deleted too; the data folder will stay on the hub machine. Anything still needing manual cleanup will be listed after removal.</string>
+    <string name="settings_ext_uninstall_delete_data_result">The package and data folder will be deleted too. Anything still needing manual cleanup will be listed after removal.</string>
+    <string name="settings_ext_removal_warnings_text">Removed. A few things still need you to clean them up by hand.</string>
+    <string name="settings_ext_removal_warnings_header">Needs manual cleanup</string>
+    <string name="settings_ext_removal_copy">Copy warnings</string>
+    <string name="settings_ext_removal_done">OK</string>
     <string name="settings_ext_dependents_title">Switch off the extensions that depend on it?</string>
     <string name="settings_ext_dependents_text">Extensions that depend on %2$s will be switched off too: %1$s.</string>
     <string name="settings_ext_dependents_unnamed">Other extensions depend on %1$s and will be switched off too.</string>
@@ -263,6 +276,11 @@
     <string name="settings_ext_token_changed">Token changed</string>
     <string name="settings_ext_remove_market_title">Remove %1$s?</string>
     <string name="settings_ext_remove_market_text">The hub stops reading this market. Extensions installed from it stay, but stop upgrading until the market is added again with the same address.</string>
+    <plurals name="settings_ext_remove_market_affected">
+        <item quantity="one">The hub stops reading this market. %1$d extension installed from it stays, but stops upgrading until the market is added again with the same address.</item>
+        <item quantity="other">The hub stops reading this market. %1$d extensions installed from it stay, but stop upgrading until the market is added again with the same address.</item>
+    </plurals>
+    <string name="settings_ext_remove_market_unused">The hub stops reading this market. No installed extension came from it.</string>
     <string name="settings_ext_remove">Remove</string>
     <string name="settings_ext_market_removed">Market removed</string>
     <string name="settings_ext_market_address">Address</string>
@@ -383,4 +401,68 @@
     <string name="settings_subscriptions_counts_on">%1$d on</string>
     <string name="settings_subscriptions_counts_failing">%1$d on · %2$d failing</string>
     <string name="settings_subscriptions_counts_none">Available</string>
+    <string name="settings_ext_notification_expired">This notification has expired. Retry from the extension page.</string>
+    <string name="settings_ext_notification_wrong_scope">Can\'t find the original hub or assistant. Reconnect, then retry from the extension page.</string>
+    <string name="settings_ext_notification_unlock">Unlock your phone to run this notification action.</string>
+    <plurals name="settings_ext_node_running">
+        <item quantity="one">Running on %1$d machine</item>
+        <item quantity="other">Running on %1$d machines</item>
+    </plurals>
+    <plurals name="settings_ext_node_abnormal">
+        <item quantity="one">%1$d machine has an issue</item>
+        <item quantity="other">%1$d machines have an issue</item>
+    </plurals>
+    <plurals name="settings_ext_node_offline">
+        <item quantity="one">%1$d machine offline</item>
+        <item quantity="other">%1$d machines offline</item>
+    </plurals>
+    <plurals name="settings_ext_node_starting">
+        <item quantity="one">Starting on %1$d machine</item>
+        <item quantity="other">Starting on %1$d machines</item>
+    </plurals>
+    <plurals name="settings_ext_node_stopped">
+        <item quantity="one">Stopped on %1$d machine</item>
+        <item quantity="other">Stopped on %1$d machines</item>
+    </plurals>
+    <string name="settings_ext_graph">Graph</string>
+    <string name="settings_ext_graph_zoom_out">Zoom out</string>
+    <string name="settings_ext_graph_zoom_in">Zoom in</string>
+    <string name="settings_ext_graph_fit">Fit</string>
+    <string name="settings_ext_graph_full_screen">Full screen</string>
+    <string name="settings_ext_graph_open">Open graph full screen</string>
+    <string name="settings_ext_graph_fold">Fold</string>
+    <plurals name="settings_ext_graph_show_hidden">
+        <item quantity="one">Show %1$d hidden</item>
+        <item quantity="other">Show %1$d hidden</item>
+    </plurals>
+    <string name="settings_ext_graph_under">under %1$s</string>
+    <string name="settings_ext_graph_progress">%1$d%%</string>
+    <string name="settings_ext_use_reference">Use a reference</string>
+    <string name="settings_ext_reference_placeholder">op://vault/item/field</string>
+    <string name="settings_ext_reference_hint">Its provider gives the value whenever this extension needs it. Persona keeps only the reference.</string>
+    <string name="settings_ext_from_provider">From %1$s</string>
+    <string name="settings_ext_secret_from_provider">From %1$s: %2$s</string>
+    <string name="settings_ext_secret_reference_saved">%1$s now uses the reference</string>
+    <string name="settings_ext_users_title">Used by</string>
+    <string name="settings_ext_users_footer">These settings take their values from this provider. Saving a setting lets it keep taking its value.</string>
+    <string name="settings_ext_user_launcher">%1$s key</string>
+    <string name="settings_ext_user_launcher_machine">%1$s key on %2$s</string>
+    <string name="settings_ext_rules_title">Always for Agents</string>
+    <string name="settings_ext_rules_footer">An Agent with this launcher on this computer gets the value without asking, when you start it yourself.</string>
+    <string name="settings_ext_rule_label">%1$s on %2$s</string>
+    <string name="settings_ext_rule_remove">Remove</string>
+    <string name="settings_ext_rule_remove_title">Remove this rule?</string>
+    <string name="settings_ext_rule_remove_body">The next time %1$s on %2$s asks for it, you approve it again.</string>
+    <string name="settings_ext_rule_removed">Rule removed</string>
+    <string name="settings_ext_secret_set_hint">Set · ends in %1$s</string>
+    <string name="settings_ext_entry_untitled">Entry %1$d</string>
+    <string name="settings_ext_entry_save_before_secret">Save this entry before setting its secret.</string>
+    <string name="settings_ext_entry_secret">Secret</string>
+    <string name="settings_ext_entry_remove">Remove %1$s</string>
+    <string name="settings_ext_entry_add">Add entry</string>
+    <string name="settings_ext_entry_editor_hint">Each entry has its own secret, stored separately and never shown again.</string>
+    <string name="settings_ext_entry_rebind_hint">Saving a changed address clears that entry\'s secret.</string>
+    <string name="settings_ext_entry_remove_title">Remove “%1$s”?</string>
+    <string name="settings_ext_entry_remove_body">The entry and its saved secret are deleted when you save.</string>
+    <string name="settings_ext_entry_remove_confirm">Remove entry</string>
 </resources>

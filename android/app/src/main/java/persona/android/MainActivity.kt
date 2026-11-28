@@ -1,19 +1,16 @@
 package persona.android
 
 import androidx.compose.ui.res.stringResource
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.CircularProgressIndicator
@@ -42,6 +39,7 @@ import persona.android.platform.PlatformPairing
 import persona.android.platform.PlatformRoot
 import persona.android.ui.AppServices
 import persona.android.ui.AppearanceOverride
+import persona.feature.assistant.conversationOpeningSource
 import persona.core.contracts.LarkFeatures
 import persona.core.contracts.api.HubConnection
 import persona.core.designsystem.GlassThrottle
@@ -52,10 +50,12 @@ import persona.core.designsystem.LocalPersonaDesign
 import persona.core.designsystem.dense
 import persona.core.designsystem.keepAmbientLightMoving
 import persona.core.navigation.*
+import persona.feature.settings.ProviderImportRequests
 import persona.feature.settings.SettingsServices
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -69,6 +69,8 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var settingsServices: SettingsServices
     /** The hubs' channels, for the "From WeChat" marks on messages and conversations (docs/extensions/channels.md "Source markers"). */
     @Inject lateinit var channelDirectory: persona.core.contracts.api.ChannelDirectory
+    /** The installed extensions' icons, for the marks of conversations an extension opened (#10358). */
+    @Inject lateinit var openerIcons: persona.feature.assistant.OpenerIcons
     @Inject lateinit var connection: HubConnection
     @Inject lateinit var shell: AppServices
     @Inject lateinit var platformPairing: PlatformPairing
@@ -81,7 +83,6 @@ class MainActivity : ComponentActivity() {
     /** Only a debug launch adapter overrides the system appearance. */
     private val darkTheme = mutableStateOf<Boolean?>(null)
 
-    private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
     /** Installed only by the debug manifest; release builds have no launch adapter or developer pages. */
     private val launchAdapter: LaunchAdapter? by lazy {
         // A legacy launcher alias does not inherit target metadata; always query the canonical Activity.
@@ -101,9 +102,6 @@ class MainActivity : ComponentActivity() {
             shell.automation = input.automation
             shell.posture.value = input.posture
             input.style?.let { (application as PersonaApp).appearance.setStyle(it) }
-        }
-        if (Build.VERSION.SDK_INT >= 33 && !shell.automation && !shell.demoSaved()) {
-            askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         val app = application as PersonaApp
         lifecycleScope.launch { shell.restoreDemo() }
@@ -130,7 +128,11 @@ class MainActivity : ComponentActivity() {
             val features by remember(app) {
                 app.hub.flatMapLatest { it?.connection?.serverFeatures ?: flowOf(emptySet()) }.distinctUntilChanged()
             }.collectAsStateWithLifecycle(emptySet())
+            val imageLimits by remember(app) {
+                app.hub.flatMapLatest { it?.connection?.imageLimits ?: flowOf(persona.core.contracts.ImageLimitsTable.Standard) }.distinctUntilChanged()
+            }.collectAsStateWithLifecycle(persona.core.contracts.ImageLimitsTable.Standard)
             val lark = remember(features) { LarkFeatures.of(features) }
+            val mail = remember(features) { persona.android.ui.mailAccessOf(features) }
             // The selected hub's managers: pages group by them when there are several (docs/assistant/managers.md step 4).
             val managers by managerRoster.roster.collectAsStateWithLifecycle()
             val managerGroup by managerRoster.group.collectAsStateWithLifecycle()
@@ -138,8 +140,12 @@ class MainActivity : ComponentActivity() {
                 LocalDeveloperTools provides launchAdapter?.tools,
                 persona.core.designsystem.LocalLanguageHost provides this@MainActivity,
                 persona.core.designsystem.LocalChannels provides channels,
+                persona.feature.assistant.LocalOpenerIcons provides openerIcons,
+                persona.feature.chat.LocalOpeningMessageSource provides ::conversationOpeningSource,
                 persona.core.designsystem.LocalLarkFeatures provides lark,
+                persona.core.designsystem.LocalMailAccess provides mail,
                 persona.core.designsystem.LocalHubFeatures provides features,
+                persona.core.designsystem.LocalHubImageLimits provides imageLimits,
                 persona.core.designsystem.LocalManagerRoster provides managers,
                 persona.core.designsystem.LocalManagerGroup provides managerGroup,
                 persona.feature.inbox.LocalTranslator provides translator,
@@ -164,7 +170,8 @@ class MainActivity : ComponentActivity() {
                     val ready by app.pairingReady.collectAsStateWithLifecycle()
                     val failed by app.pairingRestoreError.collectAsStateWithLifecycle()
                     val capsuleFullScreen by capsules.fullScreen.collectAsStateWithLifecycle()
-                    if (ready && capsuleFullScreen) persona.android.capsule.CapsuleFullScreen(capsules) {
+                    val capsulePresentation by capsules.presentation.collectAsStateWithLifecycle()
+                    if (ready && capsuleFullScreen && capsulePresentation != null) persona.android.capsule.CapsuleFullScreen(capsules) {
                         capsules.returnToCapsule()
                         moveTaskToBack(true)
                     }
@@ -186,13 +193,16 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         keepAmbientLightMoving()
         setIntent(intent)
-        if (intent.data != null || intent.hasExtra(EXTRA_SESSION) || intent.hasExtra("debug.openTab")) capsules.leaveFullScreen()
         handle(intent)
     }
 
     override fun onStart() {
         super.onStart()
-        (application as PersonaApp).hub.value?.kick()
+        val app = application as PersonaApp
+        lifecycleScope.launch {
+            app.pairingReady.first { it }
+            app.hub.value?.kick()
+        }
     }
 
     // Input that reaches this window keeps Glass's ambient light moving; five seconds after the last it holds still
@@ -224,6 +234,8 @@ class MainActivity : ComponentActivity() {
 
     private fun handle(intent: Intent?) {
         if (intent == null) return
+        val launchInput = launchAdapter?.read(intent)
+        if (leavesCapsuleFullScreen(intent, launchInput != null)) capsules.leaveFullScreen()
         intent.getStringExtra(EXTRA_CAPSULE_URL)?.let { url ->
             val target = android.net.Uri.parse(url)
             if (target.scheme == "https" && !target.host.isNullOrBlank()) pendingCapsuleUrl.value = url
@@ -233,7 +245,7 @@ class MainActivity : ComponentActivity() {
             pendingLockTest.value = true
             intent.removeExtra(LockScreenTests.EXTRA_LOCK_TEST)
         }
-        launchAdapter?.read(intent)?.let { input ->
+        launchInput?.let { input ->
             darkTheme.value = input.darkTheme
             shell.automation = input.automation
             shell.posture.value = input.posture
@@ -268,6 +280,12 @@ class MainActivity : ComponentActivity() {
             pendingPairLink.value = uri.toString()
             return
         }
+        if (uri.scheme == "persona" && uri.host == "provider" && uri.path == "/import") {
+            // A gateway's or a shared provider import link (#5428): the providers page reads it through the hub.
+            ProviderImportRequests.pending.value = uri.toString()
+            openNavigation.value = focusing { router -> router.parse(RouteInput.Internal(SettingsPageRoute(SettingsPage.Providers))) }
+            return
+        }
         val link = uri.toString()
         val notification = notificationRoute(uri)
         val terminal = terminalLink(link)
@@ -282,7 +300,11 @@ class MainActivity : ComponentActivity() {
      */
     private fun focusing(resolve: (Router) -> ResolvedRoute?): (Router) -> ResolvedRoute? = { router ->
         resolve(router)?.also {
-            if (it.focusComposer) persona.feature.assistant.AssistantComposerFocus.request()
+            if (it.focusComposer) {
+                val chat = it.key as? ChatRoute
+                if (chat != null) persona.feature.chat.ChatComposerFocus.request(persona.core.contracts.SessionKey(chat.machineId, chat.sessionId))
+                else persona.feature.assistant.AssistantComposerFocus.request()
+            }
             // A card outside any session (#4808): Agents opens its sheet once the card is listed.
             it.card?.let(persona.feature.agents.AgentsCardOpen::request)
         }
@@ -293,7 +315,20 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_SESSION = "session"
         const val EXTRA_CAPSULE_URL = "persona.capsule.url"
         val pendingCapsuleUrl = mutableStateOf<String?>(null)
+        /** A message link waiting for its hub group and replacement session; survives the shell's identity change. */
+        val pendingHubLink = mutableStateOf<String?>(null)
         /** A pairing link the activity was opened with, for the pairing screen to confirm. */
         val pendingPairLink = mutableStateOf<String?>(null)
     }
 }
+
+/** Explicit notification, deep-link, capsule URL, lock-test and debug intents exit any lingering full-screen capsule mode. */
+internal fun leavesCapsuleFullScreen(intent: Intent?, hasLaunchInput: Boolean = false): Boolean =
+    intent != null && (
+        hasLaunchInput ||
+            intent.data != null ||
+            intent.hasExtra(MainActivity.EXTRA_SESSION) ||
+            intent.hasExtra(MainActivity.EXTRA_CAPSULE_URL) ||
+            intent.getBooleanExtra(LockScreenTests.EXTRA_LOCK_TEST, false) ||
+            intent.hasExtra("debug.openTab")
+        )

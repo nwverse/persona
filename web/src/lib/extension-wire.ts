@@ -46,7 +46,8 @@ export interface Manifest {
    */
   extension_pack?: PackMember[];
   /**
-   * The configuration's JSON Schema, in the subset every app draws as a form (docs "Configuration: the form subset").
+   * The configuration's JSON Schema, in the settings-form subset (docs "Configuration: the form subset"). Capable
+   * clients draw declared entry lists after opting in; other clients receive compatibility projections.
    */
   configuration?: unknown;
   secrets?: SecretSpec[];
@@ -64,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -135,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -284,6 +304,11 @@ export interface Permissions {
    */
   agent_runtimes?: boolean;
   /**
+   * The routine sends its local date and language to this extension and may include its facts and report sections in
+   * the briefing.
+   */
+  routine_facts?: boolean;
+  /**
    * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
@@ -316,15 +341,18 @@ export interface Contributes {
   connectors?: ConnectorItem[];
   voice?: NamedItem[];
   transcription?: NamedItem[];
+  speech?: NamedItem[];
   computer?: NamedItem[];
   browser?: NamedItem[];
   iphone?: NamedItem[];
   quota?: QuotaItem[];
+  usage?: UsageItem[];
   providers?: ProviderItem[];
   api?: APIItem[];
   assistant?: AssistantItem[];
   mcp_servers?: MCPServerItem[];
   ui?: UIItem[];
+  track_kinds?: TrackKindItem[];
   agent_sources?: AgentSourceItem[];
   channel?: ChannelItem[];
   events?: EventsItem[];
@@ -336,9 +364,14 @@ export interface Contributes {
   triage_templates?: TriageTemplateItem[];
   agent_filters?: AgentFilterItem[];
   tunnels?: TunnelItem[];
+  routine_facts?: RoutineFactsItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
+  repository_providers?: RepositoryProviderItem[];
+  text_lookup?: TextLookupItem[];
+  memory_sources?: MemorySourceItem[];
+  disk_offload?: DiskOffloadItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -352,6 +385,8 @@ export interface Contributes {
  */
 export interface SkillItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
   source?: ContentSource;
@@ -550,6 +585,134 @@ export interface SecretProviderItem {
 }
 
 /**
+ * A code-hosting source on the exact hosts it names, for the repository catalog and a to-do's repositories and links
+ * there: the manager asks the program (repo.parse, repo.check, repo.link, repo.describe; repository.schema.json) and
+ * re-checks every answer. Needs the program to speak the protocol. A host another installed extension claims, on or
+ * off, fails the install, and so does one host in two items.
+ */
+export interface RepositoryProviderItem {
+  id: string;
+  /**
+   * What the source is called (Acme Code): the catalog and a to-do's repositories show it. Not only spaces, no
+   * control characters.
+   */
+  name: string;
+  /**
+   * The exact host names whose addresses it reads (code.example.com): lowercase, no scheme, port, path or wildcard,
+   * not an IP address, and not a host the built-in GitHub and GitLab read.
+   */
+  hosts: string[];
+  /**
+   * What it calls the link kinds it names (each at most once; the others keep their usual words). Only relabels: the
+   * kinds stay issue and pull_request.
+   */
+  link_kinds?: RepositoryLinkLabel[];
+  /**
+   * What else the program answers (#11584): pr_status, the state of a pull request for delivery checks
+   * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
+   */
+  capabilities?: RepositoryCapability[];
+}
+
+/**
+ * Identifies one text_lookup dictionary within its extension.
+ */
+export type TextLookupContributionID = string & { readonly __brand: "TextLookupContributionID" };
+/** A TextLookupContributionID from its raw string. */
+export function textLookupContributionID(raw: string): TextLookupContributionID {
+  return raw as TextLookupContributionID;
+}
+
+/**
+ * A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
+ * text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"]) for
+ * now.
+ */
+export interface TextLookupItem {
+  id: TextLookupContributionID;
+  /** What the dictionary is called, in a few words. */
+  name?: string;
+  /** The languages it looks up. Only "en" is accepted for now; omitted means ["en"]. */
+  languages?: string[];
+}
+
+/**
+ * A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items back
+ * (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its inventory beside
+ * the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run, offload.job,
+ * offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak the protocol.
+ */
+export interface DiskOffloadItem {
+  id: string;
+  /**
+   * What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control characters.
+   */
+  name: string;
+  /** What it takes from the map; without it, files and folders. */
+  kinds?: DiskOffloadKind[];
+  /** Items it holds can be brought back (Restore on the map's cloud side). */
+  restore?: boolean;
+}
+
+/**
+ * What a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
+ */
+export type DiskOffloadKind = "file" | "dir" | "app" | (string & {});
+export const DISK_OFFLOAD_KINDS = ["file", "dir", "app"] as const;
+
+/**
+ * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
+ * decides which entries reach which scene (a conversation's standing context, a recall, a dispatched task, the
+ * Inbox's helper). Needs the program to speak the protocol; one per extension. Once declared, the hub stops
+ * delivering the extension's own text outlets (its assistant instructions, project context, Inbox context and its
+ * connectors' read tools in the assistant's conversations) directly.
+ */
+export interface MemorySourceItem {
+  id: string;
+  /** What settings call the source (My memory). Not only spaces, no control characters. */
+  name: string;
+}
+
+/**
+ * A repository provider's optional answer: pr_status (repo.pr_status).
+ */
+export type RepositoryCapability = "pr_status" | (string & {});
+export const REPOSITORY_CAPABILITIES = ["pr_status"] as const;
+
+/**
+ * The word a repository provider shows for one kind of its links (MR for a pull_request).
+ */
+export interface RepositoryLinkLabel {
+  kind: RepositoryLinkKind;
+  /** Not only spaces, no control characters. */
+  label: string;
+}
+
+/**
+ * The kinds of a to-do's links to a repository: an issue, or a pull request (a merge request).
+ */
+export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
+export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
+
+/**
+ * Identifies one routine facts source within its extension.
+ */
+export type RoutineContributionID = string & { readonly __brand: "RoutineContributionID" };
+/** A RoutineContributionID from its raw string. */
+export function routineContributionID(raw: string): RoutineContributionID {
+  return raw as RoutineContributionID;
+}
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+export interface RoutineFactsItem {
+  id: RoutineContributionID;
+  title: string;
+}
+
+/**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
  * program to speak the protocol, on_startup and permissions.error_reports.
  */
@@ -623,8 +786,43 @@ export interface ConnectorItem {
   sends_as_user?: boolean;
 }
 
+export interface TrackAttention {
+  push_cap?: string;
+  deep_default?: string;
+  enter_mode?: string;
+}
+
+export interface TrackSidebar {
+  group?: string;
+  order?: number;
+  icon?: string;
+}
+
+export interface TrackKindConfig {
+  schema: 1;
+  template: string;
+  user_instructions?: string;
+  context: string;
+  default_categories: string[];
+  tag_focus: string[];
+  rhythms: (Record<string, unknown>)[];
+  attention: TrackAttention;
+  supervision: string;
+  usage: (Record<string, unknown>)[];
+  assembly: string;
+  capture_target?: boolean;
+  channels: string[];
+  sidebar: TrackSidebar;
+}
+
+export interface TrackKindItem {
+  id: string;
+  title: string;
+  config: TrackKindConfig;
+}
+
 /**
- * A contribution with only an id and a name: voice, transcription, computer, browser.
+ * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
 export interface NamedItem {
   id: string;
@@ -635,6 +833,15 @@ export interface QuotaItem {
   id: string;
   name: string;
   hosts?: string[];
+}
+
+export interface UsageItem {
+  id: string;
+  name: string;
+  hosts?: string[];
+  direct?: boolean;
+  remote_address?: string;
+  remote_key?: string;
 }
 
 export interface ProviderItem {
@@ -672,6 +879,8 @@ export interface APIReceipt {
 
 export interface AssistantItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   skills?: string[];
   instructions?: string;
   gate?: string;
@@ -685,6 +894,8 @@ export interface AssistantItem {
 export interface MCPServerItem {
   /** The server's name for the assistant; not persona or persona. */
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** Looked up on PATH, then in ~/bin. */
   command: string;
   /**
@@ -712,6 +923,11 @@ export interface UIItem {
   hosts?: string[];
   /** nav_page only. */
   icon?: NavIcon;
+  /**
+   * nav_page only: the icon's named color in the sidebar, the same colors as a row's icon_color, drawn only while the
+   * owner chose Colored sidebar icons (#10822); without it the icon stays the sidebar's neutral ink.
+   */
+  icon_color?: Color;
   /** overview_card, capsule_card and widget only: a nav_page or extension_page of the same extension. */
   opens?: string;
   /** inbox_item only: one of the extension's own connectors. */
@@ -720,6 +936,19 @@ export interface UIItem {
   families?: WidgetFamily[];
   /** widget only: how often the widget is drawn again on its own (30 when not said). */
   refresh_minutes?: number;
+  /**
+   * nav_page only: the sidebar group the page goes in unless the user put it elsewhere (#9071). Title translated in
+   * l10n's groups.
+   */
+  group?: UIGroup;
+}
+
+/**
+ * A sidebar group a nav_page names (docs "UI slots"): pages of any extension naming the same id share it.
+ */
+export interface UIGroup {
+  id: string;
+  title: string;
 }
 
 export interface AgentSourceItem {
@@ -740,12 +969,22 @@ export interface ChannelItem {
 
 export interface ChannelCapabilities {
   images_in?: boolean;
+  /**
+   * It can send pictures: the hub puts an answer's pictures in channel.send's images instead of leaving them as
+   * Markdown in the text.
+   */
+  images_out?: boolean;
   files_in?: boolean;
   voice_in?: boolean;
   format?: string;
   max_text?: number;
   asks?: string;
   push?: boolean;
+  /**
+   * It only replies to incoming messages or triggers and cannot send unsolicited proactive messages without reply_to;
+   * testing checks connectivity instead of calling channel.send.
+   */
+  reply_only?: boolean;
   typing?: boolean;
   progress?: boolean;
   threads?: boolean;
@@ -862,11 +1101,37 @@ export interface AuthPrompt {
   expires_at?: string;
 }
 
+/**
+ * settings.check (manifest settings_check): the configuration and secrets as a change would leave them, before the
+ * hub saves it. The program answers whether they work (SettingsCheckResult) within 10 seconds.
+ */
+export interface SettingsCheckParams {
+  /** The whole configuration as it would be saved, the schema's defaults filled in. */
+  config: unknown;
+  secrets: Record<string, string>;
+  /**
+   * The egress proxy URL for this check only, when the program runs behind the proxy and a config: entry of
+   * permissions.network names an address: requests sent through it reach the addresses this configuration names, its
+   * ordinary requests only the saved ones. It stops working once the check answers. Absent: use the program's
+   * ordinary proxy (an older hub sends none).
+   */
+  proxy?: string;
+}
+
+/**
+ * settings.check's answer: ok, or why not in one sentence for the owner (the hub takes every secret out of it and
+ * cuts it to 300 characters).
+ */
+export interface SettingsCheckResult {
+  ok: boolean;
+  error?: string;
+}
+
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | "inbox_group_state" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | "tool_views" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images", "tool_views"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -879,6 +1144,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -1028,6 +1298,11 @@ export interface UIContext {
   platform?: Platform;
   ui_version?: number;
   /**
+   * Component types this client cannot draw even within ui_version (such as ["scene"] while rendering v12 "map"). The
+   * hub downgrades each listed type in place.
+   */
+  unsupported?: string[];
+  /**
    * Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client
    * or hub advertises it.
    */
@@ -1061,6 +1336,10 @@ export interface UIPlace {
   opens?: string;
   badge?: Badge;
   connector?: string;
+  /** A nav_page's sidebar group, its title in the request's language (#9071). */
+  group?: UIGroup;
+  /** A nav_page's icon color as its manifest names it, drawn only with Colored sidebar icons (#10822). */
+  icon_color?: Color;
 }
 
 export interface UIPlaces {
@@ -1315,6 +1594,80 @@ export interface AuthRelayResult {
 }
 
 /**
+ * text_lookup.state's parameters: which contribution to ask for the words the user saved and whether saved words are
+ * underlined.
+ */
+export interface TextLookupStateParams {
+  contribution: string;
+}
+
+/**
+ * What text_lookup.state answers. words is capped by the manager at 5000.
+ */
+export interface TextLookupStateResult {
+  underline_saved: boolean;
+  words?: string[];
+}
+
+/**
+ * text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it, the word's language and
+ * the language of the app.
+ */
+export interface TextLookupLookupParams {
+  contribution: string;
+  word: string;
+  context?: string;
+  lang: string;
+  ui_lang: string;
+}
+
+/**
+ * One meaning of a looked-up word.
+ */
+export interface TextLookupSense {
+  pos?: string;
+  text: string;
+}
+
+/**
+ * What text_lookup.lookup answers: found is false when the dictionary has no entry.
+ */
+export interface TextLookupLookupResult {
+  found: boolean;
+  word: string;
+  lemma?: string;
+  phonetic?: string;
+  senses?: TextLookupSense[];
+  saved: boolean;
+}
+
+/**
+ * text_lookup.save's parameters: the word to remember, an optional sentence around it and where the user saved it
+ * from.
+ */
+export interface TextLookupSaveParams {
+  contribution: string;
+  word: string;
+  context?: string;
+  source?: string;
+}
+
+/**
+ * text_lookup.remove's parameters: the saved word to forget.
+ */
+export interface TextLookupRemoveParams {
+  contribution: string;
+  word: string;
+}
+
+/**
+ * What text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.
+ */
+export interface TextLookupSavedResult {
+  saved: boolean;
+}
+
+/**
  * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
  * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
  * user approved it on the phone, id the variable's name, machine and session the Agent's).
@@ -1349,6 +1702,11 @@ export interface SecretsResolveParams {
   contribution: string;
   reference: string;
   purpose: SecretPurpose;
+  /**
+   * The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask
+   * the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them.
+   */
+  quiet?: boolean;
 }
 
 /**
@@ -1357,6 +1715,53 @@ export interface SecretsResolveParams {
  */
 export interface SecretsResolveResult {
   value: string;
+}
+
+/**
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
+ */
+export interface SecretStoreField {
+  name: string;
+  type?: string;
+  delete?: boolean;
+  keep_value?: boolean;
+}
+
+/**
+ * The canonical public target approved on the secret storage card.
+ */
+export interface SecretStoreTarget {
+  operation: string;
+  vault: string;
+  item?: string;
+  title?: string;
+  category?: string;
+  fields: SecretStoreField[];
+}
+
+/**
+ * secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted
+ * payload.
+ */
+export interface SecretStoreParams {
+  contribution?: string;
+  phase: string;
+  target: SecretStoreTarget;
+  machine: string;
+  session: string;
+  key_id?: string;
+  sealed?: string;
+}
+
+/**
+ * Metadata and a recipient key, or references of written fields. Never values.
+ */
+export interface SecretStoreResult {
+  target: SecretStoreTarget;
+  vault_name?: string;
+  key?: string;
+  key_id?: string;
+  references?: Record<string, string>;
 }
 
 /**
@@ -1394,6 +1799,12 @@ export const TONES = ["neutral", "positive", "caution", "danger"] as const;
  */
 export type TextStyle = "body" | "secondary" | "caption" | "code" | "title" | "headline" | (string & {});
 export const TEXT_STYLES = ["body", "secondary", "caption", "code", "title", "headline"] as const;
+
+/**
+ * A progress drawing hint: bar (the default) or ring.
+ */
+export type ProgressStyle = "bar" | "ring" | (string & {});
+export const PROGRESS_STYLES = ["bar", "ring"] as const;
 
 /**
  * date, time, datetime, multichoice and multiline are UI version 6. Values stay strings: date YYYY-MM-DD, time HH:MM
@@ -1453,8 +1864,9 @@ export const PLATFORMS = ["ios", "mac", "android", "web"] as const;
 
 /**
  * The fixed icon set: a nav_page's icon, a row's, an empty state's (UI version 3 for the last two and the icons after
- * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's). Each app
- * draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is its old name).
+ * money; 4 for those after settings; 6 for those after file, and a metric's, a tile's, a row action's; 8 a
+ * section's). Each app draws its own icon for the meaning; an unknown one draws as the default (extension; plugin is
+ * its old name).
  */
 export type NavIcon = "plugin" | "chart" | "gauge" | "list" | "bell" | "doc" | "calendar" | "money" | "extension" | "person" | "chat" | "mail" | "link" | "folder" | "star" | "check" | "warning" | "clock" | "tag" | "search" | "settings" | "branch" | "commit" | "code" | "pull_request" | "merge" | "file" | "home" | "sofa" | "light" | "power" | "fan" | "thermometer" | "droplet" | "lock" | "unlock" | "door" | "window" | "camera" | "video" | "play" | "pause" | "stop" | "speaker" | "music" | "tv" | "plug" | "battery" | "bolt" | "sun" | "moon" | "cloud" | "rain" | "snow" | "wind" | "leaf" | "car" | "location" | "robot" | "wifi" | "shield" | "trend_up" | "trend_down" | "wallet" | "bank" | "heart" | "plus" | "minus" | "trash" | "edit" | "refresh" | "share" | "info" | (string & {});
 export const NAV_ICONS = ["plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "extension", "person", "chat", "mail", "link", "folder", "star", "check", "warning", "clock", "tag", "search", "settings", "branch", "commit", "code", "pull_request", "merge", "file", "home", "sofa", "light", "power", "fan", "thermometer", "droplet", "lock", "unlock", "door", "window", "camera", "video", "play", "pause", "stop", "speaker", "music", "tv", "plug", "battery", "bolt", "sun", "moon", "cloud", "rain", "snow", "wind", "leaf", "car", "location", "robot", "wifi", "shield", "trend_up", "trend_down", "wallet", "bank", "heart", "plus", "minus", "trash", "edit", "refresh", "share", "info"] as const;
@@ -1488,6 +1900,16 @@ export interface Section {
   items: Component[];
   more?: More;
   pane?: Pane;
+  span?: SectionSpan;
+  /** Drawn before the title. */
+  icon?: NavIcon;
+  icon_color?: Color;
+  link?: SectionLink;
+  /**
+   * How many rows sit side by side in the section on a wide screen (UI version 8), in reading order; one on a narrow
+   * screen and when absent. Other components keep the whole width.
+   */
+  columns?: number;
 }
 
 /**
@@ -1519,9 +1941,12 @@ export type Component =
   | ComposerComponent
   | ImageComponent
   | GridComponent
-  | CarouselComponent;
-export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel"] as const;
-export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6 };
+  | CarouselComponent
+  | GraphComponent
+  | SceneComponent
+  | MapComponent;
+export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene", "map"] as const;
+export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11, map: 12 };
 
 /**
  * A paragraph.
@@ -1549,13 +1974,19 @@ export interface MetricComponent {
 }
 
 /**
- * A bar filled to ratio (0 to 1).
+ * Progress toward a goal, filled to ratio (0 to 1).
  */
 export interface ProgressComponent {
   type: "progress";
   key?: string;
   label: string;
   ratio: number;
+  /**
+   * A drawing hint; omitted means bar. Apple Home Screen widgets (small, medium and large) draw ring as a ring; other
+   * surfaces draw a bar. Apps that do not recognize this field keep drawing a bar. Native stream does not accept this
+   * field.
+   */
+  style?: ProgressStyle;
   detail?: string;
   tone?: Tone;
 }
@@ -1790,6 +2221,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**
@@ -1906,6 +2344,345 @@ export interface CarouselComponent {
 }
 
 /**
+ * Nodes joined by edges, drawn as a canvas the person can pan, zoom, fit and open full screen (UI version 10): work
+ * split into parts, a plan's steps, a family of things. The app lays it out (layout, direction) and draws each node
+ * with its own design system; tapping a node does its action, as a row's (or opens its in-place inspector first on
+ * the web when the node carries facts, detail or links, with the action inside); a node with children folds them.
+ * Each node counts as a component of the page. The hub refuses ids that repeat, an edge naming an unknown node or
+ * itself, a repeated edge, a cycle, a second parent in a tree, and selected or folded naming an unknown node. In a
+ * card it is a still preview that opens full screen. An older app gets a row per node in reading order, indented.
+ */
+export interface GraphComponent {
+  type: "graph";
+  /** Keeps the person's pan, zoom and folding across redraws of the page. */
+  key?: string;
+  nodes: GraphNode[];
+  edges?: GraphEdge[];
+  layout?: GraphLayout;
+  direction?: GraphDirection;
+  /** A node's id: drawn as selected, and the canvas opens centred on it. */
+  selected?: string;
+  /**
+   * Ids of nodes whose children start folded. Once the person folds or unfolds one, the app keeps their choice for
+   * this key.
+   */
+  folded?: string[];
+}
+
+/**
+ * One node of a graph (UI version 10): a box with a title, a state line, a badge, an icon and a progress bar, in
+ * tone's role color or color's named color (never both), with optional timing and inspector details.
+ */
+export interface GraphNode {
+  id: string;
+  title: string;
+  subtitle?: string;
+  badge?: Badge;
+  tone?: Tone;
+  color?: Color;
+  icon?: NavIcon;
+  /** A thin bar along the node's foot, 0 to 1. */
+  progress?: number;
+  /**
+   * Nodes with the same parents and the same group sit next to each other inside one frame titled with it (the same
+   * task tried several ways).
+   */
+  group?: string;
+  action?: Action;
+  /** Unix timestamp in seconds when this node started. */
+  started_at?: number;
+  /** Unix timestamp in seconds when this node ended; omitted while still running. */
+  ended_at?: number;
+  /** Short label/value readings shown in the node inspector. */
+  facts?: Fact[];
+  /** Plain-text summary, verifier feedback or error shown in the node inspector. */
+  detail?: string;
+  /** HTTPS links shown in the node inspector (for example work and verifier sessions across attempts). */
+  links?: GraphNodeLink[];
+}
+
+/**
+ * An https link shown in a graph node's inspector (UI version 10).
+ */
+export interface GraphNodeLink {
+  title: string;
+  url: string;
+}
+
+/**
+ * An edge from one node to another (UI version 10): from is the parent, to the child.
+ */
+export interface GraphEdge {
+  from: string;
+  to: string;
+}
+
+/**
+ * tree (the default): every node has at most one parent, children under it, a parent centred over its children.
+ * layered: a node may have several parents; each node sits one layer past its furthest parent (a plan whose steps
+ * wait for several others).
+ */
+export type GraphLayout = "tree" | "layered" | (string & {});
+export const GRAPH_LAYOUTS = ["tree", "layered"] as const;
+
+/**
+ * right (the default): roots at the start, children after them, so a wide fan-out reads down the screen like an
+ * outline. down: roots at the top, children below.
+ */
+export type GraphDirection = "right" | "down" | (string & {});
+export const GRAPH_DIRECTIONS = ["right", "down"] as const;
+
+/**
+ * A small 3D model the person can turn, zoom and tap (UI version 11): a home with its rooms and furniture as simple
+ * shapes, each device pinned where it is with its state, and a light in the model for lamps that are on. The app
+ * builds it with its own engine; the extension sends shapes, never a model file or code. Metres; plan coordinates [x,
+ * y] with x east and y north, heights up from the floor; angles in degrees counter-clockwise from +x seen from above.
+ * Each pin counts as a component of the page; a view has at most one scene. In a card it is a still preview that
+ * opens full screen. An older app gets the poster as an image, or without one a row per pin.
+ */
+export interface SceneComponent {
+  type: "scene";
+  /** Keeps the person's camera across redraws of the page. */
+  key?: string;
+  /** What the model shows, in a sentence: read out first, and shown when it cannot be drawn. */
+  alt: string;
+  caption?: string;
+  /**
+   * A picture of the model for an older app (an image in its place) and for share as image. Without it an older app
+   * gets a row per pin.
+   */
+  poster?: ImageSource;
+  camera?: SceneCamera;
+  shapes: SceneShape[];
+  labels?: SceneLabel[];
+  pins?: ScenePin[];
+}
+
+/**
+ * Where the model is first seen from (UI version 11), orthographic, around the centre of the shapes' bounding box.
+ * Each field has its default when absent.
+ */
+export interface SceneCamera {
+  /**
+   * The camera's direction from the centre, in degrees counter-clockwise from +x (east): 225 (the default) stands
+   * south-west, looking north-east.
+   */
+  yaw?: number;
+  /** Degrees above the floor plane: 35 by default, 90 straight down. */
+  pitch?: number;
+  /** 1 (the default) fits the shapes' bounding box in the view; 2 draws it twice as large. */
+  zoom?: number;
+}
+
+/**
+ * One shape of a scene (UI version 11), told apart by kind: a box, a cylinder or a prism, standing from bottom to top
+ * (metres above the floor, at least 0.005 apart). Without color, the material's own.
+ */
+export type SceneShape =
+  | SceneBox
+  | SceneCylinder
+  | ScenePrism;
+export const SCENE_SHAPE_KINDS = ["box", "cylinder", "prism"] as const;
+
+/**
+ * A box (UI version 11): at yaw 0, size[0] along +x and size[1] along +y. round rounds its corners seen from above
+ * (at most half the smaller size); the app bevels its upright edges no more than half its height. wall says the box
+ * is a wall, for an app's cutaway (#13036): the outer walls between the camera and the rooms are drawn low (a wall
+ * with a floor on the camera's side, between two rooms, keeps its height), what stands in one is cut to that height,
+ * and what stands tall in front of one is drawn see-through; an app without a cutaway draws it as any box.
+ */
+export interface SceneBox {
+  kind: "box";
+  center: number[];
+  size: number[];
+  yaw?: number;
+  round?: number;
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+  wall?: boolean;
+}
+
+/**
+ * An upright cylinder (UI version 11): a round table's top, a stool, a lamp's stem.
+ */
+export interface SceneCylinder {
+  kind: "cylinder";
+  center: number[];
+  radius: number;
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * A floor plan's polygon raised from bottom to top (UI version 11): a room's floor, an L-shaped counter. The hub
+ * refuses a polygon that is not simple: a point twice, an edge shorter than 0.005, an edge folding back, edges that
+ * touch, an area under 0.0001.
+ */
+export interface ScenePrism {
+  kind: "prism";
+  points: (number[])[];
+  bottom: number;
+  top: number;
+  color?: string;
+  material?: SceneMaterial;
+}
+
+/**
+ * How a shape's surface looks (UI version 11): matte (the default), glass (see-through), metal, screen (dark and
+ * glossy), tile and wood (the app's own pattern, in metres, in the shape's color).
+ */
+export type SceneMaterial = "matte" | "glass" | "metal" | "screen" | "tile" | "wood" | (string & {});
+export const SCENE_MATERIALS = ["matte", "glass", "metal", "screen", "tile", "wood"] as const;
+
+/**
+ * A quiet name on the floor (UI version 11): a room's. Not tappable and not a component of the page; read out after
+ * alt.
+ */
+export interface SceneLabel {
+  text: string;
+  at: number[];
+  height?: number;
+}
+
+/**
+ * A device in the model (UI version 11): a pin at its place with its label and state, in tone's role color or color's
+ * named color (never both); with light on, the model lights up around it. Tapping it does its action, as a tile's.
+ * state is required when a tone other than neutral, a color or a light that is on says something, so it never rides
+ * on color or light alone. A scene has at most 16 pins with a light on.
+ */
+export interface ScenePin {
+  id: string;
+  at: number[];
+  /** Metres above the floor: a ceiling lamp's 2.4, an AC's 2.2. 0 when absent. */
+  height?: number;
+  label: string;
+  /** In plain words: On, Off, 26 °C. */
+  state?: string;
+  icon?: NavIcon;
+  tone?: Tone;
+  color?: Color;
+  light?: SceneLight;
+  action?: Action;
+}
+
+/**
+ * A lamp's light (UI version 11): when on, the model is lit around the pin, warm or cool. Off (the default) adds no
+ * light.
+ */
+export interface SceneLight {
+  on?: boolean;
+  warmth?: SceneWarmth;
+}
+
+/**
+ * warm (the default): a lamp's yellow light; cool: a white one.
+ */
+export type SceneWarmth = "warm" | "cool" | (string & {});
+export const SCENE_WARMTHS = ["warm", "cool"] as const;
+
+/**
+ * An interactive native map (UI version 12): route polylines and markers (waypoints, origin, destination, pins) with
+ * distance/duration metadata and external https map links. Drawn as a snapshot preview in cards and inline tool
+ * views; tapping opens an interactive sheet unless static is true. An older app gets the caption, route summaries,
+ * marker rows and links.
+ */
+export interface MapComponent {
+  type: "map";
+  /** Keeps camera state across redraws of the page. */
+  key?: string;
+  title?: string;
+  /** Read out by screen readers and shown as fallback text when the map cannot be drawn. */
+  alt: string;
+  caption?: string;
+  aspect?: ImageAspect;
+  viewport?: MapViewport;
+  markers?: MapMarker[];
+  routes?: MapRoute[];
+  links?: MapLink[];
+  /** When true, stays a non-interactive snapshot and does not open an interactive sheet. */
+  static?: boolean;
+  /**
+   * When true (or when multiple routes/stops exist without a compact override), shows a companion route/stop list
+   * beneath the map.
+   */
+  show_list?: boolean;
+}
+
+/**
+ * Travel mode of a route polyline (UI version 12).
+ */
+export type MapTravelMode = "driving" | "walking" | "transit" | "cycling" | (string & {});
+export const MAP_TRAVEL_MODES = ["driving", "walking", "transit", "cycling"] as const;
+
+/**
+ * Semantic role of a marker on a map (UI version 12).
+ */
+export type MapMarkerKind = "origin" | "destination" | "waypoint" | "pin" | "user" | (string & {});
+export const MAP_MARKER_KINDS = ["origin", "destination", "waypoint", "pin", "user"] as const;
+
+/**
+ * A geographic point in WGS-84 (UI version 12).
+ */
+export interface MapCoordinate {
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Initial map framing in WGS-84 when not auto-fitted to markers and routes (UI version 12).
+ */
+export interface MapViewport {
+  center: MapCoordinate;
+  span_lat?: number;
+  span_lon?: number;
+}
+
+/**
+ * One location pin on a map (UI version 12), in tone's role color or color's named color (never both).
+ */
+export interface MapMarker {
+  id: string;
+  lat: number;
+  lon: number;
+  kind?: MapMarkerKind;
+  label: string;
+  subtitle?: string;
+  detail?: string;
+  icon?: NavIcon;
+  tone?: Tone;
+  color?: Color;
+  action?: Action;
+}
+
+/**
+ * One route polyline on a map (UI version 12), in WGS-84 coordinates.
+ */
+export interface MapRoute {
+  id: string;
+  label?: string;
+  mode?: MapTravelMode;
+  distance_meters?: number;
+  duration_seconds?: number;
+  summary?: string;
+  selected?: boolean;
+  tone?: Tone;
+  color?: Color;
+  points: MapCoordinate[];
+}
+
+/**
+ * An https link shown beside or inside a map component (UI version 12).
+ */
+export interface MapLink {
+  title: string;
+  url: string;
+}
+
+/**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension
  * serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref: its own address,
  * which the app loads with its device credentials. An extension that writes path is refused.
@@ -2011,21 +2788,56 @@ export interface Tile {
   control?: RowControl;
   actions?: RowAction[];
   action?: Action;
+  /** Draws the tile as a ring (UI version 9): never with an image or a spark. */
+  gauge?: Gauge;
+}
+
+/**
+ * A tile's ring (UI version 9), for a quota or a usage: filled to ratio, with the tile's value and the unit in its
+ * centre (the percentage when the tile has no value), the title below. Without color, the tile's color, else the
+ * app's accent. An older app gets the tile without it: the unit after the value, the percentage in the subtitle, the
+ * color as the tile's.
+ */
+export interface Gauge {
+  /** How full the ring is, 0 to 1. */
+  ratio: number;
+  /** A short word under the value (USD, GB, h), as a control's unit. */
+  unit?: string;
+  color?: Color;
 }
 
 /**
  * stack: sections one under another. split: on a wide screen the side pane's sections in a column at the start, the
  * rest beside it, each scrolling on its own; on a narrow one the side pane folds into a bar on top that opens as a
- * sheet.
+ * sheet. columns (UI version 8): on a wide screen the sections are cards in a grid, two columns or three when there
+ * is room, in reading order (left to right, then down), each row as tall as its tallest card; on a narrow one a
+ * single column, as stack. An older app gets stack.
  */
-export type Layout = "stack" | "split" | (string & {});
-export const LAYOUTS = ["stack", "split"] as const;
+export type Layout = "stack" | "split" | "columns" | (string & {});
+export const LAYOUTS = ["stack", "split", "columns"] as const;
 
 /**
  * Where a section of a split view goes.
  */
 export type Pane = "main" | "side" | (string & {});
 export const PANES = ["main", "side"] as const;
+
+/**
+ * How much of a row of a columns view a section takes (UI version 8): full, the whole row; absent, one column. Other
+ * layouts ignore it.
+ */
+export type SectionSpan = "full" | (string & {});
+export const SECTION_SPANS = ["full"] as const;
+
+/**
+ * A link beside a section's title (UI version 8), such as the page that has all of it: pressing it calls ui.action
+ * with action (which may answer with a push) or pushes action.push. An older app on a full page gets it as the
+ * section's last row.
+ */
+export interface SectionLink {
+  title: string;
+  action: Action;
+}
 
 export type FileStatus = "added" | "modified" | "deleted" | "renamed" | (string & {});
 export const FILE_STATUSES = ["added", "modified", "deleted", "renamed"] as const;
@@ -2258,8 +3070,8 @@ export interface Action {
    */
   reply?: string;
   /**
-   * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
-   * app.
+   * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+   * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app.
    */
   open?: string;
   /** Assistant only: return one page within the card. */
@@ -2580,6 +3392,8 @@ export interface MessagingAccount {
   id: string;
   name?: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   tenant?: string;
   signed_in: boolean;
   unread?: number;
@@ -2597,6 +3411,8 @@ export interface MessagingConversation {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind: MessagingConversationKind;
   unread: number;
   marked_unread?: boolean;
@@ -2621,6 +3437,8 @@ export interface MessagingPerson {
   id?: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   kind?: string;
 }
 
@@ -3034,6 +3852,8 @@ export interface MessagingProfile {
   id: string;
   name: string;
   avatar?: string;
+  /** Hub-supplied avatar path derived from avatar. Old sources supply only avatar. */
+  avatar_url?: string;
   cover?: string;
   kind?: string;
   subtitle?: string;
@@ -3511,4 +4331,251 @@ export interface UIPageSnapshot {
   version: number;
   rootKey: string;
   view: View;
+}
+
+/**
+ * Whether the provider can work on this computer: ready; needs_install (its tool is not on the computer: the first
+ * offload asks to install it, OffloadTool); needs_setup (the user has to set it up first, in the extension's
+ * settings: detail says what); unavailable (detail says why).
+ */
+export type OffloadState = "ready" | "needs_install" | "needs_setup" | "unavailable" | (string & {});
+export const OFFLOAD_STATES = ["ready", "needs_install", "needs_setup", "unavailable"] as const;
+
+/**
+ * What an offloaded item was: a file, a dir (folder), an app, an app's data (app_data), a bundle of items moved
+ * together, a session archive, or other.
+ */
+export type OffloadItemKind = "file" | "dir" | "app" | "app_data" | "bundle" | "session" | "other" | (string & {});
+export const OFFLOAD_ITEM_KINDS = ["file", "dir", "app", "app_data", "bundle", "session", "other"] as const;
+
+/**
+ * What offload.run does: offload (move paths away) or restore (bring items back by id).
+ */
+export type OffloadAction = "offload" | "restore" | (string & {});
+export const OFFLOAD_ACTIONS = ["offload", "restore"] as const;
+
+/**
+ * offload.run's answer: started (a job runs: job), needs_install (the tool is missing and install was not given:
+ * nothing happened; tool), refused (nothing happened; items say why), ok (a dry run's answer: items).
+ */
+export type OffloadRunStatus = "started" | "needs_install" | "refused" | "ok" | (string & {});
+export const OFFLOAD_RUN_STATUSES = ["started", "needs_install", "refused", "ok"] as const;
+
+/**
+ * A job: running, done, failed (error says why) or canceled.
+ */
+export type OffloadJobState = "running" | "done" | "failed" | "canceled" | (string & {});
+export const OFFLOAD_JOB_STATES = ["running", "done", "failed", "canceled"] as const;
+
+/**
+ * What a running job does now: install (its tool), check, upload, verify, cleanup (removing the originals), download
+ * (a restore).
+ */
+export type OffloadPhase = "install" | "check" | "upload" | "verify" | "cleanup" | "download" | (string & {});
+export const OFFLOAD_PHASES = ["install", "check", "upload", "verify", "cleanup", "download"] as const;
+
+/**
+ * One item of a job: pending, running, done, failed or skipped.
+ */
+export type OffloadJobItemStatus = "pending" | "running" | "done" | "failed" | "skipped" | (string & {});
+export const OFFLOAD_JOB_ITEM_STATUSES = ["pending", "running", "done", "failed", "skipped"] as const;
+
+/**
+ * The program the provider needs on the computer. source is one sentence in the caller's language saying where it
+ * comes from and where it is installed; the install confirmation shows it.
+ */
+export interface OffloadTool {
+  name: string;
+  title?: string;
+  version?: string;
+  installed: boolean;
+  source?: string;
+  detail?: string;
+}
+
+/**
+ * One item the provider holds of this computer. bytes is the size it had on disk, what the map draws so both sides
+ * share one scale; stored_bytes what it takes where it is stored; origin_path where it was and where a restore puts
+ * it; stub_path the placeholder left behind, if any; local_bytes what of it is still on the computer (a cache). Times
+ * are Unix seconds.
+ */
+export interface OffloadItem {
+  id: string;
+  name: string;
+  kind: OffloadItemKind;
+  bytes: number;
+  stored_bytes?: number;
+  origin_path?: string;
+  stub_path?: string;
+  local_bytes?: number;
+  offloaded_at?: number;
+  used_at?: number;
+  /** Items moved together share a group (an app and its data). */
+  group?: string;
+  restorable: boolean;
+}
+
+/**
+ * What the inventory left out past its 500 largest items.
+ */
+export interface OffloadMore {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * offload.inventory: what the provider holds of machine. refresh asks it not to answer from its own cache.
+ */
+export interface OffloadInventoryParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  refresh?: boolean;
+}
+
+/**
+ * What the provider holds of the computer, largest first, at most 500 items (the rest summed in more). at is when it
+ * was read (Unix seconds); total_bytes the items' bytes together, stored_bytes what they take where they are stored;
+ * partial when the list may be incomplete. items may be left out when there are none; the manager's answer to the
+ * apps always has it.
+ */
+export interface OffloadInventory {
+  state: OffloadState;
+  detail?: string;
+  tool?: OffloadTool;
+  at: number;
+  total_bytes: number;
+  stored_bytes?: number;
+  partial?: boolean;
+  items?: OffloadItem[];
+  more?: OffloadMore;
+}
+
+/**
+ * offload.run: offload paths (absolute, on machine, each already agreed by the node's protection rules) or restore
+ * items (ids of the inventory), at most 50. dry_run only checks and answers status ok with each item; install lets
+ * the job install the tool first (the user agreed to that too). request_id is the same for a retry of the same
+ * request.
+ */
+export interface OffloadRunParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  action: OffloadAction;
+  paths?: string[];
+  items?: string[];
+  dry_run?: boolean;
+  install?: boolean;
+  request_id: string;
+}
+
+/**
+ * One path or item of a run's answer: why it is refused (reason, in the caller's language), or a dry run's verdict
+ * (ok, bytes). refusal is set only by the manager, when the computer's own protection rules refused the path before
+ * the program was asked (a machine.storage.check refusal code: credentials, app_managed, ...).
+ */
+export interface OffloadRunItem {
+  path?: string;
+  id?: string;
+  ok?: boolean;
+  reason?: string;
+  refusal?: string;
+  bytes?: number;
+}
+
+/**
+ * offload.run's answer (OffloadRunStatus).
+ */
+export interface OffloadRunResult {
+  status: OffloadRunStatus;
+  job?: string;
+  tool?: OffloadTool;
+  items?: OffloadRunItem[];
+}
+
+/**
+ * offload.job and offload.cancel: the job offload.run started.
+ */
+export interface OffloadJobParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  job: string;
+}
+
+/**
+ * One path (offload) or item (restore) of a job.
+ */
+export interface OffloadJobItem {
+  path?: string;
+  id?: string;
+  status: OffloadJobItemStatus;
+  error?: string;
+  bytes?: number;
+}
+
+/**
+ * How a job goes. A job belongs to the extension: a client that lost track asks the inventory again. items may be
+ * left out; the manager's answer to the apps always has it.
+ */
+export interface OffloadJob {
+  state: OffloadJobState;
+  phase?: OffloadPhase;
+  done_bytes: number;
+  total_bytes: number;
+  freed_bytes?: number;
+  error?: string;
+  items?: OffloadJobItem[];
+}
+
+/**
+ * One enabled disk_offload contribution, as GET /api/v1/extensions/-/offload lists it for the apps.
+ */
+export interface OffloadProvider {
+  extension: string;
+  id: string;
+  name: string;
+  kinds: DiskOffloadKind[];
+  restore: boolean;
+}
+
+/**
+ * GET /api/v1/extensions/-/offload?machine=: the providers the map can offer on that computer.
+ */
+export interface OffloadProviders {
+  providers: OffloadProvider[];
+}
+
+/**
+ * POST /api/v1/extensions/{id}/-/offload/{cid}/run, an app's request: without dry_run or confirm it is refused
+ * (confirmation_required); install only after the user agreed to the tool's install confirmation.
+ */
+export interface OffloadRunRequest {
+  machine: string;
+  action: OffloadAction;
+  paths?: string[];
+  items?: string[];
+  dry_run?: boolean;
+  confirm?: boolean;
+  install?: boolean;
+}
+
+/**
+ * The run route's 202 answer: the job to follow with GET …/jobs/{job}.
+ */
+export interface OffloadStarted {
+  job: string;
+}
+
+/**
+ * An offload route's error: error in the reader's language and a code (bad_request, confirmation_required, read_only,
+ * not_found, machine_offline, node_outdated, tool_install_required with tool, offload_refused with items,
+ * plugin_failed (detail: the provider's own words, one line), usage_failed, deadline).
+ */
+export interface OffloadError {
+  error: string;
+  code: string;
+  tool?: OffloadTool;
+  detail?: string;
+  items?: OffloadRunItem[];
 }

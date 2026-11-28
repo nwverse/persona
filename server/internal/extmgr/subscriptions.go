@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/subscriptions"
@@ -58,7 +59,10 @@ func (h *Manager) subscriptionOptions(store subscriptions.Store) subscriptions.O
 	return subscriptions.Options{
 		Store:      store,
 		Connectors: subscriptionConnectors{h},
-		Location:   h.userLocation,
+		ReadAllowed: func(_ context.Context, sub subscriptions.Subscription) bool {
+			return h.inboxVisibilitySubscriptionAllowed(sub.ID, sub.Connector)
+		},
+		Location: h.userLocation,
 		Audit: func(ctx context.Context, id, action string, by subscriptions.Actor, detail map[string]any) {
 			h.audit(ctx, id, action, by.ID, detail)
 		},
@@ -122,14 +126,14 @@ func (h *Manager) readSubscriptions(ctx context.Context, r *assistantwire.InboxR
 			// A built-in read through its default subscription (#6381): its round entry is the built-in's, with the
 			// subscription's rows and read error.
 			in := assistantwire.InboxSource{ID: c.ID(), Name: connector.DisplayName(ctx, c), Extension: fromExtension(c.ID()),
-				Migrated: isMigrated(c.ID()), Counts: !src.ConnectorRows, Things: src.Things, ReadError: src.ReadError}
+				Migrated: isMigrated(c.ID()), Counts: !src.ConnectorRows, Things: src.Things, ReadError: src.ReadError, Off: src.Off}
 			withAbilities(&in, c)
 			r.Names[src.ID] = in.Name
 			r.Sources = append(r.Sources, in)
 			continue
 		}
 		r.Sources = append(r.Sources, assistantwire.InboxSource{ID: src.ID, Name: src.Name, Extension: true, Counts: true, Kinds: src.Kinds,
-			Things: src.Things, ReadError: src.ReadError, Via: src.Connector, ViaSource: src.SourceName, Chats: src.Chats})
+			Things: src.Things, ReadError: src.ReadError, Via: src.Connector, ViaSource: src.SourceName, Chats: src.Chats, Off: src.Off})
 	}
 }
 
@@ -166,12 +170,9 @@ type subscriptionModel struct{ h *Manager }
 // purposeModelInfo is what a model purpose runs on now, as the assistant resolves it (models.usable): not usable when
 // it cannot be asked.
 func (h *Manager) purposeModelInfo(ctx context.Context, purpose string) subscriptions.ModelInfo {
-	var res struct {
-		Usable   bool   `json:"usable"`
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-	}
-	if err := h.callAssistant(ctx, assistantwire.MethodModelsUsable, map[string]any{"purpose": purpose}, &res); err != nil || !res.Usable {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.ModelsUsableMethod,
+		assistantwire.ModelsUsableParams{Purpose: purpose})
+	if err != nil || !res.Usable {
 		return subscriptions.ModelInfo{}
 	}
 	return subscriptions.ModelInfo{OK: true, Provider: res.Provider, Model: res.Model}
@@ -185,12 +186,11 @@ func (m subscriptionModel) JSON(ctx context.Context, c subscriptions.ModelCall) 
 	for i, t := range c.Turns {
 		turns[i] = assistantwire.ModelMessage{Role: t.Role, Content: t.Content}
 	}
-	var out assistantwire.ModelCompleteResult
-	err := m.h.callAssistant(ctx, assistantwire.MethodModelsPurposeComplete, assistantwire.PurposeComplete{
+	out, err := buswire.Call(ctx, assistantCaller(m.h.callAssistant), assistantwire.ModelsPurposeCompleteMethod, assistantwire.PurposeComplete{
 		Purpose: assistantwire.PurposeSubscriptionRecipe,
 		Params: assistantwire.ModelCompleteParams{System: c.System, Messages: turns, MaxTokens: c.MaxTokens, JSONSchema: c.Schema,
 			TimeoutSeconds: subscriptionModelWait, Label: c.Label},
-	}, &out)
+	})
 	var re *rpc.Error
 	switch {
 	case errors.As(err, &re) && re.Code == assistantwire.CodeModelUnavailable:
@@ -226,6 +226,11 @@ func (sc subscriptionConnectors) info(ctx context.Context, c connector.Connector
 			Inbox:   c.Manifest().Has(connector.CapInbox) && r.Feeds(c.ID(), connector.FeedInbox),
 			Archive: c.Manifest().Has(connector.CapArchive) && r.Feeds(c.ID(), connector.FeedArchive),
 		}}
+	if sc.h.inboxVisibilityBlocksSource(c.ID()) {
+		// Only the selected backing connector is paused. Per-subscription selections are fenced by ReadAllowed before
+		// this connector's catalog or source bodies can be read.
+		out.Enabled = false
+	}
 	if hp := sc.h.extensions.ownerOf(c); hp != nil {
 		out.Extension = hp.id
 	}
@@ -244,7 +249,7 @@ func (sc subscriptionConnectors) Find(ctx context.Context, id string) (subscript
 func (sc subscriptionConnectors) All(ctx context.Context) []subscriptions.ConnectorInfo {
 	var out []subscriptions.ConnectorInfo
 	for _, c := range sc.h.connectors.All() {
-		info := subscriptions.ConnectorInfo{ID: c.ID(), Conn: c, Enabled: sc.h.connectors.Enabled(c.ID())}
+		info := subscriptions.ConnectorInfo{ID: c.ID(), Conn: c, Enabled: sc.h.connectors.Enabled(c.ID()) && !sc.h.inboxVisibilityBlocksSource(c.ID())}
 		if hp := sc.h.extensions.ownerOf(c); hp != nil {
 			info.Extension = hp.id
 		}

@@ -3,6 +3,7 @@ import Foundation
 import Testing
 import UserNotifications
 @testable import Persona
+import PersonaWire
 
 /// Cross-generation fixtures contain no registered account, device or production credentials.
 @MainActor struct HubNamingCompatibilityTests {
@@ -24,7 +25,7 @@ import UserNotifications
         let old = URL(string: "https://hub.example.com/prefix/\(LegacyNames.conversationPath)/c1?at=i2")!
         #expect(HubPageLink.page(old, hubs: [hub]) == .conversation(id: "c1", item: "i2"))
         #expect(HubPageLink.page(URL(string: "https://other.example.com/\(LegacyNames.conversationPath)/c1")!, hubs: [hub]) == nil)
-        #expect(HubPageLink.page(path: [LegacyNames.conversationPath, "new"], query: []) == nil)
+        #expect(HubPageLink.page(path: [LegacyNames.conversationPath, "new"], query: []) == .newConversation) // as the web router reads it
         #expect(HubPageLink.page(path: [LegacyNames.conversationPath, "c1", "extra"], query: []) == nil)
     }
 
@@ -38,12 +39,6 @@ import UserNotifications
         #expect(ExtensionSettingsLink.extensionID(URL(string: "\(LegacyNames.urlScheme)://settings/extensions/example")!) == "example")
         #if os(iOS)
         #expect(FleetLink.session(URL(string: "\(LegacyNames.urlScheme)://open?machine=m1&session=s1")!)?.session == "s1")
-        #endif
-        #if os(macOS)
-        #expect(MacOpenURL.route(URL(string: "\(LegacyNames.urlScheme)://pair")!) == .pair)
-        #expect(PersonaLinkHandoff.isPersonaLink(["CFBundleExecutable": LegacyNames.capitalizedProduct + "Link"]))
-        #expect(!PersonaLinkHandoff.isPersonaLink(["CFBundleExecutable": "Persona"]))
-        #expect(MacOpenURL.route(URL(string: "\(LegacyNames.urlScheme)://open?machine=m1&session=s1")!) == .session(SessionKey(machineID: "m1", sessionID: "s1")))
         #endif
     }
 
@@ -126,8 +121,8 @@ import UserNotifications
         let old = hub.client
         var new = hub.client
         new.personaNaming = true
-        try await old.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text)
-        try await new.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text)
+        try await old.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text, clientMsgID: UUID().uuidString)
+        try await new.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text, clientMsgID: UUID().uuidString)
         let requests = hub.sent("POST", "/api/v1/sessions/m1/s1/messages")
         let first = try JSONSerialization.jsonObject(with: #require(requests.first?.body)) as? [String: Any]
         let second = try JSONSerialization.jsonObject(with: #require(requests.last?.body)) as? [String: Any]

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// Muted agents and spaces stay off the watch (#4360): the phone's summary drops their cards, and the cards the watch
 /// pulls itself carry the hub's `muted` flag so the watch hides them and never buzzes — the same rule as the Agents
@@ -66,6 +67,15 @@ struct WatchMutedTests {
         #expect(WatchInteractions.newOnes(in: shown, alreadyShown: []).map(\.id) == ["ix1"])
         // Second pull: the same loud card is already shown, so no second buzz.
         #expect(WatchInteractions.newOnes(in: shown, alreadyShown: shown).isEmpty)
+    }
+
+    @Test func aDisplayCopyDoesNotAddASecondWatchRowOrBuzz() {
+        let original = card("ix1", session: "s1", at: 0)
+        var copy = card("mirror", session: "main", at: 1)
+        copy.mirrorOf = original.id
+        let shown = WatchInteractions.leavingMuted([original, copy])
+        #expect(shown.map(\.id) == ["ix1"])
+        #expect(WatchInteractions.newOnes(in: shown, alreadyShown: []).map(\.id) == ["ix1"])
     }
 
     @Test func interactionMutedDecodesFromTheHubAndDefaultsToFalse() throws {

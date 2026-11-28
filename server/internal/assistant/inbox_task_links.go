@@ -7,7 +7,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -27,29 +30,43 @@ func githubRef(repo string, n uint64) string {
 	return "github.com/" + strings.ToLower(repo) + "#" + strconv.FormatUint(n, 10)
 }
 
-// inboxTaskRefs keeps the host, repository, PR/issue kind and number of every link in text (on github.com without the
-// kind: one number is one thing there), and every owner/repo#N. Comment fragments and queries do not change the task.
-// A bare #N is not here: it names nothing without a repository (inboxBareRefs).
+// inboxTaskRefs reads the forge links and qualified GitHub numbers that legacy task text can name.
 func inboxTaskRefs(text string) []string {
+	return inboxRefs(text, false)
+}
+
+// inboxLinkRef normalizes a URL for matching. The second result says the URL has a known issue or PR shape.
+// Provider-specific URLs can still match a saved canonical binding. Queries and comment fragments are ignored.
+func inboxLinkRef(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimRight(raw, ".,;:!?)]}，。；：！）》」』")) // i18n-ignore: URL punctuation, not displayed text
+	if err != nil || u.Host == "" || u.User != nil || u.Scheme != "http" && u.Scheme != "https" {
+		return "", false
+	}
+	path := strings.Trim(u.EscapedPath(), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 4 && parts[0] != "" && parts[1] != "" && (parts[2] == "pull" || parts[2] == "issues") {
+		if n, err := strconv.ParseUint(parts[3], 10, 64); err == nil && n != 0 {
+			if strings.EqualFold(u.Hostname(), "github.com") {
+				return githubRef(parts[0]+"/"+parts[1], n), true
+			}
+			return strings.ToLower(u.Host) + "/" + strings.Join(parts[:3], "/") + "/" + strconv.FormatUint(n, 10), true
+		}
+	}
+	key := u.Scheme + "://" + strings.ToLower(u.Host) + "/" + path
+	if strings.Contains(path, "/merge_requests/") || strings.Contains(path, "/-/issues/") {
+		if _, link, err := repository.ParseTaskLink(key); err == nil {
+			return link.CanonicalURL, true
+		}
+	}
+	return key, false
+}
+
+func inboxRefs(text string, includeProviderURLs bool) []string {
 	var refs []string
 	for _, raw := range inboxTaskURL.FindAllString(text, -1) {
-		u, err := url.Parse(strings.TrimRight(raw, ".,;:!?)]}，。；：！）》」』")) // i18n-ignore: URL punctuation, not displayed text
-		if err != nil || u.Host == "" || u.User != nil {
-			continue
+		if ref, known := inboxLinkRef(raw); ref != "" && (known || includeProviderURLs) {
+			refs = append(refs, ref)
 		}
-		parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
-		if len(parts) != 4 || parts[0] == "" || parts[1] == "" || parts[2] != "pull" && parts[2] != "issues" {
-			continue
-		}
-		n, err := strconv.ParseUint(parts[3], 10, 64)
-		if err != nil || n == 0 {
-			continue
-		}
-		if strings.EqualFold(u.Hostname(), "github.com") {
-			refs = append(refs, githubRef(parts[0]+"/"+parts[1], n))
-			continue
-		}
-		refs = append(refs, strings.ToLower(u.Host)+"/"+strings.Join(parts[:3], "/")+"/"+strconv.FormatUint(n, 10))
 	}
 	for _, m := range inboxRepoRef.FindAllStringSubmatch(text, -1) {
 		if n, err := strconv.ParseUint(m[2], 10, 64); err == nil {
@@ -92,16 +109,50 @@ func taskText(t Todo) string {
 
 // inboxTaskIndex finds the open tasks an item's refs name (#5578, #6507).
 type inboxTaskIndex struct {
-	byRef map[string][]string // ref → the open tasks naming it in full
-	bare  map[uint64][]Todo   // #N → the open tasks writing it bare; they count for a repository only when of it
-	open  map[string]Todo
+	bound      map[string][]string        // canonical ref → open tasks with an authoritative link
+	byRef      map[string][]string        // ref → open tasks naming it in legacy fields
+	bare       map[uint64][]Todo          // #N → open tasks naming it bare
+	references map[string]map[string]bool // task ID → refs excluded from routing to it
+	open       map[string]Todo
 }
 
-func (x *inboxTaskIndex) add(t Todo) {
+func (x *inboxTaskIndex) addReferences(id string, rows []repository.TaskRepository) {
+	for _, row := range rows {
+		for _, link := range row.Links {
+			if link.Role == repository.LinkRoleReference {
+				if ref, _ := inboxLinkRef(link.CanonicalURL); ref != "" {
+					if x.references[id] == nil {
+						x.references[id] = map[string]bool{}
+					}
+					x.references[id][ref] = true
+				}
+			}
+		}
+	}
+}
+
+func (x *inboxTaskIndex) add(t Todo, rows []repository.TaskRepository) {
 	x.open[t.ID] = t
-	text := taskText(t)
-	for _, ref := range inboxTaskRefs(text) {
-		if !slices.Contains(x.byRef[ref], t.ID) {
+	x.addReferences(t.ID, rows)
+	hasBinding := false
+	for _, row := range rows {
+		for _, link := range row.Links {
+			if link.Role == repository.LinkRoleReference || link.Kind != "pull_request" && link.Kind != "issue" {
+				continue
+			}
+			if ref, _ := inboxLinkRef(link.CanonicalURL); ref != "" {
+				hasBinding = true
+				if !x.references[t.ID][ref] && !slices.Contains(x.bound[ref], t.ID) {
+					x.bound[ref] = append(x.bound[ref], t.ID)
+				}
+			}
+		}
+	}
+	if hasBinding {
+		return
+	}
+	for _, ref := range inboxTaskRefs(taskText(t)) {
+		if !x.references[t.ID][ref] && !slices.Contains(x.byRef[ref], t.ID) {
 			x.byRef[ref] = append(x.byRef[ref], t.ID)
 		}
 	}
@@ -110,13 +161,12 @@ func (x *inboxTaskIndex) add(t Todo) {
 	}
 }
 
-// tasksOf are the open tasks naming ref; repo and n, when set, are the GitHub repository and number the ref is, which
-// a bare #N of a task of that repository names too (taskOfRepo, inbox_task_scope.go).
-func (x *inboxTaskIndex) tasksOf(ref, repo string, n uint64) []string {
+// legacyTasksOf includes a bare #N only within its task's repository and only if the ref is eligible for routing.
+func (x *inboxTaskIndex) legacyTasksOf(ref, repo string, n uint64) []string {
 	ids := slices.Clone(x.byRef[ref])
 	if repo != "" && n != 0 {
 		for _, t := range x.bare[n] {
-			if !slices.Contains(ids, t.ID) && taskOfRepo(t, repo) {
+			if !x.references[t.ID][ref] && !slices.Contains(ids, t.ID) && taskOfRepo(t, repo) {
 				ids = append(ids, t.ID)
 			}
 		}
@@ -124,9 +174,32 @@ func (x *inboxTaskIndex) tasksOf(ref, repo string, n uint64) []string {
 	return ids
 }
 
-// match is the one open task item it names: its links, its own number (a GitHub item), and for a GitHub item no link
-// names, the pull requests of its repository that say they close it (closes: the item's ref → those PRs' numbers).
-// "" when none does or more than one does (the judge's to decide).
+func inboxItemRefs(it *InboxItem, repo string, n uint64) (link, thread string) {
+	if it.Connector != nil {
+		link, _ = inboxLinkRef(it.Connector.URL)
+	}
+	if repo != "" && n != 0 {
+		thread = githubRef(repo, n)
+	}
+	return link, thread
+}
+
+func (x *inboxTaskIndex) itemIsReference(id, link, thread string) bool {
+	refs := x.references[id]
+	return refs[link] || refs[thread]
+}
+
+func inboxBoundToRepo(rows []repository.TaskRepository, repo string) bool {
+	return slices.ContainsFunc(rows, func(row repository.TaskRepository) bool {
+		return slices.ContainsFunc(row.Links, func(link repository.TaskLink) bool {
+			ref, _ := inboxLinkRef(link.CanonicalURL)
+			return link.Role != repository.LinkRoleReference && strings.HasPrefix(ref, "github.com/"+repo+"#")
+		})
+	})
+}
+
+// match finds the one open task the item names. Saved links take precedence over legacy fields. When an issue
+// has no direct match, its repository's closing PRs can link it too.
 func (x *inboxTaskIndex) match(it *InboxItem, closes map[string][]uint64) string {
 	text := it.Title + " " + it.Preview + " " + it.Context
 	if it.Connector != nil {
@@ -136,22 +209,34 @@ func (x *inboxTaskIndex) match(it *InboxItem, closes map[string][]uint64) string
 	if own != 0 {
 		repo = inboxScopeOf(it).repo
 	}
-	found := map[string]bool{}
-	note := func(ids []string) {
-		for _, id := range ids {
-			found[id] = true
-		}
-	}
-	for _, ref := range inboxTaskRefs(text) {
-		note(x.tasksOf(ref, "", 0))
-	}
-	if repo != "" {
-		note(x.tasksOf(githubRef(repo, own), repo, own))
-		if len(found) == 0 {
-			for _, pr := range closes[githubRef(repo, own)] {
-				note(x.tasksOf(githubRef(repo, pr), repo, pr))
+	link, thread := inboxItemRefs(it, repo, own)
+	bound, legacy := map[string]bool{}, map[string]bool{}
+	note := func(ref, repo string, n uint64) {
+		for _, id := range x.bound[ref] {
+			if !x.itemIsReference(id, link, thread) {
+				bound[id] = true
 			}
 		}
+		for _, id := range x.legacyTasksOf(ref, repo, n) {
+			if !x.itemIsReference(id, link, thread) {
+				legacy[id] = true
+			}
+		}
+	}
+	for _, ref := range inboxRefs(text, true) {
+		note(ref, "", 0)
+	}
+	if thread != "" {
+		note(thread, repo, own)
+		if len(bound) == 0 && len(legacy) == 0 {
+			for _, pr := range closes[thread] {
+				note(githubRef(repo, pr), repo, pr)
+			}
+		}
+	}
+	found := bound
+	if len(found) == 0 {
+		found = legacy
 	}
 	if len(found) != 1 {
 		return ""
@@ -164,9 +249,12 @@ func (x *inboxTaskIndex) match(it *InboxItem, closes map[string][]uint64) string
 
 // inboxClosesIndex reads, off the GitHub pull request items the Inbox holds (open or done), which issues of their
 // repository each says it closes: issue ref → pull request numbers. Under b.mu.
-func inboxClosesIndex(items map[string]*InboxItem) map[string][]uint64 {
+func inboxClosesIndex(items map[string]*InboxItem, excluded func(*InboxItem) bool) map[string][]uint64 {
 	out := map[string][]uint64{}
 	for _, it := range items {
+		if excluded != nil && excluded(it) {
+			continue
+		}
 		pr := inboxItemNumber(it)
 		if pr == 0 || it.Connector == nil || !strings.Contains(it.Connector.URL, "/pull/") {
 			continue
@@ -190,21 +278,92 @@ func inboxClosesIndex(items map[string]*InboxItem) map[string][]uint64 {
 
 // linkInboxTaskURLs runs before the AI twin's switch: exact task links need neither triage nor a model. Keep
 // existing links, leave ambiguous matches to the judge, and persist new links before notifying their supervisors. An
-// existing link of a GitHub item to an open task that does not name its repository (inbox_task_scope.go, #6424) is
-// cleared instead: persisted like any item write, and nothing is told about it.
+// existing automatic link to an open task is cleared when the item is a reference or no longer fits the task's
+// repository scope (inbox_task_scope.go, #6424).
 func (s *Service) linkInboxTaskURLs(ctx context.Context) {
+	fullCfg, err := s.inboxConfigFresh(ctx)
+	if err != nil {
+		return
+	}
 	if s.ensureTodosLoaded(ctx) != nil {
 		return
 	}
-	idx := &inboxTaskIndex{byRef: map[string][]string{}, bare: map[uint64][]Todo{}, open: map[string]Todo{}}
+	visCfg := fullCfg.Visibility
+	var providerAllowed map[string]bool
+	if visCfg != nil && (visCfg.DirectChats || len(visCfg.Chats) > 0) {
+		b := &s.inbox
+		b.mu.Lock()
+		sources := map[string]struct{}{}
+		for _, it := range b.items {
+			sources[it.Source] = struct{}{}
+		}
+		b.mu.Unlock()
+		providerAllowed = make(map[string]bool, len(sources))
+		for src := range sources {
+			providerAllowed[src] = s.inboxVisibilityProviderAllowed(visCfg, src)
+		}
+	}
+	idx := &inboxTaskIndex{
+		bound: map[string][]string{}, byRef: map[string][]string{}, bare: map[uint64][]Todo{},
+		references: map[string]map[string]bool{}, open: map[string]Todo{},
+	}
+	acceptedPRs := map[string]Todo{}
+	followAcceptedPRs := s.inboxSignalsOn(ctx)
+	var tasks []Todo
+	var ids []string
 	s.todos.mu.RLock()
 	for _, t := range s.todos.todos {
-		if t.DoneAt != nil || t.Cancelled() || isAskTodo(t.ID) {
+		if t.Cancelled() || isAskTodo(t.ID) || t.DoneAt != nil && (!followAcceptedPRs || !taskAcceptedForFeedback(*t)) {
 			continue
 		}
-		idx.add(*t)
+		tasks = append(tasks, copyTodoLocked(t))
+		ids = append(ids, t.ID)
 	}
 	s.todos.mu.RUnlock()
+	if _, ok := s.store().(todoRepositoryStore); ok {
+		for _, todo := range tasks {
+			if todo.DoneAt != nil {
+				continue
+			}
+			for _, agent := range todo.Agents {
+				if agent.ReleasedAt != nil || agent.DismissedAt != nil {
+					continue
+				}
+				if e, found := s.workEntry([2]string{agent.MachineID, agent.SessionID}); found {
+					// A failed report import remains retryable on the next Inbox pass.
+					if err := s.importTaskRepositoryArtifacts(ctx, e); err != nil {
+						s.logf("task %s: artifact repository links not saved: %v", todo.ID, err)
+					}
+				}
+			}
+		}
+	}
+	var repositories map[string][]repository.TaskRepository
+	if st, ok := s.store().(todoRepositoryBatchStore); ok {
+		repositories, err = st.ListTodoRepositories(ctx, ids)
+		if err != nil {
+			s.logf("inbox: task repository bindings could not be read: %v", err)
+			return
+		}
+	} else {
+		repositories = s.loadOpenTodoRepositories(ctx, ids)
+	}
+	for _, t := range tasks {
+		rows := repositories[t.ID]
+		if t.DoneAt != nil {
+			idx.addReferences(t.ID, rows)
+			for _, raw := range append(slices.Clone(t.PRs), t.PRURL) {
+				ref, _ := inboxLinkRef(raw)
+				if u := triageNormalizePRURL(raw); u != "" && !idx.references[t.ID][ref] {
+					if other, ok := acceptedPRs[u]; !ok || t.DoneAt.After(*other.DoneAt) {
+						acceptedPRs[u] = t
+					}
+				}
+			}
+			continue
+		}
+		idx.add(t, rows)
+	}
 	open := idx.open
 	b := &s.inbox
 	linked := map[*InboxItem]bool{}
@@ -213,9 +372,15 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	var unlinked []string
 	var closes map[string][]uint64
 	var done []*InboxItem
+	itemVisibilityExcludedLocked := func(it *InboxItem) bool {
+		if providerAllowed != nil && !providerAllowed[it.Source] {
+			return true
+		}
+		return inboxVisibilityWithMembersExcludedLocked(b, it, visCfg)
+	}
 	b.mu.Lock()
 	for _, it := range b.items {
-		if !inboxTaskLinkEligible(it) {
+		if itemVisibilityExcludedLocked(it) || it.externallyRouted() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if !it.open() {
@@ -225,8 +390,12 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 			continue
 		}
 		if a := it.Agent; a != nil && a.TodoID != "" {
-			if sc := inboxScopeOf(it); sc.repo != "" {
-				if t, ok := open[a.TodoID]; ok && !taskOfRepo(t, sc.repo) {
+			if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && (it.TodoForward == nil || it.TodoForward.TodoID != a.TodoID) {
+				repo := inboxScopeOf(it).repo
+				link, thread := inboxItemRefs(it, repo, inboxItemNumber(it))
+				inRepo := repo == "" || slices.Contains(idx.bound[link], t.ID) ||
+					taskOfRepo(t, repo) || inboxBoundToRepo(repositories[t.ID], repo)
+				if idx.itemIsReference(t.ID, link, thread) || !inRepo {
 					w := beginWrite(it)
 					unlinked = append(unlinked, it.ID+" from "+a.TodoID)
 					a.TodoID = ""
@@ -238,9 +407,18 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 		if it.Agent == nil || it.Agent.TodoID == "" {
 			if closes == nil {
-				closes = inboxClosesIndex(b.items)
+				closes = inboxClosesIndex(b.items, itemVisibilityExcludedLocked)
 			}
 			id := idx.match(it, closes)
+			if id == "" {
+				if u := inboxOpenPR(it); u != "" {
+					repo, n := inboxScopeOf(it).repo, inboxItemNumber(it)
+					ref := githubRef(repo, n)
+					if n != 0 && len(idx.bound[ref]) == 0 && len(idx.legacyTasksOf(ref, repo, n)) == 0 {
+						id = acceptedPRs[u].ID
+					}
+				}
+			}
 			if id != "" {
 				w := beginWrite(it)
 				if it.Agent == nil {
@@ -258,7 +436,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	}
 	b.mu.Unlock()
 	for _, u := range unlinked {
-		s.logf("inbox: unlinked %s: the task does not name the item's repository", u)
+		s.logf("inbox: unlinked %s: the item's repository link is outside the task's routing scope", u)
 	}
 	failed := s.saveWrites(ctx, writes, "its task URL link")
 	kept := items[:0]
@@ -268,5 +446,63 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 	}
 	s.superviseInbox(ctx, kept, linked)
+	s.fileTaskDone(ctx, kept)
 	s.followContinuations(ctx, done) // a handled item gets no signal, but its link follows the work as an open one's does
 }
+
+// fileTaskDone files the open items still linked, after superviseInbox followed any continuation, to a to-do that is
+// done (not cancelled): the work is finished, so the item needs nothing. An item its conversation handles or that has a
+// suggestion stays. Saved like any item write; a failed save undoes it.
+func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
+	b := &s.inbox
+	followAcceptedPRs := s.inboxSignalsOn(ctx)
+	pending := map[string]bool{}
+	s.todos.mu.RLock()
+	for _, task := range s.todos.todos {
+		if task.InboxItem != "" && (task.DoneAt == nil || task.Cancelled()) {
+			pending[task.InboxItem] = true
+		}
+	}
+	s.todos.mu.RUnlock()
+	var writes []*inboxWrite
+	for _, it := range items {
+		b.mu.Lock()
+		var id string
+		if taskDoneFileable(it) {
+			id = it.Agent.TodoID
+		}
+		b.mu.Unlock()
+		if id == "" {
+			continue
+		}
+		t, ok := s.todoNow(id) // not under b.mu: todos.mu is taken on its own
+		if !ok || t.DoneAt == nil || t.Cancelled() || pending[it.ID] {
+			continue
+		}
+		b.mu.Lock()
+		if b.items[it.ID] == it && taskDoneFileable(it) && it.Agent.TodoID == id &&
+			(!followAcceptedPRs || !acceptedPRFeedback(t, inboxOpenPR(it))) {
+			now := time.Now()
+			w := beginWrite(it)
+			it.done(now, doneByManager)
+			b.chainAdd(it, InboxChainEntry{Kind: ChainDone, At: now.UTC(), By: doneByManager, Text: i18n.T(b.userLang(), "assistant-inbox_chain.done_task"),
+				Detail: clipRunesTo(t.Title, 60), Link: &InboxChainLink{Type: LinkTodo, ID: id}})
+			it.SettledOf = taskDoneEvidence(id)
+			b.settle(w)
+			writes = append(writes, w)
+		}
+		b.mu.Unlock()
+	}
+	s.saveWrites(ctx, writes, "its filing for a finished task")
+}
+
+// taskDoneFileable: an open item linked to a to-do that its finishing may file: no processing conversation of the AI
+// twin (that one decides, and its judge links the item to the task carrying the work on), nothing handling it, no
+// suggestion waiting, and not filed for this to-do before (reopened by hand, or by new messages, it stays). Under b.mu.
+func taskDoneFileable(it *InboxItem) bool {
+	return !it.VisibilityExcluded && it.open() && it.Agent != nil && it.Agent.TodoID != "" && it.Agent.SessionID == "" && !it.handled() &&
+		currentSuggestion(it) == nil && it.SettledOf != taskDoneEvidence(it.Agent.TodoID)
+}
+
+// taskDoneEvidence is SettledOf for an item filed because its to-do finished.
+func taskDoneEvidence(todoID string) string { return "todo:" + todoID }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/sessionorigin"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -212,13 +214,36 @@ func (s *Service) noteStop(machine, sid string, p map[string]any) {
 
 // notifyFinished decides, after the delay, whether this end of a turn is worth a push and to which devices. The delay
 // is a timer: a goroutine asleep through it would hold a stack per pending turn end (#2472).
-func (s *Service) notifyFinished(machine, id string, gen int) {
+func (s *Service) notifyFinished(machine, id string, gen int, end supervisionEnd) {
 	t := s.notifyTimings()
-	time.AfterFunc(t.doneDelay(), func() { s.notifyFinishedNow(machine, id, gen, t) })
+	s.afterTurnCompletion(t.doneDelay(), func() { s.notifyFinishedNow(machine, id, gen, t, end) })
+}
+
+// afterTurnCompletion owns a delayed completion so a fixture can stop one still pending and drain one already running
+// before its log and store close. fleet.mu closes the Add/Wait teardown window, as it does for screen upgrades.
+func (s *Service) afterTurnCompletion(delay time.Duration, run func()) {
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	if s.fleet.completionStopped {
+		return
+	}
+	s.fleet.completionRuns.Add(1)
+	var timer *time.Timer
+	timer = time.AfterFunc(delay, func() {
+		s.fleet.mu.Lock()
+		delete(s.fleet.completionTimers, timer)
+		s.fleet.mu.Unlock()
+		defer s.fleet.completionRuns.Done()
+		run()
+	})
+	if s.fleet.completionTimers == nil {
+		s.fleet.completionTimers = map[*time.Timer]struct{}{}
+	}
+	s.fleet.completionTimers[timer] = struct{}{}
 }
 
 // notifyFinishedNow is notifyFinished once its delay is over, with the timings it was read with.
-func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings) {
+func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings, end supervisionEnd) {
 	if s.justMeNow(machine, id) {
 		// A Just me turn: never on a screen but the meeting page (meeting_justme.go). Over all the same unless its
 		// background work goes on (the turn that work's report wakes keeps the mark): its start and its hold are not
@@ -269,7 +294,12 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 		return // the turn goes on: its mark waits for how it ends
 	}
 	// A supervision turn about a failed start ended: what it left of the start ends too (start_remedy.go, #2570).
-	go s.remedyTurnEnded(context.Background(), id)
+	if end.retained {
+		end.hold, _ = s.clearSupervisionHold(context.Background(), end.key, end.hold.At)
+	}
+	if !end.hold.At.IsZero() {
+		go s.remedyFinishedStarts(context.Background(), end)
+	}
 	// "Only long-running turns" is for turns the user started: a quick answer is read where it was asked. A morning briefing or a task notice
 	// has nobody waiting for it; a quick one was never pushed and the user had to go and look (#3438). The mark is
 	// used up by this turn whether it is pushed or dropped (notify_user, seen, muted): left over, the user's own next
@@ -291,29 +321,104 @@ func (s *Service) notifyFinishedNow(machine, id string, gen int, t fleetTimings)
 	if s.quietTaskFinish(sess) || s.quietScheduledInput(context.Background(), machine, sess) {
 		return
 	}
+	// A session a Lark chat bridge hosts, finished normally (#8592): the bridge posted its answer in the topic it was
+	// asked in, so a push and a Lark card would say it a second time, as for a turn asked through the bot
+	// (channelAnsweredPush). An error, a cut-off, a stuck turn or a usage limit is pushed as ever. The to-do's own topic
+	// still gets its line.
+	if chatBridgeFinish(sess) {
+		s.threadAgentDone(machine, sess)
+		return
+	}
 	// A turn a follow-up (supervision) message started, finished normally (#3124): what the user needs to know went out with notify_user.
-	if s.supervising(id) && assistantwire.SupervisedFinish(sess, true) {
+	if assistantwire.SupervisedFinish(sess, !end.hold.At.IsZero()) {
+		return
+	}
+	if s.quietBackgroundReply(machine, sess) {
 		return
 	}
 	if s.finishedDuplicate(machine, sess) {
 		return
 	}
+	// An Agent's turn on a supervised task (#8270): its supervisor follows the stop up (the done judge, supervision
+	// signals) and tells the owner what is theirs (notify_user, ask_user and the decision push, the conclusion card), so
+	// the turn's own push and Feishu card would only say it again, as a quiet task's would (#1731). A failed or cut-off
+	// turn neither: the supervisor hears of it as an interruption. The to-do's own topic still gets its line.
+	if s.supervisedTurn(machine, id, start) {
+		s.threadAgentDone(machine, sess)
+		return
+	}
 	place := s.pushPlace(machine, sess)
-	head, text := doneAlert(s.lang(context.Background()), sess)
+	// Decided once on the words the push would carry (exitPolicy), for the push and its Feishu card alike.
+	bg, l, space := context.Background(), s.lang(context.Background()), spaceOf(sess)
+	head, text := doneAlertIn(l, sess, false)
+	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil && !s.trackPolicy(bg, space).Redact {
+		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
+	}
+	redact := s.exitPolicy(bg, head+"\n"+text, id, space).Redact
+	if redact {
+		if floor, _ := s.trackFloor(bg, space); slices.Contains(floor, categoryHealth) {
+			head, text = doneAlertIn(l, sess, true) // as the health space always said
+		} else {
+			head, text = s.redactedNotice(bg, l, space)
+		}
+	}
+	if report && strings.HasPrefix(head, "⚠️") && s.briefOf(id) != nil {
+		return // the scheduled-run watcher sends the one fixed-facts fallback, not this model error
+	}
 	// A routine with facts says the counts it worked out (briefing.go) when it ended normally and asks nothing: a question
-	// is what the owner acts on, and a health conversation says only that there is news.
-	if !strings.HasPrefix(head, "⚠️") && !strings.HasPrefix(head, "⏳") && !sess.AwaitsReply && spaceOf(sess) != SpaceHealth {
+	// is what the owner acts on, and a conversation of a space that redacts says only that there is news.
+	if !strings.HasPrefix(head, "⚠️") && !strings.HasPrefix(head, "⏳") && !sess.AwaitsReply && !redact {
 		if counts := s.briefPush(id, s.lang(context.Background()), report); counts != "" {
 			text = counts
+		}
+	}
+	if links := s.consumeSideSupervisionLinks(id); len(links) > 0 && !redact {
+		var missing []string
+		for _, link := range links {
+			if link != "" && !strings.Contains(text, link) {
+				missing = append(missing, link)
+			}
+		}
+		if len(missing) > 0 {
+			if text != "" {
+				text += "\n"
+			}
+			text += strings.Join(missing, "\n")
 		}
 	}
 	s.deliver(Notification{Kind: assistantwire.NotifyDone, DeviceID: machine, Subtitle: place, SessionID: id, Title: head,
 		Body: text, TookMS: took.Milliseconds(), LongMS: long.Milliseconds()})
 	// The same finished turn's one Feishu card (#4674); the sender re-checks the pushes switch and the conversations
 	// with their own Feishu path (main, scheduled task, health).
-	go s.feishuAgentDone(machine, sess, head, text, place)
+	go s.feishuAgentDone(machine, sess, head, text, place, redact)
 	// And the topic of the todo this agent works on, if it has one (the same decision again, not a second one).
 	s.threadAgentDone(machine, sess)
+}
+
+func (s *Service) quietBackgroundReply(machine string, sess proto.Session) bool {
+	if !sess.Assistant || sess.AwaitsReply || strings.TrimSpace(sess.FailureReason) != "" || sess.TurnErrorKind != "" ||
+		sess.Status == proto.StatusBlocked || sess.Status == proto.StatusInterrupted || !assistantwire.NormalFinish(sess) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg := s.settings(ctx)
+	foldRelay := sess.SessionID != "" && sess.SessionID == cfg.Main && cfg.foldRoutineRelayReplies() && quietOn(cfg.MainBackgroundFolded)
+	// Only the native agents reliably distinguish an empty turn from a service failure. A different runtime
+	// can skip an alert only for an opted-in relay with an actual successful answer in its transcript.
+	knownFinish := assistantwire.SupervisedFinish(sess, true)
+	if !knownFinish && !foldRelay {
+		return false
+	}
+	var page struct {
+		Items []proto.Item `json:"items"`
+	}
+	if err := s.call(ctx, machine, DeviceSessionItems, map[string]any{
+		"session_id": sess.SessionID, "turns": 2, "lazy_images": true,
+	}, &page); err != nil {
+		return false
+	}
+	return knownFinish && transcript.BackgroundReplyMissing(page.Items) || foldRelay && transcript.RoutineConversationReply(page.Items)
 }
 
 // reportSlack is how long before its turn started a scheduled run or notice may have been sent (the node starts the
@@ -386,9 +491,15 @@ func pushTitle(sess proto.Session) string {
 	return title
 }
 
-// doneAlert is the title and body of the push for sess's finished turn, in l.
+// doneAlert is the title and body of the push for sess's finished turn, in l, a conversation of any space redacted
+// (fail closed: no registry here).
 func doneAlert(l i18n.Lang, sess proto.Session) (head, text string) {
-	if spaceOf(sess) == SpaceHealth { // the lock screen hears there is news, not what it is, nor the conversation's title
+	return doneAlertIn(l, sess, spaceOf(sess) != "")
+}
+
+// doneAlertIn is doneAlert with whether sess's space redacts (redact) decided by the caller.
+func doneAlertIn(l i18n.Lang, sess proto.Session, redact bool) (head, text string) {
+	if redact { // the lock screen hears there is news, not what it is, nor the conversation's title
 		return i18n.T(l, "push.health_title"), i18n.T(l, "push.health_body")
 	}
 	title := pushTitle(sess)
@@ -412,6 +523,10 @@ func doneAlert(l i18n.Lang, sess proto.Session) (head, text string) {
 	if e := strings.TrimSpace(sess.TurnError); e != "" && sess.TurnErrorKind == proto.TurnErrorUsageLimit {
 		// Not "the model service failed": the subscription's limit, which the user goes on from after it resets.
 		head, text = "⚠️ "+title, i18n.T(l, "push.usage_limit", i18n.Args{"error": e})
+	} else if e != "" && sess.TurnErrorKind == proto.TurnErrorStopped {
+		head, text = title, e // the owner's own Stop (silent_turns.go): not news of a failure, nor of a finished turn
+	} else if e != "" && sess.TurnErrorKind == proto.TurnErrorNoOutput {
+		head, text = "⚠️ "+title, e // the hub's sentence for it, in l: it says the turn had no output (silent_turns.go)
 	} else if e != "" {
 		head, text = "⚠️ "+title, interruptedSummary+"："+e
 	} else if assistantwire.CutOff(text) {
@@ -439,29 +554,47 @@ const linkRangWait = 2 * time.Second
 // summary merged with newer cards may list it in More, a notification may be dropped before it is handed over, a link
 // may go.
 func (s *Service) notifyInteraction(ix proto.Interaction, machine string, covered bool) {
+	s.notifyInteractionAt(ix, machine, covered, "", "")
+}
+
+// notifyInteractionAt is notifyInteraction with a push level and related key for the hub's low-distraction mode ("": derived).
+func (s *Service) notifyInteractionAt(ix proto.Interaction, machine string, covered bool, level, key string) {
 	n := Notification{Kind: assistantwire.NotifyInput, DeviceID: ix.MachineID, Subtitle: machine, SessionID: ix.SessionID,
-		Interaction: &ix}
+		Interaction: &ix, Level: level, RelatedKey: key}
+	src := s.inputCardSource(ix, level != "" || key != "") // a level or key: ask_route rang it (card_layers.go)
 	if !covered || s.devs == nil {
-		s.deliver(n)
+		s.deliverCard(src, n)
 		return
 	}
 	go func() {
 		n.LinkCovered = s.devs.LinkRang(s.runCtx(), ix.ID, linkRangWait)
-		s.deliver(n)
+		s.deliverCard(src, n)
 	}()
 }
 
 // deliver has the hub deliver a push the manager decided on (notify.request), off the caller's way.
-func (s *Service) deliver(n Notification) {
+func (s *Service) deliver(n Notification) { s.deliverCard("", n) }
+
+// deliverCard is deliver of a push made at source (card_layers.go); "" counts a finished turn's push as agent_done
+// and any other as untagged.
+func (s *Service) deliverCard(source string, n Notification) {
 	if n.ID == "" {
 		n.ID = "ntf_" + randomHex(8)
+	}
+	if source == "" && n.Kind == assistantwire.NotifyDone {
+		source = cardAgentDone
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+		s.capTrackPush(ctx, &n) // a track's push_cap (track_attention.go); never a card's
+		res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+		if err != nil {
 			s.logf("assistant: push: %v", err)
+			return
 		}
+		// Off the caller's way, no lock of theirs is held: the owner may be read from the to-dos.
+		s.noteCardOwnerResult(ctx, source, s.supervisingOwner(ctx, n), res)
 	}()
 }
 
@@ -511,6 +644,52 @@ func (s *Service) taskSessionRep(machine, session string) bool {
 		if t.RunSessionID == session && t.RunMachineID == machine {
 			return true
 		}
+	}
+	return false
+}
+
+// supervisedTurn: the turn agent machine/session started at start was work on a supervised task (#8270): the agent
+// works on an open to-do with a supervisor (its ledger: handed out by the main conversation, a leader, a task leader or
+// another conversation that supervises what it hands out, followed up by the background supervisor, or taken in with
+// agent_supervise; supervise.go), or on one that was closed since the turn started (accepted, cancelled or judged
+// while the push waited for its delay). An agent that works on an open to-do nobody supervises is not, whatever it
+// worked on before.
+func (s *Service) supervisedTurn(machine, session string, start time.Time) bool {
+	if s.ensureTodosLoaded(context.Background()) != nil {
+		return false // the to-dos cannot be read: pushed as ever
+	}
+	key := [2]string{s.canonical(machine), session}
+	supervised := func(t *Todo) bool { return t.Supervision != nil && t.Supervision.Supervisor != "" }
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	if t := s.todos.todos[s.todos.activeBySession[key]]; t != nil && t.DoneAt == nil {
+		return supervised(t)
+	}
+	for _, t := range s.todos.todos {
+		if t.DoneAt == nil || start.IsZero() || t.DoneAt.Before(start) || !supervised(t) {
+			continue
+		}
+		for _, a := range t.Agents {
+			if a.MachineID == key[0] && a.SessionID == key[1] && a.ReleasedAt == nil && a.DismissedAt == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// chatBridgeFinish: sess runs in a Lark chat bridge (sessionorigin.ChatBridge: its own pane, the Agents rows' "Lark
+// group", or a pane of the herdr session it runs its agents in, #8845), which answers in the topic the turn was asked
+// in, and its turn ended normally (assistantwire.NormalFinish, the host reporting no failure of its own). Only on
+// Claude Code, Codex and TRAE CLI, which tell a failed turn on the session (TRAE CLI's conversation is a Codex rollout, read
+// as Codex's: task_complete's error is TurnError); another agent's is pushed as ever.
+func chatBridgeFinish(sess proto.Session) bool {
+	if !sessionorigin.ChatBridge(sess) || strings.TrimSpace(sess.FailureReason) != "" {
+		return false
+	}
+	switch sess.Agent {
+	case "", "claude", "codex", "traex":
+		return assistantwire.NormalFinish(sess)
 	}
 	return false
 }

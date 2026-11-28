@@ -281,13 +281,16 @@ func TestParsePasteCurl(t *testing.T) {
 			}}},
 		},
 		{
-			name: "Chat Completions: Bearer, a direct API takes no headers or proxy",
+			name: "Chat Completions: Bearer and custom headers, proxy options noted",
 			text: "KEY=1 curl -sSL https://api.example.com/v1/chat/completions -H \"Authorization: Bearer " + pasteKeyB + "\" -H \"X-Team: blue\" " +
 				"-x http://proxy.example.com:1 --noproxy localhost --json '{\"model\":\"gpt-x\"}'\necho done\n",
 			want: pasteResult{Format: "curl", Notes: notes(pasteNote{Code: noteLineUnused, Line: 2}), Drafts: []pasteDraft{{
-				Provider:       withModels(pastedProvider{Kind: "api", API: "chat", BaseURL: "https://api.example.com/v1", Auth: "bearer", APIKey: pasteKeyB}, "gpt-x"),
-				SkippedHeaders: []skippedHeader{{Name: "X-Team", Reason: "unsupported"}},
-				Notes:          notes(pasteNote{Code: noteCurlOption, Name: "-x"}, pasteNote{Code: noteCurlOption, Name: "--noproxy"}),
+				Provider: func() pastedProvider {
+					p := withModels(pastedProvider{Kind: "api", API: "chat", BaseURL: "https://api.example.com/v1", Auth: "bearer", APIKey: pasteKeyB}, "gpt-x")
+					p.Headers = "X-Team: blue"
+					return p
+				}(),
+				Notes: notes(pasteNote{Code: noteCurlOption, Name: "-x"}, pasteNote{Code: noteCurlOption, Name: "--noproxy"}),
 			}}},
 		},
 		{
@@ -391,11 +394,10 @@ func TestParsePasteCindy(t *testing.T) {
 				{"protocol": "openai-chat", "baseUrl": "http://127.0.0.1:4000/v1", "headers": {"X-Tenant": "example", "X-Api-Key": "sk-example-h",
 					"Content-Type": "application/json", "X-Count": 3}}]}`,
 			want: pasteResult{Format: "cindy", Notes: []pasteNote{}, Drafts: []pasteDraft{{
-				Label:    "C",
-				Provider: pastedProvider{Kind: "api", API: "chat", DisplayName: "C", BaseURL: "http://127.0.0.1:4000/v1"},
-				SkippedHeaders: []skippedHeader{{Name: "Content-Type", Reason: "protocol"}, {Name: "X-Api-Key", Reason: "credential"},
-					{Name: "X-Tenant", Reason: "unsupported"}},
-				Notes: notes(pasteNote{Code: noteCindyAuth, Name: "none"}, pasteNote{Code: noteCindyEndpoint, Name: "google-generative-ai"}),
+				Label:          "C",
+				Provider:       pastedProvider{Kind: "api", API: "chat", DisplayName: "C", BaseURL: "http://127.0.0.1:4000/v1", Headers: "X-Tenant: example"},
+				SkippedHeaders: []skippedHeader{{Name: "Content-Type", Reason: "protocol"}, {Name: "X-Api-Key", Reason: "credential"}},
+				Notes:          notes(pasteNote{Code: noteCindyAuth, Name: "none"}, pasteNote{Code: noteCindyEndpoint, Name: "google-generative-ai"}),
 			}}},
 		},
 		{
@@ -464,8 +466,11 @@ func TestParsePasteLeavesSecretsOut(t *testing.T) {
 		{"cindy header name with a line break", cindy(`{"protocol": "anthropic-messages", "baseUrl": "https://gw.example.com",
 			"headers": {"X-Org: a\nAuthorization": "Bearer ` + s + `", "X Org": "` + s + `"}}`),
 			[]string{`"notes":[{"code":"header_unreadable"}]`}},
-		{"curl header names that are no token", curl + `-H 'X Api Key: ` + s + `' -H $'X-Org: a\nAuthorization: Bearer ` + s + `' -H 'x.api.key: ` + s + `'`,
+		{"curl header names that are no token", curl + `-H 'X Api Key: ` + s + `' -H '$X-Org: a\nAuthorization: Bearer ` + s + `' -H 'x.api.key: ` + s + `'`,
 			[]string{`{"code":"header_unreadable"}`}},
+		// ANSI-C quoting ($'…') is not read at all (shellcmd fails closed on it since #17598): the command makes no draft.
+		{"curl with ANSI-C quoting", curl + `-H $'X-Org: a\nAuthorization: Bearer ` + s + `'`,
+			[]string{`"drafts":[]`, `"notes":[{"code":"unrecognized"}]`}},
 		{"curl header over two lines", curl + "-H 'X-Org: a\nAuthorization: Bearer " + s + "' -H 'X-Note: a\nX-Other: " + s + "'",
 			[]string{`{"name":"X-Org","reason":"credential"}`, `{"name":"X-Note","reason":"unsafe"}`}},
 		{"a literal backslash-n or a $ in ANTHROPIC_CUSTOM_HEADERS", gw + `export ANTHROPIC_CUSTOM_HEADERS="X-Org: a\nX-Other: ` + s + `"` + "\n" +
@@ -854,5 +859,22 @@ func TestLauncherImportOneAlias(t *testing.T) {
 	}
 	if list := s.storedLaunchers(context.Background()); len(list) != 1 || len(list[0].Models) != 1 || list[0].Models[0].ID != "glm-air" {
 		t.Fatalf("%+v", list)
+	}
+}
+
+func TestParsePasteShellEnvironmentReset(t *testing.T) {
+	for _, launch := range []string{
+		"env -i ANTHROPIC_BASE_URL=https://explicit.example.com claude",
+		"alias clean='env --ignore-environment ANTHROPIC_BASE_URL=https://explicit.example.com claude'",
+		"alias clean='export ANTHROPIC_MODEL=old; env - ANTHROPIC_BASE_URL=https://explicit.example.com claude'",
+	} {
+		got := parsePaste("export ANTHROPIC_BASE_URL=https://old.example.com ANTHROPIC_API_KEY=" + pasteKeyA + " ANTHROPIC_MODEL=old\n" + launch)
+		if len(got.Drafts) != 1 {
+			t.Fatalf("%s: got %d drafts", launch, len(got.Drafts))
+		}
+		p := got.Drafts[0].Provider
+		if p.BaseURL != "https://explicit.example.com" || p.APIKey != "" || p.Model != "" {
+			t.Errorf("%s: incorrect provider after environment reset", launch)
+		}
 	}
 }

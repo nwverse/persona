@@ -53,6 +53,7 @@ import java.io.File
 import java.time.Instant
 import java.time.ZoneOffset
 import java.util.Locale
+import persona.core.inbox.*
 
 /** The shared showcase as real list and detail pages, with its wire fields and clock, in every style and appearance. */
 @RunWith(AndroidJUnit4::class)
@@ -148,7 +149,7 @@ class InboxShowcaseShotsTest {
                 PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                     key(run) {
                         Box(Modifier.testTag("showcase-list").width(400.dp).height(1800.dp).background(PersonaTheme.palette.background)) {
-                            InboxScreen(inbox, navigator)
+                            OnAll { InboxScreen(inbox, navigator) }
                         }
                     }
                 }

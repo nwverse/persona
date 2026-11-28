@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 // router.ts listens to popstate at load (no window in node); links.ts only needs navigate from it.
-vi.mock("./router", () => ({ navigate: vi.fn(), routeAt: () => null }));
-vi.mock("./api", () => ({ api: vi.fn(), enc: encodeURIComponent, getToken: () => "tok", ApiError: class extends Error {} }));
+vi.mock("./router", async (importOriginal) => {
+  const router = await importOriginal<typeof import("./router")>();
+  return { parse: router.parse, routePath: router.routePath, navigate: vi.fn(), routeAt: () => null };
+});
+vi.mock("./api", () => ({ api: vi.fn(), enc: encodeURIComponent, onCredentialChange: () => () => {}, credentialOwner: () => "test-owner", getToken: () => "tok", ApiError: class extends Error {} }));
 
 import { api } from "./api";
 import { parseUserText } from "./turns";
@@ -34,6 +37,12 @@ import {
 import { BR, docErrorFromBody, loadDoc, mediaURL, orderedNumbers, prepareMarkdown, readDoc, type DocNode, type Get } from "../views/link/feishu-doc";
 
 describe("where a link opens", () => {
+  it("keeps Settings fragments on same-hub page links behind a base path", () => {
+    const path = "/settings?tab=persona#repositories";
+    expect(linkRoute("https://hub.example.com/base" + path, false, "https://hub.example.com", "/base"))
+      .toEqual({ kind: "page", path });
+  });
+
   it("reads Feishu documents in the panel, like the phone's FeishuLinks.isDoc", () => {
     for (const u of [
       "https://example.feishu.cn/docx/AbC123",
@@ -87,11 +96,22 @@ describe("where a link opens", () => {
       expect(linkHref(`${scheme}://session/mac%20book/abc-1`)).toBe("/s/mac%20book/abc-1");
       expect(opensInApp(`${scheme}://session/macbook/abc-1`)).toBe(true);
       expect(linkRoute(`${scheme}://pair?token=x`).kind).toBe("none");
-      expect(linkRoute(`${scheme}://session/macbook`).kind).toBe("none");
+      expect(linkRoute(`${scheme}://session/macbook`).kind).toBe("app"); // read when opened: it names no page, so nothing opens
     }
     expect(linkRoute("other://session/macbook/abc-1").kind).toBe("none");
     expect(linkHref("https://example.com/a")).toBe("https://example.com/a");
     expect(linkRoute("persona://pair?token=x").kind).toBe("none");
+  });
+
+  it("opens app links to every page of the route table (docs/protocol/deep-links.md, #9930)", () => {
+    // an Agent's as persona://session links always did; the table's other forms are read when opened (lib/deep-links.ts)
+    for (const app of ["persona://open/inbox/i-1", "persona://session/m/s?at=m1", "persona://task/t-1", "persona://kb/docs/a", "persona://settings/extensions/gh", "persona://extension/w/today"]) {
+      expect(linkRoute(app), app).toEqual({ kind: "app", url: app });
+      expect(opensInApp(app), app).toBe(true);
+    }
+    for (const none of ["persona://pair?url=x", "persona://ask?text=hi", "persona://link?code=x"]) {
+      expect(linkRoute(none).kind, none).toBe("none");
+    }
   });
 
   it("knows this hub's own agent and task pages, and only this hub's", () => {
@@ -100,21 +120,28 @@ describe("where a link opens", () => {
     expect(linkRoute(`${hub}/s/mac%20book/abc-1?view=chat`, false, hub)).toEqual({ kind: "agent", mid: "mac book", sid: "abc-1" });
     expect(linkRoute(`${hub}/todos?id=todo_1`, false, hub)).toEqual({ kind: "task", id: "todo_1" });
     expect(linkRoute(`${hub}/todos/todo_1`, false, hub)).toEqual({ kind: "task", id: "todo_1" });
-    // the same paths elsewhere, other pages of the hub, and what does not name one stay web pages
+    // the same paths elsewhere, and what does not name a page, stay web pages
     expect(linkRoute("https://other.example.com/s/m1/abc-1", false, hub).kind).toBe("web");
     expect(linkRoute("http://hub.example.com/s/m1/abc-1", false, hub).kind).toBe("web");
     expect(linkRoute(`${hub}/s/m1/abc-1`, false, "").kind).toBe("web");
     expect(linkRoute(`${hub}/s/m1`, false, hub).kind).toBe("web");
-    expect(linkRoute(`${hub}/s/m1/abc-1/more`, false, hub).kind).toBe("web");
-    expect(linkRoute(`${hub}/todos`, false, hub).kind).toBe("web");
-    expect(linkRoute(`${hub}/inbox`, false, hub).kind).toBe("web");
+    expect(linkRoute(`${hub}/s/m1/abc-1/more`, false, hub).kind).toBe("page"); // the router draws its agent
+    expect(linkRoute(`${hub}/admin`, false, hub).kind).toBe("web");
+    expect(linkRoute(`${hub}/share/abc`, false, hub).kind).toBe("web");
+    // embedded credentials are rejected completely rather than falling through to window.open
+    expect(linkRoute(`https://user:pw@hub.example.com/s/m1/abc-1`, false, hub).kind).toBe("none");
+    // the app's other pages (the Inbox, settings, knowledge…) open in place (docs/protocol/deep-links.md, #9930)
+    for (const path of ["/todos", "/inbox", "/inbox/assistant%3A9f?manager=m2", "/settings?tab=extensions&extension=gh", "/overview", "/persona", "/persona/new", "/kb/spells/x"]) {
+      expect(linkRoute(`${hub}${path}`, false, hub), path).toEqual({ kind: "page", path });
+    }
+    // one message of an agent's conversation
+    expect(linkRoute(`${hub}/s/m1/abc-1?at=msg%231`, false, hub)).toEqual({ kind: "page", path: "/s/m1/abc-1?at=msg%231" });
+    expect(linkRoute(`${hub}/persona/c-1?at=m1`, false, hub)).toEqual({ kind: "page", path: "/persona/c-1?at=m1" });
     expect(linkRoute(`${hub}/s/m1/%E0%A4%A`, false, hub).kind).toBe("web");
-    // its conversations, but not /persona/new (a fresh one) or the main conversation's bare /j
+    // its conversations; /persona/new and the main page are pages of the table, in place
     expect(linkRoute(`${hub}/persona/conv-1`, false, hub)).toEqual({ kind: "conversation", sid: "conv-1" });
     expect(linkRoute(`${hub}/persona/conv-1?x=1#y`, false, hub)).toEqual({ kind: "conversation", sid: "conv-1" });
-    expect(linkRoute(`${hub}/persona/new`, false, hub).kind).toBe("web");
-    expect(linkRoute(`${hub}/persona`, false, hub).kind).toBe("web");
-    expect(linkRoute(`${hub}/persona/conv-1/more`, false, hub).kind).toBe("web");
+    expect(linkRoute(`${hub}/persona/conv-1/more`, false, hub).kind).toBe("page");
     // the hub's advertised addresses are its own too, whichever one this page was opened at
     const lan = "http://192.0.2.10:18660";
     expect(linkRoute(`${hub}/s/m1/abc-1`, false, [lan, hub])).toEqual({ kind: "agent", mid: "m1", sid: "abc-1" });
@@ -141,7 +168,9 @@ describe("where a link opens", () => {
       openLink(`${hub}/s/m1/abc-1`);
       openLink(`${hub}/todos?id=todo_1`);
       expect(getPanel()).toBeNull();
-      expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+      // away from a Persona conversation (this mock's routeAt knows no page) a link's page names nowhere it came from;
+      // from one it names the conversation (lib/handoff.ts openLinkPage, #13164: lib/handoff.test.ts)
+      expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }, false, null], [{ name: "todos", id: "todo_1" }, false, null]]);
     } finally {
       closePanel();
       vi.unstubAllGlobals();
@@ -164,7 +193,7 @@ describe("where a link opens", () => {
         // a task the store does not know yet: its to-do's page (with an Agent on it, that Agent's page; lib/handoff.test.ts)
         openLink(`${hub}/todos?id=todo_1`);
         expect(getPanel()).toBeNull();
-        expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }], [{ name: "todos", id: "todo_1" }]]);
+        expect(vi.mocked(navigate).mock.calls.slice(-2)).toEqual([[{ name: "session", mid: "m1", sid: "abc-1" }, false, null], [{ name: "todos", id: "todo_1" }, false, null]]);
       }
       // a conversation moves there on any screen
       narrow.value = false;
@@ -204,6 +233,57 @@ describe("where a link opens", () => {
     expect(linkRoute("/relative/path").kind).toBe("none");
     expect(opensInApp("javascript:alert(1)")).toBe(false);
   });
+
+  it("rejects single-slash relative URLs, userinfo, backslashes, control chars, and unsafe linkHref schemes", () => {
+    const openSpy = vi.fn();
+    vi.stubGlobal("window", { open: openSpy });
+    try {
+      for (const bad of [
+        "https:/admin",
+        "https:admin",
+        "https://user:pw@evil.example/a",
+        "https://@evil.example/a",
+        "https://good.example\\@evil.example/a",
+        "https://evil.example/a\tb",
+        "https://user:@example.feishu.cn/docx/AbC",
+        "https://@example.feishu.cn/docx/AbC",
+        "persona://user:pw@session/macbook/abc-1",
+        "mailto:",
+        "tel:",
+        "mailto://user:pw@evil.example",
+        "mailto:me@example.com\r\nBcc:evil@example.com",
+        "javascript:alert(1)",
+        "data:text/html,hi",
+        "file:///etc/hosts",
+        "//evil.example/a",
+        "/admin",
+        "/api/../admin",
+        "/api/..",
+      ]) {
+        expect(linkRoute(bad, true), bad).toEqual({ kind: "none" });
+        expect(linkHref(bad), bad).toBeUndefined();
+        openLink(bad);
+      }
+      expect(openSpy).not.toHaveBeenCalled();
+
+      // Same-origin /api/ download/media paths remain valid for <a href={linkHref(...)}>.
+      expect(linkHref("/api/v1/media/1?token=t")).toBe("/api/v1/media/1?token=t");
+      expect(linkHref("mailto:me@example.com")).toBe("mailto:me@example.com");
+
+      // Valid external http(s) links open their normalized URL.
+      openLink("  https://example.com/a  ");
+      expect(openSpy).toHaveBeenCalledWith("https://example.com/a", "_blank", "noopener,noreferrer");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a link to a section of the page or to a file beside it, never one above its folder (#17669)", () => {
+    for (const ok of ["#heading", "./other.md", "./notes/a.md#L3"]) expect(linkHref(ok), ok).toBe(ok);
+    for (const bad of ["other.md", "../other.md", "./notes/../../admin", "./%2e%2e/admin", "./..%2fadmin", "./a%5c..%5cadmin", "./a\\b.md", "#a\tb"]) {
+      expect(linkHref(bad), bad).toBeUndefined();
+    }
+  });
 });
 
 describe("<persona-context>", () => {
@@ -227,15 +307,15 @@ describe("<persona-context>", () => {
   it("puts the contexts before the message, with a stand-in when nothing was typed", () => {
     expect(withContexts([], "  hi ")).toBe("hi");
     expect(withContexts([ref, { ...ref, text: "二" }], "改一下")).toBe(`${contextXML(ref)}\n${contextXML({ ...ref, text: "二" })}\n\n改一下`);
-    expect(withContexts([ref], "  ")).toBe(`${contextXML(ref)}\n\n参考上面的内容。`);
-    expect(withContexts([ref], "", true)).toBe(`${contextXML(ref)}\n\n请看图片`);
+    expect(withContexts([ref], "  ")).toBe(`${contextXML(ref)}\n\n请参考以上内容。`);
+    expect(withContexts([ref], "", true)).toBe(`${contextXML(ref)}\n\n请查看图片`);
   });
 
   it("writes 「AI 修改」 as an edit context and the request", () => {
     const m = editMessage(ref, " 更简洁 ");
     expect(m.startsWith('<persona-context kind="edit"')).toBe(true);
-    expect(m.endsWith("\n\n按要求修改上面选中的内容：更简洁")).toBe(true);
-    expect(editMessage(ref, "").endsWith("\n\n按上面选中的内容修改。")).toBe(true);
+    expect(m.endsWith("\n\n请按要求修改以上选中的内容：更简洁")).toBe(true);
+    expect(editMessage(ref, "").endsWith("\n\n请基于以上选中的内容进行修改。")).toBe(true);
     expect(parseUserText(m).contexts[0].kind).toBe("edit");
   });
 
@@ -336,8 +416,8 @@ describe("reading a Feishu document", () => {
 
   it("explains failures", async () => {
     await expect(readDoc(url, undefined, async () => { throw fail(404, { error: { code: "DOCUMENT_NOT_FOUND" } }); })).rejects.toThrow("文档不存在或已被删除");
-    expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("没有登录飞书");
-    expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("没有接入飞书");
+    expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("尚未登录飞书");
+    expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("尚未接入飞书");
     expect(fail(403, { error: "forbidden", code: "forbidden" }).message).toBe("没有访问权限");
   });
 });

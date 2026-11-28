@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/osproc"
 )
@@ -126,6 +127,7 @@ func (h *Hub) adminRoutes(mux *http.ServeMux, api, web http.Handler) http.Handle
 	h.adminAuthRoutes(open, closed)
 	h.adminHubRoutes(closed)
 	h.adminMachineRoutes(closed)
+	h.adminLinkSwitchRoutes(closed)   // relayed to the computer's manager (link_switch.go)
 	h.adminUsageRoutesRelayed(closed) // the usage sources page, the manager's (devices_routes.go, #2595)
 	h.adminDeviceRoutes(closed)
 	h.adminPasswordLoginRoutes(closed)
@@ -154,6 +156,13 @@ func (h *Hub) adminRoutes(mux *http.ServeMux, api, web http.Handler) http.Handle
 				writeErrCode(w, http.StatusForbidden, code, err)
 				return
 			}
+			// The admin pages write settings and trusts: a snapshot must not see
+			// them, and the write is repeated after the update.
+			if !h.quiesce.begin() {
+				writeErr(w, http.StatusServiceUnavailable, i18n.Err("hub-selfupdate.err_quiesced"))
+				return
+			}
+			defer h.quiesce.end()
 		}
 		if _, pattern := open.Handler(r); pattern != "" {
 			open.ServeHTTP(w, r)

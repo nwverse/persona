@@ -1,10 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Suspense, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ComponentType } from "react";
 import { createPortal } from "react-dom";
 import { t } from "../i18n";
-import type { AgentState } from "../lib/types";
+import type { StatusMarkState } from "../lib/types";
 import { Icon, type IconName } from "./icons";
 import { StatusMark } from "./StatusMark";
+import type { ToastLiftProps } from "./toast-lift";
 import { collapseMounted } from "../lib/disclosure";
+import { foldAllSeq, FoldMissed, type FoldRegion } from "../lib/fold-all";
 import { FeedbackGate, offlineNow } from "../lib/feedback";
 import { useCloseOnBack } from "../lib/back-close";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
@@ -87,10 +89,12 @@ export function Loading({ label = t("common.loading") }: { label?: string }) {
 }
 
 /** A state as a word in a pill; `awaiting`: seen and awaiting the user's reply, a quiet pending mark (#5096). */
-export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: AgentState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
-  const tone: Record<AgentState, string> = {
+export function StatePill({ state, awaiting = false, waiting = false, dot = true }: { state: StatusMarkState; awaiting?: boolean; /** working only on background commands that wait (#6045) */ waiting?: boolean; /** false beside a dot that already says the state (an Agent's header, #3956): the words alone */ dot?: boolean }) {
+  const tone: Record<StatusMarkState, string> = {
     needs_you: "bg-field text-attention",
     working: "bg-field text-orange",
+    done: "bg-green-tint text-green",
+    error: "bg-danger-wash text-red",
     unread: "bg-green-tint text-green",
     idle: "bg-field text-ink-2",
     offline: "bg-field text-ink-3",
@@ -110,31 +114,42 @@ export function IconButton({
   icon,
   label,
   onClick,
+  onKeyDown,
   active,
   size = 28,
   className = "",
   disabled,
   iconSize = 15,
+  pressed,
+  buttonRef,
 }: {
   icon: IconName;
   label: string;
   onClick?: (e: React.MouseEvent<HTMLElement>) => void;
+  onKeyDown?: React.KeyboardEventHandler<HTMLButtonElement>;
   active?: boolean;
   size?: number;
   className?: string;
   disabled?: boolean;
   iconSize?: number;
+  /** A button that turns a mode on and off (Overview's Arrange cards): whether it is on (aria-pressed, drawn as `active`). */
+  pressed?: boolean;
+  /** The button itself (not forwarded through `ref`: these buttons are plain, and a named prop keeps the call sites explicit). */
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
       type="button"
+      ref={buttonRef}
       aria-label={label}
+      aria-pressed={pressed}
       title={label}
       disabled={disabled}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       className={cx(
         "touch-hit flex shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.94] disabled:opacity-40",
-        active ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
+        active || pressed ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
         className,
       )}
       style={{ width: size, height: size }}
@@ -158,8 +173,10 @@ export function Button({
   title,
   href,
   expanded,
+  "aria-pressed": pressed,
   testId,
   size,
+  ref,
   ...aria
 }: {
   children: React.ReactNode;
@@ -175,6 +192,8 @@ export function Button({
   href?: string;
   /** A button that shows or hides something: whether it is shown (aria-expanded). */
   expanded?: boolean;
+  /** A toggle: whether it is on (aria-pressed). */
+  "aria-pressed"?: boolean;
   /** The id of what it shows or hides. */
   "aria-controls"?: string;
   /** A fuller name for screen readers, starting with the visible words, as "Show 2 more in Export". */
@@ -184,12 +203,14 @@ export function Button({
   /** "sm": 28 px tall (a row of actions inside a card, as the error notice's). A height in `className` does not win
    *  over the 32 px one here: the classes are joined, not merged, and the stylesheet's order decides. */
   size?: "sm";
+  /** The button, for a page that hands the focus back to it (not the link's: `href` draws an <a>). */
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   const base = cx("inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-control px-3 text-[12.5px] font-medium transition-[background-color,color,transform,opacity,filter] duration-150", size === "sm" ? "h-7" : "h-8");
   if (href && !disabled && !busy) {
     // an <a> is never :enabled, so the link has its own hover / press
     const links: Record<BtnTone, string> = {
-      primary: "bg-ink text-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] hover:opacity-90",
+      primary: "bg-ink text-surface hover:opacity-90",
       accent: "bg-accent-ink text-surface hover:brightness-105",
       secondary: "bg-surface text-ink shadow-btn hover:bg-hover",
       quiet: "text-ink-2 hover:bg-hover hover:text-ink",
@@ -203,7 +224,7 @@ export function Button({
     );
   }
   const tones: Record<BtnTone, string> = {
-    primary: "bg-ink text-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] enabled:hover:opacity-90",
+    primary: "bg-ink text-surface enabled:hover:opacity-90",
     accent: "bg-accent-ink text-surface enabled:hover:brightness-105",
     // dark: at 45% the ring and the light label still read as a button you can press, so a disabled one drops both
     secondary: "bg-surface text-ink shadow-btn enabled:hover:bg-hover dark:disabled:bg-transparent dark:disabled:text-ink-3 dark:disabled:shadow-hairline",
@@ -213,12 +234,14 @@ export function Button({
   return (
     <button
       {...aria}
+      ref={ref}
       type={type}
       title={title}
       disabled={disabled || busy}
       // the spinner is aria-hidden, so without this a busy button just reads as disabled
       aria-busy={busy || undefined}
       aria-expanded={expanded}
+      aria-pressed={pressed}
       data-testid={testId}
       onClick={onClick}
       className={cx(
@@ -244,6 +267,24 @@ export function Spinner({ size = 12 }: { size?: number }) {
   );
 }
 
+/** `animated`: crossfade tone changes (#2757). `wrap`: keep long explanatory chips inside a narrow row. */
+export function Pill({ children, tone, animated, wrap, size }: { children: React.ReactNode; tone?: "accent" | "green" | "red" | "orange"; animated?: boolean; wrap?: boolean; size?: "sm" }) {
+  return (
+    <span
+      style={animated ? { transitionTimingFunction: EASE } : undefined}
+      className={cx(
+        animated && "transition-[background-color,color,box-shadow] duration-300",
+        "inline-flex items-center rounded-full text-[11px] font-medium",
+        size === "sm" ? "px-1" : "px-1.5",
+        wrap ? "min-h-5 max-w-full whitespace-normal break-words py-0.5" : "h-5 shrink-0 whitespace-nowrap",
+        tone === "accent" ? "bg-accent-tint text-accent-ink" : tone === "green" ? "bg-green-tint text-green" : tone === "red" ? "bg-red-tint text-red" : tone === "orange" ? "bg-orange-tint text-orange" : "bg-inset text-ink-2 shadow-hairline",
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** An on / off switch (role=switch): the knob slides over 200 ms with the design system's ease (reduced motion: at once).
  *  Settings' rows, and the chat's and "New agent"'s ultracode switch (#3428). `className`: added to the track (a place
  *  that needs its grayed state drawn more clearly); without it the switch is as before. */
@@ -262,7 +303,7 @@ export function Switch({ on, onChange, disabled, label, className, describedBy, 
       onClick={() => onChange(!on)}
       className={cx("switch touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-switch-on" : "bg-switch-off", className)}
     >
-      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
+      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: "var(--ease-spring)" }} />
     </button>
   );
 }
@@ -278,10 +319,17 @@ export function Kbd({ children }: { children: React.ReactNode }) {
  *  the clicked row still while the height runs (`anchoredScroll`, #1124). `clipClassName` goes on the box that clips the
  *  children: padding there is room for what they draw outside themselves (a ring, a shadow) and stays while closed.
  *  `min-w-0`: the grid's implicit column's `auto` minimum is the item's content-based minimum, so one child that cannot
- *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262). */
-export function Collapse({ open, children, className = "", clipClassName = "", lazy = false, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing. */ sidebarFold?: boolean }) {
+ *  break (a long URL) would widen the whole grid past its column — the Inbox list then scrolls sideways (#3262).
+ *  A sidebar fold is lazy unless it says otherwise: a folded group holds no rows, so the sidebar costs what is open,
+ *  not every Agent (with 400 Agents its folded groups kept about 8,800 elements, laid out on every page switch). The
+ *  groups in it then miss a "Collapse / Expand all" while it is folded; opened, it has them take the last one
+ *  (`FoldMissed`, lib/fold-all.ts, #7440). */
+export function Collapse({ open, children, className = "", clipClassName = "", lazy: lazyProp, unclipped = false, sidebarFold = false }: { open: boolean; children: React.ReactNode; className?: string; clipClassName?: string; lazy?: boolean; /** Once open and still, the content isn't clipped: sticky headers inside it stick to the scroller, not to this box. */ unclipped?: boolean; /** Sidebar groups fold by clipping fully visible content, with the shared sidebar timing; lazy by default. */ sidebarFold?: boolean }) {
+  const lazy = lazyProp ?? sidebarFold;
   const [closing, setClosing] = useState(false);
   const [moving, setMoving] = useState(false);
+  const mounted = collapseMounted(lazy, open, closing);
+  const missed = useFoldRegion(lazy && sidebarFold, !mounted);
   // A lazy one's new content is laid out at 0fr first and the row opens a frame later: a long trace's first layout
   // would otherwise land inside the transition, which then starts most of the way open.
   const [laidOut, setLaidOut] = useState(open || !lazy);
@@ -322,9 +370,23 @@ export function Collapse({ open, children, className = "", clipClassName = "", l
       // inert once closed, not while it closes: switching a long trace inert is a full style pass (34 ms for 650 steps)
       inert={(!open && !moving) || undefined}
     >
-      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{collapseMounted(lazy, open, closing) && children}</div>
+      <div className={`min-h-0 min-w-0 ${!sidebarFold && !unclippedNow ? "overflow-hidden [contain:layout_paint]" : ""} ${clipClassName}`}>{mounted && (missed ? <FoldMissed.Provider value={missed}>{children}</FoldMissed.Provider> : children)}</div>
     </div>
   );
+}
+
+/** A sidebar fold's place for the "Collapse / Expand all" its groups miss while it holds none (lib/fold-all.ts): from
+ *  when it dropped them (or from what the place around it missed), until they mount again and have read it. None for a
+ *  fold that keeps its children. */
+function useFoldRegion(on: boolean, hidden: boolean): FoldRegion | null {
+  const around = useContext(FoldMissed);
+  const [region] = useState<FoldRegion>(() => ({ since: around.since ?? (hidden ? foldAllSeq() : null) }));
+  useEffect(() => {
+    if (!on) return;
+    if (!hidden) region.since = null;
+    else region.since ??= foldAllSeq();
+  }, [on, hidden, region]);
+  return on ? region : null;
 }
 
 // ── popover menu with a gliding highlight ───────────────
@@ -359,6 +421,8 @@ export function Menu({
   side = "bottom",
   width = 208,
   header,
+  headerAsWritten = false,
+  focusScoped = false,
   container,
 }: {
   items: MenuItem[];
@@ -370,6 +434,11 @@ export function Menu({
   side?: "top" | "bottom";
   width?: number;
   header?: string;
+  /** The header is or holds a name (a space's, a tab's, a worktree's): drawn as written. A label header is drawn in
+   *  capitals, which would rewrite the name ("weather" as "WEATHER"). */
+  headerAsWritten?: boolean;
+  /** Only this menu and its trigger own its keyboard actions (terminal toolbar). */
+  focusScoped?: boolean;
   /** Where the menu is put instead of the page's body: a full-screen layer above the menus' own (the image editor),
    *  whose look (its `dark`) the menu then takes. */
   container?: Element | null;
@@ -385,6 +454,8 @@ export function Menu({
   const asking = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const loads = useRef(0);
   const rows = useRef<(HTMLElement | null)[][]>([]);
+  // The highlight last moved by a key, not the pointer: a row it lands on past a cut edge is scrolled into view
+  const keyed = useRef(false);
   // What had the focus as the menu opened (its button, a row's ⋯), read on the first render, before a row can take it.
   const [opener] = useState(() => {
     const el = document.activeElement as HTMLElement | null;
@@ -511,6 +582,7 @@ export function Menu({
     const { levels: ls, subs: open } = live.current;
     const it = ls[depth]?.[index];
     if (!enabled(it)) return;
+    keyed.current = false;
     setActive(depth, index);
     // a submenu opens (and the one beside it closes) a moment after the pointer settles on a row, so a pointer
     // crossing rows on its way to the submenu does not swap it
@@ -535,6 +607,7 @@ export function Menu({
       const { levels: ls, actives: act, subs: open, renaming: renamed } = live.current;
       if (composing(e) || renamed) return; // an input in the menu takes its own keys
       const t = e.target as HTMLElement | null;
+      if (focusScoped && t !== anchor && t?.closest("[data-menu]")?.getAttribute("data-menu") !== id) return;
       const typing = Boolean(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable));
       // a field elsewhere on the page keeps its letters and its Backspace
       if (typing && (e.key.length === 1 || e.key === "Backspace" || e.key === "Delete")) return;
@@ -549,6 +622,7 @@ export function Menu({
       }
       e.preventDefault();
       e.stopPropagation();
+      keyed.current = true;
       if (intent.type === "close") {
         handBack(); // a row the pointer chose to confirm may have it
         onClose();
@@ -563,11 +637,13 @@ export function Menu({
       removeEventListener("keydown", key, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the handlers read `live`; only the menu's anchor and close change them
-  }, [anchor, onClose, id]);
+  }, [anchor, onClose, id, focusScoped]);
 
+  const inSidePanel = Boolean(anchor?.closest?.("[data-side-panel]"));
   const panelProps = (depth: number) => ({
     id,
     depth,
+    inSidePanel,
     items: levels[depth],
     active: actives[depth] ?? -1,
     confirming,
@@ -577,20 +653,27 @@ export function Menu({
     rows: (list: (HTMLElement | null)[]) => {
       rows.current[depth] = list;
     },
+    keyed,
     onHover: (i: number) => hover(depth, i),
     onEnter: () => clearTimeout(timer.current),
     onLeave: () => live.current.subs.length <= depth && setActive(depth, -1),
     onChoose: (i: number) => choose(depth, i, false),
     onRename: (it: MenuItem, name: string) => void commitRename(depth, it, name),
     onCancelRename: () => {
+      // The input had the focus: it goes back to what opened the menu, the menu stays open with its Rename row
+      // highlighted, and the next key is the menu's (Enter renames again, the arrows go on from it, Esc closes)
+      const index = live.current.levels[depth]?.findIndex((it) => it.key === live.current.renaming) ?? -1;
+      handBack();
       setRenaming(null);
       setFailure(null);
+      keyed.current = true;
+      if (index >= 0) setActive(depth, index);
     },
   });
 
   return createPortal(
     <>
-      <MenuPanel {...panelProps(0)} place={{ anchor, point, align, side, width }} header={header} />
+      <MenuPanel {...panelProps(0)} place={{ anchor, point, align, side, width }} header={header} headerAsWritten={headerAsWritten} />
       {subs.map((s, i) => (
         <MenuPanel key={`${s.from}-${i}`} {...panelProps(i + 1)} place={{ rect: s.rect, width }} loading={s.loading} loadError={s.error} />
       ))}
@@ -599,17 +682,30 @@ export function Menu({
   );
 }
 
+/** The height of the fade a cut menu draws at an edge with more rows beyond it (`data-menu-more`, h-6). */
+const MENU_FADE = 24;
+
+/** Scrolls `box` (a menu) the least that shows `row` whole, clear of the fade at the edge it was past. */
+function reveal(box: HTMLElement, row: HTMLElement) {
+  if (box.scrollHeight <= box.clientHeight) return;
+  const b = box.getBoundingClientRect();
+  const r = row.getBoundingClientRect();
+  if (r.top < b.top + MENU_FADE) box.scrollTop = Math.max(0, box.scrollTop - (b.top + MENU_FADE - r.top));
+  else if (r.bottom > b.bottom - MENU_FADE) box.scrollTop = Math.min(box.scrollHeight - box.clientHeight, box.scrollTop + r.bottom - (b.bottom - MENU_FADE));
+}
+
 type Place =
   | { anchor: HTMLElement | null; point?: { x: number; y: number }; align: "left" | "right"; side: "top" | "bottom"; width: number; rect?: undefined }
   | { rect: { left: number; right: number; top: number; bottom: number }; width: number };
 
 /** One level of a menu: the rows, the highlight gliding under them, a rename input or a failure where they call for it. */
 function MenuPanel({
-  id, depth, items, active, confirming, renaming, busy, failure, rows: report, place, header, loading, loadError,
+  id, depth, inSidePanel, items, active, confirming, renaming, busy, failure, rows: report, keyed, place, header, headerAsWritten, loading, loadError,
   onHover, onEnter, onLeave, onChoose, onRename, onCancelRename,
 }: {
   id: string;
   depth: number;
+  inSidePanel?: boolean;
   items: MenuItem[];
   active: number;
   confirming: string | null;
@@ -617,8 +713,11 @@ function MenuPanel({
   busy: string | null;
   failure?: string;
   rows: (list: (HTMLElement | null)[]) => void;
+  /** The highlight last moved by a key (Menu's): then a row past a cut edge scrolls into view. */
+  keyed: { readonly current: boolean };
   place: Place;
   header?: string;
+  headerAsWritten?: boolean;
   loading?: boolean;
   loadError?: string;
   onHover: (i: number) => void;
@@ -632,6 +731,9 @@ function MenuPanel({
   const els = useRef<(HTMLElement | null)[]>([]);
   const [box, setBox] = useState<{ top: number; height: number } | null>(null);
   const [pos, setPos] = useState<React.CSSProperties>({ visibility: "hidden" });
+  // Rows past what shows (a window too short for the whole menu): a fade at that edge says there is more to scroll to,
+  // where a cut falling between two rows looked like the menu's end
+  const [more, setMore] = useState({ up: false, down: false });
   const narrow = useMedia(NARROW_QUERY);
   report(els.current);
   // only lines to read (#4054): a popover that explains something, not a menu to choose from
@@ -645,12 +747,13 @@ function MenuPanel({
       // On a phone it keeps to what the keyboard leaves visible (the frame --kb-top / --kb-h follow).
       const view = narrow ? keyboardFrame(innerHeight, window.visualViewport) : undefined;
       // Measure the natural height: the inline maxHeight left by the previous placement (a keyboard that has since
-      // closed) would otherwise be read back as the menu's height, and the menu placed for a height it no longer has.
+      // closed) would otherwise be read back as the menu's height, and the menu placed for a height it no longer has;
+      // the class's cap (the window's height) too, or a menu taller than the window would seem to fit in it.
       // The scroll offset is put back too: the uncapped layout may clamp it.
       const el = ref.current;
       const { scrollTop } = el;
       const capped = el.style.maxHeight;
-      el.style.maxHeight = "";
+      el.style.maxHeight = "none";
       // ...at the width it will have: rows whose text wraps (`detail`, `wrap`) are taller in a narrower panel, and the
       // first placement has no width yet, so a menu above its anchor came out too short and covered it (#5584)
       el.style.width = `${Math.min(place.width, innerWidth - 16)}px`;
@@ -662,12 +765,13 @@ function MenuPanel({
       else if (place.point) {
         const { x, y } = place.point;
         const right = x + Math.min(place.width, innerWidth - 16) + 8 > innerWidth; // no room on the right: it opens leftwards
-        at = placeMenu({ left: x, right: x, top: y, bottom: y }, h, { width: place.width, align: right ? "right" : "left", side: "bottom", screenW: innerWidth, screenH: innerHeight, view, gap: 0 });
+        at = placeMenu({ left: x, right: x, top: y, bottom: y }, h, { width: place.width, align: right ? "right" : "left", side: "bottom", screenW: innerWidth, screenH: innerHeight, view, gap: 0, beside: !narrow });
       } else if (place.anchor) {
-        at = placeMenu(place.anchor.getBoundingClientRect(), h, { width: place.width, align: place.align, side: place.side, screenW: innerWidth, screenH: innerHeight, view });
+        at = placeMenu(place.anchor.getBoundingClientRect(), h, { width: place.width, align: place.align, side: place.side, screenW: innerWidth, screenH: innerHeight, view, beside: !narrow });
       } else return;
       const { maxHeight, ...rest } = at;
-      setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `min(70vh, 520px, ${maxHeight}px)` });
+      // as tall as the window (or what the keyboard leaves) allows, 8px inside it, as placeMenu keeps it (the class's cap)
+      setPos(maxHeight === undefined ? rest : { ...rest, maxHeight: `${maxHeight}px` });
     };
     reposition();
     // An open menu keeps to where it belongs when the window or the visual viewport (a phone keyboard) resizes.
@@ -684,7 +788,21 @@ function MenuPanel({
   useLayoutEffect(() => {
     const el = els.current[active];
     setBox(el ? { top: el.offsetTop, height: el.offsetHeight } : null);
+    // the keys moved the highlight to a row the cut hides (or the fade covers): the menu scrolls it into view. Not
+    // for the pointer, whose row is in view already, so the menu never scrolls under it
+    if (el && ref.current && keyed.current) reveal(ref.current, el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `keyed` is a ref
   }, [active]);
+
+  const measureMore = () => {
+    const el = ref.current;
+    if (!el) return;
+    const up = el.scrollTop > 0;
+    const down = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    setMore((m) => (m.up === up && m.down === down ? m : { up, down }));
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- measured again once placed, and when its rows change height
+  useLayoutEffect(measureMore, [pos, items.length, renaming, failure, loading, loadError]);
 
   return (
     <div
@@ -692,12 +810,15 @@ function MenuPanel({
       role={reading ? "dialog" : "menu"}
       aria-label={reading ? (header ?? items[0].label) : undefined}
       data-menu={id}
-      className="fixed z-50 max-h-[min(70vh,520px)] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
-      style={{ ...pos, animation: `pop-in 160ms ${EASE} both`, transformOrigin: origin }}
+      data-side-panel={inSidePanel ? "" : undefined}
+      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-card bg-surface p-1 shadow-overlay"
+      style={{ ...pos, animation: "pop-in 180ms var(--ease-spring) both", transformOrigin: origin }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
+      onScroll={measureMore}
     >
-      {header && <div className="px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{header}</div>}
+      {more.up && <div aria-hidden data-menu-more="up" className="pointer-events-none sticky top-0 z-20 -mb-6 h-6 bg-linear-to-b from-surface to-transparent" />}
+      {header && <div className={cx("px-2 pt-1.5 pb-1 text-[10.5px] font-medium tracking-[0.06em] text-ink-3", !headerAsWritten && "uppercase")}>{header}</div>}
       <div className="relative">
         <span
           aria-hidden
@@ -760,10 +881,11 @@ function MenuPanel({
         ])}
       </div>
       {failure && (
-        <div role="alert" className="mx-1 mt-1 max-h-28 overflow-y-auto border-t border-line px-1 pt-1.5 pb-1 text-[11.5px] break-words whitespace-pre-wrap text-red">
+        <div role="alert" className="mx-1 mt-1 max-h-28 overflow-y-auto border-t border-line px-1 pt-1.5 pb-1 text-submeta break-words whitespace-pre-wrap text-red">
           {failure}
         </div>
       )}
+      {more.down && <div aria-hidden data-menu-more="down" className="pointer-events-none sticky bottom-0 z-20 -mt-6 h-6 bg-linear-to-t from-surface to-transparent" />}
     </div>
   );
 }
@@ -802,7 +924,7 @@ function MenuRow({ item: it, asking, working, refCb, onHover, onChoose }: { item
         // label over its explanation, both wrapping: the explanation never pushes the label (or the check) off the row
         <span className="min-w-0 flex-1">
           <span className="block break-words">{label}{tag}</span>
-          <span id={detailId} className="mt-0.5 block text-[11.5px] leading-snug break-words whitespace-pre-line text-ink-3">{detail}</span>
+          <span id={detailId} className="mt-0.5 block text-submeta leading-snug break-words whitespace-pre-line text-ink-3">{detail}</span>
         </span>
       ) : (
         <span className={cx("min-w-0 flex-1", it.wrap ? "break-all" : "truncate", it.mono && "font-mono")}>{label}{tag}</span>
@@ -886,7 +1008,7 @@ function RenameRow({ item, busy, onCommit, onCancel, refCb }: { item: MenuItem; 
         {busy && <Spinner size={12} />}
       </div>
       {below && (
-        <p id={hintId} role={problem ? "alert" : undefined} className={cx("px-0.5 pb-0.5 text-[11.5px] leading-snug break-words", problem ? "text-red" : "text-ink-3")}>
+        <p id={hintId} role={problem ? "alert" : undefined} className={cx("px-0.5 pb-0.5 text-submeta leading-snug break-words", problem ? "text-red" : "text-ink-3")}>
           {below}
         </p>
       )}
@@ -963,6 +1085,41 @@ export function useExit(open: boolean, ms: number, play: () => (Animation | unde
 
 // ── modal dialog ────────────────────────────────────────
 
+const REVEAL_MARGIN = 8;
+
+/** Scrolls `scroller` so the field focused in it is in sight: its top when it is taller than the room. */
+function revealFocused(scroller: HTMLElement | null) {
+  const field = document.activeElement;
+  if (!scroller || !(field instanceof HTMLElement) || !field.matches("input, textarea, [contenteditable]") || !scroller.contains(field)) return;
+  const box = scroller.getBoundingClientRect();
+  const r = field.getBoundingClientRect();
+  if (r.top < box.top + REVEAL_MARGIN || r.height > box.height - 2 * REVEAL_MARGIN) scroller.scrollTop += r.top - box.top - REVEAL_MARGIN;
+  else if (r.bottom > box.bottom - REVEAL_MARGIN) scroller.scrollTop += r.bottom - box.bottom + REVEAL_MARGIN;
+}
+
+/** A sheet's body, once the keyboard has made the sheet shorter (--kb-h), scrolls its focused field back into sight.
+ *  By hand, inside the sheet: a document-level scrollIntoView could pan iOS's visual viewport away from --kb-top.
+ *  A frame later, so the keyboard's variables are written and the sheet laid out at its new height. */
+function useSheetReveal(body: React.RefObject<HTMLDivElement | null>, on: boolean) {
+  useEffect(() => {
+    if (!on) return;
+    const vv = window.visualViewport;
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => revealFocused(body.current));
+    };
+    // the visual viewport on iOS; the window on Android, where the keyboard resizes the page itself
+    vv?.addEventListener("resize", later);
+    window.addEventListener("resize", later);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv?.removeEventListener("resize", later);
+      window.removeEventListener("resize", later);
+    };
+  }, [body, on]);
+}
+
 /** A modal. Wide: a card in the middle of the page. Phone width (max-sm): a sheet up from the bottom of what the
  *  keyboard leaves visible (--kb-top / --kb-h), at most 90% of it, its body scrolling between the title and the footer,
  *  and Back closes it. Either way the focus moves in, Tab stays in, and goes back where it was when it closes
@@ -976,6 +1133,7 @@ export function Dialog({
   footer,
   labelledBy,
   describedBy,
+  closeOnBack = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -987,16 +1145,25 @@ export function Dialog({
   labelledBy?: string;
   /** The id of the text that says what the dialog asks. */
   describedBy?: string;
+  /** A drill-down is a history entry even on wider screens. */
+  closeOnBack?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const sheet = useMedia(SHEET_QUERY);
-  useCloseOnBack(open, onClose, sheet);
+  useCloseOnBack(open, onClose, sheet || closeOnBack);
   useEscapeClose(open, onClose);
   // The dialog itself takes the focus, so a phone's keyboard does not come up for its first field (one with autoFocus
   // took it already). On close it goes back to the opener, unless the close moved it outside on purpose.
   useModalFocus(panel, open);
+  const body = useRef<HTMLDivElement>(null);
+  useSheetReveal(body, open && sheet);
   const backdrop = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    if (body.current) body.current.scrollTop = 0;
+    if (backdrop.current) backdrop.current.scrollTop = 0;
+  }, [open]);
   // what it showed when last open: a caller may clear what the body reads once it is closed, while it still leaves
   const kept = useRef({ title, children, footer });
   if (open) kept.current = { title, children, footer };
@@ -1013,7 +1180,12 @@ export function Dialog({
       inert={exit.leaving || undefined}
       className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/25 px-4 pt-[12vh] pb-8 backdrop-blur-[2px] dark:bg-black/45 max-sm:top-(--kb-top) max-sm:bottom-auto max-sm:h-(--kb-h) max-sm:items-end max-sm:overflow-hidden max-sm:p-0"
       style={{ animation: "fade-in 140ms ease-out both" }}
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // The default mousedown focus change would blur the opener just after closing restores focus.
+        e.preventDefault();
+        onClose();
+      }}
     >
       {/* A column either way, so a tall body scrolls between the title and the footer: the card stops short of the
           backdrop's bottom padding (12vh above it, pb-8 below), the sheet at 90% of what the keyboard leaves. */}
@@ -1024,7 +1196,7 @@ export function Dialog({
         aria-labelledby={shown.title ? titleId : labelledBy}
         aria-describedby={describedBy}
         tabIndex={-1}
-        className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_220ms_var(--ease-out-strong)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
+        className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_240ms_var(--ease-spring)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
         style={{ "--dialog-w": `${width}px` } as React.CSSProperties}
       >
         {shown.title && (
@@ -1033,8 +1205,9 @@ export function Dialog({
             <IconButton icon="x" label={t("ui-atoms.close")} onClick={onClose} size={26} iconSize={14} />
           </div>
         )}
-        <div className={cx("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4", !shown.footer && "max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]")}>{shown.children}</div>
-        {shown.footer && <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">{shown.footer}</div>}
+        <div ref={body} data-dialog-body className={cx("min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-2 pb-4 [overflow-anchor:none]", !shown.footer && "max-sm:pb-[calc(16px+env(safe-area-inset-bottom))]")}>{shown.children}</div>
+        {/* data-dialog-footer: what a toast on a phone keeps clear of (Toasts) */}
+        {shown.footer && <div data-dialog-footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-inset px-4 py-2.5 max-sm:pb-[calc(10px+env(safe-area-inset-bottom))]">{shown.footer}</div>}
       </div>
     </div>,
     document.body,
@@ -1074,7 +1247,7 @@ function dropToast(id: number) {
   setTimeout(() => removeToast(id), EXIT_MS.toast + 120); // the exit's end may never come (a hidden tab)
 }
 
-/** Holds every toast's time while the pointer or the focus is on one (WCAG 2.2.1), and lets it run on after. */
+/** Holds every toast's time while a mouse pointer or the focus is on one (WCAG 2.2.1), and lets it run on after. */
 function pauseToasts(on: boolean) {
   if (toastsPaused === on) return;
   toastsPaused = on;
@@ -1109,9 +1282,15 @@ export function toast(text: string, tone: Toast["tone"] = "info", action?: Toast
   toastsChanged();
 }
 
-export function Toasts() {
+const keyboardUp = () => keyboardFrame(window.innerHeight, window.visualViewport) !== undefined;
+
+/** The toasts. `lift` places them on a narrow screen (ui/toast-lift.tsx): phone-only, so the app hands it in from a
+ *  chunk of its own, loaded once the screen is narrow; until it is in, they sit at the bottom of the page, then move. */
+export function Toasts({ lift: Lift }: { lift?: ComponentType<ToastLiftProps> }) {
   const [, force] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<number, HTMLDivElement>());
+  const lifting = useMedia(NARROW_QUERY) && toasts.length > 0 && Lift !== undefined;
   // where each row was on screen just before the list changed, and the glides and exits that are running
   const before = useRef(new Map<number, number>());
   const glides = useRef(new Map<number, Animation>());
@@ -1163,7 +1342,8 @@ export function Toasts() {
   useEffect(() => pauseToasts(paused), [paused]);
   useEffect(() => () => pauseToasts(false), []);
   return createPortal(
-    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
+    // narrow: `lift` places it in the visible frame (above the keyboard), over what sits at the frame's bottom
+    <div ref={box} aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-5 z-[70] flex flex-col items-center gap-2 px-4">
       {toasts.map((item) => (
         <div
           key={item.id}
@@ -1173,8 +1353,9 @@ export function Toasts() {
           }}
           data-closing={item.leaving || undefined}
           inert={item.leaving || undefined}
-          onMouseEnter={() => setHovered(item.id)}
-          onMouseLeave={() => setHovered((h) => (h === item.id ? null : h))}
+          // a mouse only: a tap's compatibility mouseenter gets no mouseleave, and would hold the toast for good
+          onPointerEnter={(e) => e.pointerType === "mouse" && setHovered(item.id)}
+          onPointerLeave={(e) => e.pointerType === "mouse" && setHovered((h) => (h === item.id ? null : h))}
           onFocus={() => setFocused(item.id)}
           onBlur={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setFocused((f) => (f === item.id ? null : f))}
           className="pointer-events-auto flex max-w-md items-center gap-2 rounded-[10px] border border-tooltip-border bg-tooltip-bg px-3 py-2 text-[12.5px] text-tooltip-fg shadow-overlay"
@@ -1183,8 +1364,11 @@ export function Toasts() {
           {item.tone === "error" && <Icon name="warning" size={13} stroke={2.2} className="shrink-0 text-red" />}
           {item.tone === "ok" && <Icon name="check" size={13} stroke={2.6} className="text-green" />}
           <span className="min-w-0">{item.text}</span>
+          {/* On a touch screen the button's target (touch-hit) reaches at least 8 px past its word on either side and
+              44 px high, and the close button moves over so their targets meet there instead of the close button's
+              covering the gap: a tap just past the word still runs it. */}
           {item.action && (
-            <button type="button" className="ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline"
+            <button type="button" className="touch-hit ml-1 shrink-0 whitespace-nowrap font-semibold text-accent hover:underline [@media(pointer:coarse)]:before:inset-x-[min(--spacing(-2),calc(50%-22px))]"
               onClick={() => { item.action?.run(); dropToast(item.id); }}>
               {item.action.label}
             </button>
@@ -1194,12 +1378,18 @@ export function Toasts() {
             aria-label={t("ui-atoms.close")}
             title={t("ui-atoms.close")}
             onClick={() => dropToast(item.id)}
-            className="touch-hit -mr-1.5 ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-tooltip-muted transition-colors duration-150 hover:bg-tooltip-border hover:text-tooltip-fg"
+            className={cx("touch-hit -mr-1.5 ml-0.5 flex size-5 shrink-0 items-center justify-center rounded-[5px] text-tooltip-muted transition-colors duration-150 hover:bg-tooltip-border hover:text-tooltip-fg", item.action && "[@media(pointer:coarse)]:ml-3")}
           >
             <Icon name="x" size={12} stroke={2.2} />
           </button>
         </div>
       ))}
+      {/* after the rows: their refs are set before it measures them */}
+      {lifting && Lift && (
+        <Suspense fallback={null}>
+          <Lift box={box} rows={rows} keyboardUp={keyboardUp} />
+        </Suspense>
+      )}
     </div>,
     document.body,
   );

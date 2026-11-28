@@ -141,9 +141,18 @@ func scanPath(pathVar string, taken map[string]bool) *pathScan {
 			}
 			w, ok := wrapperScript(head)
 			if !ok {
+				w, ok = forwardedClaudeWrapper(path, head, userHome())
+			}
+			if !ok {
 				continue
 			}
-			s.list = append(s.list, proto.Launcher{Name: name, BaseURL: w.shown("ANTHROPIC_BASE_URL"), Model: w.model(), Source: "path"})
+			s.list = append(s.list, proto.Launcher{
+				Name:      name,
+				BaseURL:   w.shown("ANTHROPIC_BASE_URL"),
+				Model:     w.model(),
+				ConfigDir: literalConfigDir(w.env["CLAUDE_CONFIG_DIR"], userHome()),
+				Source:    "path",
+			})
 			if w.settings != "" {
 				s.settings[name] = w.settings
 			}
@@ -365,7 +374,7 @@ func wrapperScript(text string) (wrapper, bool) {
 					break
 				}
 				front := map[string]string{}
-				i := shellcmd.CommandIndex(words, front)
+				i, reset := shellcmd.CommandEnvironment(words, front)
 				if i < 0 {
 					continue
 				}
@@ -380,7 +389,7 @@ func wrapperScript(text string) (wrapper, bool) {
 					return wrapper{}, false // a script that runs claude for its own ends, no wrapper
 				}
 				w := wrapper{env: map[string]string{}, branch: guarded}
-				if !envIgnored(words[:i]) {
+				if !reset {
 					for k := range exported {
 						if v, ok := vars[k]; ok {
 							w.env[k] = v
@@ -399,17 +408,6 @@ func wrapperScript(text string) (wrapper, bool) {
 		}
 	}
 	return wrapper{}, false
-}
-
-// envIgnored: `env -i` (--ignore-environment, or POSIX `env -`) in front of the command: claude gets only what is set
-// after it.
-func envIgnored(front []string) bool {
-	for i, w := range front {
-		if w == "env" && i+1 < len(front) && (front[i+1] == "-i" || front[i+1] == "--ignore-environment" || front[i+1] == "-") {
-			return true
-		}
-	}
-	return false
 }
 
 // separators are what joins each segment of line to the next: "|", "||", "&&", ";", "&" or "" (a new line); a

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -27,8 +28,10 @@ func waitReportQueue(t *testing.T, s *Service) {
 // By default a task's turns are not pushed: a finished turn (whatever the agent said, a merged PR, "收工"), an
 // interruption and a closing by the judge are execution steps.
 func TestGoalReportsSkipExecutionSteps(t *testing.T) {
-	s, f, posts := reportServiceWith(t, goalFeatures)
+	s, f, posts := reportServiceWith(t, goalFeatures, repositorystore.New(todoTestDB(t)))
 	todo := startedTask(t, s, f)
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor",
+		"fix/login", "fix/login", "abc", "abc")
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "好的，收工。https://github.com/o/r/pull/901 已合并，临时 worktree 清掉了", 0)
 	waitReportQueue(t, s)
@@ -46,6 +49,7 @@ func TestGoalReportsSkipExecutionSteps(t *testing.T) {
 
 // A decision is pushed as its own answerable card, with no task report line around it.
 func TestGoalReportsDecisionIsItsOwnCard(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportServiceWith(t, goalFeatures)
 	todo := startedTask(t, s, f)
 	agentTurn(s, f, proto.StatusBlocked, "", 1)
@@ -56,7 +60,7 @@ func TestGoalReportsDecisionIsItsOwnCard(t *testing.T) {
 	waitFor(t, "the question's card", func() bool { return len(posts()) == 1 })
 	waitReportQueue(t, s)
 	got := posts()
-	if len(got) != 1 || !strings.Contains(got[0], `"a":"ix"`) || strings.Contains(got[0], "📋") {
+	if len(got) != 1 || !strings.Contains(got[0], `"a":"ix"`) || strings.Contains(got[0], `"content":"汇报"}`) {
 		t.Fatalf("posts:\n%s", strings.Join(got, "\n---\n"))
 	}
 }
@@ -65,18 +69,19 @@ func TestGoalReportsDecisionIsItsOwnCard(t *testing.T) {
 // goal, where it is and the evidence with a link — no stage bar, no agent's words. It is told once; a finished turn
 // starts the count again.
 func TestGoalReportsStuckSaysGoalNowEvidence(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportServiceWith(t, goalFeatures)
 	todo := startedTask(t, s, f)
 	s.taskReport(todo, reportFailed, "box", [2]string{}, "那台电脑离线", nil)
 	waitFor(t, "the stuck card", func() bool { return len(posts()) == 1 })
 	card := posts()[0]
-	for _, want := range []string{"🎯 1 件事的目标卡住了", "**🎯 目标**：修登录崩溃", "**现在**：⚠️ 卡住了，没开起来",
-		"**证据**：那台电脑离线 [去看看](https://hub.example.com/todos?id=" + todo.ID + ")"} {
+	for _, want := range []string{"[Persona] 修登录崩溃 · 1 件事的目标卡住了", "**目标**：修登录崩溃", "**现在**：卡住了，没开起来",
+		"**证据**：那台电脑离线 [去看看](https://hub.example.com/todos/" + todo.ID + ")"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card lacks %q:\n%s", want, card)
 		}
 	}
-	for _, not := range []string{"📋", "✅开发", "⚪部署", "这一轮做完"} {
+	for _, not := range []string{`"content":"汇报"}`, "✅开发", "⚪部署", "这一轮做完"} {
 		if strings.Contains(card, not) {
 			t.Errorf("card has %q:\n%s", not, card)
 		}
@@ -111,6 +116,7 @@ func TestGoalReportsStuckSaysGoalNowEvidence(t *testing.T) {
 
 // report_steps brings the card back as it was: a finished turn with the stage bar and what the agent said.
 func TestReportStepsSwitchBringsBackTheOldCard(t *testing.T) {
+	needsLarkLayer(t)
 	feats := goalFeatures
 	feats.ReportSteps = true
 	s, f, posts := reportServiceWith(t, feats)
@@ -118,20 +124,22 @@ func TestReportStepsSwitchBringsBackTheOldCard(t *testing.T) {
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "好的，收工。临时 worktree 清掉了", 0)
 	waitFor(t, "the report", func() bool { return len(posts()) == 1 })
-	if card := posts()[0]; !strings.Contains(card, "📋") || !strings.Contains(card, "这一轮做完") || !strings.Contains(card, "收工") {
+	if card := posts()[0]; !strings.Contains(card, `"content":"汇报"}`) || !strings.Contains(card, "这一轮做完</text_tag>") || !strings.Contains(card, "收工") {
 		t.Fatalf("card:\n%s", card)
 	}
 }
 
 // The conclusion card says the goal, where it is now — with how far the work went out — and the evidence's link.
 func TestConclusionCardSaysGoalNowEvidence(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, todo, posts, _ := conclusionService(t, true)
 	waitsForReview(t, s, f, todo.ID, "查完了，见 https://docs.example.com/plan")
 	s.setTaskStage(context.Background(), todo.ID, "verify", "")
-	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "reason": "登录不再崩溃", "link": "https://hub.example.com/s/box/s1"})
+	reviewTask(t, s, todo.ID, map[string]any{"verdict": "accepted", "reason": "登录不再崩溃", "link": "https://hub.example.com/s/box/s1",
+		"checks": completeReviewChecks(todoNow(s, todo.ID))})
 	waitFor(t, "the conclusion card", func() bool { return len(cardsWith(posts(), "结论：")) == 1 })
 	card := cardsWith(posts(), "结论：")[0]
-	for _, want := range []string{"**🎯 目标**：修登录崩溃", "**现在**：✅ 做完了：登录不再崩溃 · 已上线并实测", "**证据**：[https://hub.example.com/s/box/s1]"} {
+	for _, want := range []string{"**目标**：修登录崩溃", "**现在**：✅ 做完了：登录不再崩溃 · 已上线并实测", "**证据**：[https://hub.example.com/s/box/s1]"} {
 		if !strings.Contains(card, want) {
 			t.Errorf("card lacks %q:\n%s", want, card)
 		}
@@ -140,6 +148,7 @@ func TestConclusionCardSaysGoalNowEvidence(t *testing.T) {
 
 // Cuts that come quickly — the one making the task stuck replaced by a later one before the card went out — still tell it.
 func TestGoalReportsStuckSurvivesQuickCuts(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, posts := reportServiceWith(t, goalFeatures)
 	todo := startedTask(t, s, f)
 	for i := 0; i < reportStuckAfter+2; i++ {

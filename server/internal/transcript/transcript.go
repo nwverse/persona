@@ -3,6 +3,8 @@ package transcript
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	jsonv2 "encoding/json/v2"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/tokenuse"
 )
 
 // Limits keep huge tool outputs and images from flooding the phone. Parsing keeps up to maxTextLen of any text, what
@@ -42,11 +45,12 @@ type entry struct {
 	} `json:"compactMetadata"`
 	Content json.RawMessage `json:"content"`
 	Message *struct {
-		Role    string          `json:"role"`
-		Model   string          `json:"model"`
-		ID      string          `json:"id"`
-		Content json.RawMessage `json:"content"`
-		Usage   *claudeUsage    `json:"usage"`
+		StopReason string                `json:"stop_reason"`
+		Role       string                `json:"role"`
+		Model      string                `json:"model"`
+		ID         string                `json:"id"`
+		Content    json.RawMessage       `json:"content"`
+		Usage      *tokenuse.ClaudeUsage `json:"usage"`
 	} `json:"message"`
 	AITitle        string `json:"aiTitle"`
 	CustomTitle    string `json:"customTitle"`
@@ -93,12 +97,15 @@ type entry struct {
 	} `json:"quotaLimits"`
 	// system/scheduled_task_fire: the /loop prompt that is about to run.
 	Prompt string `json:"prompt"`
+	// ContextBreakdown is an optional native context category split when an engine writes one into the transcript.
+	ContextBreakdown *proto.ContextBreakdown `json:"context_breakdown"`
 }
 
 type block struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
 	Thinking  string          `json:"thinking"`
+	Signature string          `json:"signature"`
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     json.RawMessage `json:"input"`
@@ -124,10 +131,15 @@ type Meta struct {
 	// VersionAt is when the line that said Version was written (zero when it had no timestamp).
 	VersionAt      time.Time
 	PermissionMode string
-	// ModeAt / Effort / EffortAt: when the permission mode was last seen, and the effort level of the latest reply.
-	ModeAt   time.Time
-	Effort   string
-	EffortAt time.Time
+	// ModeAt / Effort / EffortAt / ModelAt: when the permission mode was last seen, and when the latest reply or turn_context named Effort or Model.
+	// ServiceTier / ServiceTierAt: the Codex service tier from the latest thread settings, and when they were applied.
+	ModeAt        time.Time
+	Effort        string
+	EffortAt      time.Time
+	ModelAt       time.Time
+	ServiceTier   string
+	ServiceTierAt time.Time
+	Speed         SpeedObservation
 	// Ultracode is independent of effort: nil means the transcript has no dated evidence. Since, when set by a
 	// caller, ignores observations from before the current Claude process (resume resets the session-only switch).
 	Ultracode        *bool
@@ -137,9 +149,16 @@ type Meta struct {
 	// CodexSandbox: Codex rollouts' sandbox of the latest turn (read-only, workspace-write…); PermissionMode is its approval policy.
 	CodexSandbox  string
 	ContextTokens int // input + cache read + cache creation of the latest reply: what the model last saw
+	// ContextCompacted: a compaction came after the latest reply, so the context is not known (ContextTokens 0) until
+	// the next one; the size before it no longer stands (#9207).
+	ContextCompacted bool
+	restartContext   contextRestart
+	restartCodex     tokenuse.CodexTotal
 	// ContextWindow is the model's context window when the transcript says it (a Codex rollout's token_count carries
 	// model_context_window); 0 for Claude Code, whose transcripts do not (node/contextwindow.go knows by model id).
-	ContextWindow    int
+	ContextWindow int
+	// ContextStats holds bounded category byte accumulators (and any native exact breakdown) for ContextBreakdown.
+	ContextStats     ContextStats
 	OutputTokens     int // total generated, counted once per message
 	Compactions      int
 	Turns            int // user prompts
@@ -148,8 +167,8 @@ type Meta struct {
 	lastOutputTokens int
 	// usage: the request whose usage the latest reply lines put on items (item_usage.go). codexTotal: a rollout's
 	// latest running total of tokens; codexUsage: what the turn under way used so far.
-	usage      RequestUsage
-	codexTotal int64
+	usage      tokenuse.Request
+	codexTotal tokenuse.CodexTotal
 	codexUsage proto.TokenUsage
 	sawUser    bool // a user line was read: a subagent's own work began (a fork's copied context comes before it)
 	// Queue holds input typed while Claude works and not yet taken (queue-operation lines:
@@ -159,7 +178,10 @@ type Meta struct {
 	queued []queuedInput
 	// Background holds background shells / agents that have not reported back (see trackBackground).
 	Background []proto.BackgroundTask
-	bgPending  map[string]proto.BackgroundTask // tool_use_id → started, waiting for the tool result with its id
+	// BackgroundEnded holds recent shell / Monitor outcomes, oldest first, at most backgroundEndedKept.
+	BackgroundEnded []proto.BackgroundTask
+	bgPending       map[string]proto.BackgroundTask // tool_use_id → started, waiting for the tool result with its id
+	bgPendingIDs    [][]byte                        // the same ids, for readers that skip lines without a static marker
 	// fgBash: foreground Bash calls waiting for their result, which may say it was moved to the background by hand
 	// (Ctrl+B, or a message sent mid-turn: node/assistant_interject.go).
 	fgBash map[string]proto.BackgroundTask
@@ -174,10 +196,11 @@ type Meta struct {
 	// Goal is the goal the agent works toward (Claude Code's /goal, a Codex thread goal), nil when none is set (goal.go).
 	Goal *proto.GoalInfo
 	// Plan is the agent's latest task list, counted (TodoWrite, TaskCreate / TaskUpdate; plan.go), nil when it keeps none.
-	Plan        *proto.PlanInfo
-	planItems   []planItem
-	planUses    map[string]proto.Item // tool_use_id → a plan tool's call, waiting for its result
-	planPending [][]byte              // planUses' ids (PlanPending)
+	Plan              *proto.PlanInfo
+	planItems         []planItem
+	desktopPlanDeltas []string              // accepted relative updates to the current checklist
+	planUses          map[string]proto.Item // tool_use_id → a plan tool's call, waiting for its result
+	planPending       [][]byte              // planUses' ids (PlanPending)
 	// LastActivity is the time of the last real exchange (user input, assistant output, tool calls). Claude Code
 	// also appends recaps, titles and mode lines to idle sessions, so the file mtime is not "last used".
 	LastActivity time.Time
@@ -196,6 +219,12 @@ type Meta struct {
 	// turn_duration / an interrupt), no turn started after it. Unlike !TurnOpen it is false when the lines say nothing
 	// (a tail read from mid-turn).
 	TurnClosed bool
+	// CodexClosedTurnID is the id on the closing record, when the rollout supplies it.
+	CodexClosedTurnID string
+	// The closing record, even when it produces no visible item (e.g. Codex without a duration).
+	turnEndedAt time.Time
+	turnEndSeq  int
+	turnEndLine string
 	// TurnError / TurnErrorKind: the latest turn failed on the model service, as the agent's own record says it
 	// (Codex: task_complete's error, #2185; Claude Code: the reply it writes itself for a failed request,
 	// isApiErrorMessage, #1710); empty when it ended well or the model answered since. Kind is
@@ -220,8 +249,16 @@ type Meta struct {
 	// TurnErrorAfterWork: the failed turn did some work (a reply, a tool call, thinking) before the error ended it.
 	TurnErrorAfterWork bool
 	// turnWorked: the turn under way did some work so far (TurnErrorAfterWork when it fails); its end or the next
-	// turn's start sets it back. turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
-	turnWorked bool
+	// turn's start sets it back. turnSucceeded: that turn closed after a real reply; TurnSucceeded also checks its error.
+	// turnErrorLine: the uuid of the line that said TurnError (Tail.Settle).
+	// UpstreamErrorStreak: consecutive turns that ended in an upstream 5xx/capacity failure with no assistant work in
+	// between (#13372); turnErrorCounted ensures at most one increment per turn.
+	turnWorked          bool
+	turnSucceeded       bool
+	turnErrorCounted    bool
+	upstreamStreakReset bool
+	UpstreamErrorStreak int
+	upstreamErrorLines  []string
 	// turnParts: the latest turn's words so far, for TurnAnswer (answer.go).
 	turnParts     []AnswerPart
 	turnErrorLine string
@@ -233,6 +270,14 @@ type Meta struct {
 	codexSeen   map[string]bool
 	codexTurnID string
 	codexUserID string
+	// A native plan event and the successful update_plan tool receipt can describe the same revision.
+	codexPlanCalls []codexPlanCall
+	codexLastPlan  json.RawMessage
+	// codexPending: the ids of backgrounded commands whose terminal record has not been read. A command can finish in
+	// a later turn, so task_started does not clear it; the id leaves when its completed/failed record is read.
+	// codexPendingIDs keeps them oldest first and codexPendingKept (codex.go) bounds them.
+	codexPending    map[string]bool
+	codexPendingIDs []string
 	// codexTurnModel: the model the turn under way runs on (its turn_context), which the turn's agent items carry.
 	// task_started clears it, as a window starting there has none.
 	codexTurnModel string
@@ -275,37 +320,64 @@ type Meta struct {
 	Updated      time.Time
 }
 
-// ObserveNamingMetadata reads only title provenance and generated usage during an existing incremental scan.
+func (m *Meta) observeCodexSettings(s CodexThreadSettings, at time.Time) {
+	if s.Model != "" && !at.Before(m.ModelAt) {
+		m.Model, m.ModelAt = s.Model, at
+	}
+	if s.ReasoningEffort != nil && *s.ReasoningEffort != "" && !at.Before(m.EffortAt) {
+		m.Effort, m.EffortAt = *s.ReasoningEffort, at
+	}
+	if len(s.ServiceTier) != 0 && !at.Before(m.ServiceTierAt) {
+		var tier string
+		if json.Unmarshal(s.ServiceTier, &tier) == nil {
+			if tier == "" {
+				tier = "default"
+			}
+			m.ServiceTier, m.ServiceTierAt = tier, at
+		}
+	}
+}
+
+// ObserveNamingMetadata reads title provenance, usage and Codex turn settings during an existing incremental scan.
 // It never decodes message content (which can contain large screenshots or tool output).
 func (m *Meta) ObserveNamingMetadata(line []byte) {
 	if !bytes.Contains(line, []byte(`"custom-title"`)) && !bytes.Contains(line, []byte(`"ai-title"`)) &&
-		!bytes.Contains(line, []byte(`"output_tokens"`)) {
+		!bytes.Contains(line, []byte(`"usage"`)) && !bytes.Contains(line, []byte(`"turn_context"`)) &&
+		!bytes.Contains(line, []byte(`"compact_boundary"`)) && !bytes.Contains(line, []byte(`"compacted"`)) &&
+		!bytes.Contains(line, []byte(`"context_compacted"`)) && !bytes.Contains(line, []byte(`"token_count"`)) &&
+		!bytes.Contains(line, []byte(`"thread_settings_applied"`)) {
 		return
 	}
 	var e struct {
-		Type        string `json:"type"`
-		CustomTitle string `json:"customTitle"`
-		AITitle     string `json:"aiTitle"`
-		IsSidechain bool   `json:"isSidechain"`
+		Type        string    `json:"type"`
+		Subtype     string    `json:"subtype"`
+		Timestamp   time.Time `json:"timestamp"`
+		CustomTitle string    `json:"customTitle"`
+		AITitle     string    `json:"aiTitle"`
+		IsSidechain bool      `json:"isSidechain"`
+		APIError    bool      `json:"isApiErrorMessage"`
 		Message     *struct {
-			ID    string `json:"id"`
-			Usage *struct {
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
+			ID    string                `json:"id"`
+			Model string                `json:"model"`
+			Usage *tokenuse.ClaudeUsage `json:"usage"`
 		} `json:"message"`
 		Payload struct {
-			Type string `json:"type"`
-			Info *struct {
-				Total struct {
-					OutputTokens int `json:"output_tokens"`
-				} `json:"total_token_usage"`
-			} `json:"info"`
+			Type           string               `json:"type"`
+			Model          string               `json:"model"`
+			Effort         string               `json:"effort"`
+			Info           *tokenuse.CodexInfo  `json:"info"`
+			ThreadSettings *CodexThreadSettings `json:"thread_settings"` // thread_settings_applied (codex.go)
 		} `json:"payload"`
 	}
 	if json.Unmarshal(line, &e) != nil {
 		return
 	}
 	switch e.Type {
+	case "turn_context":
+		m.observeCodexSettings(CodexThreadSettings{Model: e.Payload.Model}, e.Timestamp)
+		if e.Payload.Effort != "" && !e.Timestamp.Before(m.EffortAt) {
+			m.Effort, m.EffortAt = e.Payload.Effort, e.Timestamp
+		}
 	case "custom-title":
 		if e.CustomTitle != "" {
 			m.Title, m.TitleManual, m.TitleSource = e.CustomTitle, true, "manual"
@@ -316,11 +388,35 @@ func (m *Meta) ObserveNamingMetadata(line []byte) {
 		}
 	case "assistant":
 		if !e.IsSidechain && e.Message != nil && e.Message.Usage != nil {
-			m.observeOutput(e.Message.ID, e.Message.Usage.OutputTokens)
+			m.observeOutput(e.Message.ID, int(e.Message.Usage.OutputTokens))
+			t, _, ok := tokenuse.ClaudeTokens(e.Message.Model, e.Message.Usage, e.APIError)
+			tokens := t.Input + t.CacheRead + t.CacheWrite
+			if ok && e.Message.ID != "" && tokens > 0 && tokens <= MaxContextTokens {
+				m.restartContext.observe(e.Message.ID, tokens)
+			}
 		}
+	case "system":
+		if e.Subtype == "compact_boundary" && !e.IsSidechain {
+			m.restartContext.compact()
+		}
+	case "compacted":
+		m.restartContext.compact()
 	case "event_msg":
-		if e.Payload.Type == "token_count" && e.Payload.Info != nil {
-			m.OutputTokens = e.Payload.Info.Total.OutputTokens
+		switch e.Payload.Type {
+		case "context_compacted":
+			m.restartContext.compact()
+		case "thread_settings_applied":
+			// A /model typed between turns is a small line too: a long tool result after it can push it out of the tail.
+			if e.Payload.ThreadSettings != nil {
+				m.observeCodexSettings(*e.Payload.ThreadSettings, e.Timestamp)
+			}
+		case "token_count":
+			if info := e.Payload.Info; info != nil {
+				m.OutputTokens = int(info.Total.Output)
+				if m.restartCodex.Grew(info.Total.Total) && info.Last.Input > 0 && info.Last.Input <= MaxContextTokens {
+					m.restartContext.observe("", info.Last.Input)
+				}
+			}
 		}
 	}
 }
@@ -336,9 +432,9 @@ func (m *Meta) observeOutput(id string, tokens int) {
 	}
 }
 
-// botmuxSentinel is the line a botmux session's agent ends a turn with when its answer went to the Feishu topic
+// BotmuxSentinel is the line a botmux session's agent ends a turn with when its answer went to the Feishu topic
 // through `botmux send`: a word for botmux, not the answer.
-const botmuxSentinel = "BOTMUX_NOTHING_TO_SEND"
+const BotmuxSentinel = "BOTMUX_NOTHING_TO_SEND"
 
 // Some Anthropic-compatible proxies have a "thinking as text" mode: the thinking block comes back as a text block whose
 // lines are each wrapped in ANSI dim italic, opening with "💭 Thinking" and closing with "💭 Thought for Ns (N tokens)",
@@ -360,15 +456,18 @@ func thinkingAsText(text string) (thinking string, ok bool) {
 	return strings.TrimSpace(strings.Join(lines, "\n")), true
 }
 
-// withoutBotmuxSentinel is text without its botmux sentinel lines, "" when that is all it says (LastText then stays the
+// WithoutBotmuxSentinel is text without its botmux sentinel lines, "" when that is all it says (LastText then stays the
 // turn's earlier words).
-func withoutBotmuxSentinel(text string) string {
-	if !strings.Contains(text, botmuxSentinel) {
+func WithoutBotmuxSentinel(text string) string {
+	if !strings.Contains(text, BotmuxSentinel) {
 		return text
 	}
 	lines := strings.Split(text, "\n")
-	lines = slices.DeleteFunc(lines, func(l string) bool { return strings.TrimSpace(l) == botmuxSentinel })
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	kept := slices.DeleteFunc(lines, func(l string) bool { return strings.TrimSpace(l) == BotmuxSentinel })
+	if len(kept) == len(lines) {
+		return text
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // pastedRe matches the wrapper Claude Code puts around long pasted input (also what herdr's bracketed paste from
@@ -390,6 +489,10 @@ var tagRe = lazyre.New(`(?s)<(command-name|command-message|command-args|local-co
 // APIRetrying ends an API error notice Claude Code is still retrying: the turn goes on.
 const APIRetrying = "（正在重试）"
 
+// OmpStoppedNotice is what a stopped omp session (listed from omp's own session files, node/ompdisk.go) shows in
+// place of its conversation. The hub puts it into the reader's language (hub/transcript_text.go noticeText).
+const OmpStoppedNotice = "这个 omp 会话已停止。发一条消息会在电脑上新开一个终端标签页，用 omp --resume 接着它。"
+
 // InterruptedNotice is the notice a turn stopped by the user becomes (Claude Code and Codex); APIErrorPrefix starts
 // the notice of a turn the model service failed. The channels read them as why a turn ended without words
 // (channel.Stopped).
@@ -402,9 +505,25 @@ const (
 	CompactSummaryNotice = "已从压缩的上下文继续"
 )
 
-// CompactNotice is the notice a /compact without instructions becomes (no user line): a /compact sent from the phone
+// CompactNotice is the notice a /compact command becomes (no user line): a /compact sent from the phone
 // is tied to it (node/echo.go).
 const CompactNotice = "压缩上下文"
+
+// What the runtime bridges write themselves (integrations/paseo, opencode, pi and antigravity), in Chinese as the node
+// writes its own lines: a failure's notice, and a runtime session's last words when its agent stopped on one
+// (RuntimeErrorLead, then the cause; RuntimeError alone when nothing was said of it); after a failed command's output,
+// its exit code (RuntimeExitHead, the code, RuntimeExitTail); a tool call cancelled before it gave anything back
+// (RuntimeCanceled); and agy's refused Auto mode falling back to Persona-side automatic approval. The hub rewrites them
+// in the reader's language (hub/transcript_text.go, assistant/fleet_text.go).
+// The bridges write them word for word: change both sides together.
+const (
+	RuntimeError                = "出错了"
+	RuntimeErrorLead            = "出错了："
+	RuntimeExitHead             = "（退出码 "
+	RuntimeExitTail             = "）"
+	RuntimeCanceled             = "（已取消）"
+	RuntimeAgyAutoRefusalNotice = "agy 拒绝了 Auto 模式，已改由 Persona 自动批准权限请求"
+)
 
 // ParseLine converts one JSONL line (1-based seq) into items, updating meta.
 func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
@@ -422,12 +541,21 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		meta.FirstUser = clipTo(meta.FirstUser, pageTextLen)
 	}
 	defer func() { meta.localInput = false }()
-	for _, it := range items {
-		if it.Role != "system" && !it.TS.IsZero() && it.TS.After(meta.LastActivity) {
-			meta.LastActivity = it.TS
+	var fingerprint string
+	for i := range items {
+		it := &items[i]
+		if (it.Kind == proto.KindText || it.Kind == proto.KindImage && it.Role == "user") && proto.PositionalItemID(it.ID) {
+			if fingerprint == "" {
+				digest := sha256.Sum256(line)
+				fingerprint = hex.EncodeToString(digest[:16])
+			}
+			it.SourceFingerprint = fingerprint
 		}
-		meta.trackActivity(it)
-		meta.trackPlan(it)
+		if !meta.Codex {
+			meta.observeActivity(*it)
+		}
+		meta.trackActivity(*it)
+		meta.trackPlan(*it)
 		if it.Wake || it.Role == "user" && !it.Queued && (it.Kind == proto.KindText || it.Kind == proto.KindImage) {
 			// A new turn's words start afresh (TurnAnswer): a photo with no caption and a command that runs the model
 			// start one too, though they do not reach ClaudeTurnStarted.
@@ -449,6 +577,7 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				meta.localTurn, meta.beforeLocal = true, [2]bool{meta.TurnOpen, meta.TurnClosed}
 			} else if !local {
 				meta.localTurn = false
+				meta.tree.turnStart = true
 				// A local command (a slash command, "! cmd") is not sent to the model: it does not end a limit.
 				meta.ClaudeTurnStarted(it.Wake)
 			}
@@ -456,6 +585,20 @@ func ParseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 	}
 	return items
+}
+
+func (m *Meta) observeActivity(it proto.Item) {
+	if it.Role != "system" && !it.TS.IsZero() && it.TS.After(m.LastActivity) {
+		m.LastActivity = it.TS
+	}
+}
+
+func (m *Meta) endTurn(seq int, at time.Time) {
+	m.TurnOpen, m.TurnClosed = false, true
+	m.turnEndedAt, m.turnEndSeq, m.turnEndLine = at, seq, m.tree.uuid
+	if m.tree.sidechain || m.Sidechain {
+		m.turnEndedAt = time.Time{}
+	}
 }
 
 // lineJSON is encoding/json's way of decoding without its check of the whole input before it decodes (its legacy
@@ -475,7 +618,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		return nil
 	}
 	meta.tree = treeLine{uuid: e.UUID, parent: e.ParentUUID, sidechain: e.IsSidechain, assistant: e.Type == "assistant",
-		system: e.Type == "system", turnEnd: e.Type == "system" && e.Subtype == "turn_duration"}
+		system: e.Type == "system", turnEnd: e.Type == "system" && e.Subtype == "turn_duration", raw: line}
 	if e.Type == "user" {
 		meta.sawUser = true
 	}
@@ -510,12 +653,27 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 	switch {
 	case e.Type == "system" && e.Subtype == "compact_boundary":
 		meta.Compactions++
+		if !e.IsSidechain {
+			// What the latest reply saw was compacted away, and the boundary's postTokens leaves out the system prompt
+			// and tools (the next reply sees about four times as much, #9207): unknown until that reply.
+			meta.ContextTokens, meta.ContextCompacted = 0, true
+			meta.ContextStats.ResetCompacted()
+		}
+	case e.Type == "system" && !e.IsSidechain && e.ContextBreakdown != nil:
+		meta.ContextStats.SetNative(e.ContextBreakdown)
 	case e.Type == "assistant" && e.Message != nil && e.Message.Usage != nil && !e.IsSidechain:
 		u := e.Message.Usage
 		// A gateway's sum of a whole turn is not a context, nor the zeros it reports on the turn's other replies
 		// (usage.go): the last real one stands.
 		if tokens := int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens); tokens > 0 && PlausibleContext(tokens, 0) {
-			meta.ContextTokens = tokens
+			meta.ContextTokens, meta.ContextCompacted = tokens, false
+			if e.ContextBreakdown != nil {
+				meta.ContextStats.SetNative(e.ContextBreakdown)
+			} else {
+				meta.ContextStats.Native = nil
+			}
+		} else if e.ContextBreakdown != nil {
+			meta.ContextStats.SetNative(e.ContextBreakdown)
 		}
 		meta.observeOutput(e.Message.ID, int(u.OutputTokens))
 	}
@@ -590,7 +748,10 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			return nil
 		}
 		var text string
-		var images []proto.Item // a message with pictures, sent while the agent worked: its prompt is blocks
+		// A message with pictures, sent while the agent worked: its prompt is blocks. Newer Claude Code puts the
+		// pictures first: the text's items count from its first block, after them, so no two items share an id.
+		var before, images []proto.Item
+		at := 0
 		if json.Unmarshal(a.Prompt, &text) != nil {
 			var blocks []block
 			if json.Unmarshal(a.Prompt, &blocks) == nil {
@@ -598,12 +759,19 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				for i, b := range blocks {
 					switch b.Type {
 					case "text":
+						if len(parts) == 0 {
+							at = i
+						}
 						parts = append(parts, b.Text)
 					case "image":
 						if img := imageOf(b); img != nil {
 							it := mk(i, "user", proto.KindImage)
 							it.Image, it.Queued = img, true
-							images = append(images, it)
+							if len(parts) == 0 {
+								before = append(before, it)
+							} else {
+								images = append(images, it)
+							}
 						}
 					}
 				}
@@ -617,14 +785,19 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		if notification {
 			return nil // other harness notifications are not user input
 		}
-		items := userText(mk, text, meta)
+		items, paseo := paseoInput(mk, at, text)
+		if !paseo {
+			items = userText(func(k int, role, kind string) proto.Item { return mk(at+k, role, kind) }, text, meta)
+		}
 		for i := range items {
-			items[i].Queued = true
+			if !paseo || items[i].Role == "user" { // a Paseo child's notice is a notice, as a background task's
+				items[i].Queued = true
+			}
 		}
 		if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
 			meta.FirstUser = items[0].Text
 		}
-		return append(items, images...) // the pictures dropped here once: the phone showed the message without them
+		return append(append(before, items...), images...) // the pictures dropped here once: the phone showed the message without them
 	case "system":
 		if strings.HasPrefix(e.Subtype, "model_refusal_") {
 			return meta.claudeModelRefusal(e.Subtype, line, mk(0, "system", proto.KindNotice))
@@ -632,8 +805,12 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		var text string
 		switch e.Subtype {
 		case "turn_duration":
-			meta.TurnOpen, meta.TurnClosed = false, true
-			meta.turnWorked = false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
+			meta.endTurn(seq, e.Timestamp)
+			meta.turnSucceeded = meta.turnWorked && meta.TurnError == ""
+			if meta.turnSucceeded {
+				meta.resetUpstreamStreak()
+			}
+			meta.turnWorked, meta.turnErrorCounted = false, false // the turn's work is done: Claude Code's own continuation after a limit opens with no prompt
 			ms, ok := recordedMilliseconds(e.DurationMS)
 			if !ok || strings.TrimSpace(e.ParentUUID) == "" {
 				return nil
@@ -707,6 +884,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 			meta.handedBack(agent, report)
 		}
 		if e.IsCompactSummary {
+			meta.ContextStats.SystemBytes += estimateWeightedBytes(rawString(e.Message.Content))
 			it := mk(0, "system", proto.KindNotice)
 			it.Text = CompactSummaryNotice
 			return []proto.Item{it}
@@ -718,14 +896,18 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		var s string
 		if raw := bytes.TrimSpace(e.Message.Content); len(raw) > 0 && raw[0] == '"' && unmarshalLine(raw, &s) == nil {
+			meta.observeUserText(s, e.IsMeta)
 			if strings.Contains(s, "<task-notification>") {
 				meta.taskFinished(s, e.Timestamp)
 			}
 			if e.IsMeta {
 				return nil
 			}
-			items := userText(mk, s, meta)
-			if strings.Contains(s, "<task-notification>") {
+			items, paseo := paseoInput(mk, 0, s)
+			if !paseo {
+				items = userText(mk, s, meta)
+			}
+			if paseo || strings.Contains(s, "<task-notification>") { // a notice that woke the agent
 				markWake(items)
 			}
 			if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
@@ -746,14 +928,18 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		for i, b := range blocks {
 			switch b.Type {
 			case "text":
+				meta.observeUserText(b.Text, e.IsMeta)
 				if strings.Contains(b.Text, "<task-notification>") {
 					meta.taskFinished(b.Text, e.Timestamp)
 				}
 				if e.IsMeta {
 					continue
 				}
-				items := userText(func(_ int, role, kind string) proto.Item { return mk(i, role, kind) }, b.Text, meta)
-				if strings.Contains(b.Text, "<task-notification>") {
+				items, paseo := paseoInput(mk, i, b.Text)
+				if !paseo {
+					items = userText(func(_ int, role, kind string) proto.Item { return mk(i, role, kind) }, b.Text, meta)
+				}
+				if paseo || strings.Contains(b.Text, "<task-notification>") {
 					markWake(items)
 				}
 				if meta.FirstUser == "" && len(items) > 0 && items[0].Kind == proto.KindText {
@@ -765,6 +951,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 					continue
 				}
 				if img := imageOf(b); img != nil {
+					meta.ContextStats.ConversationBytes += imageTokenBytesEstimate
 					it := mk(i, "user", proto.KindImage)
 					it.Image = img
 					out = append(out, it)
@@ -775,6 +962,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 					continue
 				}
 				text, imgs := toolResultContent(b.Content)
+				meta.ContextStats.ToolOutputBytes += estimateWeightedBytes(text) + int64(len(imgs))*imageTokenBytesEstimate
 				meta.backgroundStarted(b.ToolUseID, text, b.IsError, e.Timestamp)
 				it := mk(i, "user", proto.KindToolResult)
 				it.ToolUseID = b.ToolUseID
@@ -802,6 +990,9 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 		}
 		if model != "" {
 			meta.Model = model
+			if !e.IsSidechain && !meta.Updated.IsZero() {
+				meta.ModelAt = meta.Updated
+			}
 			meta.observeReplyModel(model)
 		}
 		var blocks []block
@@ -815,6 +1006,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				if strings.TrimSpace(b.Text) == "" {
 					continue
 				}
+				meta.ContextStats.ConversationBytes += estimateWeightedBytes(b.Text)
 				if t, ok := thinkingAsText(b.Text); ok {
 					if t != "" {
 						it := mk(i, "assistant", proto.KindThinking)
@@ -825,16 +1017,22 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 				}
 				it := mk(i, "assistant", proto.KindText)
 				it.Text = clip(b.Text)
-				meta.said(withoutBotmuxSentinel(b.Text), e.Timestamp)
+				it.Narration = e.Message.StopReason == "tool_use" && !e.IsAPIErrorMessage
+				meta.said(b.Text, e.Timestamp)
 				out = append(out, it)
 			case "thinking":
 				if strings.TrimSpace(b.Thinking) == "" {
 					continue
 				}
+				meta.ContextStats.ConversationBytes += estimateWeightedBytes(b.Thinking)
 				it := mk(i, "assistant", proto.KindThinking)
 				it.Text = clip(b.Thinking)
+				if claudeNarration(b.Signature) {
+					it.Kind, it.Narration = proto.KindText, true
+				}
 				out = append(out, it)
 			case "tool_use", "server_tool_use":
+				meta.ContextStats.ToolOutputBytes += int64(len(b.Name)) + estimateWeightedBytes(string(b.Input))
 				if b.Name == handbackTool {
 					// a subagent handing its report back to the session that launched it: its last words, not a step
 					if report := meta.handbackCall(b.ID, b.Input); report != "" {
@@ -868,7 +1066,7 @@ func parseLine(seq int, line []byte, meta *Meta) []proto.Item {
 
 // said notes the agent writing at ts: LastText (when t has words) and what its branch said.
 func (m *Meta) said(t string, ts time.Time) {
-	if t != "" {
+	if t = WithoutBotmuxSentinel(t); t != "" {
 		m.LastText = t
 		m.tree.said = t
 		m.turnSaid(t)

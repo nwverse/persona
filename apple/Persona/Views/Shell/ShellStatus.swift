@@ -1,7 +1,6 @@
 import BeautifulUI
 import SwiftUI
 
-#if os(iOS) || os(visionOS)
 /// The hub's link in the shell (docs/apple/shell.md「Connection status and toasts」): Waiting for Network / Connecting… / Updating…, floating just under
 /// the top bar like a toast, in the toast window (`ToastWindow`): it takes no touches and moves nothing (#413). It used
 /// to take a row of room under the status bar through the window's safe area, and folding that row made SwiftUI lay
@@ -143,6 +142,11 @@ struct ShellWindowHooks: UIViewRepresentable {
         }
     }
 }
+/// A window above the call's bar (`CallWindow`, iOS) whose content is placed for the pages' top bars, as the toasts'
+/// is (just below them): while the bar shows, it gets the bar's room as the pages under it do, so a toast never lies
+/// on a top bar the bar moved down (the dictation refusal's note lay on an Agent conversation's title).
+@MainActor protocol TakesCallBarRoom: AnyObject {}
+
 /// The shell's toasts (`AppModel.toast`) over everything in its scene, the drawer, the pages and a sheet over them, in a
 /// window of their own above the shell's: it takes no touches, so what is under a toast takes the tap (a toast over the
 /// top bar's switch took the tap meant for it, 2026-11-02), and it moves nothing (opening the status row for a toast
@@ -180,7 +184,7 @@ struct ShellWindowHooks: UIViewRepresentable {
     }
 
     /// Takes no touch but on the toast's button: every other one goes to the windows below.
-    private final class PassThrough: UIWindow {
+    private final class PassThrough: UIWindow, TakesCallBarRoom {
         let touchable = Touchable()
 
         override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -248,20 +252,15 @@ private struct ToastWindowRoot: View {
             .tint(Theme.accent)
     }
 }
-#endif
 
 /// A view in a title that says the hub's link itself (`ConnectionLabel`): while it is on screen in front, the shell's
-/// floating pill does not say it too. Outside the shell (iPad, Mac, Vision Pro) nothing.
+/// floating pill does not say it too. Outside the shell (iPad, Vision Pro) nothing.
 private struct TitleSaysLink: ViewModifier {
     @Environment(\.shell) private var shell
 
     func body(content: Content) -> some View {
-        #if os(iOS) || os(visionOS)
         content.onTabVisibility(appear: { shell?.notices.titleShowsLink(true) },
                                 disappear: { shell?.notices.titleShowsLink(false) })
-        #else
-        content
-        #endif
     }
 }
 

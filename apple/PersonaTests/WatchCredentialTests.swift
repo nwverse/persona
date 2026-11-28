@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Persona
+import PersonaWire
 
 /// What the phone gives the watch (#1185): each group's answer-only watch credential, never the phone's own in its
 /// place (that one opens everything), and which groups have none yet so the watch can ask for a sync.
@@ -131,7 +132,9 @@ import Testing
         let full = FakeHub()
         full.on("POST", "/api/v1/auth/tokens", json: #"{"id":"watch-a-new","token":"fixture-watch-a-new","role":"answer"}"#)
         #expect(try await DeviceCredentialTrade.issueWatchToken(for: try #require(issued.primary("")), api: full.client) == nil)
-        let token = try #require(try await DeviceCredentialTrade.issueWatchToken(for: a, api: full.client))
+        let token = try #require(try await DeviceCredentialTrade.issueWatchToken(for: a, api: full.client, replaces: "watch-a-prior"))
+        let body = try #require(full.sent("POST", "/api/v1/auth/tokens").first?.body)
+        #expect(try JSON.decoder.decode(JSONValue.self, from: body)["replaces"] == .string("watch-a-prior"))
         let reissued = try #require(DeviceCredentialTrade.watchRegistry(revoked, expected: a, token: token))
         #expect(reissued.primary("")?.watch?.token == "fixture-watch-a-new")
         #expect(reissued.primary("")?.watchDeviceID == "watch-a-new")

@@ -4,6 +4,7 @@ import (
 	"go/parser"
 	"go/token"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -38,5 +39,67 @@ func TestContractImportsNothing(t *testing.T) {
 				t.Errorf("%s imports %d packages: the node contract imports nothing", name, len(f.Imports))
 			}
 		}
+	}
+}
+
+// The lane table is one list per lane: no name on two, none twice, and the node_lanes_v1 capability announced with it.
+func TestLaneTable(t *testing.T) {
+	seen := map[string]string{}
+	for lane, names := range map[string][]string{"control": ControlLane, "bulk": BulkLane} {
+		for _, n := range names {
+			if n == "" {
+				t.Fatalf("%s: an empty name", lane)
+			}
+			if other, ok := seen[n]; ok {
+				t.Fatalf("%s is on %s and %s", n, other, lane)
+			}
+			seen[n] = lane
+		}
+	}
+	if !slices.Contains(Announced, NodeLanes) {
+		t.Fatalf("%s is not announced", NodeLanes)
+	}
+}
+
+func TestValidScratchID(t *testing.T) {
+	valid := []string{
+		"todo_1234567890abcdef",
+		"t1",
+		"Task-Alpha_01",
+		"0",
+		strings.Repeat("a", 96),
+	}
+	for _, id := range valid {
+		if !ValidScratchID(id) {
+			t.Errorf("ValidScratchID(%q) = false, want true", id)
+		}
+	}
+	invalid := []string{
+		"",
+		".",
+		"..",
+		"../assistant",
+		"..\\assistant",
+		"todo/sub",
+		"todo\\sub",
+		".persona-managed",
+		"-leading-dash",
+		"_leading_underscore",
+		"todo.with.dot",
+		"todo with space",
+		"todo\x00null",
+		"todo:colon",
+		strings.Repeat("a", 97),
+	}
+	for _, id := range invalid {
+		if ValidScratchID(id) {
+			t.Errorf("ValidScratchID(%q) = true, want false", id)
+		}
+	}
+}
+
+func TestScratchWorkspaceCapabilityAnnounced(t *testing.T) {
+	if !slices.Contains(Announced, ScratchWorkspace) {
+		t.Fatalf("Announced lacks %q", ScratchWorkspace)
 	}
 }

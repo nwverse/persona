@@ -1,11 +1,13 @@
+import { conversationDeleted, conversationDeletionRevision, conversationDeletionScope } from "./conversation-deleted";
+import { useStore } from "./store";
 // Finding an assistant chat by what was said in it (#6283, docs/protocol/protocol.md "Assistant chat search (#6282)"):
 // the manager's GET /api/v1/assistant/search, asked while ⌘K or "All chats" is searched, 200 ms after the last key,
 // each new query cancelling the one before. Local matches (titles, last messages) show at once and the server's merge
 // in (super rule 5); without the hub's assistant_search feature, or on a 404 from the current assistant's manager (an
 // older build), there is nothing to merge and the local filter is the whole answer, as before.
-import { useEffect, useState } from "react";
-import { api, ApiError, enc, isAbort } from "./api";
-import { chosenManager } from "./manager-choice";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { api, ApiError, credentialOwner, enc, isAbort, subscribeCredentialOwner } from "./api";
+import { shownManager, useShownManager } from "./manager-choice";
 
 export const ASSISTANT_SEARCH_FEATURE = "assistant_search";
 
@@ -44,17 +46,20 @@ export const SEARCH_SETTLE_MS = 200;
 
 /** The managers that answered 404 (a build from before the search), by the manager the request named. */
 const unsupported = new Set<string>();
+const searchScope = () => JSON.stringify([credentialOwner(), conversationDeletionScope(), shownManager()]);
+const liveAnswer = (answer: AssistantSearchAnswer): AssistantSearchAnswer => ({ ...answer, results: answer.results.filter((r) => !conversationDeleted(r.machine_id, r.session_id)) });
 
 /** Asks the current assistant's manager; null when it cannot (no such route). */
 export async function searchAssistantChats(query: string, signal?: AbortSignal): Promise<AssistantSearchAnswer | null> {
-  const key = chosenManager() ?? "";
+  const key = searchScope();
   if (unsupported.has(key)) return null;
   try {
     const a = await api<AssistantSearchAnswer>(`/assistant/search?q=${enc(query)}&limit=30`, { signal });
-    return { results: a?.results ?? [], partial: Boolean(a?.partial), indexed: a?.indexed };
+    if (signal?.aborted || key !== searchScope()) return null;
+    return liveAnswer({ results: a?.results ?? [], partial: Boolean(a?.partial), indexed: a?.indexed });
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
-      unsupported.add(key);
+      if (!signal?.aborted && key === searchScope()) unsupported.add(key);
       return null;
     }
     throw e;
@@ -64,23 +69,28 @@ export async function searchAssistantChats(query: string, signal?: AbortSignal):
 /** The server's answer for `query` (trimmed) while `on`: undefined until it comes, and while nothing is typed. */
 export function useAssistantSearch(query: string, on: boolean): { answer?: AssistantSearchAnswer; searching: boolean } {
   const q = query.trim();
-  const [state, setState] = useState<{ q: string; answer?: AssistantSearchAnswer }>({ q: "" });
+  const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner, credentialOwner);
+  const manager = useShownManager();
+  const epoch = useStore(conversationDeletionScope);
+  const revision = useStore(conversationDeletionRevision);
+  const scope = JSON.stringify([owner, epoch, manager]);
+  const [state, setState] = useState<{ q: string; scope: string; answer?: AssistantSearchAnswer }>({ q: "", scope });
   useEffect(() => {
+    setState({ q: "", scope });
     if (!on || !q) return;
     const ctrl = new AbortController();
     const id = window.setTimeout(() => {
       searchAssistantChats(q, ctrl.signal).then(
-        (answer) => setState({ q, answer: answer ?? undefined }),
-        (e) => isAbort(e) || setState({ q }), // a failed search leaves the local matches as they are
+        (answer) => { if (!ctrl.signal.aborted && scope === searchScope()) setState({ q, scope, answer: answer ?? undefined }); },
+        (e) => { if (!isAbort(e) && !ctrl.signal.aborted && scope === searchScope()) setState({ q, scope }); },
       );
     }, SEARCH_SETTLE_MS);
-    return () => {
-      clearTimeout(id);
-      ctrl.abort();
-    };
-  }, [q, on]);
-  const current = on && q && state.q === q;
-  return { answer: current ? state.answer : undefined, searching: Boolean(on && q && state.q !== q) };
+    return () => { clearTimeout(id); ctrl.abort(); };
+  }, [q, on, scope]);
+  useEffect(() => { setState((s) => s.answer ? { ...s, answer: liveAnswer(s.answer) } : s); }, [revision]);
+  const current = on && q && state.q === q && state.scope === scope;
+  const answer = useMemo(() => current && state.answer ? liveAnswer(state.answer) : undefined, [current, state.answer, revision]);
+  return { answer, searching: Boolean(on && q && (!current || state.q !== q)) };
 }
 
 /** Characters a found chat's line keeps before its first match (#7045). The manager's snippet starts up to 40 before

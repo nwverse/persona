@@ -6,12 +6,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
-import { getFeedState, loadFeed, type FeedItem, type TaskPlan } from "../../lib/feed";
+import { getFeedState, loadFeed, setRoute, type FeedItem, type TaskPlan } from "../../lib/feed";
 import { clock } from "../../lib/format";
 import { setAgentOpenMode } from "../../lib/agent-open";
 import { closePanel, getPanel } from "../../lib/panel";
 import { decisionLaterKey } from "../../lib/assistant-entries";
-import { putTodo, refresh, refreshTodos, reset } from "../../lib/store";
+import { storedValue } from "../../lib/compatibility";
+import { getQuotes, parseQuote, setQuotes, splitQuote, storeDraft, withQuoteBlock } from "../../lib/drafts";
+import { getState, putTodo, refresh, refreshTodos, reset } from "../../lib/store";
 import type { Todo, TodoAsk } from "../../lib/todos";
 import { AssistantActionBar } from "./Tasks";
 import * as atoms from "../../ui/atoms";
@@ -57,6 +59,9 @@ let turnError: boolean;
 let needsInput: boolean;
 let postGate: Promise<void> | undefined;
 let listStatus: number;
+let assistantStatus: number;
+let assistantMain: string;
+let refusal: Record<string, unknown> | undefined; // a POST's error body other than the offline one
 
 async function mount() {
   todo = { id: "decision-task", title: "Demo release", origin: conversation, plan_id: plan.id, created_at: at, updated_at: at,
@@ -66,7 +71,7 @@ async function mount() {
     if (init?.method === "POST") {
       posts.push({ path, body: JSON.parse(String(init.body)) });
       if (postGate) await postGate;
-      if (status !== 200) return new Response(JSON.stringify({ error: "The computer is offline" }), { status, headers: { "Content-Type": "application/json" } });
+      if (status !== 200) return new Response(JSON.stringify(refusal ?? { error: "The computer is offline" }), { status, headers: { "Content-Type": "application/json" } });
       if (path.endsWith("/decision-dismiss")) {
         todo = { ...todo, decision_review: { review_at: at, dismissal_id: "dismiss-demo" } };
         return new Response(JSON.stringify(todo.decision_review), { headers: { "Content-Type": "application/json" } });
@@ -75,11 +80,13 @@ async function mount() {
         todo = { ...todo, decision_review: { review_at: at } };
         return new Response(JSON.stringify(todo.decision_review), { headers: { "Content-Type": "application/json" } });
       }
-      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(refusal ?? { ok: true }), { headers: { "Content-Type": "application/json" } });
     }
     if (path.includes("/todos") && listStatus !== 200) return new Response("{}", { status: listStatus });
+    if (path.endsWith("/assistant") && assistantStatus !== 200) return new Response("{}", { status: assistantStatus });
     const body = path.includes("/feed") ? { items: feed, plans: { [plan.id]: plan }, task_cards: [{ id: `plan:${plan.id}:0`, plan_id: plan.id, index: 0, todo_id: todo.id, at, updated_at: at, state: "accepted" }] }
       : path.includes("/todos") ? { todos: [todo] }
+      : path.endsWith("/assistant") ? { machine_id: "new-chat-node", main_machine_id: "main-node", main: assistantMain, conversations: [] }
       : path.includes("/sessions") ? { sessions: [{ machine_id: "demo", session_id: "worker", title: "Demo agent", state: needsInput ? "needs_you" : "idle", status: "idle", updated_at: at, ...(turnError ? { turn_error: "Synthetic transient error", turn_error_kind: "transient" } : {}) }] } : {};
     return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
   }));
@@ -107,6 +114,7 @@ async function mount() {
 }
 
 beforeEach(() => {
+  setRoute(conversation, null);
   ask = decision;
   posts = [];
   status = 200;
@@ -114,9 +122,16 @@ beforeEach(() => {
   needsInput = false;
   postGate = undefined;
   listStatus = 200;
+  assistantStatus = 200;
+  assistantMain = "main-chat";
+  refusal = undefined;
 });
 afterEach(() => {
   act(() => root.unmount());
+  setRoute("main-chat", null);
+  setQuotes("main-node/main-chat", []);
+  setQuotes("persona-new", []);
+  storeDraft("main-node/main-chat", "");
   host.remove();
   history.replaceState(null, "", "/");
   setAgentOpenMode("panel");
@@ -136,6 +151,77 @@ const openMenu = () => act(() => row().querySelector<HTMLButtonElement>(`button[
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
 describe("a decision in the Needs you tray", () => {
+  it("opens the existing main composer with a decision quote and clears an earlier task reply route", async () => {
+    await mount();
+    const key = "main-node/main-chat";
+    const question = decision.recommend!; // even words equal to an option can be discussed there
+    storeDraft(key, question);
+    act(() => setRoute("main-chat", todo.id, at));
+    const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.ask_in_main_chat"));
+    expect(open).toBeDefined();
+    assistantStatus = 503;
+    await act(async () => open!.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(getQuotes(key).list).toHaveLength(0);
+    expect(getFeedState().routes["main-chat"]).toEqual({ todoId: todo.id, askedAt: at });
+    expect(storedValue(`draft:${key}`)).toBe(question);
+    assistantStatus = 200;
+    await act(async () => { open!.click(); open!.click(); });
+    expect(posts).toHaveLength(0); // attaching a quote leaves the send to the owner
+    expect(opened()).toBe("/persona/main-chat");
+    expect(getFeedState().routes["main-chat"]).toBeUndefined();
+    expect(getQuotes(key).list).toHaveLength(1);
+    expect(storedValue(`draft:${key}`)).toBe(question);
+    const split = splitQuote(withQuoteBlock(getQuotes(key).list, question))!;
+    const quoted = parseQuote(split.quote);
+    expect(split.rest).toBe(question);
+    expect(quoted.task).toEqual({ title: todo.title, id: todo.id });
+    expect(quoted.text).toContain(decision.question);
+    for (const option of decision.options!) {
+      expect(quoted.text).toContain(`${option.label}: ${option.leads_to}`);
+    }
+    expect(quoted.text).toContain(t("assistant-brief.recommend", { option: question }));
+    expect(quoted.text).toContain(t("assistant-decisionrow.ask_discussion_context"));
+    expect(getState().todos.find((value) => value.id === todo.id)?.ask).toEqual(decision);
+    expect(row()).toBeNull(); // the discussion has the full chat viewport
+    act(() => host.querySelector<HTMLButtonElement>('[data-tray-entry="needs"]')!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[data-needs-row="task:decision-task"]')?.click());
+    await vi.waitFor(async () => {
+      await act(async () => {});
+      expect(row()?.querySelector("[data-decision-row]")).toBeTruthy();
+    });
+    expect(optionButtons().every((button) => !button.disabled)).toBe(true);
+  });
+
+  it("attaches the quote to the main starter when the current assistant has no main chat yet", async () => {
+    assistantMain = "";
+    await mount();
+    const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.ask_in_main_chat"))!;
+    await act(async () => open.click());
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(opened()).toBe("/");
+    expect(getQuotes("persona-new").list[0]?.task?.id).toBe(todo.id);
+    expect(posts).toHaveLength(0);
+  });
+
+  it("opens a legacy manual-resume option on its terminal without answering the decision", async () => {
+    ask = { ...decision, terminal_option: decision.options![0].label, resume_terminal: { machine_id: "demo", session_id: "worker" } };
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(opened()).toMatch(/\/s\/demo\/worker\b.*view=term/);
+    expect(posts).toHaveLength(0);
+  });
+
+  it("offers a separate terminal link alongside a replacement decision", async () => {
+    ask = { ...decision, resume_terminal: { machine_id: "demo", session_id: "worker" } };
+    await mount();
+    const open = [...row().querySelectorAll("button")].find((button) => button.textContent === t("assistant-decisionrow.open_terminal"))!;
+    act(() => open.click());
+    expect(opened()).toMatch(/\/s\/demo\/worker\b.*view=term/);
+    expect(posts).toHaveLength(0);
+  });
+
   it("shows the question, the background, what each option leads to and the default, with the recommended option first", async () => {
     await mount();
     expect(row().querySelector("[data-decision-row]")).not.toBeNull();
@@ -192,6 +278,15 @@ describe("a decision in the Needs you tray", () => {
     expect(optionButtons()).toEqual([]);
   });
 
+  it("records the decision when the hub says no Agent received it", async () => {
+    refusal = { delivered: "none", ok: true };
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-brief.recorded_not_delivered"));
+    expect(optionButtons()).toEqual([]);
+  });
+
   it("posts a fixed response from the menu", async () => {
     await mount();
     openMenu();
@@ -215,23 +310,77 @@ describe("a decision in the Needs you tray", () => {
     expect(row().querySelector("[data-decision-done]")!.textContent).toBe(t("assistant-brief.handled"));
   });
 
-  it("opens the task from Other…", async () => {
+  // A dialog in the Agent's terminal kept the answer from it (#7343): 423 dialog_open, which is not "handled". The row
+  // keeps its buttons and says so itself, with the dialog's first line and the way to that terminal; while the hub
+  // answered it 409, the row read it as an answered round and showed nothing, so the press seemed to do nothing.
+  it("says a dialog in the Agent's terminal blocks the answer, and opens that terminal", async () => {
+    setAgentOpenMode("page");
+    status = 423;
+    refusal = { code: "dialog_open", delivered: "none", retryable: false, error: "a dialog is open", dialog: "Approaching rate limits", machine_id: "demo", session_id: "worker" };
+    const toast = vi.spyOn(atoms, "toast");
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(posts).toHaveLength(1);
+    expect(row().querySelector("[data-decision-done]")).toBeNull();
+    const blocked = row().querySelector<HTMLElement>("[data-decision-blocked]")!;
+    expect(blocked.textContent).toContain(t("assistant-decisionrow.dialog_open", { dialog: "Approaching rate limits" }));
+    expect(blocked.textContent).toContain("Approaching rate limits");
+    expect(toast).not.toHaveBeenCalled();
+    expect(optionButtons()[0].hasAttribute("disabled")).toBe(false);
+    const open = [...blocked.querySelectorAll("button")].find((b) => b.textContent === t("assistant-decisionrow.open_terminal"))!;
+    act(() => open.click());
+    expect(opened()).toMatch(/\/s\/demo\/worker\b.*view=term/);
+    // pressed again once the dialog is gone: the notice goes and the answer is taken
+    status = 200;
+    act(() => optionButtons()[0].click());
+    await flush();
+    expect(row().querySelector("[data-decision-blocked]")).toBeNull();
+    expect(row().querySelector("[data-decision-done]")).not.toBeNull();
+    toast.mockRestore();
+  });
+
+  // A hub that answered the refusal 409 (#7350 before 423) is not taken for an answered round either: its code says why.
+  it("says a dialog blocks it without its line or a terminal to open when the hub did not say them", async () => {
+    status = 409;
+    refusal = { code: "dialog_open", delivered: "none", error: "a dialog is open" };
+    await mount();
+    act(() => optionButtons()[0].click());
+    await flush();
+    const blocked = row().querySelector<HTMLElement>("[data-decision-blocked]")!;
+    expect(blocked.textContent).toBe(t("assistant-decisionrow.dialog_open_unnamed"));
+    expect(blocked.querySelector("button")).toBeNull();
+    expect(row().querySelector("[data-decision-done]")).toBeNull();
+  });
+
+  it("opens the originating conversation with this decision routed to its composer from Other…", async () => {
     await mount();
     const other = [...row().querySelectorAll("button")].find((b) => b.textContent === t("assistant-decisionrow.another"))!;
     act(() => other.click());
-    // in the side panel, the default (#5424)
-    expect(getPanel()).toMatchObject({ kind: "task", todo: "decision-task" });
-    expect(opened()).toBe("/");
+    expect(opened()).toBe("/persona/decision-demo");
+    expect(getFeedState().routes[conversation]).toEqual({ todoId: "decision-task", askedAt: at });
+    expect(getPanel()).toBeNull();
     expect(posts).toEqual([]);
   });
 
-  it("opens the task's Agent page from Other…, set to Full page (#5096)", async () => {
+  it("opens the free-text answer rather than the Agent page from Other…, set to Full page (#5096)", async () => {
     setAgentOpenMode("page");
     await mount();
     const other = [...row().querySelectorAll("button")].find((b) => b.textContent === t("assistant-decisionrow.another"))!;
     act(() => other.click());
     expect(getPanel()).toBeNull();
-    expect(opened()).toBe("/s/demo/worker");
+    expect(opened()).toBe("/persona/decision-demo");
+    expect(getFeedState().routes[conversation]).toEqual({ todoId: "decision-task", askedAt: at });
+  });
+
+  it("keeps the task-opening fallback when a decision has no originating conversation", async () => {
+    await mount();
+    await act(async () => putTodo({ ...todo, origin: undefined }));
+    const other = [...row().querySelectorAll("button")].find((b) => b.textContent === t("assistant-decisionrow.another"))!;
+    act(() => other.click());
+    expect(getPanel()).toMatchObject({ kind: "task", todo: "decision-task" });
+    expect(opened()).toBe("/");
+    expect(getFeedState().routes[conversation]).toBeUndefined();
   });
 
   it("says it went back to Persona while a decision answered with a fixed response still waits", async () => {
@@ -245,7 +394,9 @@ describe("a decision in the Needs you tray", () => {
   it("defers only this decision round without writing or completing the task", async () => {
     await mount();
     const actions = row().querySelector("[data-decision-actions]")!;
-    expect([...actions.querySelectorAll("button")].map((b) => b.textContent)).toEqual([t("assistant-tasks.later"), t("assistant-tasks.dismiss_draft")]);
+    expect([...actions.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+      t("assistant-task-actions.later"), t("assistant-task-actions.dismiss_draft"), t("assistant-decisionrow.ask_in_main_chat"),
+    ]);
     act(() => actions.querySelector<HTMLButtonElement>("button")!.click());
     expect(row()).toBeNull();
     expect(posts).toEqual([]);
@@ -393,5 +544,49 @@ describe("a decision in the Needs you tray", () => {
     expect(row().querySelector('[data-brief-row="accept"]')).not.toBeNull();
     expect(row().textContent).toContain(t("assistant-brief.take"));
     expect(row().querySelector("[data-decision-option]")).toBeNull();
+  });
+
+  it.each([
+    { name: "GitHub PR", url: "https://github.com/nwverse/persona/pull/14659", label: "PR #14659" },
+    { name: "GitLab MR", url: "https://gitlab.example.com/team/app/-/merge_requests/1468", label: "MR !1468" },
+    { name: "GitHub Issue", url: "https://github.com/nwverse/persona/issues/14659", label: "Issue #14659" },
+    { name: "generic external URL", url: "https://docs.example.com/specs/rollout", label: t("assistant-decisionrow.open_link_host", { host: "docs.example.com" }) },
+  ])("renders a concise external evidence link for $name", async ({ url, label }) => {
+    ask = { ...decision, link: url };
+    await mount();
+    const link = row().querySelector<HTMLAnchorElement>('[data-decision-link="external"]')!;
+    expect(link).not.toBeNull();
+    expect(link.href).toBe(url);
+    expect(link.target).toBe("_blank");
+    expect(link.rel).toBe("noopener noreferrer");
+    expect(link.title).toBe(url);
+    expect(link.textContent).toBe(label);
+    expect(link.getAttribute("aria-label")).toBe(t("assistant-decisionrow.open_link_aria", { label }));
+  });
+
+  it("navigates safely in-app for a same-origin Persona link without answering the decision", async () => {
+    const internal = `${location.origin}/s/demo/worker?view=chat`;
+    ask = { ...decision, link: internal };
+    await mount();
+    const link = row().querySelector<HTMLAnchorElement>('[data-decision-link="internal"]')!;
+    expect(link).not.toBeNull();
+    expect(link.target).toBe("");
+    expect(link.rel).toBe("");
+    expect(link.textContent).toBe(t("assistant-decisionrow.open_link"));
+    act(() => link.click());
+    expect(opened()).toBe("/s/demo/worker?view=chat");
+    expect(posts).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "same-origin self-link", url: `${location.origin}/todos/decision-task` },
+    { name: "self-link with trailing slash", url: "https://hub.example.com/todos/decision-task/" },
+    { name: "javascript scheme", url: "javascript:alert(1)" },
+    { name: "data scheme", url: "data:text/html,hi" },
+    { name: "non-URL text", url: "not-a-valid-url" },
+  ])("omits invalid or redundant self-link: $name", async ({ url }) => {
+    ask = { ...decision, link: url };
+    await mount();
+    expect(row().querySelector("[data-decision-link]")).toBeNull();
   });
 });

@@ -27,6 +27,18 @@ describe("launcher quota", () => {
     expect(quotaUsage({ label: "今日", requests: 1, tokens: 2 })).toBe("1 次 · 2 token");
   });
 
+  it("moves up a unit where rounding reaches the next one (#9913)", () => {
+    // the unit follows the number as it is shown, as formatTokens does (999,500 → 1M, not 1000K)
+    expect(quotaCount(99_999_499)).toBe("9999.9 万");
+    expect(quotaCount(99_999_500)).toBe("1 亿");
+    expect(quotaCount(99_999_999)).toBe("1 亿");
+    expect(quotaCount(1e8)).toBe("1 亿");
+    expect(quotaCount(-99_999_999)).toBe("-1 亿");
+    expect(quotaCount(9_999.4)).toBe("9999");
+    expect(quotaCount(9_999.5)).toBe("1 万");
+    expect(quotaAmount({ label: "每月", used: 99_999_800, limit: 1e8, unit: "tokens" })).toBe("1 亿 / 1 亿 token");
+  });
+
   it("selects the tightest weekly window for a provider's rail bar, and nothing when it is unknown", () => {
     const answer = { quota: { gateway: "g", budget: [{ label: "每周预算", used_ratio: 0.62 }], pools: [
       { name: "a", windows: [{ label: "5 小时", used_ratio: 0.99 }, { label: "每周", used_ratio: 0.77, resets_at: "2099-01-01T00:00:00Z" }] },
@@ -64,7 +76,7 @@ describe("launcher quota", () => {
     expect(quotaUnlimited({ gateway: "g" })).toBe(true);
     expect(quotaUnlimited({ gateway: "g", note: "n" })).toBe(false);
     const footer = quotaFooter({ machine: "m1", checked_at: "t", quota: { gateway: "g", key_name: "k" } }, () => "示例电脑", () => "刚刚");
-    expect(footer).toBe("网关上的 Key 名：k；由 示例电脑 读取，Key 不离开那台电脑；刚刚读的，一分钟内再打开用这次的。");
+    expect(footer).toBe("网关 Key 名称：k；由 示例电脑 读取，Key 始终保留在该电脑本地；刚刚读取，1 分钟内再次打开将沿用此结果。");
     expect(quotaFooter({}, (x) => x, () => "")).toBe("");
   });
 });

@@ -33,21 +33,34 @@ func (d *DB) PutInboxItems(ctx context.Context, rows []InboxRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	// A bare pgx.Batch is only a pipeline of autocommit statements, so a connection failure midway can leave some
-	// rows stored; the explicit transaction makes the all-or-nothing contract real.
-	tx, err := d.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
+	return d.Transaction(ctx, func(tx pgx.Tx) error {
+		return WriteInboxItems(ctx, tx, rows)
+	})
+}
+
+// WriteInboxItems lets the Inbox commit source receipts in the same transaction as its rows.
+func WriteInboxItems(ctx context.Context, tx pgx.Tx, rows []InboxRow) error {
+	var batch pgx.Batch
+	for _, row := range rows {
+		batch.Queue(putInboxItemSQL, row.ID, row.Data, row.UpdatedAt, row.DoneAt)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
-	var b pgx.Batch
-	for _, r := range rows {
-		b.Queue(putInboxItemSQL, r.ID, r.Data, r.UpdatedAt, r.DoneAt)
+	return tx.SendBatch(ctx, &batch).Close()
+}
+
+// PutConversationInboxItems commits an assistant post only while its source
+// conversation is available. The ledger's shared lock and the Inbox write use
+// the same transaction and connection, including across overlapping managers.
+// Previously committed derived rows are retained when their source is deleted.
+func (d *DB) PutConversationInboxItems(ctx context.Context, machine, session string, rows []InboxRow) error {
+	if len(rows) == 0 {
+		return nil
 	}
-	if err := tx.SendBatch(ctx, &b).Close(); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		if err := conversationAvailableTx(ctx, tx, machine, session); err != nil {
+			return err
+		}
+		return WriteInboxItems(ctx, tx, rows)
+	})
 }
 
 // deleteInboxSourceSQL finds a source's rows through inbox_items_source: source is the item's, kept by Postgres (0471),
@@ -91,6 +104,17 @@ func (d *DB) InboxItems(ctx context.Context, doneSince time.Time, each func(raw 
 		}
 	}
 	return rows.Err()
+}
+
+// StoredInboxSources lists the distinct source ids of every retained item, open and completed. The source index lets
+// Postgres answer without decoding item JSON or returning every history row; the assistant turns the ids into its
+// typed source-presence projection.
+func (d *DB) StoredInboxSources(ctx context.Context) ([]string, error) {
+	rows, err := d.pool.Query(ctx, `SELECT DISTINCT source FROM inbox_items WHERE source IS NOT NULL ORDER BY source`)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 
 // DoneInboxItemsByID returns the done items stored under ids (the history, whether the manager holds them or not); an

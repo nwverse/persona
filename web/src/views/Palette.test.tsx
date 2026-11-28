@@ -1,9 +1,13 @@
+import { t } from "../i18n";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { closePalette, openPalette, registerContextCommands, setPaletteQuery } from "../lib/palette";
 import { registerShortcut } from "../lib/shortcuts";
-import { Palette, placeWords } from "./Palette";
+import { Palette } from "./Palette";
+import { placeWords } from "./palette/PlaceWords";
 import { initI18n } from "../i18n";
+import { getState } from "../lib/store";
+import type { Session } from "../lib/types";
 import { placeHits } from "../lib/palette";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { ShortcutSettings } from "./settings/ShortcutSettings";
@@ -42,7 +46,7 @@ describe("the palette's command mode", () => {
   it("is the same search as ever without a `>`", () => {
     const html = render("");
     expect(html).toContain('aria-label="搜索会话"');
-    expect(html).toContain("搜索会话、收件箱、终端、目录、空间、机器、页面…");
+    expect(html).toContain("搜索会话、收件箱、标签页、文件夹、空间、机器、页面…");
     expect(html).not.toContain("命令面板");
   });
   it("hints at `>` in the search's footer", () => {
@@ -56,7 +60,7 @@ describe("the palette's command mode", () => {
     expect(html).toContain("输入命令…");
     expect(html).toContain("显示 / 隐藏右侧面板");
     expect(html).toMatch(/打开设置<\/span>.*?<kbd[^>]*>Ctrl<\/kbd><kbd[^>]*>,<\/kbd>/);
-    expect(html).toMatch(/折叠侧边栏的全部分组<\/span>.*?>Ctrl<\/kbd>.*?>Alt<\/kbd>.*?>Shift<\/kbd>.*?>↑<\/kbd>/);
+    expect(html).toMatch(/折叠侧边栏全部分组<\/span>.*?>Ctrl<\/kbd>.*?>Alt<\/kbd>.*?>Shift<\/kbd>.*?>↑<\/kbd>/);
     for (const heading of ["全局", "会话页", "侧边栏"]) expect(html).toContain(`uppercase">${heading}</div>`);
     // a command nothing handles here is not listed
     expect(html).not.toContain("终端 ⇄ 对话");
@@ -74,10 +78,17 @@ describe("the palette's command mode", () => {
     expect(html.indexOf("重命名…")).toBeLessThan(html.indexOf("新建 Agent"));
     expect(html).toContain('uppercase">节点</div>');
   });
+  it("draws a heading that holds a name as written: the capitals of a label would rewrite it", () => {
+    // the node palette's "Space · weather" read "SPACE · WEATHER", a title's "Astro" "ASTRO"
+    cleanups.push(registerContextCommands(() => [{ id: "node:close", section: "空间 · weather", sectionAsWritten: true, title: "关闭", run: () => {} }]));
+    const html = render(">");
+    expect(html).toContain('text-ink-3">空间 · weather</div>');
+    expect(html).not.toContain('uppercase">空间 · weather</div>');
+  });
   it("says so when no command matches, and how to get back to the search", () => {
     const html = render(">zzzz");
     expect(html).toContain("没有匹配的命令");
-    expect(html).toContain("删掉「&gt;」");
+    expect(html).toContain("删除「&gt;」");
   });
 });
 
@@ -92,8 +103,8 @@ describe("设置 › 快捷键", () => {
     const html = renderToStaticMarkup(<ShortcutSettings />);
     expect(html).toContain("命令面板");
     expect(html).toContain("全部恢复默认");
-    expect(html).toContain("跳转到会话或终端窗格");
-    expect(html).toContain("切到第 1–9 台电脑");
+    expect(html).toContain("前往会话或标签页");
+    expect(html).toContain("切换到第 1–9 台电脑");
     // nothing is rebound: no per-row "Reset to default"
     expect(html).not.toContain("的默认快捷键");
   });
@@ -104,12 +115,25 @@ describe("the palette's 前往 (the Mac's quick open)", () => {
     const html = render("设置");
     expect(html).toContain("前往");
     expect(html).toContain("设置");
-    expect(render("cpu")).toContain("机器");
-    expect(render("todo")).toContain("待办");
+    // Alias matching loads on the first typed query; mounted coverage lives in Palette.runtime-search.test.tsx.
+    const places = ["machines", "todos"].map((key) => ({ key, title: key, words: placeWords(key), icon: "list" as const, to: { name: "home" } as const }));
+    expect(placeHits(places, "cpu").map((hit) => hit.key)).toEqual(["p:machines"]);
+    expect(placeHits(places, "todo").map((hit) => hit.key)).toEqual(["p:todos"]);
   });
 });
 
 describe("a page's words", () => {
+  it("do not take \"dashboard\" for Overview: Dashboards is a place of its own (#15017)", async () => {
+    await initI18n("en");
+    try {
+      const overview = { key: "home", title: "Overview", icon: "list" as const, to: { name: "home" } as const, words: placeWords("home") };
+      const dashboards = { key: "p:-pages/index", title: "Dashboards", icon: "list" as const, to: { name: "home" } as const };
+      expect(placeHits([overview, dashboards], "dashboard").map((h) => h.key)).toEqual(["p:p:-pages/index"]);
+      expect(placeHits([overview, dashboards], "overview").map((h) => h.key)).toEqual(["p:home"]);
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
   it("answer to the Chinese names in an English UI too (the Mac's quick open)", async () => {
     await initI18n("en");
     try {
@@ -120,6 +144,44 @@ describe("a page's words", () => {
       expect(placeHits(places, "内存").map((h) => h.key)).toEqual(["p:machines"]);
     } finally {
       await initI18n("zh-Hans");
+    }
+  });
+});
+
+// A Persona chat's line under its title said "Persona · ~/.persona/assistant", the same folder for every chat and an
+// engineering path besides: it says what was said last, as the chats list does.
+describe("a Persona chat in the search", () => {
+  it("calls the main conversation Main chat and uses its home symbol", () => {
+    const kept = getState().assistant;
+    Object.assign(getState(), { assistant: { machine_id: "m1", main: "main", conversations: [{ machine_id: "m1", session_id: "main", title: "Assistant name", assistant: true, cwd: "/", status: "idle" }] } });
+    try {
+      const html = render("");
+      expect(html).toContain(t("sidebar.main_chat"));
+      expect(html).not.toContain(">Assistant name</span>");
+      expect(html).toContain('M3 10.5 12 3l9 7.5');
+      expect(render(t("sidebar.main_chat"))).toContain(t("sidebar.main_chat"));
+    } finally { Object.assign(getState(), { assistant: kept }); }
+  });
+  it("says what was said last, without the assistant's folder", () => {
+    const kept = getState().assistant;
+    Object.assign(getState(), {
+      assistant: {
+        machine_id: "m1",
+        main: "p0",
+        conversations: [
+          { machine_id: "m1", session_id: "p1", title: "今天要处理的事", assistant: true, cwd: "/Users/me/.persona/assistant", last_text: "**发布说明**我来整理，先列出改动。", updated_at: "2026-11-10T09:00:00Z" },
+          { machine_id: "m1", session_id: "p2", title: "群里的发布计划", assistant: true, cwd: "/Users/me/.persona/assistant", updated_at: "2026-11-10T08:00:00Z" },
+        ] as unknown as Session[],
+      },
+    });
+    try {
+      const html = render("");
+      expect(html).not.toContain(".persona/assistant");
+      expect(html).toContain("发布说明我来整理，先列出改动。");
+      // nothing said yet: just whose chat it is
+      expect(html).toMatch(/群里的发布计划<\/span>(?:(?!<\/button>).)*>Persona<\/span>/s);
+    } finally {
+      Object.assign(getState(), { assistant: kept });
     }
   });
 });

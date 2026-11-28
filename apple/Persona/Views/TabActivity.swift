@@ -210,34 +210,73 @@ extension View {
     /// are a crash (`NSToolbar … already contains an item with the identifier com.apple.SwiftUI.search`). On the Mac the
     /// field hangs off a view in the page's background, so the page's own views do not see `isSearching` /
     /// `dismissSearch`; use `isPresented` instead.
-    func pageSearchable(text: Binding<String>, isPresented: Binding<Bool>? = nil, placement: SearchFieldPlacement = .automatic,
+    func pageSearchable(text: Binding<String>, isPresented: Binding<Bool>? = nil, placement: SearchFieldPlacement? = nil,
                         prompt: String) -> some View {
         modifier(PageSearchable(text: text, isPresented: isPresented, placement: placement, prompt: prompt))
+    }
+
+    /// The same with search tokens before the text, which the user can delete as in any search field (the Agents
+    /// list's scope, #7443).
+    func pageSearchable<Token: Identifiable, TokenLabel: View>(text: Binding<String>, tokens: Binding<[Token]>,
+                                                                isPresented: Binding<Bool>, placement: SearchFieldPlacement = .automatic,
+                                                                prompt: String,
+                                                                @ViewBuilder token: @escaping (Token) -> TokenLabel) -> some View {
+        modifier(PageSearchableTokens(text: text, tokens: tokens, isPresented: isPresented, placement: placement,
+                                      prompt: prompt, token: token))
+    }
+}
+
+private struct PageSearchableTokens<Token: Identifiable, TokenLabel: View>: ViewModifier {
+    let text: Binding<String>
+    let tokens: Binding<[Token]>
+    let isPresented: Binding<Bool>
+    let placement: SearchFieldPlacement
+    let prompt: String
+    let token: (Token) -> TokenLabel
+
+    func body(content: Content) -> some View {
+        field(content)
+    }
+
+    private func field<V: View>(_ v: V) -> some View {
+        v.searchable(text: text, tokens: tokens, isPresented: isPresented, placement: placement, prompt: Text(prompt), token: token)
     }
 }
 
 private struct PageSearchable: ViewModifier {
     let text: Binding<String>
     let isPresented: Binding<Bool>?
-    let placement: SearchFieldPlacement
+    /// nil: the system's (`resolvedPlacement`).
+    let placement: SearchFieldPlacement?
     let prompt: String
     @Environment(\.tabIsActive) private var active
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var widthClass
+    #endif
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        // On a view of its own beside the content, so the content keeps its identity when the field comes and goes.
-        content.background { if active { field(Color.clear) } }
-        #else
         field(content)
-        #endif
     }
 
     @ViewBuilder private func field<V: View>(_ v: V) -> some View {
         if let isPresented {
-            v.searchable(text: text, isPresented: isPresented, placement: placement, prompt: Text(prompt))
+            v.searchable(text: text, isPresented: isPresented, placement: resolvedPlacement, prompt: Text(prompt))
         } else {
-            v.searchable(text: text, placement: placement, prompt: Text(prompt))
+            v.searchable(text: text, placement: resolvedPlacement, prompt: Text(prompt))
         }
+    }
+
+    /// iPadOS 18 puts an automatic field in a regular-width bar beside the title, and a wide one squeezed Inbox's title
+    /// to "In…" (#6730). There, before iOS 26, a page that names no placement gets the field under its title; iOS 26
+    /// folds it into a button, and compact widths keep the system's.
+    private var resolvedPlacement: SearchFieldPlacement {
+        if let placement { return placement }
+        #if os(iOS)
+        if #available(iOS 26.0, *) { return .automatic }
+        return widthClass == .regular ? .navigationBarDrawer(displayMode: .automatic) : .automatic
+        #else
+        return .automatic
+        #endif
     }
 }
 
@@ -255,13 +294,7 @@ private struct PageToolbar<Items: ToolbarContent>: ViewModifier {
     @Environment(\.tabIsActive) private var active
 
     func body(content: Content) -> some View {
-        #if os(macOS)
-        // Taken out behind, not `.hidden(!active)`: AppKit lays the toolbar out again either way, and with every page's
-        // items kept hidden in it the switch's long frame grew from about 85 ms to 150 (#390).
-        content.toolbar { if active { items } }
-        #else
         content.toolbar { items }
-        #endif
     }
 }
 

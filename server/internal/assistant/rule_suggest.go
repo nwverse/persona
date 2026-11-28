@@ -207,7 +207,8 @@ func rulePlanRuns(plans []*TaskPlan) (runs map[string]int, task map[string]PlanT
 				runs[k] = 0
 			case p.State == planStarted && t.OwnerStarted:
 				runs[k]++
-				task[k] = PlanTask{Machine: t.Machine, Cwd: t.Cwd}
+				// The repository's folder when it is the kind (#8259): what the suggestion names and tasks.trust keeps.
+				task[k] = PlanTask{Machine: t.Machine, Cwd: firstNonEmpty(t.Repo, t.Cwd), Repo: t.Repo}
 			}
 		}
 	}
@@ -402,8 +403,9 @@ func (s *Service) ruleCount(ctx context.Context, now time.Time) (map[string]*rul
 	if err != nil {
 		return nil, err
 	}
+	homes := s.trustHomes(ctx)
 	for k, n := range starts {
-		if n >= ruleSuggestAfter && !trusted[k] {
+		if n >= ruleSuggestAfter && !trustCovers(trusted, homes, k) { // a kind a remembered directory holds starts already
 			out[ruleSuggestionID(ruleKindPlanStart, k)] = &ruleCandidate{id: ruleSuggestionID(ruleKindPlanStart, k),
 				kind: ruleKindPlanStart, count: n, task: task[k]}
 		}
@@ -453,7 +455,7 @@ func (s *Service) ruleCount(ctx context.Context, now time.Time) (map[string]*rul
 
 // ruleTodoScope is where task t works, as a standing authorization names it: the computer and the directory its plan
 // gave it (the repository, whatever checkout its agent got), else its agent's. None for a directory no grant may name,
-// and for the health space.
+// and for a space that confirms what leaves it.
 func (s *Service) ruleTodoScope(ctx context.Context, t Todo, plans map[string]*TaskPlan) (machineID, directory string, ok bool) {
 	if t.PlanID != "" {
 		p, seen := plans[t.PlanID]
@@ -477,7 +479,7 @@ func (s *Service) ruleTodoScope(ctx context.Context, t Todo, plans map[string]*T
 			}
 		}
 	}
-	if machineID == "" || !validStandingDirectory(directory) || identity.InHealthSpace(directory) {
+	if machineID == "" || !validStandingDirectory(directory) || s.trackPolicy(ctx, identity.SpaceAt(directory)).ConfirmOutbound {
 		return "", "", false
 	}
 	return machineID, directory, true
@@ -525,7 +527,7 @@ func (s *Service) ruleFor(ctx context.Context, id string, l i18n.Lang) *proto.Ru
 
 // planWithSuggestion is plan p as the apps get it: with the suggestion to start its kind directly while it waits for
 // Start and the owner started that kind ruleSuggestAfter times. p itself is not changed (the suggestion is never kept
-// with the plan). A health plan gets none: it waits for Start whatever is trusted.
+// with the plan). A plan of a space that confirms what leaves it gets none: it waits for Start whatever is trusted.
 func (s *Service) planWithSuggestion(ctx context.Context, p *TaskPlan, l i18n.Lang) *TaskPlan {
 	if p == nil || p.State != planOpen {
 		return p
@@ -535,7 +537,7 @@ func (s *Service) planWithSuggestion(ctx context.Context, p *TaskPlan, l i18n.La
 			continue
 		}
 		if sg := s.ruleFor(ctx, ruleSuggestionID(ruleKindPlanStart, trustKey(t)), l); sg != nil {
-			if s.inHealth(ctx, p.Conversation) {
+			if s.selfPolicy(ctx, p.Conversation).ConfirmOutbound {
 				return p
 			}
 			cp := *p

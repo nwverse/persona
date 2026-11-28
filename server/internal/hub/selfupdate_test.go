@@ -38,6 +38,10 @@ func newPublisher(t *testing.T, version string, build int64) *fakePublisher {
 	return newPublisherWith(t, version, build, func(*update.Manifest) {})
 }
 
+func testFeedPath() string {
+	return "/dl/" + update.FeedName(update.ThisEdition)
+}
+
 // newPublisherWith is newPublisher with the manifest changed first (its commit and ancestors).
 func newPublisherWith(t *testing.T, version string, build int64, edit func(*update.Manifest)) *fakePublisher {
 	t.Helper()
@@ -49,15 +53,23 @@ func newPublisherWith(t *testing.T, version string, build int64, edit func(*upda
 		Files: map[string]update.File{runtime.GOOS + "-" + runtime.GOARCH: {Name: name, Size: int64(len(gz)),
 			SHA256: hex.EncodeToString(outer[:]), BinarySHA256: hex.EncodeToString(inner[:])}}}
 	edit(&m)
+	// The fixture is a release of the binary under test: a core-only hub reads and accepts only the core feed.
+	m.Edition = update.ThisEdition.Marker()
+	plat := runtime.GOOS + "-" + runtime.GOARCH
+	file := m.Files[plat]
+	if update.ThisEdition.Marker() != "" {
+		file.Served = update.ThisEdition.Served(file.Name)
+	}
+	m.Files[plat] = file
 	data, _ := json.Marshal(m)
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p.asked != nil {
 			p.asked(r.URL.Path)
 		}
 		switch r.URL.Path {
-		case "/dl/latest.json":
+		case testFeedPath():
 			w.Write(data)
-		case "/dl/" + name:
+		case "/dl/" + file.Remote():
 			if p.corrupt {
 				w.Write(bytes.Repeat([]byte{0}, len(gz)))
 				return
@@ -119,10 +131,68 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// waitForUpdate is waitFor for an update in progress: when it runs out it says where the update stood and where its
+// goroutines were, so a run that stalls on a loaded machine shows what it waited on.
+func waitForUpdate(t *testing.T, u *updater, what string, ok func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); <-time.After(10 * time.Millisecond) {
+		if ok() {
+			return
+		}
+	}
+	v := u.view()
+	t.Fatalf("timed out waiting for %s: update %q %q %q\n%s", what, v.State, v.Progress, v.Error, updateStacks())
+}
+
+// updateStacks are the stacks of the goroutines in an update (the hub's updater, internal/update).
+func updateStacks() string {
+	buf := make([]byte, 1<<22)
+	buf = buf[:runtime.Stack(buf, true)]
+	var out []string
+	for _, g := range strings.Split(string(buf), "\n\n") {
+		if strings.Contains(g, "hub.(*updater)") || strings.Contains(g, "/internal/update.") {
+			out = append(out, g)
+		}
+	}
+	return strings.Join(out, "\n\n")
+}
+
 func setSessions(m *Machine, ss ...proto.Session) {
 	m.mu.Lock()
 	m.sessions = ss
 	m.mu.Unlock()
+}
+
+func TestUpdateViewReleaseTimestamp(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		released time.Time
+		wantJSON string
+	}{
+		{name: "omitted"},
+		{name: "published", released: time.Date(2026, 11, 20, 15, 4, 5, 0, time.UTC), wantJSON: `"2026-11-20T15:04:05Z"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newTestHub(t)
+			h.upd.release = &update.Published{Manifest: &update.Manifest{Version: "v1.0.0", Build: 202611201504, Released: tc.released}}
+			data, err := json.Marshal(h.upd.view())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var status struct {
+				Latest map[string]json.RawMessage `json:"latest"`
+			}
+			if err := json.Unmarshal(data, &status); err != nil {
+				t.Fatal(err)
+			}
+			if status.Latest == nil {
+				t.Fatal("latest release missing from update status")
+			}
+			if got := string(status.Latest["released"]); got != tc.wantJSON {
+				t.Errorf("latest.released = %q, want %q", got, tc.wantJSON)
+			}
+		})
+	}
 }
 
 // Nothing restarts while a conversation is working or waiting for the user; once all is idle the new binary is in
@@ -338,7 +408,7 @@ func TestUpdateConfirmOrRollBack(t *testing.T) {
 	update.Save(update.PendingPath(h.upd.dir), pending)
 	var told []string
 	h.upd.notify = func(title, body string) { told = append(told, title) }
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if h.upd.view().Confirmed {
 		t.Fatal("confirmed before checking")
 	}
@@ -397,7 +467,7 @@ func TestUpdateConfirmLeavesAClaimedUpdateToTheWatchdog(t *testing.T) {
 	h.upd.edgeConfirmed = func() { told++ }
 	pending := update.Pending{FromBuild: 202611021500, ToBuild: 202611021700, Target: target, Prev: target + ".prev", Online: []string{"box"}, Auto: true}
 	update.Save(update.PendingPath(h.upd.dir), pending)
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	os.Rename(update.PendingPath(h.upd.dir), update.PendingPath(h.upd.dir)+".watch") // the watchdog's claim
 	h.upd.confirm(context.Background(), pending)
 	if h.upd.view().Confirmed || len(h.upd.settings.History) != 0 || told != 0 {
@@ -416,7 +486,7 @@ func TestUpdateBootTakesBackAWatchdogsClaim(t *testing.T) {
 		h.build = update.Make("v2-202611021700", "release", "202611021700", p.srv.URL+"/dl")
 		pending.Target, pending.Prev = target, target+".prev"
 		update.Save(update.PendingPath(h.upd.dir)+".watch", pending)
-		if !h.upd.boot() || len(execs()) != 0 {
+		if !bootUpdater(t, h.upd) || len(execs()) != 0 {
 			t.Fatalf("the new build has no update to confirm (execd %v)", execs())
 		}
 		var back update.Pending
@@ -432,7 +502,7 @@ func TestUpdateBootTakesBackAWatchdogsClaim(t *testing.T) {
 		h, _, target, _ := updatingHub(t, p, "release")
 		pending.Target, pending.Prev = target, target+".prev"
 		update.Save(update.PendingPath(h.upd.dir)+".watch", pending)
-		if h.upd.boot() {
+		if bootUpdater(t, h.upd) {
 			t.Fatal("the old build thinks it has an update to confirm")
 		}
 		var rb update.RolledBack
@@ -451,7 +521,7 @@ func TestUpdateDirectDeployIsNotARollback(t *testing.T) {
 	h, _, target, execs := updatingHub(t, p, "release")
 	h.build = update.Make("deployed-202611021800", "release", "202611021800", p.srv.URL+"/dl")
 	update.Save(update.PendingPath(h.upd.dir), update.Pending{FromBuild: 202611021500, ToBuild: 202611021700, Target: target, Prev: target + ".prev"})
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if _, err := os.Stat(update.RolledBackPath(h.upd.dir)); !os.IsNotExist(err) {
 		t.Fatal("a direct deploy was recorded as a rollback (its release would be marked bad)")
 	}
@@ -468,11 +538,11 @@ func TestUpdateStartsCountedOnce(t *testing.T) {
 	os.WriteFile(target+".prev", []byte("old"), 0o755)
 	update.Save(update.PendingPath(h.upd.dir), update.Pending{ToBuild: 202611021700, Target: target, Prev: target + ".prev"})
 	for i := 1; i <= updateMaxStarts; i++ {
-		if !h.upd.boot() || len(execs()) != 0 {
+		if !bootUpdater(t, h.upd) || len(execs()) != 0 {
 			t.Fatalf("start %d went back already", i)
 		}
 	}
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if len(execs()) != 1 {
 		t.Fatal("start 4 did not go back")
 	}
@@ -485,7 +555,7 @@ func TestUpdateCrashLoopGoesBack(t *testing.T) {
 	h.build = update.Make("v2-202611021700", "release", "202611021700", p.srv.URL+"/dl")
 	os.WriteFile(target+".prev", []byte("old"), 0o755)
 	update.Save(update.PendingPath(h.upd.dir), update.Pending{ToBuild: 202611021700, Target: target, Prev: target + ".prev", Starts: updateMaxStarts})
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if b, _ := os.ReadFile(target); string(b) != "old" || len(execs()) != 1 {
 		t.Fatal("a crash loop did not go back")
 	}
@@ -510,7 +580,7 @@ func TestUpdateUnsavedStartCountGoesBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(h.upd.dir, 0o700) })
-	h.upd.boot()
+	bootUpdater(t, h.upd)
 	if b, _ := os.ReadFile(target); string(b) != "old" || len(execs()) != 1 {
 		t.Fatalf("an unsaved start count kept the new version (execd %v)", execs())
 	}
@@ -703,8 +773,8 @@ func TestUpdateNodesBinariesInPlace(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.gz")); !os.IsNotExist(err) {
 		t.Fatal("the download itself went in with the binaries")
 	}
-	if _, err := os.Stat(filepath.Join(nodes, "personad-darwin-arm64.version")); !os.IsNotExist(err) {
-		t.Fatal("the old build's version file stayed beside the release's")
+	if b, err := os.ReadFile(filepath.Join(nodes, "personad-darwin-arm64.version")); err != nil || string(b) != "v2\n" {
+		t.Fatalf("package version = %q, %v", b, err)
 	}
 	_ = local // the manager decides what to redeploy (internal/devices TestUpdateNodesSkipsTheHubsOwn)
 }
@@ -723,10 +793,24 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 			body := gz(script)
 			sum, binSum := sha256.Sum256(body), sha256.Sum256(script)
 			name := "personad-" + plat + ".gz"
-			m.Files[plat] = update.File{Name: name, Size: int64(len(body)),
+			f := update.File{Name: name, Size: int64(len(body)),
 				SHA256: hex.EncodeToString(sum[:]), BinarySHA256: hex.EncodeToString(binSum[:])}
-			served["/dl/"+name] = body
+			if update.ThisEdition.Marker() != "" {
+				f.Served = update.ThisEdition.Served(name)
+			}
+			m.Files[plat] = f
+			served["/dl/"+f.Remote()] = body
 		}
+		// A Windows build keeps its .exe (#10968): releases up to 0.9.1 left it out, and the hub kept the old one.
+		body := gz(script)
+		sum, binSum := sha256.Sum256(body), sha256.Sum256(script)
+		f := update.File{Name: "personad-windows-amd64.exe.gz", Size: int64(len(body)),
+			SHA256: hex.EncodeToString(sum[:]), BinarySHA256: hex.EncodeToString(binSum[:])}
+		if update.ThisEdition.Marker() != "" {
+			f.Served = update.ThisEdition.Served(f.Name)
+		}
+		m.Files["windows-amd64"] = f
+		served["/dl/"+f.Remote()] = body
 	})
 	p.extra = served
 	var mu sync.Mutex
@@ -768,7 +852,8 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 	}
 	mu.Unlock()
 	for _, plat := range want {
-		if path := "/dl/personad-" + plat + ".gz"; counts[path] != 1 {
+		path := "/dl/" + update.ThisEdition.Served("personad-"+plat+".gz")
+		if counts[path] != 1 {
 			t.Fatalf("%s was fetched %d times, want 1 (all fetches: %v)", path, counts[path], counts)
 		}
 	}
@@ -779,12 +864,21 @@ func TestUpdateDownloadsEveryNodePlatformInTheRelease(t *testing.T) {
 	} else if !bytes.Equal(b, p.script) {
 		t.Fatalf("the node binary for %s is not the hub's binary: %d bytes, gzip %v", own, len(b), len(b) > 1 && b[0] == 0x1f && b[1] == 0x8b)
 	}
+	if _, err := os.Stat(filepath.Join(staged, "personad-windows-amd64.exe")); err != nil {
+		t.Fatalf("the release's Windows node build was not downloaded: %v", err)
+	}
 	// What the new hub does with them: "Redeploy" takes them from NodeBinaryDir (internal/devices nodeBinary).
+	if err := os.WriteFile(filepath.Join(nodes, "personad-windows-amd64.exe"), []byte("the old Windows build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	h.upd.updateNodes(context.Background(), staged, "")
 	for _, plat := range want {
 		if _, err := os.Stat(filepath.Join(nodes, "personad-"+plat)); err != nil {
 			t.Fatalf("no node binary for %s in NodeBinaryDir: %v", plat, err)
 		}
+	}
+	if b, err := os.ReadFile(filepath.Join(nodes, "personad-windows-amd64.exe")); err != nil || !bytes.Equal(b, script) {
+		t.Fatalf("the Windows node build was not replaced: %q %v", b, err)
 	}
 }
 

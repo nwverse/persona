@@ -13,6 +13,11 @@ import persona.core.designsystem.JChartKind
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes
+import org.intellij.markdown.parser.MarkdownParser
 import org.robolectric.annotation.Config
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -141,6 +146,211 @@ class ExtensionUiStateTest {
         assertEquals("确定", ExtensionViewText.confirmLabel(res, ExtensionViewItem("row", title = "一个很长很长很长的按钮名字")))
     }
 
+    @Test fun isHttpsSafeMarkdownAndAskRejectCredentialedHostlessAndMalformedUrls() {
+        listOf(
+            "https://example.com/console",
+            "https://example.com:8443/a?x=1#top",
+            "HTTPS://EXAMPLE.COM/path",
+            "https://[::1]/status",
+            "https://[::1]:8443/status",
+            "https://zh.wikipedia.org/wiki/中文?q=测试",
+            "https://example.com/search?a=1|2",
+            "https://example.com/api/{id}",
+            "https://example.com/a[1]",
+            "https://münchen.de/path",
+            "https://例子.测试/path",
+            "https://my_host.example.com/path",
+        ).forEach { assertTrue(it, ExtensionViewText.isHttps(it)) }
+
+        listOf(
+            null,
+            "",
+            "http://example.com",
+            "https://",
+            "https:///",
+            "https:///etc/passwd",
+            "https://.",
+            "https://?q=1",
+            "https://#frag",
+            "https://:443/x",
+            "https://example.com:/x",
+            "https://example.com:0/x",
+            "https://example.com:99999/x",
+            "https:example.com",
+            "https://user:pass@example.com/",
+            "https://:pass@example.com/",
+            "https://trusted.example@evil.example/login",
+            "https://@example.com/",
+            "https://example.com%40evil.example/",
+            "https://evil.example\\@trusted.example/",
+            "https://example.com/a b",
+            "https://example.com\nfoo",
+            "https://example.com\rfoo",
+            "https://example.com\tfoo",
+            "https://example.com/\u0000",
+            "https://example.com/\u007f",
+            "https://example.com/\u00a0",
+            "https://example.com\u200b/x",
+            "https://example.com/\u202ex",
+            "https://trusted.example&#64;evil.example/login",
+            "https://foo&bar.example/x",
+            "https://foo;bar.example/x",
+            " https://example.com",
+            "javascript:alert(1)",
+        ).forEach { assertFalse(it.toString(), ExtensionViewText.isHttps(it)) }
+
+        assertNull(ExtensionViewText.picture("https://user:pass@example.com/a.png"))
+        assertNull(ExtensionViewText.picture("https:///a.png"))
+        assertFalse(ExtensionViewText.drawable(ExtensionViewItem("link", title = "Phish", url = "https://trusted.example@evil.example")))
+        assertFalse(ExtensionViewText.opens("example-gateway", "https://user:pass@example.com/"))
+
+        assertEquals(
+            "点 登录 和 空主机 和 [大写](HTTPS://example.com/doc) 和 [带标题](https://example.com/doc \"Docs\") 和 [尖括号](<https://example.com/a>) 和 坏尖括号 和 坏标题",
+            ExtensionViewText.safeMarkdown(
+                "点 [登录](https://trusted.example@evil.example/x) 和 [空主机](https:///etc/passwd) 和 [大写](HTTPS://example.com/doc) 和 [带标题](https://example.com/doc \"Docs\") 和 [尖括号](<https://example.com/a>) 和 [坏尖括号](<https://user:pass@evil.example>) 和 [坏标题](https://user@evil.example \"Docs\")",
+            ),
+        )
+
+        // Nested synthesis, nested brackets, escaped parens/at-sign, code spans/fences, reference links, autolinks, and linear time.
+        assertEquals("\\[Login\\](x)", ExtensionViewText.safeMarkdown("[[Login](x)](https://trusted.example@evil.example)"))
+        assertEquals("!alt", ExtensionViewText.safeMarkdown("![![alt](x)](https://evil.example/p.png)"))
+        assertEquals("a \\[b\\]", ExtensionViewText.safeMarkdown("[a [b]](https://trusted.example@evil.example)"))
+        assertEquals("photo \\[1\\]", ExtensionViewText.safeMarkdown("![photo [1]](https://evil.example/p.png)"))
+        assertEquals("[a[b](javascript:1)](https://example.com)", ExtensionViewText.safeMarkdown("[a[b](javascript:1)](https://example.com)"))
+        assertEquals("[img](https://example.com)", ExtensionViewText.safeMarkdown("[![img](https://evil.example/a.png)](https://example.com)"))
+        assertEquals("\\[bar\\](https://evil.example)", ExtensionViewText.safeMarkdown("![[bar]](x)(https://evil.example)"))
+        assertEquals("\\[bar\\](https\\://trusted.example\\@evil.example)", ExtensionViewText.safeMarkdown("![[bar]](x)(https://trusted.example@evil.example)"))
+        assertEquals("\\![a](https://example.com)", ExtensionViewText.safeMarkdown("!![](y)[a](https://example.com)"))
+        assertEquals("foo\\![a](https://example.com)", ExtensionViewText.safeMarkdown("[foo!](javascript:1)[a](https://example.com)"))
+        assertEquals("phish", ExtensionViewText.safeMarkdown("[phish](https://trusted.example\\@evil.example)"))
+        assertEquals(
+            "[wiki](https://en.wikipedia.org/wiki/Foo_(bar))",
+            ExtensionViewText.safeMarkdown("[wiki](https://en.wikipedia.org/wiki/Foo_(bar))"),
+        )
+        assertEquals(
+            "[wiki](<https://en.wikipedia.org/wiki/Foo_(bar)>)",
+            ExtensionViewText.safeMarkdown("[wiki](<https://en.wikipedia.org/wiki/Foo_(bar)>)"),
+        )
+        assertEquals(
+            "[wiki](https://en.wikipedia.org/wiki/Foo_\\(bar\\))",
+            ExtensionViewText.safeMarkdown("[wiki](https://en.wikipedia.org/wiki/Foo_\\(bar\\))"),
+        )
+        assertEquals("`map[key](arg)`", ExtensionViewText.safeMarkdown("`map[key](arg)`"))
+        val fenced = "```\n![x](http://evil.example)\n[a](javascript:1)\n```"
+        assertEquals(fenced, ExtensionViewText.safeMarkdown(fenced))
+        assertEquals(
+            "<https://example.com/ok> http\\://evil.example https\\://trusted.example\\@evil.example javascript\\:alert(1)",
+            ExtensionViewText.safeMarkdown(
+                "<https://example.com/ok> <http://evil.example> <https://trusted.example@evil.example> <javascript:alert(1)>",
+            ),
+        )
+        val refDoc = "[bad][1] and ![pic][2] and ![2] and [good][2]\n\n[1]: https://trusted.example@evil.example\n[2]: https://example.com/ok"
+        assertEquals(
+            "bad and pic and 2 and [good][2]\n\n[2]: https://example.com/ok",
+            ExtensionViewText.safeMarkdown(refDoc),
+        )
+
+        // Pass-2 adversarial PoCs verified directly against the exact GFM AST parser used by Markdown(...):
+        // (1) unclosed backtick across blank lines, (2) HTML entities in link destinations, (3) blockquote/list/multiline
+        // ref defs & shortcut ref image recombination, (4) GFM bare autolinks, (5) O(N) performance on nested brackets.
+        val gfm = MarkdownParser(GFMFlavourDescriptor())
+        fun collectTypes(node: ASTNode, out: MutableList<String>) {
+            out += node.type.name
+            for (c in node.children) collectTypes(c, out)
+        }
+        val unclosedBacktick = "`unclosed\n\n[Login](https://trusted.example@evil.example)\n\n![](https://evil.example/p.png)\n\n`"
+        val cleanedBacktick = ExtensionViewText.safeMarkdown(unclosedBacktick)
+        assertEquals("`unclosed\n\nLogin\n\n\n\n`", cleanedBacktick)
+
+        listOf(
+            "[Login](https://trusted.example&#64;evil.example/login)",
+            "[Login](https://trusted.example&#x40;evil.example/login)",
+            "[Login](https://trusted.example&commat;evil.example/login)",
+            "[Login](https://trusted.example&sol;@evil.example/login)",
+            "[Login](https://trusted.example&quest;@evil.example/login)",
+            "[Login](https://evil.example\\/@trusted.example/login)",
+            "[Login](https://&#47;etc/passwd)",
+            "[Login](https://example.com&#10;evil)",
+            "[Login](&#104;ttps://example.com/ok)",
+            "[Login](<https://trusted.example&#64;evil.example/login>)",
+            "[Login](<javascript:alert(1)> \"title\")",
+            "[Login](<http://evil.example> 'https://example.com')",
+            "[Login](<https://trusted.example@evil.example> 'https://example.com')",
+        ).forEach { payload ->
+            assertEquals(payload, "Login", ExtensionViewText.safeMarkdown(payload))
+        }
+        assertEquals("[docs](https://example.com/search?a=1&amp;b=2)", ExtensionViewText.safeMarkdown("[docs](https://example.com/search?a=1&amp;b=2)"))
+        assertEquals("[docs](<https://example.com/a> \"Docs\")", ExtensionViewText.safeMarkdown("[docs](<https://example.com/a> \"Docs\")"))
+        assertEquals("a \\[b\\]", ExtensionViewText.safeMarkdown("[a \\[b\\]](https://trusted.example@evil.example)"))
+        assertEquals("collapsed", ExtensionViewText.safeMarkdown("[collapsed][]\n\n[collapsed]: http://evil.example").trim())
+        assertEquals("pic\n\n[pic]: https://example.com/ok", ExtensionViewText.safeMarkdown("![pic][]\n\n[pic]: https://example.com/ok"))
+        val deepNested = "[[[[[[[[[[x](javascript:1)](javascript:2)](javascript:3)](javascript:4)](javascript:5)](javascript:6)](javascript:7)](javascript:8)](javascript:9)](javascript:10)" +
+            "\n\\[Login\\](https&#58;//trusted.example&#64;evil.example/login)" +
+            "\n\\[Click\\](javascript:alert(1))"
+        val cleanedDeep = ExtensionViewText.safeMarkdown(deepNested)
+        val deepTypes = mutableListOf<String>()
+        collectTypes(gfm.buildMarkdownTreeFromString(cleanedDeep), deepTypes)
+        assertFalse("fail-closed on deep nesting + escaped brackets: $cleanedDeep", MarkdownElementTypes.INLINE_LINK.name in deepTypes)
+        assertFalse("fail-closed no images: $cleanedDeep", MarkdownElementTypes.IMAGE.name in deepTypes)
+        assertFalse("fail-closed no bare autolinks: $cleanedDeep", GFMTokenTypes.GFM_AUTOLINK.name in deepTypes)
+
+        listOf(
+            "http://a.example/".repeat(10) + "\n\\[Login\\](https&#58;//trusted.example&#64;evil.example/login)",
+            "http://a.example/".repeat(10) + "\n\\[Click\\](javascript:alert(1))",
+            "www.a.example/www.b.example/".repeat(6) + "\n\\[Login\\](javascript:alert(1))",
+        ).forEach { chained ->
+            val cleanedChained = ExtensionViewText.safeMarkdown(chained)
+            val chainedTypes = mutableListOf<String>()
+            collectTypes(gfm.buildMarkdownTreeFromString(cleanedChained), chainedTypes)
+            assertFalse("no inline links on chained autolinks: $cleanedChained", MarkdownElementTypes.INLINE_LINK.name in chainedTypes)
+            assertFalse("no images on chained autolinks: $cleanedChained", MarkdownElementTypes.IMAGE.name in chainedTypes)
+            assertFalse("no gfm autolinks on chained autolinks: $cleanedChained", GFMTokenTypes.GFM_AUTOLINK.name in chainedTypes)
+        }
+
+        val blockquotedRef = "> [bad][1]\n>\n> [1]: https://trusted.example@evil.example\n\n- [bad2][2]\n- [2]: http://evil.example\n\n[multi][a b]\n\n[a\nb]: https://trusted.example@evil.example\n  \"multi\n  line title\""
+        val cleanedRefs = ExtensionViewText.safeMarkdown(blockquotedRef)
+        val refTypes = mutableListOf<String>()
+        collectTypes(gfm.buildMarkdownTreeFromString(cleanedRefs), refTypes)
+        assertFalse("no unsafe link definitions remain: $cleanedRefs", MarkdownElementTypes.LINK_DEFINITION.name in refTypes)
+        assertFalse("no image nodes remain: $cleanedRefs", MarkdownElementTypes.IMAGE.name in refTypes)
+        assertFalse("evil url removed: $cleanedRefs", "evil.example" in cleanedRefs)
+
+        val shortcutRecombine = ExtensionViewText.safeMarkdown("!![](https://evil.example/x.png)[pic]\n\n[pic]: https://example.com/a.png")
+        val recombineTypes = mutableListOf<String>()
+        collectTypes(gfm.buildMarkdownTreeFromString(shortcutRecombine), recombineTypes)
+        assertFalse("shortcut ref must not synthesize image: $shortcutRecombine", MarkdownElementTypes.IMAGE.name in recombineTypes)
+        assertEquals("\\![pic]\n\n[pic]: https://example.com/a.png", shortcutRecombine)
+
+        val bareAuto = ExtensionViewText.safeMarkdown("visit http://evil.example/bare and www.evil.example/p and https://trusted.example@evil.example/bare and https://example.com/ok")
+        assertEquals("visit http\\://evil.example/bare and www\\.evil.example/p and https\\://trusted.example\\@evil.example/bare and https://example.com/ok", bareAuto)
+        val bareTypes = mutableListOf<String>()
+        collectTypes(gfm.buildMarkdownTreeFromString(bareAuto), bareTypes)
+        assertEquals("only the safe https bare autolink remains", 1, bareTypes.count { it == GFMTokenTypes.GFM_AUTOLINK.name })
+
+        val startNs = System.nanoTime()
+        assertEquals("[".repeat(20_000), ExtensionViewText.safeMarkdown("[".repeat(20_000)))
+        val nestedBrackets = "[".repeat(10_000) + "]".repeat(10_000)
+        assertEquals(nestedBrackets, ExtensionViewText.safeMarkdown(nestedBrackets))
+        val elapsedMs = (System.nanoTime() - startNs) / 1_000_000
+        assertTrue("expected linear time on 20k bracket payloads, took ${elapsedMs}ms", elapsedMs < 1_000)
+
+        listOf(
+            "persona://user@ask?text=hi",
+            "persona://user:pass@ask?text=hi",
+            "persona://@ask?text=hi",
+            "persona://ask:?text=hi",
+            "persona://ask:8080?text=hi",
+            "persona://ask?text=hi#frag",
+            "persona://ask?text=hi#",
+            "persona://ask?text=%C2%A0",
+        ).forEach { assertNull(it, ExtensionViewText.askText(it)) }
+
+        assertNull(ExtensionViewText.settings("demo", "persona://settings:8080/extensions/demo"))
+        assertNull(ExtensionViewText.settings("demo", "persona://@settings/extensions/demo"))
+        assertNull(ExtensionViewText.settings("demo", "persona://settings/extensions/demo#"))
+        assertEquals("demo", ExtensionViewText.settings("demo", "persona://settings/extensions/demo"))
+    }
+
     @Test fun drawsWithTheFieldsAsSentButNeverASecret() = runBlocking {
         val api = FakeUi()
         val model = ExtensionViewModel(api, "example-gateway", "home")
@@ -193,6 +403,40 @@ class ExtensionUiStateTest {
         assertNull(out.openUrl)
         assertEquals("好", out.toast)
         assertEquals(1, api.renders.size)
+    }
+
+    /** Set Up with … (#5308): `persona://ask` is taken only on the subscription pages, and refused everywhere else. */
+    @Test fun askIsTakenOnlyOnTheSubscriptionPages() = runBlocking {
+        val good = "persona://ask?text=Help%20me"
+        assertEquals("Help me", ExtensionViewText.askText(good))
+        assertEquals("Help me", ExtensionViewText.askFrom(SUBSCRIPTIONS_UI, good))
+        assertEquals("a+b", ExtensionViewText.askText("persona://ask?text=a%2Bb"))
+        assertEquals("a+b", ExtensionViewText.askText("persona://ask?text=a+b"))
+        assertEquals("hello", ExtensionViewText.askText("jarvis://ask?text=hello"))
+        assertEquals("hello", ExtensionViewText.askText("persona://ask/?text=hello"))
+        assertEquals(" hi", ExtensionViewText.askText("persona://ask?text=%20hi"))
+        assertEquals("a".repeat(ExtensionViewText.ASK_MOST), ExtensionViewText.askText("persona://ask?text=" + "a".repeat(ExtensionViewText.ASK_MOST)))
+        listOf(
+            "persona://ask?text=",
+            "persona://ask?text=%20",
+            "persona://ask/x?text=a",
+            "persona://asks?text=a",
+            "https://example.com/ask?text=a",
+            "persona://ask?text=" + "a".repeat(ExtensionViewText.ASK_MOST + 1),
+        ).forEach { assertNull(it, ExtensionViewText.askText(it)) }
+        assertNull(ExtensionViewText.askFrom("example-gateway", good))
+        assertNull(ExtensionViewText.askFrom("", good))
+        val api = FakeUi()
+        val ask = "persona://ask?text=" + java.net.URLEncoder.encode("<persona-context kind=\"context\" title=\"Source\" url=\"\">\nconnector: apps\nHelp me", "UTF-8")
+        api.answer = ExtensionUiResult(openUrl = ask)
+        val elsewhere = ExtensionViewModel(api, "example-gateway", "home")
+        elsewhere.load()
+        assertNull(elsewhere.press(ExtensionViewAction("setup")).openUrl)
+        val pages = ExtensionViewModel(api, SUBSCRIPTIONS_UI, "pages")
+        pages.load()
+        assertEquals(ask, pages.press(ExtensionViewAction("setup")).openUrl)
+        assertEquals(ExtensionViewText.askText(ask), ExtensionViewText.askFrom(SUBSCRIPTIONS_UI, ask))
+        assertNull(ExtensionViewText.askFrom("example-gateway", ask))
     }
 
     @Test fun failuresSayWhyAndKeepTheView() = runBlocking {
@@ -368,6 +612,52 @@ class ExtensionUiStateTest {
         // A day at most.
         assertEquals(1_000L + 86_400_000L, ExtensionViewText.refreshAt(ExtensionViewState(ExtensionView(refreshAfter = 1_000_000), drawnAt = 1_000L)))
         assertNull(ExtensionViewText.refreshAt(ExtensionViewState(ExtensionView(refreshAfter = 0), drawnAt = 1_000L)))
+    }
+
+    // A redraw the user did not ask for (refresh_after, ui.invalidate, back from a page pushed on it) keeps what is being
+    // typed in the view's fields, as on the web and iOS: a field the new view no longer has goes, a new one comes with its value.
+    @Test fun refreshAfterKeepsWhatIsBeingTyped() = runTest {
+        val api = FakeUi()
+        api.view = api.view.copy(refreshAfter = 30)
+        val model = ExtensionViewModel(api, "example-gateway", "home", now = { testScheduler.currentTime })
+        model.load()
+        model.edit("note", "还没发出去的话")
+        model.edit("token", "s3cret")
+        val fresh = launch { model.keepFresh() }
+        advanceTimeBy(30_500); runCurrent()
+        assertEquals(2, api.renders.size)
+        assertEquals("还没发出去的话", model.state.value.values["note"])
+        assertEquals("s3cret", model.state.value.values["token"])
+        fresh.cancel()
+    }
+
+    @Test fun anInvalidateKeepsWhatIsBeingTyped() = runTest {
+        val api = FakeUi()
+        val model = ExtensionViewModel(api, "example-gateway", "home")
+        model.load()
+        model.shown(true)
+        model.edit("note", "还没发出去的话")
+        model.edit("plan", "solo")
+        api.view = api.view.copy(sections = listOf(ExtensionViewSection(items = listOf(
+            ExtensionViewItem("field", name = "note", kind = "text", value = "扩展的新值"),
+            ExtensionViewItem("field", name = "subject", kind = "text", value = "新字段"),
+        ))))
+        model.invalidate()
+        assertEquals(2, api.renders.size)
+        assertEquals(mapOf("note" to "还没发出去的话", "subject" to "新字段"), model.state.value.values)
+    }
+
+    @Test fun comingBackFromAPushedPageKeepsWhatIsBeingTyped() = runTest {
+        val api = FakeUi()
+        val model = ExtensionViewModel(api, "example-gateway", "home")
+        model.load()
+        model.shown(true)
+        model.edit("note", "还没发出去的话")
+        model.covered()
+        model.shown(false)
+        model.shown(true)
+        assertEquals(2, api.renders.size)
+        assertEquals("还没发出去的话", model.state.value.values["note"])
     }
 
     // A machine's section for a machine the hub does not know (another hub's) is hidden, not an error.

@@ -7,6 +7,9 @@ import persona.core.contracts.*
 import persona.core.designsystem.LocalizedFormats
 import persona.core.domain.sort.AgentSession
 import persona.core.domain.sort.isNestedSubtask
+import persona.core.domain.sort.foldRows
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -15,6 +18,9 @@ import kotlin.math.abs
 
 internal fun percent(used: Number?, total: Number?): Double? =
     if (used != null && total != null && total.toDouble() > 0) used.toDouble() * 100 / total.toDouble() else null
+
+internal fun loadPerCore(load: Double?, cores: Int?): Double? =
+    if (load != null && load.isFinite() && load >= 0 && cores != null && cores > 0) load / cores else null
 
 /**
  * The live machine list (pushed over the WebSocket) sees a computer come and go before the next metrics poll does:
@@ -37,7 +43,7 @@ internal fun alerts(sample: MetricSample?, cores: Int?): List<MetricAlert> {
     add(R.string.machines_alert_cpu, sample.cpu, 75.0, 90.0)
     add(R.string.machines_alert_memory, percent(sample.memUsed, sample.memTotal), 80.0, 90.0)
     add(R.string.machines_alert_disk, percent(sample.diskUsed, sample.diskTotal), 80.0, 90.0)
-    add(R.string.machines_alert_load, cores?.takeIf { it > 0 }?.let { sample.load?.div(it) }, 1.0, 2.0)
+    add(R.string.machines_alert_load, loadPerCore(sample.load, cores), 1.0, 2.0)
     return result.sortedByDescending { it.critical }
 }
 
@@ -45,8 +51,9 @@ internal fun alerts(sample: MetricSample?, cores: Int?): List<MetricAlert> {
  * A computer's running sessions, as the Agents list counts them on its computer chip and header: a subtask another
  * session started, listed under that one's "Subtasks", is not one of them unless it needs the user (#4494).
  */
-internal fun machineSessions(sessions: List<Session>, machineId: String): List<Session> = sessions
-    .filter { it.machineId == machineId && !it.assistant && it.isLive && !AgentSession(it).isNestedSubtask }
+internal fun machineSessions(sessions: List<Session>, machineId: String, hierarchy: Boolean = false): List<Session> =
+    foldRows(sessions.filter { it.machineId == machineId }.map(::AgentSession), hierarchy)
+    .filter { !it.session.assistant && it.isLive && !it.isNestedSubtask }.map { it.session }
     .sortedWith(compareBy<Session> { it.agentState.priority }.thenByDescending { it.updated })
 
 /** History keeps the disk's used bytes; the chart shows them as a share of [total] (gaps stay gaps). */
@@ -71,22 +78,35 @@ internal fun segments(points: List<MetricPoint>, step: Int, value: (MetricPoint)
     return result
 }
 
-internal fun selectedPoint(points: List<MetricPoint>, time: Long, step: Int): MetricPoint? {
+internal fun selectedPoint(
+    points: List<MetricPoint>,
+    time: Long,
+    step: Int,
+    hasValue: (MetricPoint) -> Boolean = { true },
+): MetricPoint? {
     val ordered = points.sortedBy { it.t }
-    // Do not borrow an edge value from either side of an explicitly marked outage.
     val before = ordered.lastOrNull { it.t <= time }
     val after = ordered.firstOrNull { it.t >= time }
-    if (before?.gap == true || after?.gap == true) return null
+    // Do not borrow an edge value from either side of an explicitly marked outage or a missing series.
+    if (before?.let { it.gap || !hasValue(it) } == true) return null
+    if (after?.let { it.gap || !hasValue(it) } == true) return null
     if (before != null && after != null && after.t - before.t > 3L * step) return null
-    return ordered.filterNot { it.gap }.minByOrNull { abs(it.t - time) }
+    return listOfNotNull(before, after).filterNot { it.gap }.minByOrNull { abs(it.t - time) }
         ?.takeIf { abs(it.t - time) <= 2L * step }
 }
+
+/** A saved scrub survives refreshes and range changes while its timestamp is still inside the visible window. */
+internal fun retainedMetricSelection(selection: Long?, end: Long, span: Long): Long? =
+    selection?.takeIf { span > 0 && it in (end - span)..end }
 
 /** Numbers, sizes, rates and times on the machine pages, in the language of the page (docs/protocol/i18n.md). */
 internal object MetricFormat {
     private fun oneDecimal(format: NumberFormat) = format.apply { minimumFractionDigits = 1; maximumFractionDigits = 1 }
     fun number(value: Double?, locale: Locale): String =
         value?.takeIf(Double::isFinite)?.let { oneDecimal(NumberFormat.getNumberInstance(locale)).format(it) } ?: "—"
+    /** Round the binary sample like the web's toFixed(1), then format in the app language. */
+    fun loadPerCore(value: Double, locale: Locale): String =
+        oneDecimal(NumberFormat.getNumberInstance(locale)).format(BigDecimal(value).setScale(1, RoundingMode.HALF_UP))
     /** [value] is already a percentage (0–100). */
     fun percent(value: Double?, locale: Locale): String =
         value?.takeIf(Double::isFinite)?.let { oneDecimal(NumberFormat.getPercentInstance(locale)).format(it / 100) } ?: "—"
@@ -110,6 +130,11 @@ internal object MetricFormat {
     }
     /** How long it has been up, in minutes, or null without a boot time. */
     fun uptimeMinutes(boot: Double?, now: Long): Long? = boot?.takeIf { it.isFinite() && it > 0 && it <= now }?.let { (now - it.toLong()) / 60 }
+}
+
+@Composable
+internal fun loadPerCoreText(load: Double?, cores: Int?, locale: Locale): String? = loadPerCore(load, cores)?.let {
+    stringResource(R.string.machines_load_per_core, MetricFormat.loadPerCore(it, locale))
 }
 
 /** How long it has been up: 3d 4h in English, the Chinese or Japanese form otherwise. */

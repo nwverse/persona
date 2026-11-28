@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/deeplink"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The recommended setup, said once (#5085, docs/assistant/assistant.md "Recommended setup"; step R3, section 4c of
@@ -38,10 +37,8 @@ const (
 	setupWindow = 7 * 24 * time.Hour
 	// setupLookback is how far back "the owner did this before" looks (the work events are kept 30 days).
 	setupLookback = 30 * 24 * time.Hour
-	// setupMin is the count under which a mechanism is not named; setupLeaderMin is the same for leader
-	// conversations, counted in rounds of the main conversation.
-	setupMin       = 3
-	setupLeaderMin = 10
+	// setupMin is the count under which a mechanism is not named.
+	setupMin = 3
 	// setupQuietFor is how long a mechanism that was named is not named again.
 	setupQuietFor = 30 * 24 * time.Hour
 
@@ -66,7 +63,7 @@ const (
 // setupOrder is the order the block names them in: what removes asks first, then what removes background rounds, then
 // what makes the rounds that are left cheaper.
 var setupOrder = []string{setupDelegate, setupStanding, setupTrust, setupDecide, setupAutoContinue, setupWake,
-	setupLeaders, setupSample, setupReview, setupSupervisorTier}
+	setupReview, setupSupervisorTier}
 
 // setupSettings is the setting each mechanism is turned on with; for the supervisor's tier, the model purpose whose
 // binding the owner would change.
@@ -83,9 +80,9 @@ var setupSettings = map[string]string{
 // kinds of task; the background supervisor's purpose is its own page of Model Settings. The others are named in their
 // line (a conversation's menu, asking Persona, the configuration file).
 var setupPages = map[string]string{
-	setupDecide: "/settings?tab=persona", setupAutoContinue: "/settings?tab=persona", setupWake: "/settings?tab=persona",
-	setupStanding: "/settings?tab=persona", setupTrust: "/settings?tab=persona",
-	setupSupervisorTier: "/settings?tab=models&purpose=" + purposeSupervise,
+	setupDecide: deeplink.Settings("persona", ""), setupAutoContinue: deeplink.Settings("persona", ""),
+	setupWake: deeplink.Settings("persona", ""), setupStanding: deeplink.Settings("persona", ""),
+	setupTrust: deeplink.Settings("persona", ""), setupSupervisorTier: deeplink.Settings("models", purposeSupervise),
 }
 
 // setupBook is the setting setupKey: the week whose first briefing reached the owner, and when each mechanism was
@@ -154,19 +151,20 @@ type setupEvidence struct {
 	plans     []*TaskPlan
 	todos     []Todo
 	// scopeOf says where a to-do works, as a standing authorization names it (ruleTodoScope); health: the plan's
-	// conversation is in the health space, whose plans wait for Start whatever is trusted.
+	// conversation is in a space that confirms what leaves it, whose plans wait for Start whatever is trusted.
 	scopeOf func(todo string) (machineID, directory string, ok bool)
 	health  func(conversation string) bool
 	// What is already granted: a kind tasks.trust holds or a scope a standing authorization covers is not counted.
 	trusted map[string]bool
+	homes   map[string]trustHome // the machines' homes, for a kind a remembered directory holds (trustCovers)
 	grants  StandingAuthorizations
 }
 
 // setupCount counts, per mechanism, what it would have removed in [since, now). Each definition takes only what the
 // mechanism certainly covers:
 //
-//   - leaders: the main conversation's rounds that a supervision message started (the round events of
-//     availability.go), and their time: a leader conversation supervises its direction's tasks in its own rounds.
+//   - leaders and review_sample are retired recommendations: current ownership follows the planning lead or main
+//     task, so neither main-supervision rounds nor first-pass acceptances are work those settings would remove.
 //   - delegate: question cards a supervisor passed up with a recommendation (ask_escalated) that the owner answered
 //     once, with exactly that recommendation. Only a leader conversation's supervisor passes a question up
 //     (ask_route.go), so without leader conversations this is always 0.
@@ -178,9 +176,6 @@ type setupEvidence struct {
 //     grant covers, where they had given the same go-ahead there before within setupLookback and never said no to it.
 //   - task_trust: plans made in the window that the owner started, every startable kind of which (trustKey) they had
 //     started before within setupLookback, never dismissed, and tasks.trust does not hold.
-//   - review_sample: supervised tasks whose first and only review, in the window, was the supervisor's own accepted
-//     with every done_when criterion met with evidence, no user_check, the work live, and never reopened: what the
-//     done judge closes itself below 100 percent.
 //   - independent_review: reworks a supervisor sent after the judge had called the work done (review_rework,
 //     judged_done).
 func setupCount(ev setupEvidence, since, now time.Time) map[string]setupNumber {
@@ -199,20 +194,7 @@ func setupCount(ev setupEvidence, since, now time.Time) map[string]setupNumber {
 		}
 		str := func(k string) string { v, _ := e.Detail[k].(string); return v }
 		flag := func(k string) bool { v, _ := e.Detail[k].(bool); return v }
-		num := func(k string) float64 {
-			switch v := e.Detail[k].(type) {
-			case float64:
-				return v
-			case int: // as recorded, before the store's JSON
-				return float64(v)
-			}
-			return 0
-		}
 		switch e.Kind {
-		case roundEvent:
-			if flag("main") && str("source") == proto.SourceSupervision {
-				add(setupLeaders, num("seconds"))
-			}
 		case "resumed":
 			switch str("hand") { // a row without it does not say the stop was one a switch would have gone on with
 			case handAutoContinue:
@@ -310,7 +292,7 @@ func setupCount(ev setupEvidence, since, now time.Time) map[string]setupNumber {
 		}
 		repeat := true
 		for k := range kinds {
-			repeat = repeat && started[k] && !dismissed[k] && !ev.trusted[k]
+			repeat = repeat && started[k] && !dismissed[k] && !trustCovers(ev.trusted, ev.homes, k)
 		}
 		if repeat && in(p.CreatedAt) {
 			add(setupTrust, 0)
@@ -320,33 +302,15 @@ func setupCount(ev setupEvidence, since, now time.Time) map[string]setupNumber {
 		}
 	}
 
-	for _, t := range ev.todos {
-		v := t.Supervision
-		if v == nil || t.ReopenedAt != nil || v.Round != 0 || len(v.Reviews) != 1 || t.Delivery == nil || t.Delivery.State != deliveryLive {
-			continue
-		}
-		r := v.Reviews[0]
-		if r.Verdict != reviewAccepted || r.By != "" || r.UserCheck || !in(r.At) || len(v.DoneWhen) == 0 || len(r.Checks) != len(v.DoneWhen) {
-			continue
-		}
-		met := true
-		for _, c := range r.Checks {
-			met = met && c.Met && strings.TrimSpace(c.Evidence) != ""
-		}
-		if met {
-			add(setupSample, 0)
-		}
-	}
 	return out
 }
 
 // setupState is which mechanisms are on now.
 type setupState struct {
-	leaders, delegate, review bool
-	helloKnown                bool // the hub's hello could be read: delegate and review are as it says
-	triage                    TriageSwitches
-	triageKnown               bool // the triage's switches could be read
-	samplePercent             int
+	delegate, review bool
+	helloKnown       bool // the hub's hello could be read: delegate and review are as it says
+	triage           TriageSwitches
+	triageKnown      bool // the triage's switches could be read
 }
 
 // suggests: mechanism id is off and c reaches its threshold. tasks.trust and the standing authorizations are never
@@ -356,8 +320,8 @@ type setupState struct {
 // acceptances settled and few enough of them were reopened.
 func (st setupState) suggests(id string, c setupNumber) bool {
 	switch id {
-	case setupLeaders:
-		return !st.leaders && c.n >= setupLeaderMin
+	case setupLeaders, setupSample:
+		return false // retired: neither setting removes main's required acceptance rounds (#5732)
 	case setupDelegate:
 		return st.helloKnown && !st.delegate && c.n >= setupMin
 	case setupDecide:
@@ -366,8 +330,6 @@ func (st setupState) suggests(id string, c setupNumber) bool {
 		return st.triageKnown && st.triage.Enabled && !st.triage.AutoContinue && c.n >= setupMin
 	case setupWake:
 		return st.triageKnown && st.triage.Enabled && !st.triage.Wake && c.n >= setupMin
-	case setupSample:
-		return st.samplePercent >= 100 && c.n >= setupMin
 	case setupReview:
 		return st.helloKnown && !st.review && c.n >= setupMin
 	case setupStanding, setupTrust:
@@ -381,8 +343,7 @@ func (st setupState) suggests(id string, c setupNumber) bool {
 func (s *Service) setupStateNow(ctx context.Context) setupState {
 	// Not s.hello: a hello that failed reads as everything off, and a mechanism that is on must not be named.
 	h, err := s.hub.Hello(ctx)
-	st := setupState{leaders: len(s.settings(ctx).Leaders) > 0, helloKnown: err == nil, delegate: h.Agents.Delegate.On(),
-		review: h.Agents.Review.On(), samplePercent: s.reviewSamplePercent(ctx)}
+	st := setupState{helloKnown: err == nil, delegate: h.Agents.Delegate.On(), review: h.Agents.Review.On()}
 	if sw, err := s.readTriageSwitches(ctx); err == nil {
 		st.triage, st.triageKnown = sw, true
 	}
@@ -398,7 +359,7 @@ func (s *Service) setupRead(ctx context.Context, now time.Time) (setupEvidence, 
 	}
 	back := now.Add(-setupLookback)
 	// What is counted in the window alone, and the marks the decisions are read with over the whole lookback.
-	recent, err := st.WorkEventsBetween(ctx, now.Add(-setupWindow), now, []string{roundEvent, "resumed", reviewReworkEvent})
+	recent, err := st.WorkEventsBetween(ctx, now.Add(-setupWindow), now, []string{"resumed", reviewReworkEvent})
 	if err != nil {
 		return ev, err
 	}
@@ -432,6 +393,7 @@ func (s *Service) setupRead(ctx context.Context, now time.Time) (setupEvidence, 
 	if ev.trusted, err = s.trustedKindsErr(ctx); err != nil {
 		return ev, err
 	}
+	ev.homes = s.trustHomes(ctx)
 	if ev.grants, err = s.standingAuthorizations(ctx); err != nil {
 		return ev, err
 	}
@@ -443,7 +405,7 @@ func (s *Service) setupRead(ctx context.Context, now time.Time) (setupEvidence, 
 		}
 		return s.ruleTodoScope(ctx, t, seen)
 	}
-	ev.health = func(conversation string) bool { return s.inHealth(ctx, conversation) }
+	ev.health = func(conversation string) bool { return s.selfPolicy(ctx, conversation).ConfirmOutbound }
 	return ev, nil
 }
 
@@ -504,7 +466,7 @@ func setupWord(l i18n.Lang, web, id string, c setupNumber) setupSuggestion {
 	}
 	sg.Text = i18n.T(l, "assistant-setup_suggest."+id, args)
 	if page := setupPages[id]; page != "" && web != "" {
-		sg.Link = web + page
+		sg.Link = deeplink.Web(web, page)
 	}
 	return sg
 }

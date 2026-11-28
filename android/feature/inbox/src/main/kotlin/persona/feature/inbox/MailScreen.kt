@@ -23,12 +23,16 @@ import persona.core.contracts.api.*
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.inbox.*
 
 /**
  * Heard after a mail was handed to Persona ("Hand to AI"): the host may show the assistant with it. The message is already
  * queued, so the host must not send it again, nor send any mail.
  */
 data class MailAiContext(val itemId: String, val message: MailMessage, val text: String)
+
+/** The page's saved selection when the item still lists it, else its newest message. */
+internal fun mailUidToLoad(selected: Long?, uids: List<Long>): Long = selected?.takeIf { it in uids } ?: uids.last()
 
 @Composable
 fun MailScreen(
@@ -39,7 +43,11 @@ fun MailScreen(
     onAskAi: ((MailAiContext) -> Unit)? = null,
     onOpenLink: ((String) -> Unit)? = null,
 ) {
-    key(transport?.scope, route) { MailDetail(repository, transport, route, navigator, onAskAi, onOpenLink) }
+    // Decided by the shell from the hub's mail module (#15995): the whole message, or the text the hub stored for it.
+    when (LocalMailAccess.current) {
+        MailAccess.Live -> key(transport?.scope, route) { MailDetail(repository, transport, route, navigator, onAskAi, onOpenLink) }
+        MailAccess.StoredOnly -> key(route.itemId) { MailStoredScreen(repository, route, navigator) }
+    }
 }
 
 @Composable
@@ -59,7 +67,7 @@ private fun MailDetail(
     var loadedTarget by remember { mutableStateOf<MailReplyTarget?>(null) }
     var replyTarget by remember { mutableStateOf<MailReplyTarget?>(null) }
     var message by remember { mutableStateOf<MailMessage?>(null) }
-    var selected by rememberSaveable(transport?.scope, route.itemId) { mutableStateOf<Long?>(null) }
+    var selected by rememberSaveable(transport?.scope, route.itemId) { mutableStateOf<Long?>(route.uid) }
     var reload by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
@@ -98,7 +106,7 @@ private fun MailDetail(
 
     LaunchedEffect(transport) {
         if (transport != null) {
-            runCatching { accounts = transport.accounts() }
+            val _ = runCatching { accounts = transport.accounts() }
         }
     }
 
@@ -150,14 +158,17 @@ private fun MailDetail(
     LaunchedEffect(transport, route.itemId, selected, reload) {
         if (transport == null) return@LaunchedEffect
         loading = true
-        if (selected != null && message?.uid != selected) message = null
+        reference?.let { ref ->
+            // An unlisted route UID already shows its newest-message fallback; a reload must not clear that body.
+            if (selected != null && message?.uid != mailUidToLoad(selected, ref.uids)) message = null
+        }
         error = null
         try {
             val item = transport.item(InboxItemKey.hubId(route.itemId))
             val ref = requireNotNull(item.mail)
             reference = ref
             loadedTarget = item.replyTarget
-            val uid = selected?.takeIf { it in ref.uids } ?: ref.uids.last()
+            val uid = mailUidToLoad(selected, ref.uids)
             val loaded = transport.message(ref, uid)
             message = loaded
             // Opening it marks it read
@@ -313,7 +324,7 @@ private fun MailDetail(
                 when {
                     shownTranslation != null -> SelectionContainer {
                         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                            Text(shownTranslation.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink)
+                            ReadingContent { Text(shownTranslation.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
                             if (shownTranslation.clipped) Text(stringResource(R.string.inbox_mail_translation_clipped), style = PersonaTheme.type.caption,
                                 color = PersonaTheme.palette.ink3)
                         }
@@ -338,11 +349,13 @@ private fun MailDetail(
                                 )
                             }
                         }
-                        MailHtml(mail.html, allowImages = allowImages) { url ->
+                        MailHtml(mail.html, allowImages = allowImages, images = inbox.contentSource?.transport?.replyImages) { url ->
                             handleLink(url)
                         }
                     }
-                    mail.text.isNotBlank() -> SelectionContainer { Text(mail.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    mail.text.isNotBlank() -> SelectionContainer {
+                        ReadingContent { Text(mail.text, style = PersonaTheme.type.body, color = PersonaTheme.palette.ink) }
+                    }
                     else -> Text(stringResource(R.string.inbox_mail_no_body), style = PersonaTheme.type.body, color = PersonaTheme.palette.ink2)
                 }
             }
@@ -436,7 +449,7 @@ internal fun mailContextText(mail: MailMessage): String = buildString {
 }.trim()
 
 @Composable
-private fun MailHeaderRow(label: String, value: String) {
+internal fun MailHeaderRow(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
         Text(label, Modifier.width(56.dp), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink3)
         Text(value, Modifier.weight(1f), style = PersonaTheme.type.callout, color = PersonaTheme.palette.ink)

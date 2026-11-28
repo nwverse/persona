@@ -30,6 +30,16 @@ export interface TurnChangeSet {
   exact: boolean;
 }
 
+/** Files listed before "Show N more files" (cindy's MAX_VISIBLE_FILES). */
+export const VISIBLE_FILES = 3;
+
+/** The card's height as drawn (Chrome, 2026-11-12), for an exchange's estimate before it is first drawn: its 4 px
+ *  margins, border, the 64 px head, and the files' padding, rows and Show more row. */
+export function turnChangesHeight(c: TurnChangeSet): number {
+  const rows = Math.min(c.files.length, VISIBLE_FILES);
+  return 8 + 2 + 64 + 1 + 16 + rows * 36 + (c.files.length > VISIBLE_FILES ? 32 : 0);
+}
+
 interface Counts {
   add: number;
   del: number;
@@ -111,7 +121,7 @@ export function editCounts(use: Item): Counts {
 
 /** The note the hub ends a tool input's string with when it clipped it for good (server/internal/transcript/clip.go
  *  clipNoteFormat). */
-const CLIPPED = /\n…（已截断，共 \d+ 字节）$/; // i18n-ignore: matches the hub's text
+const CLIPPED = /\n…（已截断，共 ≈?\d+ 字节）$/; // i18n-ignore: matches the hub's text
 
 function clipped(v: unknown): boolean {
   if (typeof v === "string") return CLIPPED.test(v);
@@ -121,6 +131,11 @@ function clipped(v: unknown): boolean {
 
 const absolute = (p: string) => p.startsWith("/") || p.startsWith("~") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
 
+/** An edit's path, normalized against the session's folder when it was relative. */
+export function changePath(named: string, cwd?: string): string {
+  return normalizePath(cwd && !absolute(named) ? joinPath(cwd, named) : named);
+}
+
 /** What an exchange's own edits changed, by file in the order first edited, or null when there is nothing to show (no
  *  successful edit). Work the hub folded counts by its fold's `changes`; a fold without them (an older node) leaves the
  *  edits unknown, and there is no card rather than a wrong count. `steps` are the exchange's own (`exchangeSteps`),
@@ -128,7 +143,7 @@ const absolute = (p: string) => p.startsWith("/") || p.startsWith("~") || /^[A-Z
 export function turnChanges(steps: readonly Step[], cwd?: string): TurnChangeSet | null {
   const files = new Map<string, ChangedFile>();
   const add = (named: string, n: Counts, exact: boolean) => {
-    const path = normalizePath(cwd && !absolute(named) ? joinPath(cwd, named) : named);
+    const path = changePath(named, cwd);
     const had = files.get(path);
     if (had) {
       had.add += n.add;

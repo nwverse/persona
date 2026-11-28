@@ -113,9 +113,9 @@
     <string name="chat_answered_entered">(Entered)</string>
     <string name="chat_answered_separator">", "</string>
     <string name="chat_answered_labeled">%1$s: %2$s</string>
-    <string name="chat_answered_mode_accept_edits">auto-accept edits</string>
-    <string name="chat_answered_mode_bypass">allow everything</string>
-    <string name="chat_answered_mode_default">confirm each step</string>
+    <string name="chat_answered_mode_accept_edits">Auto accept edits</string>
+    <string name="chat_answered_mode_bypass">Full access</string>
+    <string name="chat_answered_mode_default">Default permissions</string>
     <string name="chat_context_ai_edit">AI edit</string>
     <string name="chat_context_linked">Context</string>
     <string name="chat_context_web_selection">Web selection</string>
@@ -125,6 +125,7 @@
     <string name="chat_source_no_phone_approval">This session can\'t be approved on the phone. Approve it on the computer.</string>
     <string name="chat_source_read_only_reason">View only: %1$s</string>
     <string name="chat_starting_failed">Didn\'t start: %1$s</string>
+    <string name="chat_start_failed_title">Couldn\'t start</string>
     <string name="chat_starting">Starting %1$s. Messages go out once it\'s ready.</string>
     <string name="chat_tabs_tab_description">%1$s, %2$s</string>
     <string name="chat_tabs_launcher_chip">%1$s Lead</string>
@@ -172,11 +173,12 @@
     <string name="chat_screen_empty_hint">Send a message to start this chat.</string>
     <string name="chat_screen_added_context">Added as context; it goes with your next message</string>
     <string name="chat_search_category_event">System events</string>
-    <string name="chat_search_category_text">Text</string>
+    <string name="chat_search_category_text">Messages</string>
+    <string name="chat_search_category_quoted">Quoted</string>
     <string name="chat_search_category_thinking">Thinking</string>
     <string name="chat_search_category_tool_input">Tool input</string>
     <string name="chat_search_category_tool_output">Tool output</string>
-    <string name="chat_search_category_tool_name">Tool name</string>
+    <string name="chat_search_category_tool_name">Tool names</string>
     <string name="chat_search_updating">The history is updating. Continue in a moment.</string>
     <string name="chat_search_older_failed">Couldn\'t load earlier history. Try again.</string>
     <string name="chat_search_older_none">No earlier history loaded this time. Try again later.</string>
@@ -253,6 +255,12 @@
         <item quantity="one">Show all (%1$d line)</item>
         <item quantity="other">Show all (%1$d lines)</item>
     </plurals>
+    <plurals name="chat_diff_unchanged_lines">
+        <item quantity="one">… %1$d unchanged line</item>
+        <item quantity="other">… %1$d unchanged lines</item>
+    </plurals>
+    <string name="chat_diff_line_added">Added</string>
+    <string name="chat_diff_line_removed">Removed</string>
     <plurals name="chat_todos_progress">
         <item quantity="one">%1$d/%2$d to-do done</item>
         <item quantity="other">%1$d/%2$d to-dos done</item>
@@ -280,11 +288,11 @@
     <string name="chat_tasks_collapsed">Collapsed</string>
     <string name="chat_tasks_open_task">Open task</string>
     <string name="chat_tasks_answered_default">Answered</string>
-    <string name="chat_tasks_permission_accept_edits">Can edit files</string>
-    <string name="chat_tasks_permission_plan">Plan first</string>
-    <string name="chat_tasks_permission_auto">Auto</string>
-    <string name="chat_tasks_permission_bypass">Allow everything</string>
-    <string name="chat_tasks_permission_default">Ask every step</string>
+    <string name="chat_tasks_permission_accept_edits">Auto accept edits</string>
+    <string name="chat_tasks_permission_plan">Plan mode</string>
+    <string name="chat_tasks_permission_auto">Auto-review</string>
+    <string name="chat_tasks_permission_bypass">Full access</string>
+    <string name="chat_tasks_permission_default">Default permissions</string>
     <plurals name="chat_tasks_plan_started">
         <item quantity="one">✓ Started %1$d task</item>
         <item quantity="other">✓ Started %1$d tasks</item>
@@ -301,8 +309,10 @@
     </plurals>
     <string name="chat_tasks_plan_single">Start like this</string>
     <string name="chat_tasks_default_model">Default model</string>
+    <string name="chat_tasks_preset">Preset %1$s</string>
+    <string name="chat_tasks_launcher_preset">%1$s · %2$s</string>
     <string name="chat_tasks_read_only">Read-only requested</string>
-    <string name="chat_tasks_plan_remember">Start these directly</string>
+    <string name="chat_tasks_plan_remember">Start directly here and in subfolders</string>
     <plurals name="chat_tasks_plan_start_count">
         <item quantity="one">Start %1$d task</item>
         <item quantity="other">Start %1$d tasks</item>
@@ -346,13 +356,16 @@
     <string name="chat_tasks_interrupt_cause_auth">Sign-in or key refused</string>
     <string name="chat_tasks_interrupt_cause_model_route">Unknown model</string>
     <string name="chat_tasks_interrupt_cause_no_output">Turns with no output</string>
+    <string name="chat_tasks_interrupt_cause_stopped">Stopped with their conversation</string>
     <string name="chat_tasks_interrupt_batch">%1$s: %2$d tasks interrupted</string>
     <string name="chat_tasks_interrupt_batch_on">%1$s on %2$s: %3$d tasks interrupted</string>
     <string name="chat_tasks_interrupt_counts">→ %1$d handled / %2$d pending</string>
     <string name="chat_tasks_interrupt_all_handled">→ all handled</string>
     <string name="chat_tasks_quick_reminder">Reminder added</string>
     <string name="chat_tasks_quick_calendar">Added to calendar</string>
-    <string name="chat_tasks_quick_on_iphone">On iPhone</string>
+    <string name="chat_tasks_quick_undo">Undo</string>
+    <string name="chat_tasks_quick_undone">Undone</string>
+    <string name="chat_tasks_quick_undo_failed">Couldn\'t undo</string>
     <string name="chat_today_done_one">Done: %1$s</string>
     <plurals name="chat_today_done_many">
         <item quantity="one">%1$d task done</item>
@@ -509,6 +522,7 @@
     <string name="chat_review_pending">Awaiting review</string>
     <string name="chat_review_rework">Rework round %1$d</string>
     <string name="chat_review_needs_user">Needs your call</string>
+    <string name="chat_review_user_check">Awaiting your verification</string>
     <string name="chat_review_accepted">Accepted</string>
     <string name="chat_review_cancelled">Cancelled</string>
     <string name="chat_review_line">Review</string>

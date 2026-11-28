@@ -1,13 +1,34 @@
-Start a new Persona conversation with an opening message and return its id at once (it does not wait for the answer). For work that deserves its own thread, when the user asks for one. The message arrives marked as coming from this conversation; it is named after its first turn like any new conversation. It is told to send its result back with conversation_send; if a turn of it fails, or ends without it ever having sent anything back, Persona leaves one notice here (once per conversation).
+Open a chat the owner requested. Returns its ID and preset configuration. It reports via conversation_send; failure or silence leaves one notice. Respect read-only refusals.{{template "shared/mcp_language" .}}
 
 ```json
 {
   "type": "object",
-  "required": ["text"],
+  "required": [
+    "text"
+  ],
   "properties": {
     "text": {
       "type": "string",
-      "description": "the opening message: everything the new conversation needs, it does not see this one"
+      "description": "Self-contained first message"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Only if asked; up to 10 tags, 32 characters each"
+    },
+    "tier": {
+      "type": "string",
+      "description": "Active profile preset or old name; unknown/assistant-incompatible: refused"
+    },
+    "pin": {
+      "type": "boolean",
+      "description": "Ask for approval to pin after the first turn"
+    },
+    "quote": {
+      "type": "string",
+      "description": "“latest”, a message ID or the owner’s exact words"
     }
   }
 }

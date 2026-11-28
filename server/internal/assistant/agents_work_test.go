@@ -225,7 +225,7 @@ func TestCodexTurnErrorIsContinued(t *testing.T) {
 		t.Fatalf("entry %+v", e)
 	}
 	s.workTick(context.Background(), time.Now().Add(31*time.Second))
-	if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: 继续" {
+	if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: "+autoContinueTextForTest(continueText) {
 		t.Fatalf("sent %v", got)
 	}
 }
@@ -244,14 +244,14 @@ func TestUnreachableAPIIsContinued(t *testing.T) {
 
 func TestTransientErrorIsContinued(t *testing.T) {
 	s, f := workService(t)
-	const errText = "API Error: 503 no eligible upstream account"
+	const errText = "API Error: 503 Service Unavailable"
 	f.setSessions("box", apiErrorTurn("s1", errText))
 	triage(t, s, "s1")
 	e := entryOf(t, s, "s1")
 	if e.WakeAt == nil || e.Work.On != proto.WaitTransient || len(f.sentToAgents()) != 0 {
 		t.Fatalf("entry %+v, sent %v", e, f.sentToAgents())
 	}
-	if d := time.Until(*e.WakeAt); d < 10*time.Second || d > 20*time.Second {
+	if d := time.Until(*e.WakeAt); d < 7*time.Second || d > 16*time.Second {
 		t.Fatalf("first retry in %v", d)
 	}
 	if w, ok := reportOf(t, s, "s1"); !ok || w.WakeAt == nil || !w.TurnAt.Equal(turnEnd) {
@@ -264,37 +264,24 @@ func TestTransientErrorIsContinued(t *testing.T) {
 	}
 	s.workTick(ctx, time.Now().Add(16*time.Second))
 	s.workTick(ctx, time.Now().Add(17*time.Second))
-	if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: 继续" {
+	if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: "+autoContinueTextForTest(continueText) {
 		t.Fatalf("sent %v", got)
 	}
 
-	// It errs again after each "Continue" (a new turn each time): the count carries over, and after the cap it is a card.
-	for i := 1; ; i++ {
+	for i := 1; i <= 10; i++ {
 		s.workStarted(ctx, "box", "s1", time.Now())
 		c := apiErrorTurn("s1", errText)
 		c.UpdatedAt = turnEnd.Add(time.Duration(i) * time.Minute)
 		f.setSessions("box", c)
 		triage(t, s, "s1")
-		if e := entryOf(t, s, "s1"); e.WakeAt == nil {
-			break
+		e = entryOf(t, s, "s1")
+		if e.WakeAt == nil || e.Work.On != proto.WaitTransient {
+			t.Fatalf("attempt %d stopped: %+v", i, e)
 		}
-		s.workTick(ctx, time.Now().Add(time.Hour))
-		if i > 7 {
-			t.Fatal("never stopped retrying")
-		}
+		s.workTick(ctx, *e.WakeAt)
 	}
-	if got := f.sentToAgents(); len(got) != 5 {
-		t.Fatalf("继续 sent %d times: %v", len(got), got)
-	}
-	e = entryOf(t, s, "s1")
-	if e.Work.On != proto.WaitUser || e.InteractionID == "" {
-		t.Fatalf("after the cap: %+v", e)
-	}
-	if cards := s.workCards(); len(cards) != 1 || cards[0].Questions[0].Options[0].Label != answerRetry || cards[0].ToolName != workCardTool {
-		t.Fatalf("cards %+v", cards)
-	}
-	if snap := s.snapshot(ctx); len(snap.Interactions) != 1 || snap.Interactions[0].ID != e.InteractionID || snap.Work == nil {
-		t.Fatalf("the snapshot carries the card and the work: %+v", snap.Interactions)
+	if len(f.sentToAgents()) != 11 || len(s.workCards()) != 0 {
+		t.Fatalf("sent %v, cards %+v", f.sentToAgents(), s.workCards())
 	}
 }
 
@@ -726,7 +713,7 @@ func TestGoldenAgentTriage(t *testing.T) {
 	golden(t, "agent_wake.task_approved", renderWake(agentWake{Attempt: 1, Wait: "发布质检跑完", Then: "推进后续发布", Approved: "推进后续发布", ApprovedByTask: true}))
 	golden(t, "agent_triage_input.task_approved", prompts.RenderAgentTriageInput(prompts.AgentTriageInput{Now: "2026-01-02 09:00 Fri",
 		Agent: "修登录", Machine: "示例电脑", Reply: "质检还在跑", ApprovedWait: "发布质检跑完", ApprovedThen: "推进后续发布", ApprovedByTask: true}))
-	golden(t, "agent_answer", renderAnswer([]agentAnswerItem{{"用哪个方案？", "用 D4"}, {"要不要推到 beta？", "先不推"}}))
+	golden(t, "agent_answer", renderAnswer([]agentAnswerItem{{"用哪个方案？", "用 D4"}, {"要不要推到 beta？", "先不推"}}, ""))
 }
 
 // workMemStore is a store with session_work and its events in memory, as Postgres keeps them.
@@ -755,7 +742,7 @@ func (m *workMemStore) SessionWorks(_ context.Context, since time.Time) ([]db.Se
 	defer m.wmu.Unlock()
 	var out []db.SessionWork
 	for _, w := range m.rows {
-		if w.TurnAt.After(since) || w.WakeAt != nil && w.Work.CI != nil || w.Work.RetiredAt != nil && w.UpdatedAt.After(since) {
+		if w.TurnAt.After(since) || w.WakeAt != nil && (w.Work.CI != nil || w.Work.On == proto.WaitTransient) || w.Work.RetiredAt != nil && w.UpdatedAt.After(since) {
 			out = append(out, w)
 		}
 	}
@@ -994,6 +981,66 @@ func TestAnswerThatDidNotGoPutsTheCardBack(t *testing.T) {
 	answerCard(t, s, cards[0].ID, proto.Resolution{Answers: map[string]string{"A 还是 B？": "A"}})
 	if got := f.sentToAgents(); len(got) != 1 || len(s.workCards()) != 0 {
 		t.Fatalf("sent %v, cards %+v", got, s.workCards())
+	}
+}
+
+type launcherRefreshWorkHub struct {
+	*fakeHub
+	t        *testing.T
+	attempts int
+}
+
+func (h *launcherRefreshWorkHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage, error) {
+	if p.Method != DeviceSessionSend {
+		return h.fakeHub.DeviceCall(ctx, p)
+	}
+	h.attempts++
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) < 3*time.Minute {
+		h.t.Errorf("Continue's send deadline %v does not cover a launcher refresh", deadline)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(p.Params, &params); err != nil {
+		h.t.Fatal(err)
+	}
+	if p.Device != "mac" || params["session_id"] != "s1" || params["text"] != continueText || params["apply_switch"] != nil {
+		h.t.Errorf("Continue did not use an ordinary send to the same session: %+v", params)
+	}
+	if h.attempts == 1 {
+		return nil, &rpc.Error{Code: "not_delivered", Message: "provider update could not be applied", Data: json.RawMessage(`{"delivered":"none"}`)}
+	}
+	return json.RawMessage(`{"ok":true}`), nil
+}
+
+func TestWorkCardContinueWaitsForManagedLauncherRefresh(t *testing.T) {
+	ft := newFleetTestNoStore(t)
+	s := ft.s
+	h := &launcherRefreshWorkHub{fakeHub: ft.f, t: t}
+	s.hub = h
+	now := time.Now().UTC()
+	row := proto.Session{SessionID: "s1", Agent: "claude", PaneID: "w1:p1", Launcher: "work", Status: proto.StatusDone, UpdatedAt: now}
+	ft.d.setSessions("mac", []proto.Session{row})
+	question, answer := "The provider refused the request. What next?", answerLabel("en", answerHandled)
+	w := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, TurnAt: now, Questions: []proto.Question{{
+		Question: question, Options: []proto.QuestionOption{{Label: answer}},
+	}}}
+	id := s.openCard("mac", row, w)
+	w.InteractionID = id
+	s.work.mu.Lock()
+	s.work.loaded = true
+	s.work.entries[[2]string{"mac", row.SessionID}] = &db.SessionWork{MachineID: "mac", SessionID: row.SessionID,
+		TurnAt: now, InteractionID: id, Work: w}
+	s.work.mu.Unlock()
+	defer s.waitWorkEvents()
+	resolution := proto.Resolution{Answers: map[string]string{question: answer}}
+	answerCard(t, s, id, resolution)
+	cards := s.workCards()
+	if h.attempts != 1 || len(cards) != 1 || cards[0].ID == id {
+		t.Fatalf("pre-delivery failure did not restore the card, attempts=%d, cards=%+v", h.attempts, cards)
+	}
+	answerCard(t, s, cards[0].ID, resolution)
+	if h.attempts != 2 || len(s.workCards()) != 0 {
+		t.Fatalf("successful Continue did not retire the card, attempts=%d, cards=%+v", h.attempts, s.workCards())
 	}
 }
 

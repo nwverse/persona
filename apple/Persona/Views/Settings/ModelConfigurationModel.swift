@@ -40,6 +40,13 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
     private(set) var error: String?
     private(set) var conflict = false
     var draft = ModelBinding()
+    struct CandidateRow: Identifiable {
+        let id = UUID()
+        var choice: ModelCandidateSelection.Choice
+    }
+    var candidateMode = "extension"
+    var candidateRows: [CandidateRow] = []
+    private(set) var candidateProviders: [ModelProvider] = []
     @ObservationIgnored private let deps: Deps
     @ObservationIgnored private var loadedPurposeID: String?
     @ObservationIgnored private(set) var requestAPI: APIClient?
@@ -49,7 +56,70 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
 
     init(deps: Deps = .live) { self.deps = deps }
 
-    var dirty: Bool { purpose.map { draft != $0.override } ?? false }
+    var dirty: Bool { purpose.map { draft != $0.override || candidateChange != nil } ?? false }
+
+    private static func directProviders(in detail: ModelPurposeDetail) -> [ModelProvider] {
+        guard let policy = detail.purpose.extensionCandidates, let ids = detail.purpose.providerIDs else { return [] }
+        let allowed = Set(ids)
+        let directIDs = policy.directProviderIDs.map { Set($0) }
+        return detail.providers.filter { p in
+            guard allowed.contains(p.id), p.hidden != true else { return false }
+            if let directIDs { return directIDs.contains(p.id) }
+            return p.id.hasPrefix("launcher.") && p.hasKey == true &&
+                (p.kind == "api" || p.kind == "launcher" && (p.api == nil || p.api == "" || p.api == "messages"))
+        }
+    }
+
+    private var candidateChange: ModelCandidateSelection? {
+        guard let original = purpose?.extensionCandidates?.selection else { return nil }
+        let choices = candidateMode == "custom" ? candidateRows.map {
+            ModelCandidateSelection.Choice(provider: $0.choice.provider, model: Self.trim($0.choice.model) ?? "")
+        } : []
+        let selection = ModelCandidateSelection(mode: candidateMode, custom: choices)
+        return selection == original ? nil : selection
+    }
+
+    var hasDuplicateCandidates: Bool { candidateChange?.hasDuplicates == true }
+
+    var validCandidateChange: Bool {
+        guard let change = candidateChange else { return true }
+        guard let policy = purpose?.extensionCandidates, policy.modes.contains(change.mode) else { return false }
+        guard change.mode == "custom" else { return change.mode == "extension" || change.mode == "off" }
+        let allowed = Set(candidateProviders.map(\.id))
+        return !change.custom.isEmpty && change.custom.count <= policy.most && !change.hasDuplicates &&
+            change.custom.allSatisfy { allowed.contains($0.provider) }
+    }
+
+    func addCandidate() {
+        guard let policy = purpose?.extensionCandidates, candidateMode == "custom", candidateRows.count < policy.most else { return }
+        let providers = candidateProviders
+        let next = providers.first { provider in
+            !candidateRows.contains { $0.choice.provider == provider.id && $0.choice.model.isEmpty }
+        }
+        if let provider = next ?? providers.first { candidateRows.append(.init(choice: .init(provider: provider.id, model: ""))) }
+    }
+
+    func moveCandidate(_ id: UUID, by offset: Int) {
+        guard let from = candidateRows.firstIndex(where: { $0.id == id }), candidateRows.indices.contains(from + offset) else { return }
+        let row = candidateRows.remove(at: from)
+        candidateRows.insert(row, at: from + offset)
+    }
+
+    private func accept(_ detail: ModelPurposeDetail) {
+        var detail = detail
+        // Legacy Plan and unknown Inbox values behave as default on the hub; do not present them as a valid current choice.
+        if detail.purpose.id == "inbox.agent", let mode = detail.purpose.override.permissionMode,
+           mode == "plan" || !SessionModes.permissionModes.contains(where: { $0.id == mode }) {
+            detail.purpose.override.permissionMode = nil
+        }
+        purpose = detail.purpose
+        providers = detail.providers
+        candidateProviders = Self.directProviders(in: detail)
+        draft = detail.purpose.override
+        let selection = detail.purpose.extensionCandidates?.selection
+        candidateMode = selection?.mode ?? "extension"
+        candidateRows = selection?.custom.map { CandidateRow(choice: $0) } ?? []
+    }
 
     var categories: [ModelPurpose] { purposes.filter { $0.uses != nil } }
     var independentPurposes: [ModelPurpose] {
@@ -57,6 +127,60 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
     }
 
     var isLarkAgent: Bool { purpose?.id == "lark.agent" }
+    var isInboxAgent: Bool { purpose?.id == "inbox.agent" }
+
+    /// The value the hub actually applies. An untouched AI twin never displays the parent Agents' permission as its own.
+    static func permissionModeInEffect(_ p: ModelPurpose) -> String? {
+        guard p.kind == "launcher" else { return nil }
+        if p.id == "inbox.agent" {
+            guard let mode = p.override.permissionMode, mode != "plan",
+                  SessionModes.permissionModes.contains(where: { $0.id == mode }) else { return "default" }
+            return mode
+        }
+        return p.effective.permissionMode
+    }
+
+    var permissionModeInEffect: String? { purpose.map(Self.permissionModeInEffect) ?? nil }
+
+    /// The selected launcher's modes. A custom list replaces the standard set; runtimes without modes offer no picker.
+    var permissionModes: [SessionModes.Option] {
+        guard let purpose, purpose.supports("permission_mode") else { return [] }
+        let id = draft.provider ?? purpose.effective.provider
+        let provider = providers.first { $0.id == id }
+        let modes: [SessionModes.Option]
+        if let listed = provider?.permissionModes, !listed.isEmpty {
+            guard listed.count >= 2 else { return [] }
+            modes = listed.map(SessionModes.listedOption)
+        } else {
+            let agent = provider?.agent ?? Self.providerAgent(provider)
+            if ["omp", "traex", "pi", "cursor"].contains(agent) { return [] }
+            modes = SessionModes.assistantModes
+        }
+        return isInboxAgent ? modes.filter { $0.id != "plan" } : modes
+    }
+
+    private static func providerAgent(_ provider: ModelProvider?) -> String {
+        switch provider?.id ?? "" {
+        case "launcher.codex": "codex"
+        case "launcher.agy": "agy"
+        case "launcher.omp": "omp"
+        case "launcher.traex": "traex"
+        default: "claude"
+        }
+    }
+
+    var permissionModeDefaultLabel: String {
+        isInboxAgent ? String(localized: "Default Permissions") : String(localized: "Default [Model Configuration View a44f9f]")
+    }
+
+    var permissionModeHint: String? {
+        guard purpose?.supports("permission_mode") == true else { return nil }
+        if isInboxAgent {
+            return String(localized: "Only the AI twin's own choice applies. Default permissions asks before edits or commands. New chats and stopped chats use the choice when they resume; a running chat keeps its current mode.")
+        }
+        guard let mode = draft.permissionMode else { return nil }
+        return SessionModes.assistantModes.first { $0.id == mode }?.detail
+    }
 
     /// A use of Agents the hub lets the user set apart (Lark /agent, the Inbox's AI twin): fields of its own, following
     /// Agents while they are empty. An older hub sends no fields for it, and it stays a read-only use of Agents.
@@ -102,7 +226,8 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
     func modelSummary(_ p: ModelPurpose) -> String {
         let model = p.effective.model
         let effort = p.effective.effort.map { value in SessionModes.effortLevels.first { $0.id == value }?.title ?? value }
-        let result = [model, effort].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        let permission = Self.permissionModeInEffect(p).map { SessionModes.mode($0)?.title ?? SessionModes.listedOption($0).title }
+        let result = [model, effort, permission].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
         if !result.isEmpty { return result }
         return p.effective.provider == nil ? String(localized: "Not set up") : String(localized: "Default [Prompt Composer 844b8c]")
     }
@@ -127,7 +252,7 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
         return purpose.runtimes ?? []
     }
 
-    /// Another provider clears the model and the effort; the runtime is not the provider's and stays.
+    /// Another provider clears the model, effort and permission; the runtime is not the provider's and stays.
     func chooseProvider(_ id: String) {
         let selected = id.isEmpty ? nil : id
         guard selected != draft.provider else { return }
@@ -161,9 +286,7 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
                     purpose = nil
                     throw APIError(status: 0, message: String(localized: "This hub doesn't support model configuration by category yet. Update the server first."))
                 }
-                purpose = result.purpose
-                providers = result.providers
-                draft = result.purpose.override
+                accept(result)
                 loadedPurposeID = purposeID
             } else {
                 let result = try await api.modelConfiguration()
@@ -186,7 +309,7 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
     }
 
     func save() async -> Bool {
-        guard !saving && !loading && !conflict, let purpose,
+        guard !saving && !loading && !conflict && validCandidateChange, let purpose,
               purpose.hasWritableFields || (purpose.fields == nil && (purpose.kind == "plugin" || purpose.uses != nil)) else { return false }
         saving = true
         defer { saving = false }
@@ -196,13 +319,16 @@ nonisolated enum ModelSettingsOwner: Equatable, Sendable {
             }
             requestAPI = api
             let binding = ModelBinding(provider: Self.trim(draft.provider), model: Self.trim(draft.model), effort: Self.trim(draft.effort),
-                                       runtime: Self.trim(draft.runtime))
-            let patch = ModelConfigurationPatch(revision: purpose.revision, binding: binding,
-                                                fields: purpose.fields ?? ["provider", "model"])
+                                       runtime: Self.trim(draft.runtime), permissionMode: Self.trim(draft.permissionMode))
+            var fields = purpose.fields ?? ["provider", "model"]
+            if purpose.isExtensionPurpose {
+                let changed = [("provider", draft.provider != purpose.override.provider), ("model", draft.model != purpose.override.model),
+                               ("effort", draft.effort != purpose.override.effort), ("runtime", draft.runtime != purpose.override.runtime)]
+                fields = fields.filter { field in changed.contains { $0.0 == field && $0.1 } }
+            }
+            let patch = ModelConfigurationPatch(revision: purpose.revision, binding: binding, fields: fields, candidates: candidateChange)
             let result = try await api.saveModelPurpose(purpose.id, patch: patch)
-            self.purpose = result.purpose
-            providers = result.providers
-            draft = result.purpose.override
+            accept(result)
             error = nil
             conflict = false
             await deps.updated()

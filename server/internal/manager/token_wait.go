@@ -12,6 +12,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
 )
 
@@ -28,7 +29,11 @@ var revokedRetry = 10 * time.Minute
 // runs meanwhile (no bots, connectors, extensions, inbox): the sources it had may be another manager's now. Every
 // revokedRetry the token alone is tried with a bare dial (probeToken), never the whole manager.
 func awaitRestart(ctx context.Context, dir string, before *assistant.ManagerConfig, out io.Writer) error {
-	return awaitRestartWith(ctx, before, func() string {
+	return awaitRestartLang(ctx, i18n.Terminal(), dir, before, out)
+}
+
+func awaitRestartLang(ctx context.Context, l i18n.Lang, dir string, before *assistant.ManagerConfig, out io.Writer) error {
+	return awaitRestartWithLang(ctx, l, before, func() string {
 		c, err := assistant.ReadManagerConfig(dir)
 		if err != nil {
 			return ""
@@ -40,6 +45,10 @@ func awaitRestart(ctx context.Context, dir string, before *assistant.ManagerConf
 // awaitRestartWith is awaitRestart with token reading the manager's token where it keeps it ("" when it does not
 // read).
 func awaitRestartWith(ctx context.Context, before *assistant.ManagerConfig, token func() string, out io.Writer) error {
+	return awaitRestartWithLang(ctx, i18n.Terminal(), before, token, out)
+}
+
+func awaitRestartWithLang(ctx context.Context, l i18n.Lang, before *assistant.ManagerConfig, token func() string, out io.Writer) error {
 	id := ""
 	if before != nil {
 		id = before.ID
@@ -51,7 +60,7 @@ func awaitRestartWith(ctx context.Context, before *assistant.ManagerConfig, toke
 			return err
 		}
 		if renewed {
-			fmt.Fprintf(out, "manager: [%s] manager.json 里有了新 token，重新连 hub\n", id)
+			fmt.Fprint(out, i18n.T(l.Or(i18n.En), "manager-cli.token_renewed", i18n.Args{"id": id}))
 			return nil
 		}
 		// Only a dial the hub took (the upgrade went through: it accepted the token) brings it back. Refused again:
@@ -60,7 +69,7 @@ func awaitRestartWith(ctx context.Context, before *assistant.ManagerConfig, toke
 		err = probeToken(ctx, before)
 		switch {
 		case err == nil:
-			fmt.Fprintf(out, "manager: [%s] hub 又认这个 token 了：重新连 hub\n", id)
+			fmt.Fprint(out, i18n.T(l.Or(i18n.En), "manager-cli.token_accepted", i18n.Args{"id": id}))
 			return nil
 		case errors.Is(err, bus.ErrRevoked), errors.Is(err, bus.ErrRejected): // refused (a plain 401 from an older hub)
 			wait = revokedRetry
@@ -80,10 +89,7 @@ var probeToken = func(ctx context.Context, c *assistant.ManagerConfig) error {
 	if c == nil {
 		return nil
 	}
-	var client *http.Client
-	if c.Fingerprint != "" {
-		client = link.Pinned(c.Fingerprint)
-	}
+	client := probeTokenClient(c.Fingerprint)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ws, err := bus.Dial(ctx, c.Hub, c.Token, client)
@@ -92,6 +98,16 @@ var probeToken = func(ctx context.Context, c *assistant.ManagerConfig) error {
 	}
 	_ = ws.Close(websocket.StatusNormalClosure, "probe")
 	return nil
+}
+
+// probeTokenClient returns the HTTP client probeToken dials the hub's bus with: pinned when a TLS fingerprint is
+// configured (link.Pinned already disables redirects), or a non-redirecting client so 3xx responses cannot leak the
+// bearer token across origins/downgrades or spoof a 101 upgrade.
+func probeTokenClient(fingerprint string) *http.Client {
+	if fingerprint != "" {
+		return link.Pinned(fingerprint)
+	}
+	return &http.Client{CheckRedirect: noRedirect}
 }
 
 // waitNewToken returns once manager.json in dir has a token other than before's (renewed), after most (not renewed:

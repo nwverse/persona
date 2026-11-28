@@ -2,6 +2,7 @@ package persona.platform.notify
 
 import persona.core.contracts.GroupKeys
 import persona.core.contracts.Interaction
+import persona.core.contracts.InteractionEvent
 import persona.core.contracts.InteractionResolvedEvent
 import persona.core.contracts.NotifyEvent
 import persona.core.contracts.ServerEvent
@@ -23,7 +24,7 @@ import java.time.Instant
  * streaming included, until it was done.
  */
 internal fun Flow<ServerEvent>.notificationEvents(): Flow<ServerEvent> =
-    filter { it is NotifyEvent || it is InteractionResolvedEvent }.buffer(Channel.UNLIMITED)
+    filter { it is NotifyEvent || it is InteractionEvent || it is InteractionResolvedEvent }.buffer(Channel.UNLIMITED)
 
 /** Live alerts require hub-approved notify events; [catchUp] is the bounded fallback when no live service can run. */
 internal class NotificationDelivery(
@@ -41,10 +42,28 @@ internal class NotificationDelivery(
     private val catchUpPreferences: suspend () -> Map<String?, DeviceNotificationPreferences> = {
         preferences()?.let { mapOf<String?, DeviceNotificationPreferences>(null to it) }.orEmpty()
     },
+    /** Only notifications showing now, not the delivered/dismissed history used to suppress a second arrival. */
+    private val showing: () -> Set<String> = notified,
+    private val retractOccurrence: ((String, String) -> Unit)? = null,
+    private val notifiedOccurrences: () -> Map<String, String?> = { emptyMap() },
 ) {
+    private fun retractCard(id: String, createdAt: String?) {
+        if (createdAt != null && retractOccurrence != null) retractOccurrence.invoke(id, createdAt) else retract(id)
+    }
+
     suspend fun accept(event: ServerEvent) {
         when (event) {
-            is InteractionResolvedEvent -> retract(event.id)
+            is InteractionResolvedEvent -> retractCard(event.id, event.createdAt)
+            is InteractionEvent -> {
+                // A current snapshot is not a new arrival. Only redraw a notification this device already delivered,
+                // with the server's latest deadline and without notifying again for an unseen card.
+                if (event.interaction.isDisplayMirror || !event.interaction.canClarify || event.interaction.id !in showing()) return
+                interactions.refresh()
+                val current = interactions.pending.value.firstOrNull { it.id == event.interaction.id } ?: return
+                if (NotificationPolicy.expired(current)) { retractCard(current.id, current.createdAt); return }
+                val session = current.sessionKey.takeIf { it.machineId.isNotBlank() && it.sessionId.isNotBlank() }
+                if (session == null || !suppressed(session)) postInteraction(current, false, null)
+            }
             is NotifyEvent -> {
                 val session = NotificationPolicy.session(event)
                 if (session != null && (suppressed(session) || quiet(session))) return
@@ -61,7 +80,8 @@ internal class NotificationDelivery(
                     // is found by the event's own ids, and with no conversation of its own to be looking at, never held back.
                     val key = SessionKey(event.machineId, event.sessionId)
                     val ix = interactions.pending.value.firstOrNull { it.id == id && it.sessionKey == key } ?: return
-                    if (NotificationPolicy.expired(ix)) { retract(id); return }
+                    if (ix.isDisplayMirror) return
+                    if (NotificationPolicy.expired(ix)) { retractCard(id, ix.createdAt); return }
                     if (session == null || !suppressed(session)) postInteraction(ix, event.quiet, null)
                 } else if (session == null || !suppressed(session)) postNotify(event)
             }
@@ -80,23 +100,25 @@ internal class NotificationDelivery(
         sessions.refresh()
         interactions.refresh()
         val currentTime = now()
-        val pending = interactions.pending.value.map { ix ->
+        val pending = interactions.pending.value.filterNot { it.isDisplayMirror }.map { ix ->
             ix to checkNotNull(settings[GroupKeys.namespaceOf(ix.machineId)]) {
                 "Notification preferences are not ready for the request's hub group"
             }
         }
         val alreadyNotified = notified()
+        val occurrences = notifiedOccurrences()
         val pendingIds = pending.mapTo(HashSet()) { it.first.id }
-        // A request resolved while no service was alive leaves both its system notification and its de-dup record behind.
-        (alreadyNotified - pendingIds).forEach(retract)
+        // A resolved occurrence clears only its own alert and history, never a same-ID replacement's.
+        ((alreadyNotified + occurrences.keys) - pendingIds).forEach { retractCard(it, occurrences[it]) }
         pending.forEach { (ix, groupSettings) ->
             if (NotificationPolicy.expired(ix, currentTime)) {
-                retract(ix.id)
+                retractCard(ix.id, ix.createdAt)
                 return@forEach
             }
+            val delivered = if (ix.createdAt != null && occurrences.isNotEmpty()) occurrences[ix.id] == ix.createdAt else ix.id in alreadyNotified
             if (
                 !groupSettings.input ||
-                ix.id in alreadyNotified ||
+                delivered ||
                 (ix.manager ?: "assistant") in groupSettings.mutedManagers.orEmpty()
             ) return@forEach
             if (groupSettings.muteWhileDesktop == true && desktopOnline(ix.machineId) == true) return@forEach

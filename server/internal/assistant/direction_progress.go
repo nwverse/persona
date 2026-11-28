@@ -48,6 +48,9 @@ var errNoDirection = errors.New("no such direction: GET /api/v1/assistant/leader
 // setDirectionName names direction id (a leader now or before) as by chose; "" clears it (the fallbacks show again).
 func (s *Service) setDirectionName(ctx context.Context, id, name, by string) error {
 	name = clip(oneLine(name), directionNameMost)
+	if name == "" {
+		by = ""
+	}
 	b := &s.directions
 	b.mu.Lock()
 	if !s.directionsLocked(ctx) {
@@ -59,13 +62,22 @@ func (s *Service) setDirectionName(ctx context.Context, id, name, by string) err
 		b.mu.Unlock()
 		return errNoDirection
 	}
-	d.Name, d.NameBy = name, by
-	if name == "" {
-		d.NameBy = ""
+	oldName, oldBy := d.Name, d.NameBy
+	if name == oldName && by == oldBy {
+		b.mu.Unlock()
+		return nil
 	}
-	s.saveDirectionsLocked(ctx)
+	d.Name, d.NameBy = name, by
+	if err := s.saveDirectionsCheckedLocked(ctx); err != nil {
+		d.Name, d.NameBy = oldName, oldBy
+		b.mu.Unlock()
+		return err
+	}
 	b.mu.Unlock()
-	s.directionsSoon() // leader.changed with the new name
+	if name != oldName {
+		s.todoRevisionChanged()
+	}
+	s.publish(ctx) // session titles update now; the existing direction/name events follow
 	return nil
 }
 
@@ -90,29 +102,33 @@ func (s *Service) toolDirectionName(ctx context.Context, self string, args json.
 	return fmt.Sprintf("Direction %s is called “%s” now (the app and the work-log extension show it).", a.ID, clip(oneLine(a.Name), directionNameMost)), nil
 }
 
-// toolLeaderProgress is leader_progress: a leader reports its direction's progress at the goal level.
-func (s *Service) toolLeaderProgress(ctx context.Context, self string, args json.RawMessage) (string, error) {
-	var a struct {
-		Reached  string   `json:"reached"`
-		Doing    string   `json:"doing"`
-		NeedsYou string   `json:"needs_you"`
-		Links    []string `json:"links"`
-	}
-	if err := json.Unmarshal(args, &a); err != nil {
-		return "", fmt.Errorf("arguments: %v", err)
-	}
-	if !s.isLeader(ctx, self) {
-		return "", errors.New("only a leader conversation (assistant.leaders) reports its direction's progress: tell the user in your reply instead")
-	}
+// normalizeLeaderProgress applies the same normalization to MCP, HTTP and node CLI reports.
+func normalizeLeaderProgress(a directionProgressInput, at time.Time) (leaderProgress, error) {
 	p := leaderProgress{Reached: clip(oneLine(a.Reached), progressPartMost), Doing: clip(oneLine(a.Doing), progressPartMost),
-		NeedsYou: clip(oneLine(a.NeedsYou), progressPartMost), At: time.Now().UTC()}
+		NeedsYou: clip(oneLine(a.NeedsYou), progressPartMost), At: at}
 	for _, l := range a.Links {
 		if l = strings.TrimSpace(l); l != "" && !slices.Contains(p.Links, l) && len(p.Links) < progressLinksMost {
 			p.Links = append(p.Links, clip(l, 500))
 		}
 	}
 	if p.Reached == "" && p.Doing == "" && p.NeedsYou == "" {
-		return "", errors.New("say at least one of reached, doing and needs_you")
+		return leaderProgress{}, errors.New("say at least one of reached, doing and needs_you")
+	}
+	return p, nil
+}
+
+// toolLeaderProgress is leader_progress: a leader reports its direction's progress at the goal level.
+func (s *Service) toolLeaderProgress(ctx context.Context, self string, args json.RawMessage) (string, error) {
+	var a directionProgressInput
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", fmt.Errorf("arguments: %v", err)
+	}
+	if !s.isLeader(ctx, self) {
+		return "", errors.New("only a leader conversation (assistant.leaders) reports its direction's progress: tell the user in your reply instead")
+	}
+	p, err := normalizeLeaderProgress(a, time.Now().UTC())
+	if err != nil {
+		return "", err
 	}
 	told, err := s.leaderProgressReport(ctx, self, p)
 	if err != nil {
@@ -134,13 +150,23 @@ func (s *Service) leaderProgressReport(ctx context.Context, lead string, p leade
 		return false, errors.New("the directions could not be read")
 	}
 	d := b.m[lead]
-	if d == nil { // a leader the sync has not recorded yet
+	created := d == nil
+	if created { // a leader the sync has not recorded yet
 		d = &direction{MachineID: s.settings(ctx).MachineID, By: directionByAssistant, At: p.At}
 		b.m[lead] = d
 	}
+	previous := d.Progress
 	cp := p
 	d.Progress = &cp
-	s.saveDirectionsLocked(ctx)
+	if err := s.saveDirectionsCheckedLocked(ctx); err != nil {
+		if created {
+			delete(b.m, lead)
+		} else {
+			d.Progress = previous
+		}
+		b.mu.Unlock()
+		return false, err
+	}
 	b.mu.Unlock()
 	if !s.todoEventsOn() {
 		return false, nil
@@ -156,7 +182,7 @@ func (s *Service) leaderProgressReport(ctx context.Context, lead string, p leade
 	sum := sha256.Sum256([]byte(key))
 	ev := assistantwire.LeaderReportEvent{ID: "lrep_" + hex.EncodeToString(sum[:8]), Leader: lead, Kind: assistantwire.LeaderProgress,
 		Text: clip(strings.Join(parts, "\n"), assistantwire.LeaderReportTextMost), At: p.At, Reached: p.Reached, Doing: p.Doing,
-		NeedsYou: p.NeedsYou, Links: p.Links}
+		NeedsYou: p.NeedsYou, Links: p.Links, Level: s.leaderReportLevel(ctx, assistantwire.LeaderProgress)}
 	if len(p.Links) > 0 {
 		ev.Link = p.Links[0]
 	}
@@ -201,6 +227,65 @@ func (s *Service) directionOf(id string) *direction {
 	}
 	cp := *b.m[id]
 	return &cp
+}
+
+// directionSessionNames uses the same canonical resolver as the tree without opening
+// the knowledge base while publish holds pubMu. directionsSync publishes refreshed
+// project fallbacks once the knowledge base is available; explicit names are immediate.
+func (s *Service) directionSessionNames(ctx context.Context, cfg Settings, titles map[string]shownTitle) map[string]string {
+	return s.directionNames(ctx, cfg, titles, false)
+}
+
+// todoDirectionLabels includes recorded directions even after they stop receiving new work.
+func (s *Service) todoDirectionLabels(ctx context.Context, cfg Settings) map[string]string {
+	titles, _ := s.conversationTitles()
+	return s.directionNames(ctx, cfg, titles, true)
+}
+
+// directionNames can include ended directions for to-do attribution. Only cfg.Leaders are current leaders.
+func (s *Service) directionNames(ctx context.Context, cfg Settings, titles map[string]shownTitle, includeEnded bool) map[string]string {
+	b := &s.directions
+	b.mu.Lock()
+	loaded := s.directionsLocked(ctx)
+	if !loaded && !includeEnded {
+		b.mu.Unlock()
+		return nil
+	}
+	records := make(map[string]direction, len(cfg.Leaders))
+	for _, id := range cfg.Leaders {
+		if id == "" || id == cfg.Main {
+			continue
+		}
+		if d := b.m[id]; loaded && d != nil {
+			records[id] = *d
+		} else {
+			records[id] = direction{} // the title is the only available fallback
+		}
+	}
+	if includeEnded && loaded {
+		for id, d := range b.m {
+			if id != "" && id != cfg.Main && d != nil {
+				records[id] = *d
+			}
+		}
+	}
+	b.mu.Unlock()
+
+	// A list validator needs only projects that supply a direction's fallback name.
+	opened := s.kb.cur.Load()
+	available := opened != nil && s.kbOn(ctx)
+	projects := map[string]string{}
+	names := make(map[string]string, len(records))
+	for id, d := range records {
+		if _, known := projects[d.Project]; available && d.Name == "" && d.Project != "" && !known {
+			projects[d.Project] = ""
+			if project, ok := opened.eng.Store.Project(d.Project); ok {
+				projects[d.Project] = project.Name
+			}
+		}
+		names[id] = nameOf(&d, titles[id].title, projects, available)
+	}
+	return names
 }
 
 // leaderNames are what the directions of leaders ids are called now (directionName), read once for all of them; a

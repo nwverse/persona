@@ -3,6 +3,7 @@ package node
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,8 +18,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -34,9 +37,10 @@ import (
 // terminal or put on a command line.
 
 type managedLaunchers struct {
-	mu   sync.Mutex
-	byID map[string]proto.ManagedLauncher // the catalog: a withheld entry has no secrets
-	full map[string]proto.ManagedLauncher // what was pulled of the withheld ones, at their Rev
+	mu    sync.Mutex
+	byID  map[string]proto.ManagedLauncher // the catalog: a withheld entry has no secrets
+	full  map[string]proto.ManagedLauncher // what was pulled of the withheld ones, at their Rev
+	infer []proto.Launcher                 // sorted Claude launcher projection for inferLauncher, rebuilt on catalog change
 	// pull lets one pull of a name go out at a time (the others wait and use it).
 	pull sync.Map // name → *sync.Mutex
 }
@@ -52,9 +56,11 @@ func (n *Node) setManaged(list []proto.ManagedLauncher) {
 		l.Withheld = false
 		m[l.Name] = l
 	}
+	infer := buildManagedInferLaunchers(m)
 	n.managed.mu.Lock()
-	n.managed.byID, n.managed.full = m, nil
+	n.managed.byID, n.managed.full, n.managed.infer = m, nil, infer
 	n.managed.mu.Unlock()
+	forgetOfflineScan() // cached transcript rows include the launcher's context window
 }
 
 // setCatalog is launchers.catalog: the providers in this computer's scope. What was pulled stays while the provider is
@@ -67,6 +73,9 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			continue
 		}
 		m[l.Name] = l
+		// A pushed provider is kept ahead of a start. Managed agy providers follow the same on-demand policy as other
+		// runtimes: catalog updates only refresh the in-memory index and rev, and credentials are pulled when a session
+		// or probe uses that channel.
 		if l.Withheld && l.Pushed() {
 			prefetch = append(prefetch, l.Name)
 		}
@@ -78,8 +87,10 @@ func (n *Node) setCatalog(list []proto.ManagedLauncher) {
 			full[name] = f
 		}
 	}
-	n.managed.byID, n.managed.full = m, full
+	infer := buildManagedInferLaunchers(m)
+	n.managed.byID, n.managed.full, n.managed.infer = m, full, infer
 	n.managed.mu.Unlock()
+	forgetOfflineScan()
 	if len(prefetch) > 0 {
 		go func() {
 			for _, name := range prefetch {
@@ -181,12 +192,23 @@ func (n *Node) launcherCommand(name string) string { return n.launcherCommandQ(n
 
 // launcherCommandQ is launcherCommand quoting with q (herdrresume.go quotes without apostrophes).
 func (n *Node) launcherCommandQ(name string, q func(string) string) string {
+	if proto.IsExternalLauncher(name) {
+		return "false" // only externalCLICommand may execute a locally registered adapter
+	}
 	if _, ok := n.managedLauncher(name); ok {
 		return q(n.bin) + " launch " + name
 	}
 	if name == "claude" {
 		if d := n.claudeStartDir.Load(); d != nil && *d != "" {
 			return "CLAUDE_CONFIG_DIR=" + shellDirQ(*d, q) + " " + name
+		}
+	}
+	if name == "codex" {
+		launcherCache.Lock()
+		words := launcherCache.codex[name]
+		launcherCache.Unlock()
+		if len(words) == 1 && filepath.IsAbs(words[0]) { // the ChatGPT app's codex, which the shell does not find
+			return q(words[0])
 		}
 	}
 	return name
@@ -204,17 +226,67 @@ func shellDirQ(p string, q func(string) string) string {
 	return q(p)
 }
 
+const openCodeSessionEnv = "PERSONA_OPENCODE_SESSION"
+const codexHeaderBindingsEnv = "PERSONA_CODEX_HEADER_BINDINGS"
+
+// withCodexHeaders carries provider header values in generated environment variables. The separate bindings value
+// contains only header and variable names; codexProviderArgs turns it into Codex's env_http_headers configuration.
+func withCodexHeaders(env []string, raw string) []string {
+	headers := piHeaders(raw)
+	if len(headers) == 0 {
+		return env
+	}
+	used := make(map[string]bool, len(env))
+	for _, name := range envNames(env) {
+		used[name] = true
+	}
+	env = slices.DeleteFunc(env, func(kv string) bool { return strings.HasPrefix(kv, codexHeaderBindingsEnv+"=") })
+	names := make([]string, 0, len(headers))
+	for name := range headers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	bindings := make([]string, 0, len(names))
+	for _, name := range names {
+		sum := sha256.Sum256([]byte(strings.ToLower(name)))
+		variable := fmt.Sprintf("PERSONA_CODEX_HEADER_%x", sum)
+		for used[variable] {
+			variable += "X"
+		}
+		used[variable] = true
+		env = append(env, variable+"="+headers[name])
+		bindings = append(bindings, name+"\t"+variable)
+	}
+	return append(env, codexHeaderBindingsEnv+"="+strings.Join(bindings, "\n"))
+}
+
+func codexHeaderBindings(env []string) map[string]string {
+	bindings := map[string]string{}
+	for _, line := range strings.Split(envValue(env, codexHeaderBindingsEnv), "\n") {
+		if name, variable, ok := strings.Cut(line, "\t"); ok && name != "" && variable != "" {
+			bindings[name] = variable
+		}
+	}
+	return bindings
+}
+
 func managedEnv(l proto.ManagedLauncher) []string {
 	switch l.AgentType() {
 	case "codex":
 		var env []string
-		if l.BaseURL != "" {
-			env = append(env, "OPENAI_BASE_URL="+l.BaseURL)
+		if base := l.LaunchBaseURL(); base != "" {
+			env = append(env, "OPENAI_BASE_URL="+base)
 		}
 		if l.APIKey != "" {
 			env = append(env, "OPENAI_API_KEY="+l.APIKey)
 		}
-		return withLauncherEnv(env, l.Env)
+		env = withLauncherEnv(env, l)
+		env = withCodexHeaders(env, l.Headers)
+		if effectiveBase := envValue(env, "OPENAI_BASE_URL"); modelhttp.OpenCodeGo(effectiveBase) && envValue(env, openCodeSessionEnv) == "" {
+			session := cmp.Or(modelhttp.OpenCodeSessionHeaderValue(l.Headers), modelhttp.OpenCodeSessionID("launcher:"+cmp.Or(l.Name, effectiveBase)))
+			env = append(env, openCodeSessionEnv+"="+session)
+		}
+		return env
 	case "agy":
 		var env []string
 		if l.BaseURL != "" {
@@ -223,15 +295,17 @@ func managedEnv(l proto.ManagedLauncher) []string {
 		if l.APIKey != "" {
 			env = append(env, "GEMINI_API_KEY="+l.APIKey)
 		}
-		return withLauncherEnv(env, l.Env)
+		return withLauncherEnv(env, l)
 	}
 	return envList(providerEnv(l, "", "", false))
 }
 
-// withLauncherEnv is env (KEY=value entries) with a launcher's own environment over it (#5953), for an agent that is no
-// Claude Code (providerEnv does that for one).
-func withLauncherEnv(env []string, raw string) []string {
-	for _, kv := range launcherEnvVars(raw) {
+// withLauncherEnv adds the proxy fields and then the launcher's explicit environment (#5953).
+func withLauncherEnv(env []string, l proto.ManagedLauncher) []string {
+	for _, kv := range launcherProxyVars(l) {
+		env = append(env, kv[0]+"="+kv[1])
+	}
+	for _, kv := range launcherEnvOverrides(l.Env) {
 		env = slices.DeleteFunc(env, func(e string) bool { return strings.HasPrefix(e, kv[0]+"=") })
 		env = append(env, kv[0]+"="+kv[1])
 	}
@@ -259,8 +333,10 @@ const artifactsOff = "CLAUDE_CODE_DISABLE_ARTIFACT=1"
 
 // managedSettingsEnv is managedEnv as a settings "env" map (providerEnv). Settings env wins over the process env, so
 // the user's ~/.claude/settings.json (another gateway, another token) would otherwise replace a managed launcher's.
+// The reply limit Persona works out is left to the process env, which `personad launch` sets for the model the
+// session runs (sessionOutput); one the provider's own environment sets is pinned like the rest of it.
 func managedSettingsEnv(l proto.ManagedLauncher) map[string]string {
-	return pinnedEnv(providerEnv(l, "", "", false))
+	return unpinnedOutput(pinnedEnv(providerEnv(l, "", "", false)))
 }
 
 var (
@@ -276,11 +352,10 @@ var agentSystemDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"}
 // node puts claude. commonNodePaths looks there after agentSystemDirs; a test points it elsewhere with them (#6257).
 var distroNodeDir = "/usr/bin"
 
-// claudeExecutable finds claude: PATH first, then the usual install spots. A node started by launchd (macOS) has a
-// minimal PATH that misses /opt/homebrew/bin, and nothing in `personad launch`'s own path adds it.
-func agentExecutable(bin string) (string, error) {
+// agentExecutableOnDisk finds a CLI on PATH or in the usual install locations without running shell startup files.
+func agentExecutableOnDisk(bin string) string {
 	if p, err := exec.LookPath(bin); err == nil {
-		return p, nil
+		return p
 	}
 	home := userHome()
 	var candidates []string
@@ -295,9 +370,11 @@ func agentExecutable(bin string) (string, error) {
 		filepath.Join(home, ".claude", "local", bin),
 		filepath.Join(home, ".volta", "bin", bin),
 	)
-	nvmDirs, _ := filepath.Glob(filepath.Join(home, ".nvm", "versions", "node", "*", "bin", bin))
-	sort.Sort(sort.Reverse(sort.StringSlice(nvmDirs)))
-	candidates = append(candidates, nvmDirs...)
+	for _, dir := range nvmVersionsDirs(home) {
+		paths, _ := filepath.Glob(filepath.Join(dir, "*", "bin", bin))
+		slices.Reverse(paths)
+		candidates = append(candidates, paths...)
+	}
 	for _, np := range commonNodePaths() {
 		candidates = append(candidates, filepath.Join(filepath.Dir(np), bin))
 	}
@@ -308,10 +385,16 @@ func agentExecutable(bin string) (string, error) {
 		}
 		seen[p] = true
 		if st, err := os.Stat(p); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-			return p, nil
+			return p
 		}
 	}
+	return ""
+}
 
+func agentExecutable(bin string) (string, error) {
+	if p := agentExecutableOnDisk(bin); p != "" {
+		return p, nil
+	}
 	agentExecutableMu.Lock()
 	cached := agentExecutableCache[bin]
 	agentExecutableMu.Unlock()
@@ -326,26 +409,76 @@ func agentExecutable(bin string) (string, error) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := loginShell(ctx, "command -v "+shellQuote(bin))
-	if out, err := cmd.Output(); err == nil {
-		lines := strings.Split(strings.TrimSpace(terminalEscapes.ReplaceAllString(string(out), "")), "\n")
-		for i := len(lines) - 1; i >= 0; i-- {
-			line := strings.TrimSpace(lines[i])
-			if filepath.IsAbs(line) {
-				if st, err := os.Stat(line); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
-					agentExecutableMu.Lock()
-					agentExecutableCache[bin] = line
-					agentExecutableMu.Unlock()
-					return line, nil
-				}
-			}
+	if path := shellAgentPath(ctx, bin); path != "" {
+		if st, err := os.Stat(path); err == nil && !st.IsDir() && (st.Mode().Perm()&0111 != 0 || runtime.GOOS == "windows") {
+			agentExecutableMu.Lock()
+			agentExecutableCache[bin] = path
+			agentExecutableMu.Unlock()
+			return path, nil
+		}
+	}
+
+	if bin == "codex" {
+		if p := bundledCodexCLI(); p != "" {
+			return p, nil
 		}
 	}
 
 	return "", fmt.Errorf("%s not found in PATH or the usual install locations (node service environment; add its bin directory to PATH and restart the node, or symlink into ~/.local/bin)", bin)
 }
 
+func shellAgentPath(ctx context.Context, bin string) string {
+	const begin, end = "\x01persona-agent-path-begin\x01", "\x01persona-agent-path-end\x01"
+	script := `if __persona_agent_path=$(builtin command -v ` + shellQuote(bin) + `); then
+  builtin printf '\001persona-agent-path-begin\001%s\001persona-agent-path-end\001' "$__persona_agent_path"
+fi`
+	out, err := launcherShellOutput(ctx, script)
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+		return ""
+	}
+	// An rc child can hold stdout open even when the lookup never ran. Require its completed result.
+	_, body, began := strings.Cut(string(out), begin)
+	path, _, ended := strings.Cut(body, end)
+	if !began || !ended || strings.ContainsAny(path, "\r\n") || !filepath.IsAbs(path) {
+		return ""
+	}
+	return path
+}
+
 func claudeExecutable() (string, error) { return agentExecutable("claude") }
+
+func canProbeManagedClaudeDirectly() bool { return canProbeManagedDirectly("claude") }
+
+func canProbeManagedCodexDirectly() bool { return canProbeManagedDirectly("codex") }
+
+func managedProbeExecutable(agent string) string {
+	path := agentExecutableOnDisk(agent)
+	if path == "" && agent == "codex" {
+		return bundledCodexCLI()
+	}
+	return path
+}
+
+// A managed model probe can skip the user's rc file when its CLI and interpreter are already available.
+func canProbeManagedDirectly(agent string) bool {
+	if runtime.GOOS == "windows" {
+		return true // keep the Windows executable and wrapper handling in Launch
+	}
+	exe := managedProbeExecutable(agent)
+	if exe == "" {
+		return false
+	}
+	dir, needsNode := launcherNodeDir(exe)
+	if dir != "" {
+		return true
+	}
+	if !needsNode {
+		// An arbitrary wrapper may depend on tools added by the user's shell.
+		return nativeExecutable(exe)
+	}
+	_, err := exec.LookPath("node")
+	return err == nil
+}
 
 // Launch is `personad launch [--ticket <ticket>] <name> [claude args…]`: the managed launcher's settings from the
 // local node, a hand-off's values with a ticket (secretenv.go), then claude.
@@ -362,9 +495,22 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		Clear  []string `json:"clear"` // what to drop from the shell's env first (envClearFor)
 		Args   []string `json:"args"`
 		Error  string   `json:"error"`
+		Config string   `json:"config_fingerprint"`
+		// the provider's models that take no thinking level: Effort is not passed when the session runs one
+		// (launchEffort); and its models' reported reply limits, for the limit of the model the session runs
+		// (sessionOutput). An older node sends neither: Effort and Env as before.
+		NoEffort  []string       `json:"no_effort"`
+		MaxOutput map[string]int `json:"max_output_tokens"`
 		// for a provider whose bypass list joins the inherited ones (mergesNoProxy): the user's settings env's lists, which
 		// come before the shell's. An older node does not send it: the provider's list alone.
 		NoProxyMerge map[string]string `json:"no_proxy_merge"`
+		// for a Codex provider whose gateway serves Codex's model catalog (codex_catalog.go): its URL, and the codex
+		// whose version the node checked. An older node sends neither: no catalog, as before.
+		CodexCatalogURL   string `json:"codex_catalog_url"`
+		CodexCatalogCodex string `json:"codex_catalog_codex"`
+		// the node's PERSONA_MODEL_SOURCE_HOSTS, which a pane's shell need not carry (adoptSourceHosts). An older node
+		// does not send it: the process's own, as before.
+		ModelSourceHosts string `json:"model_source_hosts"`
 	}
 	if err := json.Unmarshal(line, &resp); err != nil {
 		return err
@@ -376,15 +522,29 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 	if agent == "" {
 		agent = "claude"
 	}
-	exe, err := agentExecutable(agent)
-	if err != nil {
-		return fmt.Errorf("personad launch: %w", err)
+	var exe string
+	if os.Getenv(managedModelProbeEnv) == "1" {
+		// Prefer the probe's on-disk CLI before agentExecutable would look in the user's shell.
+		exe = managedProbeExecutable(agent)
+	}
+	if exe == "" {
+		exe, err = agentExecutable(agent)
+		if err != nil {
+			return fmt.Errorf("personad launch: %w", err)
+		}
 	}
 	var env []string
 	if agent == "claude" {
 		if len(resp.Clear) == 0 {
 			resp.Clear = legacyEnvClear
 		}
+		// The last guard for a tier alias behind a gateway (#10365), wherever the --model came from (a terminal, an
+		// older node's start, the assistant's own Bash).
+		warn := func(msg string) { fmt.Fprintf(os.Stderr, "personad launch %s: %s\n", name, msg) }
+		args, resp.Args = gatewayModelArgs(args, resp.Env, warn), gatewayModelArgs(resp.Args, resp.Env, warn)
+		resp.Clear = withProviderToolSearch(resp.Clear, resp.Env)
+		resp.Env, resp.Clear = sessionOutput(resp.Env, resp.Clear, resp.MaxOutput, sessionModel(args, resp.Args, resp.Env))
+		resp.Clear = inheritedOutputClear(resp.Clear, resp.Env, os.Getenv) // a session Persona launched runs this one
 		resp.Clear, resp.Env = launchEnvFor(resp.Clear, resp.Env, os.Getenv("PERSONA_ASSISTANT") == "1")
 		if resp.NoProxyMerge != nil { // the inherited bypasses still hold for what claude runs
 			resp.Env = withInheritedNoProxy(resp.Env, func(k string) string { return cmp.Or(resp.NoProxyMerge[k], os.Getenv(k)) })
@@ -412,12 +572,46 @@ func Launch(ctx context.Context, name string, args []string, ticket string) erro
 		}
 		env = append(withoutEnv(env, envNames(secrets)), secrets...)
 	}
-	argv := launchArgv(agent, args, resp.Args, resp.Effort, resp.Model, resp.Env)
+	catalog := resp.CodexCatalogURL
+	// The node checked another codex than this one (another PATH): this one is asked, within codexVersionTimeout. That
+	// is after the node answered (not part of LaunchNodeWait), and a fresh process has no version kept.
+	if catalog != "" && !sameFile(exe, resp.CodexCatalogCodex) && !codexReadsCatalog(codexVersionAt(context.Background(), exe)) {
+		catalog = ""
+	}
+	argv := launchArgv(agent, args, resp.Args, launchEffort(resp.Effort, resp.NoEffort, sessionModel(args, resp.Args, resp.Env)), resp.Model, resp.Env, catalog)
+	if agent == "claude" && resp.Config != "" && os.Getenv("PERSONA_ASSISTANT") != "1" {
+		stamp := managedLaunchStamp(name, resp.Config, settingsArg(argv), filepath.Dir(nodeclient.SocketPath()))
+		env = append(withoutEnv(env, []string{managedLaunchConfigEnv}), managedLaunchConfigEnv+"="+stamp)
+	}
 	if agent == "codex" && os.Getenv(codexBypassEnv) == "1" {
 		argv = codexBypassArgs(argv)
 	}
-	env = withoutEnv(env, []string{codexBypassEnv})
+	env = withoutEnv(env, []string{codexBypassEnv, managedModelProbeEnv})
+	if agent == "codex" {
+		// The provider wrapper is another native process boundary. Resolve npm's
+		// shim too; never let cmd.exe parse the first message on this final hop.
+		exe, env, err = codexStartProgram(exe, true, env)
+		if err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+	}
+	if agent == "codex" {
+		home, _ := os.UserHomeDir()
+		cwd, _ := os.Getwd()
+		if err := guardCodexWritableSymlinks(ctx, argv, env, cwd, home); err != nil {
+			return err
+		}
+		if hosts := adoptSourceHosts(resp.ModelSourceHosts); hosts != "" {
+			env = append(withoutEnv(env, []string{modelhttp.SourceHostsEnv}), hosts)
+		}
+		argv, env = codexModelSource(argv, env, cwd, home)
+	}
 	exe, argv, env, _ = launchExec(agent, exe, argv, env)
+	if agent == "codex" {
+		if err := codexStartCommandLine(argv); err != nil {
+			return fmt.Errorf("%s %w", codexStartError, err)
+		}
+	}
 	return osproc.Exec(exe, argv, env)
 }
 
@@ -441,14 +635,75 @@ func LaunchWithSecrets(ctx context.Context, ticket string, argv []string) error 
 	return osproc.Exec(exe, argv, env)
 }
 
+// withProviderToolSearch is clear (what `personad launch` drops from the shell) with ENABLE_TOOL_SEARCH added when env,
+// the provider's environment as the node gave it, sets it (#10365): the shell's value, the assistant's process's
+// included, would otherwise come first in the agent's environment.
+func withProviderToolSearch(clear, env []string) []string {
+	if !slices.Contains(envNames(env), toolSearchEnv) || slices.Contains(clear, toolSearchEnv) {
+		return clear
+	}
+	return append(slices.Clone(clear), toolSearchEnv)
+}
+
+// gatewayModelArgs is a claude's args (before a "--", which starts the prompt) with each --model that names a tier
+// alias behind a gateway (env, the provider's environment as the node gave it, names a Base URL that is not
+// Anthropic's API) replaced by the model env gives that tier, or left out with its value when env gives none, which
+// warn says (#10365): Claude Code would send the alias to the gateway as the model's name.
+func gatewayModelArgs(args, env []string, warn func(string)) []string {
+	if anthropicEndpoint(envValue(env, "ANTHROPIC_BASE_URL")) {
+		return args
+	}
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a, m, pair := args[i], "", false
+		switch {
+		case a == "--":
+			return append(out, args[i:]...)
+		case (a == "--model" || a == "-m") && i+1 < len(args):
+			m, pair = args[i+1], true
+		case strings.HasPrefix(a, "--model="):
+			m = strings.TrimPrefix(a, "--model=")
+		default:
+			out = append(out, a)
+			continue
+		}
+		if pair {
+			i++
+		}
+		r := m
+		if isTierAlias(m) {
+			r = resolveTier(planTier(m), func(k string) string { return envValue(env, k) })
+		}
+		switch {
+		case isTierAlias(r):
+			warn("--model " + m + " is a Claude Code tier the provider names no model for: it runs the provider's default model")
+		case pair:
+			out = append(out, a, r)
+		default:
+			out = append(out, "--model="+r)
+		}
+	}
+	return out
+}
+
 // launchArgv builds the argument vector for starting an agent.
-// For Claude Code, provider effort is passed as --effort only when the arguments carry no --effort (#2307).
-func launchArgv(agent string, args, respArgs []string, respEffort, respModel string, respEnv []string) []string {
+// For Claude Code, provider effort is passed as --effort only when the arguments carry no --effort (#2307), and
+// Launch leaves it out for a session model the gateway says takes none (launchEffort, #8798).
+// codexCatalog is the model catalog URL of a Codex provider's gateway, "" for none (codexProviderArgs).
+func launchArgv(agent string, args, respArgs []string, respEffort, respModel string, respEnv []string, codexCatalog string) []string {
+	if agent == agyAgent && slices.Equal(args, []string{"models"}) {
+		// Discovery needs the same provider settings as a start, with no model selected.
+		respArgs = withoutModelArgs(respArgs)
+		respModel = ""
+	}
 	hasModelArg := false
 	hasSettingsArg := false
 	hasEffortArg := false
 	cleanRespArgs := slices.Clone(respArgs)
 	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
 		if arg == "--effort" || strings.HasPrefix(arg, "--effort=") {
 			hasEffortArg = true
 		}
@@ -461,6 +716,9 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 		}
 	}
 	for _, arg := range cleanRespArgs {
+		if arg == "--" {
+			break
+		}
 		if arg == "--effort" || strings.HasPrefix(arg, "--effort=") {
 			hasEffortArg = true
 		}
@@ -477,9 +735,9 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 			launchArgs = append(launchArgs, "--effort", respEffort)
 		}
 	} else if agent == "codex" {
-		launchArgs = append(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv)...)
+		launchArgs = insertBeforeDashDash(launchArgs, codexProviderArgs(append(slices.Clone(cleanRespArgs), args...), respEnv, codexCatalog))
 		if respModel != "" && !hasModelArg {
-			launchArgs = append(launchArgs, "-m", respModel)
+			launchArgs = insertBeforeDashDash(launchArgs, []string{"-m", respModel})
 		}
 	} else if agent == "agy" {
 		if respModel != "" && !hasModelArg {
@@ -499,8 +757,11 @@ func launchArgv(agent string, args, respArgs []string, respEffort, respModel str
 // from the OPENAI_BASE_URL and OPENAI_API_KEY the launcher sets (managedEnv). Codex 0.16x no longer reads those two
 // for its built-in OpenAI provider: it went to api.openai.com over a WebSocket, without the key, and every turn ended
 // in "Reconnecting... 5/5". A provider of its own also talks plain HTTP, which a gateway answers. None when the
-// launcher names no gateway, or its arguments choose a provider or profile themselves.
-func codexProviderArgs(args, env []string) []string {
+// launcher names no gateway, or its arguments choose a provider or profile themselves. With a key and catalog (the
+// gateway's model catalog URL the node found, codex_catalog.go) the provider has its model_catalog_url too, so codex
+// lists the gateway's models and runs them with the gateway's windows and thinking levels; without, the arguments are
+// what they always were.
+func codexProviderArgs(args, env []string, catalog string) []string {
 	base := envValue(env, "OPENAI_BASE_URL")
 	if base == "" {
 		return nil
@@ -512,6 +773,34 @@ func codexProviderArgs(args, env []string) []string {
 	provider := "{name=" + q("Persona launcher") + ",base_url=" + q(base) + `,wire_api="responses"`
 	if envValue(env, "OPENAI_API_KEY") != "" {
 		provider += `,env_key="OPENAI_API_KEY"`
+		if catalog != "" { // keyless, codex would not fetch it and would list nothing
+			provider += ",model_catalog_url=" + q(catalog)
+		}
+	}
+	bindings := codexHeaderBindings(env)
+	if modelhttp.OpenCodeGo(base) && envValue(env, openCodeSessionEnv) != "" {
+		explicit := false
+		for name := range bindings {
+			if strings.EqualFold(name, modelhttp.OpenCodeSessionHeader) {
+				explicit = true
+				break
+			}
+		}
+		if !explicit {
+			bindings[modelhttp.OpenCodeSessionHeader] = openCodeSessionEnv
+		}
+	}
+	if len(bindings) > 0 {
+		names := make([]string, 0, len(bindings))
+		for name := range bindings {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		entries := make([]string, 0, len(names))
+		for _, name := range names {
+			entries = append(entries, q(name)+"="+q(bindings[name]))
+		}
+		provider += `,env_http_headers={` + strings.Join(entries, ",") + `}`
 	}
 	return []string{"-c", `model_provider="persona-launcher"`, "-c", "model_providers.persona-launcher=" + provider + "}"}
 }
@@ -561,17 +850,26 @@ func launchExec(agent, exe string, argv, env []string) (string, []string, []stri
 	home, _ := os.UserHomeDir()
 	cwd, _ := os.Getwd()
 	rest := argv[1:]
-	inner := func() string {
+	inner := func() *sandbox.StatusReason {
 		switch agent {
 		case "claude":
-			return claudeInner(rest, env, cwd, home, nil)
+			return claudeInnerReason(rest, env, cwd, home, nil)
 		case "codex":
-			return codexInner(append([]string{"codex"}, rest...), env, cwd, home)
+			return codexInnerReason(append([]string{"codex"}, rest...), env, cwd, home)
 		}
-		return "这类 agent（" + agent + "）的自带沙箱还没核对过，先不包"
+		return sandbox.NewStatusReason("node-doctor.sandbox_unmanaged_agent", i18n.Args{"agent": agent})
 	}
 	logf := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "personad launch: "+format+"\n", a...) }
-	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, append([]string{exe}, rest...), env, logf)
+	command := append([]string{exe}, rest...)
+	if (agent == "claude" || agent == "codex") && os.Getenv(managedModelProbeEnv) == "1" {
+		if dir, _ := launcherNodeDir(exe); dir != "" {
+			// Only the probe needs this interpreter. Keep the child environment's PATH order for every other command.
+			exe = filepath.Join(dir, "node")
+			command = append([]string{exe}, command...)
+			argv = command
+		}
+	}
+	wrapped, wenv, st := wrapAgent("launch "+agent, home, identity.DataDir(home), cwd, settingsArgs(rest), inner, command, env, logf)
 	if wrapped[0] == exe {
 		return exe, argv, env, st
 	}
@@ -586,21 +884,40 @@ func (n *Node) launcherEnv(name string) map[string]any {
 	}
 	if l.Withheld {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := n.ensureManaged(ctx, name)
+		var err error
+		l, err = n.readyManagedLauncher(ctx, name)
 		cancel()
 		if err != nil {
 			return map[string]any{"error": err.Error()}
 		}
-		if l, _ = n.managedLauncher(name); l.Withheld {
-			return map[string]any{"error": errManagerAway(name).Error()}
-		}
+	}
+	if l.Name == "" { // removed from the catalog while its settings were being fetched
+		return map[string]any{"error": "no managed launcher " + name + " on this computer"}
+	}
+	if strings.TrimSpace(l.Headers) != "" && !l.CustomHeadersSupported() {
+		return map[string]any{"error": "custom_headers_unsupported: this runtime cannot send provider headers on the selected model path; clear them in Settings › Model Providers"}
 	}
 	out := map[string]any{"env": managedEnv(l), "clear": envClearFor(l), "args": l.Args, "agent": l.AgentType(), "model": l.Model}
+	if l.AgentType() == "claude" {
+		out["config_fingerprint"] = managedClaudeFingerprint(l)
+	}
 	if effort := launcherDefaultEffort(l); effort != "" {
 		out["effort"] = effort
+		if ids := noEffortModels(l); len(ids) > 0 { // the models it is not passed for (launchEffort)
+			out["no_effort"] = ids
+		}
+	}
+	if limits := outputLimits(l); limits != nil && l.AgentType() == "claude" { // the session model's limit (sessionOutput)
+		out["max_output_tokens"] = limits
+	}
+	if catalog, codex := n.codexCatalogFor(l); catalog != "" { // waited for briefly: it never holds a start long
+		out["codex_catalog_url"], out["codex_catalog_codex"] = catalog, codex
 	}
 	if mergesNoProxy(l) {
 		out["no_proxy_merge"] = n.userNoProxy(l)
+	}
+	if hosts := strings.TrimSpace(os.Getenv(modelhttp.SourceHostsEnv)); hosts != "" && l.AgentType() == "codex" {
+		out["model_source_hosts"] = hosts // a pane's shell need not carry the node's allowlist (adoptSourceHosts)
 	}
 	return out
 }
@@ -610,6 +927,9 @@ var secretValue = lazyre.New(`(?i)((?:key|token|secret|password|passwd|auth)[A-Z
 // launcherDefinition is a ~/.zshrc launcher's function body (a wrapper script's text, pathlaunchers.go), for its page
 // in "Settings › Model", with anything that looks like a key or token replaced by •••.
 func (n *Node) launcherDefinition(ctx context.Context, name string) (string, error) {
+	if proto.IsExternalLauncher(name) {
+		return "", externalRefusal(ctx, "adapter_probe_unsupported")
+	}
 	if !shellcmd.NameRe.MatchString(name) {
 		return "", fmt.Errorf("invalid launcher %q", name)
 	}

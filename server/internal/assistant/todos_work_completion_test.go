@@ -140,7 +140,7 @@ func TestCompletedTodoOnlyStopsStillLinkedAgents(t *testing.T) {
 				t.Fatalf("unrelated completed todo blocked continuation: %+v", e)
 			}
 			s.workWake(ctx, s.newWorkView(ctx), [2]string{"box", "s1"}, e.WakeAt.Add(time.Second))
-			if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: "+continueText {
+			if got := f.sentToAgents(); len(got) != 1 || got[0] != "s1: "+autoContinueTextForTest(continueText) {
 				t.Fatalf("continuation = %v", got)
 			}
 		})
@@ -148,7 +148,8 @@ func TestCompletedTodoOnlyStopsStillLinkedAgents(t *testing.T) {
 }
 
 // Manual input still reaches a completed task's agent. Only a task the hub judged
-// done or its supervisor accepted reopens, allowing subsequent triage.
+// done reopens on that turn alone, allowing subsequent triage: one its supervisor accepted
+// waits for its conversation to send more, even when its plan started the agent (#6726, #7539).
 func TestCompletedTodoManualTurnPreservesReopeningRules(t *testing.T) {
 	ctx := context.Background()
 	for _, doneBy := range []string{"", db.DoneByAuto, db.DoneByReview, db.DoneByCancelled} {
@@ -159,16 +160,16 @@ func TestCompletedTodoManualTurnPreservesReopeningRules(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, f := workService(t)
 			done := time.Now().Add(-time.Minute)
-			// Its plan started the agent: an accepted one's agent with no plan reopens it only for its own work (#6726).
+			// Its plan started the agent: that no longer reopens an accepted one on a turn nobody sent for it (#7539).
 			putTodo(s, Todo{ID: "todo_done", Title: "Run tests", Origin: "conversation", PlanID: "plan_1", DoneAt: &done, DoneBy: doneBy,
 				Agents: []TodoAgent{{MachineID: "box", SessionID: "s1"}}})
 			f.setSessions("box", stopped("s1", "Finished."))
 			if err := s.sendToSession(ctx, "box", "s1", "Check one more case."); err != nil {
 				t.Fatal(err)
 			}
-			s.taskWorking(ctx, "box", "s1")
+			s.taskWorking(ctx, "box", "s1", startRow{})
 			s.workStarted(ctx, "box", "s1", time.Now())
-			wantReopen := doneBy == db.DoneByAuto || doneBy == db.DoneByReview
+			wantReopen := doneBy == db.DoneByAuto
 			if reopened := todoNow(s, "todo_done").DoneAt == nil; reopened != wantReopen {
 				t.Fatalf("reopened = %v for done_by %q", reopened, doneBy)
 			}
@@ -263,7 +264,7 @@ func TestCompletedTodoReadFailureRetriesTriageAndWake(t *testing.T) {
 				t.Fatalf("recovered read did not allow a wake: %+v", e)
 			}
 			s.workWake(ctx, s.newWorkView(ctx), key, e.WakeAt.Add(time.Second))
-			if got := f.sentToAgents(); len(got) != 1 || got[0] != "ci: "+continueText {
+			if got := f.sentToAgents(); len(got) != 1 || got[0] != "ci: "+autoContinueTextForTest(continueText) {
 				t.Fatalf("continuation after recovery = %v", got)
 			}
 			s.waitWorkEvents()

@@ -106,19 +106,38 @@ final class RecordingLibrary {
         didChange?(entry.id)
     }
 
-    #if DEBUG
-    /// Screenshots and UI tests put the same made-up recording back after a run deleted it.
+    /// The same made-up recording back after a run deleted it: a replayed meeting tape's (`ReplayedMeeting`, #10589), and
+    /// in DEBUG the screenshots' and UI tests'.
     func restore(_ id: UUID) {
         guard deleted.remove(id) != nil else { return }
         try? JSONEncoder().encode(deleted).write(to: root.appendingPathComponent("deleted.json"), options: .atomic)
     }
-    #endif
 
     /// Whether this id was deleted here (its tombstone stops late watch segments from recreating it).
     func isDeleted(_ id: UUID) -> Bool { deleted.contains(id) }
 
     /// `isDeleted` from any thread: the phone's day store asks before and after it writes a chunk.
     nonisolated func isDeletedSnapshot(_ id: UUID) -> Bool { tombstones.withLock { $0.contains(id) } }
+
+    /// The hub's name for a recording (#8873, `RecordingEntry.hubName`), kept without moving `updatedAt` and without
+    /// `didChange`: it is the hub's word, never uploaded, so it must not make the recording look changed and upload it
+    /// again.
+    func noteHubName(_ id: UUID, _ name: String?) {
+        guard let index = entries.firstIndex(where: { $0.id == id }), entries[index].hubName != name, !deleted.contains(id) else { return }
+        var entry = entries[index]
+        entry.hubName = name
+        guard (try? JSONEncoder().encode(entry).write(to: folder(id).appendingPathComponent(Self.entryFileName), options: .atomic)) != nil
+        else { return }
+        entries[index] = entry
+    }
+
+    /// The owner's own title (#8873): from now on it comes before every name the hub gives, and goes to the hub with the
+    /// next upload; an empty one gives the name back to the calendar or the hub.
+    func rename(_ id: UUID, to title: String) {
+        let title = RecordingTitle.cleaned(title)
+        guard let entry = entry(id), entry.title != title else { return }
+        change(id) { $0.title = title }
+    }
 
     func change(_ id: UUID, _ edit: (inout RecordingEntry) -> Void) {
         guard var entry = entry(id) else { return }

@@ -1,11 +1,9 @@
 import MarkdownUI
 import PersonaKit
 import SwiftUI
-#if os(iOS) || os(visionOS)
 import CoreText
 import UIKit
 import UIKit.UIGestureRecognizerSubclass
-#endif
 
 // MARK: - A lifted message's words, selected where they are (#603)
 
@@ -44,9 +42,12 @@ nonisolated enum ReplyMetrics {
     static let codeLineSpacing: CGFloat = 0.2
     /// A code block's title bar over its code (`ReplyCodeBlock`): Copy's touch height, drawn past the bar's edges.
     static let codeBar: CGFloat = Theme.Size.tapTarget - 2 * Theme.Space.sm
-    /// Inline code, and an agent's words between its steps (`QuietMarkdown`), em.
-    static let inlineCode: CGFloat = 0.88
+    /// Inline code (0.94, #9477: SF Mono's x-height is the body's, its wider letters made it look larger), and an
+    /// agent's words between its steps (`QuietMarkdown`), em.
+    static let inlineCode: CGFloat = 0.94
     static let quiet: CGFloat = 0.88
+    /// A table's words (`FittedTable`), em.
+    static let table: CGFloat = 0.88
 
     /// A list item's marker: its room, at least 1.5 em (MarkdownUI's markers, right-aligned in it), then the system
     /// `Label`'s gap before the words, the same at every text size (34, 41 and 80 pt to the words at the default size,
@@ -55,7 +56,7 @@ nonisolated enum ReplyMetrics {
     static let markerGap: CGFloat = 8
 
     /// A size in em as the chat draws it: MarkdownUI sets every run's font at a whole point (`round(size × scale)`),
-    /// so inline code at 0.88 em of 17 is 15, not 14.96. Over a line of code the difference came to most of a point (#3188).
+    /// so 0.88 em of 17 is 15, not 14.96. Over a line of code the difference came to most of a point (#3188).
     static func points(_ em: CGFloat, of size: CGFloat) -> CGFloat { (em * size).rounded() }
 }
 
@@ -102,7 +103,6 @@ private struct SelectableInLift: ViewModifier {
     @State private var place = LiftPlace()
 
     func body(content: Content) -> some View {
-        #if os(iOS) || os(visionOS)
         if lifted {
             offered(content.accessibilityHidden(select != nil)) // the text view's words, while it is over them
             // The text view over them, its lines on theirs (`LiftLayout.snap`), a folded quote's hidden ones aside.
@@ -122,9 +122,6 @@ private struct SelectableInLift: ViewModifier {
         } else {
             content
         }
-        #else
-        content
-        #endif
     }
 
     /// What the words are offered (`place`). Parts in a lazy stack, as wide as the copy: nothing between the stack and
@@ -148,7 +145,6 @@ private struct SelectableInLift: ViewModifier {
     }
 }
 
-#if os(iOS) || os(visionOS)
 #if os(iOS)
 /// A long press on the lifted message: where it landed, in the window, for its words to be selected there.
 /// iOS only: `UIGestureRecognizerRepresentable` is not available on visionOS.
@@ -899,11 +895,19 @@ final class LiftUITextView: UITextView, UITextViewDelegate, UIEditMenuInteractio
 
     func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
         let picked = ReplyText.copyText(attributedText.attributedSubstring(from: range)).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !picked.isEmpty, let quote else { return UIMenu(children: suggestedActions) }
-        let ours = UIMenu(options: .displayInline, children: [
-            UIAction(title: String(localized: "Quote"), image: UIImage(systemName: Theme.Icon.quote)) { _ in quote(picked) },
-        ])
-        return UIMenu(children: [ours] + suggestedActions)
+        var items: [UIMenuElement] = []
+        if !picked.isEmpty, let quote {
+            items.append(UIAction(title: String(localized: "Quote"), image: UIImage(systemName: Theme.Icon.quote)) { _ in quote(picked) })
+        }
+        // One word picked, while a text_lookup extension answers: Look Up in <provider> (#10977), the way to it that
+        // needs no tap on the word (VoiceOver, a selection).
+        #if os(iOS)
+        if let lookup = TextLookupMenu.action(for: picked, in: self, range: range, source: "chat") {
+            items.append(lookup)
+        }
+        #endif
+        guard !items.isEmpty else { return UIMenu(children: suggestedActions) }
+        return UIMenu(children: [UIMenu(options: .displayInline, children: items)] + suggestedActions)
     }
 
     /// The words as the chat shows them; a table in it as its Markdown.
@@ -1131,6 +1135,8 @@ enum ReplyText {
         var link: UIColor
         /// The fourth to sixth heading levels' ink (`ReplyMetrics.heading4`).
         var secondaryInk: UIColor
+        /// Inline code's ink where the words are in `color` (`InlineCodeInk`): an agent's quiet words keep theirs.
+        var codeInk: UIColor
         var traits: UITraitCollection
         /// The style's design (Clay: rounded), as the chat draws its words: not code's.
         var design: UIFontDescriptor.SystemDesign
@@ -1152,6 +1158,7 @@ enum ReplyText {
             quoteMarkRoom = UIFontMetrics(forTextStyle: .caption1).scaledValue(for: Theme.Space.xl, compatibleWith: traits)
             link = UIColor(Theme.accent)
             secondaryInk = UIColor(Theme.Reply.secondaryInk)
+            codeInk = quiet ? color : UIColor(Theme.Reply.codeInk)
             self.traits = traits
         }
 
@@ -1230,6 +1237,21 @@ enum ReplyText {
     /// A picture's room in the words that are clear (`clear`): drawn as large as the room, it draws nothing.
     static let blank = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
 
+    /// What `read` marks the room beside inline code with (`InlineCodeGap`): a private-use character, in no reply.
+    static let gapMark: Character = "\u{E000}"
+
+    /// The marks made the chat's thin space again, each copying as nothing (`copyText`): the words lie where the
+    /// chat's do, and what is copied is what was written.
+    static func unmarkGaps(_ s: NSMutableAttributedString) {
+        let mark = String(gapMark), text = s.mutableString
+        var r = text.range(of: mark)
+        while r.location != NSNotFound {
+            s.replaceCharacters(in: r, with: String(InlineCodeGap.thin))
+            s.addAttribute(.replySource, value: "", range: r)
+            r = text.range(of: mark, range: NSRange(location: NSMaxRange(r), length: text.length - NSMaxRange(r)))
+        }
+    }
+
     /// The text of a part of the words, a picture in it as what it copies as.
     static func copyText(_ part: NSAttributedString) -> String {
         var out = ""
@@ -1298,7 +1320,8 @@ enum ReplyText {
             // Bold next to CJK punctuation is read as the chat reads it (`CJKEmphasis`, line for line); a table still
             // copies as it was written.
             let written = markdown.components(separatedBy: "\n")
-            let source = CJKEmphasis.apply(markdown).components(separatedBy: "\n")
+            // So is the room beside inline code (`InlineCodeGap`), marked to copy as nothing (`unmarkGaps`).
+            let source = CJKEmphasis.apply(InlineCodeGap.apply(markdown, gap: ReplyText.gapMark)).components(separatedBy: "\n")
             var i = 0
             while i < source.count {
                 while nextPart < parts.count, i >= parts[nextPart] {
@@ -1363,8 +1386,9 @@ enum ReplyText {
                         rows.append(source[i])
                         i += 1
                     }
-                    let drawn = rows.joined(separator: "\n")
-                    table(drawn, copied: written.count == source.count ? written[first..<i].joined(separator: "\n") : drawn)
+                    let mark = String(ReplyText.gapMark), drawn = rows.joined(separator: "\n")
+                    table(drawn.replacingOccurrences(of: mark, with: String(InlineCodeGap.thin)),
+                          copied: written.count == source.count ? written[first..<i].joined(separator: "\n") : drawn.replacingOccurrences(of: mark, with: ""))
                     continue
                 }
                 if !deep, Self.isRule(trimmed) {
@@ -1580,6 +1604,7 @@ enum ReplyText {
             }
             // Blank lines at the start or the end of the reply take no part.
             while out.length > 0, out.string.hasSuffix("\n") { out.deleteCharacters(in: NSRange(location: out.length - 1, length: 1)) }
+            ReplyText.unmarkGaps(out)
             return out
         }
 
@@ -1620,7 +1645,7 @@ enum ReplyText {
                 var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: color]
                 if intent.contains(.code) {
                     f = look.inlineCode.withSize(ReplyMetrics.points(ReplyMetrics.inlineCode, of: font.pointSize))
-                    attrs[.backgroundColor] = UIColor(Theme.inlineCodeBackground)
+                    if color == look.color { attrs[.foregroundColor] = look.codeInk } // words in an ink of their own keep it
                 }
                 if intent.contains(.stronglyEmphasized) { f = look.weight(f, .semibold) }
                 if intent.contains(.emphasized), let d = f.fontDescriptor.withSymbolicTraits(f.fontDescriptor.symbolicTraits.union(.traitItalic)) {
@@ -1696,7 +1721,7 @@ enum ReplyText {
 @MainActor enum ReplyTable {
     static func picture(_ source: String, width: CGFloat, traits: UITraitCollection) -> UIImage? {
         guard width > 0 else { return nil }
-        let fontSize = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize * ReplyMetrics.inlineCode
+        let fontSize = UIFont.preferredFont(forTextStyle: .body, compatibleWith: traits).pointSize * ReplyMetrics.table
         let m = MarkdownTableText.measure(source, fontSize: fontSize)
         let n = CGFloat(m.natural.count)
         let plan = TablePlan.fit(natural: m.natural, minimum: m.minimum,
@@ -1721,4 +1746,3 @@ enum ReplyText {
         return r.uiImage
     }
 }
-#endif

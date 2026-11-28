@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/nodecmd"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
@@ -25,14 +26,15 @@ var (
 	build   = ""
 )
 
-const usage = `usage:
+var usage = `usage:
 ` + nodecmd.LaunchUsage + `
 ` + nodecmd.NodeUsage + `
-` + nodecmd.Usage + `
+` + nodecmd.Usage() + `
 ` + nodecmd.SysmonUsage + `
   personad version [-v]     the version; -v adds the channel and build number`
 
 func main() {
+	modelhttp.SetVersion(version)
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, nodecmd.Named(usage))
 		os.Exit(2)
@@ -52,7 +54,7 @@ func main() {
 		}
 		return
 	}
-	handled, err := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonaNode})
+	handled, err := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonaNode, Edition: update.ThisEdition})
 	if !handled {
 		fmt.Fprintln(os.Stderr, nodecmd.Named(usage))
 		// Say where the commands it leaves out are rather than only listing its own.

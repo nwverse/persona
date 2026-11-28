@@ -212,10 +212,11 @@ func setsClaude(env map[string]string) bool {
 // shellLaunch is one claude command of pasted shell lines: an alias (named by alias) or a command line, defined on
 // line, with the variables it sets itself.
 type shellLaunch struct {
-	alias string
-	line  int
-	env   map[string]string
-	args  []string
+	alias    string
+	line     int
+	env      map[string]string
+	args     []string
+	resetEnv bool
 }
 
 // withEnv is env with own over it.
@@ -278,7 +279,7 @@ read:
 					if launched() {
 						break read
 					}
-					aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args})
+					aliases = append(aliases, shellLaunch{alias: d.Name, line: l.Start, env: a.Env, args: a.Args, resetEnv: a.ResetEnv})
 				}
 			case words[0] == "export" || !slices.ContainsFunc(words, func(w string) bool { return !shellcmd.AssignRe.MatchString(w) }):
 				for _, w := range words {
@@ -295,7 +296,7 @@ read:
 				}
 			default:
 				own := map[string]string{}
-				i := shellcmd.CommandIndex(words, own)
+				i, reset := shellcmd.CommandEnvironment(words, own)
 				if i < 0 || filepath.Base(words[i]) != "claude" {
 					tell(l.Start, noteNotClaude, l.Start, "")
 					continue
@@ -304,7 +305,10 @@ read:
 				if launched() {
 					break read
 				}
-				commands = append(commands, shellLaunch{line: l.Start, env: withEnv(env, own), args: slices.Clone(words[i+1:])})
+				if !reset {
+					own = withEnv(env, own)
+				}
+				commands = append(commands, shellLaunch{line: l.Start, env: own, args: slices.Clone(words[i+1:])})
 			}
 		}
 	}
@@ -314,7 +318,10 @@ read:
 	var group []zshrcAlias
 	envOf := map[string]map[string]string{}
 	for _, a := range aliases {
-		e := withEnv(env, a.env)
+		e := a.env
+		if !a.resetEnv {
+			e = withEnv(env, e)
+		}
 		if _, code := launchGateway(e); code != "" {
 			tell(a.line, code, 0, a.alias)
 			continue
@@ -411,9 +418,8 @@ func unsafeHeaderValue(v string) bool {
 
 // setHeaders sorts a paste's headers (name, value) into the draft's ("Name: value" lines) and the ones left out with
 // why: request basics (when protocol: a curl command's, a cindy endpoint's), credentials by name or value
-// (secretHeader), values a line would not keep (unsafe), and every other header of a direct API provider, which takes
-// none. A name that is no plain token is neither kept nor named: header_unreadable, once. At most pasteSkippedMost are
-// named.
+// (secretHeader), and values a line would not keep (unsafe). A name that is no plain token is neither kept nor named:
+// header_unreadable, once. At most pasteSkippedMost are named.
 func (d *pasteDraft) setHeaders(hs [][2]string, protocol bool) {
 	var lines []string
 	for _, h := range hs {
@@ -428,8 +434,6 @@ func (d *pasteDraft) setHeaders(hs [][2]string, protocol bool) {
 			why = headerSkipCredential
 		case unsafeHeaderValue(h[1]):
 			why = headerSkipUnsafe
-		case d.Provider.Kind == "api":
-			why = headerSkipUnsupported
 		}
 		if why == "" {
 			lines = append(lines, h[0]+": "+h[1])
@@ -678,8 +682,12 @@ type cindyModel struct {
 	ID                     string   `json:"id"`
 	Name                   string   `json:"name"`
 	ContextWindow          int      `json:"contextWindow"`
+	MaxOutputTokens        int      `json:"maxOutputTokens"`
+	Reasoning              *bool    `json:"reasoning"`
 	ReasoningEfforts       []string `json:"reasoningEfforts"`
 	ReasoningDefaultEffort string   `json:"reasoningDefaultEffort"`
+	SupportsImageInput     *bool    `json:"supportsImageInput"`
+	SupportsToolCalls      *bool    `json:"supportsToolCalls"`
 }
 
 func (m *cindyModel) UnmarshalJSON(b []byte) error {
@@ -837,5 +845,9 @@ func cindyProviderModel(m cindyModel) proto.ProviderModel {
 	if slices.Contains(pm.Efforts, m.ReasoningDefaultEffort) {
 		pm.DefaultEffort = m.ReasoningDefaultEffort
 	}
+	// what else cindy says of it, as discovery reads a gateway (#8778): reasoning false and no level is a model that
+	// takes none
+	pm.MaxOutputTokens, pm.ImageInput, pm.ToolCalls = max(m.MaxOutputTokens, 0), m.SupportsImageInput, m.SupportsToolCalls
+	pm.NoEffort = len(pm.Efforts) == 0 && m.Reasoning != nil && !*m.Reasoning
 	return pm
 }

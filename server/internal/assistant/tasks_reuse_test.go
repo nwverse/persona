@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // task_plan's todo_id (#5279): a task runs on a todo the conversation opened (a Lark topic's) instead of making one.
@@ -53,6 +56,7 @@ func planOf(t *testing.T, s *Service, conversation string) *TaskPlan {
 // A task with todo_id runs on that todo: no todo is made, the agent is linked to it, the task card is the one the topic
 // already put in the feed (no second), the plan's task names the todo, and the task's criteria go to the supervision.
 func TestTaskPlanTodoIDRunsOnTheTopicsTodo(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	todo := e.openedTodo()
 	res, err := e.s.toolTaskPlan(context.Background(), "m1", reuseArgs(true, todo.ID))
@@ -104,6 +108,9 @@ func TestTaskPlanTodoIDRefusals(t *testing.T) {
 		{"another conversation's", Todo{ID: "todo_x", Origin: "c1x1x1"}, []string{"todo_x"}, "not opened from this conversation"},
 		{"opened by nobody", Todo{ID: "todo_x"}, []string{"todo_x"}, "not opened from this conversation"},
 		{"done", Todo{ID: "todo_x", Origin: "m1", DoneAt: &released}, []string{"todo_x"}, "already done"},
+		// A failed start is taken up again (TestTaskPlanTodoIDTakesAFailedStart); a cancelled one is closed for good.
+		{"a cancelled failed start", Todo{ID: "todo_x", Origin: "m1", DoneAt: &released, StartError: "没开起来", CancelledAt: &released},
+			[]string{"todo_x"}, "already done"},
 		{"an agent working on it", Todo{ID: "todo_x", Origin: "m1", Agents: []TodoAgent{{MachineID: "box", SessionID: "agent01"}}}, []string{"todo_x"}, "an agent is already working on it"},
 		{"twice in one plan", Todo{ID: "todo_x", Origin: "m1"}, []string{"todo_x", "todo_x"}, "already the todo of another task"},
 	} {
@@ -159,6 +166,7 @@ func TestTaskPlanTodoIDAllowsATodoWhoseAgentWasLetGo(t *testing.T) {
 // A plan that waits for the user's "Start" keeps the todo it names (the apps' card edits cannot change it) and runs on it
 // when started.
 func TestTaskPlanTodoIDWaitsForStart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	ctx := context.Background()
 	todo := e.openedTodo()
@@ -192,6 +200,7 @@ func TestTaskPlanTodoIDWaitsForStart(t *testing.T) {
 // The todo is looked at again when the plan starts: closed, or given an agent, since the plan was made, the task fails
 // with why and nothing starts (no todo of its own is made in its place).
 func TestTaskPlanTodoIDIsCheckedAgainOnStart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, c := range []struct {
 		name string
 		do   func(e *threadEnv, todo Todo)
@@ -226,19 +235,20 @@ func TestTaskPlanTodoIDIsCheckedAgainOnStart(t *testing.T) {
 // Two plans cannot take one todo in the gap before the first one's agent is linked: the second is refused until the
 // first has let go (its agent linked or its start failed).
 func TestTodoTakenByAStartedPlanIsNotTakenTwice(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	todo := e.openedTodo()
-	if _, err := e.s.takeTodoForTask(context.Background(), "new-plan", "m1", todo.ID); err != nil {
+	if _, err := e.s.takeTodoForTask(context.Background(), "new-plan", "m1", PlanTask{ReuseTodo: todo.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.s.takeTodoForTask(context.Background(), "new-plan", "m1", todo.ID); err == nil || !strings.Contains(err.Error(), "another plan is starting an agent on it") {
+	if _, err := e.s.takeTodoForTask(context.Background(), "new-plan", "m1", PlanTask{ReuseTodo: todo.ID}); err == nil || !strings.Contains(err.Error(), "another plan is starting an agent on it") {
 		t.Fatalf("a second take: %v", err)
 	}
 	if _, err := e.s.toolTaskPlan(context.Background(), "m1", reuseArgs(true, todo.ID)); err == nil || !strings.Contains(err.Error(), "another plan is starting") {
 		t.Fatalf("a plan made in the gap: %v", err)
 	}
 	e.s.releaseTakenTodo(todo.ID)
-	if _, err := e.s.takeTodoForTask(context.Background(), "new-plan", "m1", todo.ID); err != nil {
+	if _, err := e.s.takeTodoForTask(context.Background(), "new-plan", "m1", PlanTask{ReuseTodo: todo.ID}); err != nil {
 		t.Fatalf("after it was let go: %v", err)
 	}
 }
@@ -246,18 +256,78 @@ func TestTodoTakenByAStartedPlanIsNotTakenTwice(t *testing.T) {
 // The todo a task runs on is that task, not a copy of it: the duplicate hint (two names of one issue) does not list it
 // against the task, and still lists a different todo that names the same issue.
 func TestTaskPlanTodoIDIsNotItsOwnDuplicate(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newThreadEnv(t, nil)
 	e.deliver(rootEvent("om_dup", "修 #1234 登录崩溃"))
 	todo := onlyTodo(e.s)
 	putTodo(e.s, Todo{ID: "todo_else", Title: "也是 #1234", Origin: "c1x1x1"})
 	task := PlanTask{Title: "修 #1234", Prompt: "修好登录崩溃", Machine: "box", Cwd: "/code/app"}
-	got := e.s.planDuplicates(context.Background(), []PlanTask{task})
+	got := e.s.planDuplicates(context.Background(), []PlanTask{task}, nil)
 	if !strings.Contains(got, todo.ID) || !strings.Contains(got, "todo_else") {
 		t.Fatalf("without todo_id both todos are hinted: %q", got)
 	}
 	task.ReuseTodo = todo.ID
-	got = e.s.planDuplicates(context.Background(), []PlanTask{task})
+	got = e.s.planDuplicates(context.Background(), []PlanTask{task}, nil)
 	if strings.Contains(got, todo.ID) || !strings.Contains(got, "todo_else") {
 		t.Fatalf("with todo_id only the other todo is hinted: %q", got)
+	}
+}
+
+// A to-do whose agent did not start is stored done with its start error, but nothing was done and it still waits on the
+// owner (#10365): task_plan's todo_id takes it up again, reopening it (as a Retry does), with no second to-do or task
+// card. Before, it was refused as "already done", and the assistant fell back on continues, which made a new plan.
+func TestTaskPlanTodoIDTakesAFailedStart(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
+	e := newThreadEnv(t, nil)
+	ctx := context.Background()
+	todo := e.openedTodo()
+	_, open := e.s.snapshotOpenTodos(ctx, "") // the snapshot's open count does not flip with the start (#10365)
+	e.f.mu.Lock()
+	e.f.failStart = &rpc.Error{Code: proto.CodeStartLineRejected, Message: "the tab did not take the start line",
+		Data: json.RawMessage(`{"delivered":"none","line":"zsh: parse error"}`)}
+	e.f.mu.Unlock()
+	if _, err := e.s.toolTaskPlan(ctx, "m1", reuseArgs(true, todo.ID)); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the start to fail", func() bool { return todoNow(e.s, todo.ID).StartError != "" && e.s.taskStarting.Load() == 0 })
+	if failed := todoNow(e.s, todo.ID); !failed.failedStart() || failed.closedForGood() {
+		t.Fatalf("not a failed start: %+v", failed)
+	}
+	if _, n := e.s.snapshotOpenTodos(ctx, ""); n != open {
+		t.Fatalf("open count %d after the failed start, was %d", n, open)
+	}
+	e.f.mu.Lock()
+	e.f.failStart = nil
+	e.f.mu.Unlock()
+	if _, err := e.s.toolTaskPlan(ctx, "m1", reuseArgs(true, todo.ID)); err != nil {
+		t.Fatalf("a failed start refused: %v", err)
+	}
+	waitFor(t, "the agent to link to the to-do", func() bool { return len(todoNow(e.s, todo.ID).Agents) == 1 })
+	got := todoNow(e.s, todo.ID)
+	if got.DoneAt != nil || got.StartError != "" || got.ReopenedAt == nil || todoCount(e.s) != 1 {
+		t.Fatalf("the to-do after its start was taken up: %+v; %d to-dos", got, todoCount(e.s))
+	}
+	if strings.Count(feedKinds(e.s, "m1"), "task") != 1 {
+		t.Fatalf("feed %q: a second task card", feedKinds(e.s, "m1"))
+	}
+	if _, n := e.s.snapshotOpenTodos(ctx, ""); n != open {
+		t.Fatalf("open count %d once taken up, was %d", n, open)
+	}
+}
+
+// A start being remedied in the tab its computer keeps is task_retry's: a plan taking the to-do through todo_id would
+// open another tab beside the one waiting on its question.
+func TestTaskPlanTodoIDFailedStartWhileRemedying(t *testing.T) {
+	e := newThreadEnv(t, nil)
+	piece, _ := failedDirectionTodoStart(t, e, keptRefusal(proto.CodeShellWaiting))
+	if piece.DoneAt != nil {
+		t.Fatalf("failed at once, not remedied: %+v", piece)
+	}
+	_, err := e.s.toolTaskPlan(context.Background(), "c1x1x1", reuseArgs(true, piece.ID))
+	if err == nil || !strings.Contains(err.Error(), "being remedied") || !strings.Contains(err.Error(), "task_retry") {
+		t.Fatalf("error %v, want the remedy's", err)
+	}
+	if n := len(e.f.started()); n != 1 {
+		t.Fatalf("%d starts", n)
 	}
 }

@@ -23,11 +23,14 @@ final class ShellSideRailTests: XCTestCase {
         guard stacked(assistant, over: agents) else {
             throw XCTSkip("the system's bars are across the top: needs iPhone Duo's outer display or the inner one on its side")
         }
+        // The shell's rail: the open Duo's tabs have only the switch at the column's foot, their pages' faces in the page
+        // (#4231, DuoTabSwitchTests).
+        guard app.windows.firstMatch.frame.width <= 600 else { throw XCTSkip("the shell's rail: iPhone Duo's outer display") }
         XCTAssertTrue(messages.waitForExistence(timeout: 20), "Messages is on and the mock hub has Lark chats")
 
         let window = app.windows.firstMatch.frame
-        // Not Agents yet: in zh-Hans its header spins in a layout loop on the outer display (#2352).
-        let pages = [(messages, "feishu-sidebar"), (assistant, "assistant-sidebar-button")]
+        let pages = [(messages, "feishu-sidebar"), (assistant, "assistant-sidebar-button"),
+                     (agents, "work-sidebar-button"), (assistant, "assistant-sidebar-button")]
         for (segment, faceID) in pages {
             segment.tapCenter()
             let face = app.buttons.matching(identifier: faceID).firstMatch

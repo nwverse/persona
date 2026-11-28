@@ -30,6 +30,7 @@ import persona.core.contracts.api.HubConnection
 import persona.core.contracts.api.HubGroups
 import persona.core.contracts.api.MachineManagement
 import persona.core.contracts.api.SessionsRepository
+import persona.core.domain.engines.Engines
 import persona.core.designsystem.JNotice
 import persona.core.designsystem.Status
 import persona.core.designsystem.failureReasonText
@@ -44,8 +45,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * Classic herdr is in the machine's engine set (`engine_hosts`; an older hub's single engine stands for its set), whether or not
+ * it is the default host (#17037). A machine with no terminal engine (empty host set) keeps `engine` herdr and is not.
+ */
+internal val Machine.usesHerdr: Boolean get() = "herdr" in Engines.hosts(this)
+
 internal fun Machine.herdrStopped(state: HerdrState?): Boolean =
-    online && engine in setOf("herdr", "herdr-both") && state?.known == true && !state.running
+    online && usesHerdr && state?.known == true && !state.running
 
 /**
  * Why a start failed, kept on the row until the next start (iOS `HerdrFailure`): [text] in words, [detail] the hub's own
@@ -105,7 +112,7 @@ internal class HerdrStarter(
 
     suspend fun refresh() {
         val before = generation
-        val machines = repository.machines.value.filter { it.online && it.engine in setOf("herdr", "herdr-both") && reachable(it.id) }
+        val machines = repository.machines.value.filter { it.online && it.usesHerdr && reachable(it.id) }
         val results = coroutineScope {
             machines.map { machine -> async {
                 try { machine.id to api.herdr(machine.id) }
@@ -173,4 +180,13 @@ internal fun HerdrNotice(machineName: String, starting: Boolean, onStart: () -> 
             })), { menu = false })
         }
     }
+}
+
+/**
+ * "Orca isn't running" on a computer whose engine set has Orca and whose node says it is installed and not running
+ * (Engines.orcaStopped, #17037). Persona cannot open Orca for the user, so the row says what to do and has no button.
+ */
+@Composable
+internal fun OrcaNotice(machineName: String) {
+    JNotice(text = stringResource(R.string.agents_orca_stopped), title = machineName, status = Status.Unknown)
 }

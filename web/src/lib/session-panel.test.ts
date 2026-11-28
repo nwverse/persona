@@ -7,8 +7,9 @@ import { describe, expect, it } from "vitest";
 import { t } from "../i18n";
 import { ApiError } from "./api";
 import type { LauncherModels } from "./launcher-models";
+import { rowSetup, shownEffort } from "./model-panel";
 import { pendingView, switchRefused, type ModelList } from "./session-models";
-import { pickPlan, sessionPanel, type PanelOptions } from "./session-panel";
+import { pickPlan, sessionPanel, speedStep, type PanelOptions } from "./session-panel";
 import type { Launcher, Session } from "./types";
 
 const ALL = ["low", "medium", "high", "xhigh", "max"];
@@ -38,6 +39,81 @@ const session = (x: Partial<Session> = {}): Session =>
   ({ machine_id: "mac", session_id: "s1", title: "t", cwd: "/code", status: "idle", state: "idle", agent: "claude", launcher: "claude", model: "claude-opus-5-5", effort: "high", ...x }) as Session;
 const on: PanelOptions = { switching: true };
 const provider = (s: Session, id: string, o: PanelOptions = on) => sessionPanel(s, launchers, listOf, o).providers.find((p) => p.id === id)!;
+
+describe("live session speed", () => {
+  const fast = { id: "priority", name: "Fast" };
+  const ultra = { id: "ultrafast", name: "Ultrafast" };
+
+  it("uses every advertised tier on the running Codex model in speed order", () => {
+    const s = session({
+      agent: "codex", launcher: "cx", pane_id: "pane", model: "gpt-5.5", effort: "high",
+      service_tier: "ultrafast", service_tiers: [ultra, fast, { id: "flex", name: "Flex" }],
+    });
+    const { providers, state } = sessionPanel(s, launchers, listOf);
+    expect(state.current?.speed).toBe("ultrafast");
+    expect(providers.find((p) => p.id === "cx")?.models?.[0].speeds?.map((choice) => choice.id))
+      .toEqual(["standard", "fast", "ultrafast", "flex"]);
+    expect(pickPlan(s, { ...state.current!, speed: "fast" }, raw)).toEqual([{ service_tier: "priority" }]);
+    expect(speedStep(s, "flex")).toEqual({ service_tier: "flex" });
+    expect(speedStep(s, "ultrafast")).toBeUndefined();
+    expect(speedStep(s, "unadvertised", true)).toBeUndefined();
+  });
+
+  it("uses the compact pair for Claude and legacy hubs, and hides the control without advertised choices", () => {
+    const s = session({ service_tier: "fast", service_tiers: [{ id: "fast", name: "Fast" }] });
+    const { state } = sessionPanel(s, launchers, listOf);
+    expect(state.current?.speed).toBe("fast");
+    expect(provider(s, "claude").models?.find((m) => m.id === "opus")?.speeds?.map((choice) => choice.id))
+      .toEqual(["standard", "fast"]);
+    expect(speedStep(s, "standard")).toEqual({ service_tier: "default" });
+    expect(speedStep({ ...s, service_tier: "default" }, "fast")).toEqual({ service_tier: "fast" });
+    expect(speedStep({ ...s, state: "offline" }, "standard")).toBeUndefined();
+    expect(provider(session(), "claude").models?.every((m) => !m.speeds)).toBe(true);
+  });
+});
+
+describe("actual Codex session effort and control availability", () => {
+  const live = session({ agent: "codex", source_kind: "codex_app_server", launcher: "cx", model: "gpt-5.5",
+    capabilities: { send: true }, effort: "max", efforts: ["low", "high", "max"] });
+  const catalog: LauncherModels = { agent: "codex", models: [{ id: "gpt-5.5", name: "GPT 5.5", default_effort: "low", efforts: ["low", "high"] }] };
+  const panelOf = (s: Session) => sessionPanel(s, [{ name: "cx", agent: "codex" }], () => ({ list: catalog }));
+
+  it("keeps session max rather than catalog low, including when changes are unsupported", () => {
+    for (const s of [live, { ...live, source_kind: undefined, efforts: undefined }]) {
+      const { providers, state } = panelOf(s);
+      const model = providers[0].models![0];
+      expect(shownEffort(rowSetup(providers[0], model, state), model)).toBe("max");
+    }
+  });
+
+  it("does not present a launcher's default as a known session value", () => {
+    const { providers, state } = panelOf({ ...live, effort: undefined });
+    const model = providers[0].models![0];
+    expect(shownEffort(rowSetup(providers[0], model, state), model)).toBe("");
+  });
+
+  it("offers supported effort changes while Codex is working and explains next-turn scope", () => {
+    const s = { ...live, state: "working", status: "working" } as Session;
+    const { providers, state } = panelOf(s);
+    expect(state.busy).toBeUndefined();
+    expect(providers[0].models![0].efforts).toEqual(["low", "high", "max"]);
+    expect(providers[0].models![0].effortNote).toBe(t("chat-modelpanel.effort_next_turn"));
+    expect(pickPlan(s, { provider: "cx", model: "gpt-5.5", effort: "high" }, () => catalog)).toEqual([{ effort: "high" }]);
+  });
+
+  it.each([
+    ["terminal", { source_kind: undefined }, "effort_terminal"],
+    ["offline", { state: "offline", status: "offline" }, "effort_offline"],
+    ["parent", { parent_thread_id: "parent" }, "effort_parent"],
+    ["read only", { capabilities: { send: false } }, "effort_read_only"],
+    ["model", {}, "effort_model_fixed"],
+  ] as const)("explains unsupported %s effort instead of advertising a catalog slider", (_, patch, key) => {
+    const { providers } = panelOf({ ...live, efforts: undefined, ...patch } as Session);
+    const model = providers[0].models![0];
+    expect(model.efforts).toEqual([]);
+    expect(model.effortUnavailable).toBe(t(`chat-modelpanel.${key}`));
+  });
+});
 
 describe("a Codex session that names no launcher (#6501)", () => {
   // the computer runs the Codex App: the node offers its launcher, whose list is empty and locked (the App picks the model)
@@ -147,6 +223,45 @@ describe("a message the switch refused", () => {
   });
 });
 
+// A session a runtime runs (Paseo, #8142): its Claude Code switches its model there and never its launcher or engine
+// (the node refuses both, `switch_unsupported`), and each of its other providers is named by the provider, never by the
+// engine's id "paseo".
+describe("a session on Paseo", () => {
+  const engine: PanelOptions = { switching: true, engineSwitch: true };
+  const grokList: LauncherModels = { agent: "paseo", models: [{ id: "grok-4", name: "Grok 4", default: true }] };
+  const kimiList: LauncherModels = { agent: "paseo", models: [{ id: "kimi-k2", name: "Kimi K2", default: true }] };
+  const paseoLaunchers: Launcher[] = [
+    { name: "my-claude", source: "paseo" }, { name: "my-claude-2", source: "paseo" }, { name: "my-codex", agent: "codex", source: "paseo" },
+    { name: "grok", agent: "paseo", source: "paseo" }, { name: "kimi", agent: "paseo", source: "paseo" },
+  ];
+  const paseoRead: Record<string, ModelList> = { "my-claude": { list: claudeList }, "my-claude-2": { list: workList }, "my-codex": { list: codexList }, grok: { list: grokList }, kimi: { list: kimiList } };
+  const paseoRaw = (name: string) => paseoRead[name]?.list;
+  const onPaseo = (x: Partial<Session>) => session({ source_kind: "runtime", source_instance_id: "paseo", host: "paseo", capabilities: { read: true, send: true, model: true, modes: true }, ...x });
+  const claude = onPaseo({ launcher: "my-claude" });
+  const grok = onPaseo({ agent: "paseo", agent_label: "Grok", launcher: "grok", model: "grok-4", effort: undefined });
+  const providers = (s: Session) => sessionPanel(s, paseoLaunchers, (name) => paseoRead[name] ?? {}, engine).providers;
+  const of = (s: Session, id: string) => providers(s).find((p) => p.id === id)!;
+
+  it("offers its Claude Code no other launcher or engine, on a hub that switches them for terminal Agents", () => {
+    expect(of(claude, "my-claude").unavailable).toBeUndefined();
+    expect(of(claude, "my-claude-2").unavailable).toBe(t("chat-modelpanel.other_provider"));
+    expect(of(claude, "my-codex").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Claude Code", to: "Codex" }));
+    expect(pickPlan(claude, { provider: "my-claude-2", model: "glm-5.3" }, paseoRaw, engine)).toBeNull();
+    expect(pickPlan(claude, { provider: "my-codex", model: "gpt-5.5" }, paseoRaw, engine)).toBeNull();
+    // its own model still switches at once
+    expect(pickPlan(claude, { provider: "my-claude", model: "haiku" }, paseoRaw, engine)).toEqual([{ model: "haiku" }]);
+  });
+
+  it("names each provider by the provider, its own by its label", () => {
+    const own = of(grok, "grok");
+    expect([own.engine, own.engineLabel, own.unavailable]).toEqual(["grok", "Grok", undefined]);
+    expect(of(grok, "kimi").engine).toBe("kimi");
+    expect(of(grok, "kimi").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Grok", to: "kimi" }));
+    expect(of(grok, "my-claude").unavailable).toBe(t("chat-modelpanel.other_engine", { from: "Grok", to: "Claude Code" }));
+    for (const p of providers(grok)) expect(`${p.engine} ${p.unavailable ?? ""}`).not.toMatch(/paseo/i);
+  });
+});
+
 // Moving a running Agent to the other engine (#5054): on a hub with `engine_switch` a Claude Code or Codex Agent in a
 // terminal picks the other engine's launchers like another launcher of its own; without it, or for a session that can't
 // (a Codex app thread, an assistant chat, a stopped one), the reason stays.
@@ -208,9 +323,9 @@ describe("a launcher of the other engine", () => {
     // reopened, the panel stands on what runs now
     expect(state.current).toEqual({ provider: "claude", model: "opus", effort: "high" });
     const withEffort: Record<string, ModelList> = { ...read, cx: { list: { agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", default: true, default_effort: "medium" }] } } };
-    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "5.5", effort: "medium" });
+    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "GPT-5.5", effort: "medium" });
     // no effort of Claude Code's carried over when the model has none to say
-    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "5.5" });
+    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "GPT-5.5" });
     expect(pendingView(session({ pending_switch: { launcher: "cx", agent: "codex", effort: "low" } }), listOf)!.effort).toBe("low");
   });
 
@@ -220,5 +335,56 @@ describe("a launcher of the other engine", () => {
     const codexWaiting = terminalCodex({ pending_switch: { launcher: "claude", model: "opus", agent: "claude" } });
     expect(pickPlan(codexWaiting, { provider: "cx", model: "gpt-5.5", effort: "medium" }, raw, engine)).toEqual([{ launcher: "cx", from: "cx" }]);
     expect(sessionPanel(codexWaiting, launchers, listOf, engine).state.note).toBe(t("chat-modelpanel.engine_note"));
+  });
+
+  it("supports Claude Code and Antigravity (agy) cross-engine switching for terminal Agents, not companion runtime sessions", () => {
+    const agyList: LauncherModels = {
+      agent: "agy",
+      models: [{ id: "gemini-4-neon-high", name: "Gemini 4 Neon (High)", default: true, default_effort: "high" }],
+    };
+    const withAgy: Launcher[] = [...launchers, { name: "agy", agent: "agy" }];
+    const readAgy = (name: string): ModelList => (name === "agy" ? { list: agyList } : listOf(name));
+    const rawAgy = (name: string) => readAgy(name).list;
+    const providerAgy = (s: Session, id: string, o: PanelOptions = engine) =>
+      sessionPanel(s, withAgy, readAgy, o).providers.find((p) => p.id === id)!;
+
+    // Terminal Claude Agent can switch to agy when engineSwitch is on
+    expect(providerAgy(session(), "agy", engine).unavailable).toBeUndefined();
+    expect(pickPlan(session(), { provider: "agy", model: "gemini-4-neon-high" }, rawAgy, engine)).toEqual([
+      { launcher: "agy", from: "claude" },
+    ]);
+    expect(providerAgy(session(), "agy", on).unavailable).toBe(
+      t("chat-modelpanel.other_engine", { from: "Claude Code", to: "agy" }),
+    );
+
+    // Terminal agy pane can switch to Claude Code and Codex
+    const terminalAgy = session({
+      agent: "agy",
+      launcher: "agy",
+      model: "gemini-4-neon-high",
+      effort: "high",
+      pane_id: "w1:p3",
+      capabilities: { send: true },
+    });
+    expect(providerAgy(terminalAgy, "claude", engine).unavailable).toBeUndefined();
+    expect(providerAgy(terminalAgy, "cx", engine).unavailable).toBeUndefined();
+    expect(pickPlan(terminalAgy, { provider: "claude", model: "opus", effort: "high" }, rawAgy, engine)).toEqual([
+      { launcher: "claude", from: "agy", model: "opus", effort: "high" },
+    ]);
+
+    // Companion runtime agy session (source_kind: "runtime") cannot engine-switch
+    const runtimeAgy = session({
+      agent: "agy",
+      launcher: "agy",
+      source_kind: "runtime",
+      source_instance_id: "agy",
+      pane_id: undefined,
+      model: "gemini-4-neon-high",
+      capabilities: { send: true },
+    });
+    expect(providerAgy(runtimeAgy, "claude", engine).unavailable).toBe(
+      t("chat-modelpanel.other_engine", { from: "agy", to: "Claude Code" }),
+    );
+    expect(pickPlan(runtimeAgy, { provider: "claude", model: "opus" }, rawAgy, engine)).toBeNull();
   });
 });

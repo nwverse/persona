@@ -25,19 +25,10 @@ struct ArchivedConversationsView: View {
             #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            #if os(macOS)
-            .macSheetDone { dismiss() }
-            #else
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done [Extension System Presentation c0b3fb]") { dismiss() }.lineLimit(1)
-                }
+                SheetClose { dismiss() }
             }
-            #endif
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 
     private func row(_ s: Session) -> some View {

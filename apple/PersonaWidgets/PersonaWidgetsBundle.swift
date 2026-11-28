@@ -11,14 +11,29 @@ struct PersonaWidgetsBundle: WidgetBundle {
     var body: some Widget {
         HomeWidgetBundle().body
         ExtensionSystemWidget()
-        FleetLiveActivity()
-        CompatibleFleetLiveActivity()
-        RecordingLiveActivity()
+        LiveActivityBundle().body
         MeetingRecordingControl()
         AskPersonaControl()
         PersonaAgentsControl()
+        MessagePersonaControl()
+        DictatePersonaControl()
+        CallPersonaControl()
         CompatibleAssistantControl()
         CompatibleAgentsControl()
+    }
+}
+
+/// Persona's Live Activities, a bundle of their own so the main one stays within what a widget bundle's builder takes.
+struct LiveActivityBundle: WidgetBundle {
+    var body: some Widget {
+        FleetLiveActivity()
+        CompatibleFleetLiveActivity()
+        RecordingLiveActivity()
+        #if canImport(AlarmKit)
+        if #available(iOS 26.0, *) {
+            AlarmLiveActivity()
+        }
+        #endif
     }
 }
 
@@ -33,6 +48,16 @@ struct HomeWidgetBundle: WidgetBundle {
         UsageHomeWidget()
         ComputersHomeWidget()
         RecordHomeWidget()
+        HealthWidgetBundle().body
+    }
+}
+
+/// Keep every bundle builder below ten children, and preserve the existing Health kind.
+struct HealthWidgetBundle: WidgetBundle {
+    var body: some Widget {
         HealthHomeWidget()
+        WaterHomeWidget()
+        ProteinHomeWidget()
+        HealthTodayHomeWidget()
     }
 }

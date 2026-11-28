@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -96,14 +95,7 @@ func (h *Hub) renamed(ctx context.Context, id, was, shown, by, via string) strin
 // machine and its connection: only the name changed) and the machine the apps see. A name is no change waiting for a
 // restart (pendingRestart).
 func (h *Hub) renameMachineLive(id, name string) {
-	d := &h.devices
-	d.mu.Lock()
-	for i := range d.entries {
-		if d.entries[i].ID == id {
-			d.entries[i].Name = name
-		}
-	}
-	d.mu.Unlock()
+	h.editEntryLive(id, func(mc *MachineConfig) { mc.Name = name })
 	if m := h.localMachine(id); m != nil {
 		m.setName(name)
 	}
@@ -111,9 +103,26 @@ func (h *Hub) renameMachineLive(id, name string) {
 	h.broadcastMachines() // and the mesh record
 }
 
+// editEntryLive changes computer id's entry the running hub hands its manager (renameMachineLive, link_switch.go
+// kindLive); the caller hands it over (devicesConfigChanged).
+func (h *Hub) editEntryLive(id string, edit func(*MachineConfig)) {
+	d := &h.devices
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i := range d.entries {
+		if d.entries[i].ID == id {
+			edit(&d.entries[i])
+		}
+	}
+}
+
 // nameAfterSystem names a computer that has just paired its Persona Link after what its system calls it, when it has
-// no name of its own yet (added without one: its id); a name it was given is kept.
+// no name of its own yet (added without one: its id); a name it was given is kept, and so is the name of one switching
+// from ssh (link_switch.go: it is the same computer, as the user knows it).
 func (h *Hub) nameAfterSystem(ctx context.Context, id, system string) {
+	if switching, err := h.linkSwitchUnderWay(ctx, id); switching || err != nil {
+		return
+	}
 	system = strings.Join(strings.Fields(system), " ")
 	if r := []rune(system); len(r) > maxMachineName {
 		system = string(r[:maxMachineName])
@@ -159,24 +168,20 @@ func init() {
 	// A computer's Persona Link asks for another name (persona-link name, the tray, the menu bar). Only its manager
 	// speaks for it, and only once the user confirmed it: a computer waiting to be confirmed cannot pass itself off as
 	// another by its name.
-	handleBus(devicewire.MethodRename, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.Rename
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: devicewire.MethodRename + ": " + err.Error()}
-		}
+	handleTypedBus(devicewire.RenameMethod, devicewire.MethodRename+": ", func(h *Hub, ctx context.Context, c *busConn, p devicewire.Rename) (devicewire.RenameReply, error) {
 		if err := h.ownsMachine(c, p.MachineID); err != nil {
-			return nil, err
+			return devicewire.RenameReply{}, err
 		}
 		if h.machineUntrusted(p.MachineID) {
-			return nil, &rpc.Error{Code: devicewire.RenameCodePending, Message: i18n.T(h.userLang(), "hub-machine_rename.pending")}
+			return devicewire.RenameReply{}, &rpc.Error{Code: devicewire.RenameCodePending, Message: i18n.T(h.userLang(), "hub-machine_rename.pending")}
 		}
 		name, err := h.renameMachine(ctx, p.MachineID, p.Name, "link:"+p.MachineID, "link")
 		var e *addMachineError
 		switch {
 		case errors.As(err, &e):
-			return nil, &rpc.Error{Code: e.code, Message: i18n.Localize(e.err, h.userLang())}
+			return devicewire.RenameReply{}, &rpc.Error{Code: e.code, Message: i18n.Localize(e.err, h.userLang())}
 		case err != nil:
-			return nil, err
+			return devicewire.RenameReply{}, err
 		}
 		return devicewire.RenameReply{Name: name}, nil
 	})

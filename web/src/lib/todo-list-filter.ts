@@ -9,12 +9,53 @@ import { isOverdue, todoDueBy, todoDueDay, type SessionLookup, type Todo } from 
 
 export type TodoListFilter = "all" | "no_due" | "today" | "week" | "month";
 export type TodoListSort = "recent" | "due" | "priority";
+export type TodoKindFilter = "all" | "todos" | "tasks";
 
 export const TODO_LIST_FILTERS: readonly TodoListFilter[] = ["all", "no_due", "today", "week", "month"];
 export const TODO_LIST_SORTS: readonly TodoListSort[] = ["recent", "due", "priority"];
+export const TODO_KIND_FILTERS: readonly TodoKindFilter[] = ["all", "todos", "tasks"];
 
 export const isTodoListFilter = (v: unknown): v is TodoListFilter => TODO_LIST_FILTERS.includes(v as TodoListFilter);
 export const isTodoListSort = (v: unknown): v is TodoListSort => TODO_LIST_SORTS.includes(v as TodoListSort);
+export const isTodoKindFilter = (v: unknown): v is TodoKindFilter => TODO_KIND_FILTERS.includes(v as TodoKindFilter);
+
+/** The Web's two item types, including explicit aliases accepted on reads. */
+export function explicitTodoItemType(itemType: Todo["item_type"]): "personal" | "task" | undefined {
+  switch (itemType) {
+    case "personal":
+    case "quick":
+    case "concern":
+      return "personal";
+    case "task":
+    case "goal":
+      return "task";
+  }
+}
+
+/** Whether a to-do is an Agent / supervised task rather than a personal to-do (#14642, #15758).
+ *  Server-derived `item_type` wins when set, then explicit `audience` (#14619); otherwise falls back
+ *  to legacy task signals (linked agents, supervision, assistant conversation origin, plan/brief, or failed agent start). */
+export function isAgentTask(todo: Pick<Todo, "item_type" | "audience" | "agents" | "supervision" | "origin" | "plan_id" | "brief" | "start_error">): boolean {
+  const explicit = explicitTodoItemType(todo.item_type);
+  if (explicit) return explicit === "task";
+  if (todo.audience === "autonomous") return true;
+  if (todo.audience === "human") return false;
+  return Boolean(
+    (todo.agents && todo.agents.length > 0) ||
+    todo.supervision ||
+    todo.origin ||
+    todo.plan_id ||
+    todo.brief ||
+    todo.start_error,
+  );
+}
+
+/** Whether `todo` matches the lightweight All / To-dos / Tasks filter (#14642). */
+export function matchesKindFilter(todo: Todo, kind: TodoKindFilter): boolean {
+  if (kind === "all") return true;
+  const task = isAgentTask(todo);
+  return kind === "tasks" ? task : !task;
+}
 
 /** When a to-do is due, for the filter: its due moment, or the local midnight starting its due day. */
 export function todoDueStart(todo: Todo): number | undefined {

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,6 +31,18 @@ import (
 // its method; without it no client claims the request and the bus answers "no-client-found".
 
 const codexDesktopTimeout = 60 * time.Second
+
+const (
+	codexDesktopUnavailableKey  = "codex-desktop.control_unavailable"
+	codexDesktopRecoverableKey  = "codex-desktop.recoverable_resume_or_continue"
+	codexDesktopContinueOnlyKey = "codex-desktop.recoverable_continue_only"
+)
+
+// This refusal is safe to retry: no turn or settings request reached the App. Keep transport diagnostics out of
+// the user-facing message, including the stale socket's path after an App update removes the bus.
+func codexDesktopUnavailable(ctx context.Context) error {
+	return refusal("codex_read_only", i18n.T(i18n.From(ctx), codexDesktopUnavailableKey), nil)
+}
 
 // codexDesktopLoadWait: how long a thread the App has not loaded (one a thread just created, one not opened since the
 // App started) is given to load after the App is asked to open it.
@@ -139,32 +152,52 @@ func (c *codexDesktop) request(method string, params any, target string) (codexD
 
 // sendCodexDesktop runs a turn in a thread the Codex App has loaded.
 func (n *Node) sendCodexDesktop(ctx context.Context, src codexSource, text string, images []proto.Image) error {
+	// Refuse before saving attachments or holding a message behind a running turn on an unavailable App.
+	if !codexDesktopAvailable(src.home) {
+		return codexDesktopUnavailable(ctx)
+	}
 	paths, err := n.saveImages(images)
 	if err != nil {
 		return refusal("bad_image", err.Error(), nil)
 	}
-	input := []map[string]any{}
-	if text != "" {
-		input = append(input, map[string]any{"type": "text", "text": text, "text_elements": []any{}})
+	clientID, _ := ctx.Value(sendTraceKey{}).(string)
+	if clientID == "" {
+		clientID = newUUID()
+		ctx = context.WithValue(ctx, sendTraceKey{}, clientID)
 	}
-	for _, p := range paths {
-		input = append(input, map[string]any{"type": "localImage", "path": p})
-	}
+	msg := codexDesktopMessage{text: text, paths: paths, clientID: clientID}
+	// Serialize both native-queue and legacy-bus delivery per thread (codex_desktop_queue.go), and while the App runs a
+	// turn on the legacy bus hold the message until the turn ends so it is never steered into the running turn.
+	return n.sendOrHoldCodexDesktop(ctx, src, msg)
+}
+
+// startCodexDesktopTurn asks the window owning src's thread to run a turn with input, as the App's own composer does.
+func (n *Node) startCodexDesktopTurn(ctx context.Context, src codexSource, input []map[string]any) error {
 	ctx, cancel := context.WithTimeout(ctx, codexDesktopTimeout)
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		// The App may have restarted between the routing decision and delivery of a held message.
+		if missingCodexDesktopBus(err) {
+			if cli := codexDesktopQueueCLI(src.home); cli != "" {
+				return n.enqueueCodexDesktop(ctx, cli, src, input)
+			}
+		}
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.loadedOwner(ctx, src.thread)
 	if err != nil {
 		return err
 	}
+	clientID, _ := ctx.Value(sendTraceKey{}).(string)
+	if clientID == "" {
+		clientID = newUUID()
+	}
 	turn := map[string]any{
 		"conversationId": src.thread,
 		"turnStart": map[string]any{
-			"request": map[string]any{"threadId": src.thread, "clientUserMessageId": newUUID(), "input": input},
+			"request": map[string]any{"threadId": src.thread, "clientUserMessageId": clientID, "input": input},
 			"context": map[string]any{},
 		},
 	}
@@ -184,7 +217,7 @@ func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error
 	defer cancel()
 	c, err := dialCodexDesktop(ctx, src.home)
 	if err != nil {
-		return refusal("codex_read_only", "连不上电脑上的 Codex App："+err.Error(), nil)
+		return codexDesktopUnavailable(ctx)
 	}
 	defer c.close()
 	owner, err := c.owner(src.thread)
@@ -205,8 +238,8 @@ func (n *Node) interruptCodexDesktop(ctx context.Context, src codexSource) error
 // A process holding the rollout open only ever said "unknown", which the phone folds away with the quiet ones.
 const codexDesktopRecent = 72 * time.Hour
 
-// codexAppState is what the App keeps in <CODEX_HOME>/.codex-global-state.json about its sidebar: the unread threads,
-// its projects and which thread belongs to which. Read again when the file changes.
+// codexAppState joins the App's legacy sidebar state with its native project catalog and thread assignments.
+// Projects and memberships migrate independently, so both sources remain readable until that migration finishes.
 type codexAppState struct {
 	unread      map[string]bool
 	projectless map[string]bool
@@ -227,32 +260,22 @@ type codexAppProject struct {
 }
 
 type codexAppStateCache struct {
-	mtime   time.Time
-	size    int64
-	dbStamp string // the state database's stamp when its projects were merged (readCodexAppProjects, #6388)
-	state   *codexAppState
+	stamp    string
+	revision uint64
+	state    *codexAppState
 }
 
 var codexAppStates sync.Map // home → codexAppStateCache
 
 func loadCodexAppState(home string) *codexAppState {
-	p := filepath.Join(home, ".codex-global-state.json")
-	st, err := os.Stat(p)
-	if err != nil {
-		return nil
-	}
-	dbStamp := ""
-	if db := codexAppDBPath(home); db != "" {
-		dbStamp = fileStamp(db) + fileStamp(db+"-wal")
-	}
+	snapshot, snapshotErr := codexDesktopProjectSnapshot(home)
 	if v, ok := codexAppStates.Load(home); ok {
 		c := v.(codexAppStateCache)
-		if c.mtime.Equal(st.ModTime()) && c.size == st.Size() && c.dbStamp == dbStamp {
+		if snapshotErr != nil || c.stamp == snapshot.Stamp && c.revision == snapshot.Revision {
 			return c.state
 		}
 	}
-	b, err := os.ReadFile(p)
-	if err != nil {
+	if snapshot.Projects == nil {
 		return nil
 	}
 	var raw struct {
@@ -263,13 +286,15 @@ func loadCodexAppState(home string) *codexAppState {
 		Assignments map[string]struct {
 			ProjectID string `json:"projectId"`
 		} `json:"thread-project-assignments"`
-		Projects map[string]codexAppProject `json:"local-projects"`
-		Order    []string                   `json:"project-order"`
 	}
-	if json.Unmarshal(b, &raw) != nil {
+	b, err := os.ReadFile(filepath.Join(home, ".codex-global-state.json"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: raw.Projects, order: raw.Order}
+	if err == nil && json.Unmarshal(b, &raw) != nil {
+		return nil
+	}
+	s := &codexAppState{unread: map[string]bool{}, projectless: map[string]bool{}, assigned: map[string]string{}, projects: snapshot.Projects, order: snapshot.Order}
 	for _, hosts := range raw.ReadState.UnreadByIdentity {
 		for host, ids := range hosts {
 			if len(host) < 6 || host[:6] != "local:" {
@@ -284,7 +309,20 @@ func loadCodexAppState(home string) *codexAppState {
 		s.projectless[id] = true
 	}
 	for id, a := range raw.Assignments {
-		s.assigned[id] = a.ProjectID
+		pid := a.ProjectID
+		if canonical := snapshot.NativeProjectIDs[pid]; canonical != "" {
+			pid = canonical
+		}
+		s.assigned[id] = pid
+	}
+	for id, pid := range snapshot.ThreadProjects {
+		if pid == "" {
+			delete(s.assigned, id)
+			s.projectless[id] = true
+			continue
+		}
+		s.assigned[id] = pid
+		delete(s.projectless, id)
 	}
 	add := func(id string) {
 		if validID(id) && len(s.sidebar) < codexAppSidebarMax {
@@ -297,19 +335,9 @@ func loadCodexAppState(home string) *codexAppState {
 	for id := range s.assigned {
 		add(id)
 	}
-	// The migrated App keeps its projects in the state database, not in local-projects (#6388): merge them, with the
-	// json's own projects winning an id both have.
-	for id, p := range readCodexAppProjects(home) {
-		if s.projects == nil {
-			s.projects = map[string]codexAppProject{}
-		}
-		if _, ok := s.projects[id]; !ok {
-			s.projects[id] = p
-		}
-	}
 	slices.Sort(s.sidebar)
 	s.sidebar = slices.Compact(s.sidebar)
-	codexAppStates.Store(home, codexAppStateCache{mtime: st.ModTime(), size: st.Size(), dbStamp: dbStamp, state: s})
+	codexAppStates.Store(home, codexAppStateCache{stamp: snapshot.Stamp, revision: snapshot.Revision, state: s})
 	return s
 }
 
@@ -416,7 +444,12 @@ func (a *codexAppState) listed(thread string) bool {
 // placeCodexDesktop puts an App thread in its sidebar project — a subagent in its parent's (`group`) — and, for recent
 // ones, gives it its state. A subagent's finished turn is not something to read on its own: it is idle.
 func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string, subagent bool) {
-	app := loadCodexAppState(src.home)
+	n.placeCodexDesktopIn(s, src, group, subagent, nil)
+}
+
+// placeCodexDesktopIn is placeCodexDesktop with the App's state looked up once per home in a list pass (codexListPass).
+func (n *Node) placeCodexDesktopIn(s *proto.Session, src codexSource, group string, subagent bool, pass *codexListPass) {
+	app := pass.appState(src.home)
 	s.SpaceKind = "codex_app"
 	if pid, name := app.project(group, s.Cwd); pid != "" && name != "" && (app == nil || !app.projectless[group]) {
 		s.SpaceID, s.SpaceName = "codex-app:"+pid, name
@@ -430,7 +463,7 @@ func (n *Node) placeCodexDesktop(s *proto.Session, src codexSource, group string
 	if s.Status == proto.StatusDone && (subagent || app == nil || !app.unread[src.thread]) {
 		s.Status = proto.StatusIdle // looked at in the App
 	}
-	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil {
+	if s.Status == proto.StatusWorking && !subagent && s.Capabilities != nil && s.Capabilities.Send {
 		// Stopped from the phone as with the App's stop button (interruptCodexDesktop); a subagent stops with its chat.
 		s.Capabilities.Interrupt = true
 	}
@@ -444,7 +477,7 @@ func slotCodexDesktop(list []proto.Session) {
 		if s.SpaceKind != "codex_app" {
 			continue
 		}
-		s.SlotIndex = next[s.SpaceID]
+		s.SlotIndex = int32(next[s.SpaceID])
 		next[s.SpaceID]++
 	}
 }
@@ -452,46 +485,63 @@ func slotCodexDesktop(list []proto.Session) {
 type codexTurnMark struct {
 	size   int64
 	status string
+	offset int64
+	mtime  time.Time
 }
 
-// codexDesktopTurn: working while the rollout's last turn has started and not ended, done after; read from the tail
-// and kept until the file grows.
+// codexDesktopTurn follows turn boundaries across the entire rollout. After the first read, only appended
+// complete lines are read: a long running turn must not lose its start when it leaves a bounded tail window.
 func (n *Node) codexDesktopTurn(path string) string {
 	st, err := os.Stat(path)
 	if err != nil {
 		return proto.StatusUnknown
 	}
-	if v, ok := codexTurnMarks.Load(path); ok && v.(codexTurnMark).size == st.Size() {
-		return v.(codexTurnMark).status
-	}
 	status := proto.StatusDone
-	if f, err := os.Open(path); err == nil {
-		const tail = 256 << 10
-		off := max(st.Size()-tail, 0)
-		b := make([]byte, st.Size()-off)
-		_, err = f.ReadAt(b, off)
-		f.Close()
-		if err == nil {
-			for _, line := range bytes.Split(b, []byte("\n")) {
-				var e struct {
-					Type    string `json:"type"`
-					Payload struct {
-						Type string `json:"type"`
-					} `json:"payload"`
-				}
-				if !bytes.Contains(line, []byte(`"event_msg"`)) || json.Unmarshal(line, &e) != nil || e.Type != "event_msg" {
-					continue
-				}
-				switch e.Payload.Type {
-				case "task_started":
-					status = proto.StatusWorking
-				case "task_complete", "turn_aborted":
-					status = proto.StatusDone
-				}
-			}
+	var off int64
+	if v, ok := codexTurnMarks.Load(path); ok {
+		c := v.(codexTurnMark)
+		if c.size == st.Size() && c.mtime.Equal(st.ModTime()) {
+			return c.status
+		}
+		if st.Size() > c.size {
+			status, off = c.status, c.offset
 		}
 	}
-	codexTurnMarks.Store(path, codexTurnMark{size: st.Size(), status: status})
+	f, err := os.Open(path)
+	if err != nil {
+		return proto.StatusUnknown
+	}
+	defer f.Close()
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return proto.StatusUnknown
+	}
+	reader := bufio.NewReader(io.LimitReader(f, st.Size()-off))
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			if err != io.EOF {
+				return proto.StatusUnknown
+			}
+			break // Retry an unfinished line at the same offset when the rollout grows.
+		}
+		off += int64(len(line))
+		var e struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type string `json:"type"`
+			} `json:"payload"`
+		}
+		if !bytes.Contains(line, []byte(`"event_msg"`)) || json.Unmarshal(line, &e) != nil || e.Type != "event_msg" {
+			continue
+		}
+		switch e.Payload.Type {
+		case "task_started":
+			status = proto.StatusWorking
+		case "task_complete", "turn_aborted":
+			status = proto.StatusDone
+		}
+	}
+	codexTurnMarks.Store(path, codexTurnMark{size: st.Size(), status: status, offset: off, mtime: st.ModTime()})
 	return status
 }
 
@@ -502,7 +552,8 @@ var codexTurnMarks sync.Map
 // subagents), the Codex CLI "codex-tui" / "cli", `codex exec` and the SDKs over it "codex_exec" / "codex_sdk_*" with
 // source "exec" (their subagents keep the originator). Only the App's threads go through its IPC bus.
 type codexOrigin struct {
-	desktop bool
+	desktop  bool
+	userChat bool // a desktop UI thread explicitly classified as user-created
 	// persona: a chat Persona started in the App (originator codexAppClient, codexapp_new.go), which the App lists
 	// without a record in its state; desktop too, so its subagents are the App's as well.
 	persona bool
@@ -513,12 +564,23 @@ type codexOrigin struct {
 	sub  bool
 	// guardian: an approval review, a subagent of source {"subagent": {"other": "guardian"}} that Codex runs on a tool
 	// call before the call runs. Its rollout holds only the review's request and assessment: not listed (#5486).
-	guardian bool
-	root     string // session_id identifies the shared root on newer Codex versions
-	parent   string // the thread that spawned this subagent
+	guardian   bool
+	originator string // session_meta.payload.originator
+	source     string // string form of session_meta.payload.source ("" when an object)
+	root       string // session_id identifies the shared root on newer Codex versions
+	parent     string // the thread that spawned this subagent
 	// started holds when the thread began, the session_meta line's time (Session.StartedAt), made once for every row
 	// of the thread: a hierarchy is never written once set, so the rows share it. Nil when the line has no time.
 	started *proto.SessionHierarchy
+}
+
+// interactive reports whether a rollout represents a user-facing interactive thread rather than an automated
+// one-shot run (exec/SDK), subagent, guardian review, or unattributed non-interactive record.
+func (o codexOrigin) interactive() bool {
+	if o.exec || o.sub || o.guardian || o.parent != "" {
+		return false
+	}
+	return o.cli || o.desktop || o.originator != "" || o.source == "cli" || o.source == "vscode"
 }
 
 var codexOrigins sync.Map // path → codexOrigin (the first line never changes)
@@ -551,7 +613,8 @@ func readCodexOrigin(path string) codexOrigin {
 		return codexOrigin{} // not written yet: read again next time
 	}
 	o := codexOrigin{desktop: m.Payload.Originator == "Codex Desktop" || m.Payload.Originator == "codex_work_desktop" || m.Payload.Originator == codexAppClient,
-		persona: m.Payload.Originator == codexAppClient, cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs"}
+		persona: m.Payload.Originator == codexAppClient, cli: m.Payload.Originator == "codex-tui" || m.Payload.Originator == "codex_cli_rs",
+		originator: m.Payload.Originator}
 	if at, err := time.Parse(time.RFC3339Nano, m.Timestamp); err == nil && !at.IsZero() {
 		o.started = &proto.SessionHierarchy{StartedAt: at.UTC()}
 	}
@@ -559,24 +622,12 @@ func readCodexOrigin(path string) codexOrigin {
 	if json.Unmarshal(m.Payload.Source, &source) != nil {
 		source = "" // an object: a subagent
 	}
+	o.source = source
 	o.exec = source == "exec" || m.Payload.Originator == "codex_exec" || strings.HasPrefix(m.Payload.Originator, "codex_sdk")
-	var spawn struct {
-		Subagent struct {
-			ThreadSpawn struct {
-				Parent string `json:"parent_thread_id"`
-			} `json:"thread_spawn"`
-			Other string `json:"other"`
-		} `json:"subagent"`
-	}
-	if json.Unmarshal(m.Payload.Source, &spawn) == nil {
-		o.parent = spawn.Subagent.ThreadSpawn.Parent
-		o.guardian = spawn.Subagent.Other == "guardian"
-	}
-	o.parent = firstNonEmpty(m.Payload.Parent, o.parent)
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(m.Payload.Source, &fields) == nil {
-		_, o.sub = fields["subagent"]
-	}
+	o.userChat = o.desktop && source == "vscode" && m.Payload.ThreadSource == "user"
+	var spawned string
+	spawned, o.guardian, o.sub = codexSourceObject(m.Payload.Source)
+	o.parent = firstNonEmpty(m.Payload.Parent, spawned)
 	o.sub = o.sub || o.parent != "" || source == "subagent" || m.Payload.ThreadSource == "subagent"
 	if o.sub {
 		o.root = m.Payload.SessionID
@@ -585,20 +636,117 @@ func readCodexOrigin(path string) codexOrigin {
 	return o
 }
 
-// codexDesktopChat: a chat of the Codex App running on this machine (not a CLI thread, not a subagent of one).
-func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil) }
+// codexSourceObject reads a thread's source when it is an object, a subagent's ({"subagent": …}): the thread that
+// spawned it (thread_spawn's parent_thread_id), or an approval review ({"other": "guardian"}). A rollout's session_meta
+// and the App's database row hold the same object.
+func codexSourceObject(raw json.RawMessage) (parent string, guardian, sub bool) {
+	var spawn struct {
+		Subagent struct {
+			ThreadSpawn struct {
+				Parent string `json:"parent_thread_id"`
+			} `json:"thread_spawn"`
+			Other string `json:"other"`
+		} `json:"subagent"`
+	}
+	if json.Unmarshal(raw, &spawn) == nil {
+		parent, guardian = spawn.Subagent.ThreadSpawn.Parent, spawn.Subagent.Other == "guardian"
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		_, sub = fields["subagent"]
+	}
+	return parent, guardian, sub || parent != ""
+}
 
-// codexDesktopChatIn is codexDesktopChat with the App's presence looked up once per home in a list pass (codexListPass).
-func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
-	if !pass.desktopAvailable(src.home) {
+// codexThreadOrigin is where src's thread came from: its rollout's first line, or, once the App moved the rollout into
+// its database and deleted it, the database row (codexAppThread.origin, #8191). Without either it says nothing.
+func codexThreadOrigin(src codexSource) codexOrigin {
+	if t, ok := codexAppThreadOf(src); ok {
+		return t.origin()
+	}
+	return readCodexOrigin(src.path)
+}
+
+// codexAppOrigin reports whether src is a user-facing Codex App thread (not exec, subagent, or guardian review).
+func codexAppOrigin(src codexSource) bool {
+	o := codexThreadOrigin(src)
+	return o.desktop && !o.exec && !o.sub && o.parent == "" && !o.guardian
+}
+
+// A shared app-server can stamp the node's initialize name on an App-created chat (#10438).
+func (o codexOrigin) sharedAppStamp() bool {
+	return o.originator == "persona" && o.source == "vscode" && !o.sub
+}
+
+// Use the usual desktop safeguards for a desktop origin or an ambiguous stamp
+// corroborated by the same home's sidebar.
+func (o codexOrigin) desktopThread(src codexSource, pass *codexListPass) bool {
+	return o.desktop || o.sharedAppStamp() && pass.appState(src.home).listed(src.thread)
+}
+
+// codexAppRunningNow reports whether the Codex desktop App is currently running for home (either via its live IPC bus
+// or as a desktop App / bundled stdio app-server process), and whether process inspection completed cleanly.
+func (n *Node) codexAppRunningNow(home string) (running, complete bool) {
+	if home != "" && codexDesktopAvailable(home) {
+		return true, true
+	}
+	if n.codices == nil {
+		return false, true
+	}
+	n.codices.mu.Lock()
+	scan, checked := n.codices.scan, n.codices.checked
+	n.codices.mu.Unlock()
+	var procs []codexProcess
+	listed := true
+	switch {
+	case checked != nil:
+		procs, listed = checked()
+	case scan != nil:
+		procs = scan()
+	default:
+		return false, true
+	}
+	target := canonicalCodexHome(home, n.home)
+	for _, p := range procs {
+		if !p.desktop {
+			continue
+		}
+		pHome := canonicalCodexHome(firstNonEmpty(p.home, n.codexHome()), n.home)
+		if target == "" || pHome == "" || pHome == target {
+			return true, listed
+		}
+	}
+	return false, listed
+}
+
+// codexTurnRunning reports whether src's rollout currently shows an unfinished turn.
+func (n *Node) codexTurnRunning(src codexSource, m quickMeta) bool {
+	if m.turnOpen && !m.turnClosed {
+		return true
+	}
+	if src.path == "" {
 		return false
 	}
-	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go)
-		_, ok := codexAppThreadOf(src)
-		return ok
+	st, err := os.Stat(src.path)
+	if err != nil || time.Since(st.ModTime()) >= codexDesktopRecent {
+		return false
+	}
+	return n.codexDesktopTurn(src.path) == proto.StatusWorking
+}
+
+// codexDesktopChat identifies an App chat independently of whether the App still exposes its control bus.
+// An unavailable bus must not turn an App chat into a CLI session or invite a second writer.
+func codexDesktopChat(src codexSource) bool { return codexDesktopChatIn(src, nil) }
+
+// codexDesktopChatIn is codexDesktopChat with sidebar state read once per home in a list pass (codexListPass).
+func codexDesktopChatIn(src codexSource, pass *codexListPass) bool {
+	if src.path == "" { // its rollout is gone: one the App's sidebar lists and its database has (codex_appdb.go), not a subagent
+		t, ok := codexAppThreadOf(src)
+		return ok && !t.origin().sub
 	}
 	o := readCodexOrigin(src.path)
-	return o.desktop && o.parent == "" && (o.persona || loadCodexAppState(src.home).listed(src.thread))
+	return !o.exec && !o.sub && o.parent == "" &&
+		(o.persona || o.userChat || (o.desktop || o.sharedAppStamp()) && pass.appState(src.home).listed(src.thread))
 }
 
 // loadedOwner is the App window that owns the thread, the App asked to open it when none does: it loads a thread it is

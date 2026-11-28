@@ -160,6 +160,9 @@ func TestOneTool(t *testing.T) {
 func TestOneToolCarriesPaneWithoutSession(t *testing.T) {
 	old := dial
 	t.Cleanup(func() { dial = old })
+	// Herdr's and herdr-core's panes come before Orca's (nodeclient.HookPane): a run inside either must not see its own.
+	t.Setenv(nodeclient.HerdrPaneEnv, "")
+	t.Setenv(nodeclient.HerdrCorePaneEnv, "")
 	t.Setenv(nodeclient.OrcaPaneEnv, "tab:leaf")
 	t.Setenv("CODEX_THREAD_ID", "10000000-0000-0000-0000-000000000001")
 	var request map[string]any
@@ -294,6 +297,7 @@ func TestKindBeforeWords(t *testing.T) {
 		retry int
 	}{
 		{proto.ErrorResult(proto.ToolErrorDeclined, "主人在手机上拒绝了", 0), exitDeclined, 0},
+		{proto.ErrorResult(proto.ToolErrorUnanswered, "Nobody answered the confirmation card on the phone", 0), exitUnanswered, 0},
 		{proto.ErrorResult(proto.ToolErrorUnavailable, "Telegram 没登录", 0), exitUnavailable, 0},
 		{proto.ErrorResult(proto.ToolErrorRateLimited, "too many requests", 30), exitRateLimited, 30},
 		{proto.ErrorResult(proto.ToolErrorRateLimited, "Telegram is not available: Telegram 限流，12 秒后再试", 0), exitRateLimited, 12},

@@ -2,7 +2,7 @@
 // One Escape closes one overlay, the topmost: a zoomed diagram inside a Dialog, or a Dialog over another Dialog.
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // jsdom has no matchMedia (useMedia reads it); the diagram is drawn already, so Mermaid itself never loads
 vi.hoisted(() => {
@@ -15,7 +15,12 @@ vi.mock("../lib/mermaid", () => ({
 }));
 import { t } from "../i18n";
 import { Dialog } from "./atoms";
-import { MermaidBlock } from "./Mermaid";
+import { MermaidBlock, MermaidViewer } from "./Mermaid";
+
+// The zoomed view is its own chunk (Mermaid.tsx): in before the clicks, so each one draws it at once, as after a hover.
+beforeAll(async () => {
+  await MermaidViewer.preload();
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -112,6 +117,52 @@ describe("Escape closes only the topmost overlay", () => {
     const closed = vi.fn();
     act(() => root.render(<Dialog open={false} onClose={closed}>a</Dialog>));
     escape();
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it("ignores Escape while an IME composition is active (isComposing or keyCode 229)", () => {
+    const closed = vi.fn();
+    act(() => root.render(<Closable name="form" onClose={closed}><input /></Closable>));
+    const input = document.querySelector("input")!;
+
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    });
+    expect(closed).not.toHaveBeenCalled();
+
+    const safari = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    Object.defineProperty(safari, "keyCode", { value: 229 });
+    act(() => {
+      input.dispatchEvent(safari);
+    });
+    expect(closed).not.toHaveBeenCalled();
+
+    escape();
+    expect(closed).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects defaultPrevented when a child inside the Dialog already consumed Escape", () => {
+    const closed = vi.fn();
+    const consumed = vi.fn();
+    act(() =>
+      root.render(
+        <Closable name="form" onClose={closed}>
+          <input
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                consumed();
+              }
+            }}
+          />
+        </Closable>,
+      ),
+    );
+    const input = document.querySelector("input")!;
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    expect(consumed).toHaveBeenCalledTimes(1);
     expect(closed).not.toHaveBeenCalled();
   });
 });

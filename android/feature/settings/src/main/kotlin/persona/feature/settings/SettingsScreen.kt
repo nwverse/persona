@@ -25,6 +25,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import persona.core.contracts.api.*
 import persona.core.navigation.LocalDetailKey
+import persona.core.navigation.ExtensionRoute
 import persona.core.navigation.SettingsPage
 import persona.core.navigation.SettingsPageRoute
 import kotlinx.coroutines.CancellationException
@@ -71,25 +72,43 @@ private fun SettingsContent(
     onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
     onClose: (() -> Unit)?,
 ) {
-    var page by rememberSaveable(initialPage) { mutableStateOf(settingsPageFromInitialPage(initialPage)?.toInitialPage() ?: initialPage) }
-    var searchQuery by rememberSaveable { mutableStateOf("") }
+    val pageState = rememberSaveable(initialPage) { mutableStateOf(settingsPageFromInitialPage(initialPage)?.toInitialPage() ?: initialPage) }
+    var page by pageState
+    val searchQueryState = rememberSaveable { mutableStateOf("") }
     var parents by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    var purposeManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var purpose by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var extension by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var extensionManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var connectorManager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var channel by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var manager by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    val purposeManagerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var purposeManager by purposeManagerState
+    val purposeState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var purpose by purposeState
+    val extensionState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var extension by extensionState
+    val extensionManagerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var extensionManager by extensionManagerState
+    val connectorManagerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var connectorManager by connectorManagerState
+    val channelState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var channel by channelState
+    val managerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var manager by managerState
     /** `ssh:<hub id>` or `proxy:<hub id>`: a hub's tunnel page under Settings › Hubs. */
-    var tunnelPage by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var pairingDiagnostics by rememberSaveable(initialPage) { mutableStateOf(false) }
+    val tunnelPageState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var tunnelPage by tunnelPageState
+    val pairingDiagnosticsState = rememberSaveable(initialPage) { mutableStateOf(false) }
+    var pairingDiagnostics by pairingDiagnosticsState
+    var diagnosticsExport by rememberSaveable(initialPage) { mutableStateOf(false) }
     // Model providers's own steps when they open in place: one provider, adding one, importing from ~/.zshrc.
-    var provider by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
-    var providerStep by rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    val providerState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var provider by providerState
+    val providerStepState = rememberSaveable(initialPage) { mutableStateOf<String?>(null) }
+    var providerStep by providerStepState
     // The first group's pages read and write the current assistant's settings alone (docs/assistant/managers.md "Clients").
     val assistant = currentAssistant()
     val mine = services.forCurrentAssistant()
+    val knowledgeSelection = mine.knowledgeSelection.takeUnless { services.demo }
+    val knowledgeAvailability = remember(knowledgeSelection, assistant.id, services.hubAddress) {
+        knowledgeSelection?.let { KnowledgeSelectionAvailability(it) }
+    }
+    val knowledgeSelectionAvailable = knowledgeAvailability?.state?.collectAsState()?.value == true
     // The assistant the first group's pages are of, for the pages they open (null: a hub without a roster, the default's).
     val owner = assistant.takeIf { it.roster != null }?.id
     // A switch while one of its pages is open here goes back to the list: no page shows one assistant's settings once
@@ -98,6 +117,7 @@ private fun SettingsContent(
     LaunchedEffect(assistant.id) {
         if (shownFor == assistant.id) return@LaunchedEffect
         shownFor = assistant.id
+        ProviderImportRequests.cancel()
         if (initialPage == "settings" && isAssistantSettingsPage(page)) {
             page = "settings"; parents = emptyList(); purpose = null; purposeManager = null; extension = null; extensionManager = null
             connectorManager = null; channel = null; provider = null; providerStep = null
@@ -109,17 +129,24 @@ private fun SettingsContent(
     val appStyleStore = LocalAppStyleStore.current
     val scope = rememberCoroutineScope()
     val connection by services.connection.state.collectAsState()
-    val machines by services.sessions.machines.collectAsState()
-    val paired by services.pairing.isPaired.collectAsState()
+    LaunchedEffect(knowledgeAvailability, page, connection, assistant.id) {
+        if (knowledgeAvailability != null && page == "settings" && connection == ConnectionState.Online) knowledgeAvailability.probe()
+    }
+    val machinesState = services.sessions.machines.collectAsState()
+    val pairedState = services.pairing.isPaired.collectAsState()
+    val paired by pairedState
     val deviceController = remember(services) { DeviceSettingsState(services.deviceSettings, services.disconnect) }
-    val deviceState by deviceController.state.collectAsState()
+    val deviceStateState = deviceController.state.collectAsState()
+    val deviceState by deviceStateState
     // The signed-in Mac's row says "Mute phone" when it is on: read this device's preferences once a desktop shows.
     LaunchedEffect(desktops.isNotEmpty(), page) {
         if (desktops.isNotEmpty() && page == "settings" && paired && services.deviceSettings != null && deviceState.preferences == null) deviceController.loadPreferences()
     }
-    var confirmDisconnect by remember { mutableStateOf(false) }
+    val confirmDisconnectState = remember { mutableStateOf(false) }
+    var confirmDisconnect by confirmDisconnectState
     val updateController = rememberAppUpdateState(services)
-    val updateStatus by updateController.state.collectAsState()
+    val updateStatusState = updateController.state.collectAsState()
+    val updateStatus by updateStatusState
     val update = updateStatus.latest
     val updateMessage = updateStatus.message
     val updateNow by produceState(java.time.Instant.now(), page, updateStatus.lastChecked) {
@@ -140,18 +167,21 @@ private fun SettingsContent(
     }
     val busy = updateStatus.checking
     val installing = updateStatus.installing
-    fun checkUpdate() { scope.launch { updateController.check(manual = true) } }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (!services.demo) scope.launch { updateController.check() }
     }
     val extensionService = mine.extensions.takeUnless { services.demo }
     val extensionsAvailable by remember(extensionService) { extensionService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
+    val inboxSources by remember(extensionService) { extensionService?.inboxSourcesAvailable ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
     // Each assistant's own: a switch never shows the last one's count, not even while the new one's is read (or fails).
-    var extensionSummary by remember(assistant.id) { mutableStateOf<String?>(null) }
+    val extensionSummaryState = remember(assistant.id) { mutableStateOf<String?>(null) }
+    var extensionSummary by extensionSummaryState
     val connectorsService = mine.connectors.takeUnless { services.demo }
     var mailAccounts by remember(assistant.id) { mutableStateOf<List<MailAccount>?>(null) }
     var larkStatus by remember(assistant.id) { mutableStateOf<LarkStatus?>(null) }
     val larkChats = LocalLarkFeatures.current.chats
+    // The hub's mail module (#15995), decided by the shell: off, Settings offers no mail row or page and asks no mail route.
+    val mailAccess = LocalMailAccess.current
     val translationPrefs = services.translation?.prefs?.collectAsState()?.value
     val translationValue = when {
         services.demo || translationPrefs == null -> null
@@ -174,16 +204,23 @@ private fun SettingsContent(
         extensionSummary = try { ExtensionText.listSummary(context.resources, extensionService.extensions().filter { assistant.owns(it.manager) }) }
         catch (error: CancellationException) { throw error } catch (_: Exception) { extensionSummary }
     }
-    // Extensions' UI slots (docs/extensions/extensions.md "UI slots"): read again whenever the settings list shows.
+    // Extensions' UI slots (docs/extensions/extensions.md "UI slots"): refresh when Settings or Settings › Extensions shows,
+    // so the tab badge and the Extensions page stay current. Cards load only on the Extensions page when a tap can open them.
     val slots = services.extensionSlots.takeUnless { services.demo }
     val slotsState = slots?.state?.collectAsState()?.value ?: ExtensionSlotsState()
-    val slotCards = if (page == "settings" && onNavigate != null) rememberExtensionCards(slots) { onNavigate(it) } else emptyList()
+    val slotCards = if (page == "plugins" && onNavigate != null) {
+        rememberExtensionCards(slots, onOpen = { onNavigate(it) }, onSettings = { id -> onNavigate(ExtensionRoute(id, manager = owner)) })
+    } else emptyList()
     LaunchedEffect(slots, page, connection) {
-        if (slots != null && page == "settings" && connection == ConnectionState.Online) slots.load()
+        if (slots != null && (page == "settings" || page == "plugins") && connection == ConnectionState.Online) slots.load()
     }
-    val channelService = mine.channels.takeUnless { services.demo }
+    // The hub's Lark module (#15995): read here once, and handed to the list, the channel's page and the bot's page.
+    val larkBot = rememberLarkBotEntry()
+    val channelSource = mine.channels.takeUnless { services.demo }
+    val channelService = remember(channelSource, larkBot) { channelSource?.let(larkBot::listing) }
     val channelsAvailable by remember(channelService) { channelService?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
-    var channelList by remember(assistant.id) { mutableStateOf<List<HubChannel>?>(null) }
+    val channelListState = remember(assistant.id) { mutableStateOf<List<HubChannel>?>(null) }
+    var channelList by channelListState
     // Like "Extensions"': read again whenever the settings list is shown or the hub reconnects.
     LaunchedEffect(channelService, channelsAvailable, page, connection, assistant.id) {
         if (channelService == null || !channelsAvailable || page != "settings" || connection != ConnectionState.Online) return@LaunchedEffect
@@ -192,17 +229,18 @@ private fun SettingsContent(
     }
     // Settings › Hub version's row value (iOS `hubSummary`): read when the list shows or the hub reconnects, then each push.
     val hubUpdates = services.hubUpdates.takeUnless { services.demo }
-    var hubUpdateStatus by remember(hubUpdates) { mutableStateOf<persona.core.contracts.api.HubUpdateStatus?>(null) }
+    val hubUpdateStatusState = remember(hubUpdates) { mutableStateOf<persona.core.contracts.api.HubUpdateStatus?>(null) }
+    var hubUpdateStatus by hubUpdateStatusState
     LaunchedEffect(hubUpdates, page, connection) {
         if (hubUpdates == null || page != "settings" || connection != ConnectionState.Online) return@LaunchedEffect
         hubUpdateStatus = try { hubUpdates.status() }
         catch (error: CancellationException) { throw error } catch (_: Exception) { hubUpdateStatus }
     }
     LaunchedEffect(hubUpdates) { hubUpdates?.events?.collect { hubUpdateStatus = it } }
-    LaunchedEffect(connectorsService, page, connection, larkChats, assistant.id) {
+    LaunchedEffect(connectorsService, page, connection, larkChats, mailAccess, assistant.id) {
         if (connectorsService == null || page != "connectors" || connection != ConnectionState.Online) return@LaunchedEffect
         try {
-            mailAccounts = runCatching { connectorsService.mailAccounts() }.getOrNull()
+            mailAccounts = if (mailAccess == MailAccess.Live) runCatching { connectorsService.mailAccounts() }.getOrNull() else null
             // Lark's status is the Lark extension's (`/api/v1/lark/status`): only asked while the hub has it.
             larkStatus = if (larkChats) runCatching { connectorsService.larkStatus() }.getOrNull() else null
             // The current assistant's alone: a merged list (a hub that answers every manager's) is filtered by each one's stamp.
@@ -234,7 +272,7 @@ private fun SettingsContent(
         }
     }
     val connectorItems: LazyListScope.() -> Unit = {
-        val connectorRows = connectorRows(hubConnectors, lark = larkChats)
+        val connectorRows = connectorRows(hubConnectors, lark = larkChats, mail = mailAccess)
         fun connectorPosition(row: ConnectorRow) = GroupPosition.of(connectorRows.indexOf(row), connectorRows.size)
         item {
             JGroupItem(connectorPosition(ConnectorRow.Phone)) {
@@ -248,7 +286,7 @@ private fun SettingsContent(
                 )
             }
         }
-        item {
+        if (ConnectorRow.Mail in connectorRows) item {
             JGroupItem(connectorPosition(ConnectorRow.Mail)) {
                 JRow(
                     selected = detailKey == SettingsPageRoute(SettingsPage.Mail),
@@ -305,6 +343,148 @@ private fun SettingsContent(
             }
         }
     }
+    SettingsPageContent(
+        services = services, mine = mine, assistant = assistant, owner = owner, larkBot = larkBot, mailAccess = mailAccess, channelService = channelService,
+        pageState = pageState, searchQueryState = searchQueryState,
+        purposeManagerState = purposeManagerState, purposeState = purposeState,
+        extensionState = extensionState, extensionManagerState = extensionManagerState,
+        connectorManagerState = connectorManagerState, channelState = channelState,
+        managerState = managerState, tunnelPageState = tunnelPageState,
+        pairingDiagnosticsState = pairingDiagnosticsState, providerState = providerState,
+        providerStepState = providerStepState, confirmDisconnectState = confirmDisconnectState,
+        machinesState = machinesState, pairedState = pairedState, connection = connection, context = context, desktops = desktops,
+        deviceController = deviceController, deviceStateState = deviceStateState,
+        updateController = updateController, updateStatusState = updateStatusState,
+        update = update, updateMessage = updateMessage, updateSubtitle = updateSubtitle,
+        updateIncompatibility = updateIncompatibility, busy = busy, installing = installing, scope = scope,
+        extensionSummaryState = extensionSummaryState, extensionsAvailable = extensionsAvailable,
+        inboxSources = inboxSources, channelsAvailable = channelsAvailable, channelListState = channelListState,
+        knowledgeSelection = knowledgeSelection, knowledgeSelectionAvailable = knowledgeSelectionAvailable,
+        translationValue = translationValue, hubUpdateStatusState = hubUpdateStatusState,
+        slotsState = slotsState, slotCards = slotCards, detailKey = detailKey,
+        back = back, openPage = ::open, openDiagnosticsExport = {
+            if (onBack == null) {
+                parents = parents + page
+                page = "about-export"
+            } else diagnosticsExport = true
+        }, deviceFeedback = deviceFeedback, connectorItems = connectorItems,
+        onNavigate = onNavigate, onClose = onClose, onDemo = onDemo, onExitDemo = onExitDemo,
+    )
+    // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
+    if (onBack != null) BackHandler(page != "settings" && page != "pair" && page != "hubs-add", onBack = onBack)
+    // An AI use opened inside "Model configuration" (no navigation host) closes before the page does.
+    BackHandler(page == "models" && purpose != null) { purpose = null }
+    BackHandler(page == "plugins" && extension != null) { extension = null }
+    BackHandler(page == "channels" && channel != null) { channel = null }
+    BackHandler(page == "managers" && manager != null) { manager = null }
+    BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
+    BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
+    if (diagnosticsExport && onBack != null) {
+        val close = { diagnosticsExport = false }
+        BackHandler(onBack = close)
+        JFullScreen(onDismiss = close) {
+            services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = close) }
+        }
+    }
+    if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
+        val close = { pairingDiagnostics = false }
+        JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
+    }
+    if (confirmDisconnect) JDialog(
+        onDismiss = { confirmDisconnect = false }, title = stringResource(R.string.settings_disconnect_title),
+        text = stringResource(R.string.settings_disconnect_text),
+        destructive = true, confirmEnabled = !deviceState.busy,
+        confirm = stringResource(R.string.settings_disconnect) to { confirmDisconnect = false; scope.launch { deviceController.disconnect() }; Unit },
+    )
+}
+
+/* A non-Unit return keeps these page reads in SettingsContent's recomposition scope. */
+@Composable
+private fun SettingsPageContent(
+    services: SettingsServices,
+    mine: SettingsServices,
+    assistant: CurrentAssistant,
+    owner: String?,
+    larkBot: LarkBotEntry,
+    mailAccess: MailAccess,
+    channelService: ChannelManagement?,
+    pageState: MutableState<String>,
+    searchQueryState: MutableState<String>,
+    purposeManagerState: MutableState<String?>,
+    purposeState: MutableState<String?>,
+    extensionState: MutableState<String?>,
+    extensionManagerState: MutableState<String?>,
+    connectorManagerState: MutableState<String?>,
+    channelState: MutableState<String?>,
+    managerState: MutableState<String?>,
+    tunnelPageState: MutableState<String?>,
+    pairingDiagnosticsState: MutableState<Boolean>,
+    providerState: MutableState<String?>,
+    providerStepState: MutableState<String?>,
+    confirmDisconnectState: MutableState<Boolean>,
+    machinesState: State<List<persona.core.contracts.Machine>>,
+    pairedState: State<Boolean>,
+    connection: ConnectionState,
+    context: android.content.Context,
+    desktops: List<persona.core.contracts.HubDesktop>,
+    deviceController: DeviceSettingsState,
+    deviceStateState: State<DeviceSettingsUiState>,
+    updateController: AppUpdateState,
+    updateStatusState: State<AppUpdateState.State>,
+    update: AppUpdate?,
+    updateMessage: Int?,
+    updateSubtitle: String?,
+    updateIncompatibility: Int?,
+    busy: Boolean,
+    installing: Boolean,
+    scope: kotlinx.coroutines.CoroutineScope,
+    extensionSummaryState: MutableState<String?>,
+    extensionsAvailable: Boolean,
+    inboxSources: Boolean,
+    channelsAvailable: Boolean,
+    channelListState: MutableState<List<HubChannel>?>,
+    knowledgeSelection: persona.core.contracts.api.KnowledgeSelection?,
+    knowledgeSelectionAvailable: Boolean,
+    translationValue: String?,
+    hubUpdateStatusState: MutableState<HubUpdateStatus?>,
+    slotsState: ExtensionSlotsState,
+    slotCards: List<ExtensionCardSlot>,
+    detailKey: androidx.navigation3.runtime.NavKey?,
+    back: () -> Unit,
+    openPage: (SettingsPage) -> Unit,
+    openDiagnosticsExport: () -> Unit,
+    deviceFeedback: @Composable () -> Unit,
+    connectorItems: LazyListScope.() -> Unit,
+    onNavigate: ((androidx.navigation3.runtime.NavKey) -> Unit)?,
+    onClose: (() -> Unit)?,
+    onDemo: (() -> Unit)?,
+    onExitDemo: (() -> Unit)?,
+): String {
+    var page by pageState
+    var searchQuery by searchQueryState
+    var purposeManager by purposeManagerState
+    var purpose by purposeState
+    var extension by extensionState
+    var extensionManager by extensionManagerState
+    var connectorManager by connectorManagerState
+    var channel by channelState
+    var manager by managerState
+    var tunnelPage by tunnelPageState
+    var pairingDiagnostics by pairingDiagnosticsState
+    var provider by providerState
+    var providerStep by providerStepState
+    var confirmDisconnect by confirmDisconnectState
+    val machines by machinesState
+    val paired by pairedState
+    val deviceState by deviceStateState
+    val updateStatus by updateStatusState
+    var extensionSummary by extensionSummaryState
+    var channelList by channelListState
+    var hubUpdateStatus by hubUpdateStatusState
+    val connectorsService = mine.connectors.takeUnless { services.demo }
+    val hubUpdates = services.hubUpdates.takeUnless { services.demo }
+    fun checkUpdate() { scope.launch { updateController.check(manual = true) } }
+    fun open(destination: SettingsPage) = openPage(destination)
     // The first group's pages while the current assistant is offline (several assistants): what it has can't be read or
     // changed now, so they say so, as its inbox and to-dos do, rather than look empty or failed (docs/assistant/managers.md).
     if (assistant.offline != null && isAssistantSettingsPage(page)) AssistantOfflinePage(page, assistant, back) else when (page) {
@@ -315,9 +495,13 @@ private fun SettingsContent(
             machines = services.machines.takeUnless { services.demo }, attempts = services.pairingAttempts,
             mainReadiness = services.readiness.takeUnless { services.demo }, skipWelcome = true)
         "capsule" -> CapsuleSettingsPage(services.capsule, back)
-        // The current assistant's computers alone: their Claude Code / Codex settings.
+        "digital-assistant" -> DigitalAssistantSettingsPage(services.digitalAssistantModel, connection, services.demo, back)
+        "knowledge-selection" -> KnowledgeSelectionPage(knowledgeSelection, connectorsService, back)
+        // The current assistant's computers alone: their Claude Code / Codex / Antigravity settings.
         "claude" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, owns = { assistant.ownsOn(it.id, it.manager) })
         "codex" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Codex,
+            owns = { assistant.ownsOn(it.id, it.manager) })
+        "agy" -> ClaudeSettingsPage(services.sessions, services.machines.takeUnless { services.demo }, back, AgentSettingsKind.Agy,
             owns = { assistant.ownsOn(it.id, it.manager) })
         "models" -> purpose?.let { id -> ModelPurposePage(services.models.takeUnless { services.demo }, id, onBack = { purpose = null },
                 providers = services.providers.takeUnless { services.demo }, manager = purposeManager, machines = machines) }
@@ -328,11 +512,17 @@ private fun SettingsContent(
                 manager = extensionManager,
                 machines = services.sessions.machines,
                 launchers = services.providers.takeUnless { services.demo }?.let { p -> { p.launchers() } },
-                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } }) }
+                onUpgrade = onNavigate?.let { navigate -> { market, ext -> navigate(persona.core.navigation.ExtensionCatalogRoute(market, ext, manager = extensionManager)) } },
+                trust = services.extensionTrust.takeUnless { services.demo }) }
             ?: ExtensionsPage(mine.extensions.takeUnless { services.demo }, back,
                 onExtension = { id, manager -> onNavigate?.invoke(persona.core.navigation.ExtensionRoute(id, manager = manager)) ?: run { extension = id; extensionManager = manager } },
-                onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } })
-        "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate) }
+                onMarket = onNavigate?.let { navigate -> { navigate(persona.core.navigation.ExtensionMarketRoute) } },
+                slots = {
+                    if (onNavigate != null && (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId)) extensionSlotItems(slotsState, slotCards,
+                        selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
+                        onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
+                })
+        "channels" -> channel?.let { id -> ChannelPage(channelService, id, onBack = { channel = null }, onOpen = onNavigate, larkBot = larkBot) }
             ?: ChannelsPage(channelService, back,
                 onChannel = { id -> onNavigate?.invoke(persona.core.navigation.ChannelRoute(id)) ?: run { channel = id } },
                 // Installed for the current assistant, whose channels these are.
@@ -352,16 +542,39 @@ private fun SettingsContent(
         }
         "agent-settings" -> JListPage(title = stringResource(R.string.settings_home_agents), onBack = back) {
             val entries = listOf(SettingsPage.ClaudeCode to R.string.settings_row_claude, SettingsPage.Codex to R.string.settings_row_codex,
-                SettingsPage.Triage to R.string.settings_triage_title)
+                SettingsPage.Agy to R.string.settings_row_agy, SettingsPage.Triage to R.string.settings_triage_title)
             itemsIndexed(entries) { index, (destination, title) -> JGroupItem(GroupPosition.of(index, entries.size)) {
                 JRow(stringResource(title), onClick = { open(destination) })
             } }
+            val displaySettings = services.agentsDisplay.takeUnless { services.demo }
+            if (displaySettings != null) item("herdr-tab-name") {
+                AgentHerdrTabNameSetting(displaySettings)
+            }
         }
         "desktops" -> DesktopsPage(deviceController, services.desktops.takeUnless { services.demo }, paired && services.deviceSettings != null, back)
         "storage" -> StoragePage(back, services.clearCacheFiles, footer = deviceFeedback)
         "providers" -> {
             val providerService = mine.providers.takeUnless { services.demo }
-            when {
+            // Take the link only after this destination's provider service can open it. Leaving the providers page or
+            // switching assistants cancels it, so a later service cannot replay a key-bearing link (#5428).
+            var importLink by remember(page, assistant.id) { mutableStateOf<String?>(null) }
+            var importGeneration by remember(page, assistant.id) { mutableLongStateOf(0L) }
+            DisposableEffect(page, assistant.id) { onDispose { ProviderImportRequests.cancel() } }
+            val requestedImport = ProviderImportRequests.pending.value
+            LaunchedEffect(requestedImport, providerService != null) {
+                if (requestedImport != null) {
+                    val link = ProviderImportRequests.takeIfReady(providerService != null)
+                    if (link != null) {
+                        importLink = link
+                        importGeneration = ProviderImportRequests.generation.longValue
+                    }
+                }
+            }
+            if (importLink != null && providerService != null) {
+                NewProviderPage(providerService, onBack = { ProviderImportRequests.cancel(); importLink = null; providerStep = null },
+                    onSaved = { importLink = null; providerStep = null }, readiness = services.readiness,
+                    machines = machines, importLink = importLink, importGeneration = importGeneration)
+            } else when {
                 providerStep == "add" && providerService != null -> NewProviderPage(providerService, onBack = { providerStep = null }, onSaved = { providerStep = null },
                     readiness = services.readiness, machines = machines)
                 providerStep == "import" && providerService != null -> ProviderImportPage(providerService, machines, onBack = { providerStep = null }, onDone = { providerStep = null })
@@ -403,8 +616,9 @@ private fun SettingsContent(
             item { PersonaSettings(demo = services.demo) }
             item { deviceFeedback() }
         }
+        "about-export" -> services.developing?.let { DevelopingDiagnosticsExportPage(it, onBack = back) }
         "about" -> JListPage(title = stringResource(R.string.settings_home_about), onBack = back) {
-            item { AboutSettingsPage() }
+            item { AboutSettingsPage(developing = services.developing, onExport = openDiagnosticsExport) }
             item { JGroupItem(GroupPosition.Single, Modifier.padding(top = Tokens.Space.m)) {
                 JRow(stringResource(R.string.settings_update_check), subtitle = updateSubtitle, subtitleLines = 6, value = when {
                     busy -> stringResource(R.string.settings_update_checking)
@@ -444,12 +658,16 @@ private fun SettingsContent(
         "translate" -> TranslationSettingsPage(services.translation.takeUnless { services.demo }, services.models.takeUnless { services.demo },
             services.connectors.takeUnless { services.demo }, onBack = back, pickingAtStart = TranslationPreview.take(),
             onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("translate")) ?: run { purposeManager = null; purpose = "translate"; page = "models" } })
+        "standing-authorizations" -> StandingAuthorizationsPage(mine.standing.takeUnless { services.demo }, machines, back)
         "triage" -> TriageSettingsPage(mine.triage.takeUnless { services.demo }, mine.models.takeUnless { services.demo }, onBack = back,
             onModel = { onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("agent.triage", owner)) ?: run {
                 purposeManager = owner; purpose = "agent.triage"; page = "models" } })
-        "mail" -> MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
-        "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back)
-        "mail-add" -> AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
+        // The hub's mail module is off (#15995): a link or a saved page lands on one line, and no mail route is asked.
+        "mail", "mail-add" -> if (mailAccess == MailAccess.StoredOnly) ModuleOffPage(stringResource(R.string.settings_src_mail_title),
+            stringResource(R.string.settings_mail_module_off), back)
+            else if (page == "mail") MailAccountsPage(connectorsService, onBack = back, onAdd = { page = "mail-add" })
+            else AddMailAccountPage(connectorsService, onBack = { page = "mail" }, onAdded = { page = "mail" })
+        "feishu-bot" -> FeishuBotPage(mine.feishuBot.takeUnless { services.demo }, back, larkBot)
         "feishu" -> FeishuConnectorPage(connectorsService, onBack = back, onAgentModel = {
             // The model of the current assistant's agent there, as the page's connector is that one's.
             onNavigate?.invoke(persona.core.navigation.ModelPurposeRoute("lark.agent", owner)) ?: run { purposeManager = owner; purpose = "lark.agent"; page = "models" }
@@ -460,45 +678,25 @@ private fun SettingsContent(
         } else if (page.startsWith("connector/")) {
             HubConnectorPage(connectorsService, connectorId = page.removePrefix("connector/"), onBack = back, manager = connectorManager)
         } else SettingsHomePage(
-            services, searchQuery, { searchQuery = it }, extensionsAvailable, extensionSummary, channelsAvailable, channelList,
-            connection, translationValue, hubUpdateStatus,
+            services, searchQuery, { searchQuery = it }, extensionsAvailable, inboxSources, extensionSummary, channelsAvailable, channelList,
+            knowledgeSelectionAvailable, connection, translationValue, hubUpdateStatus,
             when {
                 busy -> stringResource(R.string.settings_update_checking)
                 installing -> stringResource(R.string.settings_update_installing)
                 update != null -> stringResource(R.string.settings_update_found)
                 else -> null
-            }, detailKey, ::open, onNavigate, onClose, onDemo, onExitDemo,
-            slots = {
-                if (onNavigate != null && (assistant.roster == null || assistant.id == assistant.roster?.defaultManagerId)) extensionSlotItems(slotsState, slotCards,
-                    selected = { place -> detailKey == persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id }) },
-                    onOpen = { place -> onNavigate(persona.core.navigation.ExtensionUiRoute(place.extension, place.id, place.title.ifBlank { place.id })) })
-            }, footer = {
+            }, detailKey, ::open, onNavigate, onClose, onDemo, onExitDemo, footer = {
                 if (paired) JButton(stringResource(R.string.settings_disconnect_forget), { confirmDisconnect = true },
                     Modifier.fillMaxWidth().padding(top = Tokens.Space.section), kind = JButtonKind.Destructive, enabled = !deviceState.busy)
                 deviceFeedback()
             },
         )
     }
-    // Routed Back leaves a page in one step. Pairing handles its own steps before returning to Settings or Hubs.
-    if (onBack != null) BackHandler(page != "settings" && page != "pair" && page != "hubs-add", onBack = onBack)
-    // An AI use opened inside "Model configuration" (no navigation host) closes before the page does.
-    BackHandler(page == "models" && purpose != null) { purpose = null }
-    BackHandler(page == "plugins" && extension != null) { extension = null }
-    BackHandler(page == "channels" && channel != null) { channel = null }
-    BackHandler(page == "managers" && manager != null) { manager = null }
-    BackHandler(page == "providers" && (provider != null || providerStep != null)) { if (providerStep != null) providerStep = null else provider = null }
-    BackHandler(page == "hubs" && tunnelPage != null) { tunnelPage = null }
-    if (pairingDiagnostics && (page == "pair" || page == "hubs-add")) {
-        val close = { pairingDiagnostics = false }
-        JFullScreen(onDismiss = close) { DiagnosticsScreen(services, onBack = close, footer = deviceFeedback) }
-    }
-    if (confirmDisconnect) JDialog(
-        onDismiss = { confirmDisconnect = false }, title = stringResource(R.string.settings_disconnect_title),
-        text = stringResource(R.string.settings_disconnect_text),
-        destructive = true, confirmEnabled = !deviceState.busy,
-        confirm = stringResource(R.string.settings_disconnect) to { confirmDisconnect = false; scope.launch { deviceController.disconnect() }; Unit },
-    )
+    return page
 }
+
+internal fun shouldRequestNotificationPermission(item: ReadyItem, sdkInt: Int, requested: Boolean): Boolean =
+    item.id == "notifications" && item.satisfied == false && sdkInt >= 33 && !requested
 
 @Composable
 fun ReadinessScreen(
@@ -523,6 +721,7 @@ fun ReadinessScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val preferences = remember { context.getSharedPreferences("settings-readiness", android.content.Context.MODE_PRIVATE) }
+    var notificationRequested by remember { mutableStateOf(preferences.getBoolean("notification-requested", false)) }
     // The GitHub star prompts (#5761): finish() tells them setup is done.
     val starPrompt = persona.core.designsystem.LocalStarPrompt.current
     val readinessOn by remember(readiness) { readiness?.available ?: kotlinx.coroutines.flow.flowOf(false) }.collectAsState(false)
@@ -629,12 +828,14 @@ fun ReadinessScreen(
                     if (skipped && item.satisfied != true && !confirmed) SettingsCaption(stringResource(R.string.settings_ready_skipped_note))
                     SettingsCaption(item.detail)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                        Action(stringResource(R.string.settings_ready_open)) {
+                        val requestNotifications = shouldRequestNotificationPermission(item, Build.VERSION.SDK_INT, notificationRequested)
+                        Action(stringResource(if (requestNotifications) R.string.settings_ready_allow_notifications else R.string.settings_ready_open)) {
                             when {
-                                item.id == "notifications" && Build.VERSION.SDK_INT >= 33 &&
-                                    !preferences.getBoolean("notification-requested", false) -> {
+                                requestNotifications -> {
+                                    val firstRequest = !preferences.getBoolean("notification-requested", false)
                                     preferences.edit().putBoolean("notification-requested", true).apply()
-                                    notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    notificationRequested = true
+                                    if (firstRequest) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
                                 }
                                 item.id == "local-network" && PairingLocalNetwork.missing(context) &&
                                     !preferences.getBoolean("local-network-requested", false) -> {
@@ -764,10 +965,13 @@ private fun AssistantOfflinePage(page: String, assistant: persona.core.contracts
         SettingsPage.Channels -> R.string.settings_src_channels_title
         SettingsPage.ClaudeCode -> R.string.settings_row_claude
         SettingsPage.Codex -> R.string.settings_row_codex
+        SettingsPage.Agy -> R.string.settings_row_agy
         SettingsPage.Mail -> R.string.settings_src_mail_title
         SettingsPage.Feishu -> R.string.settings_src_lark_title
         SettingsPage.FeishuBot -> R.string.settings_feishu_bot_title
         SettingsPage.Sent -> R.string.settings_sent_title
+        SettingsPage.KnowledgeSelection -> R.string.settings_knowledge_selection_title
+        SettingsPage.StandingAuthorizations -> R.string.settings_standing_title
         else -> R.string.settings_section_connectors
     }
     JListPage(title = stringResource(title), onBack = onBack) { item("offline") { JAssistantOffline(assistant) } }

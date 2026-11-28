@@ -2,10 +2,12 @@
   "detail_herdr": "herdr in a terminal",
   "detail_herdr_core": "Terminals in the desktop app",
   "detail_herdr_both": "Sessions from both the terminal and the desktop app",
-  "detail_orca": "Terminals in Orca",
+  "detail_orca": "Terminals and chats in Orca",
   "detail_tern": "Terminals in Tern",
+  "detail_rex": "Terminals in Rex",
   "detail_paseo": "Agents in Paseo",
   "detail_cindy": "Agents in Cindy",
+  "detail_t3code": "Agents in T3 Code",
   "detection_offline": "Offline, nothing detected yet",
   "detection_none": "Nothing detected yet",
   "detection_not_found": "Not detected",
@@ -26,5 +28,8 @@
   "also_open": "Also open in {engines}: messages go here only",
   "start_in": "Open in",
   "none": "no terminal engine",
-  "list_separator": ", "
+  "list_separator": ", ",
+  "detection_stopped": "Installed, not running",
+  "detection_stopped_version": "Installed, not running · {version}",
+  "detection_incompatible_version": "Not compatible · {version}"
 }

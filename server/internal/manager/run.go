@@ -8,12 +8,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
+	"github.com/nwverse/persona/server/internal/managerupdate"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -26,11 +30,11 @@ var restart = reexec
 func cmdRun(ctx context.Context, e *env, build update.Build, args []string) error {
 	fs := flag.NewFlagSet("manager run", flag.ContinueOnError)
 	fs.SetOutput(e.stdout)
-	dir := fs.String("dir", "", "管理者的目录（这台只有一个管理者时可以不写）")
-	join := fs.Bool("join", false, "目录里还没有 manager.json 时，先用后面的 <hub 地址> <安装码> 换码")
-	dbURL := fs.String("database-url", "", "和 --join 一起：它自己的 Postgres 库（容器里经环境变量 "+databaseEnv+" 给，不放命令行）")
-	fp := fs.String("fingerprint", "", "和 --join 一起：hub 的 TLS 指纹")
-	plain := fs.Bool("allow-plaintext", false, "和 --join 一起：允许公网上的明文 http hub 地址")
+	dir := fs.String("dir", "", i18n.T(e.l(), "manager-cli.flag_dir"))
+	join := fs.Bool("join", false, i18n.T(e.l(), "manager-cli.flag_run_join"))
+	dbURL := fs.String("database-url", "", i18n.T(e.l(), "manager-cli.flag_run_database_url", i18n.Args{"env": databaseEnv}))
+	fp := fs.String("fingerprint", "", i18n.T(e.l(), "manager-cli.flag_run_fingerprint"))
+	plain := fs.Bool("allow-plaintext", false, i18n.T(e.l(), "manager-cli.flag_run_allow_plaintext"))
 	pos, err := parseInterleaved(fs, args)
 	if err != nil {
 		return err
@@ -44,13 +48,13 @@ func cmdRun(ctx context.Context, e *env, build update.Build, args []string) erro
 		if dbAt == "" {
 			dbAt = e.getenv(databaseEnv)
 		}
-		joined, _, err := Join(ctx, JoinOptions{Hub: pos[0], Code: pos[1], Dir: d, DatabaseURL: dbAt, Fingerprint: *fp,
+		joined, _, err := Join(ctx, JoinOptions{Hub: pos[0], Code: pos[1], Lang: e.l(), Dir: d, DatabaseURL: dbAt, Fingerprint: *fp,
 			CheckDocker: e.dockerProblem, Warn: e.stdout, AllowPlaintext: *plain})
 		var ce ConfigError
 		switch {
 		case err == nil:
 			d = joined
-			fmt.Fprintf(e.stdout, "加入了 hub，目录 %s\n", d)
+			fmt.Fprint(e.stdout, i18n.T(e.l(), "manager-cli.run_joined", i18n.Args{"directory": d}))
 		case errors.As(err, &ce) && d == "":
 			// No directory to wait on: watching for "the one manager of this computer" would take up another
 			// manager's directory when there is exactly one. A container always names its --dir; anyone else gets the
@@ -60,18 +64,17 @@ func cmdRun(ctx context.Context, e *env, build update.Build, args []string) erro
 			// The same command can't do better next time (a used or expired code, a refused plaintext join, no
 			// database it can have), and a container's --restart unless-stopped starts it again on any exit, exit 2 too: wait,
 			// not dialing, until a join run by hand into the directory writes manager.json, as after a revoke.
-			fmt.Fprintf(e.stdout, "manager: 没加入 hub，同样的命令再试也不会成：%v。在等：在 App 里拿一个新安装码，"+
-				"再运行一次新的安装命令（没加入过的容器会用新码重建），或者运行 personad manager join <hub 地址> <安装码> --dir %s\n", err, shellQuote(d))
+			fmt.Fprint(e.stdout, i18n.T(e.l(), "manager-cli.run_join_waiting", i18n.Args{"error": err, "directory": shellQuote(d)}))
 			if err = waitJoined(ctx, d); err != nil {
 				return err
 			}
-			fmt.Fprintf(e.stdout, "manager: 有了 manager.json，目录 %s\n", d)
+			fmt.Fprint(e.stdout, i18n.T(e.l(), "manager-cli.run_joined_config_ready", i18n.Args{"directory": d}))
 		default:
 			return err
 		}
 	}
 	if d == "" {
-		if d, err = onlyManager(); err != nil {
+		if d, err = onlyManager(e.l()); err != nil {
 			return err
 		}
 	}
@@ -85,11 +88,28 @@ func Run(ctx context.Context, build update.Build, dir string, out io.Writer) err
 	return newEnv(out).runManager(ctx, build, dir)
 }
 
+// runManagerWith is the independent manager itself (tests: a stand-in).
+var runManagerWith = assistant.RunManagerWith
+
+// shouldWatchBinary says whether `personad manager run` is running under an external service supervisor
+// (systemd/launchd via PERSONA_ASSISTANT_DEPLOY=service) rather than as a one-shot CLI run, container, hub child,
+// or development trial worker.
+func shouldWatchBinary(getenv func(string) string) bool {
+	if getenv == nil {
+		return false
+	}
+	if strings.TrimSpace(getenv("PERSONA_DEVELOPMENT_MANAGER_WORKER")) != "" {
+		return false
+	}
+	return strings.TrimSpace(getenv("PERSONA_ASSISTANT_DEPLOY")) == assistant.DeployService
+}
+
 func (e *env) runManager(ctx context.Context, build update.Build, dir string) error {
 	osproc.SealInherited() // what a parent left inheritable reaches none of what the manager starts (osproc)
 	osproc.ReapInherited() // after reexec, what the previous image started is this one's child (osproc)
 	out := e.stdout
-	env := os.Environ() // as it started: RunManager points PERSONA_HOME at dir
+	env := os.Environ()      // as it started: RunManager points PERSONA_HOME at dir
+	hostDataDir := dataDir() // host's ~/.persona captured before RunManager redirects PERSONA_HOME to dir
 	c, err := assistant.ReadManagerConfig(dir)
 	if err != nil {
 		return ConfigError{err} // restarting cannot fix it (the service's unit does not, exit 2)
@@ -98,9 +118,93 @@ func (e *env) runManager(ctx context.Context, build update.Build, dir string) er
 	if _, err := e.ownDatabase(ctx, dir, c); err != nil {
 		return err
 	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	err = managerupdate.RunDevelopment(ctx, dir, build, out, func(ctx context.Context) error {
+		return e.runBoundManager(ctx, build, dir, hostDataDir, env, out)
+	})
+	if errors.Is(err, managerupdate.ErrReloadLauncher) && !managerupdate.IsUpdateWorker(dir, build) {
+		if shouldWatchBinary(e.getenv) {
+			return nil // the supervisor starts the installed launcher again
+		}
+		return reexec(env)
+	}
+	return err
+}
+
+func (e *env) runBoundManager(ctx context.Context, build update.Build, dir, hostDataDir string, env []string, out io.Writer) error {
+	var watch *binaryWatch
+	supervised, worker := shouldWatchBinary(e.getenv), managerupdate.IsUpdateWorker(dir, build)
+	if (runtime.GOOS == "linux" || runtime.GOOS == "darwin") && build.Channel != update.Docker &&
+		strings.TrimSpace(e.getenv("PERSONA_DEVELOPMENT_MANAGER_WORKER")) == "" {
+		watch = newBinaryWatchWithGuard(out, filepath.Join(dir, binaryRestartGuardFile))
+	} else if worker {
+		if path, seen := launcherBinary(); seen != nil {
+			watch = &binaryWatch{path: path, seen: seen, out: out}
+		}
+	}
+	if watch != nil {
+		watch.logPrefix = "manager"
+		watch.waitUntilIdle = true
+		watch.hostDataDir = hostDataDir
+	}
 	for {
 		before, _ := assistant.ReadManagerConfig(dir)
-		err := assistant.RunManager(ctx, build, dir)
+		run, stop := context.WithCancel(ctx)
+		var idle atomic.Pointer[assistant.Idle]
+		var pendingFn atomic.Pointer[func(bool)]
+		var pendingState atomic.Bool
+		setPending := func(v bool) {
+			pendingState.Store(v)
+			if fn := pendingFn.Load(); fn != nil {
+				(*fn)(v)
+			}
+		}
+		var renew atomic.Bool
+		watched := make(chan struct{})
+		if watch != nil {
+			go func() {
+				defer close(watched)
+				if watch.nextWith(run, func() assistant.Idle {
+					if p := idle.Load(); p != nil {
+						return *p
+					}
+					return nil
+				}, setPending) {
+					renew.Store(true)
+					stop()
+				}
+			}()
+		} else {
+			close(watched)
+		}
+		err := runManagerWith(run, build, dir, assistant.MainHooks{
+			HostDataDir: hostDataDir,
+			Ready:       func(p assistant.Idle) { idle.Store(&p) },
+			HubVersion:  watch.setHubVersion,
+			PendingRestart: func(fn func(bool)) {
+				pendingFn.Store(&fn)
+				if pendingState.Load() {
+					fn(true)
+				}
+			},
+		})
+		stop()
+		<-watched
+		if renew.Load() && ctx.Err() == nil {
+			if worker && watch.prepareExitForNew(ctx) {
+				return managerupdate.ErrReloadLauncher
+			}
+			if supervised && watch.prepareExitForNew(ctx) {
+				return nil // exit cleanly so systemd/launchd starts the new binary
+			}
+			if !supervised {
+				watch.restartOnNew(ctx, env)
+			}
+			continue
+		}
 		if !errors.Is(err, bus.ErrRevoked) {
 			return err
 		}
@@ -108,9 +212,8 @@ func (e *env) runManager(ctx context.Context, build update.Build, dir string) er
 		if before != nil {
 			id = before.ID
 		}
-		fmt.Fprintf(out, "manager: [%s] hub 不再认这个管理者的 token（在 App 里删掉了，或者在别处重新装了）：先不连 hub，每 %s 再试一次。"+
-			"要接着用这个目录：在 App 里给它拿一个新安装码，运行 personad manager join <hub 地址> <安装码> --dir %s\n", id, revokedRetry, shellQuote(dir))
-		if err := awaitRestart(ctx, dir, before, out); err != nil {
+		fmt.Fprint(out, i18n.T(e.l(), "manager-cli.run_token_revoked", i18n.Args{"id": id, "retry": revokedRetry, "directory": shellQuote(dir)}))
+		if err := awaitRestartLang(ctx, e.l(), dir, before, out); err != nil {
 			return err
 		}
 		if restart != nil {
@@ -130,20 +233,44 @@ func (e *env) runManager(ctx context.Context, build update.Build, dir string) er
 // starts again in place on a new file where it runs from, one that runs, once it is idle (binaryWatch): nothing else
 // restarts its service after an update.
 func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
-	env := os.Environ()
 	home := dataDir()
+	dir := managerconf.DefaultDir(home)
 	// One at a time: a second one on the same binding would take turns on the bus with the first, both running the
 	// computers and the extensions.
-	if err := os.MkdirAll(managerconf.DefaultDir(home), 0o700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	if err := lockFile(filepath.Join(managerconf.DefaultDir(home), builtinLock)); err != nil {
-		if errors.Is(err, errLocked) {
-			return ConfigError{errors.New("another persona-manager assistant runs on this data directory as a service already")}
+	if !managerupdate.IsUpdateWorker(dir, build) {
+		if err := lockFile(filepath.Join(dir, builtinLock)); err != nil {
+			if errors.Is(err, errLocked) {
+				return ConfigError{errors.New("another persona-manager assistant runs on this data directory as a service already")}
+			}
+			return err
 		}
-		return err
 	}
-	watch := newBinaryWatch(out)
+	err := managerupdate.RunDevelopment(ctx, dir, build, out, func(ctx context.Context) error {
+		return runBuiltinBound(ctx, build, out, home, dir)
+	}, "assistant")
+	if errors.Is(err, managerupdate.ErrReloadLauncher) && !managerupdate.IsUpdateWorker(dir, build) {
+		return nil
+	}
+	return err
+}
+
+func runBuiltinBound(ctx context.Context, build update.Build, out io.Writer, home, dir string) error {
+	l := i18n.Terminal()
+	env := os.Environ()
+	var watch *binaryWatch
+	worker := managerupdate.IsUpdateWorker(dir, build)
+	if !worker {
+		watch = newBinaryWatch(out)
+	} else if path, seen := launcherBinary(); seen != nil {
+		watch = &binaryWatch{path: path, seen: seen, out: out}
+	}
+	if watch != nil {
+		watch.waitUntilIdle = true
+		watch.hostDataDir = home
+	}
 	for {
 		before, err := managerconf.ReadBinding(home)
 		if err != nil { // not bound, or a manager.json that does not read: restarting cannot fix it (exit 2)
@@ -153,17 +280,25 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 		// the hub's child would with the hub (binaryWatch).
 		run, stop := context.WithCancel(ctx)
 		var idle atomic.Pointer[assistant.Idle]
+		var pendingFn atomic.Pointer[func(bool)]
+		var pendingState atomic.Bool
+		setPending := func(v bool) {
+			pendingState.Store(v)
+			if fn := pendingFn.Load(); fn != nil {
+				(*fn)(v)
+			}
+		}
 		var renew atomic.Bool
 		watched := make(chan struct{})
 		if watch != nil {
 			go func() {
 				defer close(watched)
-				if watch.next(run, func() assistant.Idle {
+				if watch.nextWith(run, func() assistant.Idle {
 					if p := idle.Load(); p != nil {
 						return *p
 					}
 					return nil
-				}) {
+				}, setPending) {
 					renew.Store(true)
 					stop()
 				}
@@ -171,10 +306,25 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 		} else {
 			close(watched)
 		}
-		err = runAssistant(run, build, nil, assistant.MainHooks{Ready: func(p assistant.Idle) { idle.Store(&p) }})
+		err = runAssistant(run, build, nil, assistant.MainHooks{
+			Ready:      func(p assistant.Idle) { idle.Store(&p) },
+			HubVersion: watch.setHubVersion,
+			PendingRestart: func(fn func(bool)) {
+				pendingFn.Store(&fn)
+				if pendingState.Load() {
+					fn(true)
+				}
+			},
+		})
 		stop()
 		<-watched
 		if renew.Load() && ctx.Err() == nil {
+			if worker {
+				if watch.prepareExitForNew(ctx) {
+					return managerupdate.ErrReloadLauncher
+				}
+				continue
+			}
 			watch.restartOnNew(ctx, env) // returns when it did not: the manager runs again on this code
 			continue
 		}
@@ -188,7 +338,7 @@ func RunBuiltin(ctx context.Context, build update.Build, out io.Writer) error {
 			"starts it itself again): not connecting, trying the same token every %s. To bind it again: persona-hub "+
 			"manager-code on the hub's machine, then persona-manager join --builtin <hub address> <code>\n", revokedRetry)
 		c := &assistant.ManagerConfig{ID: assistantwire.AssistantID, Hub: before.Hub, Token: before.Token, Fingerprint: before.Fingerprint}
-		if err := awaitRestartWith(ctx, c, builtinToken(home), out); err != nil {
+		if err := awaitRestartWithLang(ctx, l, c, builtinToken(home), out); err != nil {
 			return err
 		}
 		if restart != nil {

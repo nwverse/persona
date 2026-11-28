@@ -2,6 +2,7 @@ import BeautifulUI
 import MarkdownUI
 import PersonaKit
 import SwiftUI
+import PersonaWire
 
 extension MarkdownUI.Theme {
     /// Reading-first markdown: system body text, roomy lists, quiet code blocks.
@@ -20,43 +21,41 @@ extension MarkdownUI.Theme {
         MarkdownUI.Theme()
             .text { FontSize(Theme.Level.body.size * Theme.Font.scale) }
             .code {
-                #if os(macOS)
+                // The system's monospaced face on no background (#9477), tappable to copy (#2984, `CodeCopyMarkdown`).
+                // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts
+                // (`runFonts`); its ink is `InlineCodeInk`'s. A thin space where it meets a CJK letter (`InlineCodeGap`).
                 FontFamilyVariant(.monospaced)
                 FontSize(.em(ReplyMetrics.inlineCode))
-                BackgroundColor(Theme.codeBackground)
-                #else
-                // In the body's color on light gray, tappable to copy (#2984, `CodeCopyMarkdown`): applied after a
-                // link's style, so a copy link keeps it; a path that opens is linked as plain words and stays blue.
-                // Monospaced as the code blocks are, which holds because the blocks give their runs their fonts (`runFonts`).
-                FontFamilyVariant(.monospaced)
-                FontSize(.em(ReplyMetrics.inlineCode))
-                ForegroundColor(Theme.primaryText)
-                BackgroundColor(Theme.inlineCodeBackground)
-                #endif
+                InlineCodeInk()
             }
             .strong { FontWeight(.semibold) }
             .link { ForegroundColor(Theme.accent) }
             .heading1 { config in
-                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
+                config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading1.top, bottom: ReplyMetrics.heading1.bottom)
                     .markdownTextStyle { FontWeight(.bold); FontSize(.em(ReplyMetrics.heading1.size)) }
             }
             .heading2 { config in
-                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
+                config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading2.top, bottom: ReplyMetrics.heading2.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading3 { config in
-                config.label.runFonts().markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
+                config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading3.top, bottom: ReplyMetrics.heading3.bottom)
                     .markdownTextStyle { FontWeight(.semibold); FontSize(.em(1)) }
             }
             .heading4 { config in minorHeading(config) }
             .heading5 { config in minorHeading(config) }
             .heading6 { config in minorHeading(config) }
             .paragraph { config in
-                config.label.runFonts().fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
+                // Words a reading surface makes tappable for lookup (#10977, `textLookupSurface`); as they were elsewhere.
+                config.label.lookUpWords(config.content).runFonts().fixedSize(horizontal: false, vertical: true).relativeLineSpacing(.em(ReplyMetrics.lineSpacing))
                     .markdownMargin(top: 0, bottom: ReplyMetrics.paragraphBottom)
             }
             .listItem { config in config.label.markdownMargin(top: .em(ReplyMetrics.itemTop)) }
             .codeBlock { config in
+                // A run of pictures (`ReplyImages`, #9474): one, or squares, the viewer on all of the reply's.
+                if config.language == ReplyImages.language, let block = ReplyImages.block(config.content) {
+                    ReplyPictureRun(block: block).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
+                } else
                 // A card the assistant drew (persona-view, or the older persona-card, #886), drawn with the extensions'
                 // components (docs/extensions/extensions.md「Assistant cards: `persona-view` and `persona-card`」); one the app cannot read stays a code block.
                 if AssistantCardBlock.handles(config.language), let view = AssistantCardBlock.parse(language: config.language, config.content) {
@@ -70,23 +69,11 @@ extension MarkdownUI.Theme {
                     RenderedBlock(kind: kind, source: config.content.trimmingCharacters(in: .whitespacesAndNewlines)) { plainCodeBlock(config) }
                         .markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
                 } else {
-                    // The Mac is frozen (docs/apple/mac.md): its code blocks keep their hover Copy.
-                    #if os(macOS)
-                    plainCodeBlock(config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
-                    #else
                     ReplyCodeBlock(config: config).markdownMargin(top: ReplyMetrics.codeTop, bottom: ReplyMetrics.codeBottom)
-                    #endif
                 }
             }
             .blockquote { config in
-                #if os(macOS)
-                config.label
-                    .padding(.leading, Theme.Space.m)
-                    .overlay(alignment: .leading) { Rectangle().fill(Theme.accent.opacity(0.5)).frame(width: Theme.Size.bar) }
-                    .markdownTextStyle { ForegroundColor(.secondary) }
-                #else
                 ReplyQuote(config: config)
-                #endif
             }
             .table { config in FittedTable(config: config).oneBlockInLift() } // fits the width it gets; scrolls only when it cannot
             .tableCell { config in FittedTableCell(config: config).runFonts() }
@@ -97,20 +84,30 @@ extension MarkdownUI.Theme {
 /// replaces every run's font with the system one of that design, a monospaced or named one included, so inline code was
 /// drawn in the body font. Under a block that draws words the design is cleared and given to its runs as their family
 /// instead (read from the style: SwiftUI has no public environment value for it), and inline code's monospaced variant
-/// holds. The Mac is frozen: it keeps the root's design.
+/// holds.
 struct RunFonts: ViewModifier {
     func body(content: Content) -> some View {
-        #if os(macOS)
-        content
-        #else
         content.markdownTextStyle { FontFamily(.system(StyleSpec.current.fontDesign)) }.fontDesign(nil)
-        #endif
     }
 }
 
 extension View {
     /// The block's runs keep their fonts under the style's font design (`RunFonts`).
     func runFonts() -> some View { modifier(RunFonts()) }
+}
+
+/// Inline code's ink (#9477): `Theme.Reply.codeInk`, a step quieter than the words, where they are in the body's own
+/// ink. Words drawn in an ink of their own (a quote, a quieter heading, an agent's quiet words between its steps) keep it
+/// for their code too, and so does a written link: code in it is the link's. A copy link (`CodeCopyMarkdown`, what
+/// every other code span is in a chat) is no link to the eye: the code's ink, not the link's.
+struct InlineCodeInk: TextStyle {
+    func _collectAttributes(in attributes: inout AttributeContainer) {
+        if let url = attributes.link {
+            if CodeCopyURL.parse(url) != nil { attributes.swiftUI.foregroundColor = Theme.Reply.codeInk }
+        } else if attributes.swiftUI.foregroundColor == nil {
+            attributes.swiftUI.foregroundColor = Theme.Reply.codeInk
+        }
+    }
 }
 
 extension MarkdownUI.Theme {
@@ -122,17 +119,15 @@ extension MarkdownUI.Theme {
                 .markdownTextStyle { FontFamilyVariant(.monospaced); FontSize(.em(Theme.Level.code.size / Theme.Level.body.size)) }
                 .padding(Theme.Space.m)
         }
+        .clipped() // not past the block into the safe area beside it (`ReplyCodeBlock`, #8212)
         .background(Theme.codeBackground, in: .rect(cornerRadius: Theme.Radius.control, style: .continuous))
-        .macHoverActions {
-            MacHoverButton(title: String(localized: "Copy Code [Message Views fa2611]"), symbol: Theme.Icon.copy) { MacHover.copy(config.content, said: String(localized: "Code copied")) }
-        }
     }
 
     /// H4–H6 (#3863): MarkdownUI's own were the bare text, so `#### Notes` read as the next paragraph's first line. A step
     /// below the third level (the secondary level's size), semibold in the quieter ink, more space above than below.
     /// Its label is built as heading1–3's are: a modifier theirs gains (the style's run fonts, say) belongs here too.
     @MainActor static func minorHeading(_ config: BlockConfiguration) -> some View {
-        config.label.runFonts().markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
+        config.label.lookUpWords(config.content).runFonts().markdownMargin(top: ReplyMetrics.heading4.top, bottom: ReplyMetrics.heading4.bottom)
             .markdownTextStyle {
                 FontWeight(.semibold)
                 FontSize(.em(ReplyMetrics.heading4.size))
@@ -169,7 +164,30 @@ struct MaxWidthLayout: Layout {
 
 extension EnvironmentValues {
     /// Opens a path mentioned in the conversation on the session's machine (set by ChatView).
-    @Entry var openFile: ((String) -> Void)? = nil
+    @Entry var openFile: FileOpener? = nil
+}
+
+/// `\.openFile`, one object for the chat's life (`ChatActions`). Handed down as a closure, SwiftUI reported it changed each
+/// time it looked: every message and work step that reads it ran its body again whenever SwiftUI looked at its inputs again,
+/// which the chat's list does for its rows as it leaves the window and comes back (three or four times on each switch
+/// between the open iPhone Duo's tabs, #10303).
+@MainActor final class FileOpener {
+    let open: (String) -> Void
+
+    init(_ open: @escaping (String) -> Void) {
+        self.open = open
+    }
+
+    func callAsFunction(_ path: String) { open(path) }
+}
+
+/// `\.loadImage`, one object for the chat's life, as `FileOpener`.
+@MainActor final class ImageLoader {
+    let load: @Sendable (String) async -> ImagePayload?
+
+    init(_ load: @escaping @Sendable (String) async -> ImagePayload?) {
+        self.load = load
+    }
 }
 
 extension EnvironmentValues {
@@ -178,7 +196,7 @@ extension EnvironmentValues {
     /// Puts an (edited) image into this chat's composer as an attachment for the next message (set by ChatView).
     @Entry var attachImage: ((UIImage) -> Void)? = nil
     /// Loads an image file on the session's machine (photos sent from the phone are saved there; set by ChatView).
-    @Entry var loadImage: (@Sendable (String) async -> ImagePayload?)? = nil
+    @Entry var loadImage: ImageLoader? = nil
     /// Fetches the whole text of an item the page cut (`Item.fullSize`), by item id (set by ChatView).
     @Entry var loadFullText: ((String) async throws -> String)? = nil
     /// Opens the full-screen image viewer from the chat page (set by ChatView). A viewer presented by the row it was
@@ -217,9 +235,11 @@ struct UserBubble: View, Equatable {
     /// The extension that opened the conversation with this message (#3758): 「来自 飞书 /agent」 under it. Set by the chat
     /// page on the conversation's first message only.
     var external: AutoConversationSource? = nil
+    /// Which extension that was, whose own icon that line draws when it can (#10358).
+    var opener: ConversationOpener? = nil
     /// Only the message itself: the chat page re-evaluates its body on every hub push, and without this every row on
     /// screen (and in the lazy list's buffer) ran its body again too (about 45 a push on a long Persona conversation).
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.item == b.item && a.external == b.external && a.opener == b.opener }
     @Environment(\.openFile) private var openFile
     @Environment(\.loadImage) private var loadImage
     @Environment(\.chatPin) private var pin
@@ -237,7 +257,7 @@ struct UserBubble: View, Equatable {
         VStack(alignment: .trailing, spacing: Theme.Space.sm) {
             if quotes.isEmpty, !parsed.refs.isEmpty { ContextGroup(refs: parsed.refs, key: item.id) }
             if !images.isEmpty, let loadImage {
-                AttachedImages(paths: images, load: loadImage)
+                AttachedImages(paths: images, load: loadImage.load)
             }
             if !d.attached.isEmpty { AttachedFileCards(files: d.attached) }
             if !shown.isEmpty || !quotes.isEmpty {
@@ -250,13 +270,13 @@ struct UserBubble: View, Equatable {
                         }
                 }
             }
-            if let openFile { FileChips(paths: d.chips, open: openFile) }
+            if let openFile { FileChips(paths: d.chips, open: openFile.open) }
             // Came in from a channel (WeChat, the Feishu bot…): 「来自 微信」 under it; an extension opened the conversation
             // with it: 「来自 飞书 /agent」.
             if ChannelSource.possible(item.clientMsgID) {
                 ChannelSourceLine(clientMsgID: item.clientMsgID)
             } else if let external {
-                ExternalSourceLine(source: external)
+                ExternalSourceLine(source: external, opener: opener)
             }
             if d.cardSource != nil {
                 Text("From a card").font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -265,7 +285,7 @@ struct UserBubble: View, Equatable {
         }
         .lookUpFiles(d.asked)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .messageActionBar(id: item.id, text: shown, isUser: true, date: item.ts)
+        .messageActionBar(id: item.id, text: shown, isUser: true, date: item.ts, starItem: item)
     }
 }
 
@@ -322,7 +342,7 @@ struct PeerMessage: View {
             .padding(.trailing, Theme.Space.xxl)
             .chatPinned(pinKey)
             .messageLongPress(id: item.id) { card }
-            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from)
+            .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, from: from, starItem: item)
     }
 
     /// The message in its card (also what a long press lifts).
@@ -356,9 +376,6 @@ struct PeerMessage: View {
             .environment(\.replyKey, RowMemo.key(memoScope, item.id)) // its quotes' folds, the lifted copy's too
             .selectableInLift(item.text ?? "", as: .reply(quiet: false)) // #603
             .frame(maxWidth: .infinity, alignment: .leading)
-            #if os(macOS)
-            .textSelection(.enabled) // drag to select and ⌘C, as on the web (#2542)
-            #endif
     }
 }
 
@@ -448,6 +465,100 @@ struct PendingBubble: View {
         .messageActionBar(id: msg.id.uuidString, text: shown, isUser: true, date: msg.createdAt, pending: true,
                           delete: .of(msg, run: discard))
         .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+}
+
+/// One of your messages the assistant keeps after it could not go in (`Session.undelivered`, #10194): your bubble as a
+/// failed one looks (`PendingBubble`), with a line under it. Waiting: why, and that it goes by itself; its mark's menu
+/// offers Delete. Given up: why, with Retry and Delete. Shown on every device, from the chat's row.
+struct UndeliveredBubble: View {
+    var message: UndeliveredMessage
+    var canManage: Bool
+    var retryDisabled = false
+    var retry: () -> Void
+    var discard: () -> Void
+    @State private var confirmingDelete = false
+    @Environment(\.rowMemoScope) private var memoScope
+    @Environment(\.chatPin) private var pin
+
+    private func requestDelete() {
+        if message.heldForComputer { confirmingDelete = true } else { discard() }
+    }
+
+    var body: some View {
+        let parsed = ContextRef.parse(message.text)
+        let shown = AttachedFile.parse(parsed.rest).rest
+        let heldStatus = message.heldStatus
+        let reason = message.error ?? String(localized: "The assistant could not start")
+        VStack(alignment: .trailing, spacing: Theme.Space.sm) {
+            let files = AttachedFile.parse(message.text).files
+            if !files.isEmpty { AttachedFileCards(files: files) }
+            HStack(alignment: .bottom, spacing: Theme.Space.s) {
+                Spacer(minLength: 40)
+                Menu {
+                    if message.canRetry {
+                        Button(action: retry) { Label("Retry", systemImage: Theme.Icon.retry) }
+                            .disabled(retryDisabled)
+                    }
+                    Button(role: .destructive, action: requestDelete) { Label("Delete", systemImage: Theme.Icon.delete) }
+                } label: {
+                    Group {
+                        if message.gaveUp {
+                            ThemedIcon(Theme.Icon.errorFilled).font(Theme.Font.body).foregroundStyle(Theme.danger)
+                        } else {
+                            ThemedIcon(Theme.Icon.time).font(Theme.Font.caption).foregroundStyle(Theme.cautionText)
+                                .scaledFrame(width: Theme.Size.icon, height: Theme.Size.icon)
+                        }
+                    }
+                    .frame(minWidth: message.heldForComputer ? Theme.Size.tapTarget : nil,
+                           minHeight: message.heldForComputer ? Theme.Size.tapTarget : nil)
+                    .contentShape(.rect)
+                }
+                .disabled(!canManage)
+                .accessibilityLabel(heldStatus != nil || message.deleteOnly == true ? Text(verbatim: heldStatus ?? reason) :
+                    message.gaveUp ? Text("Not delivered. Retry or delete.") : Text("Not delivered yet. It will be sent automatically."))
+                // The menu's items as actions too (VoiceOver's Actions rotor, the Runtime CLI), as on PendingBubble.
+                .accessibilityActions {
+                    if canManage {
+                        if message.canRetry && !retryDisabled { Button("Retry", action: retry) }
+                        Button("Delete", action: requestDelete)
+                    }
+                }
+                let split = MessageComments.inBubble(shown)
+                let fold = BubbleFoldKey(id: "undelivered-" + message.id)
+                UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote,
+                               fold: fold)
+                    .opacity(0.6)
+                    .messageLongPress(id: "undelivered-" + message.id, opens: { fold.openOnPress(scope: memoScope, pin: pin) }) {
+                        UserBubbleBody(quotes: ContextRef.quotes(parsed.refs) ?? [], text: split?.rest ?? shown, comments: split?.comments ?? [], lead: split?.quote)
+                    }
+            }
+            Group {
+                if let heldStatus {
+                    Text(verbatim: heldStatus).foregroundStyle(message.gaveUp ? Theme.danger : Theme.cautionText)
+                } else if message.deleteOnly == true {
+                    Text(verbatim: reason).foregroundStyle(Theme.danger)
+                } else if message.gaveUp {
+                    Text("Not delivered: \(reason)").foregroundStyle(Theme.danger)
+                } else {
+                    Text("Not delivered: \(reason). It will be sent automatically.").foregroundStyle(Theme.cautionText)
+                }
+            }
+            .font(Theme.Font.label)
+            .multilineTextAlignment(.trailing)
+            if let n = message.images, n > 0 {
+                Text("Pictures: \(n)").font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        // Copy, and Delete, from the long-press bar as on a message only on this phone (#6427).
+        .messageActionBar(id: "undelivered-" + message.id, text: shown, isUser: true, date: message.at, pending: true,
+                          delete: canManage ? MessageBarDelete(title: String(localized: "Delete"), run: requestDelete) : nil)
+        .alert("Delete this held message?", isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive, action: discard)
+            Button("Cancel", role: .cancel) {}
+        }
+        .transition(.opacity)
     }
 }
 
@@ -606,29 +717,20 @@ struct AssistantText: View, Equatable {
         VStack(alignment: .leading, spacing: Theme.Space.sm) {
             answer(d)
                 .task(id: item.id) { await Self.preloadLinks(item) }
-                #if os(macOS)
-                // Drag to select and ⌘C, as on the web (#2542); iOS keeps the long-press menu's Select.
-                .textSelection(.enabled)
-                #endif
                 .contentShape(.rect)
                 // A boxed answer is lifted in its own box, a bare one on a card.
                 .messageLongPress(id: item.id, card: !boxed) { answer(d) }
             if let openFile {
                 // Documents as cards with their first page (#1543), the rest as chips.
-                FileChips(paths: d.chips, open: openFile)
-                DocumentCards(paths: d.files.filter(DocumentCards.isDocument), open: openFile)
+                FileChips(paths: d.chips, open: openFile.open)
+                DocumentCards(paths: d.files.filter(DocumentCards.isDocument), open: openFile.open)
             }
             PortChips(text: item.text ?? "")
         }
         // A single line break is one, as in the terminal and Claude's web chat (#2088): not a space.
         .markdownSoftBreakMode(.lineBreak)
         .lookUpFiles(d.asked)
-        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts)
-        #if os(macOS)
-        // Under an answer, while the pointer is over it: Copy, and Quote where the chat quotes (#2113). Not under an
-        // agent's words between its steps (`quiet`).
-        .modifier(AnswerHoverActions(on: !quiet, id: item.id, text: item.text ?? ""))
-        #endif
+        .messageActionBar(id: item.id, text: item.text ?? "", isUser: false, date: item.ts, starItem: item)
     }
 
     /// Links in a fresh answer open instantly: their pages load in the background. Only for recent answers — every
@@ -653,27 +755,6 @@ private struct QuietMarkdown: ViewModifier {
     }
 }
 
-#if os(macOS)
-private struct AnswerHoverActions: ViewModifier {
-    @Environment(MessageMenu.self) private var menu: MessageMenu?
-    var on: Bool
-    var id: String
-    var text: String
-
-    func body(content: Content) -> some View {
-        if on {
-            content.macHoverFooter {
-                MacHoverButton(title: String(localized: "Copy [Readiness Views d37380]"), symbol: Theme.Icon.copy) { MacHover.copy(text) }
-                if let quote = menu?.quote {
-                    MacHoverButton(title: String(localized: "Quote"), symbol: Theme.Icon.quote) { quote(text, id, false, nil) }
-                }
-            }
-        } else {
-            content
-        }
-    }
-}
-#endif
 
 struct CopyButton: View {
     var text: String
@@ -778,6 +859,97 @@ struct ThinkingRow: View {
 /// Where Claude Code compacted the context (`Item.compact`): a hairline across the chat, 「以上内容已压缩」 in the middle with
 /// where it came from (Manual / Auto / While idle) and the size before it, when known, as the web and Android write it (#1762).
 /// A tap shows the notes that came with it and when.
+/// The words of a permission mode change line (#10297, `ModeChangeLine`): who changed which mode to which, the modes in
+/// quotes, and what became of a restart into one, with why where the node said (its codes; rows from before them hold
+/// English words, left out). The web's `modeChangeLabel` says the same.
+nonisolated enum ModeChangeWords {
+    /// A mode's name as the session's own menu calls it.
+    static func mode(_ id: String?, session: Session?) -> String {
+        guard let id, !id.isEmpty else { return "" }
+        if session?.listedModes?.contains(id) == true { return SessionModes.listedOption(id).title }
+        return SessionModes.modeLabel(id) ?? id
+    }
+
+    static func who(_ c: APIClient.ModeChange) -> String {
+        if c.actorKind == "hub" { return String(localized: "The hub [mode change]") }
+        let name = c.deviceName?.trimmingCharacters(in: .whitespaces) ?? ""
+        return name.isEmpty ? String(localized: "A device [mode change]") : name
+    }
+
+    static func why(_ code: String?) -> String? {
+        switch code {
+        case "replaced": String(localized: "another switch took its place")
+        case "cancelled": String(localized: "the session stays in its current mode") // the mode it runs in picked again (#11089)
+        case "process_exited": String(localized: "the process it was picked for has exited")
+        case "process_replaced": String(localized: "the session runs in another process now")
+        case "process_unknown": String(localized: "it couldn't tell which process to restart")
+        case "expired": String(localized: "it waited over two hours")
+        case "not_stopped": String(localized: "the agent didn't quit")
+        case "start_failed": String(localized: "the new process didn't start, so the session carries on as before")
+        case "stopped": String(localized: "the new process didn't start, and the session has stopped")
+        default: nil
+        }
+    }
+
+    static func label(_ c: APIClient.ModeChange, session: Session?) -> String {
+        let to = mode(c.to, session: session)
+        switch c.kind {
+        case "restart_done":
+            return c.reason == "already_in" ? String(localized: "Already in “\(to)”, no restart needed")
+                : String(localized: "Restarted in “\(to)”")
+        case "restart_failed":
+            if let why = why(c.reason) { return String(localized: "Couldn't restart in “\(to)”: \(why)") }
+            return String(localized: "Couldn't restart in “\(to)”")
+        case "restart_dropped":
+            if let why = why(c.reason) { return String(localized: "Called off, won't restart in “\(to)”: \(why)") }
+            return String(localized: "Called off, won't restart in “\(to)”")
+        default:
+            let who = who(c)
+            if c.applied == "restart" { return String(localized: "\(who) picked “\(to)”: the session restarts in it once this turn ends") }
+            let from = mode(c.from, session: session)
+            return from.isEmpty || from == to ? String(localized: "\(who) changed the permission mode to “\(to)”")
+                : String(localized: "\(who) changed the permission mode from “\(from)” to “\(to)”")
+        }
+    }
+}
+
+/// A permission mode change in an Agent's chat (#10297, `ChatLines.mergeModeChanges`): rules either side of a line of
+/// words, as the compaction divider draws (`CompactDivider`), but not a control. Rules only where the words fit on one
+/// line with at least `Theme.Space.l` of rule each side; otherwise the words alone, wrapped and centered: rules a point
+/// or two long read as dots, and rules beside the first of two lines read as crooked (the owner, 2026-11-18).
+struct ModeChangeLine: View {
+    var change: APIClient.ModeChange
+    var session: Session?
+
+    private var rule: some View {
+        let beautiful = AppStyle.current.usesBeautifulUI
+        return Rectangle().fill(beautiful ? Theme.cardStroke : Color(uiColor: .separator))
+            .frame(height: beautiful ? Theme.Size.line : Theme.Size.hairline)
+            .frame(minWidth: Theme.Space.l, maxWidth: .infinity)
+    }
+
+    var body: some View {
+        let label = ModeChangeWords.label(change, session: session)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Theme.Space.s) {
+                rule
+                Text(label).lineLimit(1).fixedSize()
+                rule
+            }
+            Text(label)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+        }
+        .font(Theme.Font.label)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, Theme.Space.s)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityIdentifier("chat.modeChange")
+    }
+}
+
 struct CompactDivider: View {
     var item: Item
     @State private var open = false
@@ -1068,7 +1240,7 @@ struct RecapDrawer: View {
                                 Text(Self.written(ts, latest: n == 0 && items.count > 1))
                                     .font(Theme.Font.caption).foregroundStyle(.secondary)
                             }
-                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(item.text ?? "")))))
+                            Markdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply(item.text ?? "")))))))
                                 .markdownTheme(.persona)
                                 .readingContent()
                                 .markdownSoftBreakMode(.lineBreak)
@@ -1082,7 +1254,7 @@ struct RecapDrawer: View {
             .background(Theme.pageBackground)
             .navigationTitle(items.count > 1 ? String(localized: "While You Were Away · \(items.count)") : String(localized: "While You Were Away"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done [Extension System Presentation c0b3fb]") { dismiss() } } }
+            .toolbar { SheetClose { dismiss() } }
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -1139,16 +1311,14 @@ private struct StreamingMarkdown: View {
 }
 
 /// Drives `StreamReveal` with the display's frames: a display link runs only while received text waits to be shown
-/// (P9), at most 30 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
+/// (P9), 10 times a second, and stops when the view goes. On the Mac (frozen, docs/apple/mac.md) the text shows
 /// as it comes.
 @MainActor @Observable
 final class StreamRevealClock {
     /// Bumped when what is shown changed: the view's only dependency.
     private var revision = 0
     @ObservationIgnored private var reveal: StreamReveal?
-    #if os(iOS) || os(visionOS)
     @ObservationIgnored private var link: CADisplayLink?
-    #endif
 
     /// What of `text` to draw. `text` is the newest the view was given; `receive` takes it in right after this redraw,
     /// so until then what was shown stays (or, first time, `StreamReveal`'s start; a text that does not continue it,
@@ -1161,16 +1331,10 @@ final class StreamRevealClock {
     }
 
     func receive(_ text: String) {
-        #if os(iOS) || os(visionOS)
         let now = CACurrentMediaTime()
         if reveal == nil { reveal = StreamReveal(text) } else { reveal?.receive(text, at: now) }
         revision &+= 1
         if reveal?.caughtUp == false { start() }
-        #else
-        reveal = StreamReveal(text)
-        reveal?.finish()
-        revision &+= 1
-        #endif
     }
 
     func finish() {
@@ -1180,34 +1344,30 @@ final class StreamRevealClock {
     }
 
     func stop() {
-        #if os(iOS) || os(visionOS)
         link?.invalidate()
         link = nil
-        #endif
     }
 
     /// Back on screen: what still waits goes on (a stream that paused meanwhile sends nothing to restart it).
     func resume() {
-        #if os(iOS) || os(visionOS)
         if reveal?.caughtUp == false { start() }
-        #endif
     }
 
-    #if os(iOS) || os(visionOS)
     private func start() {
         guard link == nil else { return }
         // The link holds its target strongly: a weak hop, so a view gone without onDisappear frees this.
         let link = CADisplayLink(target: Tick(self), selector: #selector(Tick.tick(_:)))
-        // 30, not 60: each change re-measures the chat list's rows (about 4.5 ms); at 60 the main thread spent
-        // 307 ms a second on a streaming reply, at 30 about 190, and the steps are still a few characters (#7135).
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30, preferred: 30)
+        // 10 a second, the owner's choice between smoothness and power (#7135): each change re-measures the chat's rows
+        // and redraws the reply (about 4 ms of the main thread on the simulator), so the main thread's time while a
+        // reply streams follows the rate: 60 → about 300 ms a second, 30 → about 190. A step is then 2–15 characters.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 8, maximum: 10, preferred: 10)
         link.add(to: .main, forMode: .common)
         self.link = link
     }
 
     fileprivate func tick(_ link: CADisplayLink) {
         guard var r = reveal else { return stop() }
-        let moved = r.advance(to: link.timestamp)
+        let moved = r.advance(to: link.timestamp, maxStep: 0.2) // a step is a tenth of a second
         reveal = r
         if moved { revision &+= 1 }
         if r.caughtUp { stop() }
@@ -1222,7 +1382,6 @@ final class StreamRevealClock {
             }
         }
     }
-    #endif
 }
 
 /// The block of a streaming reply still being written, as it is drawn (#2916): made whole for the moment
@@ -1239,7 +1398,7 @@ nonisolated enum StreamTail {
         memo(tail) { tail in
             var shown = StreamRepair.repair(StreamRepair.plainOpenFence(tail) { RenderedFence.kind($0) != nil })
             if StreamRepair.end(of: tail) == .text { shown += " ▍" }
-            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(shown)))))
+            return MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply(shown)))))))
         }
     }
 }
@@ -1270,11 +1429,11 @@ nonisolated enum WebLinks {
 /// Parsed Markdown per text: MarkdownUI parses (cmark) in `Markdown.init`, on every redraw of the row.
 nonisolated enum MarkdownMemo {
     private static let memo = TextMemo<MarkdownContent>(limit: 128)
-    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
+    static func content(_ text: String) -> MarkdownContent { memo(text) { MarkdownContent(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply($0))))))) } }
 
     private static let pathsMemo = TextMemo<PathMarkdown>(limit: 128)
     /// Where the paths are in the same Markdown (`content`).
-    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply($0))))) } }
+    static func paths(_ text: String) -> PathMarkdown { pathsMemo(text) { PathMarkdown(Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply($0))))))) } }
 }
 
 /// Markdown with the paths that are there on the conversation's machine as links (docs/apple/ios.md「File viewer」), the code
@@ -1342,11 +1501,28 @@ nonisolated enum RowMemo {
     /// A chat's scope: its machine and session.
     static func scope(_ key: SessionKey) -> String { MemoScope.of(machine: key.machineID, session: key.sessionID) }
 
+    /// Whether rows are prewarmed while the app's scene is in `phase`: not in the background, where nothing draws them
+    /// and the app may be running only for a recording; iOS kills an app that uses too much CPU there, and the
+    /// recording with it (#9108: a row's path detection did). Back in front, the chat prewarms what came meanwhile.
+    static func prewarms(in phase: ScenePhase) -> Bool { phase != .background }
+
     /// Fills both memos off the main thread for messages just loaded (of the chat of `scope`), so a row scrolling
     /// into view only lays out.
     static func prewarm(_ items: [Item], scope: String) {
         for it in items {
             if Task.isCancelled { return }
+            if it.botmux?.isInbound == true {
+                let shown = BotmuxPresentation.user(it)
+                _ = user(key(scope, shown.id)) { _ in UserRowText(shown.text ?? "") }
+            }
+            if let reply = it.botmux, reply.kind == "reply" {
+                let shown = BotmuxPresentation.reply(reply, from: it)
+                _ = assistant(key(scope, shown.id)) { _ in AssistantRowText(reply.text) }
+            }
+            for (index, reply) in (it.fold?.botmux ?? []).enumerated() where reply.kind == "reply" {
+                let shown = BotmuxPresentation.reply(reply, from: it, index: index)
+                _ = assistant(key(scope, shown.id)) { _ in AssistantRowText(reply.text) }
+            }
             if it.kind == .toolUse { ToolDiffMemo.prewarm(it) }
             if it.kind == .toolUse || it.kind == .toolResult { ToolTextMemo.prewarm(it, scope: scope) }
             guard it.kind == .text else { continue }
@@ -1381,7 +1557,7 @@ nonisolated struct AssistantRowText {
     init(_ text: String) {
         // Steps that go on at "5." under a line of text are a list (`ReplyBreaks`, #2088); bold next to CJK punctuation
         // closes (`CJKEmphasis`, #3863); links end where `Links` says, not at the next space; formulas as pictures.
-        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(ReplyBreaks.apply(text))))
+        let source = Links.markdown(MathMarkdown.rewrite(CJKEmphasis.apply(InlineCodeGap.apply(ReplyImages.apply(ReplyBreaks.apply(text))))))
         markdown = MarkdownContent(source)
         let paths = PathMarkdown(source)
         self.paths = paths
@@ -1389,7 +1565,11 @@ nonisolated struct AssistantRowText {
         self.files = files
         asked = PathRefs.unique(paths.paths + files, limit: 40)
         let inline = Set(paths.paths)
-        chips = files.filter { !FileThumbnails.isDocument($0) && (!inline.contains($0) || FilePaths.isMedia($0)) }
+        // A picture the reply draws (`ReplyImages`, #9474) is not a chip too: a path found inside its address is its.
+        let pictures = ReplyImages.all(in: text).map(\.url)
+        chips = files.filter { file in
+            !FileThumbnails.isDocument(file) && (!inline.contains(file) || FilePaths.isMedia(file)) && !pictures.contains { $0.contains(file) }
+        }
     }
 }
 

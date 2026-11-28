@@ -1,8 +1,10 @@
 // The assistant's scheduled tasks (docs/assistant/assistant.md "Scheduled tasks", docs/protocol/protocol.md `/assistant/tasks`): the wire types,
-// how a task is said in words (the iOS app's AssistantScheduleText), what the editor checks, and the body it saves.
+// how a task is said in words (the iOS app's AssistantScheduleText, except that a daily rule's time is 24-hour here, as
+// its next run is; iOS still writes it in 12-hour time, #7499), what the editor checks, and the body it saves.
 // Pure functions of their arguments (`now` passed in), so they are tested without a DOM.
-import { currentLanguage, formatDate, t } from "../i18n";
+import { formatDate, t } from "../i18n";
 import { launcherTitle, type Named } from "./provider-names";
+import { splitSkillDraft } from "./skill-mentions";
 
 export type Repeat = "once" | "daily" | "interval" | "cron";
 
@@ -39,11 +41,27 @@ export interface CronPreview {
   next_runs: string[] | null;
 }
 
+export interface TaskExecution {
+  machine_id: string;
+  launcher: string;
+  agent?: string;
+  model?: string;
+  effort?: string;
+  runtime?: string;
+  cwd?: string;
+  permission_mode?: string;
+  fingerprint?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   prompt: string;
+  /** The task owns explicit picker selections. Unmarked prompt text stays literal. */
+  prompt_selections?: boolean;
   repeat: Repeat;
+  fresh_each_run?: boolean;
+  state_note?: { text: string; revision: number; updated_at: string };
   /** once: when; interval: the next run. */
   at?: string;
   /** daily: "HH:MM" in the user's time zone. */
@@ -61,6 +79,13 @@ export interface Task {
   /** A conversation runs go into ("Continue the original chat"); empty = the task's own one. */
   session_id?: string;
   launcher?: string;
+  model?: string;
+  model_revision?: number;
+  execution_machine_id?: string;
+  cwd?: string;
+  execution?: TaskExecution;
+  execution_error?: string;
+  run_execution?: TaskExecution;
   permission_mode?: string;
   effort?: string;
   /** "Push when done" (hubs with the task_push feature): "" every run's answer, "asked" only what a run sends with notify_user.
@@ -77,12 +102,51 @@ export interface Task {
   last_status?: string;
   last_error?: string;
   next_run?: string;
+  /** Permission for this manager's viewer to select or cancel a schedule skip. */
+  can_skip_next?: boolean;
+  /** The exact occurrence selected to skip by the owner. */
+  skip_next_at?: string;
+  /** Distinguishes two successive skip requests for the same occurrence. */
+  skip_next_token?: string;
   run_machine_id?: string;
   run_session_id?: string;
   run_launcher?: string;
+  /** Read-only (#8045): the kinds of task this task's own runs may start without the plan card, each a trust key
+   *  ("machine|folder|read" or "…|edit", as Settings › Assistant's remembered rules). Only the owner adds to it, by
+   *  ticking it on one of its runs' cards; the editor shows it and removes kinds (DELETE …/start-grant), never saves it. */
+  start_grant?: StartGrant | null;
+}
+
+export interface StartGrant {
+  kinds: string[];
+  granted_at?: string;
+}
+
+/** One kind of a start grant, as the editor names it: the computer, the folder (it covers the folders under it), and
+ *  whether the tasks only read. A key whose computer and folder can't be told apart (one of them holds "|") keeps it
+ *  whole as the place, with no computer. */
+export interface GrantKind {
+  key: string;
+  machine: string;
+  folder: string;
+  readonly: boolean;
+}
+
+export function grantKinds(task: Pick<Task, "start_grant">): GrantKind[] {
+  return (task.start_grant?.kinds ?? []).filter((key) => typeof key === "string" && key).map((key) => {
+    const parts = key.split("|");
+    const mode = parts.length > 1 ? parts[parts.length - 1] : "";
+    const readonly = mode === "read";
+    if (parts.length === 3 && (mode === "read" || mode === "edit")) return { key, machine: parts[0], folder: parts[1], readonly };
+    return { key, machine: "", folder: mode === "read" || mode === "edit" ? parts.slice(0, -1).join("|") : key, readonly };
+  });
 }
 
 export interface Run {
+  conversation?: "source" | "resumed" | "new";
+  conversation_reason?: string;
+  compatibility_fallback?: "legacy_task_execution";
+  execution?: TaskExecution;
   id: string;
   kind: string;
   ref_id: string;
@@ -92,6 +156,7 @@ export interface Run {
   status: string;
   error?: string;
   manual?: boolean;
+  owner_skipped?: boolean;
   machine_id?: string;
   session_id?: string;
 }
@@ -144,15 +209,18 @@ export function repeatsLabel(days?: number[] | null): string {
   return t("lib-routines.weekly", { days: d.map((x) => DAY_NAMES[x - 1]).join(t("lib-routines.day_separator")) });
 }
 
-/** "09:00" → "9:00 AM", "21:30" → "9:30 PM", "00:15" → "12:15 AM" (Chinese names the part of the day). */
+/** "17:05": the one way this page writes a time of day, 24-hour in every language, as its next and last runs, Up next,
+ *  the run history and the hub's cron words do; a daily rule written in 12-hour time beside a 24-hour next run made the
+ *  same moment read two ways on one card. */
+function clock(h: number, m: number): string {
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+/** A daily task's "HH:MM" as hm() writes a moment: "09:00", "21:30"; anything that is not HH:MM as it came. */
 export function clockLabel(hhmm?: string): string {
   if (!hhmm || !HHMM.test(hhmm)) return hhmm ?? "";
   const [h, m] = hhmm.split(":").map(Number);
-  // Chinese says the part of the day (small hours / early morning / morning…), finer than Intl's; the others read the clock their own way
-  if (currentLanguage() !== "zh-Hans") return formatDate(new Date(2000, 0, 1, h, m), { hour: "numeric", minute: "2-digit" });
-  const part = h < 5 ? t("lib-routines.part_small_hours") : h < 9 ? t("lib-routines.part_early_morning") : h < 12 ? t("lib-routines.part_morning") : h < 13 ? t("lib-routines.part_noon") : h < 18 ? t("lib-routines.part_afternoon") : t("lib-routines.part_evening");
-  const h12 = h % 12 === 0 ? 12 : h % 12;
-  return t("lib-routines.clock", { part, time: `${h12}:${String(m).padStart(2, "0")}` });
+  return clock(h, m);
 }
 
 /** "Every 30 minutes" / "Every 2 hours" / "Every 1 hour 30 minutes" / "Every day" / "Every 2 days". */
@@ -163,9 +231,9 @@ export function everyLabel(minutes: number): string {
   return m ? t("lib-routines.every_hours_minutes", { hours: h, minutes: m }) : t("lib-routines.every_hours", { count: h });
 }
 
-/** "17:05", always 24-hour. */
+/** "17:05", always 24-hour (clock). */
 export function hm(d: Date): string {
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return clock(d.getHours(), d.getMinutes());
 }
 
 /** The day part of a moment: "Today" / "Tomorrow" / "Yesterday" / "Wed" (within a week) / "Nov 2". */
@@ -195,14 +263,16 @@ export function untilLabel(d: Date, now: Date): string {
   return t("lib-routines.in_days", { count: Math.max(daysBetween(now, d), 1) });
 }
 
-/** Its title, or the first line of the prompt (a follow-up Persona scheduled without one). */
-export function taskTitle(task: Pick<Task, "title" | "prompt">): string {
+/** Its title, the first line of the visible prompt, or a label for its schedule type. */
+export function taskTitle(task: Pick<Task, "title" | "prompt" | "prompt_selections" | "repeat">): string {
   if (task.title?.trim()) return task.title.trim();
-  const first = (task.prompt ?? "").split("\n").find((l) => l.trim()) ?? "";
-  return first.trim() || t("lib-routines.scheduled_follow_up");
+  const prompt = task.prompt ?? "";
+  const text = task.prompt_selections ? splitSkillDraft(prompt, true).text : prompt;
+  const first = text.split("\n").find((l) => l.trim()) ?? "";
+  return first.trim() || (task.repeat === "once" ? t("lib-routines.scheduled_follow_up") : t("lib-routines.scheduled_task"));
 }
 
-/** The rule in words: "Every weekday 9:00 AM" / "Every 30 minutes" / "Once · New chat" / "0 10 1 * * · At 10:00, on day 1 of the month"
+/** The rule in words: "Every weekday at 09:00" / "Every 30 minutes" / "Once · New chat" / "0 10 1 * * · At 10:00, on day 1 of the month"
  *  (a cron task's expression first, so a one-line row always shows it). */
 export function ruleText(task: Task): string {
   if (task.repeat === "interval") return everyLabel(task.every_minutes ?? 0);
@@ -221,9 +291,26 @@ export function nextRun(t: Task): Date | null {
   return t.enabled ? parseTime(t.next_run) ?? parseTime(t.at) : null;
 }
 
-/** "Next Today 09:00 · in 2 hours" / "Off" / "". */
+export type SkipNextTarget = { at: string; time: Date } & ({ cancel: false; token?: never } | { cancel: true; token: string });
+
+/** Keep the server's timestamp intact for the compare-and-write request, including its fractional seconds. */
+export function skipNextTarget(task: Task): SkipNextTarget | undefined {
+  if (!task.enabled || task.repeat === "once") return;
+  const at = task.skip_next_at || task.next_run;
+  const time = parseTime(at);
+  if (!at || !time) return;
+  if (task.skip_next_at) {
+    if (task.skip_next_token) return { cancel: true, at, time, token: task.skip_next_token };
+    return;
+  }
+  if (task.can_skip_next === true) return { cancel: false, at, time };
+}
+
+/** "Next Today 09:00 · in 2 hours" / "Will skip Today 09:00" / "Off" / "". */
 export function nextText(task: Task, now: Date): string {
   if (!task.enabled) return t("lib-routines.off");
+  const skipped = parseTime(task.skip_next_at);
+  if (skipped) return t("lib-routines.skip_next_pending", { when: momentLabel(skipped, now) });
   const n = nextRun(task);
   return n ? t("lib-routines.next", { moment: momentLabel(n, now), until: untilLabel(n, now) }) : "";
 }
@@ -270,10 +357,22 @@ export function effortLabel(id?: string): string {
   return EFFORTS.find((e) => e.id === id)?.title ?? id;
 }
 
-/** What it runs with when that isn't the default, in a few words: "claude-fast · Auto · Low thinking"; `danger` for "Allow all".
+type TaskLauncherName = Named & { agent?: string; agent_type?: string };
+
+/** The same effective launcher/backend/model/effort line, with metadata from its execution computer. */
+export function taskExecutionSummary(ex: Pick<TaskExecution, "launcher" | "agent" | "model" | "effort">, names: readonly TaskLauncherName[] | undefined, fallback: string): string {
+  const title = launcherTitle(ex.launcher, names);
+  const known = names?.find((l) => l.name === ex.launcher);
+  const agent = ex.agent || known?.agent_type || known?.agent || (["claude", "codex"].includes(ex.launcher) ? ex.launcher : "");
+  return [title || fallback, agent !== title ? agent : "", ex.model || fallback, ex.effort || fallback].filter(Boolean).join(" · ");
+}
+
+/** The effective execution context, or a legacy task's explicit settings; `danger` for "Allow all".
  *  The launcher by its display name from `names` (#5029). */
-export function runsWith(task: Pick<Task, "launcher" | "permission_mode" | "effort">, names?: readonly Named[]): { text: string; danger: boolean } | null {
-  const parts = [task.launcher && launcherTitle(task.launcher, names), modeLabel(task.permission_mode), task.effort ? t("lib-routines.effort", { effort: effortLabel(task.effort) }) : ""].filter(Boolean);
+export function runsWith(task: Pick<Task, "launcher" | "model" | "permission_mode" | "effort" | "execution">, names?: readonly TaskLauncherName[]): { text: string; danger: boolean } | null {
+  const parts = (task.execution
+    ? [taskExecutionSummary(task.execution, names, t(task.launcher ? "assistant-taskeditor.follow_launcher" : "assistant-taskeditor.follow_assistant")), modeLabel(task.permission_mode)]
+    : [task.launcher && launcherTitle(task.launcher, names), modeLabel(task.permission_mode), task.effort ? t("lib-routines.effort", { effort: effortLabel(task.effort) }) : ""]).filter(Boolean);
   return parts.length ? { text: parts.join(" · "), danger: task.permission_mode === BYPASS } : null;
 }
 
@@ -288,10 +387,25 @@ function pastUntil(d: Task, now: Date): string | null {
   return t("lib-routines.error_until");
 }
 
+export function taskStartsFresh(task: Pick<Task, "repeat" | "fresh_each_run">): boolean {
+  return task.repeat !== "once" && !!task.fresh_each_run;
+}
+
+/** Source chats retain their context, including legacy tasks whose launcher/effort fields were inert. */
+export function taskExecutionNeedsOwnChat(d: Task, saved?: Task | null): boolean {
+  if (!d.session_id || taskStartsFresh(d)) return false;
+  const legacy = saved && saved.session_id === d.session_id && !saved.model && !saved.cwd && !saved.execution_machine_id &&
+    !taskStartsFresh(saved) &&
+    (["launcher", "effort"] as const).every((key) => (d[key] ?? "").trim() === (saved[key] ?? "").trim());
+  return !!d.model?.trim() || !!d.execution_machine_id?.trim() || !!d.cwd ||
+    (!legacy && !!(d.launcher?.trim() || d.effort?.trim()));
+}
+
 /** What the editor checks before saving (the hub checks the same and says why in Chinese): null = fine. */
-export function validateTask(d: Task, now: Date): string | null {
+export function validateTask(d: Task, now: Date, saved?: Task | null): string | null {
   if (d.repeat !== "once" && !d.title.trim()) return t("lib-routines.error_title");
   if (!d.prompt.trim()) return t("lib-routines.error_prompt");
+  if (taskExecutionNeedsOwnChat(d, saved)) return t("assistant-taskeditor.execution_own_chat");
   switch (d.repeat) {
     case "daily":
       if (!HHMM.test(d.time ?? "")) return t("lib-routines.error_time");
@@ -320,11 +434,19 @@ export function validateTask(d: Task, now: Date): string | null {
  *  another rule uses don't count). */
 export function sameTask(a: Task, b: Task): boolean {
   if (a.title.trim() !== b.title.trim() || a.prompt.trim() !== b.prompt.trim() || a.repeat !== b.repeat || a.enabled !== b.enabled) return false;
+  if (Boolean(a.prompt_selections) !== Boolean(b.prompt_selections)) return false;
   if ((a.session_id ?? "") !== (b.session_id ?? "")) return false;
+  for (const key of ["launcher", "model", "effort", "cwd", "execution_machine_id"] as const) {
+    if (key === "cwd" ? (a.cwd ?? "") !== (b.cwd ?? "") : (a[key] ?? "").trim() !== (b[key] ?? "").trim()) return false;
+  }
   if ((a.permission_mode ?? "") !== (b.permission_mode ?? "")) return false;
   if ((a.push ?? "") !== (b.push ?? "")) return false;
   if ((a.inbox ?? "") !== (b.inbox ?? "")) return false;
-  if (a.repeat !== "once" && !sameInstant(a.until, b.until)) return false;
+  if (a.repeat !== "once" && (
+    !sameInstant(a.until, b.until) ||
+    Boolean(a.fresh_each_run) !== Boolean(b.fresh_each_run) ||
+    (a.state_note?.text ?? "") !== (b.state_note?.text ?? "")
+  )) return false;
   switch (a.repeat) {
     case "once":
       return parseTime(a.at)?.getTime() === parseTime(b.at)?.getTime();
@@ -353,30 +475,54 @@ function untilBody(d: Task, saved?: Task | null): string | null | undefined {
   return draft ? draft.toISOString() : null;
 }
 
-/** The JSON for POST (no `saved`) or PUT. Models follow Models › Main chat; tasks only configure permissions.
+/** The hub uses the same sparse settings and destination to preview references and to save the task. */
+export function taskInputSettings(d: Task, saved?: Task | null): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const key of ["launcher", "model", "effort", "cwd", "execution_machine_id"] as const) {
+    const value = key === "cwd" ? d.cwd ?? "" : (d[key] ?? "").trim();
+    const previous = key === "cwd" ? saved?.cwd ?? "" : (saved?.[key] ?? "").trim();
+    if (value !== previous) body[key] = value;
+  }
+
+  if (Object.keys(body).length) body.model_revision = saved?.model_revision ?? 0;
+  body.repeat = d.repeat;
+  // Presence distinguishes a deliberate rule change from an old client's repeat echo.
+  body.cron = d.repeat === "cron" ? (d.cron ?? "").trim() : "";
+  body.session_id = d.session_id ?? "";
+  if ((d.push ?? "") !== (saved?.push ?? "")) body.push = d.push ?? "";
+  if (d.repeat !== "once" && Boolean(d.fresh_each_run) !== Boolean(saved?.fresh_each_run)) body.fresh_each_run = Boolean(d.fresh_each_run);
+  return body;
+}
+
+/** The JSON for POST (no `saved`) or PUT. Execution overrides are sparse; empty explicitly restores inheritance.
  *  `push` goes only when changed from `saved`. `session_id` "" makes runs use the task's own conversation; `at` is left out when there is none (Go can't read "").
- *  `until` follows untilBody: omit to keep, null to clear. */
+ *  `until` follows untilBody: omit to keep, null to clear. Changed state text includes the revision the editor started with. */
 export function taskBody(d: Task, saved?: Task | null): Record<string, unknown> {
+  const prompt = d.prompt.trim();
+  // A hub that predates selected references rejects a missing prompt on both create and edit.
+  const promptField = d.prompt_selections ? "structured_prompt" : "prompt";
   const body: Record<string, unknown> = {
+    ...taskInputSettings(d, saved),
     title: d.title.trim(),
-    prompt: d.prompt.trim(),
-    repeat: d.repeat,
+    [promptField]: prompt,
     enabled: d.enabled,
     time: d.repeat === "daily" ? d.time ?? "" : "",
     weekdays: d.repeat === "daily" ? normalizeDays(d.weekdays) : [],
     every_minutes: d.repeat === "interval" ? d.every_minutes ?? 0 : 0,
-    // always sent, so a hub that knows cron tasks changes the rule (left out, it keeps a cron task's); an older one ignores it
-    cron: d.repeat === "cron" ? (d.cron ?? "").trim() : "",
-    session_id: d.session_id ?? "",
     permission_mode: d.permission_mode ?? "",
   };
   const at = d.repeat === "daily" || d.repeat === "cron" ? null : parseTime(d.at);
   if (at) body.at = at.toISOString();
   const until = untilBody(d, saved);
   if (until !== undefined) body.until = until;
-  // Only when changed: a hub keeps it when left out, and one that does not know it never gets it.
-  if ((d.push ?? "") !== (saved?.push ?? "")) body.push = d.push ?? "";
+  // Only when changed: an older hub never receives the optional setting.
   if ((d.inbox ?? "") !== (saved?.inbox ?? "")) body.inbox = d.inbox ?? "";
+  if (d.repeat !== "once") {
+    if ((d.state_note?.text ?? "") !== (saved?.state_note?.text ?? "")) {
+      body.state_text = d.state_note?.text ?? "";
+      if (saved) body.state_revision = saved.state_note?.revision ?? 0;
+    }
+  }
   return body;
 }
 
@@ -431,6 +577,8 @@ export interface Template {
   key: string;
   title: string;
   prompt: string;
+  /** The task owns explicit picker selections. Unmarked prompt text stays literal. */
+  prompt_selections?: boolean;
   repeat: Repeat;
   time?: string;
   weekdays?: number[];
@@ -505,7 +653,7 @@ export function upcoming(tasks: Task[], limit = 3): Upcoming[] {
   const out: Upcoming[] = [];
   for (const task of tasks) {
     const at = nextRun(task);
-    if (!at) continue;
+    if (!at || parseTime(task.skip_next_at)) continue;
     out.push({ id: task.id, at, title: taskTitle(task), repeating: task.repeat !== "once", detail: task.repeat === "once" ? (task.session_id ? t("lib-routines.follow_up_same_chat") : t("lib-routines.follow_up_new_chat")) : ruleText(task) });
   }
   return out.sort((a, b) => a.at.getTime() - b.at.getTime()).slice(0, limit);
@@ -513,21 +661,29 @@ export function upcoming(tasks: Task[], limit = 3): Upcoming[] {
 
 // ── runs ────────────────────────────────────────────────
 
-export function runStatusWord(r: Pick<Run, "status">): string {
+export function runStatusWord(r: Pick<Run, "status" | "owner_skipped">): string {
+  if (r.status === "skipped" && r.owner_skipped) return t("lib-routines.status_owner_skipped");
   return r.status === "ok" ? t("lib-routines.status_ran") : r.status === "skipped" ? t("lib-routines.status_skipped") : t("lib-routines.status_failed");
 }
 
 /** "Run manually" / the error / "On time" / "21 seconds late" / "3 minutes late" / "2 hours late". */
 export function runDetail(r: Run): string {
-  if (r.manual) return t("lib-routines.run_manual");
-  if (r.status !== "ok") return r.error || runStatusWord(r);
-  const at = parseTime(r.at), due = parseTime(r.due);
-  if (!at || !due) return runStatusWord(r);
-  const late = (at.getTime() - due.getTime()) / 1000;
-  if (late < 5) return t("lib-routines.run_on_time");
-  if (late < 120) return t("lib-routines.late_seconds", { count: Math.round(late) });
-  if (late < 7200) return t("lib-routines.late_minutes", { count: Math.floor(late / 60) });
-  return t("lib-routines.late_hours", { count: Math.floor(late / 3600) });
+  let detail: string;
+  if (r.status !== "ok") detail = r.owner_skipped ? runStatusWord(r) : r.error || runStatusWord(r);
+  else if (r.manual) detail = t("lib-routines.run_manual");
+  else {
+    const at = parseTime(r.at), due = parseTime(r.due);
+    if (!at || !due) detail = runStatusWord(r);
+    else {
+      const late = (at.getTime() - due.getTime()) / 1000;
+      if (late < 5) detail = t("lib-routines.run_on_time");
+      else if (late < 120) detail = t("lib-routines.late_seconds", { count: Math.round(late) });
+      else if (late < 7200) detail = t("lib-routines.late_minutes", { count: Math.floor(late / 60) });
+      else detail = t("lib-routines.late_hours", { count: Math.floor(late / 3600) });
+    }
+  }
+  if (r.compatibility_fallback === "legacy_task_execution") return `${detail} · ${t("lib-routines.run_legacy_fallback")}`;
+  return detail;
 }
 
 /** Newest first, one group per day ("Today", "Yesterday", "Wed", "Nov 2"). */

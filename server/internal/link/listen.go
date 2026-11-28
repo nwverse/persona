@@ -22,6 +22,9 @@ import (
 	"unicode"
 
 	"github.com/coder/websocket"
+
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/osproc"
 )
 
 // The passive listener (docs/operations/link.md "Passive mode"): TLS with the connector's own identity, four endpoints and nothing
@@ -58,6 +61,8 @@ type passive struct {
 	// handlers: the streams' handlers still running (serve waits for them when it stops).
 	handlers sync.WaitGroup
 
+	// syncMu serializes reading link.json and applying it to s.cfg (lock order: syncMu -> mu).
+	syncMu  sync.Mutex
 	mu      sync.Mutex
 	cfg     Passive
 	streams map[*pstream]struct{}
@@ -75,6 +80,17 @@ type passive struct {
 	// logged, suppressed: refusals are logged at most every refusalLog.
 	logged     time.Time
 	suppressed int
+
+	// testAfterPairUpdate, when non-nil in tests, runs in pair after Update releases
+	// the file lock and before syncing in-memory config.
+	testAfterPairUpdate func()
+	// testReadConfig, when non-nil in tests, replaces Read inside syncFromDisk.
+	testReadConfig func(string) (*Config, error)
+	// testAfterKeepNameUpdate, when non-nil in tests, runs in keepMachineName
+	// after Update releases the file lock and before acquiring s.mu.
+	testAfterKeepNameUpdate func()
+	// testDialNode, when non-nil in tests, overrides dialing the resident node socket in stream.
+	testDialNode func() (net.Conn, error)
 }
 
 // pstream is a stream from the hub to the resident node.
@@ -112,19 +128,19 @@ func runPassive(ctx context.Context, o Options, rep *reporter) {
 		id, err := loadIdentity(TLSDir(o.Path), time.Now())
 		if err != nil {
 			rep.set(func(s *Status) {
-				*s = Status{State: "waiting", Listen: listen, Error: "连接器的 TLS 身份：" + err.Error()}
+				*s = Status{State: "waiting", Listen: listen, Error: defaultText("link-errors.tls_identity", i18n.Args{"error": err})}
 			})
 			o.wait(ctx, b.next(), was)
 			continue
 		}
-		ln, err := net.Listen("tcp", listen)
+		ln, err := osproc.Listen("tcp", listen)
 		if err != nil {
 			wait := b.next()
 			retry := time.Now().Add(wait)
 			o.Logf("passive: listen %s: %v; next attempt in %s", listen, err, wait.Round(time.Second))
 			rep.set(func(s *Status) {
 				*s = Status{State: "waiting", Listen: listen, Machine: p.Machine, HubName: p.HubName, MachineName: p.MachineName, Retry: &retry,
-					Error: listen + "：" + describeListen(err)}
+					Error: defaultText("link-errors.listen_failed", i18n.Args{"listen": listen, "error": describeListen(err)})}
 			})
 			o.wait(ctx, wait, was)
 			continue
@@ -139,11 +155,11 @@ func runPassive(ctx context.Context, o Options, rep *reporter) {
 func describeListen(err error) string {
 	switch {
 	case errors.Is(err, os.ErrPermission):
-		return "没有权限（1024 以下的端口要 root）"
+		return defaultText("link-errors.listen_permission")
 	case errors.Is(err, syscall.EADDRINUSE), strings.Contains(err.Error(), "address already in use"), strings.Contains(err.Error(), "Only one usage"):
-		return "端口被占用了"
+		return defaultText("link-errors.listen_in_use")
 	case errors.Is(err, syscall.EADDRNOTAVAIL), strings.Contains(err.Error(), "assign requested address"):
-		return "本机没有这个地址"
+		return defaultText("link-errors.listen_address_missing")
 	}
 	return err.Error()
 }
@@ -215,21 +231,16 @@ func (s *passive) serve(ctx context.Context, ln net.Listener) {
 				continue
 			}
 			was = now
-			c, err := Read(o.Path)
-			if err != nil || c.CurrentMode() != ModePassive {
+			modeOK, addr, err := s.syncFromDisk(nil, listenAddr)
+			if err != nil || !modeOK {
 				running = false // Run's watcher ends ctx as well
 				continue
 			}
-			p := Passive{}
-			if c.Passive != nil {
-				p = *c.Passive
-			}
-			if p.ListenAddr() != listenAddr {
-				o.Logf("passive: moving from %s to %s", listenAddr, p.ListenAddr())
+			if addr != listenAddr {
+				o.Logf("passive: moving from %s to %s", listenAddr, addr)
 				running = false
 				continue
 			}
-			s.setConfig(p)
 		}
 	}
 	s.mu.Lock()
@@ -261,8 +272,18 @@ func (s *passive) config() Passive {
 // longer the one end.
 func (s *passive) setConfig(p Passive) {
 	s.mu.Lock()
+	s.setConfigLocked(p)
+	s.reportLocked()
+	s.mu.Unlock()
+}
+
+func (s *passive) setConfigLocked(p Passive) bool {
+	changed := !samePassive(s.cfg, p)
 	if !p.Paired() || p.TokenSHA256 != s.cfg.TokenSHA256 {
-		s.attention = nil // another hub's, or none's
+		if s.attention != nil {
+			s.attention = nil // another hub's, or none's
+			changed = true
+		}
 	}
 	s.cfg = p
 	for st := range s.streams {
@@ -270,8 +291,121 @@ func (s *passive) setConfig(p Passive) {
 			st.end(closeCredential, "credential replaced")
 		}
 	}
+	return changed
+}
+
+type pairSync struct {
+	paired     Passive
+	prevPaired bool
+	prevToken  string
+	from       string
+}
+
+// syncFromDisk reloads passive mode's config from link.json under syncMu so concurrent pair()
+// calls and serve()'s config watcher cannot roll s.cfg backward to a stale snapshot. When ps
+// is non-nil, lastSeen/from are updated only if the latest on-disk config still holds that pairing;
+// if Read hits a transient non-ErrNotExist error after pair()'s Update, ps.paired is applied only
+// while s.cfg still matches the exact pre-pair credential state, so a concurrent newer pairing can
+// never be rolled back while the previous credential is still revoked immediately.
+// When expectedListen is non-empty and the mode ended or listen address moved, s.cfg is left
+// untouched so serve() shuts down streams with closeStopping.
+func (s *passive) syncFromDisk(ps *pairSync, expectedListen string) (modeOK bool, listenAddr string, err error) {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	read := Read
+	if s.testReadConfig != nil {
+		read = s.testReadConfig
+	}
+	c, err := read(s.o.Path)
+	if err != nil {
+		if expectedListen == "" {
+			if errors.Is(err, os.ErrNotExist) {
+				s.mu.Lock()
+				if !samePassive(s.cfg, Passive{}) || s.attention != nil {
+					s.cfg, s.attention = Passive{}, nil
+					s.reportLocked()
+				}
+				s.mu.Unlock()
+			} else if ps != nil {
+				s.o.Logf("passive: reload after pair: %v", err)
+				s.mu.Lock()
+				matchesPrePair := (ps.prevPaired && s.cfg.Paired() && s.cfg.TokenSHA256 == ps.prevToken) ||
+					(!ps.prevPaired && !s.cfg.Paired())
+				if matchesPrePair {
+					changed := s.setConfigLocked(ps.paired)
+					if !s.seenLocked(ps.from) && changed {
+						s.reportLocked()
+					}
+				}
+				s.mu.Unlock()
+			}
+		}
+		return false, "", err
+	}
+	if c.CurrentMode() != ModePassive {
+		if expectedListen == "" {
+			s.mu.Lock()
+			if !samePassive(s.cfg, Passive{}) || s.attention != nil {
+				s.cfg, s.attention = Passive{}, nil
+				s.reportLocked()
+			}
+			s.mu.Unlock()
+		}
+		return false, "", nil
+	}
+	cur := Passive{}
+	if c.Passive != nil {
+		cur = *c.Passive
+	}
+	listenAddr = cur.ListenAddr()
+	if expectedListen != "" && listenAddr != expectedListen {
+		return true, listenAddr, nil
+	}
+	s.mu.Lock()
+	changed := s.setConfigLocked(cur)
+	if ps != nil && samePairing(cur, ps.paired) {
+		if !s.seenLocked(ps.from) && changed {
+			s.reportLocked()
+		}
+	} else if changed {
+		s.reportLocked()
+	}
 	s.mu.Unlock()
-	s.report()
+	return true, listenAddr, nil
+}
+
+func sameTimePtr(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+func samePairCode(a, b *PairCode) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.SHA256 == b.SHA256 && a.Expires.Equal(b.Expires)
+}
+
+func samePassive(a, b Passive) bool {
+	return a.Listen == b.Listen &&
+		a.HubID == b.HubID &&
+		a.HubName == b.HubName &&
+		a.Machine == b.Machine &&
+		a.MachineName == b.MachineName &&
+		a.TokenSHA256 == b.TokenSHA256 &&
+		sameTimePtr(a.PairedAt, b.PairedAt) &&
+		samePairCode(a.Code, b.Code)
+}
+
+func samePairing(cur, paired Passive) bool {
+	return cur.Paired() &&
+		cur.TokenSHA256 == paired.TokenSHA256 &&
+		cur.HubID == paired.HubID &&
+		cur.HubName == paired.HubName &&
+		cur.Machine == paired.Machine &&
+		sameTimePtr(cur.PairedAt, paired.PairedAt)
 }
 
 // report says what the listener is doing: connected while a stream is open, else listening (paired) or unpaired.
@@ -316,12 +450,20 @@ func (s *passive) seen(r *http.Request) {
 	from := remoteHost(r)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.seenLocked(from)
+}
+
+// seenLocked updates lastSeen/from under s.mu and reports status when the source
+// changed or it has not reported lately, returning whether it reported.
+func (s *passive) seenLocked(from string) bool {
 	now := time.Now()
 	changed := from != s.from
 	s.lastSeen, s.from = now, from
 	if changed || now.Sub(s.seenSaid) > 30*time.Second {
 		s.reportLocked()
+		return true
 	}
+	return false
 }
 
 func (s *passive) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +501,7 @@ func (s *passive) admit(w http.ResponseWriter, r *http.Request) (key string, ok 
 	key = sourceKey(remoteIP(r))
 	if wait := s.lim.retry(key, time.Now()); wait > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(max(1, int((wait+time.Second-1)/time.Second))))
-		writeError(w, http.StatusTooManyRequests, "rate_limited", "认证失败太多次，稍后再试")
+		writeError(w, http.StatusTooManyRequests, "rate_limited", defaultText("link-peer.rate_limited"))
 		return key, false
 	}
 	return key, true
@@ -403,7 +545,7 @@ func maskSource(ip netip.Addr) string {
 }
 
 // wrongCredential answers a request without the paired hub's credential.
-const wrongCredential = "凭据不对：这台电脑只认配对它的那台 hub"
+var wrongCredential = defaultText("link-peer.wrong_credential")
 
 // authorized admits r when it carries the paired hub's credential, and answers it otherwise (429 blocked, 401 refused).
 func (s *passive) authorized(w http.ResponseWriter, r *http.Request) (Passive, bool) {
@@ -447,28 +589,31 @@ func (s *passive) pair(w http.ResponseWriter, r *http.Request) {
 	}
 	var req pairRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, pairBodyMax)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "bad_request", "要一个 JSON：{code, token, machine, hub_id, hub_name}")
+		writeError(w, http.StatusBadRequest, "bad_request", defaultText("link-peer.pair_json_required"))
 		return
 	}
 	machine, hubID, hubName := clipText(req.Machine, 128), clipText(req.HubID, 128), clipName(req.HubName)
 	switch {
 	case strings.TrimSpace(req.Code) == "":
-		writeError(w, http.StatusBadRequest, "bad_request", "没有 code")
+		writeError(w, http.StatusBadRequest, "bad_request", defaultText("link-peer.code_required"))
 		return
 	case !goodToken(req.Token):
-		writeError(w, http.StatusBadRequest, "bad_request", "token 要 32 到 512 个可打印的 ASCII 字符，不含空白")
+		writeError(w, http.StatusBadRequest, "bad_request", defaultText("link-peer.token_invalid"))
 		return
 	case machine == "":
-		writeError(w, http.StatusBadRequest, "bad_request", "没有 machine（hub 给这台电脑的机器 id）")
+		writeError(w, http.StatusBadRequest, "bad_request", defaultText("link-peer.machine_required"))
 		return
 	}
 	now := time.Now()
 	var paired Passive
+	var prevPaired bool
+	var prevToken string
 	err := Update(s.o.Path, func(c *Config) error {
 		p := c.Passive
 		if c.CurrentMode() != ModePassive || p == nil || p.Code == nil || !now.Before(p.Code.Expires) || !sameHash(req.Code, p.Code.SHA256) {
 			return errBadCode
 		}
+		prevPaired, prevToken = p.Paired(), p.TokenSHA256
 		at := now.UTC()
 		p.HubID, p.HubName, p.Machine, p.TokenSHA256, p.PairedAt, p.Code = hubID, hubName, machine, hashHex(req.Token), &at, nil
 		p.MachineName = clipName(req.MachineName)
@@ -477,16 +622,23 @@ func (s *passive) pair(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, errBadCode):
-		s.refuse(w, r, key, "bad_code", "配对码不对、过期了或者已经用过：在这台电脑上重新 persona-link pair --listen")
+		s.refuse(w, r, key, "bad_code", defaultText("link-peer.bad_code"))
 		return
 	case err != nil:
 		s.o.Logf("passive: pairing: %v", err)
-		writeError(w, http.StatusInternalServerError, "internal", "存不下配对结果")
+		writeError(w, http.StatusInternalServerError, "internal", defaultText("link-peer.pair_save_failed"))
 		return
 	}
 	s.o.Logf("passive: paired with hub %q (%s) as %q, from %s", hubName, hubID, machine, maskSource(remoteIP(r)))
-	s.setConfig(paired) // the streams of a hub paired before end now
-	s.seen(r)
+	if s.testAfterPairUpdate != nil {
+		s.testAfterPairUpdate()
+	}
+	_, _, _ = s.syncFromDisk(&pairSync{
+		paired:     paired,
+		prevPaired: prevPaired,
+		prevToken:  prevToken,
+		from:       remoteHost(r),
+	}, "") // streams of a hub paired before end now; never roll back a newer link.json
 	writeJSON(w, http.StatusOK, map[string]string{"version": s.o.Version})
 }
 
@@ -522,12 +674,29 @@ func (s *passive) info(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	s.seen(r)
-	s.keepMachineName(p, r.Header.Get(MachineNameHeader))
+	keptName, err := s.keepMachineName(p, r.Header.Get(MachineNameHeader))
+	if errors.Is(err, errPairedAgain) {
+		writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
+		return
+	}
 	info := ConnectorInfo{Machine: p.Machine, Version: s.o.Version, Features: []string{FeatureAttention}}
+	from := remoteHost(r)
 	s.mu.Lock()
+	if !s.cfg.Paired() || s.cfg.TokenSHA256 != p.TokenSHA256 {
+		// Another hub paired (or pairing was cleared) while keepMachineName ran.
+		s.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
+		return
+	}
+	nameChanged := keptName != "" && s.cfg.MachineName != keptName
+	if nameChanged {
+		s.cfg.MachineName = keptName
+	}
 	if s.attention != nil {
 		info.AttentionRev = s.attention.Rev
+	}
+	if !s.seenLocked(from) && nameChanged {
+		s.reportLocked()
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, info)
@@ -571,7 +740,7 @@ func (s *passive) takeAttention(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "want one attention object with its rev, at most 64 KiB")
 		return
 	}
-	s.seen(r)
+	from := remoteHost(r)
 	s.mu.Lock()
 	if !s.cfg.Paired() || s.cfg.TokenSHA256 != p.TokenSHA256 {
 		// Another hub paired while the body came in: this summary went with the old credential (setConfig).
@@ -579,8 +748,11 @@ func (s *passive) takeAttention(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
 		return
 	}
-	if s.attention == nil || s.attention.Rev != a.Rev {
+	attnChanged := s.attention == nil || s.attention.Rev != a.Rev
+	if attnChanged {
 		s.attention = &a
+	}
+	if !s.seenLocked(from) && attnChanged {
 		s.reportLocked()
 	}
 	s.mu.Unlock()
@@ -598,29 +770,27 @@ func (s *passive) dropStaleAttention(now time.Time) {
 }
 
 // keepMachineName keeps what the paired hub calls this computer (MachineNameHeader, escaped) in link.json, when it
-// changed.
-func (s *passive) keepMachineName(p Passive, escaped string) {
+// changed. It returns the persisted name when updated, or errPairedAgain if link.json no longer holds p's credential.
+func (s *passive) keepMachineName(p Passive, escaped string) (string, error) {
 	raw, err := url.QueryUnescape(escaped)
 	name := clipName(raw)
 	if err != nil || name == "" || name == p.MachineName {
-		return
+		return "", nil
 	}
-	var kept Passive
 	err = Update(s.o.Path, func(c *Config) error {
 		if c.Passive == nil || c.Passive.TokenSHA256 != p.TokenSHA256 {
 			return errPairedAgain
 		}
 		c.Passive.MachineName = name
-		kept = *c.Passive
 		return nil
 	})
 	if err != nil {
-		return
+		return "", err
 	}
-	s.mu.Lock()
-	s.cfg = kept
-	s.mu.Unlock()
-	s.report()
+	if s.testAfterKeepNameUpdate != nil {
+		s.testAfterKeepNameUpdate()
+	}
+	return name, nil
 }
 
 func isUpgrade(r *http.Request) bool {
@@ -645,15 +815,28 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isUpgrade(r) {
-		writeError(w, http.StatusBadRequest, "bad_request", "要 WebSocket 升级")
+		writeError(w, http.StatusBadRequest, "bad_request", defaultText("link-peer.websocket_required"))
 		return
 	}
-	s.seen(r)
-	node, err := net.DialTimeout("unix", s.o.Target, 2*time.Second)
+	from := remoteHost(r)
+	var node net.Conn
+	var err error
+	if s.testDialNode != nil {
+		node, err = s.testDialNode()
+	} else {
+		node, err = net.DialTimeout("unix", s.o.Target, 2*time.Second)
+	}
 	if err != nil {
 		msg := nodeMissing(runtime.GOOS, s.o.Target).Error() // how this OS runs it, as in active mode (#3723)
 		s.mu.Lock()
+		if !s.cfg.Paired() || s.cfg.TokenSHA256 != p.TokenSHA256 {
+			// Another hub paired (or pairing was cleared) while dialing the resident node.
+			s.mu.Unlock()
+			writeError(w, http.StatusUnauthorized, "unauthorized", wrongCredential)
+			return
+		}
 		s.node, s.nodeErr = "offline", msg
+		s.lastSeen, s.from = time.Now(), from
 		s.reportLocked()
 		s.mu.Unlock()
 		writeError(w, http.StatusServiceUnavailable, "node_unavailable", msg)
@@ -672,7 +855,7 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 	defer nc.Close()
 	var once sync.Once
 	finished := make(chan struct{})
-	st := &pstream{token: p.TokenSHA256, since: time.Now(), from: remoteHost(r)}
+	st := &pstream{token: p.TokenSHA256, since: time.Now(), from: from}
 	st.end = func(code websocket.StatusCode, reason string) {
 		once.Do(func() {
 			go func() {
@@ -698,6 +881,7 @@ func (s *passive) stream(w http.ResponseWriter, r *http.Request) {
 	s.handlers.Add(1)
 	defer s.handlers.Done()
 	s.node, s.nodeErr = "online", ""
+	s.lastSeen, s.from = time.Now(), from
 	s.reportLocked()
 	s.mu.Unlock()
 	s.o.Logf("passive: stream from %s", maskSource(remoteIP(r)))

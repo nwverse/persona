@@ -5,25 +5,20 @@ import SwiftUI
 /// domain, settled a moment after the last key; by name, or the soonest to expire first; expired sites marked. A site
 /// clears from its swipe or its long press, several from Select; every clear asks first. A leaf: nothing is pushed from it.
 struct BrowserLoginsListView: View {
+    @Environment(\.shell) private var shell
     var logins: BrowserLoginsModel
     var online: Bool
     @State private var typed = ""
     @State private var chosen = Set<String>()
     /// The sites the confirmation asks about.
     @State private var clearing: [String]?
-    #if !os(macOS)
     @State private var editMode: EditMode = .inactive
-    #endif
 
     /// The search waits this long after the last key before the list is filtered again.
     private static let settle = Duration.milliseconds(150)
 
     private var selecting: Bool {
-        #if os(macOS)
-        true
-        #else
         editMode.isEditing
-        #endif
     }
 
     var body: some View {
@@ -50,9 +45,7 @@ struct BrowserLoginsListView: View {
                 }
             }
         }
-        #if !os(macOS)
         .environment(\.editMode, $editMode)
-        #endif
         .overlay { placeholder }
         .pageSearchable(text: $typed, prompt: String(localized: "Search Sites"))
         .task(id: typed) {
@@ -71,9 +64,7 @@ struct BrowserLoginsListView: View {
         .browserLoginsClearDialog($clearing, busy: logins.busy) { sites in
             guard await logins.clear(sites) else { return }
             chosen.subtract(sites)
-            #if !os(macOS)
             withAnimation(Theme.Motion.state) { editMode = .inactive }
-            #endif
         }
         .themedPage()
         .detailTitle(String(localized: "Browser Sign-ins"))
@@ -84,33 +75,57 @@ struct BrowserLoginsListView: View {
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        #if !os(macOS)
-        ToolbarItem(placement: .topBarTrailing) {
-            if editMode.isEditing {
-                Button("Done") {
-                    withAnimation(Theme.Motion.state) { editMode = .inactive }
-                    chosen = []
-                }
-                .lineLimit(1)
-                .accessibilityIdentifier("browser-logins-done")
-            } else {
-                Button("Select") { withAnimation(Theme.Motion.state) { editMode = .active } }
+        if shell != nil {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if editMode.isEditing {
+                        Button("Done") {
+                            withAnimation(Theme.Motion.state) { editMode = .inactive }
+                            chosen = []
+                        }
+                        .lineLimit(1)
+                        .accessibilityIdentifier("browser-logins-done")
+                    } else {
+                        Button("Select") { withAnimation(Theme.Motion.state) { editMode = .active } }
+                            .lineLimit(1)
+                            .disabled(logins.shown.isEmpty || logins.busy)
+                            .accessibilityIdentifier("browser-logins-select")
+                    }
+                    Section("Sort By") {
+                        Toggle("Name", isOn: choice(.name))
+                        Toggle("Expiring First", isOn: choice(.expiry))
+                    }
+                } label: { ThemedIcon(Theme.Icon.moreMenu) }
+                    .accessibilityLabel("More")
+                    .accessibilityIdentifier("browser-logins-sort")
+            }
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                if editMode.isEditing {
+                    Button("Done") {
+                        withAnimation(Theme.Motion.state) { editMode = .inactive }
+                        chosen = []
+                    }
                     .lineLimit(1)
-                    .disabled(logins.shown.isEmpty || logins.busy)
-                    .accessibilityIdentifier("browser-logins-select")
-            }
-        }
-        #endif
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                Section("Sort By") {
-                    Toggle("Name", isOn: choice(.name))
-                    Toggle("Expiring First", isOn: choice(.expiry))
+                    .accessibilityIdentifier("browser-logins-done")
+                } else {
+                    Button("Select") { withAnimation(Theme.Motion.state) { editMode = .active } }
+                        .lineLimit(1)
+                        .disabled(logins.shown.isEmpty || logins.busy)
+                        .accessibilityIdentifier("browser-logins-select")
                 }
-            } label: {
-                Label("Sort By", systemImage: Theme.Icon.upDown)
             }
-            .accessibilityIdentifier("browser-logins-sort")
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Section("Sort By") {
+                        Toggle("Name", isOn: choice(.name))
+                        Toggle("Expiring First", isOn: choice(.expiry))
+                    }
+                } label: {
+                    Label("Sort By", systemImage: Theme.Icon.upDown)
+                }
+                .accessibilityIdentifier("browser-logins-sort")
+            }
         }
         if selecting {
             ToolbarItemGroup(placement: .bottomBar) {
@@ -164,9 +179,7 @@ struct BrowserLoginsListView: View {
         try? await Task.sleep(for: .milliseconds(600))
         if open == "search" { typed = "ra" }
         guard open == "select" || open == "confirm" else { return }
-        #if !os(macOS)
         editMode = .active
-        #endif
         let shown = logins.shown.map(\.domain)
         chosen = Set([shown.first, shown.dropFirst(2).first].compactMap { $0 })
         if open == "confirm" {

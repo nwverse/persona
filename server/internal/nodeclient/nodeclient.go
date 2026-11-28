@@ -50,7 +50,10 @@ var ErrNoNode = errors.New("no persona node")
 
 // Request is one line a client sends on the node socket; the node answers with one line.
 type Request struct {
-	Kind      string          `json:"kind"`
+	Kind string `json:"kind"`
+	// Locale is an optional display language for reports such as kind=preflight. Older nodes ignore it; absent keeps
+	// their legacy zh-Hans wording. Machine protocol fields never use it.
+	Locale    string          `json:"locale,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	Pane      string          `json:"pane,omitempty"`
 	Name      string          `json:"name,omitempty"`
@@ -58,14 +61,21 @@ type Request struct {
 	SessionID string          `json:"session_id,omitempty"`
 	// CodexThreadID is the tool process's CODEX_THREAD_ID; the node resolves it in its own Codex registry.
 	CodexThreadID string `json:"codex_thread_id,omitempty"`
+	A2AToken      string `json:"a2a_token,omitempty"`
 	Assistant     bool   `json:"assistant,omitempty"` // the caller is the assistant's MCP server
 	Guest         bool   `json:"guest,omitempty"`     // a guest conversation's MCP server (assistant_guest.go)
+	// ToolSet: mcp.tools of a process started with a narrower tool set (PERSONA_TOOL_SET: "supervise", a background
+	// supervisor's round, node/assistant_round.go); "" the whole list.
+	ToolSet string `json:"tool_set,omitempty"`
 	// WaitUpdates explicitly opts this MCP call into interim {"wait_kind":...} lines before its final response.
 	// Older clients omit it and keep the single-response protocol.
 	WaitUpdates bool `json:"wait_updates,omitempty"`
 	// Attempt is the hook process's own id, the same on each reconnect; Resume marks those reconnects.
 	Attempt string `json:"attempt,omitempty"`
 	Resume  bool   `json:"resume,omitempty"`
+	// CreatedAt identifies the resumable hook occurrence across node reconnects.
+	// Older nodes ignore it and retain their legacy reconstruction behavior.
+	CreatedAt *time.Time `json:"created_at,omitempty"`
 	// AgentPID / AgentStart: the claude the hook runs under and when it started (AgentOf); 0 / "" when not found.
 	AgentPID   int    `json:"agent_pid,omitempty"`
 	AgentStart string `json:"agent_start,omitempty"`
@@ -198,6 +208,10 @@ func dial(ctx context.Context, path string, req any, hangUpOnCancel bool) ([]byt
 // (it answers {"retry":true}, or the connection breaks) it reconnects to the next one with the same request, marked
 // Resume, for up to ResumeWait. The error is ErrNoNode when nothing listens at the first try.
 func DialResumable(ctx context.Context, dial Dialer, req Request) ([]byte, error) {
+	if req.CreatedAt == nil || req.CreatedAt.IsZero() {
+		now := time.Now().UTC()
+		req.CreatedAt = &now
+	}
 	line, err := dial(ctx, req)
 	if errors.Is(err, ErrNoNode) {
 		return nil, err

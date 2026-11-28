@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import PersonaWire
 
 /// One group of paired hubs as the app runs it (docs/protocol/multi-hub.md): its socket, the hello of the hub it is on, and the
 /// per-hub things that came with it. The default group's link is the only one until a second group is paired.
@@ -14,7 +15,7 @@ final class HubLink: Identifiable {
     /// What the hub listed in its hello beyond the first protocol (`terminal_stream`, `file_upload`…).
     private(set) var features: Set<String> = []
     /// The credential whose authenticated hello supplied these capabilities; nil before the first hello.
-    @ObservationIgnored private(set) var surfaceCapabilitiesConfig: ServerConfig?
+    private(set) var surfaceCapabilitiesConfig: ServerConfig?
     /// The group's last Fleet state (hub/liveactivity.go): merged with the other groups' for the Live Activity.
     var fleet: FleetState?
     /// The hub's `desktops` list: Mac apps connected and computers where Persona Link reports you at them (the banner over
@@ -22,6 +23,8 @@ final class HubLink: Identifiable {
     var desktops: [DesktopDevice] = []
     /// Pinned and muted spaces / agents: each hub keeps its own.
     @ObservationIgnored let pins: PinsStore
+    /// Hub-wide Agents display settings (`use_herdr_tab_name`, #13899): each hub keeps its own.
+    @ObservationIgnored let agentsDisplay: AgentsDisplayStore
     /// The last good workspace snapshot for this group's @ menus; replaced, never accumulated, and dropped with the link.
     @ObservationIgnored let workspaceMentions = MentionWorkspaceCache()
     /// Where requests go when the socket has not picked a hub yet: the group's first hub.
@@ -32,12 +35,13 @@ final class HubLink: Identifiable {
     @ObservationIgnored var transportForTests: APIClient.Transport?
     #endif
 
-    init(group: String, config: ServerConfig, pins: PinsStore) {
+    init(group: String, config: ServerConfig, pins: PinsStore, agentsDisplay: AgentsDisplayStore? = nil) {
         self.group = group
         self.fallback = config
         self.pins = pins
+        self.agentsDisplay = agentsDisplay ?? AgentsDisplayStore(deps: .init(api: { nil }))
         live.usesSessionList = true
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         live.usesExtensionUIStream = true
         #endif
     }
@@ -46,10 +50,14 @@ final class HubLink: Identifiable {
     var config: ServerConfig { live.currentConfig ?? fallback }
     var api: APIClient {
         var c = APIClient(config: config, group: group)
+        c.requestRoute = { [weak live] in try await live?.waitForRoute() }
         c.extensionsAPI = hello.features.isEmpty ? Self.remembersExtensions(group) : features.contains("extensions")
         c.personaNaming = live.personaContracts
         c.sessionLookup = features.contains("sessions_lookup")
         c.sessionList = features.contains("sessions_list")
+        c.sessionsPageCounts = features.contains("sessions_page_counts")
+        c.sessionsHierarchy = features.contains(ChildSessions.feature)
+        c.sessionsCrossMachineHierarchy = features.contains(ChildSessions.crossMachineFeature)
         #if DEBUG
         c.transport = transportForTests
         #endif
@@ -64,6 +72,10 @@ final class HubLink: Identifiable {
     }
     var isDemo: Bool { config.isDemo }
 
+    /// The hub folds side sessions into their parent's chat (`SideFold.feature`, #7944): by its hello, or before this
+    /// launch's hello by what the last one said, so a restored list does not show its sides for a moment.
+    var foldsSides: Bool { hello.features.isEmpty ? SideFold.remembered(group) : features.contains(SideFold.feature) }
+
     /// The hub's messaging sources (#2138, docs/extensions/extension-messaging.md): the Feishu screens go through the first.
     private(set) var messagingSources: [ExtensionMessagingSource] = []
 
@@ -73,6 +85,7 @@ final class HubLink: Identifiable {
         guard features.contains("messaging") else {
             messagingSources = []
             if MessagingSources.set(nil, for: hub) { await sourceChanged() }
+            live.followsMessaging = false
             return
         }
         guard let raw = try? await api.request("GET", "/api/v1/messaging"),
@@ -86,6 +99,8 @@ final class HubLink: Identifiable {
         }
         messagingSources = list.sources
         if MessagingSources.set(list.sources.first?.id, for: hub) { await sourceChanged() }
+        // The legacy `lark` event is dropped while a source is used (`AppModel.handle`): the hub need not send it (#9591).
+        live.followsMessaging = api.messagingSource != nil
     }
 
     /// The Feishu screens moved between the old API and a source (a first launch reads before the hello came): their
@@ -97,7 +112,7 @@ final class HubLink: Identifiable {
 
     func received(_ hello: HubHello) {
         self.hello = hello
-        surfaceCapabilitiesConfig = config
+        if surfaceCapabilitiesConfig != config { surfaceCapabilitiesConfig = config }
         let f = Set(hello.features)
         let changed = f != features
         if changed { features = f }
@@ -106,6 +121,8 @@ final class HubLink: Identifiable {
         if changed || messagingSources.isEmpty { Task { await refreshMessagingSources() } }
         let ext = f.contains("extensions")
         if !f.isEmpty, ext != Self.remembersExtensions(group) { UserDefaults.standard.set(ext, forKey: "hubExtensionsAPI." + group) }
+        if !f.isEmpty { SideFold.remember(f.contains(SideFold.feature), group: group) }
+        if !f.isEmpty { TodosV1.shared.heard(TodoFeatures(f), from: group) }
     }
 }
 
@@ -113,7 +130,7 @@ extension AppModel {
     /// Sends the error reports kept on disk to `group`'s hub (the caller passes the hub-level one), or deletes them when its last hello has no
     /// `error_reports` (#5621, docs/protocol/protocol.md "Error reports"). The watch and visionOS do not report yet.
     func flushErrorReports(_ group: String) {
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         guard let link = link(group), !link.isDemo else { return }
         let features = link.features, api = link.api
         Task.detached(priority: .utility) { _ = await ErrorReportSender.shared.flush(features: features, api: api) }
@@ -143,6 +160,8 @@ extension AppModel {
 
     /// Back in the app: every group's socket opens again.
     func resumeLinks() {
+        addressBoard.cameToFront(at: .now) // probes from now on say what they came to (#11390)
+        reportGroups() // a period in front begins for Developing Persona's connection tally
         for link in links {
             link.live.suspended = false
             link.live.ensureConnected()
@@ -151,6 +170,7 @@ extension AppModel {
 
     /// In the background: every socket closes (the hubs wake the phone with a silent push when they need it).
     func suspendLinks() {
+        addressBoard.wentToBackground(at: .now) // probes still running are cut short (#11390)
         for link in links {
             link.live.suspended = true
             link.live.disconnect()
@@ -177,8 +197,7 @@ extension AppModel {
     /// Picks the group hub-level pages show.
     func selectHub(_ group: String) {
         guard group != hub?.group, link(group) != nil else { return }
-        hubGroup = group
-        UserDefaults.standard.set(group, forKey: Self.hubGroupKey)
+        rememberHubGroup(group)
         hubChanged()
     }
 
@@ -189,9 +208,7 @@ extension AppModel {
     /// A group that is gone is treated the same way.
     func resolve(machineID: String, sessionID: String, group: String?) -> SessionKey {
         if let group, link(group) != nil { return SessionKey(group: group, machineID: machineID, sessionID: sessionID) }
-        let found = links.map(\.group).first { g in
-            sessionsByMachine[MachineRef(group: g, id: machineID)]?.contains { $0.sessionID == sessionID } == true
-        }
+        let found = links.first { latest(SessionKey(group: $0.group, machineID: machineID, sessionID: sessionID)) != nil }?.group
         return SessionKey(group: found ?? links.first?.group ?? "", machineID: machineID, sessionID: sessionID)
     }
 
@@ -205,7 +222,13 @@ extension AppModel {
     /// `resolve` for a key read from a string (`SessionKey.path`): a path without a group says nothing about it.
     func resolve(path: String) -> SessionKey? {
         guard let k = SessionKey(path: path) else { return nil }
-        return resolve(machineID: k.machineID, sessionID: k.sessionID, group: path.contains("|") ? k.group : nil)
+        return resolve(machineID: k.machineID, sessionID: k.sessionID, group: path.hasPrefix("|") ? "" : k.hubGroup)
+    }
+
+    func openExternal(path: String, latestAnswer: Bool = false) {
+        guard let k = SessionKey(path: path) else { return }
+        openExternal(machineID: k.machineID, sessionID: k.sessionID, group: path.hasPrefix("|") ? "" : k.hubGroup,
+                     latestAnswer: latestAnswer)
     }
 
     /// The group a push came from: the hub that sent it (`hub_id`), the push key that opened it, else the group that
@@ -228,9 +251,13 @@ extension AppModel {
         guard tunneled || HubRoute.candidates(registry, group: group).count > 1 else { return nil }
         return { [weak self] in
             guard let self else { return nil }
+            self.addressBoard.beginAttempt(group)
             if !self.hubTunnels(group).isEmpty { return await self.tunnelRoute(group) }
             let candidates = HubRoute.candidates(self.registry, group: group)
-            return await HubRoute.pick(candidates)?.config
+            let start = Date()
+            let (picked, tried) = await HubRoute.pickTried(candidates, check: self.routeCheck)
+            self.attemptTried(group, tried, since: start)
+            return picked?.config
         }
     }
 
@@ -238,6 +265,7 @@ extension AppModel {
     /// that changed what belongs together (docs/protocol/multi-hub.md「Grouping」).
     func learned(_ hello: HubHello, group: String) {
         guard let link = link(group), !link.isDemo else { return }
+        reportConnected(hello, group: group)
         defer { watchCenter(group) } // on a member now? (after the registry learned who the center is)
         var r = registry
         let on = link.live.currentConfig
@@ -277,6 +305,7 @@ extension AppModel {
         guard groupsChanged else {
             // Same groups, a new address to try: the socket picks among them from its next attempt.
             for l in links where !l.isDemo { l.live.route = routePicker(l.group) }
+            arrangeAddresses()
             return
         }
         // Groups merged or split: the groups that are gone take their lists with them (the group that stays lists
@@ -319,8 +348,20 @@ extension AppModel {
     /// opens the socket anyway.
     private func preferredAnswers(_ group: String) async -> Bool {
         guard let link = link(group), !link.live.suspended else { return false }
-        for c in preferred(group) {
-            if await HubRoute.healthProbe(c) { return true }
+        return await askPreferred(group, preferred(group))
+    }
+
+    /// Asks `candidates` in turn until one answers, each try onto the group's lines and the tally. One attempt: a probe
+    /// under way at the background notice, or asked while the app was away, was cut short; one asked after the app came
+    /// back says what it came to.
+    func askPreferred(_ group: String, _ candidates: [HubRoute.Candidate], check: HubRoute.Check = HubRoute.healthCheck) async -> Bool {
+        let all = HubRoute.candidates(registry, group: group)
+        let start = Date()
+        for c in candidates {
+            let asked = Date()
+            let outcome = await check(c)
+            tried(group, HubRoute.settled([.init(candidate: c, outcome: outcome, at: Date())], among: all), since: start, asked: asked)
+            if outcome == .answers { return true }
         }
         return false
     }
@@ -338,6 +379,119 @@ extension AppModel {
     /// A group's socket is on a candidate behind another (a member while the center is known, a hub's later address).
     func onMember(_ group: String) -> Bool { !preferred(group).isEmpty }
 
+    // MARK: What each address came to (#11390)
+
+    /// The groups' addresses in the order they are tried, for Connection Details' lines; a group that went takes its
+    /// lines with it. Also tells Developing Persona's tally which groups there are.
+    func arrangeAddresses() {
+        let groups = links.filter { !$0.isDemo }.map(\.group)
+        addressBoard.keep(Set(groups))
+        for g in groups { addressBoard.arrange(g, addresses: HubRoute.candidates(registry, group: g).map(\.url)) }
+        #if DEBUG
+        // `-showConnectionAddresses YES`: every outcome on the hub-level group's addresses, made up (screenshots).
+        if UserDefaults.standard.bool(forKey: "showConnectionAddresses"), let g = hub?.group, groups.contains(g) { addressBoard.seed(g) }
+        #endif
+        reportGroups()
+    }
+
+    /// What an attempt that began at `start` found at each address (the probes, asked at `asked` when not all at once):
+    /// onto the group's lines, and into Developing Persona's tally while the switch is on. What came after the app went
+    /// to the background meanwhile was cut short: unknown, unless it was asked after the app came back.
+    func tried(_ group: String, _ tried: [HubRoute.Tried], since start: Date, asked: Date? = nil) {
+        guard !tried.isEmpty, let link = link(group), !link.isDemo else { return }
+        let tried = addressBoard.cutShort(tried, since: start, asked: asked)
+        addressBoard.record(group, tried.map { ($0.candidate.url, $0.outcome, $0.at) })
+        tally(.tried(group: group, tried.map(\.outcome), since: start))
+    }
+
+    /// What the route's health probes answer: `HubRoute.healthCheck` (unit tests answer for it).
+    var routeCheck: HubRoute.Check {
+        #if DEBUG
+        if let routeCheckForTests { return routeCheckForTests }
+        #endif
+        return HubRoute.healthCheck
+    }
+
+    /// Tells Developing Persona's tally what the lines learned; nothing while the switch is off.
+    private func tally(_ event: @autoclosure () -> DevProbe.Link) {
+        #if DEBUG
+        if let tallyForTests { tallyForTests(event()); return }
+        #endif
+        if DevProbe.listening { DevProbe.link(event()) }
+    }
+
+    /// `tried` for the probes of one of the group's socket attempts (its route picker): the addresses they found
+    /// answering are the ones where the socket's own failure may then say what the attempt came to. A pick that was
+    /// cancelled or replaced (Retry Now, the network back, a renewed credential, the background) keeps what its probes
+    /// came to and hands the socket nothing: the next attempt may have begun already (#11683).
+    func attemptTried(_ group: String, _ tried: [HubRoute.Tried], since start: Date) {
+        self.tried(group, tried, since: start)
+        guard !Task.isCancelled else { return }
+        attemptAnswered(group, tried, since: start)
+    }
+
+    /// The addresses this attempt's probes found answering, for the socket (`HubAddressBoard.takeAnswered`).
+    func attemptAnswered(_ group: String, _ tried: [HubRoute.Tried], since start: Date) {
+        addressBoard.attemptAnswered(group, addressBoard.cutShort(tried, since: start).filter { $0.outcome == .answers }.map(\.candidate.url))
+    }
+
+    /// What one of the group's socket attempts, begun at `start`, came to at the address it went to
+    /// (`LiveConnection.onAttempt`). One source per attempt and address: a group the socket goes to straight (one
+    /// address, no tunnel) has no probe, so the socket says; otherwise the probe said, and the socket only replaces an
+    /// Answers that the same attempt's probe found at the address it then failed to open (`attemptAnswered`).
+    func socketTried(_ group: String, _ config: ServerConfig, _ outcome: HubOutcome, since start: Date) {
+        guard let link = link(group), !link.isDemo else { return }
+        if link.live.route != nil {
+            // Only where this attempt's own probe found the address answering: through a tunnel set to be used every
+            // time no probe runs, and the socket's failure there is the tunnel's, not the address's.
+            guard outcome != .answers, addressBoard.takeAnswered(group, config.url) else { return }
+        }
+        addressBoard.record(group, [(config.url, outcome, Date())])
+        // Counted from when the attempt began, as the probes' tries: one begun before the period is left out of it.
+        tally(.tried(group: group, [outcome], since: start))
+    }
+
+    /// The group's socket changed state (`LiveConnection.onChange`): not connected any more, for Developing Persona's
+    /// tally. Nothing while the switch is off.
+    func socketChanged(_ group: String) {
+        guard DevProbe.listening, let link = link(group), !link.isDemo, link.live.state != .connected else { return }
+        DevProbe.link(.disconnected(group: group))
+    }
+
+    /// Developing Persona's tally: the groups there are (Demo Mode left out). Nothing while the switch is off.
+    func reportGroups() {
+        guard DevProbe.listening else { return }
+        DevProbe.link(.groups(Set(links.filter { !$0.isDemo }.map(\.group))))
+    }
+
+    /// Developing Persona's tally: the group's socket is on its hub, and how it got there (only fixed words, never the
+    /// address). Nothing while the switch is off.
+    func reportConnected(_ hello: HubHello, group: String) {
+        guard DevProbe.listening, let link = link(group), !link.isDemo, let on = link.live.currentConfig else { return }
+        DevProbe.link(.connected(group: group, Self.connectedKind(on: on, hello: hello, registry: registry, group: group) { hub in
+            if SSHTunnels.shared.routed.contains(hub.id) { return .sshTunnel }
+            if LocalProxies.shared.routed.contains(hub.id) { return .localProxy }
+            if InAppTunnels.shared.routed.contains(hub.id) { return .inAppTunnel }
+            return .direct
+        }))
+    }
+
+    /// How a group's socket on `on` got to its hub, as the tally words it: which address it is, the way it went
+    /// (`routed`: the paired hub's tunnel or proxy carrying it, if any), what vouched for it, whether that address
+    /// carries its own Access token, and whether the hello lists a key fingerprint for the hub that sent it.
+    nonisolated static func connectedKind(on: ServerConfig, hello: HubHello, registry: HubRegistry, group: String,
+                                          routed: (PairedHub) -> DevProbe.Connected.Route) -> DevProbe.Connected {
+        let key = HubRoute.key(on.url)
+        let candidate = HubRoute.candidates(registry, group: group).first { HubRoute.key($0.url) == key }
+        let address: DevProbe.Connected.Address = candidate.map { $0.hub == nil ? .mesh : $0.address == 0 ? .paired : .added } ?? .paired
+        let route = registry.members(group).first(where: { $0.configs.contains { HubRoute.key($0.url) == key } }).map(routed) ?? .direct
+        let own = hello.mesh?.first { $0.isSelf == true } ?? hello.mesh?.first { $0.hubID == hello.hubID }
+        // Through a tunnel or proxy the socket goes to its loopback end in plain HTTP: the way vouches, not the system.
+        let trust: DevProbe.Connected.Trust = route != .direct ? .tunnel : on.url.scheme?.lowercased() == "https" ? .system : .plainHTTP
+        return .init(trust: trust, accessToken: on.access != nil, route: route, address: address,
+                     helloFingerprint: own?.fp?.isEmpty == false)
+    }
+
     /// The SSH tunnels that go with group (#2379): each of its hubs may have one, kept under the hub's id.
     nonisolated static func tunnelIDs(removing group: String, from registry: HubRegistry) -> [String] {
         registry.members(group).map(\.id)
@@ -353,9 +507,12 @@ extension AppModel {
         r.groupNames[group] = nil
         registry = r
         saveRegistry(r)
+        // buildLinks retargets a removed current group to the first remaining one; remember this before it does, or the
+        // old group's assistant and direction metadata survives on the newly selected group's page (#8236).
+        let removedCurrent = hubGroup == group
         buildLinks()
         forgetGroups([group])
-        if hubGroup == group { hubChanged() }
+        if removedCurrent { hubChanged() }
         pushWatchConfigs()
     }
 
@@ -364,6 +521,7 @@ extension AppModel {
         guard let hub = registry.hubs.first(where: { $0.id == id }) else { return }
         guard registry.members(hub.group).count > 1 else { removeGroup(hub.group); return }
         closeTunnels(id)
+        updateHeldRetryReceipts { receipts in receipts.filter { $0.target.pairing != id } }
         var r = registry
         r.hubs.removeAll { $0.id == id }
         registry = r
@@ -487,13 +645,17 @@ nonisolated struct PushRef: Sendable, Equatable {
         group = PushCrypto.group(from: info)
     }
 
-    /// The session in its group: the hub that sent the push, the key that opened it, else the group that has such a
-    /// session, else the first group (docs/protocol/multi-hub.md「Push and notifications」).
-    @MainActor func key(_ model: AppModel) -> SessionKey {
+    /// The paired group identified by the sender or decryption key, if the push names one.
+    @MainActor func sourceGroup(_ model: AppModel) -> String? {
         var info: [AnyHashable: Any] = [:]
         if let hubID { info["hub_id"] = hubID }
         if let group { info[PushCrypto.groupKey] = group }
-        return model.resolve(machineID: machine, sessionID: session, group: model.pushGroup(info))
+        return model.pushGroup(info)
+    }
+
+    /// Notification actions need a concrete key even when the push did not specify a group.
+    @MainActor func key(_ model: AppModel) -> SessionKey {
+        model.resolve(machineID: machine, sessionID: session, group: sourceGroup(model))
     }
 }
 

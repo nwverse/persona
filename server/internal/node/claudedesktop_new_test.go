@@ -1,13 +1,13 @@
-//go:build !windows
-
 package node
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +28,7 @@ type fakeDesktopApp struct {
 	mu       sync.Mutex
 	seeds    []fakeSeed
 	links    []string
+	modes    map[string]string // the mode each session was imported in, read as the app reads it
 	inboxes  map[string]*fakeInbox
 	noImport bool
 }
@@ -40,15 +41,15 @@ func newFakeDesktopApp(t *testing.T, home string) *fakeDesktopApp {
 	if err := os.MkdirAll(filepath.Join(third, "claude-code-sessions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	a := &fakeDesktopApp{t: t, home: home, index: third, inboxes: map[string]*fakeInbox{}}
+	a := &fakeDesktopApp{t: t, home: home, index: third, inboxes: map[string]*fakeInbox{}, modes: map[string]string{}}
 	oldSeed, oldOpen := seedDesktopSession, openDesktopLink
 	seedDesktopSession = func(_ context.Context, claude, dir, id, title string) error {
 		a.mu.Lock()
 		a.seeds = append(a.seeds, fakeSeed{claude, dir, id, title})
 		a.mu.Unlock()
 		writeTranscript(t, home, dir, id, time.Now(),
-			`{"type":"custom-title","customTitle":"`+title+`","sessionId":"`+id+`"}`,
-			`{"type":"user","uuid":"u1","timestamp":"2026-11-12T09:00:00Z","cwd":"`+dir+`","sessionId":"`+id+`","message":{"role":"user","content":"<command-name>/rename</command-name>"}}`)
+			fmt.Sprintf(`{"type":"custom-title","customTitle":%q,"sessionId":%q}`, title, id),
+			fmt.Sprintf(`{"type":"user","uuid":"u1","timestamp":"2026-11-12T09:00:00Z","cwd":%q,"sessionId":%q,"message":{"role":"user","content":"<command-name>/rename</command-name>"}}`, dir, id))
 		return nil
 	}
 	openDesktopLink = func(_ context.Context, link string) error {
@@ -59,8 +60,12 @@ func newFakeDesktopApp(t *testing.T, home string) *fakeDesktopApp {
 		switch {
 		case strings.HasPrefix(link, "claude://resume?session="):
 			id := strings.TrimPrefix(link, "claude://resume?session=")
+			mode := importedDesktopMode(t, findTranscript(t, home, id))
+			a.mu.Lock()
+			a.modes[id] = mode
+			a.mu.Unlock()
 			if !noImport {
-				writeDesktopEntry(t, a.index, id, id, false, nil, `,"cwd":"`+a.dirOf(id)+`"`)
+				writeDesktopEntry(t, a.index, id, id, false, nil, fmt.Sprintf(`,"cwd":%q`, a.dirOf(id)))
 			}
 		case strings.HasPrefix(link, "claude://claude.ai/epitaxy/local_"):
 			id := strings.TrimPrefix(link, "claude://claude.ai/epitaxy/local_")
@@ -88,6 +93,33 @@ func (a *fakeDesktopApp) dirOf(id string) string {
 		}
 	}
 	return ""
+}
+
+func (a *fakeDesktopApp) importedMode(id string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.modes[id]
+}
+
+// importedDesktopMode is the mode the app imports the transcript at path in: the permissionMode of its last user line
+// that names one ("" for none: the app's settings decide, and it lowers bypassPermissions to acceptEdits).
+func importedDesktopMode(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		var row struct {
+			Type           string `json:"type"`
+			PermissionMode string `json:"permissionMode"`
+		}
+		if json.Unmarshal([]byte(line), &row) == nil && row.Type == "user" && row.PermissionMode != "" {
+			mode = row.PermissionMode
+		}
+	}
+	return mode
 }
 
 func (a *fakeDesktopApp) seeded() []fakeSeed {
@@ -122,32 +154,14 @@ func fakeClaudeOnPath(t *testing.T) string {
 	t.Helper()
 	bin := t.TempDir()
 	p := filepath.Join(bin, "claude")
+	if runtime.GOOS == "windows" {
+		p += ".exe"
+	}
 	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return p
-}
-
-// shellLaunchers sets the login shell's launcher list the node has from a minute ago.
-func shellLaunchers(t *testing.T, names ...string) {
-	t.Helper()
-	var list []proto.Launcher
-	for _, name := range names {
-		list = append(list, proto.Launcher{Name: name})
-	}
-	if list == nil {
-		list = []proto.Launcher{}
-	}
-	launcherCache.Lock()
-	oldAt, oldList := launcherCache.at, launcherCache.list
-	launcherCache.at, launcherCache.list = time.Now(), list
-	launcherCache.Unlock()
-	t.Cleanup(func() {
-		launcherCache.Lock()
-		launcherCache.at, launcherCache.list = oldAt, oldList
-		launcherCache.Unlock()
-	})
 }
 
 func startDesktop(t *testing.T, n *Node, params map[string]any) (proto.Session, error) {
@@ -198,6 +212,22 @@ func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	firstMessageReceived := func() bool {
+		in := app.inbox(s.SessionID)
+		return in != nil && len(in.users()) == 1
+	}
+	// The inbox records the user before send finishes confirming delivery. Drain that send before fixture cleanup
+	// restores peerConfirmWait or closes its background-created inbox, even when an assertion below fails.
+	defer func() {
+		waitFor(t, "the first message in the session's inbox", firstMessageReceived)
+		waitFor(t, "the desktop session's first send to finish", func() bool {
+			unlock, ok := n.typing.tryLock(s.SessionID)
+			if ok {
+				unlock()
+			}
+			return ok
+		})
+	}()
 	if !validID(s.SessionID) || s.Cwd != dir || s.Title != "整理 本周的" || s.SourceKind != proto.SourceClaudeDesktop || s.Launcher != "" {
 		t.Fatalf("session: %+v", s)
 	}
@@ -208,16 +238,15 @@ func TestNewAgentWithTheDesktopLauncherStartsTheSessionInTheApp(t *testing.T) {
 	if links := app.opened(); len(links) == 0 || links[0] != "claude://resume?session="+s.SessionID {
 		t.Fatalf("links: %v", links)
 	}
-	waitFor(t, "the first message in the session's inbox", func() bool {
-		in := app.inbox(s.SessionID)
-		return in != nil && len(in.users()) == 1
-	})
+	waitFor(t, "the first message in the session's inbox", firstMessageReceived)
 	users := app.inbox(s.SessionID).users()
 	if content, _ := users[0]["message"].(map[string]any)["content"].(string); !strings.Contains(content, "整理  本周的\n周报") {
 		t.Fatalf("first message: %v", users[0])
 	}
-	if c := herdrAsked(f); c != "" {
-		t.Fatalf("herdr was asked to start or type something: %s", c)
+	for _, c := range f.trace() {
+		if strings.Contains(c, "workspace") || strings.Contains(c, "tab.create") || strings.Contains(c, "pane.") {
+			t.Fatalf("herdr was asked to start or type something: %s", c)
+		}
 	}
 }
 
@@ -259,7 +288,10 @@ func TestADesktopStartNamedAfterItsHintTakesTheFirstMessageAfter(t *testing.T) {
 	if links := app.opened(); len(links) != 1 {
 		t.Fatalf("a message was sent with no first message: %v", links)
 	}
-	if err := waitSend(t, sendWithin(context.Background(), n, s.SessionID, "周报\n整理")); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	params, _ := json.Marshal(map[string]any{"session_id": s.SessionID, "text": "周报\n整理", "client_msg_id": newUUID()})
+	if _, err := n.handle(ctx, "session.send", params); err != nil {
 		t.Fatalf("first message: %v", err)
 	}
 	if in := app.inbox(s.SessionID); in == nil || len(in.users()) != 1 {
@@ -275,7 +307,7 @@ func TestTheDesktopLauncherNeedsNoTerminalEngine(t *testing.T) {
 	fakeClaudeOnPath(t)
 	shellLaunchers(t)
 	dir := t.TempDir()
-	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop"})
+	s, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop", "task_instructions": "Keep the task scope."})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -301,14 +333,14 @@ func TestTheDesktopLauncherIsOfferedWhereTheAppKeepsSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, added := n.withDesktopLauncher([]proto.Launcher{{Name: "claude"}})
-	if !added || len(list) != 2 || list[1] != (proto.Launcher{Name: "claude-desktop", Source: "claude_desktop", Agent: "claude"}) {
+	if !added || len(list) != 2 || list[1] != (proto.Launcher{Name: "claude-desktop", Source: "claude_desktop", Agent: "claude", DisplayName: "Claude Desktop"}) {
 		t.Fatalf("list %+v", list)
 	}
 	if !n.knownLauncher(context.Background(), "claude-desktop") {
 		t.Fatal("not known")
 	}
 	models, err := n.launcherModels(context.Background(), "claude-desktop", "", false)
-	if err != nil || models.Agent != "claude" || len(models.Models) != 0 || models.Locked == "" {
+	if err != nil || models.Agent != "claude" || len(models.Models) != 0 || models.Locked != "" {
 		t.Fatalf("models %+v, %v", models, err)
 	}
 	if c := n.launcherCheck(context.Background(), "claude-desktop"); c.Error != desktopCheckMsg {
@@ -318,7 +350,7 @@ func TestTheDesktopLauncherIsOfferedWhereTheAppKeepsSessions(t *testing.T) {
 	// No claude where the node looks: not offered (a machine-wide one, outside the test's home, skips this part).
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", home)
-	if _, err := claudeExecutable(); err == nil {
+	if _, err := desktopClaudeCLI(); err == nil {
 		t.Log("a claude is installed machine-wide: the no-claude case is not checked here")
 	} else if _, added := n.withDesktopLauncher(nil); added {
 		t.Fatal("offered without a claude")
@@ -343,7 +375,7 @@ func TestADesktopStartWithNoFolderRunsInTheScratchFolder(t *testing.T) {
 	// Code holds a project and the scratch folder, Elsewhere one project: Code is where the projects are.
 	for i, cwd := range []string{filepath.Join(projects, "a"), filepath.Join(other, "c"), filepath.Join(projects, desktopScratchName)} {
 		id := strings.Replace("ffffffff-0000-4000-8000-00000000000x", "x", string(rune('1'+i)), 1)
-		writeDesktopEntry(t, app.index, id, id, false, nil, `,"cwd":"`+cwd+`"`)
+		writeDesktopEntry(t, app.index, id, id, false, nil, fmt.Sprintf(`,"cwd":%q`, cwd))
 	}
 	if got, want := n.desktopScratchDir(), filepath.Join(projects, desktopScratchName); got != want {
 		t.Fatalf("scratch %s, want %s", got, want)
@@ -418,7 +450,7 @@ func TestADesktopStartRefusesWhatTheAppCannotRun(t *testing.T) {
 	t.Cleanup(func() { desktopImportWait = old })
 	_, err := startDesktop(t, n, map[string]any{"cwd": dir, "launcher": "claude-desktop", "prompt": "hi"})
 	var re *rpc.Error
-	if !errors.As(err, &re) || re.Code != desktopOpenFailed {
+	if !errors.As(err, &re) || re.Code != "desktop_start_incomplete" || !strings.Contains(string(re.Data), `"cause_code":"`+desktopOpenFailed+`"`) {
 		t.Fatalf("not imported: %v", err)
 	}
 	if links := app.opened(); len(links) != 1 { // nothing sent to a session the app does not have
@@ -429,6 +461,9 @@ func TestADesktopStartRefusesWhatTheAppCannotRun(t *testing.T) {
 // The CLI writes the new session with a local command only, in its folder, without what would make it another
 // claude's (a running Claude Code's variables, the assistant's) or put it where the app does not look.
 func TestTheDesktopSeedRunsALocalCommandOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the native Windows seed is covered by TestWindowsDesktopSeedArguments")
+	}
 	bin, out := t.TempDir(), filepath.Join(t.TempDir(), "seen")
 	claude := filepath.Join(bin, "claude")
 	script := "#!/bin/sh\n{ pwd; for a in \"$@\"; do echo \"arg:$a\"; done; env; } > " + out + "\n"
@@ -471,6 +506,75 @@ func TestTheDesktopSeedRunsALocalCommandOnly(t *testing.T) {
 	}
 	if err := seedDesktopSession(context.Background(), claude, dir, id, "x"); err == nil || !strings.Contains(err.Error(), "Not logged in") {
 		t.Fatalf("a failed run: %v", err)
+	}
+}
+
+// The app lowers bypassPermissions to acceptEdits for a session it imports and keeps auto (#9350), so a start with no
+// mode, or bypassPermissions, is imported in auto; default, acceptEdits and auto are imported as asked. The mode is on
+// the transcript before the app is asked to import it.
+func TestADesktopStartIsImportedInAutoMode(t *testing.T) {
+	n, home := testNode(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	app := newFakeDesktopApp(t, home)
+	fakeClaudeOnPath(t)
+	shellLaunchers(t)
+	dir := t.TempDir()
+	for _, c := range []struct{ asked, want string }{
+		{"", "auto"},
+		{"bypassPermissions", "auto"},
+		{"auto", "auto"},
+		{"acceptEdits", "acceptEdits"},
+		{"default", "default"},
+	} {
+		params := map[string]any{"cwd": dir, "launcher": "claude-desktop"}
+		if c.asked != "" {
+			params["permission_mode"] = c.asked
+		}
+		s, err := startDesktop(t, n, params)
+		if err != nil {
+			t.Fatalf("%q: %v", c.asked, err)
+		}
+		if got := app.importedMode(s.SessionID); got != c.want {
+			t.Errorf("asked %q: imported in %q, want %q", c.asked, got, c.want)
+		}
+	}
+}
+
+// stampDesktopMode puts the mode on the user lines that name none and keeps every other byte of the transcript.
+func TestStampDesktopModeKeepsTheRestOfTheTranscript(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	before := `{"type":"custom-title","customTitle":"周报 <整理> & co"}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"<command-name>/rename</command-name>"}}` + "\n" +
+		`{"type":"user","permissionMode":"acceptEdits","message":{"role":"user","content":"kept"}}` + "\r\n" +
+		`not json` + "\n" +
+		`{"type":"system","content":"<local-command-stdout>x</local-command-stdout>"}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"last, no newline"}}`
+	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beforeStat, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stampDesktopMode(path, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	want := strings.Replace(strings.Replace(before,
+		`{"type":"user","message":{"role":"user","content":"<command`, `{"permissionMode":"auto","type":"user","message":{"role":"user","content":"<command`, 1),
+		`{"type":"user","message":{"role":"user","content":"last`, `{"permissionMode":"auto","type":"user","message":{"role":"user","content":"last`, 1)
+	if string(b) != want {
+		t.Fatalf("stamped:\n%s\nwant:\n%s", b, want)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != beforeStat.Mode().Perm() {
+		t.Errorf("mode %v, want original %v", st.Mode().Perm(), beforeStat.Mode().Perm())
+	}
+
+	if err := os.WriteFile(path, []byte(`{"type":"custom-title","customTitle":"x"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := stampDesktopMode(path, "auto"); err == nil {
+		t.Fatal("a transcript with no user line was stamped")
 	}
 }
 

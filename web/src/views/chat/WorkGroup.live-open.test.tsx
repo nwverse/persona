@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
 import { emptyTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
 import { segments, segmentIdentity, type Segment, type Step } from "../../lib/turns";
@@ -34,7 +35,7 @@ beforeEach(() => {
   root = createRoot(host);
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); });
-function draw(style: WorkLineStyle, s: Segment, live: boolean, expand: (f: Item) => Promise<void> = async () => {}, streaming?: string) {
+function draw(style: WorkLineStyle, s: Segment, live: boolean, expand: (f: Item) => Promise<boolean | void> = async () => {}, streaming?: string) {
   const ctx: ChatContextValue = { tasks: emptyTaskIndex(), subagents: [], scope: "x:", lineStyle: style };
   act(() => root.render(<ChatContext.Provider value={ctx}><SegmentView key={segmentIdentity(s)} seg={s} live={live} mid="m" sid="s" expandFold={expand} streaming={streaming} /></ChatContext.Provider>));
 }
@@ -43,6 +44,11 @@ const detail = () => host.querySelector("[data-work-detail]");
 const detailText = () => detail()?.textContent ?? "";
 const slot = () => host.querySelector("[data-latest-text]");
 const tap = () => act(() => header().click());
+const openInnerRuns = () => {
+  for (const b of host.querySelectorAll<HTMLButtonElement>("[data-work-detail] [data-work-group] > button")) {
+    if (b.getAttribute("aria-expanded") === "false") act(() => b.click());
+  }
+};
 const running = [tool(1), words(2, "First progress."), tool(3), words(4, "Latest progress."), tool(5, false)];
 const finished = [...running.slice(0, -1), tool(5), words(9, "Final result.")];
 
@@ -67,6 +73,7 @@ describe.each(["assistant", "agents"] as const)("%s compact execution", (style) 
     tap();
     expect(detailText()).toContain("First progress.");
     expect(detailText()).toContain("Latest progress.");
+    openInnerRuns();
     for (const n of [1, 3, 5, 7]) expect(detailText()).toContain(`echo ${n}`);
   });
   it("folds long intermediate Markdown too, keeping only the final result", () => {
@@ -148,7 +155,7 @@ describe.each(["assistant", "agents"] as const)("%s compact execution", (style) 
   it("jump-to-call opens a running summary and completion still collapses it", () => {
     draw(style, seg(running), true);
     const id = host.querySelector<HTMLElement>("[data-work-group]")!.dataset.groupId!;
-    act(() => openExpanded([`x:${id}`]));
+    act(() => openExpanded([`x:${id}`, "x:work-1.0"]));
     expect(header().getAttribute("aria-expanded")).toBe("true");
     expect(detailText()).toContain("echo 1");
     draw(style, seg(finished), false);
@@ -231,8 +238,61 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     tap();
     await settle();
     expect(new Set(chat.expand.mock.calls.map(([f]) => f.seq))).toEqual(new Set([1, 5]));
+    openInnerRuns();
     for (const n of [1, 2, 3, 5, 6, 7]) expect(detailText()).toContain(`echo ${n}`);
     expect(detailText()).toContain("Earlier progress.");
     expect(host.querySelectorAll('[data-work-group] > button span[style*="width: 11px"]')).toHaveLength(0);
+  });
+  it("stops rendering the fold loading spinner on failure while keeping live steps and retry working", async () => {
+    let steps: Step[] = [fold(1, 5), tool(6, false)];
+    let rejectNext = true;
+    const expand = vi.fn(async (f: Item) => {
+      if (rejectNext) throw new Error("409 missing_generation");
+      steps = steps.flatMap((s) => s.kind === "fold" && s.item.id === f.id ? calls(f.seq, f.fold!.through_seq) : [s]);
+      draw(style, seg(steps), true, expand);
+      return true;
+    });
+    draw(style, seg(steps), true, expand);
+    tap();
+    await settle();
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
+    expect(host.textContent).not.toContain("正在取 10 条");
+    expect(detailText()).toContain("echo 6");
+    const retry = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
+    expect(retry.textContent).toBe("重试");
+    rejectNext = false;
+    act(() => retry.click());
+    await settle();
+    expect(host.textContent).not.toContain(t("chat-workgroup.load_failed"));
+    expect(host.textContent).not.toContain("正在取 10 条");
+    for (const n of [1, 2, 3, 4, 5, 6]) expect(detailText()).toContain(`echo ${n}`);
+  });
+  it.each(["incomplete", "rejected"])("continues later folds after an %s read and on Retry", async (failure) => {
+    const expand = vi.fn(async (item: Item) => {
+      if (item.seq !== 1) return true;
+      if (failure === "rejected") throw new Error("409 missing_generation");
+      return false;
+    });
+    draw(style, seg([fold(1, 3), words(4, "Earlier progress."), fold(5, 7)]), false, expand);
+    tap();
+    await settle();
+    expect(expand.mock.calls.map(([item]) => item.seq)).toEqual([1, 5]);
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
+    const retry = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
+    act(() => retry.click());
+    await settle();
+    expect(expand.mock.calls.map(([item]) => item.seq)).toEqual([1, 5, 1, 5]);
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
+    expect(host.textContent).not.toContain("正在取 10 条");
+  });
+  it("shows Retry and stops spinning when expandFold resolves incomplete (false)", async () => {
+    const expand = vi.fn(async () => false);
+    draw(style, seg([fold(1, 5)]), false, expand);
+    tap();
+    await settle();
+    expect(expand).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
+    expect(host.textContent).not.toContain("正在取 10 条");
+    expect(detail()).toBeNull();
   });
 });

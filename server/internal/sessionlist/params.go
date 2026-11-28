@@ -15,7 +15,7 @@ import (
 // machine_id filtering. Presence matters: malformed new parameters must be
 // parsed and rejected rather than silently falling back to the legacy API.
 func Enabled(v url.Values) bool {
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "parent_session_id", "place", "space", "catalog", "todo", "waiting", "exclude_pane_source"} {
+	for _, key := range []string{"search", "limit", "cursor", "since", "summary", "state", "project", "group", "counts", "pane_source", "roots", "cross_machine_hierarchy", "parent_session_id", "parent_machine_id", "place", "space", "catalog", "todo", "waiting", "exclude_pane_source", "include_hidden", "agents_only", "just_finished"} {
 		if _, exists := v[key]; exists {
 			return true
 		}
@@ -26,10 +26,34 @@ func Enabled(v url.Values) bool {
 // Parse strictly validates recognized parameters. Unknown parameters remain
 // available to adapters. The counts and catalog selectors are validated but are not
 // Options fields: adapters choose those answers, while Query ignores the selectors.
+// Provider remains a singleton here, preserving the runtime collection's contract.
 func Parse(v url.Values) (Options, error) {
+	return parse(v, false)
+}
+
+// ParseProviderSets is Parse for the personal-Agent paged collection when it
+// advertises agents_provider_or. One to 64 provider values form an OR set;
+// ordering and duplicates do not change its meaning. It does not change Enabled:
+// provider alone still selects the legacy unpaged route.
+func ParseProviderSets(v url.Values) (Options, error) {
+	return parse(v, true)
+}
+
+func parse(v url.Values, providerSet bool) (Options, error) {
 	o := Options{Limit: defaultLimit}
-	for _, key := range []string{"limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "parent_session_id", "catalog", "todo", "waiting", "exclude_pane_source"} {
-		if values, exists := v[key]; exists && len(values) != 1 {
+	if values, exists := v["search"]; exists {
+		if len(values) != 1 || strings.TrimSpace(values[0]) == "" || !utf8.ValidString(values[0]) || len(values[0]) > 1024 {
+			return Options{}, failure("invalid_query", "search must contain 1 to 1024 UTF-8 bytes")
+		}
+		o.Search, o.Limit = values[0], 40
+		for _, key := range []string{"q", "since", "counts", "with_counts", "catalog", "session_id"} {
+			if _, present := v[key]; present {
+				return Options{}, failure("invalid_query", "search cannot be combined with "+key)
+			}
+		}
+	}
+	for _, key := range []string{"search", "limit", "cursor", "since", "summary", "state", "machine_id", "project", "group", "source", "provider", "q", "counts", "with_counts", "pane_source", "roots", "cross_machine_hierarchy", "parent_session_id", "parent_machine_id", "catalog", "todo", "waiting", "exclude_pane_source", "include_hidden", "agents_only", "just_finished"} {
+		if values, exists := v[key]; exists && len(values) != 1 && (key != "provider" || !providerSet) {
 			return Options{}, failure("invalid_query", key+" must have exactly one value")
 		}
 	}
@@ -54,6 +78,13 @@ func Parse(v url.Values) (Options, error) {
 			}
 		}
 	}
+	if values, exists := v["include_hidden"]; exists {
+		b, err := boolean(values[0])
+		if err != nil {
+			return Options{}, err
+		}
+		o.IncludeHidden = b
+	}
 	if values, exists := v["roots"]; exists {
 		b, err := boolean(values[0])
 		if err != nil {
@@ -61,11 +92,31 @@ func Parse(v url.Values) (Options, error) {
 		}
 		o.Roots = b
 	}
+	if values, exists := v["cross_machine_hierarchy"]; exists {
+		b, err := boolean(values[0])
+		if err != nil {
+			return Options{}, err
+		}
+		o.CrossMachineHierarchy = b
+	}
+	if values, exists := v["agents_only"]; exists {
+		b, err := boolean(values[0])
+		if err != nil {
+			return Options{}, err
+		}
+		o.AgentsOnly = b
+	}
 	if values, exists := v["parent_session_id"]; exists {
 		if values[0] == "" {
 			return Options{}, failure("invalid_query", "parent_session_id must not be empty")
 		}
 		o.Under = values[0]
+	}
+	if values, exists := v["parent_machine_id"]; exists {
+		if values[0] == "" {
+			return Options{}, failure("invalid_query", "parent_machine_id must not be empty")
+		}
+		o.UnderMachine = values[0]
 	}
 	o.Cursor, o.Since = v.Get("cursor"), v.Get("since")
 	if _, exists := v["cursor"]; exists && o.Cursor == "" {
@@ -77,6 +128,15 @@ func Parse(v url.Values) (Options, error) {
 	o.State, o.Machine = v.Get("state"), v.Get("machine_id")
 	o.Project, o.Group = v.Get("project"), v.Get("group")
 	o.Source, o.Provider, o.Q = v.Get("source"), v.Get("provider"), v.Get("q")
+	if providerSet {
+		if values, exists := v["provider"]; exists && !(len(values) == 1 && values[0] == "") {
+			if len(values) == 0 {
+				return Options{}, failure("invalid_query", "provider takes between 1 and 64 values")
+			}
+			o.Provider = ""
+			o.Providers = values
+		}
+	}
 	if values, exists := v["pane_source"]; exists {
 		if values[0] == "" {
 			return Options{}, failure("invalid_query", "pane_source must not be empty")
@@ -95,6 +155,13 @@ func Parse(v url.Values) (Options, error) {
 			return Options{}, err
 		}
 		o.Waiting = map[bool]string{true: "1", false: "0"}[b]
+	}
+	if values, exists := v["just_finished"]; exists {
+		b, err := boolean(values[0])
+		if err != nil {
+			return Options{}, err
+		}
+		o.JustFinished = map[bool]string{true: "1", false: "0"}[b]
 	}
 	if values, exists := v["exclude_pane_source"]; exists {
 		if values[0] == "" {
@@ -167,6 +234,14 @@ func positiveInteger(s string) (int, error) {
 }
 
 func validate(o Options) (Options, error) {
+	if o.Search != "" {
+		if strings.TrimSpace(o.Search) == "" || !utf8.ValidString(o.Search) || len(o.Search) > 1024 || o.Q != "" || o.Since != "" || o.ID != "" || o.Limit > 100 {
+			return Options{}, failure("invalid_query", "invalid runtime search query")
+		}
+		if o.Limit == 0 {
+			o.Limit = 40
+		}
+	}
 	if o.ID != "" && (o.Cursor != "" || o.Since != "") {
 		return Options{}, failure("invalid_query", "exact identity cannot be combined with cursor or since")
 	}
@@ -176,8 +251,11 @@ func validate(o Options) (Options, error) {
 	if o.Limit < 1 || o.Limit > maxLimit {
 		return Options{}, failure("invalid_query", "limit must be between 1 and 200")
 	}
-	if o.Under != "" && o.Machine == "" {
-		return Options{}, failure("invalid_query", "parent_session_id requires machine_id")
+	if o.UnderMachine != "" && o.Under == "" {
+		return Options{}, failure("invalid_query", "parent_machine_id requires parent_session_id")
+	}
+	if o.Under != "" && o.UnderMachine == "" && o.Machine == "" {
+		return Options{}, failure("invalid_query", "parent_session_id requires parent_machine_id or machine_id")
 	}
 	if o.Under != "" && o.Roots {
 		// The rows folded under a session are never roots: together they would always select nothing.
@@ -189,6 +267,18 @@ func validate(o Options) (Options, error) {
 	if err := validPlaces("space", o.Spaces); err != nil {
 		return Options{}, err
 	}
+	if len(o.Providers) > maxProviders {
+		return Options{}, failure("invalid_query", "provider takes between 1 and 64 values")
+	}
+	if o.Provider != "" && len(o.Providers) != 0 {
+		return Options{}, failure("invalid_query", "provider cannot combine scalar and set matching")
+	}
+	for _, provider := range o.Providers {
+		if provider == "" {
+			return Options{}, failure("invalid_query", "provider set members must not be empty")
+		}
+	}
+	o.Providers = normalizeProviders(o.Providers)
 	for _, origin := range []string{o.PaneSource, o.ExcludePaneSource} {
 		switch origin {
 		case "", "terminal", "feishu", "desktop", "unknown":
@@ -200,6 +290,11 @@ func validate(o Options) (Options, error) {
 	case "", "0", "1":
 	default:
 		return Options{}, failure("invalid_query", "waiting must be 0 or 1")
+	}
+	switch o.JustFinished {
+	case "", "0", "1":
+	default:
+		return Options{}, failure("invalid_query", "just_finished must be 0 or 1")
 	}
 	switch o.State {
 	case "", "needs_you", "working", "unread", "idle", "offline", "unknown":
@@ -226,12 +321,19 @@ func validate(o Options) (Options, error) {
 func normalizeQ(s string) string { return strings.ToLower(s) }
 
 func (o Options) filters() filters {
-	return filters{ID: o.ID, State: o.State, Machine: o.Machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
-		Roots: o.Roots, Under: o.Under, NoPrivate: o.NoPrivate, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces), Todo: o.Todo, Waiting: o.Waiting, ExcludePaneSource: o.ExcludePaneSource}
+	machine, underMachine := o.Machine, o.UnderMachine
+	if o.Under != "" && underMachine == "" {
+		underMachine = machine
+		if o.CrossMachineHierarchy {
+			machine = ""
+		}
+	}
+	return filters{ID: o.ID, State: o.State, Machine: machine, Project: o.Project, Group: o.Group, Source: o.Source, Provider: o.Provider, Providers: providersKey(o.Providers), Q: o.Q, PaneSource: o.PaneSource, Manager: o.Manager,
+		Roots: o.Roots, CrossMachineHierarchy: o.CrossMachineHierarchy, IncludeHidden: o.IncludeHidden, Under: o.Under, UnderMachine: underMachine, NoPrivate: o.NoPrivate, AgentsOnly: o.AgentsOnly, Places: placesKey(o.Places), Spaces: placesKey(o.Spaces), AllowedMachines: allowedMachineKey(o.AllowedMachines), Todo: o.Todo, Waiting: o.Waiting, ExcludePaneSource: o.ExcludePaneSource, JustFinished: o.JustFinished}
 }
 
 func (o Options) binding() binding {
-	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since}
+	return binding{filters: o.filters(), Summary: o.Summary, Since: o.Since, Search: o.Search}
 }
 
 func validTokenPart(s string) bool {
