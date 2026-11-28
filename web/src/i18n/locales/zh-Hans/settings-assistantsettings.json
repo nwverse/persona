@@ -191,5 +191,12 @@
   "owner_approval_phrases": "批准短语（每行一条）",
   "owner_approval_phrases_hint": "可填写 1 至 8 条不重复的短语，每条长度为 1 至 32 个字符。匹配时忽略首尾空格和英文字母大小写，部分匹配或模糊匹配均不会触发批准。",
   "owner_approval_save_phrases": "保存短语",
-  "owner_approval_unconfirmed": "助手未能确认精确批准设置，请重新加载后再试。"
+  "owner_approval_unconfirmed": "助手未能确认精确批准设置，请重新加载后再试。",
+  "standing_memory": "每个对话都带上的记忆",
+  "standing_memory_hint": "Persona 在每个对话里带上多少记忆扩展的常驻记忆。",
+  "standing_memory_4kb": "4 KB（默认）",
+  "standing_memory_8kb": "8 KB",
+  "standing_memory_16kb": "16 KB",
+  "standing_memory_footer": "按记忆文字计算：4 KB 即 4096 字节，8 KB 即 8192 字节，16 KB 即 16384 字节，约合 1300、2700、5400 个汉字。超出时保留最重要的部分，其余不带。容量越大，每条消息占用越多。从下一条消息起生效。",
+  "standing_memory_unconfirmed": "Hub 没有确认新的容量。"
 }

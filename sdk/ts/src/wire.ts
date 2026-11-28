@@ -7930,8 +7930,10 @@ export interface MemoryEntriesResult {
   after?: string;
   /**
    * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
-   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
-   * out or 0: 4096. Entries past it are left out, the most important kept.
+   * keeps this budget apart from its own memory ledger's and takes the largest any page states; it caps it at 8192,
+   * or at the owner's choice of 8192 or 16384 bytes when larger (assistant.memory_extension_standing_bytes: 4096 by
+   * default, 8192 or 16384); left out or 0: that choice, 4096 by default. Entries past it are left out, the most
+   * important kept.
    */
   standing_bytes?: number;
 }

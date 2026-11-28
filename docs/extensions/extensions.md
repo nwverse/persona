@@ -977,8 +977,9 @@ Each entry (`MemoryEntry`):
   field means nothing is known: each entry is in no track and taken for sensitive everywhere, so no assembly carries it.
 - **`standing_bytes`** (#15312) is the bytes of standing entries' text the extension wants a standing channel to carry,
   say its own setting for how much it keeps resident. The hub keeps this budget apart from its own memory ledger's
-  (neither spends the other's), takes the largest any page or source states, and caps it at 8192; left out or 0 means
-  4096. A negative value, or one that is not an integer, fails the page like the other page fields. Past the budget the
+  (neither spends the other's), takes the largest any page or source states, and caps it at 8192, or at the owner's
+  choice when that is larger (`assistant.memory_extension_standing_bytes`: 4096 by default, 8192 or 16384); left out or
+  0 means that choice, 4096 by default. A negative value, or one that is not an integer, fails the page like the other page fields. Past the budget the
   usual rule holds: the most important entries first, one that does not fit is left out and a smaller one after it may
   still go (`docs/assistant/health.md` "Memory by scene", "Budgets").
 - **Not filtered by scene**: answer every entry the extension would otherwise put in its text outlets. Grading by scene
