@@ -7,6 +7,10 @@ offer a direction review even before its first completed row is loaded. Keep tha
 older rows. Append those rows to Done or Cancelled without feeding them back into active board groups. Calendar shows
 the dated rows already in memory.
 
+Use `board.counts.needs_you` for the Web attention total. The section's visible count includes surfaced rows that
+do not add to that total, and Batch decide counts the immediate projected rows with an open decision. A merged
+board has hub-wide totals. Read the selected assistant's board when the browser shows one of several assistants.
+
 ## Channel refreshes keep the routing draft (#17664)
 
 A channel read updates the current configuration document under one resource key. A refresh counter in that key or a
