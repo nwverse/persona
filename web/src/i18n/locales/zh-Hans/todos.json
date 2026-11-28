@@ -375,7 +375,6 @@
   "reorganize_success_transferred": "已更新 {count} 项（已移交 {transferred} 项督办权）",
   "detail_template_work_goal": "工作目标",
   "detail_ownership_region": "工作目标归属",
-  "detail_status_summary_region": "工作目标状态摘要",
   "detail_parent_label": "主任务：{title}",
   "detail_subtasks_section": "子任务 · {done}/{total}",
   "detail_open_active_agent": "打开活跃 Agent",

@@ -5,7 +5,7 @@ import { hasRequestPieces } from "../lib/request-pieces";
 import { ExternalSourcesEntry } from "../features/external-sources/ExternalSourcesEntry";
 import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
-import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
+import { createContext, lazy, memo, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, apiBlob, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "../lib/api";
 import { ago, clock, safeWebURL, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
 import { foldedState } from "../lib/child-sessions";
@@ -205,6 +205,14 @@ const sortLabel = (s: TodoListSort) => t(`todos.sort_${s}`);
 const kindFilterLabel = (k: TodoKindFilter) => t(`todos.kind_filter_${k}`);
 
 type TodoGrouping = "status" | "folder" | "direction" | "request";
+
+/** Tracks currently expanded & visibly mounted list row IDs while Batch Reorganize mode is active (#17696). */
+interface ReorganizeVisibilityRegistry {
+  register: (id: string) => () => void;
+  currentIds: () => string[];
+}
+
+const ReorganizeVisibilityContext = createContext<ReorganizeVisibilityRegistry | null>(null);
 
 const DONE_UNCATEGORIZED_ID = "__uncategorized__";
 
@@ -810,11 +818,43 @@ function TodoListView({
   const byStatus = grouping === "status";
   // "By request": the requests graph takes the page's width, and the detail opens beside it only once a piece is picked
   const requestMode = grouping === "request";
-  const visibleReorganizeIds = useMemo(() => [...placed.row.keys()], [placed]);
+  const [renderedReorganizeIds, setRenderedReorganizeIds] = useState<string[]>([]);
+  const mountedReorganizeCounts = useRef(new Map<string, number>());
+  const reorganizeRegistry = useMemo<ReorganizeVisibilityRegistry | null>(() => {
+    if (!reorganizeMode) return null;
+    const sync = () => {
+      const next = [...mountedReorganizeCounts.current.keys()];
+      setRenderedReorganizeIds((prev) =>
+        prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next,
+      );
+    };
+    return {
+      register: (id: string) => {
+        const counts = mountedReorganizeCounts.current;
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+        sync();
+        return () => {
+          const n = (counts.get(id) ?? 0) - 1;
+          if (n <= 0) counts.delete(id);
+          else counts.set(id, n);
+          sync();
+        };
+      },
+      currentIds: () => [...mountedReorganizeCounts.current.keys()],
+    };
+  }, [reorganizeMode]);
+  useEffect(() => {
+    if (!reorganizeMode) {
+      mountedReorganizeCounts.current.clear();
+      setRenderedReorganizeIds((prev) => (prev.length === 0 ? prev : []));
+    }
+  }, [reorganizeMode]);
+  const visibleReorganizeIds = reorganizeMode ? renderedReorganizeIds : [];
   const selectAllReorganize = useCallback(() => {
-    setReorganizeSelected(new Set(visibleReorganizeIds));
+    const ids = reorganizeRegistry ? reorganizeRegistry.currentIds() : [];
+    setReorganizeSelected(new Set(ids));
     setReorganizeError(null);
-  }, [visibleReorganizeIds]);
+  }, [reorganizeRegistry]);
 
   // Immediately exit organize mode and clear selection if todos_v2 turns off or user leaves list view.
   useEffect(() => {
@@ -1145,7 +1185,10 @@ function TodoListView({
     fromList.current = undefined;
     shownOverList.current = undefined;
     if (from && listBox.current) listBox.current.scrollTop = from.top;
-    if (id) [...list.querySelectorAll<HTMLElement>("[data-todo]")].find((el) => el.dataset.todo === id)?.focus();
+    if (id) {
+      const row = [...list.querySelectorAll<HTMLElement>("[data-todo]")].find((el) => el.dataset.todo === id);
+      (row?.querySelector<HTMLElement>("[data-testid=todo-row-open]") ?? row)?.focus();
+    }
   }, [detailOnNarrow, selectedId]);
   // Esc on a phone's width goes back to the list, as Back does; a dialog or a menu over the page and a field being
   // edited keep it.
@@ -1616,6 +1659,7 @@ function TodoListView({
               <TodoRequestGraph todos={todos} lookup={lookup} machines={machines} selectedId={activeTodo?.id} onOpenTodo={openFromList} />
             </Suspense>
           ) : (
+          <ReorganizeVisibilityContext.Provider value={reorganizeRegistry}>
           <TodoListScroller box={listBox}>
             {(!todosLoaded && todos.length === 0) || (grouping === "direction" && directionPending) ? (
               <div className="flex justify-center py-16" data-testid="todos-loading">
@@ -1804,6 +1848,7 @@ function TodoListView({
                     <button
                       type="button"
                       data-testid="todos-done-fold"
+                      aria-expanded={doneOpen}
                       onClick={() => {
                         if (!doneOpen && closedHistory.hasMore) closedHistory.onLoad();
                         if (directionDoneFold) setDoneDirectionOpen(doneOpen ? "0" : "1");
@@ -1957,10 +2002,11 @@ function TodoListView({
                 )}
                 {/* Cancelled Fold: its own outcome and reason, never inside Completed (#5732) */}
                 {(cancelledCount > 0 || hasOlderClosed) && (
-                  <div className="mt-2 border-t border-line/60 pt-2" data-testid="todos-cancelled-fold">
+                  <div className="mt-2 border-t border-line/60 pt-2">
                     <button
                       type="button"
                       data-testid="todos-cancelled-fold"
+                      aria-expanded={showCancelled}
                       onClick={() => {
                         if (!showCancelled && closedHistory.hasMore) closedHistory.onLoad();
                         setShowCancelled((v) => !v);
@@ -1996,6 +2042,7 @@ function TodoListView({
               )
             )}
           </TodoListScroller>
+          </ReorganizeVisibilityContext.Provider>
           )}
         </div>
 
@@ -3262,6 +3309,11 @@ const TodoListItem = memo(function TodoListItem({
   const failedOpen = open && Boolean(todo.start_error);
   // Its menu (#4429): a right click opens it at the pointer, the menu key and Shift+F10 on the row
   const menu = onMenu ? contextMenuProps((at) => onMenu(todo, at, open)) : undefined;
+  const reorganizeRegistry = useContext(ReorganizeVisibilityContext);
+  useLayoutEffect(() => {
+    if (!onToggleReorganize || !reorganizeRegistry) return;
+    return reorganizeRegistry.register(todo.id);
+  }, [onToggleReorganize, reorganizeRegistry, todo.id]);
 
   if (slim) {
     const due = todoDueText(todo);
@@ -3278,24 +3330,21 @@ const TodoListItem = memo(function TodoListItem({
     if (personalSlim) {
       return (
         <div
-          role="button"
-          tabIndex={0}
           data-todo={todo.id}
           data-todo-row-layout="personal-slim"
           aria-current={selected || undefined}
-          onClick={() => onSelect(todo.id)}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest("button, a, input, select, textarea, summary")) return;
+            onSelect(todo.id);
+          }}
           onContextMenu={menu && ((e) => {
             if (!(e.target as HTMLElement).closest("a[href]")) menu.onContextMenu(e);
           })}
           onKeyDown={(e) => {
             menu?.onKeyDown(e);
-            if (e.defaultPrevented) return;
-            if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-            e.preventDefault();
-            onSelect(todo.id);
           }}
           className={cx(
-            "group/item flex cursor-pointer items-center gap-2 rounded-control px-2.5 py-2 transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+            "group/item relative flex cursor-pointer items-center gap-2 rounded-control px-2.5 py-2 transition-colors",
             selected ? "bg-accent-tint/70" : "hover:bg-hover",
           )}
         >
@@ -3309,7 +3358,7 @@ const TodoListItem = memo(function TodoListItem({
               onClick={(e) => e.stopPropagation()}
               onKeyDown={(e) => e.stopPropagation()}
               onChange={() => onToggleReorganize(todo.id)}
-              className="size-4 shrink-0 cursor-pointer accent-accent"
+              className="relative z-10 size-4 shrink-0 cursor-pointer accent-accent"
             />
           )}
           <button
@@ -3320,7 +3369,7 @@ const TodoListItem = memo(function TodoListItem({
               onToggleDone(todo, open);
             }}
             className={cx(
-              "touch-hit flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+              "touch-hit relative z-10 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
               !open
                 ? "border-accent bg-accent text-white"
                 : "border-line-strong text-transparent hover:border-accent hover:text-accent",
@@ -3328,6 +3377,13 @@ const TodoListItem = memo(function TodoListItem({
           >
             <Icon name="check" size={10} stroke={2.6} />
           </button>
+          <button
+            type="button"
+            data-testid="todo-row-open"
+            aria-label={todo.title}
+            onClick={() => onSelect(todo.id)}
+            className="absolute inset-0 cursor-pointer rounded-[inherit] focus-visible:outline-2 focus-visible:outline-accent"
+          />
           <span className="flex min-w-0 flex-1 items-center gap-1.5">
             <span
               className={cx(
@@ -3383,7 +3439,11 @@ const TodoListItem = memo(function TodoListItem({
                 <Icon name="bell" size={11} stroke={2} />
               </span>
             )}
-            {effectiveSection === "just_done" && seenCanFile(todo) && onSeen && <SeenButton onClick={() => onSeen(todo.id)} />}
+            {effectiveSection === "just_done" && seenCanFile(todo) && onSeen && (
+              <span className="relative z-10">
+                <SeenButton onClick={() => onSeen(todo.id)} />
+              </span>
+            )}
           </span>
         </div>
       );
@@ -3510,24 +3570,21 @@ const TodoListItem = memo(function TodoListItem({
 
     return (
       <div
-        role="button"
-        tabIndex={0}
         data-todo={todo.id}
         data-todo-row-layout="task-slim"
         aria-current={selected || undefined}
-        onClick={() => onSelect(todo.id)}
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest("button, a, input, select, textarea, summary")) return;
+          onSelect(todo.id);
+        }}
         onContextMenu={menu && ((e) => {
           if (!(e.target as HTMLElement).closest("a[href]")) menu.onContextMenu(e);
         })}
         onKeyDown={(e) => {
           menu?.onKeyDown(e);
-          if (e.defaultPrevented) return;
-          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-          e.preventDefault();
-          onSelect(todo.id);
         }}
         className={cx(
-          "group/item flex cursor-pointer gap-2 rounded-control px-2.5 py-2 transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+          "group/item relative flex cursor-pointer gap-2 rounded-control px-2.5 py-2 transition-colors",
           selected ? "bg-accent-tint/70" : "hover:bg-hover",
         )}
       >
@@ -3541,7 +3598,7 @@ const TodoListItem = memo(function TodoListItem({
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
             onChange={() => onToggleReorganize(todo.id)}
-            className="mt-0.5 size-4 shrink-0 cursor-pointer accent-accent"
+            className="relative z-10 mt-0.5 size-4 shrink-0 cursor-pointer accent-accent"
           />
         )}
         <button
@@ -3552,7 +3609,7 @@ const TodoListItem = memo(function TodoListItem({
             onToggleDone(todo, open);
           }}
           className={cx(
-            "touch-hit mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+            "touch-hit relative z-10 mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
             !open
               ? "border-accent bg-accent text-white"
               : "border-line-strong text-transparent hover:border-accent hover:text-accent",
@@ -3560,6 +3617,13 @@ const TodoListItem = memo(function TodoListItem({
         >
           <Icon name="check" size={10} stroke={2.6} />
         </button>
+        <button
+          type="button"
+          data-testid="todo-row-open"
+          aria-label={todo.title}
+          onClick={() => onSelect(todo.id)}
+          className="absolute inset-0 cursor-pointer rounded-[inherit] focus-visible:outline-2 focus-visible:outline-accent"
+        />
 
         <div className="min-w-0 flex-1">
           {/* Line 1: status dot + truncated title + compact right anchor */}
@@ -3603,7 +3667,7 @@ const TodoListItem = memo(function TodoListItem({
                     e.stopPropagation();
                     goalSummary.onToggle();
                   }}
-                  className="touch-hit inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-field px-1.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+                  className="touch-hit relative z-10 inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-field px-1.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
                 >
                   <Icon
                     name="chevron"
@@ -3653,7 +3717,7 @@ const TodoListItem = memo(function TodoListItem({
                 </span>
               )}
               {showSeenAction && onSeen && (
-                <span className="ml-auto shrink-0">
+                <span className="relative z-10 ml-auto shrink-0">
                   <SeenButton onClick={() => onSeen(todo.id)} />
                 </span>
               )}
@@ -3664,7 +3728,7 @@ const TodoListItem = memo(function TodoListItem({
                     e.stopPropagation();
                     onRestore(todo.id);
                   }}
-                  className="touch-hit ml-auto shrink-0 whitespace-nowrap font-medium text-accent-ink hover:underline"
+                  className="touch-hit relative z-10 ml-auto shrink-0 whitespace-nowrap font-medium text-accent-ink hover:underline"
                 >
                   {t("todos.restore")}
                 </button>
@@ -3678,25 +3742,22 @@ const TodoListItem = memo(function TodoListItem({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
       data-todo={todo.id}
       aria-current={selected || undefined}
-      onClick={() => onSelect(todo.id)}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("button, a, input, select, textarea, summary")) return;
+        onSelect(todo.id);
+      }}
       // a right click on its PR link keeps the browser's menu (Copy link, open in a new tab)
       onContextMenu={menu && ((e) => {
         if (!(e.target as HTMLElement).closest("a[href]")) menu.onContextMenu(e);
       })}
-      // Enter / Space on the row itself (not on its own buttons) opens it, as a click does
+      // Shift+F10 / ContextMenu key opens the row's menu
       onKeyDown={(e) => {
         menu?.onKeyDown(e);
-        if (e.defaultPrevented) return;
-        if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
-        e.preventDefault();
-        onSelect(todo.id);
       }}
       className={cx(
-        "group/item flex cursor-pointer gap-2.5 rounded-control p-2.5 transition-colors focus-visible:outline-2 focus-visible:outline-accent",
+        "group/item relative flex cursor-pointer gap-2.5 rounded-control p-2.5 transition-colors",
         selected ? "bg-accent-tint/70" : "hover:bg-hover",
       )}
     >
@@ -3711,7 +3772,7 @@ const TodoListItem = memo(function TodoListItem({
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
           onChange={() => onToggleReorganize(todo.id)}
-          className="mt-0.5 size-4 shrink-0 cursor-pointer accent-accent"
+          className="relative z-10 mt-0.5 size-4 shrink-0 cursor-pointer accent-accent"
         />
       )}
       {/* Checkbox button: touch-hit makes the 16px circle a 44px target on touch, its own (no row underneath) */}
@@ -3723,7 +3784,7 @@ const TodoListItem = memo(function TodoListItem({
           onToggleDone(todo, open);
         }}
         className={cx(
-          "touch-hit mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
+          "touch-hit relative z-10 mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border transition-colors",
           !open
             ? "border-accent bg-accent text-white"
             : "border-line-strong hover:border-accent hover:text-accent text-transparent",
@@ -3731,6 +3792,13 @@ const TodoListItem = memo(function TodoListItem({
       >
         <Icon name="check" size={10} stroke={2.6} />
       </button>
+      <button
+        type="button"
+        data-testid="todo-row-open"
+        aria-label={todo.title}
+        onClick={() => onSelect(todo.id)}
+        className="absolute inset-0 cursor-pointer rounded-[inherit] focus-visible:outline-2 focus-visible:outline-accent"
+      />
 
       {/* Body */}
       <div className="min-w-0 flex-1">
@@ -3782,7 +3850,7 @@ const TodoListItem = memo(function TodoListItem({
                 e.stopPropagation();
                 goalSummary.onToggle();
               }}
-              className="touch-hit inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-field px-2 text-xs font-medium whitespace-nowrap text-ink-2 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+              className="touch-hit relative z-10 inline-flex h-5 shrink-0 items-center gap-1 rounded-full bg-field px-2 text-xs font-medium whitespace-nowrap text-ink-2 tabular-nums transition-colors hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
             >
               <Icon
                 name="chevron"
@@ -3839,7 +3907,7 @@ const TodoListItem = memo(function TodoListItem({
               <span className="truncate text-ink-3">· {t("todos.not_handed")}</span>
             ) : null)}
             {(section ?? view.section) === "just_done" && seenCanFile(todo) && onSeen ? (
-              <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              <span className="relative z-10 ml-auto flex shrink-0 items-center gap-1.5">
                 {!todo.done_at && <ReviewBadge todo={todo} />}
                 <SeenButton onClick={() => onSeen(todo.id)} />
               </span>
@@ -3850,11 +3918,13 @@ const TodoListItem = memo(function TodoListItem({
         )}
 
         {/* What it waits on from the user, with the one tap that answers it (#2056) */}
-        <TodoAskLine todo={todo} className="mt-1" />
+        <div className="relative z-10">
+          <TodoAskLine todo={todo} className="mt-1" />
+        </div>
 
         {/* Due date, a reminder still to push, high priority (#1683) */}
         <TodoPlanLine todo={todo} />
-        {(todo.wait != null || parkedRow) && <div className="mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={legacyMerges} /></div>}
+        {(todo.wait != null || parkedRow) && <div className="relative z-10 mt-1" data-testid={openPR ? "todo-pr-line" : undefined}><TaskWaitInfo todo={todo} merges={legacyMerges} /></div>}
 
         {/* Why its agent did not start, while it waits on the owner (DESIGN_SYSTEM 5.6: what failed, in red) */}
         {failedOpen && <div className="mt-1 truncate text-[11.5px] text-red" data-testid="todo-start-failed">{t("todos.start_failed", { error: todo.start_error ?? "" })}</div>}
@@ -3887,7 +3957,7 @@ const TodoListItem = memo(function TodoListItem({
 
         {/* Shelved: one tap brings it back (#3156); nothing is deleted */}
         {section === "shelved" && onRestore && (
-          <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+          <div className="relative z-10 mt-1.5" onClick={(e) => e.stopPropagation()}>
             <Button tone="secondary" icon="undo" onClick={() => onRestore(todo.id)} className="h-7 text-[12px] whitespace-nowrap">
               {t("todos.restore")}
             </Button>
@@ -4101,9 +4171,9 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           className={cx(PLAN_FIELD, "max-w-56 truncate")}
           data-testid="todo-plan-project"
         >
-          <option value="" aria-label={t("todos.project_none")}>{todosV2 ? "" : t("todos.project_none")}</option>
-          {projects.map((p) => (
-            <option key={p.slug} value={p.slug}>
+          <option value="">{t("todos.project_none")}</option>
+          {projects.map((p, index) => (
+            <option key={p.slug || `project-${index}`} value={p.slug ?? ""}>
               {p.name}
             </option>
           ))}
@@ -5834,20 +5904,14 @@ function TodoDetail({
               const kicker = ix?.kind === "plan" ? t("todos.kicker_plan") : ix?.kind === "permission" ? t("todos.kicker_permission") : ix?.kind === "screen" ? t("todos.kicker_screen") : ix?.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
               const sourceLabel = formatAgentSource(agent, todo.spaces, lookup);
 
-              return (
-                <div
-                  key={`${agent.machine_id}/${agent.session_id}`}
-                  onClick={() => {
-                    // a drill-down: Back and the sidebar stay with this to-do (#12055)
-                    if (session) {
-                      openFromPage({ name: "session", mid: agent.machine_id, sid: agent.session_id });
-                    }
-                  }}
-                  className={cx(
-                    "flex items-start gap-3 rounded-control border border-line bg-canvas p-3 transition-colors",
-                    session ? "cursor-pointer hover:bg-hover" : "",
-                  )}
-                >
+              const openAgent = () => {
+                // a drill-down: Back and the sidebar stay with this to-do (#12055)
+                if (session) {
+                  openFromPage({ name: "session", mid: agent.machine_id, sid: agent.session_id });
+                }
+              };
+              const cardBody = (
+                <>
                   <div className="mt-1">
                     <StatusMark state={agent.start_error ? "offline" : isExpired ? "offline" : st} />
                   </div>
@@ -5897,6 +5961,32 @@ function TodoDetail({
                       </div>
                     ) : null}
                   </div>
+                </>
+              );
+
+              return (
+                <div
+                  key={`${agent.machine_id}/${agent.session_id}`}
+                  data-testid="todo-agent-card"
+                  className={cx(
+                    "flex items-start gap-3 rounded-control border border-line bg-canvas p-3 transition-colors",
+                    session ? "hover:bg-hover" : "",
+                  )}
+                >
+                  {session ? (
+                    <button
+                      type="button"
+                      data-testid="todo-agent-open"
+                      onClick={openAgent}
+                      className="flex min-w-0 flex-1 cursor-pointer items-start gap-3 rounded-chip text-left focus-visible:outline-2 focus-visible:outline-accent"
+                    >
+                      {cardBody}
+                    </button>
+                  ) : (
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      {cardBody}
+                    </div>
+                  )}
                   <div className="flex shrink-0 items-center gap-1">
                     <span data-testid="todo-agent-time" className="whitespace-nowrap text-[11px] text-ink-3">
                       {ago(session?.updated_at || agent.linked_at)}
