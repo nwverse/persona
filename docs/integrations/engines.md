@@ -247,9 +247,9 @@ and the rest read from Orca's own journal. A chat shows before its first message
 running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card.
 New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
 chats), except one whose chat Orca refused to open because its chat runtime isn't installed there (until Orca shows a new chat
-of that provider, or restarts; #17684): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
-Agent's default launcher opens a terminal unless the computer starts new Agents as Orca chats ("Orca chats as New Agent's default"
-below). See `docs/integrations/orca.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and starts.
+of that provider, or restarts; #17684): picking one starts an Orca chat, in the background, in the Orca worktree holding the
+folder, with the first message; New Agent's default launcher opens a terminal unless the computer starts new Agents as Orca chats
+("Orca chats as New Agent's default" below). See `docs/integrations/orca.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
@@ -334,8 +334,8 @@ Orca's own, and the start's note says so. A start Orca refuses is refused as an 
 folder no Orca worktree holds and no Git repository Orca can add (`orca_start_folder`), or a provider whose chat runtime Orca has not
 installed on that computer yet (`orca_chat_runtime_missing`: start it in a terminal, or install it from a new chat tab in Orca).
 Orca says the latter only when asked to open the chat, so the first such start is refused; the bridge then withdraws that chat
-launcher (`docs/integrations/orca.md`, "Structured sessions"), and the next default starts
-open a terminal until Orca can open the chat. Picking a terminal launcher starts it there.
+launcher (`docs/integrations/orca.md`, "Structured sessions"), and the next default starts open a terminal until Orca can open
+the chat. Picking a terminal launcher starts it there.
 
 Never routed: the assistant's starts (`agent_start`, `dispatch_start`, `task_plan`, reviewers, follow-ups, which never go through
 `agents.start_params`; an Orca chat carries none of Persona's launcher, hooks or MCP config that a supervised task needs), resumes,
