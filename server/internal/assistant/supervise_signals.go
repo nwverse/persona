@@ -27,7 +27,7 @@ const (
 	sigInterrupted   = "interrupted"    // the model service cut its turn off
 	sigFailed        = "failed"         // its agent did not start
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
-	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
+	sigPRConflict    = "pr_conflict"    // a followed open delivery PR of the task has merge conflicts at this head
 	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
 	sigPREvent       = "pr_event"       // a PR CI failure, review, or discussion comment fell back from direct Agent routing
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
@@ -115,7 +115,9 @@ type superviseSignal struct {
 	Generation  time.Time `json:"generation,omitzero"`
 	failedClaim string
 	Detail, Ask string
-	Minutes     int
+	// Unlinked identifies the unreadable panes. Candidate conversations are resolved only for the final recipient.
+	Unlinked []unlinkedPane `json:"unlinked,omitempty"`
+	Minutes  int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
 	SourcePermission proto.SourcePermission
 	Report           string
@@ -211,10 +213,25 @@ func (g superviseSignal) userLevel() bool {
 	return false
 }
 
+// prConflictURL returns the PR URL carried by a sigPRConflict signal, falling back to the prefix before "@" in Key
+// for signals queued without PRURL before multi-PR conflict tracking (#15611).
+func (g superviseSignal) prConflictURL() string {
+	if g.PRURL != "" {
+		return g.PRURL
+	}
+	if url, _, ok := strings.Cut(g.Key, "@"); ok && url != "" {
+		return url
+	}
+	return ""
+}
+
 // id names what a newer signal replaces while it waits: the task's signal of that kind (a report: of that kind of
 // report, so a progress report does not push out a question).
 func (g superviseSignal) id() string {
 	if g.Kind == sigDraftPR {
+		return g.Todo + "|" + g.Kind + "@" + g.PRURL
+	}
+	if g.Kind == sigPRConflict && g.PRURL != "" {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
 	if g.Kind == sigPRMerged {

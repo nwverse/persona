@@ -425,6 +425,14 @@ func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) 
 }
 
 func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRepo {
+	// Closeout settles the live gate. Cached PR observations remain available as history.
+	if t.DoneAt != nil {
+		return nil
+	}
+	return linkedRepoGateInputs(bound, repoGatePRObservations(t))
+}
+
+func repoGatePRObservations(t Todo) map[string]TodoPRStatus {
 	prByURL := make(map[string]TodoPRStatus, len(t.OtherPRs)+1)
 	for _, pr := range t.OtherPRs {
 		if key := normalizeRepoGateURL(pr.URL); key != "" {
@@ -440,7 +448,11 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRe
 			prByURL[key] = TodoPRStatus{URL: strings.TrimSpace(t.PRURL), State: "open"}
 		}
 	}
+	return prByURL
+}
 
+// linkedRepoGateInputs takes membership from repository links and status from matching observations.
+func linkedRepoGateInputs(bound []repository.TaskRepository, prByURL map[string]TodoPRStatus) []repoGateRepo {
 	out := make([]repoGateRepo, 0, len(bound))
 	for _, repo := range bound {
 		repoKey := strings.TrimSpace(repo.SourceSnapshot.Identity.CanonicalURL)
@@ -456,15 +468,11 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRe
 		}
 
 		isTarget := len(repo.Links) == 0
-		refPRs := map[string]bool{}
 		for _, l := range repo.Links {
 			role := strings.TrimSpace(l.Role)
 			if role == "" || role == repository.LinkRoleDelivery {
 				isTarget = true
-			} else if role == repository.LinkRoleReference {
-				if key := normalizeRepoGateURL(l.CanonicalURL); key != "" {
-					refPRs[key] = true
-				}
+				break
 			}
 		}
 
@@ -485,18 +493,6 @@ func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRe
 					prs = append(prs, toRepoGatePR(l.CanonicalURL, obs))
 				} else {
 					prs = append(prs, repoGatePR{URL: l.CanonicalURL, State: "open"})
-				}
-			}
-			// Fall back to observed PRs belonging to this repository when not explicitly linked yet,
-			// while strictly excluding any URL marked as a reference link.
-			if repoPrefix := normalizeRepoGateURL(repo.SourceSnapshot.Identity.CanonicalURL); repoPrefix != "" {
-				prefix := repoPrefix + "/"
-				for key, obs := range prByURL {
-					if seenPRs[key] || refPRs[key] || !strings.HasPrefix(key, prefix) {
-						continue
-					}
-					seenPRs[key] = true
-					prs = append(prs, toRepoGatePR(obs.URL, obs))
 				}
 			}
 		}

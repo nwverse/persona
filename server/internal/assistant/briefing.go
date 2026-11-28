@@ -127,14 +127,14 @@ func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int)
 // briefMirror sends the cards of a routine with facts in place of its answer's cards (feishuMirror): the model's answer
 // on top, the facts under it. Required owner waits continue onto more cards rather than crossing Feishu's physical
 // budget. The push port's per-index key makes every continuation retry independently and idempotently.
-func (s *Service) briefMirror(ctx context.Context, machine, session, label string, run *briefRun, answer, turn string) {
+func (s *Service) briefMirror(ctx context.Context, machine, session, label string, run *briefRun, answer, turn string, delivery *TaskDelivery) {
 	openLabel, openURL := s.openLink(ctx, machine, session)
 	cards, _, shown := s.scheduleCards(run.Facts, run.Label, answer, "", openLabel, openURL)
 	if len(cards) == 0 {
 		return
 	}
 	sum := sha256.Sum256([]byte("brief\x00" + machine + "\x00" + session + "\x00" + turn + "\x00" + answer))
-	to := s.larkMirror(machine, session, label, false, answer, turn)
+	to := s.larkMirror(machine, session, label, false, answer, turn, delivery)
 	s.postBriefMirror(ctx, to, i18n.Lang(run.Facts.Lang), cards, "b"+hex.EncodeToString(sum[:8]), func() { s.briefAsked(run.Facts, shown) })
 }
 

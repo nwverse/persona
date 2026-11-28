@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -260,6 +261,19 @@ const (
 	// EventSessionSeen: SessionSeen, one way: the user looked at a session in an app.
 	EventSessionSeen = "session.seen"
 )
+
+// AgentTabNameMethod asks the manager for an Agent tab name.
+var AgentTabNameMethod = buswire.Method[AgentTabNameParams, AgentTabNameResult]{Name: MethodAgentTabName}
+
+// AgentTabNameParams carries the prompt used to name the tab.
+type AgentTabNameParams struct {
+	Prompt string `json:"prompt"`
+}
+
+// AgentTabNameResult carries the tab name, which can be empty.
+type AgentTabNameResult struct {
+	Name string `json:"name"`
+}
 
 // AgentStartParams is agents.start_params's params: Params are POST /api/v1/sessions's (the node's session.start);
 // NameFrom is what the tab is named from now ("": not now: it has a name, resumes a session, or is named later). Lang

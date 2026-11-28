@@ -49,7 +49,7 @@ func (s core) threadMessage(ctx context.Context, ev botcard.MessageEvent, st Fei
 	if !content.Forward && s.h.NoReplyCommand(openingCommandWords(ev, content)) {
 		// "Don't report back": a command of its own, also for a todo that is done and not yet reported, and never passed on
 		// as words (the core's todo_source.go).
-		s.h.ThreadNoReply(ctx, ev, t.ID, topic.Chat, topic.Thread)
+		s.h.ThreadNoReply(ctx, msg.MessageID, t.ID, to)
 		return
 	}
 	if t.Done {
@@ -65,7 +65,7 @@ func (s core) threadMessage(ctx context.Context, ev botcard.MessageEvent, st Fei
 		return
 	}
 	// Who gets it is settled before anything is written; with no one, the words are still recorded and the user is told so.
-	routes, routeErr := s.h.ThreadRoutes(ctx, t.ID, st.Features)
+	routes, routeErr := s.threadRoutes(ctx, t.ID, st.Features)
 	recorded := false
 	if text != "" {
 		// Noted as the to-do's decision (the core's ledger; a failure there is only logged: the words still go to the
@@ -126,12 +126,34 @@ func (s core) threadMessage(ctx context.Context, ev botcard.MessageEvent, st Fei
 }
 
 func (s core) unboundTopicMessage(ctx context.Context, ev botcard.MessageEvent, st FeishuStatus, content botcard.Content, topic *feishuTopic, mode assistantwire.TopicTodoMode) {
+	l := s.botLang(ctx)
+	note := func(text string) { s.botNoteTo(ctx, topic.target(), ev.Message.MessageID, text) }
+	// Explicit /todo, /ai, or "create a to-do" requests always open a to-do, even in a bound session topic.
+	if text, explicit := topicOpening(ev, content, assistantwire.TopicAnswerOnly); explicit {
+		s.openTopicTodo(ctx, ev, st, content, text, topic)
+		return
+	}
+	// A topic already bound to a conversation (space-bound topic group or scheduled-task thread delivery)
+	// routes follow-up replies back to that conversation without creating a to-do or disturbing main chat.
+	if boundTarget, ok := s.topicSession(ctx, topic.Chat, topic.Thread); ok {
+		if content.Forward {
+			note(i18n.T(l, "assistant-feishu.cannot_read"))
+			return
+		}
+		if err := s.botAllowed(l, st.Features, boundTarget); err != nil {
+			note(err.Error())
+			return
+		}
+		if err := s.botSendIn(ctx, &ev, content, boundTarget, topic); err != nil {
+			s.logf("bots: answer in bound topic session: %v", err)
+			note(i18n.T(l, "assistant-feishu.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
+		}
+		return
+	}
 	if text, open := topicOpening(ev, content, mode); open {
 		s.openTopicTodo(ctx, ev, st, content, text, topic)
 		return
 	}
-	l := s.botLang(ctx)
-	note := func(text string) { s.botNoteTo(ctx, topic.target(), ev.Message.MessageID, text) }
 	if mode == assistantwire.TopicAlwaysTodo {
 		if s.threadHintDue(topic.Chat + "/" + topic.Thread) {
 			note(i18n.T(l, "assistant-feishu.thread_unbound"))
@@ -140,6 +162,20 @@ func (s core) unboundTopicMessage(ctx context.Context, ev botcard.MessageEvent, 
 	}
 	if content.Forward {
 		note(i18n.T(l, "assistant-feishu.cannot_read"))
+		return
+	}
+	// A topic group bound to a domain space starts an isolated conversation in that space per topic,
+	// inheriting the space's directory, SPACE.md and context without disturbing the main conversation.
+	if space := strings.TrimSpace(st.TopicSpaces[topic.Chat]); space != "" {
+		target := botTarget{Kind: targetPersona, Space: space}
+		if err := s.botAllowed(l, st.Features, target); err != nil {
+			note(err.Error())
+			return
+		}
+		if err := s.botSendIn(ctx, &ev, content, target, topic); err != nil {
+			s.logf("bots: answer in space topic: %v", err)
+			note(i18n.T(l, "assistant-feishu.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)}))
+		}
 		return
 	}
 	target := botTarget{Kind: targetMain}

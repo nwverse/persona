@@ -395,6 +395,9 @@ func notifyMessage(kind string, payload map[string]any) map[string]any {
 	if id, ok := payload["interaction_id"]; ok {
 		msg["interaction_id"] = id
 	}
+	if at, ok := payload["interaction_created_at"]; ok {
+		msg["interaction_created_at"] = at
+	}
 	if id, ok := payload["id"]; ok { // alert: the caller's id (POST /api/v1/notify)
 		msg["id"] = id
 	}

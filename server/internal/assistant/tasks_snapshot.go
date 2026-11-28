@@ -228,7 +228,7 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			if st == "not_started" || st == "followup" {
 				var gate *repoGate
 				if bound := reposByTodo[t.ID]; len(bound) > 0 {
-					gate = aggregateRepoGate(buildRepoGateInputs(t, bound))
+					gate = snapshotRepoGate(t, bound, cfg.todosV2On())
 				}
 				if prState := openPRSnapshotState(triageOpenPRs(t, now), gate); prState != "" {
 					st = prState

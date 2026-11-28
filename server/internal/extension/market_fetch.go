@@ -122,7 +122,24 @@ func (e notFound) Unwrap() error { return e.error }
 func sameOrigin(a, b string) bool {
 	ua, err1 := url.Parse(a)
 	ub, err2 := url.Parse(b)
-	return err1 == nil && err2 == nil && ua.Scheme == ub.Scheme && strings.EqualFold(ua.Host, ub.Host)
+	if err1 != nil || err2 != nil || ua.Scheme == "" || ua.Hostname() == "" || !strings.EqualFold(ua.Scheme, ub.Scheme) {
+		return false
+	}
+	return strings.EqualFold(ua.Hostname(), ub.Hostname()) && canonicalPort(ua) == canonicalPort(ub)
+}
+
+func canonicalPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
 }
 
 // ErrRateLimited: the market refused a request for its rate limit, not for rights.
@@ -235,7 +252,7 @@ func (m *Market) FetchSigned(ctx context.Context) (*Fetched, error) {
 		err := anonymous.get(mirrorCtx, m.CatalogMirror, "application/json", &b, IndexMost)
 		stop()
 		if err == nil {
-			if f, err := ParseCatalog([]byte(b.String()), key); err == nil {
+			if f, err := ParseCatalogKeysForBuild([]byte(b.String()), []string{key}, m.HubBuild); err == nil {
 				return f, nil
 			}
 		}
@@ -246,7 +263,7 @@ func (m *Market) FetchSigned(ctx context.Context) (*Fetched, error) {
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnavailable, err)
 	}
-	return ParseCatalogKeys(raw, m.VerifyKeys())
+	return ParseCatalogKeysForBuild(raw, m.VerifyKeys(), m.HubBuild)
 }
 
 // VerifyKeys are the keys a catalog of m must be signed by (any one of them): the compiled-in key for the official

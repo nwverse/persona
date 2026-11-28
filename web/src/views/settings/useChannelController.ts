@@ -6,7 +6,7 @@ import {
   channelDetail, forgetChannels, testChannel, unbindChannel, updateChannel,
   type ChannelDetail, type ChannelUpdateBody,
 } from "../../lib/channels";
-import { otherManager, pinManager } from "../../lib/manager-choice";
+import { pinManager } from "../../lib/manager-choice";
 import { toast } from "../../ui/atoms";
 
 export interface ChannelController {
@@ -29,15 +29,14 @@ function notifyError(error: unknown) {
 
 /** Loads and mutates one channel with request sequencing, exclusive writes, and channel-switch fencing. */
 export function useChannelController(channelId: string | null, manager?: string): ChannelController {
-  const owner = otherManager(manager);
-  const scope = useMemo(() => ({}), [channelId, owner]);
+  const scope = useMemo(() => ({}), [channelId, manager]);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
 
   useLayoutEffect(() => {
     if (!channelId) return undefined;
-    return pinManager(`/channels/${encodeURIComponent(channelId)}`, owner);
-  }, [channelId, owner]);
+    return pinManager(`/channels/${encodeURIComponent(channelId)}`, manager);
+  }, [channelId, manager]);
 
   const [detail, setDetail] = useState<ChannelDetail | null>(null);
   const [error, setError] = useState("");
@@ -113,12 +112,12 @@ export function useChannelController(channelId: string | null, manager?: string)
       const next = await save();
       if (next) forgetChannels();
       if (!current() || (next && next.id !== channelId)) return null;
-      if (next && n !== seq.current) {
-        // A refresh raced the write. Re-read its committed result without publishing the stale response.
-        void load();
-        return { snapshot: null };
+      if (next) {
+        const overlapped = n !== seq.current;
+        // The routing form needs the accepted revision immediately. A fresh read reconciles any overlap.
+        if (!overlapped || what === "routing") setDetail(next);
+        if (overlapped) void load();
       }
-      if (next) setDetail(next);
       return { snapshot: next };
     } catch (error) {
       if (current()) throw error;

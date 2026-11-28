@@ -161,6 +161,9 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		}
 		verifiedKey = e.verifiedKey
 	}
+	if err := e.EngineProblem(r.build); err != nil {
+		return nil, err
+	}
 	pkg := e.PackageFor(Platform())
 	if pkg == nil {
 		return nil, fmt.Errorf("%s 没有这台 hub（%s）能用的包", e.Parsed.ID, Platform())
@@ -211,6 +214,25 @@ func (r *Registry) Discard(previewID string) {
 	if pv, _ := r.take(previewID); pv != nil {
 		r.dropStaging(pv)
 	}
+}
+
+// DetachPreview removes previewID from the registry immediately under r.mu and returns a cleanup
+// function that removes its staging files from disk (nil if absent). Callers that hold another
+// lock can detach atomically before releasing their lock and invoke the cleanup afterward.
+func (r *Registry) DetachPreview(previewID string) func() {
+	if previewID == "" {
+		return nil
+	}
+	r.mu.Lock()
+	pv := r.previews[previewID]
+	if pv != nil {
+		delete(r.previews, previewID)
+	}
+	r.mu.Unlock()
+	if pv == nil {
+		return nil
+	}
+	return func() { r.dropStaging(pv) }
 }
 
 // PreviewMarketOf is the market a preview's package comes from ("" when it does not, or the preview is gone).

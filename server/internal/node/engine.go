@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/herdrcore"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rexcli"
@@ -385,7 +387,14 @@ func rexEngine(ctx context.Context, c *rexcli.Client) proto.Engine {
 // orcaClient is the Orca runtime node.info asks; tests point it at a fake one.
 var orcaClient = orcart.New
 
-// orcaEngine is Orca as found on this machine: available when its runtime answers with a protocol Persona speaks.
+// orcaInstalled says whether Orca is on this machine though it may not run, and the version its install says
+// (orcart.Installed); tests point it elsewhere.
+var orcaInstalled = orcart.Installed
+
+// orcaEngine is Orca as found on this machine (#17037): available, and running, when its runtime answers with a
+// protocol Persona speaks; incompatible, with its version and a note the hub words in each reader's language
+// (node-engine.orca_incompatible), when it answers with another; stopped when it does not answer but is installed
+// (orcaInstalled: its app or a data directory a runtime used), with the version its install says; else missing.
 func orcaEngine(ctx context.Context, c *orcart.Client) proto.Engine {
 	e := proto.Engine{ID: proto.EngineOrca, Name: proto.EngineNames[proto.EngineOrca]}
 	st, err := c.Probe(ctx)
@@ -394,9 +403,14 @@ func orcaEngine(ctx context.Context, c *orcart.Client) proto.Engine {
 	}
 	switch {
 	case err == nil:
-		e.Available = true
+		e.Available, e.State = true, proto.EngineRunning
 	case errors.Is(err, orcart.ErrIncompatible):
-		e.Note = "这个版本的 Orca 和 Persona 不兼容，请把两边都更新到最新版"
+		e.State, e.Note = proto.EngineIncompatible, i18n.T(i18n.Default, "node-engine.orca_incompatible")
+	default:
+		e.State = proto.EngineMissing
+		if found, v := orcaInstalled(); found {
+			e.State, e.Version = proto.EngineStopped, cmp.Or(e.Version, v)
+		}
 	}
 	return e
 }

@@ -228,7 +228,8 @@ final class TasksStore {
         if item.kind == .message { messageWrites[item.id, default: 0] &+= 1 }
         viewStore.receive(item, group: group)
         merge([item], into: item.conversation)
-        if item.kind == .task || item.kind == .receipt || item.kind == .review || item.kind == .report { reloadTodos() }
+        // As a `todos` push: spaced, and only when the hub's revision moved (`TodoStore.pushed`).
+        if item.kind == .task || item.kind == .receipt || item.kind == .review || item.kind == .report { todoStore.pushed() }
     }
 
     func received(_ plan: TaskPlan) {
@@ -375,7 +376,7 @@ final class TasksStore {
     /// What the task's agents are asking the user, oldest first.
     func interactions(_ todo: TodoItem) -> [Interaction] {
         let keys = Set(sessions(todo).map(\.key))
-        return AppModel.shared.pendingInteractions.filter { keys.contains($0.sessionKey) }
+        return AppModel.shared.aggregatePendingInteractions.filter { keys.contains($0.sessionKey) }
     }
 
     /// The main conversation's Today card, once a day: the hub makes it on the first ask and answers it after that.

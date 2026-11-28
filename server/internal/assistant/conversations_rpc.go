@@ -51,42 +51,44 @@ func (s *Service) conversationsRequest(ctx context.Context, method string, param
 			return buswire.None{}, s.forgetExtensionTrust(ctx, p.Extension)
 		})
 	case assistantwire.MethodAssistantExtensionRead: // one of them for an extension the extension manager names
-		var e assistantwire.AssistantExtensionRead
-		if err := strictParams(method, params, &e); err != nil {
-			return nil, true, err
-		}
-		switch e.Method {
-		case assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages, assistantwire.MethodAssistantMemory:
-		default:
-			return nil, true, conversationsInvalid(method, "method must be an assistant read")
-		}
-		if len(e.Params) == 0 {
-			e.Params = json.RawMessage("{}")
-		}
-		out, _, err := s.conversationsRequest(s.withExtensionReader(ctx, e.Extension), e.Method, e.Params)
-		return out, true, err
+		return handleAssistantRequest(ctx, assistantwire.AssistantExtensionReadMethod, decode, s.extensionRead)
 	case assistantwire.MethodAssistantConversations:
 		return handleAssistantRequest(ctx, assistantwire.AssistantConversationsMethod, decode, s.extensionConversations)
 	case assistantwire.MethodAssistantMessages:
 		return handleAssistantRequest(ctx, assistantwire.AssistantMessagesMethod, decode, s.extensionMessages)
 	case assistantwire.MethodAssistantEntriesList:
-		var p assistantwire.AssistantEntriesParams
-		if err := strictParams(method, params, &p); err != nil {
-			return nil, true, err
-		}
-		personal, err := s.extensionEntriesPersonal(ctx)
-		if err != nil {
-			return nil, true, err
-		}
-		if extID := assistantwire.EntriesReader(ctx); extID != "" {
-			ctx = s.withExtensionReader(ctx, extID)
-		}
-		out, err := s.listEntriesForExtension(ctx, p, personal)
-		return out, true, err
+		return handleAssistantRequest(ctx, assistantwire.AssistantEntriesListMethod, decode, s.extensionEntries)
 	case assistantwire.MethodAssistantMemory:
 		return handleAssistantRequest(ctx, assistantwire.AssistantMemoryMethod, decode, s.extensionMemory)
 	}
 	return nil, false, nil
+}
+
+func (s *Service) extensionRead(ctx context.Context, p assistantwire.AssistantExtensionRead) (json.RawMessage, error) {
+	switch p.Method {
+	case assistantwire.MethodAssistantConversations, assistantwire.MethodAssistantMessages, assistantwire.MethodAssistantMemory:
+	default:
+		return nil, conversationsInvalid(assistantwire.MethodAssistantExtensionRead, "method must be an assistant read")
+	}
+	if len(p.Params) == 0 {
+		p.Params = json.RawMessage("{}")
+	}
+	out, _, err := s.conversationsRequest(s.withExtensionReader(ctx, p.Extension), p.Method, p.Params)
+	if err != nil {
+		return nil, err
+	}
+	return rpc.Marshal(out)
+}
+
+func (s *Service) extensionEntries(ctx context.Context, p assistantwire.AssistantEntriesParams) (assistantwire.AssistantEntriesResult, error) {
+	personal, err := s.extensionEntriesPersonal(ctx)
+	if err != nil {
+		return assistantwire.AssistantEntriesResult{}, err
+	}
+	if extID := assistantwire.EntriesReader(ctx); extID != "" {
+		ctx = s.withExtensionReader(ctx, extID)
+	}
+	return s.listEntriesForExtension(ctx, p, personal)
 }
 
 func strictParams(method string, raw json.RawMessage, out any) error {

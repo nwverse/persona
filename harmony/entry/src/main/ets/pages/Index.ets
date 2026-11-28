@@ -63,6 +63,11 @@ import { TodoWorkspacePage } from '../components/TodoWorkspacePage';
 import { KnowledgeWorkspacePage } from '../components/KnowledgeWorkspacePage';
 import { HealthWorkspacePage } from '../components/HealthWorkspacePage';
 import { NavigationContext } from '../models/NavigationContext';
+import { StarredMessagesSheet } from '../components/StarredMessagesSheet';
+import { ChatExportSheet } from '../components/ChatExportSheet';
+import { ArchivedConversationsSheet } from '../components/ArchivedConversationsSheet';
+import type { StarredSnapshot } from '../core/StarredMessages';
+import { starredStore } from '../models/StarredStore';
 import { LinkReader } from '../components/LinkReader';
 import { readerLink, readerHost } from '../platform/ReaderLink';
 import { common } from '@kit.AbilityKit';
@@ -111,6 +116,10 @@ import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { QuickCommandEntry } from '../core/QuickCommandPalette';
 import { QuickCommandSheet } from '../components/QuickCommandSheet';
+import { TokenUsageSheet } from '../components/TokenUsageSheet';
+import { StandingAuthSheet } from '../components/StandingAuthSheet';
+import { AssistantSearchSheet } from '../components/AssistantSearchSheet';
+import { AutoConversationsSheet } from '../components/AutoConversationsSheet';
 import { nativeLiveView } from '../platform/NativeLiveView';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
 import { toastCenter } from '../models/ToastCenter';
@@ -171,6 +180,7 @@ struct Index {
   @Local foldWorkbenchTab: number = 0;
   @Local foldWorkbenchTabSignal: number = 0;
   @Local quickPaletteOpen: boolean = false;
+  @Local tokenUsageOpen: boolean = false;
   @Local private workbenchInterruptKey: string = '';
   private foldInspectorCollapsedRail: boolean = false;
   private lastFoldPosture: string = '';
@@ -239,6 +249,13 @@ struct Index {
   @Local inboxSourcesNav:InboxSourcesNavigation=new InboxSourcesNavigation();
   @Local directionPermissionRoutes:AllChatActions=new AllChatActions();
   @Local directionPermissionsVisible:boolean=false;
+  @Local private starredSheetShown: boolean = false;
+  @Local private exportSheetShown: boolean = false;
+  @Local private archivedSheetShown: boolean = false;
+  @Local private standingAuthSheetShown: boolean = false;
+  @Local private fullSearchSheetShown: boolean = false;
+  @Local private autoChatsSheetShown: boolean = false;
+  @Local private forkSessionTarget: string = '';
   private directionPermissionsTarget:string='';
   private pairingSettingsOwner:string='';
   @Local activeChild: string = '';
@@ -394,18 +411,22 @@ struct Index {
       this.chatForward.isChoosing(this.detailModel) || this.environment.keyboardHeightPx>0;
   }
   @Builder slimSessionHeader() {
-    Row() {
-      Button({type:ButtonType.Normal}) {
-        SymbolGlyph(Symbols.collapse).fontSize(Tokens.interfaceFontVp(16,this.environment.fontScale)).fontColor([Colors.ink])
-      }.width(this.sessionActionSize()).height(40).padding(0).backgroundColor(Color.Transparent)
-        .responseRegion({x:0,y:(40-this.sessionActionSize())/2,width:this.sessionActionSize(),height:this.sessionActionSize()})
+    Row({ space: Tokens.spaceS }) {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph(Symbols.collapse).fontSize(Tokens.interfaceFontVp(16, this.environment.fontScale)).fontColor([Colors.ink])
+      }.width(36).height(36).padding(0)
+        .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+        .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: 18 })
+        .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+        .responseRegion(ButtonStyles.touchRegion(36))
         .accessibilityText(tr(this.phoneAtRoot ? 'conversation_spaces' : 'back'))
-        .onClick(() => { if (this.phoneAtRoot) { this.drawerSearching=false; this.spacesShown=true; } else this.phoneBack(); })
-        .bindContextMenu(this.backHistory(),ResponseType.LongPress).id(this.phoneAtRoot ? 'shell.spaces' : 'shell.back')
-      PhoneSessionHeading({model:this.detailModel,space:this.phoneSessionSpace,heading:this.phonePageName(),slim:true,
-        expand:() => this.agentReadingHeader.reveal(this.readingHeaderOwner)}).layoutWeight(1)
+        .onClick(() => { if (this.phoneAtRoot) { this.drawerSearching = false; this.spacesShown = true; } else this.phoneBack(); })
+        .bindContextMenu(this.backHistory(), ResponseType.LongPress).id(this.phoneAtRoot ? 'shell.spaces' : 'shell.back')
+      PhoneSessionHeading({ model: this.detailModel, space: this.phoneSessionSpace, heading: this.phonePageName(), slim: true,
+        expand: () => this.agentReadingHeader.reveal(this.readingHeaderOwner) }).layoutWeight(1)
       this.sessionMoreButton(true)
-    }.width('100%').height(AgentReadingHeader.slimHeight).padding({left:4,right:4}).alignItems(VerticalAlign.Center)
+    }.width('100%').height(AgentReadingHeader.slimHeight).padding({ left: Tokens.spaceM, right: Tokens.spaceM }).alignItems(VerticalAlign.Center)
   }
   @Computed get floatingDraftHeader(): boolean {
     return this.fullHeightPhone() && this.phoneTop === 'session' && !!this.longDraftIdentity &&
@@ -451,6 +472,7 @@ struct Index {
     this.pendingSearchHit = hit; this.pendingSearchTarget = hit ? this.hitIdentity(row) : '';
 
     this.spacesShown = false; this.drawerSearching = false; this.chatSearchShown = false;
+    this.fullSearchSheetShown = false; this.autoChatsSheetShown = false; this.standingAuthSheetShown = false; this.archivedSheetShown = false;
     const section = row.kind === 'session' ? 1 : 0;
     if (this.model.section !== section) this.changeSection(section);
     this.stack.clear();
@@ -773,16 +795,17 @@ struct Index {
   }
   @Builder phoneModuleMore(kind:string,owner:string) {
     Button({type:ButtonType.Circle}) {
-      Stack() {
-        Circle().width(22).height(22).stroke(Colors.link).strokeWidth(1.7).fill(Color.Transparent)
-        Row({space:2}) {
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-        }
+      Row({space:3}) {
+        ForEach([0,1,2], (_dot:number) => {
+          Circle().width(3.5).height(3.5).fill(Colors.ink)
+        }, (dot:number) => String(dot))
       }
-    }.width(44).height(44).padding(0).backgroundColor(Colors.surface)
-      .border({width:0.5,color:Colors.divider,radius:22}).accessibilityText(tr(kind==='recordings' ? 'meeting_start_options' : 'more'))
+    }.width(PhoneStyle.bar).height(PhoneStyle.bar).padding(0)
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:PhoneStyle.bar/2})
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+      .accessibilityText(tr(kind==='recordings' ? 'meeting_start_options' : 'more'))
       .id(kind==='recordings' ? 'recordings.options' : kind==='knowledge' ? 'knowledge.filters' : 'inbox.more')
       .onClick(()=>this.openModuleMenu(kind,owner))
       .bindMenu(this.moduleMenuShown && this.moduleMenuKind===kind && this.moduleMenuOwner===owner,this.rootModuleMenu,
@@ -1131,6 +1154,13 @@ struct Index {
       this.spacesShown ||
       this.showSheet ||
       this.chatForward.isChoosing(this.detailModel) ||
+      this.starredSheetShown ||
+      this.exportSheetShown ||
+      this.archivedSheetShown ||
+      this.standingAuthSheetShown ||
+      this.fullSearchSheetShown ||
+      this.autoChatsSheetShown ||
+      this.tokenUsageOpen ||
       !!this.messageLift.current;
   }
   private openQuickPalette(): void {
@@ -1162,7 +1192,7 @@ struct Index {
     } else if (id === 'workspace:todos') {
       if (this.model.todosPageVisible()) this.openSpace('todo');
     } else if (id === 'workspace:knowledge') {
-      this.openSpace('knowledge');
+      if (this.model.knowledgePageVisible()) this.openSpace('knowledge');
     } else if (id === 'workspace:health') {
       this.openSpace('health');
     } else if (id === 'workspace:machines') {
@@ -1175,6 +1205,8 @@ struct Index {
       if (this.wide() && this.foldLayout.supportsInspector) this.switchFoldWorkbenchTab(1);
     } else if (id === 'action:workbench_machines') {
       if (this.wide() && this.foldLayout.supportsInspector) this.switchFoldWorkbenchTab(2);
+    } else if (id === 'action:open_token_usage') {
+      this.tokenUsageOpen = true;
     } else if (id === 'action:open_xiaoyi') {
       this.openXiaoYiQuick();
     } else if (id === 'action:toggle_theme') {
@@ -1193,6 +1225,18 @@ struct Index {
         }
       }).catch(() => {});
       this.openSettings('notifications');
+    } else if (id === 'action:open_starred') {
+      this.starredSheetShown = true;
+    } else if (id === 'action:open_archived') {
+      this.archivedSheetShown = true;
+    } else if (id === 'action:export_chat') {
+      this.openChatExport();
+    } else if (id === 'action:open_standing_auth') {
+      this.standingAuthSheetShown = true;
+    } else if (id === 'action:open_full_search') {
+      this.fullSearchSheetShown = true;
+    } else if (id === 'action:open_all_chats') {
+      this.autoChatsSheetShown = true;
     }
   }
   @Builder quickPaletteButton(diameter: number = PhoneStyle.bar, compactWide: boolean = false) {
@@ -1214,7 +1258,7 @@ struct Index {
       this.quickPaletteOpen
         ? Colors.selection
         : Colors.styleID === 'glass'
-          ? (this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF')
+          ? Colors.elevatedGlass
           : Colors.surface
     )
     .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
@@ -1241,6 +1285,7 @@ struct Index {
           model: this.model,
           showWorkbench: this.wide() && this.foldLayout.supportsInspector,
           showLiveView: true,
+          showExportChat: this.detailModel.isChat() && this.detailModel.messages.length > 0,
           autoFocus: this.wide(),
           onSelectEntry: (entry: QuickCommandEntry) => this.executeQuickCommand(entry),
           onClose: () => { this.quickPaletteOpen = false; }
@@ -1248,7 +1293,207 @@ struct Index {
       }
     }
   }
+  private openChatExport(): void {
+    if (!this.detailModel.isChat()) return;
+    this.exportSheetShown = true;
+  }
+  private openStarredOriginal(star: StarredSnapshot): void {
+    this.starredSheetShown = false;
+    const pool = star.conversation === 'agent' ? this.model.sessions : this.model.conversations;
+    const existing = pool.find((row: ResourceRow) =>
+      row.machine === star.machine_id && (row.session || row.id) === star.session_id
+    );
+    if (existing) {
+      this.openPickedChat(existing, star.item_id);
+      return;
+    }
+    const kind = star.conversation === 'agent' ? 'session' : 'conversation';
+    const data = Wire.payload(
+      ['id', 'session_id', 'machine_id', 'manager', 'title'],
+      [star.session_id, star.session_id, star.machine_id, star.source_manager || this.model.profile.manager, star.title || tr('conversation')]
+    );
+    const fallbackRow = ResourceRow.from(data, kind);
+    fallbackRow.group = this.model.profile.id;
+    fallbackRow.manager = star.source_manager || this.model.profile.manager;
+    fallbackRow.machine = star.machine_id;
+    fallbackRow.session = star.session_id;
+    this.openPickedChat(fallbackRow, star.item_id);
+  }
+  private async forkCurrentChat(): Promise<void> {
+    const owner = this.detailModel, row = owner.selected;
+    const machine = row.machine, sid = row.session || row.id;
+    if (!owner.connected || !owner.isChat() || !machine || !sid) return;
+    const isMain = row.kind === 'conversation' && sid === owner.mainId && (!owner.mainMachineId || machine === owner.mainMachineId);
+    if (isMain || (!owner.demo && !Wire.bool(row.data(), 'can_fork'))) return;
+    const path = '/api/v1/sessions/' + encodeURIComponent(machine) + '/' + encodeURIComponent(sid) + '/fork';
+    if (owner.operationBlocked(path)) {
+      toastCenter.error(tr('pending_action'));
+      return;
+    }
+    const busyKey = JSON.stringify([owner.scope(), owner.connectionGeneration(), machine, sid]);
+    if (this.forkSessionTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), selectedKey = row.key();
+    const admit = (): boolean => this.detailModel === owner && owner.owns(generation, scope) && owner.selected.key() === selectedKey;
+    this.forkSessionTarget = busyKey;
+    try {
+      const response = await owner.repo().call(path, 'POST', {}, util.generateRandomUUID(), admit);
+      if (!this.detailModel || this.detailModel !== owner || !owner.owns(generation, scope)) return;
+      const forkedId = Wire.text(response, 'session_id');
+      if (!forkedId || forkedId === sid) {
+        toastCenter.error(tr('result_unknown'));
+        return;
+      }
+      const data = Wire.payload(
+        ['id', 'session_id', 'machine_id', 'manager', 'title', 'cwd', 'status', 'state', 'can_fork'],
+        [forkedId, forkedId, machine, owner.profile.manager, Wire.text(response, 'title') || row.title, row.path, 'idle', 'idle', true]
+      );
+      const forkedRow = ResourceRow.from(data, row.kind);
+      forkedRow.group = row.group || owner.profile.id;
+      forkedRow.manager = row.manager || owner.profile.manager;
+      forkedRow.machine = machine;
+      forkedRow.session = forkedId;
+      forkedRow.path = row.path;
+      Haptics.success();
+      toastCenter.success(tr('fork_chat_done_toast'));
+      owner.refresh().catch(() => {});
+      this.openPickedChat(forkedRow);
+    } catch (error) {
+      if (this.detailModel === owner && owner.owns(generation, scope)) {
+        owner.reportError(error as Error);
+        Haptics.error();
+        toastCenter.error(trError(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.forkSessionTarget === busyKey) this.forkSessionTarget = '';
+    }
+  }
+  @Builder starredSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        StarredMessagesSheet({
+          model: this.model,
+          onOpenOriginal: (star: StarredSnapshot) => this.openStarredOriginal(star),
+          onClose: () => { this.starredSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder exportSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        ChatExportSheet({
+          model: this.detailModel,
+          onClose: () => { this.exportSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder archivedSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        ArchivedConversationsSheet({
+          model: this.model,
+          onOpen: (row: ResourceRow) => {
+            this.archivedSheetShown = false;
+            this.openPickedChat(row);
+          },
+          onClose: () => { this.archivedSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder standingAuthSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        StandingAuthSheet({
+          model: this.model,
+          onClose: () => { this.standingAuthSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder fullSearchSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        AssistantSearchSheet({
+          model: this.model,
+          onOpen: (row: ResourceRow, itemId: string) => {
+            this.fullSearchSheetShown = false;
+            this.openPickedChat(row, itemId);
+          },
+          onClose: () => { this.fullSearchSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder autoChatsSheetContent() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        AutoConversationsSheet({
+          model: this.model,
+          history: this.sidebarTaskHistory,
+          onOpen: (row: ResourceRow) => {
+            this.autoChatsSheetShown = false;
+            this.openPickedChat(row);
+          },
+          onClose: () => { this.autoChatsSheetShown = false; }
+        })
+      }
+    }
+  }
+  @Builder tokenUsageSheet() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        TokenUsageSheet({
+          model: this.model,
+          onClose: () => { this.tokenUsageOpen = false; }
+        })
+      }
+    }
+  }
   private dismissTopOverlay(): boolean {
+    if (this.exportSheetShown) { this.exportSheetShown = false; return true; }
+    if (this.starredSheetShown) { this.starredSheetShown = false; return true; }
+    if (this.archivedSheetShown) { this.archivedSheetShown = false; return true; }
+    if (this.standingAuthSheetShown) { this.standingAuthSheetShown = false; return true; }
+    if (this.fullSearchSheetShown) { this.fullSearchSheetShown = false; return true; }
+    if (this.autoChatsSheetShown) { this.autoChatsSheetShown = false; return true; }
+    if (this.tokenUsageOpen) { this.tokenUsageOpen = false; return true; }
     if (this.quickPaletteOpen) { this.quickPaletteOpen = false; return true; }
     if (this.directionPermissionsVisible) { this.directionPermissionsVisible = false; return true; }
     if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true;
@@ -1442,7 +1687,7 @@ struct Index {
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
-  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.quickPaletteOpen = false; this.chatForward.end(); this.chatForward.clearNew(); this.pendingSearchHit = ''; this.pendingSearchTarget = ''; this.chatSearchShown = false; this.drawerSearching = false; this.phoneSettingsMachine = undefined; this.phoneSettingsQuery = ''; this.phoneSettingsTrail = []; this.phoneSettingsShown = false; this.phoneSettingsDepth = -1; this.pendingInboxHandoff = ''; this.projectCatalog.clear(); this.agentWorktree = undefined; this.pickedAgentTree = ''; this.agentWorkspace.hide(); this.spacesShown = false; this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
+  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.tokenUsageOpen = false; this.quickPaletteOpen = false; this.standingAuthSheetShown = false; this.fullSearchSheetShown = false; this.autoChatsSheetShown = false; this.chatForward.end(); this.chatForward.clearNew(); this.pendingSearchHit = ''; this.pendingSearchTarget = ''; this.chatSearchShown = false; this.drawerSearching = false; this.phoneSettingsMachine = undefined; this.phoneSettingsQuery = ''; this.phoneSettingsTrail = []; this.phoneSettingsShown = false; this.phoneSettingsDepth = -1; this.pendingInboxHandoff = ''; this.projectCatalog.clear(); this.agentWorktree = undefined; this.pickedAgentTree = ''; this.agentWorkspace.hide(); this.spacesShown = false; this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
   @Monitor('model.conversations', 'model.mainId', 'model.mainMachineId', 'model.sidebarConfig', 'model.connected', 'spacesShown', 'breakpoint', 'collapsed', 'sidebarTaskHistory.revision') conversationsChanged(): void { this.syncConversationRows(); }
   @Monitor('model.appearance') appearanceChanged(): void {
     this.getUIContext().getHostContext()?.getApplicationContext().setColorMode(this.model.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT : this.model.appearance === 2 ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -1484,7 +1729,7 @@ struct Index {
     if (this.model.projectsRequested && this.model.ready) { this.consumeProjectLaunch(); return; }
     if (this.model.pendingXiaoYiRoute && this.model.ready) { this.consumeXiaoYiRoute(); return; }
     if (intent !== this.navigationIntent) this.savePath();
-    if (this.model.section === 2 && !this.model.inboxPageVisible() || this.model.section === 5 && !this.model.todosPageVisible()) {
+    if (this.model.section === 2 && !this.model.inboxPageVisible() || this.model.section === 5 && !this.model.todosPageVisible() || this.model.section === 6 && !this.model.knowledgePageVisible()) {
       this.openSpace('persona');
       return;
     }
@@ -1497,7 +1742,8 @@ struct Index {
   @Monitor('model.sidebarConfig', 'model.demo') hiddenPagesChanged(): void {
     const viewingInbox = this.model.section === 2 || this.phoneTop === 'inbox' || this.phoneTop === 'resources' && this.phoneParam === 'inbox';
     const viewingTodos = this.model.section === 5 || this.phoneTop === 'todo' || this.phoneTop === 'resources' && this.phoneParam === 'todo';
-    if (viewingInbox && !this.model.inboxPageVisible() || viewingTodos && !this.model.todosPageVisible()) {
+    const viewingKnowledge = this.model.section === 6 || this.phoneTop === 'knowledge' || this.phoneTop === 'knowledge_meetings' || this.phoneTop === 'resources' && this.phoneParam === 'knowledge';
+    if (viewingInbox && !this.model.inboxPageVisible() || viewingTodos && !this.model.todosPageVisible() || viewingKnowledge && !this.model.knowledgePageVisible()) {
       this.openSpace('persona');
     }
   }
@@ -1532,7 +1778,7 @@ struct Index {
       return;
     }
     if (dest === 'todos') { this.openSpace(this.model.todosPageVisible() ? 'todo' : 'persona'); return; }
-    if (dest === 'knowledge') { this.openSpace('knowledge'); return; }
+    if (dest === 'knowledge') { this.openSpace(this.model.knowledgePageVisible() ? 'knowledge' : 'persona'); return; }
     if (dest === 'health') { this.openSpace('health'); return; }
     if (dest === 'inbox') { this.openSpace(this.model.inboxPageVisible() ? 'inbox' : 'persona'); return; }
     if (dest === 'recording') {
@@ -1706,7 +1952,7 @@ struct Index {
       .finally(() => { const remaining = (this.creatingConversations.get(ownerKey) || 1) - 1; if (remaining) this.creatingConversations.set(ownerKey, remaining); else this.creatingConversations.delete(ownerKey); });
   }
   private openResources(kind: string): void { this.resourceKind = kind; this.model.listResources(kind); this.stack.pushPath({ name: 'resources', param: kind }); this.savePath(); }
-  private openSettings(page: string, contextual: boolean = false): void { if (page === 'appearance' || page === 'phone_agent_layout' || page === 'phone_look_layout') this.ensureAgentWorkspace(); this.settingsPage = page; this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, contextual ? this.detailModel.selected : undefined) }); this.savePath(); }
+  private openSettings(page: string, contextual: boolean = false): void { if (page === 'standing_authorizations') { this.spacesShown = false; this.phoneSettingsShown = false; this.standingAuthSheetShown = true; return; } if (page === 'appearance' || page === 'phone_agent_layout' || page === 'phone_look_layout') this.ensureAgentWorkspace(); this.settingsPage = page; this.stack.pushPath({ name: 'settings', param: NavigationContext.settings(page, contextual ? this.detailModel.selected : undefined) }); this.savePath(); }
   private settingsFamily(page: string): string { return ['extension_detail', 'extension_catalog'].includes(page) ? 'extensions' : page === 'connector_detail' ? 'connectors' : page === 'channel_detail' ? 'channels' : page; }
   private isAdminPage(page: string): boolean { return ['assistant', 'memory', 'managers', 'phone_new_assistant', 'launchers', 'engine', 'hub_update', 'node_update'].includes(page); }
   private settingsLabel(page: string): string {
@@ -1892,20 +2138,29 @@ struct Index {
     ];
   }
   @Builder shellMenu() {
-    Row({ space: this.foldLayout.supportsInspector ? 4 : Tokens.gap }) {
+    Row({ space: this.foldLayout.supportsInspector ? Tokens.spaceSm : Tokens.spaceS }) {
       if (!this.rail() && this.model.profile.id) {
         this.quickPaletteButton(this.foldLayout.supportsInspector ? 32 : 36, true)
       }
       if (!this.rail()) ForEach(this.menus(), (item: NavigationMenuItem, index: number) => {
         Button({ type: ButtonType.Circle }) { SymbolGlyph(index === 0 ? Symbols.plus : Symbols.spaces).fontSize(Tokens.symbolFont).fontColor([Colors.ink]) }
-          .attributeModifier(ButtonStyles.chrome).width(this.foldLayout.supportsInspector ? 32 : 36).height(this.foldLayout.supportsInspector ? 32 : 36).accessibilityText(item.value as string).onClick(() => { Haptics.tap(); item.action?.(); }).id(index === 0 ? 'shell.new' : 'shell.spaces')
+          .width(this.foldLayout.supportsInspector ? 32 : 36).height(this.foldLayout.supportsInspector ? 32 : 36).padding(0)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: (this.foldLayout.supportsInspector ? 32 : 36) / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(this.foldLayout.supportsInspector ? 32 : 36))
+          .accessibilityText(item.value as string).onClick(() => { Haptics.tap(); item.action?.(); }).id(index === 0 ? 'shell.new' : 'shell.spaces')
       })
       if (!this.rail() && this.wide() && this.foldLayout.supportsInspector) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
-        }.attributeModifier(ButtonStyles.chrome).width(32).height(32)
-          .responseRegion({ x: -6, y: -6, width: 44, height: 44 })
-          .backgroundColor(this.showFoldInspector() ? Colors.selection : Color.Transparent)
+        }.width(32).height(32).padding(0)
+          .responseRegion(ButtonStyles.touchRegion(32))
+          .backgroundColor(this.showFoldInspector() ? Colors.selection : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.showFoldInspector() ? Colors.link : (Colors.styleEdge || Colors.hairlineGlass), radius: 16 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
           .accessibilityText(tr('fold_inspector_title'))
           .onClick(() => this.toggleFoldInspector())
           .id('shell.fold.inspector')
@@ -1927,22 +2182,30 @@ struct Index {
     Button({type:ButtonType.Circle}) {
       Row({space:3}) {
         ForEach([0,1,2], (_dot:number) => {
-          Circle().width(4).height(4).fill(Colors.link)
+          Circle().width(3.5).height(3.5).fill(Colors.ink)
         }, (dot:number) => String(dot))
       }
-    }.attributeModifier(ButtonStyles.chrome).width(this.sessionActionSize()).height(slim ? 40 : this.sessionActionSize())
-      .backgroundColor(slim ? Color.Transparent : Colors.surface)
-      .responseRegion({x:0,y:slim ? (40-this.sessionActionSize())/2 : 0,width:this.sessionActionSize(),height:this.sessionActionSize()})
-      .border({width:slim ? 0 : 0.5,color:Colors.divider,radius:this.sessionActionSize()/2}).accessibilityText(tr('more')).id('chat.title.more')
+    }.width(slim ? 36 : this.sessionActionSize()).height(slim ? 36 : this.sessionActionSize()).padding(0)
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .responseRegion(ButtonStyles.touchRegion(slim ? 36 : this.sessionActionSize()))
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.hairlineGlass,radius:(slim ? 36 : this.sessionActionSize())/2})
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+      .accessibilityText(tr('more')).id('chat.title.more')
       .enabled(this.phoneChatActionsReady).onClick(() => this.showChatActions(this.phoneTop,this.phoneParam))
       .bindMenu(this.chatTitleMenuVisible && this.phoneChatActionsReady,this.chatActionsMenu,this.chatMenuOptions(this.chatMenuRevision))
   }
   @Builder destinationMenus(name: string, param: Object) {
-    if (!this.mainDestination(name, param)) Row({ space: Tokens.gap }) {
+    if (!this.mainDestination(name, param)) Row({ space: Tokens.spaceS }) {
       if (name==='knowledge' && this.routeRow(param).path==='recordings') {
         Button({type:ButtonType.Circle}) {
           SymbolGlyph($r('sys.symbol.label')).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        }.attributeModifier(ButtonStyles.chrome).width(Tokens.chrome).height(Tokens.chrome).backgroundColor(Color.Transparent)
+        }.width(Tokens.chrome).height(Tokens.chrome).padding(0)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: Tokens.chrome / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(Tokens.chrome))
           .accessibilityText(tr('tags')).enabled(this.targetReady(name,param)).onClick(() => {
             if (this.activeChild===this.childKey(name,param) && this.targetReady(name,param)) this.recordingEditRevision++;
           }).id('destination.action.0')
@@ -1956,8 +2219,12 @@ struct Index {
               }, (dot: number) => String(dot))
             }
           } else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
-        }.attributeModifier(ButtonStyles.chrome)
-          .width(Tokens.chrome).height(Tokens.chrome).backgroundColor(Color.Transparent)
+        }.width(Tokens.chrome).height(Tokens.chrome).padding(0)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: Tokens.chrome / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(Tokens.chrome))
           .accessibilityText(item.value as string).enabled(item.isEnabled !== false).onClick(() => item.action?.())
           .id(name === 'session' || name === 'conversation' || name === 'tools' ? 'chat.title.more' : 'destination.action.' + String(index))
           .bindMenu((name === 'session' || name === 'conversation' || name === 'tools') && this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param),
@@ -1966,9 +2233,12 @@ struct Index {
       if (this.rail() && this.foldLayout.supportsInspector && (name === 'session' || name === 'conversation' || name === 'tools')) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
-        }.attributeModifier(ButtonStyles.chrome)
-          .width(Tokens.chrome).height(Tokens.chrome)
-          .backgroundColor(this.showFoldInspector() ? Colors.selection : Color.Transparent)
+        }.width(Tokens.chrome).height(Tokens.chrome).padding(0)
+          .backgroundColor(this.showFoldInspector() ? Colors.selection : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.showFoldInspector() ? Colors.link : (Colors.styleEdge || Colors.hairlineGlass), radius: Tokens.chrome / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(Tokens.chrome))
           .accessibilityText(tr('fold_inspector_title'))
           .onClick(() => this.toggleFoldInspector())
           .id('fold.inspector.toggle')
@@ -1978,7 +2248,7 @@ struct Index {
   private openSettingsRoot(): void { this.stack.pushPath({ name: 'settings_root', param: '' }); this.savePath(); }
   private openSpace(kind: string): void {
     this.phoneSettingsDepth = -1;
-    if (kind === 'inbox' && !this.model.inboxPageVisible() || kind === 'todo' && !this.model.todosPageVisible()) {
+    if (kind === 'inbox' && !this.model.inboxPageVisible() || kind === 'todo' && !this.model.todosPageVisible() || kind === 'knowledge' && !this.model.knowledgePageVisible()) {
       kind = 'persona';
     }
     if (kind === 'settings' && !this.wide() && this.spacesShown) {
@@ -1998,6 +2268,7 @@ struct Index {
       if (this.phoneTop !== 'resources' || this.phoneParam !== 'health') this.openResources('health');
     }
     else if (kind === 'hub') this.openSheet('hub');
+    else if (kind === 'token_usage') { this.tokenUsageOpen = true; }
     else if (kind === 'collapse') this.collapsed = true;
     else {
       const index = ['persona', 'agents', 'inbox', 'settings', 'projects', 'todo', 'knowledge', 'health', 'devices', 'schedules', 'recordings', 'applications'].indexOf(kind);
@@ -2031,6 +2302,7 @@ struct Index {
     if (kind === 'knowledge') return $r('sys.symbol.books_vertical_fill');
     if (kind === 'health') return $r('sys.symbol.heart');
     if (kind === 'devices') return $r('sys.symbol.matebook_and_phone_fill');
+    if (kind === 'token_usage') return Symbols.health;
     if (kind === 'settings') return Symbols.gear;
     if (kind === 'applications') return Symbols.apps;
     if (kind === 'collapse') return Symbols.collapse;
@@ -2051,6 +2323,7 @@ struct Index {
     if (kind === 'health') return tr('phone_drawer_health');
     if (kind === 'schedules') return tr('phone_drawer_schedules');
     if (kind === 'devices') return tr('phone_machines');
+    if (kind === 'token_usage') return tr('token_usage_title');
     if (kind === 'recordings') return tr('knowledge_kind_meetings');
     return tr(kind);
   }
@@ -2288,8 +2561,9 @@ struct Index {
         if (this.model.inboxPageVisible()) this.spaceRow('inbox')
         if (this.model.todosPageVisible()) this.spaceRow('todo')
         this.spaceRow('schedules')
-        this.spaceRow('knowledge')
+        if (this.model.knowledgePageVisible()) this.spaceRow('knowledge')
         this.spaceRow('health')
+        this.spaceRow('token_usage')
         if (this.applications.visible) this.spaceRow('applications')
         this.spaceRow('devices')
         if (!this.wide()) this.drawerDivider()
@@ -2313,7 +2587,45 @@ struct Index {
         ListItem() {
           Row() { Text(tr('flow_all_chats')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1); SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary]) }
             .width('100%').constraintSize({minHeight:this.drawerMetric(44)}).padding({left:12,right:12})
-        }.onClick(() => { if (this.drawerAcceptsTap()) this.showAllChats(false); }).id('spaces.all_chats')
+        }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.autoChatsSheetShown = true; } }).id('spaces.all_chats')
+        if (this.model.connected) {
+          ListItem() {
+            Row({ space: 10 }) {
+              SymbolGlyph(Symbols.search).fontSize('16vp').fontColor([Colors.link])
+              Text(tr('assistant_full_search_title')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
+              SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) }).padding({ left: 12, right: 12 })
+          }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.fullSearchSheetShown = true; } }).id('spaces.full_search')
+          ListItem() {
+            Row({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.checkmark_shield')).fontSize('16vp').fontColor([Colors.ai])
+              Text(tr('standing_auth_title')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
+              SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) }).padding({ left: 12, right: 12 })
+          }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.standingAuthSheetShown = true; } }).id('spaces.standing_auth')
+        }
+        if (starredStore.isOffered(this.model)) {
+          ListItem() {
+            Row({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.star')).fontSize('16vp').fontColor([Colors.working])
+              Text(tr('starred_messages')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
+              SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) }).padding({ left: 12, right: 12 })
+          }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.starredSheetShown = true; } }).id('spaces.starred')
+        }
+        if (this.model.connected) {
+          ListItem() {
+            Row({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.archivebox')).fontSize('16vp').fontColor([Colors.secondary])
+              Text(tr('archived_chats')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
+              if (this.model.conversations.filter((row: ResourceRow) => Wire.bool(row.data(), 'archived')).length > 0) {
+                Text(String(this.model.conversations.filter((row: ResourceRow) => Wire.bool(row.data(), 'archived')).length))
+                  .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+              }
+              SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
+            }.width('100%').constraintSize({ minHeight: this.drawerMetric(44) }).padding({ left: 12, right: 12 })
+          }.onClick(() => { if (this.drawerAcceptsTap()) { this.spacesShown = false; this.archivedSheetShown = true; } }).id('spaces.archived')
+        }
         if (this.mergedPhone() && this.drawerAgentRows.length) {
           ListItem() {
             Row() {
@@ -2403,6 +2715,15 @@ struct Index {
   private dismissChatActions(): void {
     this.chatMenuRevision++; this.chatTitleMenuVisible = false; this.chatBodyMenuVisible = false; this.chatMenuActions = [];
   }
+  private async triggerDetailAutoRename(owner: ClientModel): Promise<void> {
+    const target = owner.selected;
+    const label = target.title || tr('agent_untitled');
+    const err = await owner.autoRenameAgent(target);
+    if (err && this.detailModel === owner) {
+      Haptics.error();
+      toastCenter.error(trError(err) + ' · ' + label);
+    }
+  }
   private showChatActions(name: string, param: Object): void {
     const owner = this.detailModel, key = owner.selected.key(), generation = owner.connectionGeneration(), scope = owner.scope();
     const valid = (): boolean => this.activeChild === this.childKey(name, param) && this.targetReady(name, param) &&
@@ -2441,6 +2762,21 @@ struct Index {
     sheets.push({ title: tr('voice'), action: () => { if (valid()) this.openSettings('voice', true); } });
     if (canEdit && sessionModeAvailable(owner.selected, 'effort')) sheets.push({ title: tr('effort'), action: () => { if (valid()) this.openSettings('session_effort', true); } });
     if (canEdit && sessionModeAvailable(owner.selected, 'model')) sheets.push({ title: tr('model'), action: () => { if (valid()) this.openSettings('session_model', true); } });
+    if (owner.isChat() && owner.messages.length > 0) {
+      sheets.push({ title: tr('export_chat'), identity: 'chat.actions.export', action: () => { if (valid()) this.openChatExport(); } });
+    }
+    if (owner.selected.kind === 'session' && owner.canAutoRenameAgent(owner.selected)) {
+      sheets.push({
+        title: tr(owner.isAutoRenamingRow(owner.selected) ? 'agent_renaming' : 'agent_auto_rename'),
+        identity: 'chat.actions.autoname',
+        action: () => { if (valid() && !owner.isAutoRenamingRow(owner.selected)) { void this.triggerDetailAutoRename(owner); } }
+      });
+    }
+    const sid = owner.selected.session || owner.selected.id;
+    const isMainChat = owner.selected.kind === 'conversation' && sid === owner.mainId && (!owner.mainMachineId || owner.selected.machine === owner.mainMachineId);
+    if (owner.connected && owner.isChat() && !isMainChat && owner.selected.machine && (owner.demo || Wire.bool(owner.selected.data(), 'can_fork'))) {
+      sheets.push({ title: tr('fork_continue_new_chat'), identity: 'chat.actions.fork', action: () => { if (valid()) { void this.forkCurrentChat(); } } });
+    }
     const identity = JSON.stringify([owner.scope(), owner.connectionGeneration(), owner.target()]);
     if (owner.canStop() && this.inlineStopIdentity !== identity) sheets.push({ title: tr('stop'), action: () => { if (valid()) owner.stop(valid); } });
     this.chatMenuRevision++; this.chatMenuActions = sheets;
@@ -2524,8 +2860,9 @@ struct Index {
       ListItemGroup() {
       if (this.model.inboxPageVisible()) this.spaceRow('inbox')
       if (this.model.todosPageVisible()) this.spaceRow('todo')
-      this.spaceRow('knowledge')
+      if (this.model.knowledgePageVisible()) this.spaceRow('knowledge')
       this.spaceRow('health')
+      this.spaceRow('token_usage')
       if (this.applications.visible) this.spaceRow('applications')
       this.spaceRow('devices')
       this.spaceRow('settings')
@@ -2576,10 +2913,16 @@ struct Index {
       } })
   }
   @Builder inboxList() {
-    InboxWorkspacePage({ model: this.model, visible: this.model.section === 2, phoneList:!this.wide(), refreshRevision: this.inboxRefreshRevision, toolbarActions:!this.wide() && this.rootModuleMenuKind()==='inbox', composeRevision:this.inboxComposeRevision, onComposeAvailability:(enabled:boolean) => { if (this.model.section===2 && !this.phoneTop) { this.inboxComposeScope=this.inboxPermissionOwner();this.inboxComposeAvailable=enabled; } }, onChanged: () => this.inboxRefreshRevision++, onOpen: (row: ResourceRow) => this.openRow(row), onLink: (address: string) => this.openReader(address),
+    InboxWorkspacePage({ model: this.model, visible: this.model.section === 2, phoneList:!this.wide(), refreshRevision: this.inboxRefreshRevision, toolbarActions:!this.wide() && this.rootModuleMenuKind()==='inbox', composeRevision:this.inboxComposeRevision, onComposeAvailability:(enabled:boolean) => { if (this.model.section===2 && !this.phoneTop) { this.inboxComposeScope=this.inboxPermissionOwner();this.inboxComposeAvailable=enabled; } }, onChanged: () => this.inboxRefreshRevision++, onOpen: (row: ResourceRow) => this.openRow(row), onOpenResource: (row: ResourceRow) => this.openLinkedResource(row), onLink: (address: string) => this.openReader(address),
       onHandoff: (row: ResourceRow) => this.openLinkedResource(row) })
   }
   private openFromPhoneSettings(page: string): void {
+    if (page === 'standing_authorizations') {
+      this.phoneSettingsShown = false;
+      this.spacesShown = false;
+      this.standingAuthSheetShown = true;
+      return;
+    }
     if (phoneSettingsLink(page)) {
       if (page === 'appearance' || page === 'phone_agent_layout' || page === 'phone_look_layout') this.ensureAgentWorkspace();
       this.phoneSettingsTrail = pushPhoneSetting(this.phoneSettingsTrail, page);
@@ -2872,7 +3215,7 @@ struct Index {
       }.width('100%').padding({ top: 4, bottom: 4 })
       if (this.model.inboxPageVisible()) this.railSpaceButton('inbox')
       if (this.model.todosPageVisible()) this.railSpaceButton('todo')
-      this.railSpaceButton('knowledge')
+      if (this.model.knowledgePageVisible()) this.railSpaceButton('knowledge')
       this.railSpaceButton('health')
       this.railSpaceButton('devices')
       this.railSpaceButton('settings')
@@ -3737,6 +4080,9 @@ struct Index {
     const row = this.routeRow(param);
     const current = this.detailModel.sessions.concat(this.detailModel.conversations).find((item: ResourceRow) => item.key() === row.key());
     const target = current || row;
+    if (this.detailModel.isAutoRenamingRow(target)) {
+      return tr('agent_renaming');
+    }
     return sessionDisplayTitle(target.title, target.data(), this.detailModel.useHerdrTabName) || tr(row.kind === 'conversation' ? 'main_chat' : 'agents');
   }
   private async restoreTarget(name: string, param: Object): Promise<void> {
@@ -3861,7 +4207,7 @@ struct Index {
         else this.targetLoading(name, param)
       } else if (name === 'inbox' || name === 'todo_source' || name === 'todo_thread' || name === 'resources' && param === 'inbox') {
         if (name === 'resources' || this.targetReady(name, param)) InboxWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'resources' ? undefined : this.routeRow(param), list: name === 'resources', phoneList: !this.wide() && name === 'resources', visible: this.activeChild === this.childKey(name, param), refreshRevision: this.inboxRefreshRevision, toolbarActions:!this.wide() && this.rootModuleMenuKind()==='inbox', composeRevision:this.inboxComposeRevision, onComposeAvailability:(enabled:boolean) => { if (this.activeChild===this.childKey(name,param) && this.rootModuleMenuKind()==='inbox') { this.inboxComposeScope=this.inboxPermissionOwner();this.inboxComposeAvailable=enabled; } }, handoffRequested: this.pendingInboxHandoff === this.childKey(name, param), onHandoffConsumed: () => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; },
-          onChanged: () => { if (this.activeChild === this.childKey(name, param)) this.inboxRefreshRevision++; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
+          onChanged: () => { if (this.activeChild === this.childKey(name, param)) this.inboxRefreshRevision++; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'todo' || name === 'resources' && param === 'todo') {
         if (name === 'resources' || this.targetReady(name, param)) TodoWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'todo' ? this.routeRow(param) : undefined, list: name === 'resources', visible: this.activeChild === this.childKey(name, param),
@@ -4017,7 +4363,7 @@ struct Index {
         Stack() {
           Row().width('100%').height('100%').background(Colors.canvas, { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
           Row().width('100%').height('100%').opacity(this.drawerFraction)
-            .background(this.environment.dark ? '#73000000' : '#33000000', { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
+            .background(Colors.subtleScrim, { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
         }.layoutWeight(1).height('100%')
       }.width('100%').height('100%').hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
     }
@@ -4105,6 +4451,7 @@ struct Index {
         onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
         onInterruptSession: (row: ResourceRow) => { this.interruptSessionFromWorkbench(row); },
         onOpenXiaoYi: () => this.openXiaoYiQuick(),
+        onOpenTokenUsage: () => { this.tokenUsageOpen = true; },
         onOpenLink: (address: string) => this.openReader(address)
       })
     }
@@ -4113,7 +4460,7 @@ struct Index {
         .backgroundBlurStyle(BlurStyle.COMPONENT_THIN).hitTestBehavior(HitTestMode.Transparent)
         .accessibilityLevel(this.spacesShown || this.chatSearchShown ? 'no-hide-descendants' : 'auto')
       if (this.drawerFraction > 0 && !this.wide()) Row().width('100%').height('100%')
-        .backgroundColor(this.environment.dark ? '#73000000' : '#33000000')
+        .backgroundColor(Colors.subtleScrim)
         .opacity(this.drawerFraction)
         .onClick(() => this.spacesShown = false).accessibilityText(tr('close')).id('spaces.dismiss')
       }.width('100%').height('100%').backgroundColor(Colors.canvas)
@@ -4158,6 +4505,62 @@ struct Index {
       showClose: false,
       backgroundColor: Colors.sheetBackground,
       onDisappear: () => { this.quickPaletteOpen = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.starredSheetShown, this.starredSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.starredSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.exportSheetShown, this.exportSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.exportSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.archivedSheetShown, this.archivedSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.archivedSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.standingAuthSheetShown, this.standingAuthSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.standingAuthSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.fullSearchSheetShown, this.fullSearchSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.fullSearchSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.autoChatsSheetShown, this.autoChatsSheetContent(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: false,
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.autoChatsSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.tokenUsageOpen, this.tokenUsageSheet(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: !this.wide(),
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.tokenUsageOpen = false; }
     })
     Column().width(0).height(0).bindSheet(!this.model.profile.id && this.phoneSettingsShown, this.phoneSettings(), {
       height: this.wide() ? SheetSize.LARGE : this.compactFormHeight(),

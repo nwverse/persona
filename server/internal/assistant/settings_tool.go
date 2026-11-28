@@ -13,6 +13,7 @@ import (
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -142,6 +143,12 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.mainTasksQuiet(ctx)), nil },
 			set: s.setMainTasksQuiet},
+		{Setting: Setting{Key: "assistant.approval_mirror_main", Title: "Show approvals in the main chat", Actions: getSet,
+			About: "on (the default): a non-private approval for a change in another Assistant conversation also appears in the main conversation; " +
+				"read-only requests stay in their original conversation, and answering either copy of a routed request resolves the same request. Off applies to new cards. Agent, private and health conversations are unchanged",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.approvalMirrorMain(ctx)), nil },
+			set: s.setApprovalMirrorMain},
 		{Setting: Setting{Key: "assistant.start_requested_tasks", Title: "我在对话里说过的，直接开始", Actions: getSet,
 			About: "on (the default): task_plan tasks marked user_requested (the user asked for that very task in this turn) start at once " +
 				"instead of waiting for 开始 on the plan card; off: only read-only tasks and remembered kinds start without asking",
@@ -531,7 +538,7 @@ func (s *Service) allOwnSettings() []ownSetting {
 			set: s.setModelTiers},
 		{Setting: Setting{Key: admissionSettingsKey, Title: "Execution Agent admission gate", Actions: getSet,
 			About: "the lines an execution Agent's start is checked against on every computer: enabled, load_per_core, min_memory_bytes, " +
-				"max_claude_procs (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
+				"max_claude_procs, max_swap_percent (and the hub machine's own hub_* lines, per-machine overrides), and the per-direction cap. " +
 				"direction_cap_by_direction keys are a supervisor conversation id or a direction's displayed name and win over " +
 				"direction_cap_by_project, which wins over direction_cap and the code default. launcher_groups (none by default) caps " +
 				"running tasks across launchers that share one budget, on every computer: each {name, launchers (exact launcher names), " +
@@ -845,7 +852,7 @@ func (s *Service) applyAutomaticReversibleSetting(ctx context.Context, call Tool
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
 		Kind: proto.IxPermission, ToolName: "persona_settings", SessionTitle: "Persona", CreatedAt: now, ToolInput: audit,
 		Private: s.justMeNow(call.MachineID, call.SessionID), Summary: proposal}
-	if err := writer.InsertResolvedInteraction(ctx, ix, resolution); err != nil {
+	if err := writer.InsertResolvedInteraction(db.WithEndedBy(ctx, db.EndedByAssistant), ix, resolution); err != nil {
 		return "", fmt.Errorf("%w: write the reversible-setting history record: %v", approvalops.ErrNotApplied, err)
 	}
 	_, saveErr := s.updateSettingsChecked(ctx, func(v *Settings) error {
@@ -1170,6 +1177,13 @@ func (s *Service) setMainTasksQuiet(ctx context.Context, v json.RawMessage) (*ow
 		return i18n.T(l, "assistant-settings_tool.change_main_tasks_quiet", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.MainTasksQuiet },
 		"assistant.main_tasks_quiet is %v for tasks opened from now on (existing ones keep theirs).")
+}
+
+func (s *Service) setApprovalMirrorMain(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	return s.setBoolSetting(ctx, v, s.approvalMirrorMain, "assistant.approval_mirror_main is unchanged", func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_approval_mirror_main", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.ApprovalMirrorMain },
+		"assistant.approval_mirror_main is %v for new cards.")
 }
 
 func (s *Service) setStartRequestedTasks(ctx context.Context, v json.RawMessage) (*ownChange, error) {

@@ -287,7 +287,7 @@ Knowledge state is files in `~/.persona/data`, the manager's `handles.key` (`~/.
 This is hub's same Postgres, with unchanged keys / tables and no data migration; the assistant connects itself using the same `database_url`. Only it reads / writes these keys and tables; hub doesn't touch them.
 Scheduled-task and finished-task Agent-closing loops belong to the assistant (`Service.Run`, beginning only after first hub connection and handshake).
 
-**Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (a compatibility switch, off by default: new tasks belong to the planning lead or main, and `background_supervisor` names only a legacy conversation finishing older work, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean"), `limit_fallbacks` (empty by default: the launchers a conversation the owner relies on moves to when a usage limit stops it, and back from after the reset; `persona_settings` only, `docs/assistant/agent-work.md` "Usage limits: a backup launcher"), `machine_fallbacks` and `machine_fallback_minutes` (empty by default = off, threshold 10 minutes: ordered backup computers that the main conversation, direction leaders and unbound default scheduled routines fail over to when the primary computer stays offline past the threshold; `persona_settings` only, `docs/assistant/agent-work.md` "Offline computer: automatic machine failover").
+**Assistant settings** (settings `assistant`, exclusively read / written by the assistant since 2026-11-04, `assistant/profile.go`): chat machine, launcher, user timezone (phone `PUT /api/v1/assistant`; `timezone_picked` when a client says the user picked it by hand, which devices then leave alone, #1855), About Me, main chat, replaced old main chats, `main_tasks_quiet`, `approval_mirror_main` (on by default for new cards: non-private write-operation permissions from other Assistant conversations also appear in the main conversation, `docs/assistant/approval-clarification.md` "Main-conversation and direct-chat copies"), `approval_mirror_tools` (the configurable write allowlist for those main and direct-bot copies, with read confirmations excluded by default), `agent_tasks` (off by default, `docs/assistant/unified-entry.md` "Agent tasks"), `inbox_signals` (off by default: new Inbox messages on a supervised task reach its supervisor, `docs/assistant/unified-entry.md` "Supervision (#3124)"), `main_supervises_own_tasks` (a compatibility switch, off by default: new tasks belong to the planning lead or main, and `background_supervisor` names only a legacy conversation finishing older work, `docs/assistant/unified-entry.md` "Background supervisor"), `background_supervisor_keeps_context` (off by default: each of the background supervisor's rounds starts from its first turn with only that round's facts and tools; on, it is one long conversation as before #7315; `persona_settings` only for now, `docs/assistant/unified-entry.md` "Each round starts clean"), `limit_fallbacks` (empty by default: the launchers a conversation the owner relies on moves to when a usage limit stops it, and back from after the reset; `persona_settings` only, `docs/assistant/agent-work.md` "Usage limits: a backup launcher"), `machine_fallbacks` and `machine_fallback_minutes` (empty by default = off, threshold 10 minutes: ordered backup computers that the main conversation, direction leaders and unbound default scheduled routines fail over to when the primary computer stays offline past the threshold; `persona_settings` only, `docs/assistant/agent-work.md` "Offline computer: automatic machine failover").
 `assistant.owner` / `notes` / `machine` / `launcher` in the manager's `manager.json` supply the defaults (laid over the hub's handshake answer); JSON matches the old hub-written form without migration. `assistant.supervision_batch_minutes` is an administrator pin instead: when present, including explicit `0`, it overrides the saved supervision interval; when omitted, the saved setting is unchanged. Reads are cached for 5 seconds (only it writes; `manager.updated` triggers immediate reread).
 `GET/PUT /api/v1/assistant` also reads and saves `default_permission_mode` in this manager’s settings. Reads identify the answering manager with `manager`. New non-guest conversations without an explicit `permission_mode` inherit it, including new main chats, scheduled new conversations and side chats. A stopped Claude Code process resumes with the current default unless the conversation has an explicit mode; a live process keeps its current mode. An explicit session mode, including `default`, always wins over the manager default. Legacy Claude state and transcript modes without that explicit marker are inherited values, not a pin. Non-Claude launchers keep their legacy `AppMode` / in-memory / transcript precedence and do not receive the manager's resume default, even when their declared modes include it. An unset preference selects the built-in `bypassPermissions` default. Web Settings › Persona and Android's native Assistant settings expose the control; on the web, Direction notes links to the same control and Settings search finds it by either the permission or direction name.
 
@@ -563,6 +563,14 @@ With over ten Agents running, most mid-task questions concern internal choices t
 - **Client UI**: web has "Assistant is looking", the `delegate` context and "Change answer", plus the delegated answers in **Session info** (#544, `docs/web/web.md` "Pages"); iOS / Mac have the same (`docs/apple/ios.md`, "Information architecture"). Android has the same pending-card looking/context presentation (#544, `docs/android/android.md` "Session controls, session origin and capabilities") and already has Change Answer.
 
 ## Asking without holding the turn (#4928)
+
+Decision rights apply before either wait mode publishes a card. Internal execution questions name
+`decision_scope: "internal"` and actively wake their designated supervisor. Owner-only questions supply `why_owner`
+or `owner_action`; a personal unlock uses `owner_action: "personal_unlock"`, without asking for the credential itself.
+Calls with no decision-right metadata are rejected for clarification. Both modes keep that metadata in `ToolInput`;
+asynchronous records restore the same routing after restart. Supervisor answers are attributed to the assistant in
+the receipt, never to the owner. An internal cancellation or expiry returns unanswered and takes no default or
+owner to-do. The owner-card lifecycle below applies to questions explicitly addressed to the owner.
 
 `ask_user` takes `wait`, a boolean that defaults to true (hold the turn until the answer, as described under "Ask on the phone" above). With `wait: false` the card is raised and the tool returns at once; the turn ends, and whatever ends the card reaches the asking conversation as one message. Step Q1 of `docs/design/proposals/main-chat-availability.md` (3c); code in `assistant/ask_later.go`.
 
@@ -1802,6 +1810,11 @@ answer reached Persona through the Inbox alone, and none of the Inbox's routes l
 
 ## Messages that could not go in (#10194)
 
+A logical (segmented) conversation's own delivery queue uses the same row field and bubbles: each of its inputs that
+has not gone in is listed with why (`reason`), an attempt whose receipt stays unknown expires after a bounded deadline
+instead of fencing the queue, and its owner picks Retry or Delete (#17431, docs/operations/logical-input-reconciliation.md
+"Delivery deadline").
+
 The owner's own message must never vanish. When the owner writes to one of the assistant's conversations while it
 cannot take the message (its process did not start, as a cold start killed on a loaded computer, #10192; its computer is
 away), nothing was typed. The hub used to answer the app with the failure and forget the message; a replay of the app's
@@ -1879,7 +1892,8 @@ operation then read as accepted and the bubble waited for the transcript and wen
   context (leaving `Later` untouched even if storage recovers before settlement), while saving a carry reservation for
   waiting quiet messages stays fail-closed. Nothing is guessed from
   the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
-  refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
+  refused. While kept, a user-facing message shows above the composer (`queuedRelays`) and disappears once consumed.
+  Internal-only relays (the card ledger and non-owner card routing notes) stay in the delivery state but are not listed.
 - **Per-sender wake cap and deferred wakes** (#13888, #14352, `server/internal/assistant/conversation_fanout.go`,
   `server/internal/assistant/delayed_waits.go`). To keep one broadcast from waking every leader at once, a sender may
   immediately wake at most `fanoutWide - 1` (2) distinct conversations within `fanoutWindow` (10 min); a conversation
@@ -2272,7 +2286,8 @@ kept per day of the owner's time zone in the setting `assistant.card_ledger` (ei
 database). Once a day, from the morning briefing's time (`acceptLoop`'s tick), the day before's count goes to the main
 conversation as a message kept without waking it (`keepRelayLater`, setting `assistant.card_ledger_told`): in all, each
 of the six kinds, and kind 0 by source. It is never pushed to the owner and the briefing does not carry it. The ledger
-only records; which cards are pushed is decided where they are made.
+only records; which cards are pushed is decided where they are made. Its report is internal-only: it is kept for
+the main conversation but left out of the queue shown above the composer.
 
 ## Supervision by model (#5086)
 
@@ -2391,6 +2406,8 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
 ## Guest conversations (2026-11-06, #5195)
 
 A proxy reply the bot writes for a group is one of these too: the hub starts it itself, with a single hub-owned tool, `bot_group_reply`, and the question never enters a conversation of the owner's (`docs/extensions/bots.md`).
+
+A teammate's question that group access lets through is a third kind the hub starts itself (`bot_group`, `docs/extensions/bots.md` "Group access for teammates"). It is one conversation per chat and thread, registered before the node starts it, and it lists `bot_group_reply` plus the connector tools the owner named (`guest_tools`), nothing else: no snapshot, no memory, no skills, no knowledge-base tools, and never a work machine. The question is another person's words and is not stored with the owner's.
 
 A conversation an extension opens to answer **someone else** for the user (for example a Lark extension's opt-in auto replies to @-mentions). Someone else's message goes into it and its answer goes out as the user, so it must have none of the assistant's powers.
 An ordinary extension conversation is an assistant conversation (the assistant directory, its CLAUDE.md and memory, every `mcp__persona` tool allowed up front, `agent_start` / `agent_send` asking the phone only in the health space), where only the prompt stands between the message and those tools; hence this kind.

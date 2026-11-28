@@ -287,7 +287,7 @@ describe("settings search", () => {
     expect(searchSettings("Codex").groups.some((g) => g.tab === "agents" && g.anchor === "settings-codex")).toBe(true);
   });
   it("finds the Sent entry under Connectors by its label and existing hint", () => {
-    for (const q of ["以你的名义发出", "为什么放行"]) {
+    for (const q of ["以你的名义发出", "放行原因"]) {
       const result = searchSettings(q);
       expect(result.tabs).not.toContain("sent");
       expect(result.groups).toContainEqual(expect.objectContaining({ tab: "connectors", anchor: "sent" }));

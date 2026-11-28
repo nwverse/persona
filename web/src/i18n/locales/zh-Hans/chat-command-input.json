@@ -1,12 +1,12 @@
 {
   "kicker": "命令输入",
-  "title": "在等你输入",
+  "title": "等待你的输入",
   "command": "命令",
   "field": "你的输入",
-  "placeholder": "输入命令要的内容",
+  "placeholder": "输入命令所需的内容",
   "show": "显示输入的内容",
   "hide": "隐藏输入的内容",
-  "not_now": "暂不",
+  "not_now": "暂不输入",
   "send": "发送",
-  "note": "直接发给电脑上的这个命令，不经过 Agent；Persona 不会保存。"
+  "note": "内容将直接发送给电脑上的该命令，不经过 Agent，Persona 也不会保存。"
 }

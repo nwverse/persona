@@ -264,7 +264,7 @@ test('phone search starts folded, reveals only from a downward top pull, and a s
  const TouchType={Down:0,Move:1,Up:2};
  const Search=new Function('TouchType','return '+stripTypeScriptTypes('class Search {'+
    ['searchVisible','setSearchEditing','resetSearchReveal','trackPull','refreshAgents'].map(methodCode).join('\n')+'}'))(TouchType);
- const page=new Search(); page.refreshGroupingSupport=()=>{};page.reloadDecisions=()=>{};
+ const page=new Search(); page.refreshGroupingSupport=()=>{};page.reloadDecisions=()=>{};page.refreshPersonalAgents=()=>Promise.resolve();
  let top=0,refreshes=0;
  page.workspace={search:'',setReadingDetail(){},refresh(){refreshes++;return Promise.resolve();},isBoundTo(){return true;}};
  page.agentScroller={currentOffset:()=>({yOffset:top})};page.compactRoot=true;page.active=true;page.onSearchMode=()=>{};page.resetSearchReveal();

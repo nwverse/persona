@@ -55,8 +55,15 @@ export interface QuickCommandLabels {
   readonly workbenchCode?: string;
   readonly workbenchMachines?: string;
   readonly openXiaoYi?: string;
+  readonly openTokenUsage?: string;
   readonly toggleTheme?: string;
   readonly liveViewPreview?: string;
+  readonly starredMessages?: string;
+  readonly archivedChats?: string;
+  readonly exportChat?: string;
+  readonly standingAuth?: string;
+  readonly fullSearch?: string;
+  readonly allChats?: string;
   readonly needsYou?: string;
   readonly working?: string;
   readonly unread?: string;
@@ -68,8 +75,15 @@ export interface QuickCommandBuildOptions {
   readonly useHerdrTabName?: boolean;
   readonly inboxVisible?: boolean;
   readonly todosVisible?: boolean;
+  readonly knowledgeVisible?: boolean;
   readonly showWorkbench?: boolean;
   readonly showLiveView?: boolean;
+  readonly showStarred?: boolean;
+  readonly showArchived?: boolean;
+  readonly showExportChat?: boolean;
+  readonly showStandingAuth?: boolean;
+  readonly showFullSearch?: boolean;
+  readonly showAllChats?: boolean;
   readonly isDark?: boolean;
   readonly labels?: QuickCommandLabels;
 }
@@ -269,8 +283,8 @@ function buildWorkspaceEntries(
     });
   }
 
-  candidates.push(
-    {
+  if (options.knowledgeVisible !== false) {
+    candidates.push({
       id: 'workspace:knowledge',
       category: 'workspaces',
       title: labels?.knowledge || 'Knowledge',
@@ -280,7 +294,10 @@ function buildWorkspaceEntries(
       iconKey: 'knowledge',
       workspaceKind: 'knowledge',
       keywords: ['knowledge', 'docs', 'notes', 'meetings', '知识库', 'ナレッジ']
-    },
+    });
+  }
+
+  candidates.push(
     {
       id: 'workspace:health',
       category: 'workspaces',
@@ -368,6 +385,17 @@ function buildActionEntries(
 
   candidates.push(
     {
+      id: 'action:open_token_usage',
+      category: 'actions',
+      title: labels?.openTokenUsage || 'Token Usage',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'token_usage',
+      actionId: 'open_token_usage',
+      keywords: ['token', 'usage', 'heatmap', 'calendar', 'project', 'tokens', '用量', 'トークン']
+    },
+    {
       id: 'action:open_xiaoyi',
       category: 'actions',
       title: labels?.openXiaoYi || 'Open XiaoYi',
@@ -402,6 +430,90 @@ function buildActionEntries(
       iconKey: 'liveview',
       actionId: 'liveview_preview',
       keywords: ['liveview', 'live', 'view', 'capsule', 'preview', '实况窗', 'プレビュー']
+    });
+  }
+
+  if (options.showStarred === true) {
+    candidates.push({
+      id: 'action:open_starred',
+      category: 'actions',
+      title: labels?.starredMessages || 'Starred Messages',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'star',
+      actionId: 'open_starred',
+      keywords: ['starred', 'star', 'saved', 'bookmark', '收藏', '星标', 'お気に入り', 'スター']
+    });
+  }
+
+  if (options.showArchived === true) {
+    candidates.push({
+      id: 'action:open_archived',
+      category: 'actions',
+      title: labels?.archivedChats || 'Archived Chats',
+      subtitle: '',
+      badge: '',
+      tone: 'neutral',
+      iconKey: 'archive',
+      actionId: 'open_archived',
+      keywords: ['archived', 'archive', 'unarchive', '归档', 'アーカイブ']
+    });
+  }
+
+  if (options.showExportChat === true) {
+    candidates.push({
+      id: 'action:export_chat',
+      category: 'actions',
+      title: labels?.exportChat || 'Export Chat',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'export',
+      actionId: 'export_chat',
+      keywords: ['export', 'markdown', 'share', 'copy', 'transcript', '导出', 'エクスポート']
+    });
+  }
+
+  if (options.showStandingAuth === true) {
+    candidates.push({
+      id: 'action:open_standing_auth',
+      category: 'actions',
+      title: labels?.standingAuth || 'Standing Authorizations',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'standing_auth',
+      actionId: 'open_standing_auth',
+      keywords: ['standing', 'authorization', 'authorizations', 'grants', 'always', 'permissions', '授权', '权限', '常時許可']
+    });
+  }
+
+  if (options.showFullSearch === true) {
+    candidates.push({
+      id: 'action:open_full_search',
+      category: 'actions',
+      title: labels?.fullSearch || 'Search Chats & Agents',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'search',
+      actionId: 'open_full_search',
+      keywords: ['search', 'find', 'chats', 'agents', 'full', '搜索', '检索', '検索']
+    });
+  }
+
+  if (options.showAllChats === true) {
+    candidates.push({
+      id: 'action:open_all_chats',
+      category: 'actions',
+      title: labels?.allChats || 'All Chats & Auto',
+      subtitle: '',
+      badge: '',
+      tone: 'neutral',
+      iconKey: 'all_chats',
+      actionId: 'open_all_chats',
+      keywords: ['all', 'chats', 'auto', 'automatic', 'inbox', 'tasks', '全部对话', '自动对话', 'すべてのチャット']
     });
   }
 

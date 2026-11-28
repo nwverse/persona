@@ -51,7 +51,7 @@ CATALOG = os.environ.get("MOCK_SESSIONS_CATALOG") == "1" and os.environ.get("MOC
 
 def features():
     # Match proto.Features, retaining the existing terminal fixture switches.
-    return ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
+    base = ["error_codes", "client_hello", "heartbeat", "app_ping", "client_msg_id", "send_refusals",
             "screen_dialog", "resumable_interactions", "secret_prompts", "request_id", "file_upload", "upload_attachment",
             "tls", "endpoints", "connectors", "lark_attachments", "file_stream", "file_thumb", "git_blob", "task_push", "task_inbox",
             "machine_rename"] + ([] if os.environ.get("MOCK_MANAGERS") == "0" else ["sessions_manager"]) + (["git_write"] if os.environ.get("MOCK_GIT_WRITE") and os.environ.get("MOCK_GIT_WRITE_FEATURE") != "0" else []) + (["git_review"] if os.environ.get("MOCK_REVIEW") else []) + (["session_review"] if os.environ.get("MOCK_AGENT_REVIEW") else []) + (["terminal_stream"] if TERMINAL_STREAM else []) + (
@@ -70,6 +70,7 @@ def features():
                  ["look_uploads"] if os.environ.get("MOCK_LOOK_UPLOADS") == "basic" else
                  ["look_uploads", "look_uploads_states"])) + (
                 [] if os.environ.get("MOCK_TODO_IMAGES") == "off" else ["todo_images"])
+    return text_lookup_mock.features(base)
 
 
 def identity():
@@ -498,6 +499,7 @@ if RESUME_TERMINAL:  # the Mac mini (#5521)
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:  # python3 -I leaves the script's folder out
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import machine_alerts  # noqa: E402
+import text_lookup_mock  # noqa: E402  the dictionary a tapped word asks (#10977)
 MACHINE_ALERT_METRICS = machine_alerts.install_machines(MACHINES, SYSTEMS) if machine_alerts.ON else {}
 # The hub's own build (hello server_version, /api/v1/health version): a dated build in that mode, so the alert sheet
 # can say how far apart a node's build is.
@@ -11530,7 +11532,8 @@ WORKSPACE_LINEAGE = {}  # (machine, workspace) -> parent source id for Orca-crea
 
 
 def mock_panes(mid):
-    sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id")][:2]
+    # Orca's Agents are in its own host's list (mock_orca_panes), not herdr's
+    sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id") and s.get("space_kind") != "orca"][:2]
     if mid == "studio":
         return {"hosts": []}
     if os.environ.get("MOCK_PANES_NO_WORKSPACE") and not PANES_NEW.get(mid):
@@ -11572,7 +11575,33 @@ def mock_panes(mid):
             tabs.append({"id": f"w12:t{i}", "workspace_id": "w12", "label": f"agent-{i}", "number": i})
             panes.append({"pane": f"w12:p{i}", "terminal": f"pane:w12:p{i}", "tab_id": f"w12:t{i}", "workspace_id": "w12", "agent": agent,
                           "status": status, "title": title, "cwd": "/home/me/code/marks", "session_id": sid})
-    return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
+    hosts = [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]
+    if os.environ.get("MOCK_ORCA_CHILDREN") and mid == "macbook":
+        hosts.append(mock_orca_panes(mid))
+    return {"hosts": hosts}
+
+
+def mock_orca_panes(mid):
+    """MOCK_ORCA_CHILDREN=1 with MOCK_TERMINAL_PANES=1: the MacBook's Orca host (#17053), its worktrees as workspaces, each
+    Orca Agent's terminal tab and a plain shell beside the first. Its `abilities` are what a node reports for an Orca
+    without split and close tab."""
+    ws, tabs, panes = [], [], []
+    for s in SESSIONS:
+        if s.get("machine_id") != mid or s.get("space_kind") != "orca" or not s.get("pane_id"):
+            continue
+        if not any(w["id"] == s["space_id"] for w in ws):
+            ws.append({"id": s["space_id"], "label": s["space_name"], "number": s.get("space_index", 1), "cwd": s["cwd"],
+                       "branch": s["space_name"]})
+        tabs.append({"id": s["tab_id"], "workspace_id": s["space_id"], "label": s.get("slot_name") or "claude", "number": 1})
+        panes.append({"pane": s["pane_id"], "terminal": "pane:" + s["pane_id"], "tab_id": s["tab_id"], "workspace_id": s["space_id"],
+                      "agent": "claude", "status": s.get("status", "idle"), "title": s.get("title"), "cwd": s["cwd"], "session_id": s["session_id"]})
+    if ws:
+        first = ws[0]
+        tabs.append({"id": "tab-shell", "workspace_id": first["id"], "label": "zsh", "number": 2})
+        panes.append({"pane": "orca:tab-shell:leaf1", "terminal": "pane:orca:tab-shell:leaf1", "tab_id": "tab-shell",
+                      "workspace_id": first["id"], "title": "zsh", "cwd": first["cwd"], "foreground": "zsh"})
+    return {"kind": "orca", "stream": False, "control": False, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes,
+            "abilities": {"rename": True, "close_pane": True, "split": False, "close_tab": False, "git": True, "run_here": False}}
 
 
 def mock_panes_file(mid):
@@ -12148,6 +12177,22 @@ if os.environ.get("MOCK_BOT") == "pairing":
     FEISHU_BOT.update(owner=None, agents=[], target="", pairing={"code": "482913", "expires_at": int(time.time()) + 540})
 elif os.environ.get("MOCK_BOT") == "off":
     FEISHU_BOT.update(enabled=False, app_id="", has_secret=False, connected=False, bot_name=None, owner=None, agents=[], target="")
+# Group access for the Lark bot (GET/PUT /api/v1/bots/feishu/group-access, #16848): the whole policy, written back at the
+# revision it was read at. MOCK_BOT_GROUP=allowlist preloads an allowlist with one recent request and one tool, =absent
+# answers 404 as a hub from before the route does.
+FEISHU_GROUP_ACCESS = {"revision": 3, "paired": FEISHU_BOT.get("owner") is not None,
+    "policy": {"mode": "owner_only", "allowed_users": [], "allowed_chats": [], "blocked_users": [], "blocked_chats": [],
+               "guest_tools": [], "per_chat_hourly": 20},
+    "available_tools": [], "recent_requests": [],
+    "limits": {"list_max": 200, "guest_tools_max": 8, "per_chat_hourly_min": 1, "per_chat_hourly_max": 120, "per_chat_hourly_default": 20}}
+if os.environ.get("MOCK_BOT_GROUP") == "allowlist":
+    FEISHU_GROUP_ACCESS["policy"] = {"mode": "allowlist",
+        "allowed_users": [{"open_id": "ou_example1", "name": "Teammate A"}],
+        "allowed_chats": [{"chat_id": "oc_example1", "name": "Project group"}],
+        "blocked_users": [], "blocked_chats": [], "guest_tools": ["wiki_search"], "per_chat_hourly": 20}
+    FEISHU_GROUP_ACCESS["available_tools"] = [{"name": "wiki_search", "connector": "Wiki"}]
+    FEISHU_GROUP_ACCESS["recent_requests"] = [{"open_id": "ou_example2", "name": "Teammate B", "chat_id": "oc_example1",
+                                               "chat_name": "Project group", "at": 1795000000}]
 # Phone tools (docs/apple/phone-tools.md): what each connected phone declared (register_phone) and the tool_result messages it
 # sent back. GET /mock/tool_call?name=phone_…&args=<JSON> sends a tool_call to the phones that declared the tool, as the
 # hub does when Claude calls it; GET /mock/phone shows the registrations and results.
@@ -21890,9 +21935,21 @@ def personal_rows():
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
     if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
-    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
-             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
-            for i, (prov, title, hours, unread) in enumerate(rows)]
+    # What the Messages page draws beside each (docs/extensions/lark-migration.md "Personal Agents in Messages"): the
+    # latest message, and the allowance at its service as a charge: plenty (show false, an older account's default, still
+    # drawn), low, used up, none, an old reading.
+    previews = [("周报草稿好了", False), ("帮我再找找周末的票", True), ("第三章的要点整理完了", False), ("", False), ("", False), ("", False)]
+    quotas = [{"state": "ok", "percent": 70, "show": False, "resetsAt": now + 5 * 3600 * 1000}, {"state": "low", "remaining": 0.15},
+              {"state": "exhausted", "remaining": 0}, None, {"state": "ok", "percent": 55, "stale": True}, None]
+    out = []
+    for i, (prov, title, hours, unread) in enumerate(rows):
+        row = {"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+               "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+        text, mine = previews[i]
+        if text: row.update(previewText=text, previewIsMine=mine)
+        if quotas[i]: row["quota"] = quotas[i]
+        out.append(row)
+    return out
 def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial", "partial_setup") else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made
@@ -22146,7 +22203,7 @@ def mock_files(p, q):
                     {"path": "WeatherWidget/WidgetView.swift", "index": "A", "worktree": ".",
                      **diff_counts(MOCK_DIFFS["WeatherWidget/WidgetView.swift"]), "binary": False},
                     {"path": "docs/icon.png", "index": "?", "worktree": "?", "added": 0, "deleted": 0, "binary": True}]
-                + [{"path": rel, "index": ".", "worktree": "M", "added": 0, "deleted": 0, "binary": True} for rel in COMPARE_BLOBS]
+                + [{"path": rel, "index": "A" if rel == COMPARE_PICTURE else ".", "worktree": "M", "added": 0, "deleted": 0, "binary": True} for rel in COMPARE_BLOBS]
                 + [{"path": "Sources/App/Models/Forecast.swift", "index": ".", "worktree": "M", "added": 3, "deleted": 0, "binary": False}
                    for _ in range(min(FS_STATE["dirty"], 1))]}, 200
     if what == "git/diff":
@@ -22156,9 +22213,12 @@ def mock_files(p, q):
         return {"commits": MOCK_COMMITS[skip:skip + limit], "has_more": skip + limit < len(MOCK_COMMITS)}, 200
     c = next((c for c in MOCK_COMMITS if c["hash"] == arg("hash")), None)
     if not c: return {"error": "unknown revision"}, 502
+    deleted_picture = []
+    if COMPARE_PICTURE in COMPARE_BLOBS and c == MOCK_COMMITS[0]:
+        deleted_picture.append({"path": COMPARE_PICTURE, "index": "D", "worktree": ".", "added": 0, "deleted": 0, "binary": True})
     return {"commit": dict(c, body="Made-up commit for the mock hub."),
             "files": [{"path": "Sources/App/main.swift", "index": "M", "worktree": ".", "added": 2, "deleted": 1, "binary": False},
-                      {"path": "README.md", "index": "M", "worktree": ".", "added": 2, "deleted": 0, "binary": False}],
+                      {"path": "README.md", "index": "M", "worktree": ".", "added": 2, "deleted": 0, "binary": False}] + deleted_picture,
             "diff": MOCK_DIFFS["Sources/App/main.swift"] + "\n" + MOCK_DIFFS["README.md"], "truncated": False}, 200
 # --- end of Files & Git ---
 
@@ -22351,6 +22411,8 @@ if os.environ.get("MOCK_MEDIA"):  # the web's media (#1422): a sound, an SVG, a 
         MOCK_TREE[MOCK_REPO + "/media/preview.mp4"] = ("video/mp4", "")
 # MOCK_COMPARE=1 (with MOCK_FILES): a changed Word file, deck and picture in the repository's status, and git/blob
 # answering their staged (INDEX) / HEAD versions from the node's "cache", for the web's comparing (#1437).
+# The last commit removed the banner. It was added back to the index and edited in the working tree.
+COMPARE_PICTURE = "assets/banner.png"
 COMPARE_BLOBS = {}
 if os.environ.get("MOCK_COMPARE"):
     import io as _io, zipfile as _zf
@@ -22364,7 +22426,7 @@ if os.environ.get("MOCK_COMPARE"):
     _docx_old = _zip_edit(_docx_new, "word/document.xml", lambda x: x.replace("+10.2%", "+9.8%").replace("6 个百分点", "4 个百分点").replace("海外区域接入本地天气数据源。", "海外区域先观望。"))
     _pptx_old = _zip_edit(_pptx_new, "ppt/slides/slide2.xml", lambda x: x.replace("日活提高 18%", "日活提高 12%").replace("锁屏小组件适配深色壁纸", "锁屏小组件"))
     for _rel, _new, _old in (("reports/季度报告.docx", _docx_new, _docx_old), ("reports/季度回顾.pptx", _pptx_new, _pptx_old),
-                             ("assets/banner.png", _bar_png(480, 200), _bar_png(480, 200, (0.3, 0.5, 0.55, 0.7)))):
+                             (COMPARE_PICTURE, _bar_png(480, 200), _bar_png(480, 200, (0.3, 0.5, 0.55, 0.7)))):
         FILES["/Users/me/code/weather/" + _rel] = _new
         _blob = _cache + hashlib.sha1(_old).hexdigest() + os.path.splitext(_rel)[1]
         FILES[_blob] = _old
@@ -27658,8 +27720,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "LibreOffice is not installed on this machine", "code": "no_converter"}, 404)
             return self.send_json({"path": "/Users/me/Library/Caches/persona/convert/mock.pdf", "size": len(FILES.get("/Users/me/Library/Caches/persona/convert/mock.pdf", b"")), "mime": "application/pdf"})
         if p.startswith("/api/v1/machines/") and p.endswith("/git/blob"):  # node git.blob: a version written into the cache
-            blob = COMPARE_BLOBS.get(q.get("path", [""])[0])
-            return self.send_json({"path": blob, "size": len(FILES[blob])} if blob and q.get("rev", [""])[0] in ("HEAD", "INDEX") else {"missing": True})
+            path = q.get("path", [""])[0]
+            blob = COMPARE_BLOBS.get(path)
+            revisions = ("INDEX", MOCK_COMMITS[0]["hash"] + "^") if path == COMPARE_PICTURE else ("HEAD", "INDEX")
+            return self.send_json({"path": blob, "size": len(FILES[blob])} if blob and q.get("rev", [""])[0] in revisions else {"missing": True})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"):  # node file.thumb: a drawn stand-in for a HEIC
             if not q.get("path", [""])[0].lower().endswith((".heic", ".heif")):
                 return self.file_thumb(p, q)  # the rest drawn by Quick Look, as a Mac node does (the Files tab's thumbnails)
@@ -27876,6 +27940,10 @@ class H(BaseHTTPRequestHandler):
             listed += [wechat_connector()] if WECHAT_MODE else []
             listed += [larkcli_connector()] if LARKCLI_MODE else []
             return self.send_json({"connectors": (LEGACY_CONNECTORS if q.get("all") == ["1"] else []) + listed})
+        if p == "/api/v1/bots/feishu/group-access":  # Settings › Lark bot › Group Access (#16848)
+            if os.environ.get("MOCK_BOT_GROUP") == "absent":
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_json(FEISHU_GROUP_ACCESS)
         if p == "/api/v1/bots/feishu":  # Settings › Connectors › Lark bot
             st = dict(FEISHU_BOT, last_event_at=int(time.time()) - 40 if FEISHU_BOT["connected"] else None)
             if LARKCLI_MODE:
@@ -28003,6 +28071,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(listing)
         if doctor_route(self, p, "GET"): return
         if machine_alerts.route(self, "GET", MACHINES, SYSTEMS, metric_latest, broadcast): return
+        if text_lookup_mock.route(self, "GET", p, q, b"", broadcast): return
         if p.startswith("/api/v1/machines/") and p.endswith("/launchers"):
             mid = p.split("/")[4]
             return self.send_json(with_own_service_unavailable({"launchers": machine_launchers(mid)}, mid, self.headers.get("Accept-Language")))
@@ -28356,6 +28425,7 @@ class H(BaseHTTPRequestHandler):
         if chat_pins_route(self, p, parse_qs(urlparse(self.path).query)): return
         if doctor_route(self, p, "POST"): return
         if self.command == "POST" and machine_alerts.route(self, "POST", MACHINES, SYSTEMS, metric_latest, broadcast): return
+        if text_lookup_mock.route(self, self.command, p, {}, self.last_body, broadcast): return
         if history_route(self, p, parse_qs(urlparse(self.path).query)): return
         if plugins_route(self, p, self.last_body): return
         if os.environ.get("MOCK_TERMINAL_PANES") and re.fullmatch(r"/api/v1/machines/[^/]+/(panes/(close|close_finished|split|agent|git)|tabs/(close|rename))", p):
@@ -29902,6 +29972,18 @@ class H(BaseHTTPRequestHandler):
             FEISHU_BOT.update(owner=None, agents=[], target="", pairing=None)
             return self.send_json({k: v for k, v in FEISHU_BOT.items() if v is not None})
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
+        if p == "/api/v1/bots/feishu/group-access" and self.command == "PUT":  # the whole policy, at the revision read (#16848)
+            if os.environ.get("MOCK_BOT_GROUP") == "absent":
+                return self.send_json({"error": "not found"}, 404)
+            body = json.loads(self.last_body or b"{}")
+            if body.get("revision") != FEISHU_GROUP_ACCESS["revision"]:
+                return self.send_json({"code": "group_access_conflict", "error": "changed elsewhere"}, 409)
+            policy = body.get("policy") or {}
+            for key in ("allowed_users", "allowed_chats", "blocked_users", "blocked_chats", "guest_tools"):
+                policy.setdefault(key, [])
+            FEISHU_GROUP_ACCESS["policy"] = policy
+            FEISHU_GROUP_ACCESS["revision"] += 1
+            return self.send_json(FEISHU_GROUP_ACCESS)
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
         review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)
@@ -33793,6 +33875,16 @@ def features():
 import todo_view_mock  # noqa: E402
 MOCK_HELP.extend(todo_view_mock.HELP)
 _todo_view = todo_view_mock if todo_view_mock.install(globals()) else None
+
+
+# MOCK_TEXT_LOOKUP=1|off (#10977, scripts/mock/text_lookup_mock.py): an Inbox row with English text to tap.
+if text_lookup_mock.ENABLED:
+    INBOX.insert(0, text_lookup_mock.inbox_row(ago(minutes=5)))
+
+
+MOCK_HELP.append("MOCK_TEXT_LOOKUP=1|off  Word lookup (#10977): features carry text_lookup; 1: Relingo answers GET/POST "
+                 "/api/v1/text-lookup… from a made-up dictionary (context, deploy, latency…); off: available false. "
+                 "MOCK_TEXT_LOOKUP_UNDERLINE=1, MOCK_TEXT_LOOKUP_LATENCY=S; GET /mock/text-lookup?available=&underline=&fail=&latency=")
 
 
 if __name__ == "__main__":

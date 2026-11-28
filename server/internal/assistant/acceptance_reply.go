@@ -127,7 +127,7 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		} else if err != nil { // the recommendation did not reach the agent: nothing recorded, "OK" can be said again
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		} else if result.undelivered != nil {
-			why := clip(oneLine(i18n.Localize(result.undelivered, l)), 120)
+			why := decisionNotDeliveredReason(result.undelivered, l)
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_decided_not_sent", i18n.Args{"error": why}))
 		} else if result.taken {
 			s.chat().Note(ctx, larkhost.Target{}, messageID, acceptedNote(l, &ask))
@@ -265,7 +265,7 @@ func (s *Service) decisionNotDelivered(ctx context.Context, id string, askedAt t
 	s.userDecided(ctx, id)
 	s.signal(superviseSignal{Todo: id, Kind: sigIdle, Key: "undelivered|" + askedAt.UTC().Format(time.RFC3339Nano), Handoff: true,
 		Detail: i18n.T(l, "assistant-reports.decision_not_delivered", i18n.Args{"decision": clip(oneLine(choice), 200),
-			"error": clip(oneLine(i18n.Localize(cause, l)), 120)})})
+			"error": decisionNotDeliveredReason(cause, l)})})
 	return acceptResult{taken: true, undelivered: cause}
 }
 
@@ -322,7 +322,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return acceptResult{}, nil
 	}
-	if ownerCheck && !decideAsk(a) && !a.Conclusion && t.DoneAt == nil {
+	if ownerCheck && !decideAsk(a) && !a.Conclusion {
 		if err := s.investigationCloseError(ctx, t); err != nil {
 			b.mu.Unlock()
 			return acceptResult{}, err
@@ -396,6 +396,19 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 					}
 					return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 				}
+			} else if cur, ok := s.todoNow(id); ok {
+				if err := s.investigationCloseError(ctx, cur); err != nil {
+					if !resumeOwnerPass {
+						b.mu.Lock()
+						if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+							a.AcceptedAt = previousAcceptedAt
+							s.saveAcceptLocked(ctx)
+						}
+						b.mu.Unlock()
+						s.askChanged(ctx)
+					}
+					return acceptResult{}, err
+				}
 			}
 			v, changed, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 				if v.State != reviewUserCheck {
@@ -410,6 +423,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			}
 			if closed || changed {
 				s.taskReviewed(ctx, v.Supervisor, id, reviewAccepted, v)
+				// The owner's Pass is the acceptance task_review(user_check) deferred: the terminal cleanup the owner
+				// opted into at Start follows it, under the same checks as a direct acceptance (#16948).
+				s.goFinishTaskTerminal(ctx, t)
 			}
 		}
 		completeDismissal()

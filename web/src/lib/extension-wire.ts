@@ -369,6 +369,7 @@ export interface Contributes {
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
   repository_providers?: RepositoryProviderItem[];
+  text_lookup?: TextLookupItem[];
   memory_sources?: MemorySourceItem[];
   disk_offload?: DiskOffloadItem[];
   messaging?: MessagingItem[];
@@ -611,6 +612,28 @@ export interface RepositoryProviderItem {
    * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
    */
   capabilities?: RepositoryCapability[];
+}
+
+/**
+ * Identifies one text_lookup dictionary within its extension.
+ */
+export type TextLookupContributionID = string & { readonly __brand: "TextLookupContributionID" };
+/** A TextLookupContributionID from its raw string. */
+export function textLookupContributionID(raw: string): TextLookupContributionID {
+  return raw as TextLookupContributionID;
+}
+
+/**
+ * A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
+ * text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"]) for
+ * now.
+ */
+export interface TextLookupItem {
+  id: TextLookupContributionID;
+  /** What the dictionary is called, in a few words. */
+  name?: string;
+  /** The languages it looks up. Only "en" is accepted for now; omitted means ["en"]. */
+  languages?: string[];
 }
 
 /**
@@ -1568,6 +1591,80 @@ export interface AuthRelayResult {
 }
 
 /**
+ * text_lookup.state's parameters: which contribution to ask for the words the user saved and whether saved words are
+ * underlined.
+ */
+export interface TextLookupStateParams {
+  contribution: string;
+}
+
+/**
+ * What text_lookup.state answers. words is capped by the manager at 5000.
+ */
+export interface TextLookupStateResult {
+  underline_saved: boolean;
+  words?: string[];
+}
+
+/**
+ * text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it, the word's language and
+ * the language of the app.
+ */
+export interface TextLookupLookupParams {
+  contribution: string;
+  word: string;
+  context?: string;
+  lang: string;
+  ui_lang: string;
+}
+
+/**
+ * One meaning of a looked-up word.
+ */
+export interface TextLookupSense {
+  pos?: string;
+  text: string;
+}
+
+/**
+ * What text_lookup.lookup answers: found is false when the dictionary has no entry.
+ */
+export interface TextLookupLookupResult {
+  found: boolean;
+  word: string;
+  lemma?: string;
+  phonetic?: string;
+  senses?: TextLookupSense[];
+  saved: boolean;
+}
+
+/**
+ * text_lookup.save's parameters: the word to remember, an optional sentence around it and where the user saved it
+ * from.
+ */
+export interface TextLookupSaveParams {
+  contribution: string;
+  word: string;
+  context?: string;
+  source?: string;
+}
+
+/**
+ * text_lookup.remove's parameters: the saved word to forget.
+ */
+export interface TextLookupRemoveParams {
+  contribution: string;
+  word: string;
+}
+
+/**
+ * What text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.
+ */
+export interface TextLookupSavedResult {
+  saved: boolean;
+}
+
+/**
  * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
  * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
  * user approved it on the phone, id the variable's name, machine and session the Agent's).
@@ -2116,6 +2213,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**

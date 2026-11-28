@@ -115,6 +115,8 @@ func MarketID(s MarketSpec) string {
 // Market is a registered market with what reading it needs.
 type Market struct {
 	Spec MarketSpec
+	// HubBuild selects the compatible releases when the market is read.
+	HubBuild int64
 	// TrustedKey is supplied by the hub to pin the market's trust at preview time; it is not a download credential.
 	TrustedKey string
 	// TrustedKeys are a private market's owner-configured public keys (MarketRecord.TrustedKeys); ignored for the

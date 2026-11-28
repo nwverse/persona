@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hasRequestPieces } from "./request-pieces";
-import type { Machine, Session } from "./types";
+import type { Interaction, Machine, Session } from "./types";
 import {
   DECISIONS_FIRST,
   shownDecisions,
@@ -30,6 +30,7 @@ import {
   taskNow,
   todoDueBy,
   todoStatus,
+  todoSupervisorLabel,
   type Todo,
   type TodoAgent,
   type TodoSpace,
@@ -104,6 +105,24 @@ describe("待办状态计算 (todoStatus)", () => {
       ],
     };
     expect(todoStatus(todo, lookup)).toBe("needs_you");
+  });
+
+  it("counts only supervisor-held cards as working and gives any owner card priority", () => {
+    const held: Interaction = { id: "ix-held", machine_id: "mac-2", session_id: "child", folded_under: "s1", folded_under_machine_id: "mac-1", kind: "screen", delegating: true };
+    const owner: Interaction = { id: "ix-owner", machine_id: "mac-1", session_id: "s2", kind: "question" };
+    const sessions = [mockSession("mac-1", "s1", "needs_you"), mockSession("mac-1", "s2", "working")];
+    const at = "2026-11-02T10:00:00Z";
+    const todo: Todo = {
+      id: "t1", title: "Check the release", created_at: at, updated_at: at,
+      agents: sessions.map(({ machine_id, session_id }) => ({ machine_id, session_id, linked_at: at })),
+    };
+    const heldLookup = makeSessionLookup(sessions, [held, { ...owner, mirror_of: held.id }]);
+    expect(todoStatus(todo, heldLookup)).toBe("working");
+    expect(todoSupervisorLabel(todo, "working", heldLookup)).toBe("督办处理中");
+    expect(todoStatus(todo, makeSessionLookup(sessions, [held, owner]))).toBe("needs_you");
+    expect(todoStatus(todo, makeSessionLookup(sessions, [{ ...held, delegating: false }]))).toBe("needs_you");
+    expect(todoSupervisorLabel(todo, "working", makeSessionLookup(sessions, [held, { ...owner, delegating: true }]))).toBeUndefined();
+    expect(todoStatus(todo, makeSessionLookup(sessions))).toBe("needs_you");
   });
 
   it("没有等你，但有挂着的 Agent 完成了未看，状态为待查看 (unread)", () => {
@@ -223,8 +242,8 @@ describe("Agent 没开起来的任务 (#1077 / #1142)", () => {
 
   it("hub 结束掉的失败任务是「没开起来」，不是已完成", () => {
     expect(todoStatus(failed)).toBe("failed");
-    expect(TODO_STATUS_INFO.failed).toEqual({ label: "没开起来", tone: "red" });
-    expect(todoStatusLabel(failed, "failed")).toBe("没开起来");
+    expect(TODO_STATUS_INFO.failed).toEqual({ label: "启动失败", tone: "red" });
+    expect(todoStatusLabel(failed, "failed")).toBe("启动失败");
     expect(todoStatus({ ...failed, start_error: undefined })).toBe("done");
   });
 
@@ -409,8 +428,8 @@ describe("Agents 侧边栏「按待办」分组 (buildTodoAgentGroups)", () => {
     ];
 
     const groups = buildTodoAgentGroups(all, machines, todos, mutes);
-    expect(groups.map((g) => g.name)).toEqual(["天气 App 发 1.3 版", "博客迁移到 Astro", "没挂待办的"]);
-    expect(groups[2].hint).toContain("没挂在任何待办上");
+    expect(groups.map((g) => g.name)).toEqual(["天气 App 发 1.3 版", "博客迁移到 Astro", "未关联待办"]);
+    expect(groups[2].hint).toContain("未关联到任何待办");
     expect(groups[0].hint).toBeUndefined();
     expect(groups[groups.length - 1].folded).toBe(true);
     expect(groups[0].todoStatus).toBe("needs_you");
@@ -431,9 +450,9 @@ describe("Agents 侧边栏「按待办」分组 (buildTodoAgentGroups)", () => {
 
     const groups = buildTodoAgentGroups([sOnTodo, sManual, sByPersona, sBotmux], machines, todos, mutes);
     expect(groups.map((g) => g.key)).toEqual(["todo:todo-a", "todo:none"]);
-    expect(groups[1].name).toBe("没挂待办的");
+    expect(groups[1].name).toBe("未关联待办");
     // the name alone does not say why these are here: the group says it (#3057), the terminal ones included
-    expect(groups[1].hint).toContain("没挂在任何待办上");
+    expect(groups[1].hint).toContain("未关联到任何待办");
     expect(groups[1].hint).toContain("终端");
     expect(groups[1].sessions.map((s) => s.session_id).sort()).toEqual(["botmux-chat", "manual-herdr", "persona-herdr"]);
     expect(groups[1].folded).toBe(true);
@@ -495,7 +514,7 @@ describe("Agents 侧边栏「按待办」分组 (buildTodoAgentGroups)", () => {
 
     const groups = buildTodoAgentGroups([sDoneTask], machines, todos, mutes);
     // todo-done is done, so it makes no segment as an unfinished todo; that session goes under "Unassigned"
-    expect(groups.map((g) => g.name)).toEqual(["没挂待办的"]);
+    expect(groups.map((g) => g.name)).toEqual(["未关联待办"]);
     // nothing above it: the whole list, open
     expect(groups[0].folded).toBe(false);
     expect(groups[0].sessions.map((s) => s.session_id)).toEqual(["done-task"]);
@@ -915,7 +934,7 @@ describe("模型服务出错中断的任务 (#1516)", () => {
   it("这一轮以 API 错误结束：中断了，不是待查看", () => {
     const s = mockSession("mac-1", "s1", "unread", { last_text: cut, turn_error: cut });
     expect(todoStatus(todo, makeSessionLookup([s]))).toBe("interrupted");
-    expect(TODO_STATUS_INFO.interrupted).toEqual({ label: "中断了", tone: "red" });
+    expect(TODO_STATUS_INFO.interrupted).toEqual({ label: "已中断", tone: "red" });
     expect(isRemovable("interrupted")).toBe(true);
     // still interrupted (not finished) after the user has seen it
     expect(todoStatus(todo, makeSessionLookup([mockSession("mac-1", "s1", "idle", { turn_error: cut })]))).toBe("interrupted");
@@ -935,9 +954,9 @@ describe("模型服务出错中断的任务 (#1516)", () => {
   });
 
   it("说清为什么中断、继续有没有用", () => {
-    expect(interruption(mockSession("mac-1", "s1", "unread", { turn_error: cut }))).toEqual({ reason: "连不上模型服务", canContinue: true });
+    expect(interruption(mockSession("mac-1", "s1", "unread", { turn_error: cut }))).toEqual({ reason: "无法连接模型服务", canContinue: true });
     expect(interruption(mockSession("mac-1", "s1", "unread", { turn_error: "API Error: 401 authentication_error" }))).toEqual({
-      reason: "登录过期了，要在电脑上重新 /login",
+      reason: "登录已过期，请在电脑上重新运行 /login",
       canContinue: false,
     });
     expect(interruption(mockSession("mac-1", "s1", "unread", { last_text: "修好了" }))).toBeUndefined();
@@ -1198,7 +1217,7 @@ describe("open PR, parked, and concern status labels when no active agent runs",
         ...patch,
       },
     });
-    expect(todoStatusLabel(withPR({}), "not_started", now)).toBe("等合入");
+    expect(todoStatusLabel(withPR({}), "not_started", now)).toBe("待合入");
     expect(todoStatusLabel(withPR({ review: "required" }), "not_started", now)).toBe("评审中");
     expect(todoStatusLabel(withPR({ checks: "pending" }), "not_started", now)).toBe("检查中");
     expect(todoStatusLabel(withPR({ checks: "failure" }), "not_started", now)).toBe("检查未通过");
@@ -1244,7 +1263,7 @@ describe("open PR, parked, and concern status labels when no active agent runs",
     expect(todoStatusLabel(withGate("blocked_ci", "ci_failed"), "not_started", now)).toBe("检查未通过");
     expect(todoStatusLabel(withGate("awaiting_review", "review_required"), "not_started", now)).toBe("评审中");
     expect(todoStatusLabel(withGate("checks_pending", "checks_pending"), "not_started", now)).toBe("检查中");
-    expect(todoStatusLabel(withGate("checks_pending", "pr_open"), "not_started", now)).toBe("等合入");
+    expect(todoStatusLabel(withGate("checks_pending", "pr_open"), "not_started", now)).toBe("待合入");
     expect(todoStatusLabel(withGate("awaiting_review", "draft_pr"), "not_started", now)).toBe("未开始");
     expect(todoStatusLabel(withGate("missing_pr", "missing_pr"), "not_started", now)).toBe("未开始");
     expect(todoStatusLabel({ ...base, repo_gate: { state: "reference_only", target_count: 0, ready_count: 0, reference_count: 1 } }, "not_started", now)).toBe("未开始");
@@ -1262,7 +1281,7 @@ describe("open PR, parked, and concern status labels when no active agent runs",
       pr_url: "https://github.com/org/repo/pull/20",
       pr_status: { url: "https://github.com/org/repo/pull/20", state: "open", draft: false, review: "approved", checks: "success", conflicts: false, checked_at: fresh },
     };
-    expect(todoStatusLabel(concernWithPR, "not_started", now)).toBe("等合入");
+    expect(todoStatusLabel(concernWithPR, "not_started", now)).toBe("待合入");
     expect(todoStatusLabel({ ...concernWithPR, supervision: { supervisor: "main", state: "needs_user" } }, "not_started", now)).toBe("待处理");
     const parked: Todo = {
       ...base,
