@@ -181,7 +181,7 @@ type todoStore interface {
 	UpdateTodo(ctx context.Context, id string, title *string, notes *string, done *bool, updatedAt time.Time) (*db.TodoRow, error)
 	EditTodo(ctx context.Context, id string, e db.TodoEdit, updatedAt time.Time) (*db.TodoRow, error)
 	SeeTodo(ctx context.Context, id string, at *time.Time) (*db.TodoRow, error)
-	AutoSeeTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
+	AutoSeeTodo(ctx context.Context, id string, doneAt time.Time, reopenedAt *time.Time, at time.Time) (*db.TodoRow, bool, error)
 	RestoreTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, error)
 	SetTodoSomeday(ctx context.Context, id string, until *time.Time) (*db.TodoRow, error)
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
@@ -234,8 +234,8 @@ type todoBook struct {
 	// into memory takes it. Workspace ownership writes and deletion also take it through publication; fanout
 	// rechecks ownership under it after session lookup. A write of part_of or after checks the request graph again
 	// under it before storing (todo_pieces.go). Automatic links take it for memory changes and again for background persistence, so a
-	// removed workspace cannot gain a late stored agent. Agent snapshots do not take it. Taken before mu, never
-	// while mu is held; node calls and change notifications run after it is released.
+	// removed workspace cannot gain a late stored agent. Agent snapshots do not take it. Taken before supervise.writeMu and mu, never
+	// while either is held; node calls and change notifications run after it is released.
 	writing             sync.Mutex
 	loaded              bool
 	todos               map[string]*Todo
@@ -726,16 +726,21 @@ func (s *Service) putNewTodo(ctx context.Context, row db.TodoRow, bindings ...*r
 			return Todo{}, err
 		}
 	}
-	id := row.ID
-	images, imageData := todoImageMetadata(id, row.Images)
-	tObj := &Todo{ID: id, Title: row.Title, Notes: row.Notes, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Origin: row.Origin,
-		PlanID: row.PlanID, Quiet: row.Quiet, Spaces: make([]TodoSpace, 0), Agents: make([]TodoAgent, 0), Images: images, imageData: imageData}
-	tObj.setPlan(row)
 	s.todos.mu.Lock()
-	s.todos.todos[id] = tObj
-	out := formatTodo(copyTodoLocked(tObj))
+	out := s.addTodoRowLocked(row)
 	s.todos.mu.Unlock()
 	return out, nil
+}
+
+// addTodoRowLocked puts a newly committed row into the book with todos.mu held.
+func (s *Service) addTodoRowLocked(row db.TodoRow) Todo {
+	id := row.ID
+	images, imageData := todoImageMetadata(id, row.Images)
+	t := &Todo{ID: id, Title: row.Title, Notes: row.Notes, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Origin: row.Origin,
+		PlanID: row.PlanID, Quiet: row.Quiet, Spaces: []TodoSpace{}, Agents: []TodoAgent{}, Images: images, imageData: imageData}
+	t.setPlan(row)
+	s.todos.todos[id] = t
+	return formatTodo(copyTodoLocked(t))
 }
 
 func copyTodoLocked(t *Todo) Todo {
@@ -1775,11 +1780,21 @@ func (s *Service) applyTodoRow(ctx context.Context, id string, row db.TodoRow, g
 // todoBook.writing calls it before letting go, and todoRowSet after.
 func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) (Todo, [][2]string, bool) {
 	s.todos.mu.Lock()
+	out, keys, after, ok := s.setTodoRowLocked(id, row, guard)
+	s.todos.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return out, keys, ok
+}
+
+// setTodoRowLocked applies one committed row and returns effects to run outside todos.mu.
+// Topology writes apply a batch under that lock so readers see the entire new graph at once.
+func (s *Service) setTodoRowLocked(id string, row db.TodoRow, guard func(*Todo) bool) (Todo, [][2]string, func(), bool) {
 	t, ok := s.todos.todos[id]
 	if !ok || guard != nil && !guard(t) || t.Kind == db.KindConcern && t.DoneAt == nil && row.DoneAt != nil && row.DoneBy != db.DoneByReported {
 		// A concern closes only by its report (concerns.go): no other writer's row closes it in memory either.
-		s.todos.mu.Unlock()
-		return Todo{}, nil, false
+		return Todo{}, nil, nil, false
 	}
 	t.Title = row.Title
 	t.Notes = row.Notes
@@ -1814,17 +1829,20 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 	}
 	out := formatTodo(copyTodoLocked(t))
 	closing := threadClosing(becameDone, t.StartError, t.DoneReason)
-	s.todos.mu.Unlock()
-	if reopened {
-		s.dropSourcePlan(id) // what was planned to be told may not be what it comes to now (todo_source.go)
-		s.dropReopenedCheck(id)
-		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
+	if !reopened && closing == nil {
+		return out, doneKeys, nil, true
 	}
-	if closing != nil {
-		s.chat().ThreadPost(id, *closing) // after the lock: it looks the todo up again
-		s.sourceReportSoon(id, sourceReportWait)
-	}
-	return out, doneKeys, true
+	return out, doneKeys, func() {
+		if reopened {
+			s.dropSourcePlan(id) // what was planned to be told may not be what it comes to now (todo_source.go)
+			s.dropReopenedCheck(id)
+			s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
+		}
+		if closing != nil {
+			s.chat().ThreadPost(id, *closing) // after the lock: it looks the todo up again
+			s.sourceReportSoon(id, sourceReportWait)
+		}
+	}, true
 }
 
 // todoRowSet tells everyone what setTodoRow changed: the hub and the herdr marks, the apps, and the done agents'
@@ -2382,6 +2400,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now}
 	cur.keepPlan(&row)
 	row.SomedayUntil = nil // retried: out of Someday, as db.RetryTodo does on the store
+	row.SeenAt, row.AutoSeenUndone = nil, false
 	if st := s.todoDB(); st != nil {
 		r, ok, err := st.RetryTodo(ctx, id, now)
 		if err != nil {

@@ -312,15 +312,28 @@ func (s *Service) syncAfterBlockers(ctx context.Context, todoID string, afterIDs
 	if todoID == "" {
 		return
 	}
-	st := s.todoBlockerDB()
-	if st == nil {
-		return
-	}
 
+	todo, _ := s.todoNow(todoID)
+	todo.ID = todoID
+	if err := writeAfterBlockers(ctx, s.todoBlockerDB(), todo, afterIDs, unlockStage, unlockContracts, time.Now().UTC()); err != nil {
+		s.logf("todo %s: sync after blockers: %v", todoID, err)
+	}
+}
+
+type todoBlockerWriter interface {
+	ListTodoBlockersByTodo(context.Context, string) ([]db.TodoBlockerRow, error)
+	UpsertTodoBlocker(context.Context, db.TodoBlockerRow) (*db.TodoBlockerRow, error)
+	CancelTodoBlocker(context.Context, string, time.Time) (*db.TodoBlockerRow, error)
+}
+
+func writeAfterBlockers(ctx context.Context, st todoBlockerWriter, todo Todo, afterIDs []string, unlockStage string, unlockContracts []string, now time.Time) error {
+	if st == nil {
+		return nil
+	}
+	todoID := todo.ID
 	existing, err := st.ListTodoBlockersByTodo(ctx, todoID)
 	if err != nil {
-		s.logf("todo %s: list blockers for after mirror: %v", todoID, err)
-		return
+		return err
 	}
 	existingByID := make(map[string]db.TodoBlockerRow, len(existing))
 	for _, r := range existing {
@@ -333,11 +346,9 @@ func (s *Service) syncAfterBlockers(ctx context.Context, todoID string, afterIDs
 	}
 	normContracts := stagegate.NormalizeContracts(unlockContracts)
 	if normStage == "" && len(normContracts) == 0 {
-		if t, ok := s.todoNow(todoID); ok {
-			if rule, hasRule := parseTodoStageUnlockRule(t); hasRule {
-				normStage = string(rule.Stage)
-				normContracts = rule.Contracts
-			}
+		if rule, hasRule := parseTodoStageUnlockRule(todo); hasRule {
+			normStage = string(rule.Stage)
+			normContracts = rule.Contracts
 		}
 	}
 	if normStage == "" && len(normContracts) == 0 {
@@ -371,7 +382,7 @@ func (s *Service) syncAfterBlockers(ctx context.Context, todoID string, afterIDs
 			normalizeBlockerConditionJSON(cur.ConditionJSON) == condJSON {
 			continue
 		}
-		if _, err := s.addTodoBlocker(ctx, db.TodoBlockerRow{
+		if _, err := st.UpsertTodoBlocker(ctx, db.TodoBlockerRow{
 			ID:            id,
 			TodoID:        todoID,
 			Kind:          kind,
@@ -379,11 +390,10 @@ func (s *Service) syncAfterBlockers(ctx context.Context, todoID string, afterIDs
 			ConditionJSON: condJSON,
 			State:         db.TodoBlockerStateActive,
 		}); err != nil {
-			s.logf("todo %s: mirror after blocker %s (%s): %v", todoID, depID, kind, err)
+			return fmt.Errorf("mirror after blocker %s (%s): %w", depID, kind, err)
 		}
 	}
 
-	now := time.Now().UTC()
 	for _, r := range existing {
 		if r.State != db.TodoBlockerStateActive {
 			continue
@@ -395,9 +405,10 @@ func (s *Service) syncAfterBlockers(ctx context.Context, todoID string, afterIDs
 			continue
 		}
 		if _, err := st.CancelTodoBlocker(ctx, r.ID, now); err != nil {
-			s.logf("todo %s: cancel stale mirrored blocker %s: %v", todoID, r.ID, err)
+			return fmt.Errorf("cancel stale mirrored blocker %s: %w", r.ID, err)
 		}
 	}
+	return nil
 }
 
 // ReconcileTodoBlockers performs a pull-based reconciliation of persisted active blockers under todos_v2 (#16099).

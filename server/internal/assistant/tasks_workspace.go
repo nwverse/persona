@@ -331,13 +331,19 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 				var sourceErr error
 				if eagerPrepare {
 					// With prefer-new and no shared-branch repository overrides, mode is guaranteed workspaceNew;
-					// overlap workspace.resolve and worktree.prepare to save a serial round-trip.
+					// overlap workspace.resolve and worktree.prepare to save a serial round-trip. A node that prepares
+					// the workspace itself never gets the engine call (previewDispatchedWorkspace's rule, asked first).
 					prepared = true
+					var engineSkipped bool
 					prepCtx, cancelPrep := context.WithCancel(ctx)
 					var wg sync.WaitGroup
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
+						if prepareOnNode && !s.enginePathAllowed(prepCtx, t) {
+							engineSkipped = true
+							return
+						}
 						prepErr = s.prepareTaskWorktree(prepCtx, t, map[string]any{"cwd": t.Cwd}, &prep)
 					}()
 					source, sourceErr = s.taskWorkspaceResolve(ctx, t.Machine, t.Cwd)
@@ -346,6 +352,7 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 					}
 					wg.Wait()
 					cancelPrep()
+					prepared = !engineSkipped // skipped: the engine is asked later only if the node turns out to need it
 				} else {
 					source, sourceErr = s.taskWorkspaceResolve(ctx, t.Machine, t.Cwd)
 				}
