@@ -2444,6 +2444,12 @@ settings. Mail, Feishu and sources with history link to the sync scope in Knowle
 original forwarding switch. See the [split layout](../design/DESIGN_SYSTEM.md#integrations--extensions-in-web-settings),
 [channel settings](../extensions/channels.md#7-ui) and [connector overview](../extensions/connectors.md).
 
+An assistant that advertises `integrations_projection_v1` in the hub roster supplies the rows, filter counts and
+detail sections through its read-only Integrations projection (#17762). The Web view loads these reads only inside
+Settings and keeps them scoped to the named assistant and hub credential. A failed read can be retried on that
+assistant while readable sections remain usable. Older hubs or assistants that lack the announcement use the legacy
+catalog, and existing settings endpoints still handle edits.
+
 Channel and extension editors keep their configuration in tab memory under the bound hub credential, assistant, resource
 kind, and ID (#17762). The split breakpoint and legacy Extensions entry read the same drafts. Saves run in order for a
 resource, and a refresh requested during a write reads again after it. The channel form checks the document revision
@@ -3813,7 +3819,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connectors: Lark | Yes | #297 | Read-only status |
 | Connectors: Lark › Show messages on home screen | Yes | #1327 | Only applies to the current browser |
 | Lark anti-recall and edit history (Message display) | Yes | #2900 | The toggles are shared with the Lark gateway web page for the current account; encrypted old versions only show the public display (iOS can show the body after unlocking) |
-| Integrations & Extensions (Labs) | Web first | #14802, #16190 | One detail per service, channel routing and Data flow. Assistant links to its forwarding switch. GitHub and history-capable sources link to Repositories and Knowledge settings respectively. |
+| Integrations & Extensions (Labs) | Web first | #14802, #16190, #17762 | One detail per service, channel routing and Data flow. Assistants with projection support supply the catalog and detail sections. Assistant links to its forwarding switch, and GitHub and history-capable sources link to Repositories and Knowledge settings. |
 | Connectors: Lark bot (status, credentials, pairing, what it can do) | Yes | #1325 | Settings › Connectors, opens as a dialog; copying the pairing code uses the clipboard (falls back to execCommand over http) |
 | hub version and updates (check, update, update now, auto-update, history, Docker commands) | Yes | #1325, #2897, #15240 | Settings › hub shows second-level local times and a stage and step pipeline during updates. The hub notice row below the filter bar in the Agents sidebar is chosen by `hubNotice` in `lib/hub-update.ts`. The hub hosts the web app itself, so the app and hub version compatibility notices are inapplicable here. |
 | Whole-install Recovery overview, offline bundle inspection, temporary-database verification | Web first | #12553 | Settings › Hub › Recovery, separate from update program backups and Machines. Full-credential, audited reads only; no create, restore, download, key export, or service-starting drill. Missing tools, Compose, unsafe inventory, changed bundles, and unavailable restore history stay explicitly unsupported or unverified. See [server.md](../server/server.md) "Settings → Hub → Recovery" |
