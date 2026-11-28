@@ -1162,7 +1162,10 @@ permissions and questions go to its supervising conversation (the main conversat
   existing interaction; manager-owned internal questions never use that fallback.
   `handNonOwnerCard` uses the active durable relay queue for internal questions, permissions and maintenance approvals:
   a busy or offline recipient is retried, delivery and failure are work events, and `interaction_answer` attributes the
-  decision to the assistant. The interaction's expiry is never extended. Restart rebuilds its route and wake-up;
+  decision to the assistant. Sensitive delegation approvals are bound to the exact proposal, track and decision
+  authority. Source membership is checked again after approval, and the target is looked up again before sending;
+  a changed or unavailable boundary cannot reuse an internal approval. The interaction's expiry is never extended.
+  Restart rebuilds its route and wake-up;
   stale relay generations cannot act on the rebuilt route. The card is shown on the apps
   marked `delegating` and rings nothing: no push, no bot card, no Persona Link notification. A card the supervisor
   holds (any kind but a question) is not the owner's: the apps count no session that waits only on such cards in Needs

@@ -157,14 +157,29 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // otherwise (expired, withdrawn, cleared, answered for the user), which the tool must not report as a decline
 // (outboundNotDone).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (allowed bool, outcome string, err error) {
-	space, _ := s.selfSpace(ctx, self)
-	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.selfPolicy(ctx, self).ConfirmOutbound {
+	space, known := s.selfSpace(ctx, self)
+	home := machine
+	if home == "" {
+		home = s.settings(ctx).MachineID
+	}
+	if row, present := s.session(ctx, home, self); present {
+		space, known = spaceOf(row), true
+	} else {
+		known = false
+	}
+	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.trackPolicy(ctx, space).ConfirmOutbound {
 		return true, "", nil // fresh confirmation covers these words, never an isolated track boundary
 	}
 	if !s.exitPolicy(ctx, text, self, space).ConfirmOutbound {
 		return true, "", nil
 	}
-	return s.outbound.confirm(ctx, outboundKey(self, tool, text, summary), func() (bool, string, error) {
+	source := cardSecretForm // an isolated or unknown privacy boundary needs the owner
+	if tool == "agent_send" && known && !s.trackPolicy(ctx, space).ConfirmOutbound {
+		source = cardConfirmOutbound
+	}
+	// Approval belongs to this exact proposal, track and decision authority, including cache hits.
+	key := outboundKey(self, tool, text, summary, space, source, string(input))
+	allowed, outcome, err = s.outbound.confirm(ctx, key, func() (bool, string, error) {
 		l := s.lang(ctx)
 		now := time.Now().UTC()
 		ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: machine, SessionID: self, Kind: proto.IxPermission, ToolName: tool,
@@ -173,9 +188,7 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 		if c, ok := s.session(ctx, machine, self); ok {
 			ix.Cwd = c.Cwd
 		}
-		source := cardSecretForm // a cross-track privacy boundary needs the owner in person
-		if tool == "agent_send" && !s.selfPolicy(ctx, self).ConfirmOutbound {
-			source = cardConfirmOutbound
+		if source == cardConfirmOutbound {
 			ix.Summary = s.outboundSummary(ctx, l, space, "Internal delegation to an owned Agent; review the existing task authorization before allowing it")
 		} else {
 			ix.OwnerProposal = true
@@ -187,6 +200,19 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 		}
 		return validInternalAnswer(ix, r), r.Outcome(), nil
 	})
+	if allowed {
+		// Read live membership, not an MCP caller snapshot captured before the approval wait.
+		currentSpace := space
+		if row, present := s.session(ctx, home, self); present {
+			currentSpace = spaceOf(row)
+		} else if known {
+			return false, proto.OutcomeUnanswered, nil
+		}
+		if currentSpace != space || source == cardConfirmOutbound && s.trackPolicy(ctx, currentSpace).ConfirmOutbound {
+			return false, proto.OutcomeUnanswered, nil
+		}
+	}
+	return allowed, outcome, err
 }
 
 // outboundNotDone is what a tool tells the model when confirmOutbound did not let it go (outcome: how its card ended):

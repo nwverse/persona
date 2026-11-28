@@ -561,7 +561,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
 		}
-		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
+		// Bind approval to the resolved address, even when the caller used a prefix or machine alias.
+		var proposal map[string]json.RawMessage
+		if err := json.Unmarshal(args, &proposal); err != nil {
+			return "", err
+		}
+		proposal["machine"], _ = json.Marshal(am.ID)
+		proposal["session_id"], _ = json.Marshal(c.SessionID)
+		approvalInput, err := json.Marshal(proposal)
+		if err != nil {
+			return "", err
+		}
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, approvalInput); err != nil {
 			if resumeTodo != "" {
 				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 			}
@@ -571,6 +582,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 			}
 			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
+		}
+		// Approval may have waited while the target moved to another privacy space or runtime.
+		am, c, err = s.findAgentInSpace(ctx, am.ID, c.SessionID, &space)
+		if err != nil {
+			return "", err
+		}
+		if c.Assistant || c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) && !stoppedAgent(c) {
+			return "", errors.New("the Agent changed while permission was pending; nothing was sent")
 		}
 		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
 			return "", err

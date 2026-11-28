@@ -248,6 +248,7 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 				t.Fatal("async source did not persist a question")
 			}
 			ix := qs[0]
+			t.Cleanup(func() { _ = e.s.resolve(ix.ID, proto.Resolution{Cancel: true}) })
 			e.noticeWith("lead1", "interaction_id="+ix.ID)
 			// Restart from a durable snapshot, not two live managers writing the same fake store.
 			restarted := newFleetMem()
@@ -272,7 +273,16 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 				p, ok := next.s.pendingIx(ix.ID)
 				return ok && next.s.internalCard(p)
 			})
-			next.noticeWith("lead1", "interaction_id="+ix.ID)
+			// Run the normal recovery tick: the durable queue may still contain the pre-crash relay head.
+			waitFor(t, "restored supervisor awakened", func() bool {
+				next.s.drainHeldRelays(context.Background(), time.Now())
+				for _, notice := range next.f.noticesTo("lead1") {
+					if strings.Contains(notice, "interaction_id="+ix.ID) {
+						return true
+					}
+				}
+				return false
+			})
 			r := proto.Resolution{Answers: map[string]string{"Which shard after restart?": "Affected"}, AnsweredBy: proto.AnsweredByAssistant}
 			if terminal == "cancel" {
 				r = proto.Resolution{Cancel: true}
