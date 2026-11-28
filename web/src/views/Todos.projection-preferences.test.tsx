@@ -157,6 +157,7 @@ describe("the Web To-dos projection and saved views", () => {
     expect(progress?.querySelector('[data-todo="deferred"] [data-testid="board-owner"]')).toBeNull();
     await click(progress?.querySelector<HTMLElement>('[data-board-grouping="direction"]'));
     expect(find("todo-board-group")?.dataset.direction).toBe("product");
+    expect(find("todo-board-group")?.dataset.openCount).toBe(String(board.counts.open_total));
     expect(find("todo-board-group")?.dataset.waitingCount).toBe(String(count));
   });
 

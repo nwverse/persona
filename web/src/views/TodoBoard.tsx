@@ -229,9 +229,10 @@ export function TodoBoard({
       key, name, rows, waiting: waiting ?? rows.filter((row) => row.waiting).length,
       open: rows.length, stale: rows.filter((row) => row.stale).length,
     });
+    let groups: BoardGroup[];
     if (activeGrouping === "direction" && serverBoard) {
       const rowsById = new Map(rows.map((row) => [row.todo.id, row]));
-      return serverBoard.direction_groups.flatMap(({ direction_id: id, label, todo_ids, counts }) => {
+      groups = serverBoard.direction_groups.flatMap(({ direction_id: id, label, todo_ids, counts }) => {
         const members = todo_ids.flatMap((id) => {
           const row = rowsById.get(id);
           return row ? [row] : [];
@@ -240,27 +241,27 @@ export function TodoBoard({
         const name = id ? label || members[0].direction?.label || id : t("todos.direction_uncategorized");
         return [group(id, name, members, counts.needs_you)];
       });
+    } else {
+      const buckets = new Map<string, BoardRow[]>();
+      for (const row of rows) {
+        const key = (activeGrouping === "direction" ? row.direction?.id : row.todo.project?.trim()) ?? "";
+        const list = buckets.get(key);
+        if (list) list.push(row);
+        else buckets.set(key, [row]);
+      }
+      groups = [...buckets].map(([key, bucketRows]) => {
+        const name = activeGrouping === "direction"
+          ? bucketRows[0].direction?.label || t("todos.direction_uncategorized")
+          : key ? projectName(key) : t("todos.board_no_project");
+        return group(key, name, bucketRows);
+      }).sort((a, b) => !a.key ? 1 : !b.key ? -1 : a.name.localeCompare(b.name));
     }
 
-    const buckets = new Map<string, BoardRow[]>();
-    for (const row of rows) {
-      const key = (activeGrouping === "direction" ? row.direction?.id : row.todo.project?.trim()) ?? "";
-      const list = buckets.get(key);
-      if (list) list.push(row);
-      else buckets.set(key, [row]);
+    if (serverBoard && groups.length === 1 && groups[0].rows.length === rows.length) {
+      groups[0].open = serverBoard.counts.open_total;
+      groups[0].waiting = serverBoard.counts.needs_you;
     }
-    const named = [...buckets].map(([key, bucketRows]) => {
-      const name = activeGrouping === "direction"
-        ? bucketRows[0].direction?.label || t("todos.direction_uncategorized")
-        : key ? projectName(key) : t("todos.board_no_project");
-      return group(key, name, bucketRows);
-    });
-    if (serverBoard && named.length === 1) {
-      const [only] = named;
-      only.open = serverBoard.counts.open_total;
-      only.waiting = serverBoard.counts.needs_you;
-    }
-    return named.sort((a, b) => !a.key ? 1 : !b.key ? -1 : a.name.localeCompare(b.name));
+    return groups;
   }, [todos, allTodos, lookup, triages, serverBoard, projectedNeeds, projectName, effectiveDirectionOf, isV2, activeGrouping, hours, tick]);
 
   const changeHours = (raw: string) => {
