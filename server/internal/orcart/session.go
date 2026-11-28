@@ -330,26 +330,49 @@ func (c *Client) Prompts(ctx context.Context, sessionID string) ([]Prompt, error
 	return nil, fmt.Errorf("orca agentSession.currentRequests: the requests kept changing")
 }
 
-// Options is the part of agentSession.options Persona shows: the session's permission mode and effort, Orca's words.
+// Options is the part of agentSession.options Persona shows: the session's permission mode, interaction mode ("plan"
+// or "default"; "" from hosts without one), effort and model, Orca's words; the efforts each model it lists takes
+// (by model id, weakest first; none when Orca does not know them), and whether the chat can be rewound.
 type Options struct {
-	PermissionMode string
-	Effort         string
-	Model          string
+	PermissionMode  string
+	InteractionMode string
+	Effort          string
+	Model           string
+	Efforts         map[string][]string
+	Rewind          bool
 }
 
 // Options reads a session's current options.
 func (c *Client) Options(ctx context.Context, sessionID string) (*Options, error) {
 	var res struct {
 		Current struct {
-			PermissionMode string `json:"permissionMode"`
-			Effort         string `json:"effort"`
-			Model          string `json:"model"`
+			PermissionMode  string `json:"permissionMode"`
+			InteractionMode string `json:"interactionMode"`
+			Effort          string `json:"effort"`
+			Model           string `json:"model"`
 		} `json:"current"`
+		Models []struct {
+			ID      string            `json:"id"`
+			Efforts []json.RawMessage `json:"efforts"`
+		} `json:"models"`
+		Rewind *struct {
+			Supported bool `json:"supported"`
+		} `json:"rewind"`
 	}
 	if err := c.Call(ctx, CallTimeout, "agentSession.options", map[string]any{"sessionId": sessionID}, &res); err != nil {
 		return nil, err
 	}
-	return &Options{PermissionMode: res.Current.PermissionMode, Effort: res.Current.Effort, Model: res.Current.Model}, nil
+	o := &Options{PermissionMode: res.Current.PermissionMode, InteractionMode: res.Current.InteractionMode,
+		Effort: res.Current.Effort, Model: res.Current.Model, Rewind: res.Rewind != nil && res.Rewind.Supported}
+	for _, m := range res.Models {
+		if efforts := effortsOf(m.Efforts); m.ID != "" && len(efforts) > 0 {
+			if o.Efforts == nil {
+				o.Efforts = map[string][]string{}
+			}
+			o.Efforts[m.ID] = efforts
+		}
+	}
+	return o, nil
 }
 
 // SendSession is agentSession.send: text and images (files on this machine) as the user's next message; queued

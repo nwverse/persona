@@ -268,8 +268,28 @@ runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but in
   would open in an Orca terminal: the bridge sends `unlisted_transcripts: []` (it lists its closed chats itself and names none).
 - **State**: poll `worktree.ps` every 1.5 seconds, using row `mainAgent.state` (working / blocked / done); a tab without a turn is idle. Push to hub only when the list changes.
 - **Actions**: send text/images (messages sent while working queue after this turn, `delivery: queue-if-active`), interrupt (`agentSession.cancel`),
-  close (`agentSession.close`, like Orca's close button; records remain), change permission mode and thinking effort (`agentSession.setOption`; Orca has no plan mode,
-  so plan returns `unsupported`). No terminal, screen reads, keys, or live terminal.
+  close (`agentSession.close`, like Orca's close button; records remain). No terminal, screen reads, keys, or live terminal.
+- **Controls** (#17046, `orcabridge_controls.go`; the bridge declares `caps.modes`, `model`, `rename`, `rewind` and `seen`):
+  - Permission mode, effort and model are `agentSession.setOption`, in that order: model, then the effort chosen with it, then the mode. Persona's `default` /
+    `acceptEdits` / `auto` / `bypassPermissions` are Orca's `ask` / `accept-edits` / `auto` / `full-access`. **Plan** is not a permission mode in Orca but its
+    interaction mode (`setOption interactionMode plan`, Orca 1.4.277): a row in it reads `permission_mode: plan`, and any other mode picked on it sets
+    `interactionMode default` first. A Claude chat takes Claude Code's chips, full access included at any time (`bypass_available`). Another provider's chat lists
+    the modes Orca takes for it (`capabilities.permission_modes`, its approval as `default`, from Orca's own table: Codex ask / auto / full-access, Antigravity
+    and Hermes ask / accept-edits / full-access, most providers ask / full-access, pi, aug and a provider outside the table none; plus `plan` where its options
+    report an interaction mode, as Codex's do) and the efforts its model has that Persona can send (`efforts`, from `agentSession.options`' models); a mode Orca
+    does not take for it is refused (`orca_mode_unsupported`) with nothing changed. A model change is offered on every open chat (`capabilities.model`); the
+    apps list the computer's launcher models for it until Orca's chats have launchers of their own (#17047).
+  - Rename is `agentSession.rename {sessionId, name}` (`agent-session.structured.rename.v1`; an Orca without it is refused as `orca_rename_unsupported`).
+  - Rewind is `agentSession.rewind {envelope, itemId, expectedEpoch}` (`agent-session.rewind.v1`; a row says `capabilities.rewind` only while Orca has it and
+    `agentSession.options` says the chat supports it). The bridge finds the user's message in Orca's journal (the newest 2,000 rows) by its text (white space
+    aside), its occurrence counting from the end and how many of the user's messages came after it, and refuses (`rewind_mismatch`) a message not where the app
+    saw it and a journal whose epoch moved on (Orca's `stale-epoch`); Orca's `busy` is `rewind_busy`. It rewinds the conversation only (no `rewind_code`), and
+    the app puts the message back in its own input box (`input_cleared: true`). A Claude chat that Orca rewinds goes on in a fork of its Claude session: the
+    bridge reads the chat's provider session again at once (and at most every 10 seconds while its row changes), so the row names the new transcript and keeps
+    its id.
+  - Seen is `agentSession.acknowledgeAttention {sessionId, observedCursor}` up to the journal's end (`agent-session.attention-ack.v1`; nothing on an Orca
+    without it), so a chat read in Persona is not unread in Orca.
+  - A closed chat (above) takes none of these until a message opens it again.
 - **Cards**: when blocked, read `agentSession.currentRequests`, mapping pending approvals to permission cards (if `detail` is tool-input JSON,
   show commands/files like hook cards), plan approvals to plan cards, and questions to question cards. Return answers with Orca option IDs and `expectedRevision`.
   Cards disappear from the phone if answered on the computer first. Every answer of a question goes: Orca 1.4.277 takes at most four in one reply and refuses more, which
