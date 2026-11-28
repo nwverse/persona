@@ -5,7 +5,7 @@ import { defaultManager, LinkManager, useShownManager } from "../../lib/manager-
 import { decisionLaterKey } from "../../lib/assistant-entries";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, activityOf, stateOf, tabLabel, uuid } from "../../lib/format";
+import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, activityOf, stateOf, tabLabel, uuid, viewOf } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type Route, type SessionView } from "../../lib/router";
@@ -197,6 +197,7 @@ const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => (
 // a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
 const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").then((m) => m.SessionReviewMenuItem));
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
+const DeliveryBanner = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.DeliveryBanner));
 const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then((m) => m.default));
 
 const NO_FEED: FeedItem[] = [];
@@ -264,7 +265,7 @@ interface Pending extends QueueCandidate {
 }
 
 function queuesWhileWorking(row?: Session): boolean {
-  return Boolean(row && stateOf(row) === "working" && !row.background_waiting && (
+  return Boolean(row && stateOf(row) === "working" && !row.background_working && !row.background_waiting && viewOf(row).reason?.kind !== "background" && (
     (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now ||
     row.space_kind === "codex_app" ||
     (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude" || row.agent === "agy"))
@@ -1716,19 +1717,23 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       toast(t("chat-chatview.send_now_failed", { error: errorText(e) }), "error");
     }
   }, [mid, sid]);
-  // the turn ended, and not necessarily by this stop
-  useEffect(() => {
-    if (state !== "working") stopDone();
-  }, [state, stopDone]);
-
   // Once the hub says the turn is over, four kinds of background work draw the last exchange finished (its work folded,
   // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
   // background subagents (#5030), commands that only wait (#6045), and finally a real background command or Monitor
   // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
   const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
   const backgroundOnly = backgroundState !== null;
-  const foregroundWorking = (state === "working" && !backgroundOnly) || awaiting;
-  const canStopForeground = !backgroundOnly && sessionCan(session, "interrupt");
+  // Also cover runtime background agents/workflows where backgroundTurn returns null while the hub still reports background-only state.
+  const backgroundEnded =
+    backgroundOnly ||
+    Boolean(!streaming && outgoing === 0 && !awaiting && session && (session.background_working || session.background_waiting || viewOf(session).reason?.kind === "background"));
+  const foregroundWorking = (state === "working" && !backgroundEnded) || awaiting;
+  const canStopForeground = !backgroundEnded && sessionCan(session, "interrupt");
+
+  // the turn ended, and not necessarily by this stop
+  useEffect(() => {
+    if (!foregroundWorking) stopDone();
+  }, [foregroundWorking, stopDone]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -3018,6 +3023,13 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             onDismiss={dismissBanner}
           />
         )}
+        {/* a logical conversation's input that has not gone in (#17431): which one waits for its receipt and how long,
+            what waits behind it, and the expired ones with Resend / Ignore. Never an idle chat that swallowed a message */}
+        {!detached && keptUndelivered.some((m) => m.reason) && (
+          <PageBoundary page="undelivered">
+            <Suspense fallback={null}><DeliveryBanner mid={mid} sid={sid} list={keptUndelivered} /></Suspense>
+          </PageBoundary>
+        )}
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
         </div>
@@ -3061,7 +3073,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         <Composer
           draftKey={draftKey}
           commentImagesRef={commentImagesRef}
-          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : (state === "working" && !backgroundOnly) || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : (state === "working" && !backgroundEnded) || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           agent={session?.agent}
           uploadDest={session?.space === "health" ? "health" : undefined}

@@ -212,6 +212,9 @@ type Service struct {
 	// todoAskAfter is how long a linked to-do goes without progress before its recurring check asks the owner (0:
 	// scheduleAskAfter's floor; tests shorten it, schedule_todo_evidence.go).
 	todoAskAfter time.Duration
+	// logicalInputClock is the clock a logical input's delivery deadline is checked against (logical_undelivered.go;
+	// nil: time.Now, tests set it).
+	logicalInputClock func() time.Time
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
 	// machineNow is the clock collectMachineSnapshots checks sample freshness and silent-node age against (nil: time.Now, tests set it).
@@ -1179,6 +1182,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 			v := view(id, k.Machine)
 			v.Undelivered = append(v.Undelivered, k.wire()) // the owner's messages that could not go in (undelivered.go)
 		}
+	}
+	logicalKept, ok := s.logicalUndeliveredViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	for key, q := range logicalKept {
+		v := view(key[1], key[0])
+		v.Undelivered = append(v.Undelivered, q...) // a logical conversation's input that has not gone in (logical_undelivered.go)
 	}
 	for _, id := range s.heldConversations() {
 		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise_digest.go)

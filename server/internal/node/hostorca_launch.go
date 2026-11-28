@@ -388,6 +388,7 @@ func (h *orcaHost) NameAgent(ctx context.Context, pane host.PaneRef, name string
 	if err != nil {
 		return orcaErr(err)
 	}
+	defer h.renamedTab() // the next listing reads the tab's new name (namedTabs)
 	return orcaErr(h.onTerminal(ctx, t, true, func(target orcart.Target) error {
 		return h.c.RenameTerminal(ctx, target, name)
 	}))

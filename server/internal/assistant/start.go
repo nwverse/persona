@@ -648,9 +648,9 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	if s.isWorkMachine(machine) {
 		return proto.Session{}, errWorkAssistant
 	}
-	// MCP discovery can arrive before assistant.send returns its session ID. Keep the
-	// manager's authorization until the resulting conversation's origin is recorded.
-	finishStart := s.beginAssistantStart(machine)
+	// MCP discovery and the first assistant.context can arrive before assistant.send returns its session ID.
+	// Keep the manager's authorization and in-flight start space until origin and space are recorded.
+	finishStart := s.beginAssistantStartSpace(machine, p.Space, p.NewSessionID)
 	defer finishStart()
 	guestID := ""
 	if p.GuestTools != nil {

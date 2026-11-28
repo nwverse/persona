@@ -243,7 +243,7 @@ describe("a brief item", () => {
     drawDecision({ id: "todo_stopped", title: "Demo rollout", outcome: "decide", recommend: "Stage it", waited_s: 60, asked_at: ASKED });
     const take = [...rows("accept")[0].querySelectorAll("button")].find((b) => b.textContent === "采用推荐")!;
     await act(async () => take.click());
-    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记录。Agent 已停止运行，将由督办接手处理。");
+    expect(host.querySelector("[data-brief-accepted=recorded]")?.textContent).toBe("已记录。没能送到 Agent，将由督办接手转交");
   });
 
   it("a round that is over (409) says it was handled; another failure keeps the button for a retry", async () => {

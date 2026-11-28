@@ -44,6 +44,11 @@ type Fake struct {
 	revisions map[string]int
 	writes    []Write
 	invalid   []string
+	// splits counts terminal.split's new terminals; lacking are the methods it answers method_not_found to (Lack);
+	// customTitles are tabs' custom names by tab id (terminal.rename, RenameTab).
+	splits       int
+	lacking      map[string]bool
+	customTitles map[string]string
 	// unknown: params each method's schema does not have and refuses (Unknown), as an older, strict Orca's would.
 	unknown map[string][]string
 }
@@ -172,7 +177,9 @@ func (f *Fake) serve(c net.Conn) {
 			if invalid = f.unknownLocked(req.Method, req.Params); invalid == "" {
 				invalid = validate(req.Method, req.Params)
 			}
-			if invalid == "" {
+			if f.lacking[req.Method] {
+				result = Fail{"method_not_found"} // an older Orca: nothing done
+			} else if invalid == "" {
 				result = f.answerLocked(req.Method, req.Params)
 			} else {
 				f.invalid = append(f.invalid, req.Method+": "+invalid)
@@ -260,6 +267,25 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 			out["visualLayouts"] = slices.Clone(f.layouts)
 		}
 		return out
+	case "session.tabs.list":
+		// The phone's tab model: a terminal entry per pane, its tab's custom name when it has one.
+		sel, _ := p["worktree"].(string)
+		wt := strings.TrimPrefix(sel, "id:")
+		tabs := []any{}
+		for _, x := range f.terms {
+			if x["worktreeId"] != wt {
+				continue
+			}
+			tab, _ := x["tabId"].(string)
+			leaf, _ := x["leafId"].(string)
+			entry := map[string]any{"type": "terminal", "id": tab + "::" + leaf, "parentTabId": tab, "leafId": leaf,
+				"title": f.layoutTitleLocked(tab), "customTitle": nil}
+			if c, ok := f.customTitles[tab]; ok {
+				entry["title"], entry["customTitle"] = c, c
+			}
+			tabs = append(tabs, entry)
+		}
+		return map[string]any{"worktree": wt, "tabs": tabs}
 	case "worktree.ps":
 		b, _ := json.Marshal(f.trees)
 		id := fmt.Sprintf("snap-%x", fnv32(b))
@@ -314,13 +340,41 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 		return map[string]any{"close": map[string]any{"handle": h, "tabId": t["tabId"], "ptyKilled": true}}
 	case "terminal.rename":
 		title, _ := p["title"].(string)
-		if t != nil {
-			t["title"] = title
-		}
-		return map[string]any{"rename": map[string]any{"handle": h, "title": title}}
+		tab, _ := t["tabId"].(string)
+		f.renameTabLocked(tab, title)
+		return map[string]any{"rename": map[string]any{"handle": h, "tabId": tab, "title": title}}
 	case "terminal.setPaneTitle":
 		title, _ := p["title"].(string)
 		return map[string]any{"setPaneTitle": map[string]any{"handle": h, "title": title}}
+	case "terminal.split":
+		f.splits++
+		handle := fmt.Sprintf("term_split_%d", f.splits)
+		leaf := fmt.Sprintf("leaf_split_%d", f.splits)
+		nt := maps.Clone(t)
+		nt["handle"], nt["leafId"], nt["incarnationId"], nt["ptyId"] = handle, leaf, "inc-"+handle, "pty-"+handle
+		nt["agentIdentity"], nt["title"] = "", ""
+		f.terms = append(slices.Clone(f.terms), nt)
+		direction, _ := p["direction"].(string)
+		if direction == "" {
+			direction = "horizontal" // Orca's default
+		}
+		command, _ := p["command"].(string)
+		f.writes = append(f.writes, Write{Handle: h, Split: direction, Text: command})
+		return map[string]any{"split": map[string]any{"handle": handle, "tabId": t["tabId"], "leafId": leaf, "paneRuntimeId": -1}}
+	case "terminal.closeTab":
+		tab := t["tabId"]
+		var keep []map[string]any
+		for _, x := range f.terms {
+			if x["tabId"] != tab {
+				keep = append(keep, x)
+			}
+		}
+		f.terms = keep
+		f.retabLocked(func(tabs []any) []any {
+			return slices.DeleteFunc(tabs, func(x any) bool { m, _ := x.(map[string]any); return m["tabId"] == tab })
+		})
+		f.writes = append(f.writes, Write{Handle: h, Close: true, Tab: true})
+		return map[string]any{"close": map[string]any{"handle": h, "tabId": tab, "closeMode": "tab", "ptyKilled": false}}
 	case "terminal.send":
 		text, _ := p["text"].(string)
 		enter := p["enter"] == true
@@ -343,6 +397,62 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 		return map[string]any{"send": send}
 	}
 	return Fail{"method_not_found"}
+}
+
+// retabLocked rewrites each worktree layout's tabs through fn, as fresh maps: terminal.list answers hold the old ones,
+// encoded after the lock is let go.
+func (f *Fake) retabLocked(fn func(tabs []any) []any) {
+	layouts := make([]any, len(f.layouts))
+	for i, l := range f.layouts {
+		lm, _ := l.(map[string]any)
+		root, _ := lm["root"].(map[string]any)
+		tabs, _ := root["tabs"].([]any)
+		nr := maps.Clone(root)
+		nr["tabs"] = fn(slices.Clone(tabs))
+		nl := maps.Clone(lm)
+		nl["root"] = nr
+		layouts[i] = nl
+	}
+	f.layouts = layouts
+}
+
+// renameTabLocked does what Orca 1.4.277 with no window does for terminal.rename (checked live): the tab gets the
+// custom name (session.tabs.list), every terminal in it that title (terminal.list), and its layout keeps the title it
+// was made with.
+func (f *Fake) renameTabLocked(tab, title string) {
+	if f.customTitles == nil {
+		f.customTitles = map[string]string{}
+	}
+	f.customTitles[tab] = title
+	for _, x := range f.terms {
+		if x["tabId"] == tab {
+			h, _ := x["handle"].(string)
+			f.replaceLocked(h, map[string]any{"title": title})
+		}
+	}
+}
+
+// RenameTab renames a tab the way someone does in Orca's window or with Orca's own CLI (terminal.rename's effect).
+func (f *Fake) RenameTab(tab, title string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.renameTabLocked(tab, title)
+}
+
+// layoutTitleLocked is the tab's title in the layouts, "" when no layout has it.
+func (f *Fake) layoutTitleLocked(tab string) string {
+	for _, l := range f.layouts {
+		lm, _ := l.(map[string]any)
+		root, _ := lm["root"].(map[string]any)
+		tabs, _ := root["tabs"].([]any)
+		for _, x := range tabs {
+			if m, _ := x.(map[string]any); m["tabId"] == tab {
+				title, _ := m["title"].(string)
+				return title
+			}
+		}
+	}
+	return ""
 }
 
 func (f *Fake) termLocked(h string) map[string]any {
@@ -431,10 +541,18 @@ func validate(method string, p map[string]any) string {
 			}
 		}
 		return first(handle(), literalTrue("screen"))
-	case "terminal.agentStatus", "terminal.close":
+	case "terminal.agentStatus", "terminal.close", "terminal.closeTab":
 		return handle()
+	case "terminal.split":
+		if v, ok := p["direction"]; ok && v != "vertical" && v != "horizontal" {
+			// Orca turns any other value into its default (horizontal): a wrong word would split the wrong way.
+			return "direction must be vertical or horizontal"
+		}
+		return first(handle(), str("command", false), str("cwd", false))
 	case "terminal.inspectProcess":
 		return first(handle(), boolean("scanChildProcesses"))
+	case "session.tabs.list":
+		return str("worktree", true)
 	case "terminal.rename", "terminal.setPaneTitle":
 		return first(handle(), str("title", true))
 	case "repo.add":
@@ -749,6 +867,10 @@ type Write struct {
 	// Pasted: delivered as an agent prompt (bracketed paste); else written raw.
 	Pasted bool
 	Close  bool
+	// Tab: the close was terminal.closeTab (the whole tab).
+	Tab bool
+	// Split is terminal.split's direction for a split of the terminal (its command, if any, in Text).
+	Split string
 }
 
 // Writes are the sends and closes taken so far.
@@ -756,6 +878,16 @@ func (f *Fake) Writes() []Write {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.writes)
+}
+
+// Lack makes the fake answer method_not_found to method, doing nothing, as an Orca older than the method would.
+func (f *Fake) Lack(method string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lacking == nil {
+		f.lacking = map[string]bool{}
+	}
+	f.lacking[method] = true
 }
 
 // Unknown makes the fake refuse method's requests that carry any of keys (invalid_argument, before any handler), as
@@ -1098,14 +1230,14 @@ func (f *Fake) Handle(method string, fn func(params map[string]any) any) {
 }
 
 // Trace is the calls so far ("method {params}"), only of the given methods when any are named, else all but the
-// listing ones every refresh makes (status.get, terminal.list, worktree.ps).
+// listing ones a refresh makes (status.get, terminal.list, worktree.ps, and session.tabs.list with the layouts).
 func (f *Fake) Trace(methods ...string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
 	for _, c := range f.log {
 		if len(methods) > 0 && !slices.Contains(methods, c.Method) ||
-			len(methods) == 0 && slices.Contains([]string{"status.get", "terminal.list", "worktree.ps"}, c.Method) {
+			len(methods) == 0 && slices.Contains([]string{"status.get", "terminal.list", "worktree.ps", "session.tabs.list"}, c.Method) {
 			continue
 		}
 		out = append(out, c.String())

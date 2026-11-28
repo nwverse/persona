@@ -23,6 +23,42 @@ old binary. It is never guessed from today's active segment. An unprovable targe
 stays blocked until an operator explicitly resolves it. The original target is
 kept open while its receipt remains unresolved. Later inputs remain FIFO queued.
 
+## Delivery deadline
+
+Uncertain is a bounded transition, not a permanent fence (#17431). A claim records
+`claimed_at`. While the receipt stays unknown the reconciler keeps asking the
+original dispatch target (above); once `claimed_at` is older than the delivery
+deadline (default 150 s; `PERSONA_INPUT_DELIVERY_DEADLINE` on the manager, a Go
+duration between 30 s and 30 min) without a positive receipt, one transaction
+moves that exact attempt (the CAS tuple below, under the root lock, so never
+while its RPC holds the share lock) to `expired`:
+
+- the payload, hash and reason stay; `conversation_input_resolutions` records the
+  attempt as action `expired`, actor `delivery_deadline`;
+- nothing is sent again by itself;
+- the queue behind it drains at once in the same pass, and switch preparation is no
+  longer fenced by it;
+- when it was the current switch's own first input, that switch is accepted on its
+  already active target and keeps its handoff, so the next input carries the
+  context the lost first turn carried.
+
+A positive receipt before the deadline settles it as accepted, an explicit refusal
+requeues it in place, exactly as above.
+
+Every input that has not gone in is on the conversation's row
+(`undelivered` with `reason`, docs/protocol/protocol.md): queued, behind the
+unconfirmed one, waiting for a switch, awaiting its receipt with its deadline, or
+expired. A send that is queued answers `{"delivered":"later","undelivered":{…}}`
+with that entry, not a bare `ok`. The row is never `idle` while any is listed.
+
+The owner, not an operator, resolves an expired input from its bubble or the banner
+over the composer: Retry (`POST /api/v1/assistant/conversations/{id}/undelivered/{msg}/retry`)
+requeues it once at the end of the queue with a new dispatch identity; Delete
+(`DELETE …/undelivered/{msg}`) drops it and clears its payload, which the audit
+keeps. Both are full-role only, CAS on the expired row, audited with the actor,
+and idempotent: a repeat answers `repeated` and changes nothing. The manual
+`inputs/resolve` endpoint below stays for operators.
+
 ## Diagnostics
 
 Full-role devices can read:

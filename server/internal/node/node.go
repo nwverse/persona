@@ -2753,11 +2753,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			limit = 80
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
-			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
+			page, more, span := f.RangeSpan(p.FromSeq, p.ThroughSeq, 1000)
 			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, false, f)
 			n.ttft.annotate(p.SessionID, page, false)
-			return map[string]any{"items": items(page), "more": more}, nil
+			return withSpan(map[string]any{"items": items(page), "more": more}, span, true), nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {

@@ -423,4 +423,110 @@ describe("foreground Stop and Esc are hidden when only background work remains",
     await flush();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/interrupt"))).toBe(true);
   });
+
+  it("also hides Stop and Esc for background-only runtime agents/workflows where backgroundTurn returns null", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: true,
+      background: [{ id: "hub/task-2", kind: "agent", description: "Subagent", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    expect(barInterruptBtn()).toBeNull();
+    expect(stopBtn()).toBeNull();
+    expect(composerInput()?.getAttribute("placeholder")).toBe(t("chat-chatview.agent_placeholder"));
+
+    const callsBefore = fetchMock.mock.calls.length;
+    escapeKey();
+    await flush();
+    expect(fetchMock.mock.calls.slice(callsBefore).some(([url]) => String(url).includes("/interrupt"))).toBe(false);
+  });
+
+  it("clears stopping state immediately when interrupting transitions into background-only work", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const fg = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "agy",
+      source_kind: "runtime",
+      capabilities: { send: true, interrupt: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: false,
+    } as Session;
+    captured.session = fg;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    act(() => { stopBtn()!.click(); });
+    await flush();
+
+    // State remains "working" because background work continues; stopping lock must clear right away.
+    captured.session = {
+      ...fg,
+      background_working: true,
+      background: [{ id: "hub/task-2", kind: "agent", description: "Subagent", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(stopBtn()).toBeNull();
+
+    // Starting another foreground turn sees an enabled Stop button rather than staying disabled for STOP_SETTLE_MS.
+    captured.session = fg;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+    expect(stopBtn()?.disabled).toBe(false);
+  });
+
+  it("does not route new sends into QueuePanel while only background work runs", async () => {
+    let resolveSend!: (r: Response) => void;
+    const fetchMock = vi.fn(() => new Promise<Response>((res) => { resolveSend = res; }));
+    vi.stubGlobal("fetch", fetchMock);
+    captured.session = {
+      machine_id: "hub",
+      session_id: "c1",
+      title: "Agent",
+      agent: "claude",
+      capabilities: { send: true, interrupt: true, queue_edit: true },
+      cwd: "/code",
+      status: "working",
+      state: "working",
+      state_since: "2026-11-13T01:00:01Z",
+      background_working: true,
+      background: [{ id: "hub/task-2", kind: "agent", description: "Subagent", started_at: "2026-11-13T01:00:02Z" }],
+    } as Session;
+    act(() => root.render(<ChatView mid="hub" sid="c1" />));
+    await flush();
+
+    const box = composerInput()!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    act(() => {
+      setValue.call(box, "Start next turn");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+
+    expect(host.querySelector("[data-queue-panel]")).toBeNull();
+    resolveSend(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }));
+    await flush();
+  });
 });

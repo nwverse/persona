@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 func logicalRefusal(ctx context.Context, code string) error {
@@ -267,7 +268,15 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 							return e
 						}
 					}
-					out, e = json.Marshal(map[string]any{"ok": true, "queued": seen != "accepted" && seen != "rejected", "duplicate": seen != "", "session_id": id, "client_msg_id": client})
+					reply := logicalQueuedReply{OK: true, Queued: seen != "accepted" && seen != "rejected" && seen != db.ConversationInputDismissed, Duplicate: seen != "", SessionID: wireids.SessionID(id), ClientMsgID: wireids.ClientMsgID(client)}
+					if reply.Queued {
+						// Not gone in yet: the sender sees its bubble with why at once (logical_undelivered.go), and so does
+						// every other device from the next snapshot. Never a bare success that then vanishes.
+						kept := s.logicalQueuedMessage(ctx, machine, id, client)
+						reply.Delivered, reply.Undelivered = logicalDeliveredLater, &kept
+						s.publishSoon()
+					}
+					out, e = json.Marshal(reply)
 					s.historyWake()
 					return e
 				}

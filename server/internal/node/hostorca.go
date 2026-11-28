@@ -61,6 +61,9 @@ type orcaHost struct {
 	made      map[string]orcart.Terminal
 	rekeyed   map[string]string
 	agentTabs map[string]orcaStartTerminal
+	// missing are the methods the runtime missingIn (its id) answered method_not_found to (hostorca_panes.go).
+	missing   map[string]bool
+	missingIn string
 }
 
 // track remembers a terminal this host created (h.mu held), to find it by handle if Orca re-keys it.
@@ -203,9 +206,13 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	if fresh && l.Truncated {
 		return nil, nil, orcart.ErrPartial // a terminal left out could be an agent's
 	}
+	var named []orcart.Tab
+	if layouts {
+		named = h.namedTabs(ctx, l.Tabs) // the names renames gave them (hostorca_panes.go)
+	}
 	h.mu.Lock()
 	if layouts {
-		h.tabs, h.tabsAt, h.topology = l.Tabs, time.Now(), orcaTopology(l)
+		h.tabs, h.tabsAt, h.topology = named, time.Now(), orcaTopology(l)
 	}
 	tabs := h.tabs
 	h.mu.Unlock()

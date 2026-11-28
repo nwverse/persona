@@ -1247,4 +1247,20 @@ export interface UndeliveredMessage {
   /** Held for an Agent while its computer was away (#10661): that computer's name. `error` is then the whole line to
    *  show under the bubble, and Retry / Delete go to the session's held routes (lib/undelivered-actions.ts). */
   computer?: string;
+  /** Set on an input of a logical conversation's delivery queue (docs/operations/logical-input-reconciliation.md
+   *  "Delivery deadline"): why it has not gone in yet. `error` is still the server's line for it. */
+  reason?: UndeliveredReason;
+  /** When the current wait began (the dispatch, the queueing, or the expiry). */
+  since?: string;
+  /** awaiting_receipt: when it stops waiting for its receipt and expires. Nothing is sent twice. */
+  deadline?: string;
+  /** How many inputs wait before this one / after the one awaiting its receipt. */
+  ahead?: number;
+  behind?: number;
+  /** The client_msg_id of the input a queued one waits behind. */
+  blocked_by?: string;
 }
+
+/** Why a logical conversation's input has not gone in (proto.UndeliveredReason). receipt_expired is `failed`: it may
+ *  have gone in, so the owner looks and picks Retry (sent once more, last in the queue) or Ignore; the rest wait. */
+export type UndeliveredReason = "awaiting_receipt" | "behind_unconfirmed" | "switch_pending" | "queued" | "receipt_expired";
