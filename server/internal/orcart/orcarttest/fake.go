@@ -75,6 +75,9 @@ func (c Call) String() string {
 // Fail makes a handler answer with an error of that code.
 type Fail struct{ Code string }
 
+// Refuse makes a handler answer with an error of that code in Orca's own words (Message).
+type Refuse struct{ Code, Message string }
+
 // New starts a fake runtime in a fresh directory (TempDir).
 func New(t testing.TB) *Fake {
 	t.Helper()
@@ -208,6 +211,9 @@ func (f *Fake) serve(c net.Conn) {
 		if e, ok := result.(Fail); ok {
 			resp["ok"] = false
 			resp["error"] = map[string]any{"code": e.Code, "message": e.Code}
+		} else if e, ok := result.(Refuse); ok {
+			resp["ok"] = false
+			resp["error"] = map[string]any{"code": e.Code, "message": e.Message}
 		} else {
 			resp["ok"], resp["result"] = true, result
 		}
