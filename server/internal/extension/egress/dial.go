@@ -110,7 +110,11 @@ func (p *Proxy) connectVia(ctx context.Context, up *url.URL, target string) (net
 		pass, _ := up.User.Password()
 		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(up.User.Username()+":"+pass)))
 	}
-	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+	deadline := time.Now().Add(30 * time.Second)
+	if caller, ok := ctx.Deadline(); ok && caller.Before(deadline) {
+		deadline = caller
+	}
+	_ = c.SetDeadline(deadline)
 	if err := req.Write(c); err != nil {
 		c.Close()
 		return nil, err
