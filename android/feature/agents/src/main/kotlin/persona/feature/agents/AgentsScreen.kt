@@ -1247,12 +1247,19 @@ internal fun SlotRow(
         preferHerdrTabName = preferHerdrTabName), muted,
         display = AgentListDisplay.of(if (glass) style else AgentRowStyle.Avatar, compact))
     val links = androidx.compose.ui.platform.LocalUriHandler.current
-    // "Lark groups" / "Terminal" under the time (#3132, #3043); a botmux session's tag opens its Feishu topic when it has one.
+    // "Lark groups" / "In a tab" / "Desktop app" under the time (#3132, #3043, #17054); a botmux session's tag opens its Feishu
+    // topic when it has one.
     val origin = session.agentSource?.takeIf { !session.assistant }?.let { kind ->
         val link = session.externalLink.takeIf { kind == AgentSource.Feishu }
-        RowSource(stringResource(if (kind == AgentSource.Feishu) R.string.agents_source_feishu else R.string.agents_filter_terminal),
-            if (kind == AgentSource.Feishu) SourceKind.Feishu else SourceKind.Terminal,
-            onClick = link?.let { { links.openUri(it) } }, clickLabel = link?.let { stringResource(R.string.agents_source_feishu_open) })
+        RowSource(stringResource(when (kind) {
+            AgentSource.Feishu -> R.string.agents_source_feishu
+            AgentSource.Terminal -> R.string.agents_filter_terminal
+            AgentSource.Desktop -> R.string.agents_source_desktop
+        }), when (kind) {
+            AgentSource.Feishu -> SourceKind.Feishu
+            AgentSource.Terminal -> SourceKind.Terminal
+            AgentSource.Desktop -> SourceKind.Desktop
+        }, onClick = link?.let { { links.openUri(it) } }, clickLabel = link?.let { stringResource(R.string.agents_source_feishu_open) })
     }
     val rowSideUnread = sideUnread?.toRowSideUnread(onOpenSide)
     JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {

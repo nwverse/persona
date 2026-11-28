@@ -98,6 +98,10 @@ test('normalized surfaces and PhoneStyle contain zero hardcoded hex color litera
     'components/StarredMessagesSheet.ets',
     'components/ChatExportSheet.ets',
     'components/ArchivedConversationsSheet.ets',
+    'components/StandingAuthSheet.ets',
+    'components/AlwaysGrantsSection.ets',
+    'components/AssistantSearchSheet.ets',
+    'components/AutoConversationsSheet.ets',
     'components/AssistantCards.ets',
     'components/KnowledgeWorkspacePage.ets',
     'components/InboxWorkspacePage.ets',
@@ -110,7 +114,10 @@ test('normalized surfaces and PhoneStyle contain zero hardcoded hex color litera
     'components/AgentListPage.ets',
     'components/ProjectsPage.ets',
     'components/SettingsDirectory.ets',
-    'components/SettingsPage.ets'
+    'components/SettingsPage.ets',
+    'components/TodoStageBar.ets',
+    'components/TodoDecisionsSection.ets',
+    'components/RuleSuggestionBar.ets'
   ];
 
   for (const file of guardedFiles) {

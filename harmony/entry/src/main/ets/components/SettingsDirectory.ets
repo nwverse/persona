@@ -35,6 +35,7 @@ function settingIcon(id:string):Resource {
   switch (id) {
     case 'models': return $r('sys.symbol.square_stack_3d');
     case 'assistant': return Symbols.persona;
+    case 'standing_authorizations': return $r('sys.symbol.checkmark_shield');
     case 'channels': return $r('sys.symbol.ellipsis_bubble');
     case 'connectors': return $r('sys.symbol.link');
     case 'extensions': return Symbols.apps;
@@ -90,6 +91,7 @@ function settingTint(id:string):ResourceColor {
       return Colors.indigo;
     case 'models':
     case 'assistant':
+    case 'standing_authorizations':
     case 'privacy':
     case 'phone_xiaoyi':
       return Colors.ai;
@@ -139,6 +141,7 @@ function settingLabel(id:string, label:(page:string)=>string):string {
   if (id === 'phone_language_options') return tr('phone_settings_language_dictation');
   if (id === 'models') return tr('phone_settings_models');
   if (id === 'assistant') return tr('phone_settings_profile');
+  if (id === 'standing_authorizations') return tr('standing_auth_title');
   if (id === 'appearance') return tr('phone_settings_display');
   if (id === 'phone_meeting_options') return tr('meetings');
   if (id === 'machines') return tr('phone_machines');

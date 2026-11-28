@@ -24,7 +24,7 @@ import { PhoneStyle } from '../design/PhoneStyle';
 import { Colors } from '../design/Colors';
 import { ButtonStyles, SelectStyles } from '../design/Controls';
 import { Symbols } from '../design/Symbols';
-import { tr } from '../design/Strings';
+import { tr, trError } from '../design/Strings';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
 import { DeviceLook, deviceLook } from '../models/DeviceLook';
@@ -465,6 +465,15 @@ export struct AgentListPage {
       } } });
   }
 
+  private async triggerAutoRename(row: ResourceRow): Promise<void> {
+    const label = row.title || tr('agent_untitled');
+    const err = await this.model.autoRenameAgent(row);
+    if (err && this.active) {
+      Haptics.error();
+      toastCenter.error(trError(err) + ' · ' + label);
+    }
+  }
+
   @Builder rowMenu(binding:BoundAgentRow) { this.sessionMenu(binding.bound.value,binding.presentation.spaceName) }
   @Builder sessionMenu(row:ResourceRow,spaceName:string) {
     Menu() {
@@ -486,6 +495,12 @@ export struct AgentListPage {
         .enabled(!this.workspace.busy).onClick(() => this.workspace.markSeen(row).catch(() => undefined))
       if (this.workspace.canRename(row)) MenuItem({ content: tr('rename') }).enabled(!this.workspace.busy)
         .onClick(() => this.openRename(row))
+      if (this.model.canAutoRenameAgent(row)) {
+        MenuItem({ content: tr('agent_auto_rename') })
+          .enabled(!this.workspace.busy && !this.model.isAutoRenamingRow(row))
+          .onClick(() => { void this.triggerAutoRename(row); })
+          .id('agents.menu.autoname')
+      }
       if (this.workspace.canClose(row)) MenuItem({ content: tr('close') }).enabled(!this.workspace.busy)
         .onClick(() => this.confirmClose(row))
       if (this.workspace.canDelete(row)) MenuItem({ content: tr('delete') }).enabled(!this.workspace.busy)
@@ -843,7 +858,8 @@ export struct AgentListPage {
           showsSource:!!binding.presentation.activitySource,sourceTitle:binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
           narrow:this.listWidth>0 && this.listWidth<296,leftInset:(groupId.includes('/project/') ? 36 : 20)+16*depth,
           controlScale:Math.max(1,Math.min(this.environment.fontScale,67/51)),fontScale:this.environment.fontScale,
-          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName})
+          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName,
+          renaming:!!(this.model.namingAgentKeys && this.model.namingAgentKeys.length > 0 && this.model.isAutoRenamingRow(binding.bound.value))})
       }.width('100%').backgroundColor(this.isRowSelected(binding) ? Colors.selection : this.displayedAgentStyle==='cards'?Colors.grouped:Colors.surface)
        .borderRadius({topLeft:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,topRight:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,
          bottomLeft:this.endsSurface(binding,groupId) && endOfSurface ? 26:0,bottomRight:this.endsSurface(binding,groupId) && endOfSurface ? 26:0})
@@ -968,6 +984,9 @@ export struct AgentListPage {
   }
 
   private rowTitle(binding: BoundAgentRow): string {
+    if (this.model.namingAgentKeys && this.model.namingAgentKeys.length > 0 && this.model.isAutoRenamingRow(binding.bound.value)) {
+      return tr('agent_renaming');
+    }
     const preferTab = this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName;
     if (preferTab && binding.presentation.herdrTabName) {
       return binding.presentation.herdrTabName;

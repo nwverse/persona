@@ -2448,11 +2448,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 		over := n.turnOver(p.SessionID) // before the key: the Escape itself may end a turn
+		var qPath string
+		var qStat os.FileInfo
+		if !over {
+			if qPath = n.transcriptPath(p.SessionID); qPath != "" {
+				qStat, _ = os.Stat(qPath)
+			}
+		}
 		err := n.keys(ctx, p.SessionID, []string{"esc"}, "")
 		if err == nil && over && n.backgroundRuns(p.SessionID) {
 			// The Escape went to an idle prompt and the background work goes on: said, not claimed as an interruption
 			// (#10828). The key is pressed whatever this finds, so a turn that does run is never left running.
 			err = refusal(proto.CodeTurnOverBackground, i18n.T(i18n.From(ctx), "rpc-errors."+proto.CodeTurnOverBackground), nil)
+		} else if err == nil && !over && qPath != "" {
+			n.forgetMeta(qPath)
+			n.notifySessionsSoon()
+			if qStat != nil {
+				n.watchQueueSettle(qPath, qStat.Size(), qStat.ModTime())
+			}
 		}
 		return ok(err)
 	case "session.screen.before":

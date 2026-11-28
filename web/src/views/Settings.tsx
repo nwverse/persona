@@ -23,6 +23,7 @@ import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { FontRows, PhoneNavRow, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
+import { setNeedsYouAutoOpen, useNeedsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -783,6 +784,7 @@ function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
   const starred = useStarredSetting();
+  const autoOpenNeedsYou = useNeedsYouAutoOpen();
   const features = moduleFeaturesSource();
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
@@ -821,6 +823,9 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
         <SidebarUsageRow />
+        <Row label={t("settings.needs_you_auto_open")} hint={t("settings.needs_you_auto_open_hint")} wrapHint stackOnNarrow anchor="needs-you-auto-open">
+          <Switch on={autoOpenNeedsYou} onChange={setNeedsYouAutoOpen} label={t("settings.needs_you_auto_open")} />
+        </Row>
       </Group>
 
       <DesktopSettings />
