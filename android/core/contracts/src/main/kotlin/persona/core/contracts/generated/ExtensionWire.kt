@@ -2285,6 +2285,11 @@ data class ExtensionSecretsResolveParams(
     val contribution: String = "",
     val reference: String = "",
     val purpose: ExtensionSecretPurpose = ExtensionSecretPurpose(),
+    /**
+     * The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask
+     * the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them.
+     */
+    val quiet: Boolean? = null,
 )
 
 /**
