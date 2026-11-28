@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -187,7 +188,8 @@ func NewBusHub(o BusOptions) *BusHub {
 				assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription, assistantwire.CapabilityMeetingSpeakers,
 				assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 				assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-				assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability}
+				assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability,
+				assistantwire.CapabilityExtensionInfoAccessScoped}
 			if reviewEnabled {
 				capabilities = append(capabilities, assistantwire.CapabilityProjectReview)
 			}
@@ -832,6 +834,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	}
 	if e := b.opts.Extensions; e != nil {
 		if out, ok, err := e.Request(ctx, method, params); ok { // extensions.* (extensions.go)
+			if method == extwire.MethodAuthorize && err == nil {
+				if a, ok := out.(extwire.Authorized); ok && a.Extension != "" {
+					a.Owner = extwire.OwnerThirdParty
+					if s.extensionIsOwner(ctx, a.Extension) {
+						a.Owner = extwire.OwnerConfirmed
+					}
+					return a, nil
+				}
+			}
 			return out, err
 		}
 	}
