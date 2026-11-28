@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"time"
 
@@ -75,27 +76,42 @@ type codexJoinState struct {
 }
 
 // joinCodexPanes enqueues, on each owning app-server's bounded background worker pool, every live Codex pane whose
-// thread runs on a connected app-server and is not joined yet. Failed joins back off with jitter before retrying.
+// thread runs on a connected app-server and is not joined yet, plus active or blocked threads on connected app-servers.
+// Failed joins back off with jitter before retrying.
 func (n *Node) joinCodexPanes(ctx context.Context) {
-	if n == nil || ctx.Err() != nil {
+	if n == nil || ctx.Err() != nil || n.codices == nil {
 		return
 	}
 	n.mu.Lock()
 	var ids []string
 	for id, a := range n.agents {
-		// botmux's sessions stay botmux's: it delivers their messages, and its Codex may run on an app-server too.
+		// A botmux pane alone does not trigger a join because botmux delivers its own messages.
 		if a.Agent == "codex" && a.PaneID != "" && host.ParsePane(a.PaneID).Kind != host.Botmux {
 			ids = append(ids, id)
 		}
 	}
 	n.mu.Unlock()
+	n.codices.mu.Lock()
+	remotes := slices.Collect(mapRemoteValues(n.codices.remotes))
+	n.codices.mu.Unlock()
+	for _, c := range remotes {
+		c.mu.Lock()
+		for _, t := range c.threads {
+			if c.ready && !t.joined && (t.status == proto.StatusWorking || t.status == proto.StatusBlocked) {
+				ids = append(ids, t.publicID)
+			}
+		}
+		c.mu.Unlock()
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
 	if len(ids) == 0 {
 		return
 	}
 	byRemote := map[*codexRemote][]string{}
 	for _, id := range ids {
 		c, t, err := n.codexOwner(id)
-		if err != nil || t.joined || t.parent != "" || !n.cx.joinDue(id) {
+		if err != nil || t.joined || !n.cx.joinDue(id) {
 			continue
 		}
 		byRemote[c] = append(byRemote[c], id)
