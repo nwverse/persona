@@ -112,9 +112,9 @@ func (s *Service) todoAcceptRoute() {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-feishu_cards.already_handled"))
 			return
 		}
-		reply := acceptReply{OK: true}
+		reply := acceptRouteReply{OK: true}
 		if result.undelivered != nil {
-			reply.Delivered, reply.Reason = "none", undeliveredReason(result.undelivered, s.requestCtxLang(r.Context()))
+			reply.Delivered, reply.Reason = "none", decisionNotDeliveredReason(result.undelivered, s.requestCtxLang(r.Context()))
 		}
 		apierr.WriteJSON(w, reply)
 	})
@@ -155,15 +155,15 @@ func decisionWaitsForSupervisor(err error) bool {
 	return errors.Is(err, rpc.ErrNotSent) || errors.Is(err, apierr.ErrOffline) || errors.As(err, &re)
 }
 
-// undeliveredReason is why a recorded decision did not reach its Agent, as the owner and the supervisor read it: one
+// decisionNotDeliveredReason is why a recorded decision did not reach its Agent, as the owner and the supervisor read it: one
 // line in l, clipped, with anything token-like blanked.
-func undeliveredReason(err error, l i18n.Lang) string {
+func decisionNotDeliveredReason(err error, l i18n.Lang) string {
 	return clip(oneLine(githubwire.Scrub(i18n.Localize(err, l))), 120)
 }
 
-// acceptReply is the accept route's answer to a decision taken. Delivered "none": it was recorded and handed to the
+// acceptRouteReply is the accept route's answer to a decision taken. Delivered "none": it was recorded and handed to the
 // task's supervisor because no Agent could take it now, Reason saying why.
-type acceptReply struct {
+type acceptRouteReply struct {
 	OK        bool   `json:"ok"`
 	Delivered string `json:"delivered,omitempty"`
 	Reason    string `json:"reason,omitempty"`
