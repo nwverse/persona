@@ -1120,6 +1120,8 @@ data class Item(
     @SerialName("source_fingerprint") val sourceFingerprint: String? = null,
     /** Out-of-band, read-only views rendered beside this item. */
     @SerialName("tool_views") val toolViews: List<ExtensionView> = emptyList(),
+    /** What a BotMux-wrapped message or `botmux send` call says without its wrapper ([Botmux]); older nodes omit it. */
+    val botmux: Botmux? = null,
 )
 
 /**

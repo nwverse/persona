@@ -337,6 +337,8 @@ internal class LineBuilder(val liveId: String?, val options: LineOptions) {
             }
             // Between the work and the answer: what the work looked at.
             ViewedImages.of(steps).takeIf { it.isNotEmpty() }?.let { add(ChatLine.Viewed("vi-" + id.removePrefix("w-"), it)) }
+            // Then what it sent to Lark (a BotMux session): the replies came before the turn's last words.
+            botmuxReplies(steps).takeIf { it.isNotEmpty() }?.let { add(ChatLine.BotmuxReplies("bm-" + id.removePrefix("w-"), it)) }
             // Only the latest text stays outside the summary, in one stable slot throughout the turn.
             seg.rows.getOrNull(last)?.let { add(ChatLine.Row(it, contentKey = "$id/latest-text")) }
             addAll(after.sorted().map { ChatLine.Row(seg.rows[it]) })
