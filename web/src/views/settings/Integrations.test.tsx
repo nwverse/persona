@@ -1174,6 +1174,8 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       const pushExtUI = pushDetail.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
       expect(pushExtUI).not.toBeNull();
       expect(pushExtUI.dataset.state).toBe(subscriptionSourceState("sub_push_iphone"));
+      await act(async () => vi.dynamicImportSettled());
+      expect(pushDetail.querySelector("[data-external-source-settings]")).toBeNull();
       expect(host.querySelector('[data-integration-id="sub_push_iphone"]')?.getAttribute("aria-current")).toBe("true");
       // Split-pane compact header still keeps both view switch and Market button.
       expect(host.querySelector("[data-integrations-list-header] [data-integrations-view-switch]")).not.toBeNull();
@@ -1196,6 +1198,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       // SourcesGraph renders source nodes AND InboxForwardSetting switch is mounted untouched.
       expect(host.textContent).toContain("My iPhone Notifications");
       expect(host.textContent).toContain("Team Wiki Updates");
+      expect(host.querySelector("[data-integrations-sources-view] [data-external-source-settings]")).not.toBeNull();
       const forwardSwitch = host.querySelector<HTMLButtonElement>(
         `[role="switch"][aria-label="${t("settings-assistantsettings.inbox_todo_forward")}"]`,
       )!;

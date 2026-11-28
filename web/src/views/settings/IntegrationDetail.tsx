@@ -439,13 +439,12 @@ function FeishuBotBuiltinDetail({
         {showInboxSection && larkcli && (
           <>
             <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={setLarkcli} />
-            {!manager && (
-              <SubscriptionsEntry
-                pick={(l) => l.connector === "larkcli"}
-                scope={{ c: "larkcli" }}
-                onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
-              />
-            )}
+            <SubscriptionsEntry
+              pick={(l) => l.connector === "larkcli"}
+              scope={{ c: "larkcli" }}
+              manager={manager}
+              onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
+            />
           </>
         )}
         <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />
@@ -515,14 +514,14 @@ function BuiltinIntegrationDetail({
         : channelCtl.detail?.description);
 
   const subscriptionConnectorId = connectorId ?? (isMail ? "mail" : isLarkGateway ? "lark" : null);
-  const subscriptions = countsOf(useSubscriptionSummary(), (l) => l.connector === subscriptionConnectorId);
+  const subscriptions = countsOf(useSubscriptionSummary(manager), (l) => l.connector === subscriptionConnectorId);
   const isGitHub = isGitHubIntegration(target.id, connectorId ? [connectorId] : []);
   const showKnowledgeScope =
     isMail ||
     isLarkGateway ||
     connectorId === "larkcli" ||
     (connector?.capabilities?.includes("history") ?? false);
-  const showInboxSection = showKnowledgeScope || (!!connector && connectorHasInbox(connector)) || (!manager && !!subscriptions);
+  const showInboxSection = showKnowledgeScope || (!!connector && connectorHasInbox(connector)) || !!subscriptions;
   const showConnection = isMail || isLarkGateway || connectorId || isGitHub || hasBinding(channelCtl.detail);
   const sourceChannel = channelCtl.detail?.installed && channelCtl.detail.kind !== "app" ? channelId : null;
 
@@ -617,7 +616,7 @@ function BuiltinIntegrationDetail({
           {connector && connectorHasInbox(connector) && (
             <ConnectorInboxBlock connector={connector} reload={loadConnector} onSaved={onSaved} />
           )}
-          {subscriptionConnectorId && !manager && subscriptions && (
+          {subscriptionConnectorId && subscriptions && (
             <IntegrationSubscriptions
               counts={subscriptions}
               scope={{ c: subscriptionConnectorId }}
@@ -974,8 +973,8 @@ function ExtensionIntegrationDetail({
     );
   const hasChannelSection = !!p && (!!channelId || (editable && sections.channel.length > 0));
   const inboxConnectors = connectors.filter(connectorHasInbox);
-  const subscriptions = countsOf(useSubscriptionSummary(), (l) => l.extension === id);
-  const showSubscriptions = !manager && (p?.enabled ?? true) && !!p?.contributes?.connectors?.length && !!subscriptions;
+  const subscriptions = countsOf(useSubscriptionSummary(manager), (l) => l.extension === id);
+  const showSubscriptions = (p?.enabled ?? true) && !!p?.contributes?.connectors?.length && !!subscriptions;
   const hasInboxSection =
     !!p && (
       inboxConnectors.length > 0 ||

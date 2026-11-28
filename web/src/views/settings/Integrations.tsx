@@ -5,7 +5,6 @@
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { loadMailAccounts, useMailboxEnabled } from "../../lib/mail";
 import { t } from "../../i18n";
-import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import type { MailAccount } from "../../lib/agent-settings";
 import { api, enc, errorText } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
@@ -224,7 +223,6 @@ function PushSourceDetailPane({
       <Suspense fallback={<Loading />}>
         <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
       </Suspense>
-      {item?.kind === "source" && <ExternalSourceSettingsEntry provider="subscription" channel="" manager={manager} />}
     </div>
   );
 }

@@ -1048,6 +1048,25 @@ describe("integration detail parity", () => {
     expect(onOpen).toHaveBeenCalledWith(JSON.stringify(kind === "builtin" ? { c: "plain" } : { ext: "plain" }), undefined);
   });
 
+  it.each(["builtin", "extension"] as const)("shows the named assistant's subscriptions in %s detail", async (kind) => {
+    applyCompleteSessions([SEED_SESSION], [], { features: ["connectors", "source_subscriptions"] });
+    currentConnectors = [{ id: "plain", name: "Plain", status: "ok", capabilities: ["read"], manager: "work" }];
+    currentExt = { ...currentExt, id: "plain", contributes: { connectors: ["plain"] }, form: undefined };
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation((url, init) => {
+      if (!String(url).endsWith("/subscriptions/summary")) return fallback(url, init);
+      const owner = new Headers(init?.headers).get("X-Persona-Manager");
+      return Promise.resolve(ok({ connectors: owner === "work" ? [{ connector: "plain", extension: "plain", on: 3, failing: 1 }] : [] }) as Response);
+    });
+    const onOpen = vi.fn();
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind, id: "plain", manager: "work" }} onOpenSources={onOpen} />));
+    const button = section("inbox")?.querySelector("button");
+    expect(button?.textContent ?? "").toContain(t("subscriptions.counts_failing", { on: 3, failing: 1 }));
+    act(() => button!.click());
+    expect(onOpen).toHaveBeenCalledWith(JSON.stringify(kind === "builtin" ? { c: "plain" } : { ext: "plain" }), "work");
+  });
+
   it.skipIf(!installedMailbox)("refreshes mail accounts and only groups an available inbox switch", async () => {
     await preloadMailbox("Settings");
     await preloadMailbox("InboxSwitch");
