@@ -807,19 +807,24 @@ Never archived by this pass: a session still in a host (a pane or an engine host
 
 An Agent is gone when its computer is not connected, the computer no longer lists the session, or the session is closed in the sense of "Closed sessions archive themselves" (no pane and no host, not working or starting, whatever its status reads: `offline`, `interrupted`, `idle` or `unknown`). For 2 minutes after its computer's node connects again, none of that computer's Agents is gone: a node that started over (an ssh node whose link dropped) lists its Agents again only once it has found them. It is not gone, whatever its status, when it is an assistant conversation, is starting, has a card waiting or queued input, has a wake or continuation pending or waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set), or waits out a subscription usage limit.
 
-`GET /api/v1/todos` then carries `orphaned: {"reason", "since"}` on the to-do, and the apps are told to read the to-dos again (`{"type":"todos"}`) when it appears, changes reason or goes. `since` is when the manager first saw it so (it restarts with the manager). `reason` is the first that applies to any of its Agents:
+`GET /api/v1/todos` then carries `orphaned: {"reason", "since"}` on the to-do, and the apps are told to read the to-dos again (`{"type":"todos"}`) when it appears, changes reason or goes. For a queued task, `since` is the durable time that wait began. For the other reasons, it is when the manager first saw the condition.
 
 | `reason` | Meaning |
 | --- | --- |
 | `error` | An Agent is closed and its last turn ended on a model error (`turn_error`) that nothing is set to retry |
 | `offline` | An Agent's computer is not connected. Reported only after the computer has been away for 10 minutes, so a dropped link or a node restart flags nothing |
 | `closed` | The Agents are not running: stopped by the finished-task or idle rule ("Stop Agents of completed tasks"; their terminals stay) or closed by the user, and nothing is set to wake them |
+| `queued` | No Agent or start is active, and the plan has waited at least 10 minutes for a computer or workspace. The supervisor hears the queue's reason once for that stretch |
 
-Not orphaned: a done to-do; one with no Agent yet (not started, or its start failed: "Remedying a start"); a supervised task waiting for its review or for the user's decision, which waits on them and not on an Agent. A to-do whose computer is connected but could not be asked this minute keeps what was found before.
+A done to-do, one with no Agent or queued start, and one intentionally waiting for a prerequisite, review, verification, or owner decision skip the orphan check. A to-do whose computer is connected but could not be asked this minute keeps what was found before.
 
 The assistant's snapshot says it on the task's line, and a supervised task's supervisor gets the `orphaned` signal once (`docs/assistant/unified-entry.md`, "Supervision": the supervisor loop's signals). Clients that do not know the field show the to-do as before; showing it on the task card and row is each client's own work: the web (`docs/web/web.md`), Android (`docs/android/android.md`, "Closeout, decisions and tasks nobody works on") and the iOS app (`OrphanedLine`, `docs/apple/ios.md` "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)") do.
 
 ## Decision records
+
+A recorded owner decision that could not reach any Agent is handed to the assigned supervisor immediately through the
+existing supervision route. The handoff names the decision and the delivery failure. A busy conversation can still
+receive it through its relay queue, and the decision is not sent to the original Agent again.
 
 A standing authorization answer records an Agent decision naming the grant, original user words and source. It is
 committed in the same transaction as the hook's resolved question or plan, before the answer is delivered. It is not

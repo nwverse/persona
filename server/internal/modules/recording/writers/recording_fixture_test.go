@@ -22,6 +22,9 @@ const (
 	// fixtureAudioRecording is a hub-transcribed meeting still in flight, with two seconds of audio held
 	// (attachments/audio/0.pcm); fixtureRecording holds one photo (attachments/p1.jpg).
 	fixtureAudioRecording = "6f1c2a3b-0000-4000-8000-00000000a0d1"
+	// fixtureSpeakersRecording is a hub-transcribed meeting with timing "turn", a stored speaker timeline, and
+	// synthetic speaker names ("Ada", "Grace") so Core module-off gates verify detail.speakers and segment labels.
+	fixtureSpeakersRecording = "6f1c2a3b-0000-4000-8000-000000005bea"
 )
 
 type fixtureMinutesModel struct{}
@@ -61,14 +64,64 @@ func TestWriteRecordingFixture(t *testing.T) {
 	if _, created, err := e.PhotoAdd(fixtureRecording, photo, false); err != nil || !created {
 		t.Fatalf("add the photo: %v (created %v)", err, created)
 	}
-	if n := e.WriteMinutes(context.Background(), 2); n != 1 {
-		t.Fatalf("wrote %d minutes, want 1", n)
+	// Hub-transcribed meeting with timing "turn", speaker timeline, and synthetic names (Ada, Grace).
+	e.TranscriptionReady = func() bool { return true }
+	spUpload := recordingwire.RecordingUpload{
+		Revision: 1, StartedAt: now.Add(-90 * time.Minute), Duration: 90, Language: "en-US", Device: "phone",
+		Title: "Kept recording, speakers", Complete: true, Kind: recordingwire.RecordingMeeting,
+		Segments: []kbwire.RecordingSegment{
+			{Start: 0, End: 28, Text: "Ada proposed keeping speaker timelines in the knowledge base."},
+			{Start: 29, End: 58, Text: "Grace agreed and noted that names stay readable without the module."},
+			{Start: 59, End: 86, Text: "Ada confirmed stored speaker names survive module switches."},
+		},
+	}
+	spUpload.SetTranscription(recordingwire.TranscriptionHub, nil)
+	if p, err := e.PutRecording(fixtureSpeakersRecording, spUpload, now); err != nil || p.Status != recordingwire.RecordingStored {
+		t.Fatalf("put speakers fixture: %+v %v", p, err)
+	}
+	if _, err := e.HubTranscriptPutWithTiming(fixtureSpeakersRecording, HubPassFinal, TimingTurn, []kbwire.RecordingSegment{
+		{Start: 0, End: 28, Text: "Ada proposed keeping speaker timelines in the knowledge base."},
+		{Start: 29, End: 58, Text: "Grace agreed and noted that names stay readable without the module."},
+		{Start: 59, End: 86, Text: "Ada confirmed stored speaker names survive module switches."},
+	}); err != nil {
+		t.Fatalf("put hub transcript with timing: %v", err)
+	}
+	if _, err := e.TranscriptionUpdate(fixtureSpeakersRecording, func(t *MeetingTranscription, _ Recording) error {
+		t.State = recordingwire.TranscriptionFinal
+		t.FinalAt = now
+		return nil
+	}); err != nil {
+		t.Fatalf("mark transcription final: %v", err)
+	}
+	if err := e.FinalTranscriptStored(fixtureSpeakersRecording); err != nil {
+		t.Fatalf("mark final transcript stored: %v", err)
+	}
+	if _, err := e.ImportSpeakerTurns(fixtureSpeakersRecording, SpeakerTurnsImportRequest{
+		Run:     "fixture-run-1",
+		Engine:  "fixture-engine 1.0",
+		Source:  SpeakerSourceHub,
+		Covered: []SpeakerSpan{{0, 90}},
+		Turns: []RawSpeakerTurn{
+			{Start: 0, End: 28, Cluster: "c1"},
+			{Start: 29, End: 58, Cluster: "c2"},
+			{Start: 59, End: 86, Cluster: "c1"},
+		},
+	}, now); err != nil {
+		t.Fatalf("import speaker turns: %v", err)
+	}
+	if _, err := e.EditSpeakers(fixtureSpeakersRecording, 1, []SpeakerEditOp{
+		{Op: SpeakerOpName, ID: "s1", Name: "Ada"},
+		{Op: SpeakerOpName, ID: "s2", Name: "Grace", Me: true},
+	}, "Grace"); err != nil {
+		t.Fatalf("name fixture speakers: %v", err)
+	}
+	if n := e.WriteMinutes(context.Background(), 2); n != 2 {
+		t.Fatalf("wrote %d minutes, want 2", n)
 	}
 	put(fixturePendingRecording, "Kept recording, minutes pending", now.Add(-time.Hour), "A second made-up meeting", "Its minutes were never written")
 	if r, ok := st.Recording(fixturePendingRecording); !ok || r.MinutesState != MinutesPending {
 		t.Fatalf("the pending fixture's minutes state: %+v", r)
 	}
-	e.TranscriptionReady = func() bool { return true }
 	live := recordingwire.RecordingUpload{Revision: 1, StartedAt: now.Add(-30 * time.Minute), Duration: 10, Language: "en-US", Device: "phone",
 		Title: "Kept recording, audio held", Kind: recordingwire.RecordingMeeting, Segments: []kbwire.RecordingSegment{{Start: 0, End: 9, Text: "Audio is still held"}}}
 	live.SetTranscription(recordingwire.TranscriptionHub, nil)
@@ -83,6 +136,9 @@ func TestWriteRecordingFixture(t *testing.T) {
 		t.Fatalf("hold the audio: %v", err)
 	}
 	if _, err := st.ReadMinutes(fixtureRecording); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReadMinutes(fixtureSpeakersRecording); err != nil {
 		t.Fatal(err)
 	}
 }
