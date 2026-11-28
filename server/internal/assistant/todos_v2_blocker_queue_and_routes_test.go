@@ -43,8 +43,14 @@ func (m *memBlockerQueueStore) TaskPlansQueued(_ context.Context, _ time.Time) (
 func (m *memBlockerQueueStore) UpsertTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
 	return m.b.UpsertTodoBlocker(ctx, r)
 }
+func (m *memBlockerQueueStore) EnsureTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
+	return m.b.EnsureTodoBlocker(ctx, r)
+}
 func (m *memBlockerQueueStore) ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error) {
 	return m.b.ListActiveTodoBlockers(ctx)
+}
+func (m *memBlockerQueueStore) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
+	return m.b.ListTodoReadinessBlockers(ctx, todoIDs)
 }
 func (m *memBlockerQueueStore) ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]db.TodoBlockerRow, error) {
 	return m.b.ListTodoBlockersByTodo(ctx, todoID)

@@ -32,6 +32,19 @@ func newMemBlockerStore() *memBlockerStore {
 func (m *memBlockerStore) UpsertTodoBlocker(_ context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
 	m.bmu.Lock()
 	defer m.bmu.Unlock()
+	return m.putBlockerLocked(r), nil
+}
+
+func (m *memBlockerStore) EnsureTodoBlocker(_ context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
+	m.bmu.Lock()
+	defer m.bmu.Unlock()
+	if _, found := m.blockers[r.ID]; found {
+		return nil, nil
+	}
+	return m.putBlockerLocked(r), nil
+}
+
+func (m *memBlockerStore) putBlockerLocked(r db.TodoBlockerRow) *db.TodoBlockerRow {
 	if r.ConditionJSON == "" {
 		r.ConditionJSON = "{}"
 	}
@@ -45,8 +58,7 @@ func (m *memBlockerStore) UpsertTodoBlocker(_ context.Context, r db.TodoBlockerR
 		r.UpdatedAt = r.CreatedAt
 	}
 	m.blockers[r.ID] = r
-	cp := r
-	return &cp, nil
+	return &r
 }
 
 func (m *memBlockerStore) listFiltered(keep func(db.TodoBlockerRow) bool) []db.TodoBlockerRow {
@@ -69,6 +81,12 @@ func (m *memBlockerStore) listFiltered(keep func(db.TodoBlockerRow) bool) []db.T
 
 func (m *memBlockerStore) ListActiveTodoBlockers(_ context.Context) ([]db.TodoBlockerRow, error) {
 	return m.listFiltered(func(r db.TodoBlockerRow) bool { return r.State == db.TodoBlockerStateActive }), nil
+}
+
+func (m *memBlockerStore) ListTodoReadinessBlockers(_ context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
+	return m.listFiltered(func(r db.TodoBlockerRow) bool {
+		return slices.Contains(todoIDs, r.TodoID) && (r.State == db.TodoBlockerStateActive || r.Kind == todoBlockerKindTodoStage || r.Kind == todoBlockerKindExternalPR)
+	}), nil
 }
 
 func (m *memBlockerStore) ListTodoBlockersByTodo(_ context.Context, todoID string) ([]db.TodoBlockerRow, error) {

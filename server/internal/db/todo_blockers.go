@@ -76,6 +76,27 @@ func (d *DB) UpsertTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBloc
 }
 
 func upsertTodoBlocker(ctx context.Context, q queryRower, r TodoBlockerRow) (*TodoBlockerRow, error) {
+	return writeTodoBlocker(ctx, q, r, `DO UPDATE SET
+		todo_id = EXCLUDED.todo_id,
+		kind = EXCLUDED.kind,
+		target_ref = EXCLUDED.target_ref,
+		condition_json = EXCLUDED.condition_json,
+		state = EXCLUDED.state,
+		attempts = EXCLUDED.attempts,
+		updated_at = EXCLUDED.updated_at,
+		resolved_at = EXCLUDED.resolved_at`)
+}
+
+// EnsureTodoBlocker inserts a missing blocker without reactivating a row that has already ended.
+func (d *DB) EnsureTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBlockerRow, error) {
+	row, err := writeTodoBlocker(ctx, d.pool, r, "DO NOTHING")
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return row, err
+}
+
+func writeTodoBlocker(ctx context.Context, q queryRower, r TodoBlockerRow, onConflict string) (*TodoBlockerRow, error) {
 	r.ID = strings.TrimSpace(r.ID)
 	r.TodoID = strings.TrimSpace(r.TodoID)
 	r.Kind = strings.TrimSpace(r.Kind)
@@ -105,16 +126,7 @@ func upsertTodoBlocker(ctx context.Context, q queryRower, r TodoBlockerRow) (*To
 		id, todo_id, kind, target_ref, condition_json, state, attempts, created_at, updated_at, resolved_at
 	) VALUES (
 		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-	) ON CONFLICT (id) DO UPDATE SET
-		todo_id = EXCLUDED.todo_id,
-		kind = EXCLUDED.kind,
-		target_ref = EXCLUDED.target_ref,
-		condition_json = EXCLUDED.condition_json,
-		state = EXCLUDED.state,
-		attempts = EXCLUDED.attempts,
-		updated_at = EXCLUDED.updated_at,
-		resolved_at = EXCLUDED.resolved_at
-	RETURNING `+todoBlockerCols,
+	) ON CONFLICT (id) `+onConflict+` RETURNING `+todoBlockerCols,
 		r.ID, r.TodoID, r.Kind, r.TargetRef, r.ConditionJSON, r.State, r.Attempts, r.CreatedAt, r.UpdatedAt, r.ResolvedAt,
 	))
 }
@@ -124,6 +136,19 @@ func (d *DB) ListActiveTodoBlockers(ctx context.Context) ([]TodoBlockerRow, erro
 	rows, err := d.pool.Query(ctx,
 		`SELECT `+todoBlockerCols+` FROM todo_blockers WHERE state = $1 ORDER BY created_at ASC, id ASC`,
 		TodoBlockerStateActive)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTodoBlockerRows(rows)
+}
+
+// ListTodoReadinessBlockers reads the blockers for a projection in one query. Stage rules and
+// the evidence that an approved PR blocker was stored remain relevant after resolution.
+func (d *DB) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]TodoBlockerRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT `+todoBlockerCols+` FROM todo_blockers
+		WHERE todo_id = ANY($1) AND (state = 'active' OR kind IN ('todo_stage', 'external_pr'))
+		ORDER BY created_at ASC, id ASC`, todoIDs)
 	if err != nil {
 		return nil, err
 	}

@@ -28,15 +28,19 @@ const (
 	admissionQueueMaxWait = 30 * time.Minute
 	// admissionQueueLookback bounds the recent-update side of the database scan; a serialized queue survives downtime.
 	admissionQueueLookback = time.Hour
-	// blockerWaitQueueKey marks a planned task deferred until its persistent external PR blockers clear (#16198).
+	// blockerWaitQueueKey marks an approved task waiting for prerequisites.
 	blockerWaitQueueKey = "todo_blockers"
 )
 
-func (s *Service) blockerWaitQueue(refs []string) *TaskQueue {
+func (s *Service) blockerWaitQueue(ctx context.Context, refs []string) *TaskQueue {
 	now := time.Now().UTC()
+	reason := i18n.T(s.lang(ctx), "assistant-tasks.checking_prerequisites")
+	if len(refs) > 0 {
+		reason = i18n.T(s.lang(ctx), "assistant-tasks.waiting_for_prerequisites", i18n.Args{"blockers": strings.Join(refs, ", ")})
+	}
 	return &TaskQueue{
 		Key:      blockerWaitQueueKey,
-		Reason:   "waiting for external PR: " + strings.Join(refs, ", "),
+		Reason:   reason,
 		QueuedAt: now,
 		NextAt:   now,
 		Blockers: append([]string(nil), refs...),
@@ -168,11 +172,20 @@ func (s *Service) sweepAdmissionQueue(ctx context.Context) {
 				}
 				continue
 			}
-			if s.settings(cctx).todosV2On() && s.hasActiveTodoBlockers(cctx, pt.TodoID) {
+			readiness, err := s.taskTodoReadiness(cctx, todo, pt)
+			if err != nil {
+				s.logf("task %s: admission queue: read prerequisites: %v", pt.TodoID, err)
+				continue
+			}
+			if len(readiness.missingPRs) > 0 {
+				s.ensureApprovedPRBlockers(cctx, todo.ID, readiness.missingPRs)
 				continue
 			}
 			if pt.RequestGate != "" {
 				s.startPlanTaskAsync(p.ID, p.Conversation, i, pt, q.Retry, nil)
+				continue
+			}
+			if !readiness.ready() {
 				continue
 			}
 			if queueExpired(q, now) {
@@ -199,14 +212,13 @@ func queueExpired(q *TaskQueue, now time.Time) bool {
 // so the sweep cannot start it twice while this attempt is in flight: success clears it in runPlanTaskStart, another
 // refusal parks it again with the attempt counted on.
 func (s *Service) retryQueuedStart(ctx context.Context, p *TaskPlan, i int, pt PlanTask) {
-	if err := s.patchPlanTask(ctx, p.ID, i, func(t *PlanTask) {
-		if t.Queue != nil {
-			t.Queue.NextAt = time.Now().Add(admissionQueueMaxWait)
-		}
-	}); err != nil {
-		s.logf("task %s: admission queue: mark retry in flight: %v", pt.TodoID, err)
+	pt.planID, pt.planIndex = p.ID, i
+	next := *pt.Queue
+	next.NextAt = time.Now().Add(admissionQueueMaxWait)
+	if !s.replaceTaskQueue(ctx, pt, &next, queueCAS) {
 		return
 	}
+	pt.Queue = &next
 	s.logf("task %s: admission queue: retrying start on %s", pt.TodoID, pt.Machine)
 	// The same kind of start the gate refused: a first start that now fails past the gate is told as one (#8092).
 	s.startPlanTaskAsync(p.ID, p.Conversation, i, pt, pt.Queue != nil && pt.Queue.Retry, nil)

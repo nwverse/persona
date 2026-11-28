@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/wireids"
@@ -73,51 +76,101 @@ func (s *Service) projectTodoRows(ctx context.Context, list []listedTodo, now ti
 	return todoProjection{facts: facts, views: views, waits: waits}
 }
 
-// populateTodoActiveBlockers loads all active persistent blockers in a single DB query and
-// attaches them to each matching listedTodo. Callers must invoke this only when todos_v2 is enabled.
+// populateTodoActiveBlockers uses the same gate as dispatch, with one bulk read of blocker rows.
+// Callers invoke it for the v2 projection.
 func (s *Service) populateTodoActiveBlockers(ctx context.Context, list []listedTodo) {
-	if len(list) == 0 {
+	var ids []string
+	for _, row := range list {
+		if row.DoneAt == nil || row.StartError != "" {
+			ids = append(ids, row.ID)
+		}
+	}
+	if len(ids) == 0 {
 		return
 	}
-	st := s.todoBlockerDB()
-	if st == nil {
-		return
+	var rows []db.TodoBlockerRow
+	var readErr error
+	if st := s.todoBlockerDB(); st != nil {
+		rows, readErr = st.ListTodoReadinessBlockers(ctx, ids)
+		if readErr != nil {
+			s.logf("todo projection: read prerequisites: %v", readErr)
+		}
 	}
-	rows, err := st.ListActiveTodoBlockers(ctx)
-	if err != nil {
-		s.logf("todo_blockers: list active: %v", err)
-		return
+	byTodo := make(map[string][]db.TodoBlockerRow)
+	for _, row := range rows {
+		byTodo[row.TodoID] = append(byTodo[row.TodoID], row)
 	}
-	if len(rows) == 0 {
-		return
+	type planRead struct {
+		plan *TaskPlan
+		err  error
 	}
-	byTodo := make(map[string][]todoActiveBlockerView)
-	for _, r := range rows {
-		if r.TodoID == "" {
+	plans := make(map[string]planRead)
+	for i := range list {
+		row := &list[i]
+		row.ActiveBlockers, row.readinessWaits = nil, nil
+		if row.DoneAt != nil && row.StartError == "" {
 			continue
 		}
-		byTodo[r.TodoID] = append(byTodo[r.TodoID], todoActiveBlockerView{
-			ID:        r.ID,
-			Kind:      r.Kind,
-			TargetRef: r.TargetRef,
-			State:     r.State,
-			Attempts:  r.Attempts,
+		var task PlanTask
+		err := readErr
+		if err == nil && row.PlanID != "" && !todoHasActiveAgent(row.Todo) {
+			r, cached := plans[row.PlanID]
+			if !cached {
+				r.plan, r.err = s.loadPlan(ctx, row.PlanID)
+				plans[row.PlanID] = r
+			}
+			switch {
+			case r.err != nil && !errors.Is(r.err, errPlanNotFound):
+				err = r.err
+			case r.plan != nil && r.plan.State == planStarted:
+				for _, candidate := range r.plan.Tasks {
+					if candidate.TodoID == row.ID {
+						task = candidate
+						break
+					}
+				}
+			}
+		}
+		var readiness todoReadiness
+		if err == nil {
+			readiness, err = s.evaluateTodoReadiness(ctx, row.Todo, task, byTodo[row.ID], true)
+		}
+		if err != nil {
+			row.readinessWaits = []assistantwire.TodoWait{{Kind: assistantwire.TodoWaitKindExternalEvent,
+				WaitingOn: i18n.T(s.lang(ctx), "assistant-tasks.checking_prerequisites")}}
+			continue
+		}
+		slices.SortFunc(readiness.active, func(a, b db.TodoBlockerRow) int {
+			return strings.Compare(a.ID, b.ID)
 		})
-	}
-	for todoID := range byTodo {
-		slices.SortFunc(byTodo[todoID], func(a, b todoActiveBlockerView) int {
-			return cmp.Or(
-				strings.Compare(a.ID, b.ID),
-				strings.Compare(a.Kind, b.Kind),
-				strings.Compare(a.TargetRef, b.TargetRef),
-			)
-		})
-	}
-	for i := range list {
-		if list[i].DoneAt == nil || list[i].StartError != "" {
-			list[i].ActiveBlockers = byTodo[list[i].ID]
+		for _, b := range readiness.active {
+			view := todoActiveBlockerView{ID: b.ID, Kind: b.Kind, TargetRef: b.TargetRef, State: b.State, Attempts: b.Attempts}
+			row.ActiveBlockers = append(row.ActiveBlockers, view)
+			if !slices.Contains(readiness.after, b.TargetRef) {
+				row.readinessWaits = append(row.readinessWaits, activeBlockerWait(view))
+			}
+		}
+		for _, ref := range readiness.missingPRs {
+			row.readinessWaits = append(row.readinessWaits, activeBlockerWait(todoActiveBlockerView{Kind: todoBlockerKindExternalPR, TargetRef: ref}))
+		}
+		for _, depID := range readiness.after {
+			dep, _ := s.todoNow(depID)
+			title := dep.Title
+			if title == "" {
+				title = i18n.T(s.lang(ctx), "assistant-tasks.waiting_for_linked_task")
+			}
+			row.readinessWaits = append(row.readinessWaits, assistantwire.TodoWait{Kind: assistantwire.TodoWaitKindExternalEvent, WaitingOn: title})
 		}
 	}
+}
+
+func activeBlockerWait(b todoActiveBlockerView) assistantwire.TodoWait {
+	_, _, label, u := normalizePersistedBlockerKey(b.TargetRef)
+	kind := assistantwire.TodoWaitKindExternalEvent
+	if b.Kind == todoBlockerKindExternalPR {
+		kind = assistantwire.TodoWaitKindPrMerge
+	}
+	return assistantwire.TodoWait{Kind: kind, WaitingOn: label, URL: u}
 }
 
 // mergePersistedSharedBlockers merges persistent active todo_blockers shared by 2+ open to-dos
@@ -664,13 +717,11 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		DueAt: t.DueAt, DueDate: t.DueDate, Priority: t.Priority, Project: t.Project, Kind: t.Kind, SeenAt: t.SeenAt,
 		PartOf: t.PartOf, After: slices.Clone(t.After), Loc: loc}
 	f.RepoGate = repoGateProjection(t.RepoGate)
-	for _, b := range t.ActiveBlockers {
-		_, _, label, u := normalizePersistedBlockerKey(b.TargetRef)
-		kind := assistantwire.TodoWaitKindExternalEvent
-		if b.Kind == todoBlockerKindExternalPR {
-			kind = assistantwire.TodoWaitKindPrMerge
+	f.ActiveBlockers = t.readinessWaits
+	if f.ActiveBlockers == nil {
+		for _, b := range t.ActiveBlockers {
+			f.ActiveBlockers = append(f.ActiveBlockers, activeBlockerWait(b))
 		}
-		f.ActiveBlockers = append(f.ActiveBlockers, assistantwire.TodoWait{Kind: kind, WaitingOn: label, URL: u})
 	}
 	f.RestoredAt, f.SomedayUntil = t.RestoredAt, t.SomedayUntil // the owner's marks on the hub (todo_marks.go)
 	if t.Agents != nil {

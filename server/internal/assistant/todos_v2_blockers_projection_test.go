@@ -26,9 +26,9 @@ func newCountingBlockerStore() *countingBlockerStore {
 	return &countingBlockerStore{memBlockerStore: newMemBlockerStore()}
 }
 
-func (c *countingBlockerStore) ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error) {
+func (c *countingBlockerStore) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
 	c.listActiveCalls.Add(1)
-	return c.memBlockerStore.ListActiveTodoBlockers(ctx)
+	return c.memBlockerStore.ListTodoReadinessBlockers(ctx, todoIDs)
 }
 
 func TestTodosV2BlockersDefaultExternalPRFetcherAutoWake(t *testing.T) {

@@ -28,7 +28,9 @@ const (
 // Production *db.DB satisfies it directly without widening the core Store interface.
 type todoBlockerStore interface {
 	UpsertTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error)
+	EnsureTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error)
 	ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error)
+	ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error)
 	ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]db.TodoBlockerRow, error)
 	ListActiveTodoBlockersByTarget(ctx context.Context, targetRef string) ([]db.TodoBlockerRow, error)
 	ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*db.TodoBlockerRow, error)
@@ -273,31 +275,6 @@ func normalizeBlockerConditionJSON(raw string) string {
 		return "{}"
 	}
 	return s
-}
-
-// todoStageUnlockRuleFromBlockers extracts a structured stage/contract unlock rule from persisted todo_stage blockers
-// for todoID under todos_v2, allowing structured unlock_stage/unlock_contracts inputs to work alongside legacy notes.
-func (s *Service) todoStageUnlockRuleFromBlockers(ctx context.Context, todoID string) (todoStageUnlockRule, bool) {
-	if s == nil || !s.settings(ctx).todosV2On() {
-		return todoStageUnlockRule{}, false
-	}
-	st := s.todoBlockerDB()
-	if st == nil {
-		return todoStageUnlockRule{}, false
-	}
-	rows, err := st.ListTodoBlockersByTodo(ctx, strings.TrimSpace(todoID))
-	if err != nil {
-		return todoStageUnlockRule{}, false
-	}
-	for _, r := range rows {
-		if r.Kind != todoBlockerKindTodoStage || r.State == db.TodoBlockerStateCancelled {
-			continue
-		}
-		if rule, ok := decodeTodoStageBlockerCondition(r.ConditionJSON); ok {
-			return rule, true
-		}
-	}
-	return todoStageUnlockRule{}, false
 }
 
 // syncAfterBlockers mirrors Todo.After edges into persistent todo_blockers (todo_done or todo_stage) strictly
