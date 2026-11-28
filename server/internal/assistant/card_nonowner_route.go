@@ -104,6 +104,15 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	if src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
 		return false
 	}
+	// The owner's own side conversation is the owner talking to the Assistant: its ordinary permission is the
+	// owner's to answer. Routing it to a reviewer cannot work, because interaction_answer refuses any card of an
+	// assistant conversation that is not that conversation's designated supervisor, and it stays unanswerable
+	// until the standalone hold runs out (#17771).
+	if src == cardAgentPermission && ix.Kind == proto.IxPermission && !cfg.supervisorConversation(ix.SessionID) {
+		if c, err := s.assistantConversation(ctx, ix.SessionID); err == nil && c.Assistant {
+			return false
+		}
+	}
 	to, home := s.internalReviewer(ctx, ix)
 	if to == "" || home == "" {
 		// Legacy node questions outside the five manager-owned sources keep
