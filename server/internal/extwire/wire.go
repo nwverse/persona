@@ -148,6 +148,8 @@ type Authorized struct {
 	Name      string   `json:"name,omitempty"`
 	Scopes    []string `json:"scopes,omitempty"`
 	Scope     string   `json:"scope,omitempty"`
+	// Owner is the token owner's Assistant's current trust verdict. Nil is the legacy reply or an unknown token.
+	Owner *bool `json:"owner,omitempty"`
 }
 
 // Emit is EventEmit's params.

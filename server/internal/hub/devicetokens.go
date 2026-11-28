@@ -94,6 +94,9 @@ type principal struct {
 	// names when it drops the token (extwire.HubTokenRevoked). extAt: when the hub asked the managers whose it is.
 	extHash string
 	extAt   time.Time
+	// extAuthConn binds the verdict (or its legacy snapshot) to the connection that validated the route and token.
+	extAuthConn *busConn
+	extOwner    *bool
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string
