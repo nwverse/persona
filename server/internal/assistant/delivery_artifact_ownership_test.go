@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -334,7 +335,10 @@ func TestExplicitUnmergedDeliveryStillBlocksWithRelatedReferences(t *testing.T) 
 			ctx := context.Background()
 			deliveryOn(t, s)
 			if recorded != "" {
-				s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+recorded)
+				ref := "https://github.com/o/r/pull/" + recorded
+				s.setTaskStage(ctx, todo.ID, "review", ref)
+				// The legacy stage still points to an incidental reference. Only the reported PR is delivery.
+				setTestTodoLinkRole(t, s, todo.ID, ref, repository.LinkRoleReference)
 			}
 			f.setItems(append(artifactCreationItems(todo, "https://github.com/o/r/pull/5"),
 				proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo), Text: "Related merged PR: https://github.com/o/r/pull/9\n" +

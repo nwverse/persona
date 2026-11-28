@@ -555,6 +555,14 @@ func (s *Service) forgetReportedPRLinks(ctx context.Context, id string) error {
 		return fmt.Errorf("task %s: read repository links to remove a non-PR: %w", id, err)
 	}
 	for _, row := range set.Repositories {
+		if slices.ContainsFunc(row.Links, func(link repository.TaskLink) bool {
+			role, _ := repository.NormalizeLinkRole(link.Role)
+			return link.Kind == "pull_request" && role == repository.LinkRoleDelivery
+		}) {
+			return fmt.Errorf("task %s: its delivery links changed during verification; retry the review", id)
+		}
+	}
+	for _, row := range set.Repositories {
 		kept := make([]repository.LinkInput, 0, len(row.Links))
 		changed := false
 		for _, link := range row.Links {
@@ -641,6 +649,11 @@ func (s *Service) writeTaskStage(ctx context.Context, id, stage, pr, kind string
 			}
 		}
 	}
+	var completionMode assistantwire.CompletionMode
+	if pr != "" {
+		brief, _ := s.committedBriefOfTodo(id)
+		completionMode = brief.CompletionModeNow
+	}
 	b := &s.reports
 	b.stageWriting.Lock()
 	defer b.stageWriting.Unlock()
@@ -702,7 +715,7 @@ func (s *Service) writeTaskStage(ctx context.Context, id, stage, pr, kind string
 	if cur.bindPR(pr) {
 		changed = true
 		if cur.hasTaskRuntime() {
-			cur.refreshRuntimeDelivery(time.Now())
+			cur.refreshRuntimeDelivery(time.Now(), completionMode)
 		}
 	}
 	if changed {
