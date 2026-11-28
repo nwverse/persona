@@ -581,7 +581,7 @@ func TestNonApprovedJournalCannotBeSpentThroughFreshRetry(t *testing.T) {
 	}
 }
 
-func TestDetachedWaitingRestartFinishesTheRestoredCard(t *testing.T) {
+func TestDetachedWaitingRestartKeepsTheRestoredCardPending(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		recoverFirst bool
@@ -607,25 +607,185 @@ func TestDetachedWaitingRestartFinishesTheRestoredCard(t *testing.T) {
 					restarted.restoreInteractions(context.Background())
 					restarted.recoverApprovalJournals(context.Background())
 				}
-				if got := len(restarted.pendingInteractions()); got != 0 {
-					t.Fatalf("restored waiting card survived its cancelled journal: pending=%d", got)
+				if got := len(restarted.pendingInteractions()); got != 1 {
+					t.Fatalf("restored waiting card was cancelled: pending=%d, want 1", got)
 				}
-				if status, _, _ := st.InteractionOutcome(context.Background(), ix.ID); status != "cancelled" {
-					t.Fatalf("restored outcome = %q, want cancelled", status)
-				}
-				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "cancelled") {
-					t.Fatalf("restart continuation = %q, want the durable cancellation", result)
+				if status, _, _ := st.InteractionOutcome(context.Background(), ix.ID); status != "pending" {
+					t.Fatalf("restored outcome = %q, want pending", status)
 				}
 				replayed, err := restarted.nodeInteraction(context.Background(), detachedTestCard(ix.ID))
-				if err != nil || (replayed.Allow != nil && *replayed.Allow) || !replayed.Dismiss {
-					t.Fatalf("original replay after restart = %+v, %v; want no execution", replayed, err)
+				if err != nil || !replayed.Pending || !replayed.Dismiss || replayed.ApprovalID != ix.ID || replayed.Allow != nil ||
+					!strings.Contains(replayed.Message, "The command was not executed") {
+					t.Fatalf("original replay after restart = %+v, %v; want non-final waiting without execution", replayed, err)
+				}
+
+				changed := ix
+				changed.ID = ix.ID + "_changed"
+				changed.ToolInput = json.RawMessage(`{"command":"printf changed"}`)
+				if got, ok, err := restarted.consumeDetachedGrant(context.Background(), changed); err != nil || ok || got.Allow != nil {
+					t.Fatalf("changed input consumed the approval: %+v ok=%v err=%v", got, ok, err)
+				}
+				allow := true
+				if err := restarted.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+					t.Fatalf("late owner Allow after restart failed: %v", err)
+				}
+				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "approved") {
+					t.Fatalf("restart continuation = %q, want approval", result)
+				}
+				retry := ix
+				retry.ID = ix.ID + "_retry"
+				got, err := restarted.nodeInteraction(context.Background(), retry)
+				if err != nil || got.Allow == nil || !*got.Allow || got.ApprovalID != ix.ID {
+					t.Fatalf("exact retry after restart = %+v, %v", got, err)
+				}
+				second := ix
+				second.ID = ix.ID + "_second_retry"
+				if got, ok, err := restarted.consumeDetachedGrant(context.Background(), second); err != nil || ok || got.Allow != nil {
+					t.Fatalf("second retry consumed the one-time approval: %+v ok=%v err=%v", got, ok, err)
 				}
 			})
 		})
 	}
 }
 
-func TestDetachedRestoredReplayCannotAllowBeforeRecovery(t *testing.T) {
+func TestDetachedWaitingRestartDenyDoesNotExecute(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		shortDetachedTimers(t)
+		ft := newFleetTest(t)
+		preparedTestConversation(ft)
+		ix := detachedTestCard("ix_detached_restart_deny")
+		done := startDetachedTest(t, ft, ix)
+		elapse(30 * time.Millisecond)
+		if got := awaitDetachedTest(t, done); got.err != nil || !got.res.Pending {
+			t.Fatalf("initial result = %+v, %v", got.res, got.err)
+		}
+		st := &restoreMem{fleetMem: ft.st}
+		restarted := newRestartedService(t, Options{Hub: ft.f, Store: func() Store { return st }, Logf: testLogf(t), Devices: ft.d})
+		restarted.restoreInteractions(context.Background())
+		restarted.recoverApprovalJournals(context.Background())
+		deny := false
+		if err := restarted.resolve(ix.ID, proto.Resolution{Allow: &deny}); err != nil {
+			t.Fatalf("late owner Deny after restart failed: %v", err)
+		}
+		if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "denied") {
+			t.Fatalf("restart continuation = %q, want denial", result)
+		}
+		retry := ix
+		retry.ID = ix.ID + "_retry"
+		if got, ok, err := restarted.consumeDetachedGrant(context.Background(), retry); err != nil || ok || got.Allow != nil {
+			t.Fatalf("denied restart approval created a continuation: %+v ok=%v err=%v", got, ok, err)
+		}
+	})
+}
+
+func TestDetachedUnfinishedJournalWithoutFullInteractionStillCancels(t *testing.T) {
+	ft := newFleetTest(t)
+	preparedTestConversation(ft)
+	ix := detachedTestCard("ix_detached_delivery_only_restart")
+	if err := ft.s.approvalJournalStarted(context.Background(), ix); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately do not record the full interaction. The digest-only journal
+	// cannot reconstruct the exact command or make an owner Allow meaningful.
+	st := &restoreMem{fleetMem: ft.st}
+	restarted := newRestartedService(t, Options{Hub: ft.f, Store: func() Store { return st }, Logf: testLogf(t), Devices: ft.d})
+	restarted.restoreInteractions(context.Background())
+	restarted.recoverApprovalJournals(context.Background())
+	if got := len(restarted.pendingInteractions()); got != 0 {
+		t.Fatalf("delivery-only journal restored %d cards, want none", got)
+	}
+	if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "cancelled") {
+		t.Fatalf("delivery-only restart continuation = %q, want cancellation", result)
+	}
+	journal := storedApprovalJournal(t, ft)
+	// Successful result delivery removes the finalized journal. If delivery has
+	// not cleaned it yet, the retained record must already be terminal and final.
+	if len(journal) > 1 || len(journal) == 1 && (journal[0].Status != "cancelled" || journal[0].Result == "" || !journal[0].Finalized) {
+		t.Fatalf("delivery-only recovered journal = %+v, want delivered or finalized cancellation", journal)
+	}
+	retry := ix
+	retry.ID = ix.ID + "_retry"
+	if got, ok, err := restarted.consumeDetachedGrant(context.Background(), retry); err != nil || ok || got.Allow != nil {
+		t.Fatalf("delivery-only journal created an execution grant: %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestDetachedRestoreBeforeRecoveryDoesNotUseReconnectGrace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		shortDetachedTimers(t)
+		oldGrace := resumeGrace
+		resumeGrace = 20 * time.Millisecond
+		t.Cleanup(func() { resumeGrace = oldGrace })
+		ft := newFleetTest(t)
+		preparedTestConversation(ft)
+		ix := detachedTestCard("ix_detached_restore_before_recovery_grace")
+		done := startDetachedTest(t, ft, ix)
+		elapse(30 * time.Millisecond)
+		if got := awaitDetachedTest(t, done); got.err != nil || !got.res.Pending {
+			t.Fatalf("initial result = %+v, %v", got.res, got.err)
+		}
+		st := &restoreMem{fleetMem: ft.st}
+		restarted := newRestartedService(t, Options{Hub: ft.f, Store: func() Store { return st }, Logf: testLogf(t), Devices: ft.d})
+		restarted.restoreInteractions(context.Background())
+		// Recovery is deliberately delayed beyond the ordinary reconnect grace.
+		// A restored waiting card must use its durable decision deadline instead.
+		elapse(30 * time.Millisecond)
+		if got := len(restarted.pendingInteractions()); got != 1 {
+			t.Fatalf("restored card used the reconnect grace before recovery: pending=%d, want 1", got)
+		}
+		if status, _, _ := st.InteractionOutcome(context.Background(), ix.ID); status != "pending" {
+			t.Fatalf("restored outcome before recovery = %q, want pending", status)
+		}
+		restarted.recoverApprovalJournals(context.Background())
+		allow := true
+		if err := restarted.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+			t.Fatalf("owner Allow after delayed recovery failed: %v", err)
+		}
+		if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "approved") {
+			t.Fatalf("delayed-recovery continuation = %q, want approval", result)
+		}
+	})
+}
+
+func TestDetachedUnfinishedJournalWithNonResumableRowStillCancels(t *testing.T) {
+	for _, restore := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restore_%v", restore), func(t *testing.T) {
+			ft := newFleetTest(t)
+			preparedTestConversation(ft)
+			ix := detachedTestCard(fmt.Sprintf("ix_detached_non_resumable_restart_%v", restore))
+			ix.Resumable = false
+			if err := ft.s.approvalJournalStarted(context.Background(), ix); err != nil {
+				t.Fatal(err)
+			}
+			// The complete row exists but cannot be resumed by a hook. Its exact input
+			// must not become a synthetic owner-executable approval after restart.
+			ft.s.record(ix)
+			st := &restoreMem{fleetMem: ft.st}
+			restarted := newRestartedService(t, Options{Hub: ft.f, Store: func() Store { return st }, Logf: testLogf(t), Devices: ft.d})
+			if restore {
+				restarted.restoreInteractions(context.Background())
+			}
+			restarted.recoverApprovalJournals(context.Background())
+			journal := storedApprovalJournal(t, ft)
+			if len(journal) == 1 && journal[0].Result == "" {
+				t.Fatalf("non-resumable full row was left for synthetic recovery: %+v", journal)
+			}
+			if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "cancelled") {
+				t.Fatalf("non-resumable restart continuation = %q, want cancellation", result)
+			}
+			if status, _, _ := st.InteractionOutcome(context.Background(), ix.ID); status != "cancelled" {
+				t.Fatalf("non-resumable full row outcome = %q, want cancelled", status)
+			}
+			retry := ix
+			retry.ID = ix.ID + "_retry"
+			if got, ok, err := restarted.consumeDetachedGrant(context.Background(), retry); err != nil || ok || got.Allow != nil {
+				t.Fatalf("non-resumable full row created an execution grant: %+v ok=%v err=%v", got, ok, err)
+			}
+		})
+	}
+}
+
+func TestDetachedRestoredReplayBeforeRecoveryWaitsWithoutExecuting(t *testing.T) {
 	for _, restore := range []bool{true, false} {
 		t.Run(fmt.Sprintf("restore_%v", restore), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -648,16 +808,21 @@ func TestDetachedRestoredReplayCannotAllowBeforeRecovery(t *testing.T) {
 					res, err := restarted.nodeInteraction(context.Background(), detachedTestCard(ix.ID))
 					replayed <- detachedTestResult{res, err}
 				}()
-				elapse(0)
-				allow := true
-				_ = restarted.resolve(ix.ID, proto.Resolution{Allow: &allow})
+				elapse(30 * time.Millisecond)
 				got := awaitDetachedTest(t, replayed)
-				if got.err != nil || (got.res.Allow != nil && *got.res.Allow) || !got.res.Dismiss {
-					t.Fatalf("restored replay before recovery = %+v, %v; want no execution", got.res, got.err)
+				if got.err != nil || !got.res.Pending || !got.res.Dismiss || got.res.Allow != nil || got.res.ApprovalID != ix.ID {
+					t.Fatalf("restored replay before recovery = %+v, %v; want non-final waiting", got.res, got.err)
 				}
 				restarted.recoverApprovalJournals(context.Background())
-				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "cancelled") {
-					t.Fatalf("restart continuation = %q, want cancellation", result)
+				if got := len(restarted.pendingInteractions()); got != 1 {
+					t.Fatalf("replay before recovery left %d pending cards, want 1", got)
+				}
+				allow := true
+				if err := restarted.resolve(ix.ID, proto.Resolution{Allow: &allow}); err != nil {
+					t.Fatalf("owner Allow after replay recovery failed: %v", err)
+				}
+				if result := waitFakeApprovalResult(t, ft.f, ix.ID); !strings.Contains(result, "approved") {
+					t.Fatalf("restart continuation = %q, want approval", result)
 				}
 			})
 		})

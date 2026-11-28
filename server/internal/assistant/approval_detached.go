@@ -281,6 +281,32 @@ func (s *Service) consumeDetachedGrant(ctx context.Context, ix proto.Interaction
 	return proto.Resolution{}, false, nil
 }
 
+// unfinishedDetachedJournal is an unanswered, exact-input approval whose operation has not started.
+// Legacy and delivery-only entries lack the fingerprint needed to bind a restored call to this occurrence.
+func unfinishedDetachedJournal(entry approvalJournalEntry) bool {
+	return entry.Result == "" && entry.Status != "applying" && entry.Fingerprint != ""
+}
+
+// completePendingDetachedInteraction proves that the full original call, not just its delivery journal, survived.
+// A missing, terminal or different occurrence stays on the fail-closed recovery path.
+func (s *Service) completePendingDetachedInteraction(ctx context.Context, ix proto.Interaction, entry approvalJournalEntry) (bool, error) {
+	if !unfinishedDetachedJournal(entry) || !ix.Detachable || !ix.Resumable {
+		return false, nil
+	}
+	recorder, ok := s.store().(interactionRecorder)
+	if !ok {
+		return false, errors.New("the restored approval recorder is unavailable")
+	}
+	readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+	rec, err := recorder.InteractionRecord(readCtx, entry.ID)
+	cancel()
+	if err != nil {
+		return false, err
+	}
+	return rec != nil && rec.Status == "pending" && rec.Interaction.Detachable && rec.Interaction.Resumable &&
+		approvalJournalMatches(entry, rec.Interaction) && sameApprovalOccurrence(ix, rec.Interaction), nil
+}
+
 // journaledDetachedReplay closes a recovered original before it can reach an
 // Always rule or register a fresh executable operation. An active process-local
 // prepared approval is not recovered: its reconnecting hook keeps the ordinary
@@ -300,6 +326,17 @@ func (s *Service) journaledDetachedReplay(ctx context.Context, ix proto.Interact
 	s.fleet.mu.Unlock()
 	if local {
 		return proto.Resolution{}, false, nil
+	}
+	if unfinishedDetachedJournal(entry) {
+		pending, err := s.completePendingDetachedInteraction(ctx, ix, entry)
+		if err != nil {
+			return proto.Resolution{}, true, err
+		}
+		if pending {
+			// Let waitDetachedCard reconnect the exact stored call to a recovered
+			// prepared coordinator. Its replay receives Waiting, never an Apply.
+			return proto.Resolution{}, false, nil
+		}
 	}
 	b := &s.approvals
 	b.mu.Lock()
@@ -461,13 +498,10 @@ func (s *Service) detachedContinuationPendingLocked(ctx context.Context, id, dig
 	return !grant.CreatedAt.After(cutoff), nil
 }
 
-// waitDetachedCard uses the prepared-approval coordinator for its first-answer-
-// wins claim, clarification, durable result delivery and short initial wait.
-// Apply creates a continuation grant only after the original caller was
-// released. An immediate Allow returns through the original hook and leaves no
-// unused second execution behind.
-func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
-	state := &preparedApproval{caller: ctx, release: make(chan struct{}), deliveries: map[string]clarifyDelivery{}}
+// detachedApprovalState builds the ordinary detached continuation. Apply creates a one-time grant only after the
+// original caller was released; it never executes the command in the manager.
+func (s *Service) detachedApprovalState(ix proto.Interaction, caller context.Context) *preparedApproval {
+	state := &preparedApproval{caller: caller, release: make(chan struct{}), deliveries: map[string]clarifyDelivery{}}
 	state.op = approvalops.Operation{
 		Denied:     "The owner denied this command. Nothing was executed. Do not retry it or create another approval for the same call.",
 		Unanswered: "The approval ended without an owner Allow. Nothing was executed; do not retry unless the owner asks.",
@@ -482,9 +516,8 @@ func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (p
 				return "The owner allowed this exact command through the original hook.", nil
 			}
 			if r.Remembered {
-				// A newer explicit Always decision covers this sibling card. Its
-				// late card must not mint another one-time grant or ask the model to
-				// repeat a call that a later owner turn may already have run.
+				// A newer explicit Always decision covers this sibling card. Its late card
+				// must not mint another one-time grant or ask the model to repeat a call.
 				state.reportStatus = "covered"
 				return "A newer Always allow covers this exact call. This older card executed nothing and requests no automatic retry; check whether the call already ran before making a later explicit call.", nil
 			}
@@ -494,6 +527,37 @@ func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (p
 			state.reportStatus = "approved"
 			return detachedContinuationText(ix, r), nil
 		},
+	}
+	return state
+}
+
+// recoveredDetachedApprovalState reconnects a complete unanswered call without its original process-local callback.
+// The closed release returns the existing non-final Waiting result; Allow and Deny still use resolvePreparedAnswer.
+func (s *Service) recoveredDetachedApprovalState(ix proto.Interaction) *preparedApproval {
+	state := s.detachedApprovalState(ix, context.Background())
+	state.clarified, state.waiting = true, true
+	close(state.release)
+	return state
+}
+
+// waitDetachedCard uses the prepared-approval coordinator for its first-answer-
+// wins claim, clarification, durable result delivery and short initial wait.
+// Apply creates a continuation grant only after the original caller was
+// released. An immediate Allow returns through the original hook and leaves no
+// unused second execution behind.
+func (s *Service) waitDetachedCard(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	state := s.detachedApprovalState(ix, ctx)
+	if entry, found, err := s.approvalJournalRecord(ctx, ix); err != nil {
+		return proto.Resolution{}, err
+	} else if found && unfinishedDetachedJournal(entry) {
+		pending, err := s.completePendingDetachedInteraction(ctx, ix, entry)
+		if err != nil {
+			return proto.Resolution{}, err
+		}
+		if !pending {
+			return proto.Resolution{}, errors.New("the recovered detached approval has no complete pending interaction")
+		}
+		state = s.recoveredDetachedApprovalState(ix)
 	}
 	res, err := s.waitInteractionPrepared(ctx, ix, state)
 	if errors.Is(err, errApprovalClarifying) {

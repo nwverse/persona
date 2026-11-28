@@ -866,20 +866,27 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 			if b.list[i].Summary == "" {
 				b.list[i].Summary = backfilled[b.list[i].ID]
 			}
-			if b.list[i].Status == "applying" {
+			switch {
+			case b.list[i].Status == "applying":
 				b.list[i].Status = "failed"
 				b.list[i].Result = approvalResultTextWithSummary(b.list[i].ID, "failed", b.list[i].Summary, "The assistant restarted while the approved operation was executing. Its execution outcome is uncertain: check current state before retrying; do not assume it applied or that nothing changed.")
-			} else {
+			case unfinishedDetachedJournal(b.list[i]):
+				// A digest-bound, unanswered exact-input approval may survive the
+				// restart. finishRecoveredApproval verifies the complete pending
+				// interaction before leaving it for the restored owner card.
+			default:
 				b.list[i].Status = "cancelled"
 				b.list[i].Result = approvalResultTextWithSummary(b.list[i].ID, "cancelled", b.list[i].Summary, approvalRestartCancelledText)
 			}
-			if !b.list[i].CreatedAt.IsZero() || b.list[i].Fingerprint != "" {
-				b.list[i].UpdatedAt = time.Now().UTC()
+			if !unfinishedDetachedJournal(b.list[i]) {
+				if !b.list[i].CreatedAt.IsZero() || b.list[i].Fingerprint != "" {
+					b.list[i].UpdatedAt = time.Now().UTC()
+				}
+				// A legacy entry has no occurrence fields. Its original UpdatedAt is
+				// also its occurrence cutoff; leave it unchanged so this recovery result
+				// cannot make a later same-ID card look like the old occurrence.
+				changed = true
 			}
-			// A legacy entry has no occurrence fields. Its original UpdatedAt is
-			// also its occurrence cutoff; leave it unchanged so this recovery result
-			// cannot make a later same-ID card look like the old occurrence.
-			changed = true
 		}
 		// A terminal journal result can be the only durable outcome after a crash
 		// between its write and the interaction's terminal write. Close every
@@ -919,6 +926,13 @@ func (s *Service) finalizeRecoveredApprovals(ctx context.Context, seq uint64, re
 		if err != nil {
 			failed = true
 			s.logf("reload recovered approval %s: %v", a.ID, err)
+			continue
+		}
+		if found && current.Result == "" && current.Status == "applying" {
+			// An owner Allow claimed the restored card after finishRecoveredApproval.
+			// Its grant and terminal journal may still be in flight; never revoke the
+			// grant in that window. Retry recovery after the honest outcome is durable.
+			failed = true
 			continue
 		}
 		if found && current.Status != "approved" {
@@ -1018,6 +1032,31 @@ func approvalJournalMatches(entry approvalJournalEntry, ix proto.Interaction) bo
 	return entry.CreatedAt.Equal(ix.CreatedAt)
 }
 
+// cancelUnrestorableDetached records the old fail-closed outcome only after the
+// complete pending row was not available for exact-call recovery.
+func (s *Service) cancelUnrestorableDetached(ctx context.Context, entry approvalJournalEntry) (approvalJournalEntry, error) {
+	_, status, text, _ := recoveredApprovalOutcome(entry)
+	b := &s.approvals
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.loadApprovalJournalLocked(ctx) {
+		return approvalJournalEntry{}, errors.New("the clarification journal is unavailable")
+	}
+	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return sameApprovalJournalOccurrence(a, entry) })
+	if i < 0 {
+		return approvalJournalEntry{}, errors.New("the recovered approval journal entry disappeared")
+	}
+	if b.list[i].Result == "" {
+		b.list[i].Status = status
+		b.list[i].Result = approvalResultText(entry.ID, status, text)
+		b.list[i].UpdatedAt = time.Now().UTC()
+		if err := s.saveApprovalJournalLocked(ctx); err != nil {
+			return approvalJournalEntry{}, err
+		}
+	}
+	return b.list[i], nil
+}
+
 // finishRecoveredApproval closes only the journal's occurrence. A different
 // live occurrence is never claimed. With no matching live card, the fleet mutex
 // stays held through the strict database write so restoreInteractions cannot
@@ -1034,6 +1073,7 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 		return nil
 	}
 	entry = current
+	restorable := unfinishedDetachedJournal(entry)
 	id := entry.ID
 	historyStatus, journalStatus, text, restartCancelled := recoveredApprovalOutcome(entry)
 	r := proto.Resolution{Dismiss: true, Reason: "assistant_restarted"}
@@ -1071,6 +1111,16 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 				// mistaken for a different fingerprint.
 				candidate = rec.Interaction
 				if rec.Status != "pending" {
+					if restorable && entry.Result == "" && rec.Status == historyStatus {
+						// Startup may already have closed a non-resumable row before
+						// journal recovery. Do not finalize its empty journal without
+						// the durable cancellation result that delivery must retain.
+						entry, err = s.cancelUnrestorableDetached(context.Background(), entry)
+						if err != nil {
+							s.fleet.mu.Unlock()
+							return err
+						}
+					}
 					matches := rec.Status == historyStatus
 					if rec.Status == "resolved" {
 						matches = recoveredTerminalJournalStatus(rec.Interaction, rec.Status, rec.Resolution) == journalStatus
@@ -1085,6 +1135,19 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 					s.fleet.mu.Unlock()
 					return s.approvalJournalFinalized(context.Background(), entry)
 				}
+				if restorable && candidate.Detachable && candidate.Resumable {
+					// Recovery may run before restoreInteractions. Leave the complete
+					// pending row and journal for that restore to reconnect.
+					s.fleet.mu.Unlock()
+					return nil
+				}
+			}
+		}
+		if restorable {
+			entry, err = s.cancelUnrestorableDetached(context.Background(), entry)
+			if err != nil {
+				s.fleet.mu.Unlock()
+				return err
 			}
 		}
 		err := s.recordEndOccurrenceStrictBy(candidate, historyStatus, by, &r)
@@ -1103,6 +1166,37 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 	if p.claimed {
 		s.fleet.mu.Unlock()
 		return fmt.Errorf("interaction %s has an owner claim still finalizing", id)
+	}
+	if restorable && p.ix.Detachable && p.ix.Resumable && p.prepared == nil {
+		// A bare restored occurrence (snapshot installed it without a coordinator,
+		// or recovery won the race) becomes the released waiting card.
+		p.prepared = s.recoveredDetachedApprovalState(p.ix)
+		if p.orphaned != nil {
+			p.orphaned.Stop()
+			p.orphaned = nil
+		}
+		s.fleet.mu.Unlock()
+		s.startRecoveredWaitingTimer(p)
+		return nil
+	}
+	if restorable && p.ix.Detachable && p.ix.Resumable && p.prepared != nil &&
+		p.prepared.clarified && p.prepared.waiting {
+		// Restore or a reconnecting replay already reconstructed the released
+		// waiting coordinator and its deadline timer. Keep it pending.
+		s.fleet.mu.Unlock()
+		return nil
+	}
+	if p.prepared == nil && restorable {
+		// The digest-bound entry cannot be reconnected safely (its live occurrence
+		// is not detachable/resumable). Record the fail-closed outcome before the
+		// synthetic terminal close below. A live ordinary prepared coordinator is
+		// excluded: endPreparedIfBy -> finishPrepared records its journal outcome
+		// and ended_by attribution on the ordinary path.
+		entry, err = s.cancelUnrestorableDetached(context.Background(), entry)
+		if err != nil {
+			s.fleet.mu.Unlock()
+			return err
+		}
 	}
 	if p.prepared != nil {
 		s.fleet.mu.Unlock()
