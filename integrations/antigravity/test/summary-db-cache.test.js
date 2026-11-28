@@ -148,6 +148,8 @@ test('checkedStates preserves agy exclusive-lock read failures while cached stat
     assert.equal(store.checkedStates().get(RAW).status, 'IDLE')
     writer.exec('BEGIN EXCLUSIVE')
     assert.throws(() => store.checkedStates(), /database is locked/)
+    assert.equal(store.connected, false)
+    assert.equal(store.stats.opens, store.stats.closes)
     // The pure snapshot accessor does not probe the lock and keeps serving cache.
     assert.equal(store.states().get(RAW).status, 'IDLE')
     writer.exec('ROLLBACK')
@@ -157,6 +159,57 @@ test('checkedStates preserves agy exclusive-lock read failures while cached stat
     writer.close()
     store.close()
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('transient exclusive lock during cold or reopened probe/states does not poison store or skew open/close stats', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-summary-poison-'))
+  const dbPath = join(dir, 'conversation_summaries.db')
+  const writer = new DatabaseSync(dbPath)
+  writer.exec('CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT, not_fully_idle INTEGER, killed INTEGER, step_count INTEGER, title TEXT, workspace_uris TEXT, last_modified_time TEXT)')
+  writer.prepare('INSERT INTO conversation_summaries VALUES (?,?,?,?,?,?,?,?)').run(RAW, 'IDLE', 0, 0, 1, 't', '[]', 'x')
+  const store = createSummaryStateStore(dbPath)
+  try {
+    // 1. Warm snapshot, then lose connection under exclusive lock so probe() must reopen while locked.
+    assert.equal(store.checkedStates().get(RAW).status, 'IDLE')
+    writer.exec('BEGIN EXCLUSIVE')
+    assert.throws(() => store.point(RAW), /database is locked/)
+    assert.equal(store.connected, false)
+    // states() serves cached snapshot, then probe() calls connection() while locked -> must fail cleanly without poisoning db/probeStmt.
+    assert.throws(() => store.checkedStates(), /database is locked/)
+    assert.equal(store.connected, false)
+    writer.exec('ROLLBACK')
+    // After lock release, checkedStates() must recover instead of throwing TypeError on undefined probeStmt.
+    assert.equal(store.checkedStates().get(RAW).status, 'IDLE')
+    assert.equal(store.connected, true)
+
+    // 2. Cold probe() under exclusive lock must not leave a half-initialized connection or corrupt stats.
+    const cold = createSummaryStateStore(dbPath)
+    try {
+      writer.exec('BEGIN EXCLUSIVE')
+      assert.throws(() => cold.probe(), /database is locked/)
+      assert.equal(cold.connected, false)
+      assert.equal(cold.stats.opens, 0)
+      assert.equal(cold.stats.closes, 0)
+      assert.throws(() => cold.states(), /database is locked/)
+      assert.equal(cold.stats.opens, 0)
+      assert.equal(cold.stats.closes, 0)
+      writer.exec('ROLLBACK')
+      cold.probe()
+      assert.equal(cold.checkedStates().get(RAW).status, 'IDLE')
+    } finally {
+      cold.close()
+      assert.equal(cold.stats.opens, cold.stats.closes)
+    }
+  } finally {
+    try {
+      try { writer.exec('ROLLBACK') } catch {}
+      writer.close()
+      store.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+    assert.equal(store.stats.opens, store.stats.closes)
   }
 })
 

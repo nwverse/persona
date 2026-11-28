@@ -953,6 +953,8 @@ export function isSessionReview(ix: Pick<Interaction, "kind" | "tool_name">): bo
 
 export interface Interaction {
   id: string;
+  /** Authoritative interaction for a display-only copy; aggregates count only cards without this field. */
+  mirror_of?: string;
   /** The manager it belongs to (docs/protocol/protocol.md "Per-manager routing"); none: the default one. */
   manager?: string;
   machine_id: string;

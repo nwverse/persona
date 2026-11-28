@@ -124,6 +124,7 @@ func (h *orcaHost) CloseSlot(ctx context.Context, slot string) error {
 		if m.TabID == slot {
 			delete(h.made, key)
 			delete(h.launches, key)
+			delete(h.agentTabs, key)
 		}
 	}
 	h.mu.Unlock()

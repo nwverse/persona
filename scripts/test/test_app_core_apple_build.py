@@ -394,7 +394,7 @@ class AppleCoreBuildTests(Harness):
 
 @unittest.skipUnless(SHASUM, 'needs shasum')
 class LinuxAppleCoreBuildTests(Harness):
-    """The Linux path (#16944): a Linux Apple toolchain such as nwverse/apple-build, with no Xcode tool on PATH."""
+    """The Linux path (#16944): a Linux Apple toolchain, with no Xcode tool on PATH."""
 
     def setUp(self):
         super().setUp()

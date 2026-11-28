@@ -25,9 +25,10 @@ import type { Interaction, Session } from "./types";
 
 /** #8578: a directory-hidden session's pending cards leave the card lists and counts (Needs you, the sidebar, the Inbox,
  *  the assistants' badges) as its row leaves the lists; they stay answerable on that session's own page. The row comes
- *  from the lists or from the card's exact lookup (store.ts cardSessionRow), which returns hidden rows too. */
+ *  from the lists or from the card's exact lookup (store.ts cardSessionRow), which returns hidden rows too. Display copies
+ *  also stay out of these aggregate lists and counts; conversation pages read the store directly and retain both cards. */
 export function directoryVisibleCards(cards: Interaction[]): Interaction[] {
-  const visible = cards.filter((ix) => !cardSessionRow(ix.machine_id, ix.session_id)?.hidden_by_directory);
+  const visible = cards.filter((ix) => !ix.mirror_of && !cardSessionRow(ix.machine_id, ix.session_id)?.hidden_by_directory);
   return visible.length === cards.length ? cards : visible;
 }
 

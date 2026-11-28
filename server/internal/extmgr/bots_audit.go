@@ -27,6 +27,8 @@ const (
 	auditBotTopicChatRemoved = "bot_topic_chat_removed"
 	// {chat_id}: the group chat that is the home topic group now (/topics home, or the app's list).
 	auditBotTopicHome = "bot_topic_home"
+	// {chat_id, space}: the domain space bound to a topic group (/topics space, or the app's list).
+	auditBotTopicSpace = "bot_topic_space"
 	// {chat_id}: the owner's "@bot /ai …" was taken from a group chat that is not opted in (#6146). Never the words.
 	auditBotAITaken = "bot_ai_taken"
 	// {chat_id}: the owner's "@bot /read …" was taken from a group chat (#11803). Never the words.

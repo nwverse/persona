@@ -46,12 +46,24 @@ export interface KBEntry {
   extra?: string;
   /** recordings: meeting, note or day (#8870); absent from an older hub */
   recording_kind?: string;
+  /** recordings: why in-flight work (minutes, recap or upload) is paused on the hub ("module_off"); absent otherwise (#15214) */
+  paused?: string;
   /** chats: the source they came from; docs, meetings and events: the connector that supplied them (#8872) */
   source?: string;
   /** recordings: the id of the imported meeting it overlaps, as the meetings list has it (#8872) */
   meeting_id?: string;
   /** recordings in the meetings list (this client's, `mergeMeetingLists` in views/knowledge/meetings.ts): the imported meeting it stands for (#8872) */
   imported?: KBEntry;
+}
+
+/** Why a stored recording's in-flight work is paused on the hub (#15214): closed so an unknown reason from a newer hub
+ *  neither crashes nor triggers module-off wording. */
+export type RecordingPause = "module_off" | "unknown";
+
+/** Decodes `paused` from a recording entry or detail into the closed set; empty, absent or non-string values are null. */
+export function recordingPaused(value: unknown): RecordingPause | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  return value === "module_off" ? "module_off" : "unknown";
 }
 
 /** The tag a recording's row carries in the meetings list (#8871): notes and all-day recordings are the exceptions among
@@ -102,6 +114,8 @@ export interface KBDetail {
   minutes?: RecordingMinutes | null;
   /** An all-day recording's recap (#4741), kept while a newer one is pending or failed. */
   recap?: DayRecap | null;
+  /** recordings: why in-flight work (minutes, recap or upload) is paused on the hub ("module_off"); absent otherwise (#15214) */
+  paused?: string;
   /** topics: the knowledge points (docs/assistant/knowledge.md "Knowledge points"). */
   points?: TopicPoint[] | null;
 }

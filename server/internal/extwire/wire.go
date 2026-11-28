@@ -76,14 +76,14 @@ const (
 	HeaderHub        = "X-Persona-Hub"
 	HeaderDevice     = "X-Persona-Device"      // the device token's id ("" for the master token)
 	HeaderDeviceName = "X-Persona-Device-Name" // its name
-	HeaderRole       = "X-Persona-Role"        // full | answer | extension | …
+	HeaderRole       = wire.HeaderRole         // full | answer | extension | … (the Go SDK has it too)
 	HeaderPaired     = "X-Persona-Paired"      // "1": a pairing token, not one of the user's own signed-in apps
 	HeaderExtension  = "X-Persona-Extension"   // an extension token's extension
 	HeaderScopes     = "X-Persona-Scopes"      // its scopes, comma-separated
 	HeaderOwner      = "X-Persona-Owner"       // "1": the master token over loopback (installing runs code here)
 	HeaderAdmin      = "X-Persona-Admin"       // "1": a signed-in admin session (the admin UI's routes)
 	HeaderRemote     = "X-Persona-Remote"      // the caller's address
-	HeaderLang       = "X-Persona-Lang"        // the language the hub would answer it in
+	HeaderLang       = wire.HeaderLang         // the language the hub would answer it in
 )
 
 // Hub → manager.

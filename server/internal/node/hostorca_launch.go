@@ -154,7 +154,7 @@ func (h *orcaHost) launchShell(ctx context.Context) (shell, typed string) {
 }
 
 // resolveWorktree locates the best-matching local Orca worktree for cwd.
-// A non-empty space is an explicit target and must contain cwd. Without one, if cwd is inside a worktree (including subdirectories),
+// A non-empty space is an explicit target and must contain cwd outside a task workspace. Without one, if cwd is inside a worktree (including subdirectories),
 // it chooses the deepest enclosing worktree.
 // If not found in any existing worktree, it checks whether cwd can be safely registered via repo.add (if git repo).
 func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree, spaceHint, cwd string) (*orcart.Worktree, error) {
@@ -169,7 +169,9 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 			}
 			if w.WorktreeID == spaceHint {
 				wPath := orcaLaunchPath(w.Path)
-				if isInsideOrEqual(path, wPath) {
+				// A task uses the worktree as its tab container. Run enters the worker's own checkout.
+				ts := taskSpaceIn(ctx, h)
+				if isInsideOrEqual(path, wPath) || ts != nil && ts.id == spaceHint {
 					return w, nil
 				}
 			}

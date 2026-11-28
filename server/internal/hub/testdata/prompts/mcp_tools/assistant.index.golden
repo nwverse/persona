@@ -3,6 +3,7 @@ mail_search
 mail_read
 mail_save_attachment
 mail_send
+mail_move
 resource_status
 ask_user
 ask_user_withdraw
@@ -55,6 +56,8 @@ model_profile_get
 model_profile_switch
 model_profile_rollback
 model_profile_capture
+model_profile_deactivate
+model_profile_clear
 model_probe
 launcher_import
 repositories_list

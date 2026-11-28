@@ -104,6 +104,11 @@ type decisionAgentReply struct {
 	Text      string    `json:"text,omitempty"`
 	Handled   bool      `json:"handled,omitempty"`
 	Closeout  string    `json:"closeout,omitempty"`
+	// FromSupervisor marks a reply the owner wrote in a supervisor / direction conversation's
+	// reverse-lookup path, rather than in the task's worker Agent chat. The restart sweep uses it
+	// to rebuild the supervisor-specific routing (an explicit leader destination); records
+	// written before this field existed stay false and keep the legacy no-To route.
+	FromSupervisor bool `json:"from_supervisor,omitempty"`
 }
 
 // priorDecisionReply anchors the scan to the Agent's actual question, within this task's current round.
@@ -486,6 +491,11 @@ func (s *Service) sweepAgentDecisionReplies() {
 	for id, a := range pending {
 		if a.AgentReply.Handled {
 			s.handBackAgentDecision(ctx, id, a)
+		} else if a.AgentReply.FromSupervisor {
+			// A reply captured through the supervisor reverse-lookup must route back to the
+			// direction that owns the card; the persisted flag survives the restart that erased
+			// the in-memory signal's explicit destination.
+			s.signalSupervisorDecisionReply(ctx, id, a)
 		} else {
 			s.signalAgentDecisionReply(id, a)
 		}

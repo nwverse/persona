@@ -1,6 +1,7 @@
 {
   "workers_accepted": "子タスク {count} 件はすべて受け入れ済みで、リーダーは停止しています。親タスクと記録された決定を確認し、残りの作業を進めてください。",
   "investigation_handoff_open": "このフォローアップを終了する前に、調査項目を完了するか引き継ぎ先を変更してください。{finding}",
+  "investigation_parent_handoff_open": "この調査タスクを削除する前に、引き継いだフォローアップを完了してください。{finding}",
   "investigation_review_required": "この作業を保留または終了する前に、今回の調査結果を確認してください。",
   "investigation_findings_open": "次の調査項目には、フォローアップ、確認できる利用者の判断、または完了の証拠が必要です。{findings}",
   "handoff_wait": "「{task}」から「{check}」の確認結果を待っています",
@@ -87,6 +88,7 @@
   "admission_memory": "空きメモリーは {available} しかなく、上限 {limit} を下回っています。",
   "admission_procs": "claude プロセスが既に {count} 個実行中で、上限 {limit} に達しています。",
   "admission_load": "負荷 {load} がコア数 {cores} × {multiplier} を超えています。",
+  "admission_swap": "スワップが {percent}% 使用中（{total} 中 {used}）で、空きメモリーは {available} しかありません。",
   "admission_direction_full": "この方向のエージェントは既に {running} 個実行中で、上限 {limit} に達しています。",
   "admission_launcher_group_full": "ランチャーグループ {group} のタスクは既に {running} 件実行中で、上限 {limit} に達しています。",
   "admission_refused": "コンピューター {machine} ではこのエージェントを開始できません：{reason}{recommend}",
@@ -127,5 +129,6 @@
   "placement_hit_launcher_unhealthy": "ランチャー {launcher} が利用不可（{kind}）",
   "placement_hit_no_resources": "リソース指標が未報告",
   "inbox_link_removed": "受信トレイの話題が変わったため、自動リンクを解除しました。タスクは開始できます。",
-  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。"
+  "inbox_candidates": "関連する可能性のある受信トレイの項目：{items}。自動リンクは行っていません。リンクする前に送信元を確認してください。",
+  "placement_hit_scratch_unsupported": "管理対象の scratch ワークスペース非対応（Persona Node の更新が必要）"
 }
