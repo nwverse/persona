@@ -391,11 +391,14 @@ type Node struct {
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
 	// Per-host snapshot sequence numbers and agentsGen keep delayed older snapshots from overwriting newer live state (#2133).
-	hostAgents    map[string][]host.Agent
-	hostSnapSeq   map[string]uint64
-	hostLayoutSeq map[string]uint64
-	hostAgentsSeq map[string]uint64
-	agentsGen     uint64
+	// agentsGen numbers each merge of hostAgents as it is taken; agentsCommitted is the newest one written into agents. A
+	// merge gives way only to a newer one already written, never to one still running (#17826).
+	hostAgents      map[string][]host.Agent
+	hostSnapSeq     map[string]uint64
+	hostLayoutSeq   map[string]uint64
+	hostAgentsSeq   map[string]uint64
+	agentsGen       uint64
+	agentsCommitted uint64
 	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
 	// (claudeInPane's grace while its engine has not reported it yet).
 	paneClaudes map[int]paneClaudeSeen
