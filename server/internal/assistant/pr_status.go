@@ -675,8 +675,8 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	}
 	reconcileEarlyTerminal := func() {
 		if terminalState {
-			reconcileTerminalBlockers()
 			s.onPRStatusMergeTrain(ctx, t, status)
+			reconcileTerminalBlockers()
 		}
 	}
 	current, ok := s.todoNow(t.ID)
@@ -861,6 +861,16 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
+	s.onPRStatusMergeTrain(ctx, t, status)
+	if terminalState {
+		reconcileTerminalBlockers()
+	}
+	if s.settings(ctx).todosV2On() {
+		// Stage/contract after edges can become ready when the tracked PR changes.
+		if _, err := s.ReconcileTodoBlockers(ctx, t.ID); err != nil {
+			s.logf("task %s: reconcile PR stage prerequisites: %v", t.ID, err)
+		}
+	}
 	if strings.EqualFold(status.State, "merged") {
 		if parkWoke || needsUserMergeHandled {
 			s.prMergeWakeTold(ctx, []superviseSignal{{Todo: t.ID, Kind: sigPRMerged, PRURL: status.URL, Key: prMergeSignalKey(status.URL)}})
@@ -878,10 +888,6 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			s.maybeEmitUnparkedPRMerged(ctx, t.ID, u, held, parkWoke, newlyClosed, preStage)
 		}
 	}
-	if terminalState {
-		reconcileTerminalBlockers()
-	}
-	s.onPRStatusMergeTrain(ctx, t, status)
 	return nil
 }
 

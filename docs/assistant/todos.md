@@ -1447,6 +1447,10 @@ An owner can set `{"require_accepted_after":true}` on the root to-do with `POST 
 
 An approved start is remembered across manager restarts and rechecked by the task queue (normally within a minute). After it clears prerequisites, normal capacity checks still apply. A waiting start checks the prerequisites it was approved with as well as any new links; removing a link or turning enforcement off does not waive that approval's prerequisites. To release work with revised prerequisites, cancel the old start and approve a new plan. If the manager loses confirmation of a launch, it does not send it a second time automatically: check the computer. This version does not support direct Retry or a `continues` handoff for gated starts; after a definitive failure, make a new plan on the same to-do and approve it.
 
+The manager uses the same prerequisite verdict for the to-do view, dependency wakes, the task queues, and the final launch check. A stored `after` mirror follows the live dependency, including reopening. If a blocker read fails, the task stays queued for another check. Turning off To-dos v2 keeps an already approved PR wait in force until the existing blocker clears.
+
+External PR observations run separately from the supervision tick and reuse recent results. A failed lookup backs off and leaves the blocker in place. The merge train tracks each PR by its canonical URL within its repository's queue. An observed conflict records a wait and can notify the supervisor. The rebase failure count tracks explicit attempt results.
+
 ## The assistant's todo tools
 
 #1683. The assistant has the user's to-dos as MCP tools (`todo_tools.go`, descriptions in `prompts/mcp/todo/`), so it can note what the user asks it to, or a batch of deadlines from a mail, without a hub token:

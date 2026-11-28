@@ -52,6 +52,12 @@ func (m *memBlockerQueueStore) ListActiveTodoBlockers(ctx context.Context) ([]db
 func (m *memBlockerQueueStore) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error) {
 	return m.b.ListTodoReadinessBlockers(ctx, todoIDs)
 }
+func (m *memBlockerQueueStore) ListMergeTrainPRBlockers(ctx context.Context, prURL, repoKey string) ([]db.TodoBlockerRow, error) {
+	return m.b.ListMergeTrainPRBlockers(ctx, prURL, repoKey)
+}
+func (m *memBlockerQueueStore) UpdateActiveTodoBlockerCondition(ctx context.Context, id, condition string, at time.Time) (*db.TodoBlockerRow, error) {
+	return m.b.UpdateActiveTodoBlockerCondition(ctx, id, condition, at)
+}
 func (m *memBlockerQueueStore) ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]db.TodoBlockerRow, error) {
 	return m.b.ListTodoBlockersByTodo(ctx, todoID)
 }

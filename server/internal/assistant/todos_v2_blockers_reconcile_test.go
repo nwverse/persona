@@ -89,6 +89,24 @@ func (m *memBlockerStore) ListTodoReadinessBlockers(_ context.Context, todoIDs [
 	}), nil
 }
 
+func (m *memBlockerStore) ListMergeTrainPRBlockers(_ context.Context, prURL, repoKey string) ([]db.TodoBlockerRow, error) {
+	return m.listFiltered(func(r db.TodoBlockerRow) bool {
+		return r.Kind == todoBlockerKindMergeTrain && (strings.EqualFold(r.TargetRef, prURL) || strings.EqualFold(r.TargetRef, repoKey))
+	}), nil
+}
+
+func (m *memBlockerStore) UpdateActiveTodoBlockerCondition(_ context.Context, id, condition string, at time.Time) (*db.TodoBlockerRow, error) {
+	m.bmu.Lock()
+	defer m.bmu.Unlock()
+	row, found := m.blockers[id]
+	if !found || row.State != db.TodoBlockerStateActive {
+		return nil, nil
+	}
+	row.ConditionJSON, row.UpdatedAt = condition, at
+	m.blockers[id] = row
+	return &row, nil
+}
+
 func (m *memBlockerStore) ListTodoBlockersByTodo(_ context.Context, todoID string) ([]db.TodoBlockerRow, error) {
 	return m.listFiltered(func(r db.TodoBlockerRow) bool { return r.TodoID == todoID }), nil
 }

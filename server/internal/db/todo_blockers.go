@@ -156,6 +156,29 @@ func (d *DB) ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([
 	return scanTodoBlockerRows(rows)
 }
 
+// ListMergeTrainPRBlockers reads the current PR-keyed rows and the legacy repository-keyed rows.
+func (d *DB) ListMergeTrainPRBlockers(ctx context.Context, prURL, repoKey string) ([]TodoBlockerRow, error) {
+	rows, err := d.pool.Query(ctx, `SELECT `+todoBlockerCols+` FROM todo_blockers
+		WHERE kind = 'merge_train' AND LOWER(target_ref) IN (LOWER($1), LOWER($2))
+		ORDER BY created_at ASC, id ASC`, prURL, repoKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTodoBlockerRows(rows)
+}
+
+// UpdateActiveTodoBlockerCondition records a changed observation without touching the attempt count.
+func (d *DB) UpdateActiveTodoBlockerCondition(ctx context.Context, id, condition string, at time.Time) (*TodoBlockerRow, error) {
+	row, err := scanTodoBlocker(d.pool.QueryRow(ctx, `UPDATE todo_blockers
+		SET condition_json = $2, updated_at = $3 WHERE id = $1 AND state = 'active'
+		RETURNING `+todoBlockerCols, id, condition, at))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return row, err
+}
+
 // ListTodoBlockersByTodo returns all blocker edges (any state) attached to todoID.
 func (d *DB) ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]TodoBlockerRow, error) {
 	return listTodoBlockersByTodo(ctx, d.pool, todoID, false)

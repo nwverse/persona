@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -142,9 +141,6 @@ func (s *Service) todoBlockersRoutes() {
 			return
 		}
 		if cancelled != nil {
-			if matched.Kind == todoBlockerKindMergeTrain {
-				s.clearMergeTrainBlocker(todoID, matched.TargetRef, matched.ConditionJSON)
-			}
 			s.todosChanged(ctx)
 			ready, err := s.blockerUnblockStillHolds(ctx, superviseSignal{Todo: todoID, Key: blockerResolutionKey(*cancelled)})
 			if ready || err != nil {

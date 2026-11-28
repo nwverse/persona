@@ -37,10 +37,15 @@ func TestTodoReadinessPostgresProtectsApprovedPRWaitAfterLabsRollback(t *testing
 
 	setBlockersTodosV2Flag(t, s, false, true)
 	s.sweepAdmissionQueue(ctx)
+	s.startPlanTask(plan.ID, plan.Conversation, 0, task, false)
 	waitFor(t, "rollback queue sweep to settle", func() bool { return s.taskStarting.Load() == 0 })
 	reloaded, err := s.loadPlan(ctx, plan.ID)
 	if err != nil || reloaded.Tasks[0].Queue == nil || len(f.started()) != 0 {
 		t.Fatalf("rollback released an active PR blocker: plan=%+v starts=%d err=%v", reloaded, len(f.started()), err)
+	}
+	row, ok, err := s.viewedTodo(ctx, task.TodoID)
+	if err != nil || !ok || row.Wait == nil || row.Wait.URL != prURL || len(row.ActiveBlockers) != 0 {
+		t.Fatalf("rollback hid the approved wait or exposed Labs fields: wait=%+v blockers=%+v, %v", row.Wait, row.ActiveBlockers, err)
 	}
 	if err := s.applyPRStatus(ctx, Todo{}, TodoPRStatus{URL: prURL, State: "merged", CheckedAt: s.todoViewNow()}); err != nil {
 		t.Fatal(err)
@@ -84,6 +89,7 @@ func TestTodoReadinessPostgresKeepsWorkspaceQueuedOnBlockerReadError(t *testing.
 	if err != nil || !ok || row.View.Phase != assistantwire.TodoPhaseWaiting {
 		t.Fatalf("unreadable prerequisites looked ready in projection: view=%+v ok=%v err=%v", row.View, ok, err)
 	}
+	s.startPlanTask(plan.ID, plan.Conversation, 0, plan.Tasks[0], false)
 	done := true
 	if _, err := s.editTodo(ctx, owner.ID, db.TodoEdit{Done: &done}); err != nil {
 		t.Fatal(err)

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -26,10 +27,10 @@ type todoBlockerReconciler struct {
 
 type externalPRObservations struct {
 	mu    sync.Mutex
-	byURL map[string]externalPRObservation
+	byURL map[string]externalPRCacheEntry
 }
 
-type externalPRObservation struct {
+type externalPRCacheEntry struct {
 	fact      todoBlockerPRFact
 	startedAt time.Time
 	nextAt    time.Time
@@ -69,14 +70,14 @@ func (c *externalPRObservations) record(ref string, fact todoBlockerPRFact, ok b
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.byURL == nil {
-		c.byURL = make(map[string]externalPRObservation)
+		c.byURL = make(map[string]externalPRCacheEntry)
 	}
 	key := externalPRObservationKey(ref)
 	prev := c.byURL[key]
 	if started.Before(prev.startedAt) {
 		return false
 	}
-	entry := externalPRObservation{startedAt: started}
+	entry := externalPRCacheEntry{startedAt: started}
 	if ok {
 		fact.URL = normalizeTodoBlockerPRRef(ref)
 		entry.fact = fact
@@ -109,16 +110,14 @@ func (s *Service) queueTodoBlockerSweep(ctx context.Context, now time.Time) {
 
 func (s *Service) refreshTodoBlockers(ctx context.Context, now time.Time) error {
 	sweepStarted := time.Now()
-	if _, err := s.ReconcileTodoBlockers(ctx, ""); err != nil {
-		return err
-	}
+	_, reconcileErr := s.ReconcileTodoBlockers(ctx, "")
 	st := s.todoBlockerDB()
 	if st == nil {
-		return nil
+		return reconcileErr
 	}
 	rows, err := st.ListActiveTodoBlockers(ctx)
 	if err != nil {
-		return err
+		return errors.Join(reconcileErr, err)
 	}
 	if !s.settings(ctx).todosV2On() {
 		rows = s.approvedExternalPRWaits(ctx, rows)
@@ -156,7 +155,7 @@ func (s *Service) refreshTodoBlockers(ctx context.Context, now time.Time) error 
 		})
 	}
 	workers.Wait()
-	return nil
+	return reconcileErr
 }
 
 // approvedExternalPRWaits keeps work already approved under Labs recoverable when Labs is disabled.

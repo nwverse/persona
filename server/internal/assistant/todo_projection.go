@@ -49,8 +49,8 @@ func (s *Service) projectTodoRows(ctx context.Context, list []listedTodo, now ti
 	if cfg.todosV2On() {
 		reposByTodo := s.populateTodoRepoGates(ctx, list)
 		populateTodoItemTypes(list, reposByTodo)
-		s.populateTodoActiveBlockers(ctx, list)
 	}
+	s.populateTodoReadiness(ctx, list, cfg.todosV2On())
 	facts := s.todoFactsOf(ctx, list)
 	b := &s.tbriefs
 	b.mu.Lock()
@@ -79,11 +79,53 @@ func (s *Service) projectTodoRows(ctx context.Context, list []listedTodo, now ti
 // populateTodoActiveBlockers uses the same gate as dispatch, with one bulk read of blocker rows.
 // Callers invoke it for the v2 projection.
 func (s *Service) populateTodoActiveBlockers(ctx context.Context, list []listedTodo) {
+	s.populateTodoReadiness(ctx, list, true)
+}
+
+func (s *Service) populateTodoReadiness(ctx context.Context, list []listedTodo, v2 bool) {
+	type planRead struct {
+		plan *TaskPlan
+		err  error
+	}
+	type candidateRead struct {
+		index int
+		task  PlanTask
+		err   error
+	}
 	var ids []string
-	for _, row := range list {
-		if row.DoneAt == nil || row.StartError != "" {
-			ids = append(ids, row.ID)
+	plans := make(map[string]planRead)
+	var candidates []candidateRead
+	for i := range list {
+		row := &list[i]
+		row.ActiveBlockers, row.readinessWaits = nil, nil
+		if row.DoneAt != nil && row.StartError == "" {
+			continue
 		}
+		candidate := candidateRead{index: i}
+		if row.PlanID != "" && !todoHasActiveAgent(row.Todo) {
+			r, cached := plans[row.PlanID]
+			if !cached {
+				r.plan, r.err = s.loadPlan(ctx, row.PlanID)
+				plans[row.PlanID] = r
+			}
+			switch {
+			case r.err != nil && !errors.Is(r.err, errPlanNotFound):
+				candidate.err = r.err
+			case r.plan != nil && r.plan.State == planStarted:
+				for _, task := range r.plan.Tasks {
+					if task.TodoID == row.ID {
+						candidate.task = task
+						break
+					}
+				}
+			}
+		}
+		task := candidate.task
+		if !v2 && (task.Queue == nil || len(task.BlockedByPR) == 0 && task.Queue.Key != blockerWaitQueueKey) {
+			continue
+		}
+		ids = append(ids, row.ID)
+		candidates = append(candidates, candidate)
 	}
 	if len(ids) == 0 {
 		return
@@ -100,40 +142,12 @@ func (s *Service) populateTodoActiveBlockers(ctx context.Context, list []listedT
 	for _, row := range rows {
 		byTodo[row.TodoID] = append(byTodo[row.TodoID], row)
 	}
-	type planRead struct {
-		plan *TaskPlan
-		err  error
-	}
-	plans := make(map[string]planRead)
-	for i := range list {
-		row := &list[i]
-		row.ActiveBlockers, row.readinessWaits = nil, nil
-		if row.DoneAt != nil && row.StartError == "" {
-			continue
-		}
-		var task PlanTask
-		err := readErr
-		if err == nil && row.PlanID != "" && !todoHasActiveAgent(row.Todo) {
-			r, cached := plans[row.PlanID]
-			if !cached {
-				r.plan, r.err = s.loadPlan(ctx, row.PlanID)
-				plans[row.PlanID] = r
-			}
-			switch {
-			case r.err != nil && !errors.Is(r.err, errPlanNotFound):
-				err = r.err
-			case r.plan != nil && r.plan.State == planStarted:
-				for _, candidate := range r.plan.Tasks {
-					if candidate.TodoID == row.ID {
-						task = candidate
-						break
-					}
-				}
-			}
-		}
+	for _, candidate := range candidates {
+		row := &list[candidate.index]
+		err := errors.Join(candidate.err, readErr)
 		var readiness todoReadiness
 		if err == nil {
-			readiness, err = s.evaluateTodoReadiness(ctx, row.Todo, task, byTodo[row.ID], true)
+			readiness, err = s.evaluateTodoReadiness(ctx, row.Todo, candidate.task, byTodo[row.ID], v2)
 		}
 		if err != nil {
 			row.readinessWaits = []assistantwire.TodoWait{{Kind: assistantwire.TodoWaitKindExternalEvent,
@@ -145,7 +159,9 @@ func (s *Service) populateTodoActiveBlockers(ctx context.Context, list []listedT
 		})
 		for _, b := range readiness.active {
 			view := todoActiveBlockerView{ID: b.ID, Kind: b.Kind, TargetRef: b.TargetRef, State: b.State, Attempts: b.Attempts}
-			row.ActiveBlockers = append(row.ActiveBlockers, view)
+			if v2 {
+				row.ActiveBlockers = append(row.ActiveBlockers, view)
+			}
 			if !slices.Contains(readiness.after, b.TargetRef) {
 				row.readinessWaits = append(row.readinessWaits, activeBlockerWait(view))
 			}

@@ -32,6 +32,8 @@ type todoBlockerStore interface {
 	EnsureTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error)
 	ListActiveTodoBlockers(ctx context.Context) ([]db.TodoBlockerRow, error)
 	ListTodoReadinessBlockers(ctx context.Context, todoIDs []string) ([]db.TodoBlockerRow, error)
+	ListMergeTrainPRBlockers(ctx context.Context, prURL, repoKey string) ([]db.TodoBlockerRow, error)
+	UpdateActiveTodoBlockerCondition(ctx context.Context, id, condition string, at time.Time) (*db.TodoBlockerRow, error)
 	ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]db.TodoBlockerRow, error)
 	ListActiveTodoBlockersByTarget(ctx context.Context, targetRef string) ([]db.TodoBlockerRow, error)
 	ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*db.TodoBlockerRow, error)
@@ -57,6 +59,7 @@ type todoBlockerReconcileSummary struct {
 	EscalatedIDs     []string
 	UnblockedTodoIDs []string
 	SharedGroups     []todoBlockerSharedGroup
+	cancelledMirrors int
 }
 
 type todoStageUnlockSpec struct {
@@ -145,6 +148,8 @@ func (s *Service) addTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*d
 	if st == nil {
 		return nil, nil
 	}
+	s.blockerReconcile.mu.Lock()
+	defer s.blockerReconcile.mu.Unlock()
 	return st.UpsertTodoBlocker(ctx, row)
 }
 
@@ -433,7 +438,13 @@ func (s *Service) cancelTodoBlocker(ctx context.Context, id string) (*db.TodoBlo
 	if st == nil {
 		return nil, nil
 	}
-	return st.CancelTodoBlocker(ctx, id, time.Now().UTC())
+	s.blockerReconcile.mu.Lock()
+	defer s.blockerReconcile.mu.Unlock()
+	row, err := st.CancelTodoBlocker(ctx, id, time.Now().UTC())
+	if row != nil && row.Kind == todoBlockerKindMergeTrain {
+		s.clearMergeTrainBlocker(row.TodoID, row.TargetRef, row.ConditionJSON)
+	}
+	return row, err
 }
 
 // sharedActiveTodoBlockerGroups returns active blockers aggregated by shared target_ref (count >= 2)
@@ -496,7 +507,7 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 	s.blockerReconcile.mu.Lock()
 	summary, wakes, err := s.reconcileBlockerRows(ctx, st, normalizeTodoBlockerPRRef(targetRef), observedPR)
 	s.blockerReconcile.mu.Unlock()
-	if len(summary.ResolvedIDs) > 0 {
+	if len(summary.ResolvedIDs) > 0 || summary.cancelledMirrors > 0 {
 		s.todosChanged(ctx)
 		for _, wake := range wakes {
 			s.emitTodoBlockerWake(ctx, wake)
@@ -548,18 +559,24 @@ func (s *Service) reconcileBlockerRows(ctx context.Context, st todoBlockerStore,
 	var writeErr error
 	for _, decision := range result.Decisions {
 		b := rowsByID[decision.BlockerID]
-		resolved, mirror := mirrors[b.ID]
+		verdict, mirror := mirrors[b.ID]
 		if !mirror {
-			resolved = decision.Resolution.Resolved
+			verdict.ready = decision.Resolution.Resolved
 		}
-		if !resolved {
+		if !verdict.ready && !verdict.removed {
 			if !mirror && decision.Resolution.Escalate {
 				summary.EscalatedIDs = append(summary.EscalatedIDs, b.ID)
 			}
 			remaining = append(remaining, b)
 			continue
 		}
-		row, err := st.ResolveTodoBlocker(ctx, b.ID, now)
+		var row *db.TodoBlockerRow
+		var err error
+		if verdict.removed {
+			row, err = st.CancelTodoBlocker(ctx, b.ID, now)
+		} else {
+			row, err = st.ResolveTodoBlocker(ctx, b.ID, now)
+		}
 		if err != nil {
 			writeErr = errors.Join(writeErr, err)
 			remaining = append(remaining, b)
@@ -568,7 +585,11 @@ func (s *Service) reconcileBlockerRows(ctx context.Context, st todoBlockerStore,
 		if row == nil {
 			continue // a competing transition already owns this row
 		}
-		summary.ResolvedIDs = append(summary.ResolvedIDs, row.ID)
+		if verdict.removed {
+			summary.cancelledMirrors++
+		} else {
+			summary.ResolvedIDs = append(summary.ResolvedIDs, row.ID)
+		}
 		wake := lastByTodo[row.TodoID]
 		wake.resolved = append(wake.resolved, b)
 		if laterBlockerResolution(*row, wake.last) {
@@ -597,15 +618,20 @@ func (s *Service) reconcileBlockerRows(ctx context.Context, st todoBlockerStore,
 	return summary, wakes, errors.Join(mirrorErr, writeErr)
 }
 
+type todoAfterMirrorVerdict struct {
+	ready   bool
+	removed bool
+}
+
 // todoAfterMirrorVerdicts gives persisted after edges the same live verdict used by projection and dispatch.
-func (s *Service) todoAfterMirrorVerdicts(ctx context.Context, rows []db.TodoBlockerRow) (map[string]bool, error) {
+func (s *Service) todoAfterMirrorVerdicts(ctx context.Context, rows []db.TodoBlockerRow) (map[string]todoAfterMirrorVerdict, error) {
 	byTodo := make(map[string][]db.TodoBlockerRow)
 	for _, row := range rows {
-		if row.Kind == todoBlockerKindTodoDone || row.Kind == todoBlockerKindTodoStage {
+		if isTodoAfterMirror(row) {
 			byTodo[row.TodoID] = append(byTodo[row.TodoID], row)
 		}
 	}
-	verdicts := make(map[string]bool)
+	verdicts := make(map[string]todoAfterMirrorVerdict)
 	var readErr error
 	for id, attached := range byTodo {
 		todo, ok := s.todoNow(id)
@@ -620,8 +646,9 @@ func (s *Service) todoAfterMirrorVerdicts(ctx context.Context, rows []db.TodoBlo
 		}
 		readErr = errors.Join(readErr, err)
 		for _, row := range attached {
-			if isTodoAfterMirror(row, todo.After) {
-				verdicts[row.ID] = err == nil && !slices.Contains(readiness.after, row.TargetRef)
+			named := slices.Contains(todo.After, row.TargetRef)
+			verdicts[row.ID] = todoAfterMirrorVerdict{
+				ready: err == nil && named && !slices.Contains(readiness.after, row.TargetRef), removed: err == nil && !named,
 			}
 		}
 	}

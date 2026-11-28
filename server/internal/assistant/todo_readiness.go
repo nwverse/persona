@@ -124,7 +124,7 @@ func (s *Service) evaluateTodoReadiness(ctx context.Context, todo Todo, task Pla
 		}
 		// A mirror and its after edge represent the same prerequisite. The live verdict also
 		// accounts for reopened prerequisites after a mirror has already been resolved.
-		if isTodoAfterMirror(row, todo.After) && !slices.Contains(result.after, row.TargetRef) {
+		if isTodoAfterMirror(row) && !slices.Contains(result.after, row.TargetRef) {
 			continue
 		}
 		result.active = append(result.active, row)
@@ -137,9 +137,9 @@ func (s *Service) evaluateTodoReadiness(ctx context.Context, todo Todo, task Pla
 	return result, nil
 }
 
-func isTodoAfterMirror(row db.TodoBlockerRow, after []string) bool {
+func isTodoAfterMirror(row db.TodoBlockerRow) bool {
 	return (row.Kind == todoBlockerKindTodoDone || row.Kind == todoBlockerKindTodoStage) &&
-		slices.Contains(after, row.TargetRef) && row.ID == todoBlockerID(row.TodoID, row.Kind, row.TargetRef)
+		row.ID == todoBlockerID(row.TodoID, row.Kind, row.TargetRef)
 }
 
 func (s *Service) evaluateTodoAfter(ctx context.Context, todo Todo, task PlanTask, rows []db.TodoBlockerRow, v2 bool) (todoReadiness, error) {
@@ -185,7 +185,8 @@ func stageRuleForAfter(todo Todo, task PlanTask, rows []db.TodoBlockerRow) *todo
 		return &rule
 	}
 	for _, row := range rows {
-		if row.Kind == todoBlockerKindTodoStage && row.State != db.TodoBlockerStateCancelled && isTodoAfterMirror(row, todo.After) {
+		if row.Kind == todoBlockerKindTodoStage && row.State != db.TodoBlockerStateCancelled &&
+			isTodoAfterMirror(row) && slices.Contains(todo.After, row.TargetRef) {
 			if rule, ok := decodeTodoStageBlockerCondition(row.ConditionJSON); ok {
 				return &rule
 			}

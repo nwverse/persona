@@ -90,6 +90,7 @@ type Options struct {
 // Service is the assistant. It implements Handler.
 type Service struct {
 	blockerReconcile todoBlockerReconciler
+	mergeTrain       mergeTrainCoordinator
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules *kernel.Kernel
 	// moduleSwitch is the same list as the provider seams read it (moduleswitch): recording's and Lark's layers.
