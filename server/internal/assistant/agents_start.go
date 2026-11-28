@@ -95,6 +95,11 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 					return nil, badRequest(err, s.appLang(ctx, p.Lang))
 				}
 			}
+			if own.tier != "" {
+				if err := checkHostLauncher(params, agent); err != nil {
+					return nil, badRequest(err, s.appLang(ctx, p.Lang))
+				}
+			}
 			if mode, _ := params["permission_mode"].(string); mode != "" && own.permission == "" && !agent.supportsPermissionMode(mode) {
 				delete(params, "permission_mode")
 			}

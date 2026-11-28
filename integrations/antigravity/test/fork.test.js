@@ -79,7 +79,12 @@ async function fixture(t, { assistant = false, status = 'IDLE', pending = false,
   }
   const fork = (at_item_id, session_id = sessionId, extra = {}) => node.peer.call('session.fork', { session_id, at_item_id, assistant, ...extra })
   const items = async (id = sessionId) => (await node.peer.call('session.items', { session_id: id })).items
-  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+  const calls = () => {
+    const contents = readFileSync(join(home, 'calls.jsonl'), 'utf8')
+    // A concurrent fake worker may still be appending the last JSONL record.
+    // Completed malformed records must still fail; only an unfinished tail waits.
+    return contents.slice(0, contents.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map(JSON.parse)
+  }
   const rowOf = (id = branched) => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === id)
   const restart = async () => {
     await runtime.stop()
@@ -798,7 +803,7 @@ test('switching explicitly from a variant fork model to a non-variant model clea
 })
 
 test('fork creates brain/ safely in a fresh agyDir to persist .persona-permission-mode and never follows a symlinked brain', async (t) => {
-  await t.test('creates brain/<branch>/.persona-permission-mode in a fresh agyDir without brain/', async (t) => {
+  await t.test('creates the branch directory after persisting a prepared source in a fresh agyDir', async (t) => {
     const { node, cwd, config, fork } = await fixture(t, {
       skipBrain: true,
       delayForkExport: true,
@@ -806,7 +811,8 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     assert.equal(existsSync(join(config, 'brain')), false)
     const started = await node.peer.call('session.start', { cwd, permission_mode: 'bypassPermissions' })
     assert.equal(started.session.session_id, sessionId)
-    assert.equal(existsSync(join(config, 'brain')), false)
+    assert.equal(existsSync(join(config, 'brain', source, '.persona-session.json')), true, 'prepare persists its identity before acknowledgement')
+    assert.equal(existsSync(join(config, 'brain', branch)), false, 'the fork has not created its own directory yet')
 
     const result = await fork('', sessionId)
     assert.equal(result.session_id, branched)
@@ -814,7 +820,7 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     assert.equal(readFileSync(join(config, 'brain', branch, '.persona-permission-mode'), 'utf8').trim(), 'bypassPermissions')
   })
 
-  await t.test('never writes through a symlinked brain directory during fork', async (t) => {
+  await t.test('preparation refuses a symlinked brain directory before it can be used for a fork', async (t) => {
     const { node, home, cwd, config, fork } = await fixture(t, {
       skipBrain: true,
       delayForkExport: true,
@@ -822,11 +828,8 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     const target = join(home, 'outside-target')
     mkdirSync(target, { recursive: true })
     symlinkSync(target, join(config, 'brain'))
-    const started = await node.peer.call('session.start', { cwd, permission_mode: 'bypassPermissions' })
-    assert.equal(started.session.session_id, sessionId)
-
-    const result = await fork('', sessionId)
-    assert.equal(result.session_id, branched)
+    await assert.rejects(node.peer.call('session.start', { cwd, permission_mode: 'bypassPermissions' }), /Invalid Persona session directory/)
+    assert.equal(existsSync(join(target, source)), false, 'prepare must not follow the symlink to persist an identity')
     assert.equal(existsSync(join(target, branch)), false, 'must never create directories or files through symlinked brain')
   })
 })

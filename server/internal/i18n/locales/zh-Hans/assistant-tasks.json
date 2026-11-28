@@ -1,6 +1,7 @@
 {
   "workers_accepted": "{count} 个子任务已全部验收，负责的 Agent 已停止。请查看父任务及已记录的决定，处理剩余工作。",
   "investigation_handoff_open": "关闭这个后续待办前，请先完成或重新交接这条调研发现：{finding}",
+  "investigation_parent_handoff_open": "删除这项调研任务前，请先完成已交接的后续待办：{finding}",
   "investigation_review_required": "请确认本轮调研发现清单，再搁置或关闭这项工作。",
   "investigation_findings_open": "请先为这些调研发现安排后续待办、请你决定，或补充完成证据：{findings}",
   "handoff_wait": "等「{task}」回传「{check}」的结果",
@@ -128,5 +129,6 @@
   "placement_hit_launcher_unhealthy": "启动器 {launcher} 不可用（{kind}）",
   "placement_hit_no_resources": "未上报资源指标",
   "inbox_link_removed": "收件箱话题已变化，自动关联已取消；任务仍可启动。",
-  "inbox_candidates": "可能相关的收件箱卡：{items}。未自动关联，请确认来源后再关联。"
+  "inbox_candidates": "可能相关的收件箱卡：{items}。未自动关联，请确认来源后再关联。",
+  "placement_hit_scratch_unsupported": "节点版本过旧，不支持受管 scratch 工作区"
 }

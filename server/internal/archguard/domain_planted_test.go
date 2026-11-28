@@ -285,6 +285,8 @@ var plantedWant = []string{
 	"out-visitor-impl internal/assistant/badapp/genericvisitor.go:8",
 	"out-visitor-impl internal/assistant/badapp/genericvisitor.go:9",
 	"out-visitor-impl internal/assistant/badapp/visitorimpl.go:12",
+	"out-visitor-impl internal/assistant/badapp/visitorimpl.go:17",
+	"out-visitor-impl internal/assistant/badapp/visitorimpl.go:18",
 	"out-wire-ref internal/assistant/badapp/wireref.go:6",
 	"path-no-core internal/db/usage.go:3",
 	"path-no-core internal/hub/core.go:3",

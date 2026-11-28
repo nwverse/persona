@@ -255,6 +255,7 @@
   "calendar_today": "Today",
   "calendar_previous": "Previous",
   "calendar_next": "Next",
+  "calendar_download": "Download deadlines",
   "calendar_show_done": "Show done",
   "calendar_all_day": "All day",
   "calendar_move_failed": "Couldn't reschedule it: {error}",

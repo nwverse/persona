@@ -359,6 +359,7 @@
   "lib-todos.review_",
   "lib-todos.same_chat",
   "lib-todos.spawned",
+  "lib-todos.supervisor_processing",
   "lib-todos.unassigned",
   "lib-todos.with_project",
   "lib-turn-images",

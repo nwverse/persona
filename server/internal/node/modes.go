@@ -389,9 +389,25 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 				if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(id, "", st), id); env != nil {
 					params["env"] = env
 				}
+				var res struct {
+					PermissionMode string `json:"permission_mode"`
+				}
 				cctx, cancel := context.WithTimeout(ctx, runtimeCallTimeout)
-				_ = h.peer.Call(cctx, "session.modes", params, nil)
+				err := h.peer.Call(cctx, "session.modes", params, &res)
 				cancel()
+				if err != nil && mode == "auto" && h.agent() == agyAgent && isAgyAutoModeUnavailableErr(err) {
+					params["permission_mode"] = proto.ModeBypass
+					rctx, rcancel := context.WithTimeout(ctx, runtimeCallTimeout)
+					if rerr := h.peer.Call(rctx, "session.modes", params, &res); rerr == nil && res.PermissionMode == "" {
+						res.PermissionMode = proto.ModeBypass
+					}
+					rcancel()
+				}
+				if res.PermissionMode != "" && res.PermissionMode != mode && slices.Contains(permissionModes, res.PermissionMode) {
+					mode = res.PermissionMode
+					n.noteModes(id, mode, effort)
+					n.persistModes(id, mode, effort, true)
+				}
 			}
 		}
 		if p != nil && p.alive() {

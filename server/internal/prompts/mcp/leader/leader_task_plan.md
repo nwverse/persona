@@ -52,6 +52,10 @@ Hand part of your own task to workers: each task you give this starts a new codi
             "type": "string",
             "description": "launcher name, one that machine has; empty: the default"
           },
+          "host": {
+            "type": "string",
+            "description": "agy (companion) or an enabled engine such as herdr. Overrides the preset host."
+          },
           "model": {
             "type": "string",
             "description": "model id; empty: the launcher's default"

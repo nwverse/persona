@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -22,6 +23,7 @@ import (
 // plan's own todo_id, the todo a started task became, is the hub's to set, and the shallower field wins in JSON.
 type planTaskIn struct {
 	PlanTask
+	taskContractInput
 	TodoID        string   `json:"todo_id"`
 	WritePrefixes []string `json:"write_prefixes,omitempty"`
 	ForceParallel bool     `json:"force_parallel,omitempty"`
@@ -41,6 +43,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		return "", err
 	}
 	var a struct{ Tasks []PlanTask }
+	var contracts []taskContract
 	var plannedScopes []plannedWriteScopeInput
 	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
@@ -62,7 +65,12 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if lead, err = s.planSupervisor(ctx, sessionID, in.Supervisor); err != nil {
 			return "", err
 		}
-		for _, t := range in.Tasks {
+		for i, t := range in.Tasks {
+			contract, err := t.validatedContract()
+			if err != nil {
+				return "", fmt.Errorf("task %d: %w", i+1, err)
+			}
+			contracts = append(contracts, contract)
 			t.PlanTask.ReuseTodo = strings.TrimSpace(t.TodoID)
 			t.PlanTask.Parent = "" // the hub's, set only for a task leader's workers
 			t.PlanTask.Supervisor = lead
@@ -178,8 +186,19 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", fmt.Errorf("task %d: expect_minutes must be zero or a positive number of minutes", i+1)
 		}
 		t.DoneWhen, t.ExpectMinutes = cleanDoneWhen(t.DoneWhen), min(t.ExpectMinutes, 24*60)
-		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) {
+		if t.Title == "" || t.Prompt == "" || t.Cwd == "" && !t.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *t) && !t.scratchWorkspace() {
 			return "", fmt.Errorf("task %d: title, prompt and cwd are required", i+1)
+		}
+		if t.scratchWorkspace() && t.Cwd != "" {
+			if identity.IsAssistantDir(t.Cwd) {
+				return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+			}
+			if t.Machine != "" {
+				if m, ok := s.machineByName(ctx, t.Machine); ok && assistantWorkspace(m, proto.ExpandHome(t.Cwd, m.Home)) {
+					return "", fmt.Errorf("task %d: %w", i+1, i18n.Err("rpc-errors.agent_assistant_workspace"))
+				}
+			}
+			return "", fmt.Errorf("task %d: workspace %q cannot be combined with cwd; omit cwd to use a managed scratch directory", i+1, workspaceScratch)
 		}
 		t.Brief = nil // the hub's (planBriefs below), never the tool call's
 		t.Goal, t.OutOfBounds = clip(oneLine(t.Goal), 300), cleanDoneWhen(t.OutOfBounds)
@@ -392,7 +411,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			a.Tasks[i].RequestGate = s.planRequestGate(a.Tasks[i])
 		}
 	}
-	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks); err != nil {
+	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks, contracts...); err != nil {
 		return "", err
 	}
 	for i := range a.Tasks {
@@ -535,22 +554,14 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if inRound {
 		granted = func() func(PlanTask) bool { return s.scheduleGrantCover(ctx, round, machine, sessionID) }
 	}
-	// Only what the owner really has to approve waits on a card: confirmed words, a request gate, a cross-provider
-	// or cross-launcher continuation handoff (#12980), an implicit health-detour or non-orchestrator cross-machine
-	// handoff, an explicit owner step, and an ordinary conversation's writable work where the owner has not let such
-	// work start by itself. Main chat and direction leaders explicitly moving a task to another owned machine on the
-	// same engine/launcher auto-start once continuation blockers and non-escalation checks pass (still recording an
-	// auditable TodoContextHandoff).
+	// Launcher/provider choice is part of an authorized supervisor's dispatch authority. Continuations
+	// have already passed the safety, approval and non-escalation checks above; startPlan rechecks them.
+	// Private hand-off policy, request prerequisites, implicit health detours and real owner steps still
+	// hold the plan. Ordinary conversations still need their existing auto-start authorization.
 	step := planOwnerStep(p.Tasks)
 	needsOwner := policy.ConfirmOutbound || step != "" ||
 		slices.ContainsFunc(p.Tasks, func(task PlanTask) bool {
-			if task.RequestGate != "" {
-				return true
-			}
-			if task.HandoffOperationID == "" {
-				return false
-			}
-			return task.handoffLauncherSwitch || task.Reroute != nil || !orchestrates
+			return task.RequestGate != "" || task.continuationNeedsOwner(orchestrates)
 		})
 	var autoStartReasons []string
 	if !needsOwner && !orchestrates {
@@ -573,7 +584,13 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			// The owner is talking in this very conversation: the card is in front of them, a push would only repeat it.
 			return b.String(), nil
 		}
-		// A card below the answer is easy to miss: push it as well.
+		// A blocked plan stays in the conversation/feed. Missing dispatch authority, prerequisites or a
+		// private-boundary confirmation is not itself one of the owner's six decision categories. Do not
+		// turn that internal wait into a category-zero phone notification or an owner decision report.
+		if step == "" {
+			return b.String(), nil
+		}
+		// A real owner step below the answer is easy to miss: push its typed card as well.
 		titles := make([]string, 0, len(p.Tasks))
 		for _, t := range p.Tasks {
 			titles = append(titles, t.Title)
@@ -688,6 +705,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 	}
 	if e.Workspace != nil {
 		t.Workspace, t.WorkspaceResolved, t.WorkspaceInferred = e.Workspace, nil, false
+		if e.Workspace.Mode == workspaceScratch && strings.TrimSpace(e.Cwd) == "" {
+			t.Cwd = ""
+		}
 	}
 	if s := strings.TrimSpace(e.Title); s != "" {
 		t.Title = s
@@ -701,6 +721,9 @@ func applyPlanEdit(t *PlanTask, e PlanTask) {
 			// The user's explicit retarget supersedes a plan-time health detour: drop the stale reroute so the receipt
 			// names the machine the task will actually run on, not the old landing (#2271).
 			t.Reroute, t.Placement = nil, nil
+			if t.scratchWorkspace() && (t.WorkspaceResolved == nil || (!t.WorkspaceResolved.Created && !t.WorkspaceResolved.Reused)) {
+				t.WorkspaceResolved = nil
+			}
 		}
 		t.Machine = s
 	}
