@@ -2,7 +2,7 @@
   "detail_herdr": "终端中的 herdr",
   "detail_herdr_core": "桌面端中的终端",
   "detail_herdr_both": "同时显示终端与桌面端的会话",
-  "detail_orca": "Orca 中的终端",
+  "detail_orca": "Orca 中的终端和对话",
   "detail_tern": "Tern 中的终端",
   "detail_rex": "Rex 中的终端",
   "detail_paseo": "Paseo 中的 Agent",
