@@ -1,5 +1,12 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A channel topic may have two routing keys during a Labs rollback (#17664). Reserve both keys at admission, use the active
+  binding under the other key on a lookup miss, and refresh both known bindings after delivery. A `/new` can supply only one
+  key. Clear the other bindings for the same conversation so the next message starts fresh.
+  Keep the accepted routing reference through queued commands and delivery (#17762). Recomputing it after a Labs switch can
+  make a queued topic reset change the channel's default target. Use a synchronized clock in rollback tests because
+  background snapshots also read the clock, including from managers that have been reloaded.
+
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
   receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real
@@ -72,6 +79,14 @@
 - A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
 
+- Prove a reported PR's ownership before asking its repository provider (#9725). A provider-specific address is eligible when a successful native creation record names that exact plain URL; an unstructured CLI URL is not equivalent proof. Recheck the original address's report turn and active Agent after asynchronous resolution, even when the provider canonicalizes an alias. Share only provider metadata across pending reports, never their authorization.
+- A reply can name a dependency's merged or deployed PR (#9725). Use the same ownership proof or the task's recorded PR for progress, delivery judgment, and the receipt's PR field. If a reply describes several PRs, its merge or deploy words cannot establish the task PR's state. A separate check of the task PR can still establish delivery.
+- Deterministic task admission must use saved repository links, not advisory duplicate hints (#9725). Check the original title, goal and prompt before clipping, and recheck waiting cards before Start. Read associations without importing legacy metadata; a store failure is not proof that no match exists. A distinct-work override must identify every conflicting to-do and preserve its reason in the brief. Validate original URLs before discarding query parameters: canonicalization must not hide credentials from the repository parser or echo them in an error.
+- Saving an Agent's PR association is only half the feedback path (#9725). Inbox routing must read the same saved links, not only the legacy current PR or transcript preview, and its repository-scope check must retain that exact association. Import explicit work artifacts only for the session's current open task and a turn at or after its Agent link; reuse report receipts so retries cannot resurrect links the user removed. A final closeout's PR artifacts outrank incidental background links in the reply.
+- Inbox handoffs may continue an existing Agent without making a plan (#9725). Apply the same persisted-source inference to `agent_send` and `task_scope`; refuse ambiguity before sending or logging scope. Record the task backlink and Agent chain link, not the coding Agent as the item's processing conversation, and preserve the task's original Inbox source. After delivery or a queued receipt, save the association with a fresh bounded context independent of the send deadline and caller cancellation. Report a real association-save failure as partial success so it cannot cause a blind duplicate send.
+- Native PR-create and push records must match the report being processed, not just its Agent link (#9725). Cut at the latest prompt, reject side exchanges, and bind report text and its recorded timestamp or the persisted artifact's turn end. Compare stored timestamps at Postgres microsecond precision. Missing or mismatched turn evidence needs an independent author, branch and commit readback; positive fixtures must provide the same turn identity. Include the turn timestamp in preview deduplication so identical text in a new turn can still prove fresh ownership.
+- Inbox preflight is not a reservation across Agent delivery (#9725). Recheck against the actual adopted task before sending, and reconcile a later conflicting claim by removing only a task just created for that handoff, without stopping its Agent or changing the competing owner. Keep an accurate partial-delivery receipt; a failed rollback must name the task that remains, never invite a resend or claim that nothing happened.
+- An omitted Inbox source is resolved from the persisted user handoff, not model text (#9725). Exactly one eligible unarchived item handed to the calling conversation and computer is a safe default; multiple eligible items require `inbox_item`. Filter the existing link policy before counting candidates, so excluded bot handoffs neither block unrelated work nor create false ambiguity. Persist that exact handoff on the plan and keep Start checks; a later handoff must not retarget a waiting card.
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 - A parked wait can cite a PR while waiting for a separate deployment or verification (#9775). Enroll the exact PR from an explicit event binding. Keep the source receipt and review transition together and identify the notification by that park. Test both a stage PR with terminal facts and a PR named only in the park.
 
@@ -377,6 +392,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
   it hands out as within the `mine` context made a lone mention `mentions+mine` (the longer days) where daily ingestion says `mentions`. Its `Kept` hook
   names those; `pick` leaves them out of `near`.
 - **A small-task model call is sized by what the model is today, not by the first measurement** (#1532): chat titles had 15 s per call and `max_tokens` 200 from a 2–3 s measurement. Once "Chat title" inherited a thinking flash model behind the gateway, a title-sized call took p50 6 s / p90 21.6 s and its thinking ate the 200 tokens (188–192 thinking + 4–8 output, `stop_reason: max_tokens`), so about a fifth of new chats kept "explore | the first message cut short" and some kept a two-character half topic that still parsed. A call off the user's path gets minutes, room for the thinking, and `Chat` instead of `Complete` so a cut-off reply (`Reply.Truncated`) is not taken as an answer; retry only what another try can change (`ai.Transient`: no answer, 5xx; not a 4xx or a model that isn't set up), each kind of failure once, so one doesn't use up another's retry; a naming that got no answer is a stand-in, done again later, and "again later" must read the first turn (`after_seq: 0`): `turns: 1` is the newest. To find which, match the hub's `context deadline exceeded` lines with the gateway's request log: the hub's cancellations sit at the call's timeout to the millisecond (14 996 ms).
+- **Short naming calls must switch thinking off and still guard their write-back against reasoning leaks** (#17207): giving title calls more token room (#1532) did not stop a Direct API thinking model whose compatible gateway surfaces cut-off monologue as ordinary text deltas — first lines like `We need answer title` became todo titles, `we-need-answer-title` tab slugs, and (behind a known kind prefix) assistant topics. `ai.Request.DisableThinking` forces the protocol's existing "off" encoding (`ApplyReasoningEffort`: Messages `thinking.type=disabled` with the model-specific fallbacks, Chat `reasoning_effort=none` with its rejection cache, Responses `reasoning.effort=none`) for `todo.title` / `agent.title` / `assistant.title` only; long-reasoning purposes keep the connection effort. The parsers stay strict (Messages skips thinking blocks/deltas, Chat reads only `delta.content`, never `reasoning_content`, Responses only `output_text`), and `title_guard.go` is the second line: strip `<think>` blocks, reject a bar-delimited topic/first line that pairs a monologue opener with a second meta-reasoning signal, and never overwrite on a reject. An opener alone is not enough (`We need new icons`, `I should answer Sarah's email`, `我应该回复客户邮件` are titles); keep those near-misses in the guard test corpus.
 
 - **Model listing and saving must agree on online launcher selection** (#1840). A cached provider's first machine can be offline even when another machine successfully lists its models. For a purpose without a bound machine, reuse `pickMachine` for model validation; if no reported candidate is online, allow saving without a live check. Keep known bound-machine validation and managed-launcher behavior intact. Cover the HTTP save and profile-apply paths, including effort-only edits, rejected online models, exact RPC destinations, and unchanged storage after rejection.
 
@@ -588,6 +604,12 @@ conversations' cards with the user, and the new route had to share that rule (`s
 For an Agent's permission without an open to-do (#16093), use the active relay queue and keep the card available
 in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
 or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
+
+For an internal question that outlives its manager (#17823), restore the task and its worker link before publishing
+the question in the restart fixture. The real store already has that assignment. Capture the relay while its send is
+blocked and again after the queue removal is durable. A pending card gets a fresh wake in both cases. Check the queued
+wake against the current route before looking for an earlier send in the transcript, so the previous route's retry
+timer cannot delay the fresh wake.
 
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
@@ -854,6 +876,12 @@ keyed to the event that told of the turn, not to the turn.
 
 When `session.start` never answers, the hub lists the machine and adopts the session its start probably created. The first version guessed from shape: not in the pre-start snapshot, `StartedByPersona`, same launcher and cwd, a fresh sign of life, newest wins. Three rows are indistinguishable by shape: a session the owner started by hand also carries `StartedByPersona` (the app's start path stamps it), and two workspace-none tasks run in the same directory with no workspace claim between them, so each could adopt the other's session — and nothing excluded a session already linked to another open todo. A heuristic over mutable, shared signals (`UpdatedAt`, cwd) cannot identify one specific start. The fix carries the identity instead: the hub generates a v4 UUID and sends it on the existing `session.start` `session_id`, the node starts Claude with `--session-id <id>` on every Claude path (the sync terminal path had been passing an empty id), and adoption matches that exact id first with no other condition. The heuristic is only the fallback for a node too old to honor the field, and even then it skips every session in `todos.activeBySession` and fails closed when the todo book cannot load. Lesson: when an action's result can be lost, make the request carry a unique correlation token and match on that; keep a heuristic only as a version-compatibility fallback, and have it exclude resources already claimed elsewhere rather than merely rank candidates.
 
+## A drifted workspace and its launch require separate checks (#17087)
+
+Retry replays a frozen operation, while a continuation with changed inputs can collide with the previous head. Confirm
+Git drift against the exact Node receipt, then let the Node decide whether its launch has stopped. Replace the manager
+head under the to-do lock and prepare a distinct directory, keeping the old checkout available for inspection.
+
 ## A hidden effective cadence overrides the interval the user configured (#7619)
 
 #3811 gave interval follow-ups in leader conversations a hidden 10-minute cadence while an open supervised todo had an active agent: `nextWithLeaderCadence` derived extra runs from `LastRun` while leaving the stored `At` / `EveryMinutes` on the original rule, and the run copy's `cadenceEvery` made `taskPrompt` print "每 10 分钟". The stored task still showed 30 minutes / 1 hour in `list_followups`, so nothing visible explained why a patrol the user asked for every 30 minutes fired every 10 minutes from its first run, and it became the main chat's biggest token sink. Lesson: a scheduler may have exactly one effective cadence, and it must be the one stored on the task and shown in every view and run prompt; an "accelerate while busy" rule that is invisible to both storage and UI is indistinguishable from a bug. If such a rule is ever wanted again, it must be an explicit, user-visible setting with its own stored field, not a second rule derived inside the scheduler. Keep interval advancement in one place (`runDue` advancing `At` by `EveryMinutes`); tests assert the prompt text states the configured interval even while supervised work is open.
@@ -958,6 +986,14 @@ snapshot. Fixed delays hide this ordering and grow the sleep ratchet; keep bound
 
 - A terminal task review must commit its closure before publishing review effects (#6819). Activity can arrive after the initial guard, while another writer holds the ledger or task lock, or during a database write. Validate on a private ledger, save the ledger and closure in one transaction, and recheck activity immediately before commit so a refusal rolls both back. Only then record the brief result, review feed, decision changes and supervision signals; apply the same boundary to a task leader's review and tasks without a ledger.
 
+## To-do topology writes share the review lock order (#17693)
+
+Reopen, terminal review, guarded park and topology writes take the to-do writer before the supervision writer.
+An idle-close fence waits with both writers free. Reorganize, split and merge validate the graph before any
+side effects, commit the rows and their related records in PostgreSQL, then publish one in-memory batch.
+A split retry uses the existing child identities, and a merge's source closes only after its target's changes.
+Auto-seen checks both the completion and reopen timestamps. A reopen clears the previous round's seen and Undo marks.
+
 ## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
 
 The background supervisor is replaced when its rounds outgrow it, and the first version checked that no queued message
@@ -1007,6 +1043,21 @@ A failed ledger read or checkpoint is unknown: keep the original queue. Move a c
 remove its source entries in the same saved relay state. Do not change an uncertain send's text or destination: its
 old once-only identity may already have reached the node. Test both an entirely obsolete digest and a mixed one,
 including a real database reload into a new service; the in-memory signal map alone does not survive restart.
+
+An Agent's PR artifact is a claim, not proof of ownership. Deployment reports and
+evidence often name other Agents' PRs, sometimes under the same GitHub account.
+Automatic repository links need a native successful creation record or an
+independent node read matching author, head branch and published commit (a native
+push can establish the actor for a shared PR). Exclude another open to-do's PR in
+the same transaction, including concurrent reports, and apply the result to legacy
+stage PRs too; otherwise feedback routing and deterministic duplicate admission
+inherit the false association (`todo_repository_ownership_test.go`).
+Native CLI evidence must exclude help, web and dry-run modes, including Boolean
+`=true` flags, bundled short options and arguments whose shell expansion is unknown.
+The node's `gh` lookup covers GitHub PRs. A manual review can proceed when another host
+supplies no verified artifact. Any already recorded GitHub PR still goes through the delivery
+gate. Reuse the stored canonical URL after a verified import. Apply GitLab's legacy MR
+alias only on its known host so unclaimed review URLs keep their own meaning.
 
 ## Manual compaction is not a main-only policy (#10064)
 
@@ -1142,3 +1193,15 @@ restart in place for a new binary), `run()` closed the store, but both loops wen
 for days, and each restart left another pair. Take the cancellation off only the one-time reads; a loop gets the
 run's context. Test it by finding the loop's goroutine in the stacks, ending the run, and waiting until it is gone
 (`server/internal/assistant/fleet_loops_run_test.go`).
+
+## A start path of its own skips what the shared start decides (#14887)
+
+`a2a_send`'s new Agent and `dispatch_start` built their own `session.start`, so they never got two things `agent_start`
+and `task_plan` decide before a start goes out: the start host (an agy launcher on the computer's Antigravity companion,
+`companionStartHost`, #13447) and the read-only refusal (`readonlyLauncherRefusal`, #8316). An agy launch, in `plan` by
+default, went to a pane, where the node refused it after its A2A task was recorded. The failed task then said "Persona
+could not confirm the Agent started.", the words for an unknown outcome, about a definite refusal with a reason. A path
+that starts an Agent readies its start with the same steps as the others (`agentStartedHost`,
+`server/internal/assistant/start_host.go`), refuses what it can before anything is recorded, and keeps a definite
+refusal's reason; only an outcome that is really unknown says it is unknown.
+

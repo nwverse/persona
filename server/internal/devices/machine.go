@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -264,6 +265,7 @@ func (m *Machine) snapshot() proto.Machine {
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
 	fileTransferOn := d.fileTransferOn(m.cfg.ID)
+	orcaChats := orcaChatStartsField(choice, d.orcaChatStartsOn(m.cfg.ID))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	engines := []proto.Engine{} // what the node found: none while offline
@@ -323,10 +325,11 @@ func (m *Machine) snapshot() proto.Machine {
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
-		Clipboard:    m.clipboardStateLocked(clipboardOn),
-		FileTransfer: m.fileTransferState(fileTransferOn),
-		ClaudePlugin: m.info.ClaudePlugin,
-		LinkSwitch:   linkSwitch,
+		Clipboard:      m.clipboardStateLocked(clipboardOn),
+		FileTransfer:   m.fileTransferState(fileTransferOn),
+		OrcaChatStarts: orcaChats,
+		ClaudePlugin:   m.info.ClaudePlugin,
+		LinkSwitch:     linkSwitch,
 	}
 }
 
@@ -377,7 +380,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	// abroad at ~15 KB/s, 2026-10-31) an 87 KB page took 5.6 s and a 500-item page passed the hub's 30 s deadline;
 	// on a LAN it costs next to nothing.
 	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "Compression=yes",
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", host, bin+" node --stdio")
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", host, bin+" node --stdio")
 }
 
 // localNode is the program the node of the hub's computer runs as (docs/server/server.md "Programs"): persona-node
@@ -458,6 +461,15 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 		ac := &activityConn{Conn: c, now: m.timings.now}
 		ac.touch()
 		return &nodePipe{r: ac, w: ac, lastErr: func() string { return "" }, close: func() { _ = c.Close() }, activity: ac}, nil
+	}
+	if via == "ssh" && m.nodeCmd == nil {
+		host := m.cfg.SSHHost
+		if host == "" {
+			host = m.cfg.ID
+		}
+		if err := validateSSHHost(host); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := m.command(ctx)
@@ -1077,6 +1089,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
+	case proto.EventEnginesChanged: // what the node found of its engines changed since node.info (node/orcaengine.go)
+		m.onEnginesChanged(params)
+		return
 	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
 		var st proto.ClaudePlugin
 		if json.Unmarshal(params, &st) == nil && st.State != "" {
@@ -1211,10 +1226,10 @@ func (m *Machine) passOn(ctx context.Context, method string, params json.RawMess
 	if len(params) > maxForward {
 		return nil, errTooLarge
 	}
-	var out json.RawMessage
 	key := m.d.requestKey()
-	err := m.d.opts.Hub.Call(ctx, devicewire.MethodRequest, devicewire.NodeCall{MachineID: m.cfg.ID, Method: method, Params: params,
-		Request: key}, &out)
+	out, err := buswire.Call(ctx, m.d.opts.Hub, devicewire.RequestMethod, devicewire.NodeCall{
+		MachineID: m.cfg.ID, Method: method, Params: params, Request: key,
+	})
 	if err != nil {
 		if ctx.Err() != nil { // the node's connection ended (ctx is its): the hub's part ends too
 			_ = m.d.opts.Hub.Notify(devicewire.EventRequestEnd, devicewire.RequestEnd{MachineID: m.cfg.ID, Request: key})

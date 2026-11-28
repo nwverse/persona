@@ -161,7 +161,7 @@ func TestStatePutStoreStallDoesNotDelayFollowingReply(t *testing.T) {
 		if gotReturns == 1 {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for the blocked store call to return
 	}
 	if gotReturns != 1 {
 		t.Fatalf("PutNodeSession returns = %d after release, want 1", gotReturns)
@@ -223,7 +223,7 @@ func TestStatePutDifferentSessionsStayBehindOneWriter(t *testing.T) {
 		if len(st.callOrder()) == 3 {
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for the three completed writes
 	}
 	if got := st.callOrder(); len(got) != 3 || got[0] != "a" {
 		t.Fatalf("completed write order = %v, want a first and three writes", got)

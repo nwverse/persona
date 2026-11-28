@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -33,12 +34,12 @@ import (
 // "unknown": the retry is not typed, and the app asks the user to look before sending again (with a new id).
 
 const (
-	sendDelivered = "delivered"
-	sendUnknown   = "unknown"
-	sendSending   = "sending"
+	sendDelivered = db.SendStateDelivered
+	sendUnknown   = db.SendStateUnknown
+	sendSending   = db.SendStateSending
 	// sendLater: nothing was typed, and the conversation's manager keeps the message and sends it again by itself
 	// (#10194, keepUndelivered): a retry of the id is answered as kept, never sent from here.
-	sendLater = "later"
+	sendLater = db.SendStateLater
 )
 
 type sendLog struct {
@@ -103,13 +104,16 @@ const switchSendWait = 8 * time.Minute
 // seconds; 5 minutes for one that is starting or not running (a resume, node's claudeStartWait, #1396); switchSendWait
 // for the user's message that carries out a switch to another launcher (apply_switch): it quits the agent and starts
 // it again, and brings it back on its own launcher when that fails. Decided by the request, not the cached row, which
-// may not show a switch picked a moment ago.
+// may not show a switch picked a moment ago. A live terminal Claude send may resume on an updated provider too.
 func sendWait(p map[string]any, s proto.Session) time.Duration {
 	if apply, _ := p["apply_switch"].(bool); apply {
 		return switchSendWait
 	}
 	if s.Starting || s.Status == proto.StatusOffline {
 		return 5 * time.Minute
+	}
+	if s.CanRefreshTerminalLauncher() {
+		return proto.LauncherRefreshSendWait
 	}
 	return 90 * time.Second
 }

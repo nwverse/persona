@@ -70,7 +70,7 @@ func NewWith(cfg Config, transport http.RoundTripper) *Client {
 
 // net/http copies headers from the first request on every redirect, so check the entire chain before retaining
 // provider-specific values. Once a chain leaves its original origin, all later hops use Persona's identity and omit
-// every custom provider header and gateway-scoped session header.
+// API credentials, custom provider headers and gateway-scoped session headers.
 func checkRedirect(req *http.Request, via []*http.Request) error {
 	return checkRedirectHeaders(req, via, nil)
 }
@@ -83,11 +83,19 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
+	if len(via) == 0 || via[0] == nil || req == nil {
+		return nil
+	}
 	origin := via[0].URL
 	clearPrivate := func() {
 		for name := range headers {
 			req.Header.Del(name)
 		}
+		req.Header.Del("Authorization")
+		req.Header.Del("Proxy-Authorization")
+		req.Header.Del("X-Api-Key")
+		req.Header.Del("Cookie")
+		req.Header.Del("Cookie2")
 		req.Header.Set("User-Agent", modelhttp.UserAgent())
 		modelhttp.ClearOpenCodeSession(req.Header)
 		modelhttp.ClearSource(req.Header)
@@ -97,7 +105,7 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 		return nil
 	}
 	for _, previous := range via[1:] {
-		if !sameOrigin(origin, previous.URL) {
+		if previous == nil || !sameOrigin(origin, previous.URL) {
 			clearPrivate()
 			break
 		}
@@ -106,6 +114,9 @@ func checkRedirectHeaders(req *http.Request, via []*http.Request, headers map[st
 }
 
 func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
 	port := func(u *url.URL) string {
 		if p := u.Port(); p != "" {
 			return p
@@ -186,6 +197,23 @@ type Request struct {
 	// BoundOutput also enforces MaxTokens on Responses. Cost-sensitive background calls
 	// fail closed when a relay refuses the bound; legacy callers keep their existing behavior.
 	BoundOutput bool
+	// DisableThinking asks the API to turn extended thinking/reasoning off for this call, through each protocol's
+	// standard "off" encoding (Messages thinking.type=disabled with the model-specific fallback, Chat Completions
+	// reasoning_effort="none", Responses reasoning.effort="none"). Short deterministic tasks such as title naming
+	// set it: a thinking model spends the small output room on reasoning and a relay that surfaces that reasoning
+	// as text can leak cut-off monologue fragments into the answer. It wins over Config.ReasoningEffort for this
+	// request only; protocols and models that cannot express "off" keep ApplyReasoningEffort's compatibility rules.
+	DisableThinking bool
+}
+
+// effortForRequest is the reasoning effort to encode for one call. Request.DisableThinking forces the generic
+// "off" level, which ApplyReasoningEffort maps to each protocol's own encoding; otherwise the connection's
+// configured effort is used ("" leaves the model/provider default).
+func effortForRequest(configured string, r Request) string {
+	if r.DisableThinking {
+		return "off"
+	}
+	return configured
 }
 
 type Usage = aiwire.Usage
@@ -367,7 +395,7 @@ func (c *Client) messages(ctx context.Context, hc *http.Client, key string, r Re
 		turns = append(turns, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	bodyMap := map[string]any{"model": c.cfg.Model, "max_tokens": r.MaxTokens, "system": r.System, "messages": turns, "stream": true}
-	ApplyReasoningEffort(bodyMap, "messages", c.cfg.Model, c.cfg.ReasoningEffort)
+	ApplyReasoningEffort(bodyMap, "messages", c.cfg.Model, effortForRequest(c.cfg.ReasoningEffort, r))
 	body, _ := json.Marshal(bodyMap)
 	req, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "messages"), bytes.NewReader(body))
 	if err != nil {
@@ -713,7 +741,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	if r.BoundOutput && r.MaxTokens > 0 {
 		req["max_output_tokens"] = r.MaxTokens
 	}
-	ApplyReasoningEffort(req, "responses", c.cfg.Model, c.cfg.ReasoningEffort)
+	ApplyReasoningEffort(req, "responses", c.cfg.Model, effortForRequest(c.cfg.ReasoningEffort, r))
 	body, _ := json.Marshal(req)
 	hreq, err := http.NewRequestWithContext(ctx, "POST", apiEndpoint(c.cfg.BaseURL, "responses"), bytes.NewReader(body))
 	if err != nil {

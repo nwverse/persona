@@ -636,15 +636,18 @@ func (s *Service) deliverApprovalResult(a approvalJournalEntry) error {
 	if msg.Continuation && msg.OnceID == "" {
 		msg.OnceID = relayMsgID(a.SessionID, msg)
 	}
-	working := false
+	working, placeholder := false, false
 	if c, ok := s.session(ctx, a.MachineID, a.SessionID); ok {
 		working = c.Status == proto.StatusWorking || c.Starting
+		placeholder = c.LogicalPlaceholder || (c.Assistant && c.Cwd == "" && c.Space == "" && s.isLogicalOfflineRow(c))
 	}
 	if !working {
 		if err := s.tryDirectRelay(ctx, a.MachineID, a.SessionID, &msg); err == nil {
 			return nil
 		} else if s.refusedDirect(ctx, a.MachineID, a.SessionID, msg, err) {
 			return nil // a runtime conversation that cannot take it: the owner was pushed (relayRefused)
+		} else if !placeholder && relayFailureOf(err) == relayFailedGone {
+			return errApprovalConversationGone
 		} else if !relayInDoubt(err) && !refusedForGood(err) {
 			// A transient send refusal may still be retried through the durable
 			// queue; an actually missing conversation was rejected above.

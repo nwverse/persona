@@ -49,7 +49,7 @@ func (s *recordingStateStore) waitSession(session string, timeout time.Duration)
 				return c, true
 			}
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond) // sleep-ok: yield inside the recording store's deadline-bounded waitSession poll
 	}
 	return writtenCall{}, false
 }
@@ -124,7 +124,7 @@ func TestStatePutStopRaceNeverDropsAdmittedPut(t *testing.T) {
 		if iter%3 == 0 {
 			runtime.Gosched()
 		} else {
-			time.Sleep(time.Duration(iter%4) * time.Millisecond)
+			time.Sleep(time.Duration(iter%4) * time.Millisecond) // sleep-ok: spread the cancel point so admissions cover both the live writer and exit window
 		}
 		m.stop()
 		wg.Wait()
@@ -139,7 +139,7 @@ func TestStatePutStopRaceNeverDropsAdmittedPut(t *testing.T) {
 			if len(got) == n {
 				break
 			}
-			time.Sleep(2 * time.Millisecond)
+			time.Sleep(2 * time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for all admitted writes to land
 		}
 		if len(got) != n {
 			var missing []string

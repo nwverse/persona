@@ -76,7 +76,7 @@ func TestStateWriterLatestSessionWinsWithoutLosingCreationReceipt(t *testing.T) 
 		if n == 2 {
 			break
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for the two coalesced writes
 	}
 	cancel()
 	if !w.waitDone(2 * time.Second) {
@@ -144,7 +144,7 @@ func TestStateWriterDoesNotReorderDifferentSessions(t *testing.T) {
 					close(ch)
 					return
 				}
-				time.Sleep(time.Millisecond)
+				time.Sleep(time.Millisecond) // sleep-ok: yield inside the poll that fails fast if a blocked head fans writes out concurrently
 			}
 		}()
 		return ch
@@ -164,7 +164,7 @@ func TestStateWriterDoesNotReorderDifferentSessions(t *testing.T) {
 		if n == 3 {
 			break
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for the three ordered writes
 	}
 	cancel()
 	if !w.waitDone(2 * time.Second) {
@@ -331,7 +331,7 @@ func TestStateWriterFailedWriteRetriesRetainedPending(t *testing.T) {
 		if n == 1 {
 			break
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for the retained pending retry
 	}
 	cancel()
 	if !w.waitDone(2 * time.Second) {
@@ -398,7 +398,7 @@ func TestStateWriterFailedWriteRetryWritesLatest(t *testing.T) {
 		if n == 1 {
 			break
 		}
-		time.Sleep(time.Millisecond)
+		time.Sleep(time.Millisecond) // sleep-ok: yield inside the deadline-bounded poll for the successful retry
 	}
 	cancel()
 	if !w.waitDone(2 * time.Second) {

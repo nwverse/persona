@@ -27,26 +27,29 @@ func (d *Devices) Request(ctx context.Context, method string, params json.RawMes
 		return nil
 	}
 	switch method {
-	case devicewire.MethodCall, devicewire.MethodFileCall, devicewire.MethodRetireCall:
-		var p devicewire.NodeCall
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		if method == devicewire.MethodRetireCall && p.Method != nodeproto.StopIfIdle {
-			return nil, true, &rpc.Error{Code: "invalid_params", Message: "devices.retire_call requires session.stop_if_idle"}
-		}
-		out, err := d.Call(ctx, p)
-		return out, true, err
+	case devicewire.MethodCall:
+		return handleDeviceRequest(devicewire.CallMethod, decode, func(p devicewire.NodeCall) (json.RawMessage, error) {
+			return d.Call(ctx, p)
+		})
+	case devicewire.MethodFileCall:
+		return handleDeviceRequest(devicewire.FileCallMethod, decode, func(p devicewire.NodeCall) (json.RawMessage, error) {
+			return d.Call(ctx, p)
+		})
+	case devicewire.MethodRetireCall:
+		return handleDeviceRequest(devicewire.RetireCallMethod, decode, func(p devicewire.NodeCall) (json.RawMessage, error) {
+			if p.Method != nodeproto.StopIfIdle {
+				return nil, &rpc.Error{Code: "invalid_params", Message: "devices.retire_call requires session.stop_if_idle"}
+			}
+			return d.Call(ctx, p)
+		})
 	case devicewire.MethodHoldStart:
 		return handleDeviceRequest(devicewire.HoldStartMethod, decode, func(p devicewire.HoldStartRequest) (devicewire.HoldStartReply, error) {
 			return d.holdStart(ctx, p)
 		})
 	case devicewire.MethodAccept:
-		var p devicewire.Accept
-		if err := decode(&p); err != nil {
-			return nil, true, err
-		}
-		return map[string]any{}, true, d.Accept(ctx, p)
+		return handleDeviceRequest(devicewire.AcceptMethod, decode, func(p devicewire.Accept) (buswire.None, error) {
+			return buswire.None{}, d.Accept(ctx, p)
+		})
 	case devicewire.MethodReconnect:
 		return handleDeviceRequest(devicewire.ReconnectMethod, decode, func(p devicewire.ReconnectRequest) (buswire.None, error) {
 			return buswire.None{}, d.Reconnect(p.MachineID)
@@ -300,6 +303,8 @@ func (d *Devices) Handler(next http.Handler) http.Handler {
 	route("PUT /api/v1/machines/{mid}/herdr/sessions/blocked", d.putHerdrSessionsBlocked)
 	route("GET /api/v1/machines/{mid}/botmux", d.getBotmux)
 	route("PUT /api/v1/machines/{mid}/botmux", d.putBotmux)
+	route("GET /api/v1/machines/{mid}/orca-chat-starts", d.getOrcaChatStarts)
+	route("PUT /api/v1/machines/{mid}/orca-chat-starts", d.putOrcaChatStarts)
 	route("GET /api/v1/machines/{mid}/health/reports", d.listHealthReports)
 	route("DELETE /api/v1/machines/{mid}/health/reports/{name}", d.deleteHealthReport)
 	route("POST /api/v1/machines/{mid}/deploy", func(w http.ResponseWriter, r *http.Request, m *Machine) {

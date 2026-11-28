@@ -26,6 +26,8 @@ type cotWorker struct {
 	done                    chan struct{}
 	pending                 []proto.Item
 	queued, ending, aborted bool
+	answerAbandoned         bool
+	finished                bool
 	usable                  bool
 	cancel                  context.CancelFunc
 	run                     channel.Run
@@ -165,15 +167,25 @@ func (w *cotWorker) work(f feishuSink) {
 			w.mu.Unlock()
 			continue
 		}
-		items, finish := w.pending, w.ending
+		items, finish, final, abandoned := w.pending, w.ending, w.final, w.answerAbandoned
+		if abandoned {
+			final.answer = ""
+		}
+		hasOpenCot := w.live.cot.cot != "" || w.run.Ext["cot"] != ""
 		w.pending, w.queued = nil, false
+		if finish && abandoned && !hasOpenCot {
+			w.outcome = cotOutcome{native: false, answered: false}
+			w.finished = true
+			w.mu.Unlock()
+			return
+		}
 		ctx, cancel := context.WithTimeout(f.s.runCtx(), 15*time.Second)
 		w.cancel = cancel
 		w.mu.Unlock()
 		ctx = f.s.sendAs(ctx, "progress", w.run.MachineID, w.run.SessionID)
 		native := true
 		if finish {
-			native = f.cotFinishNowItems(ctx, &w.run, &w.live, items, w.final)
+			native = f.cotFinishNowItems(ctx, &w.run, &w.live, items, final)
 		} else {
 			f.cotProgressNowItems(ctx, &w.run, &w.live, items)
 		}
@@ -184,8 +196,9 @@ func (w *cotWorker) work(f feishuSink) {
 		if finish {
 			// Written before w.done closes, so a reader of it sees the outcome.
 			w.outcome = cotOutcome{native: native, answered: w.live.cot.answered}
+			w.finished = true
 		}
-		unified := w.final.answer != ""
+		unified := w.final.answer != "" || w.answerAbandoned
 		aborted := w.aborted
 		w.mu.Unlock()
 		// Unified mode already knows its outcome: the answer waits for it itself, so there is no card to repair.
@@ -232,8 +245,16 @@ func (w *cotWorker) state() (open, off bool) {
 }
 
 // result waits, at most d, for the terminal work. ok is false when it did not end in time; then its in-flight
-// I/O is cancelled, and the worker closes the agent message itself.
+// I/O is cancelled, any pending unified answer is abandoned so the worker does not duplicate the card fallback,
+// and the worker closes the agent message itself.
 func (w *cotWorker) result(ctx context.Context, d time.Duration) (out cotOutcome, ok bool) {
+	select {
+	case <-w.done:
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return w.outcome, true
+	default:
+	}
 	timer := time.NewTimer(d)
 	defer timer.Stop()
 	select {
@@ -245,6 +266,16 @@ func (w *cotWorker) result(ctx context.Context, d time.Duration) (out cotOutcome
 	case <-ctx.Done():
 	}
 	w.mu.Lock()
+	if w.finished {
+		out = w.outcome
+		w.mu.Unlock()
+		return out, true
+	}
+	if w.run.Ext["cot_answer"] != "" {
+		w.mu.Unlock()
+		return cotOutcome{native: true, answered: true}, true
+	}
+	w.answerAbandoned = true
 	if w.cancel != nil {
 		w.cancel()
 	}

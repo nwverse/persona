@@ -824,9 +824,10 @@ extension Theme {
         static let mobileData = "cellularbars"
         /// The calendar event a meeting recording is named after (docs/apple/recording.md).
         static let calendarEvent = "calendar.day.timeline.left"
-        /// A meeting's minutes (#2710): a key point, a decision, a question left open (action items are `todo`).
+        /// A meeting's minutes (#2710): a key point, a decision, a disagreement (#16728), a question left open (action items are `todo`).
         static let keyPoint = "text.bubble.fill"
         static let decision = "signature"
+        static let disagreement = "bubble.left.and.exclamationmark.bubble.right"
         static let openQuestion = "questionmark.circle.dashed"
         /// A meeting's minutes as a whole (the watch's Meeting Minutes).
         static let minutes = "note.text"

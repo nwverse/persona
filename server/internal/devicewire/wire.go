@@ -54,6 +54,7 @@ const (
 )
 
 var (
+	RequestMethod         = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRequest}
 	ConnectedMethod       = buswire.Method[Connected, ConnectedReply]{Name: MethodConnected}
 	ConnectorCredMethod   = buswire.Method[ConnectorCredRequest, ConnectorCred]{Name: MethodConnectorCred}
 	ConnectorPairedMethod = buswire.Method[ConnectorCred, buswire.None]{Name: MethodConnectorPaired}
@@ -126,6 +127,10 @@ const (
 )
 
 var (
+	CallMethod                 = buswire.Method[NodeCall, json.RawMessage]{Name: MethodCall}
+	FileCallMethod             = buswire.Method[NodeCall, json.RawMessage]{Name: MethodFileCall}
+	RetireCallMethod           = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRetireCall}
+	AcceptMethod               = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
 	UpdateNodesMethod          = buswire.Method[buswire.None, buswire.None]{Name: MethodUpdateNodes}
 	PairConnectorMethod        = buswire.Method[PairConnector, PairConnectorReply]{Name: MethodPairConnector}
 	ReconnectMethod            = buswire.Method[ReconnectRequest, buswire.None]{Name: MethodReconnect}
@@ -419,6 +424,8 @@ const (
 	PortStreamHalfCloseV1 = 1
 )
 
+var PortDialMethod = buswire.Method[PortDial, PortDialReply]{Name: MethodPortDial}
+
 // PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
 type PortDial struct {
 	ID            string `json:"id"`
@@ -532,6 +539,9 @@ var Routes = []string{
 	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
+	// "Start new Agents as Orca chats" (#17650, internal/devices orca_chat_starts.go).
+	"GET /api/v1/machines/{mid}/orca-chat-starts",
+	"PUT /api/v1/machines/{mid}/orca-chat-starts",
 	"GET /api/v1/machines/{mid}/health/reports",
 	"DELETE /api/v1/machines/{mid}/health/reports/{name}",
 	"POST /api/v1/machines/{mid}/deploy",
