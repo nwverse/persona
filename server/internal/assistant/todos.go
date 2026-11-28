@@ -2387,6 +2387,7 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now}
 	cur.keepPlan(&row)
 	row.SomedayUntil = nil // retried: out of Someday, as db.RetryTodo does on the store
+	row.SeenAt, row.AutoSeenUndone = nil, false
 	if st := s.todoDB(); st != nil {
 		r, ok, err := st.RetryTodo(ctx, id, now)
 		if err != nil {

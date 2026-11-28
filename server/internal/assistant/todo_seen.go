@@ -19,8 +19,10 @@ import (
 
 // seeTodo marks todo id seen now, or with seen false takes the mark off (Undo); db.ErrTodoNotFound when it is not there.
 func (s *Service) seeTodo(ctx context.Context, id string, seen bool) (Todo, error) {
+	s.todos.writing.Lock()
 	cur, ok := s.todoNow(id)
 	if !ok {
+		s.todos.writing.Unlock()
 		return Todo{}, db.ErrTodoNotFound
 	}
 	var at *time.Time
@@ -28,7 +30,6 @@ func (s *Service) seeTodo(ctx context.Context, id string, seen bool) (Todo, erro
 		now := time.Now().UTC()
 		at = &now
 	}
-	s.todos.writing.Lock()
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
 		var err error
