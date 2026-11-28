@@ -12,8 +12,10 @@ registerHooks({
     if (context.parentURL?.endsWith('/ClientModel.ets') && specifier === '../core/Markdown')
       return {url:new URL('../core/Markdown.ts',context.parentURL).href,shortCircuit:true};
     if (specifier === '@kit.ArkTS') return { url: 'persona-question-test:arkts', shortCircuit: true };
+    if (specifier === '../core/SessionSnapshot' || context.parentURL?.endsWith('/SessionSnapshot.ts') && specifier === './TranscriptCache') return {url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true};
+    if (specifier === '@kit.ArkTS') return { url: 'persona-question-test:arkts', shortCircuit: true };
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './Wire', './AgentAttention', './InteractionDecision', './ChatDraftStore', '../core/Domain', '../core/HubModules', '../core/XiaoYiActions'].includes(specifier)) {
+      if (['./Wire', './InteractionDecision', './ChatDraftStore', '../core/MessageImageGallery', '../core/WorkPresentation', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './AgentAttention', '../core/HubModules', '../core/XiaoYiActions'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return { url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true };
       }
@@ -34,6 +36,7 @@ registerHooks({
     if (url.startsWith('persona-question-test:')) return {
       format: 'module', shortCircuit: true,
       source: `
+        export const hilog={info(){}};
         export class HttpFailure extends Error { constructor(status=0, codeOrUnknown=false, unknownOrPending=false, pending=false) { super('synthetic failure'); this.status=status; this.resultUnknown=typeof codeOrUnknown==='string'?unknownOrPending:codeOrUnknown; this.resultPending=typeof codeOrUnknown==='string'?pending:unknownOrPending; } }
         export class AssistantViewModel { static forgetProfile(){} }
         export class SshTunnel { initialize(){} stop(){} async bind(){} async acquire(){} async forget(){} }

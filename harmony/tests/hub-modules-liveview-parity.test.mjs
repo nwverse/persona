@@ -29,6 +29,7 @@ globalThis.__parityLiveViewState = liveState;
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === '@kit.PerformanceAnalysisKit') return { url: 'parity:hilog', shortCircuit: true };
     if (specifier === '@kit.LiveViewKit') return { url: 'parity:liveview-kit', shortCircuit: true };
     if (specifier === '@kit.AbilityKit') return { url: 'parity:ability-kit', shortCircuit: true };
     if (specifier === '@ohos.wantAgent') return { url: 'parity:want-agent', shortCircuit: true };
@@ -39,9 +40,9 @@ registerHooks({
         '../core/DictationLanguage', '../core/Markdown', '../core/PhoneInterfaceStyle',
         './Wire', './AgentAttention', './AssistantView', './DemoRepository', './NavigationContext',
         './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility',
-        './InteractionDecision', '../core/ClientLocale', '../core/Domain', '../core/HubModules',
+        './InteractionDecision', '../core/ClientLocale', '../core/WorkPresentation', '../core/Domain', '../core/HubModules',
         '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent',
-        '../core/TranscriptCache', '../core/XiaoYiActions'
+        '../core/SessionSnapshot', '../core/HubAccess', '../core/TranscriptCache', '../core/XiaoYiActions', '../core/MessageImageGallery', '../core/ConversationPlan', '../core/AgentEvents'
       ].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return { url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true };
@@ -59,7 +60,7 @@ registerHooks({
     if (specifier.endsWith('/core/HubModules')) {
       return { url: new URL('../core/HubModules.ts', context.parentURL).href, shortCircuit: true };
     }
-    if (context.parentURL?.endsWith('.ets') && specifier.startsWith('.')) {
+    if (context.parentURL && /\.(?:ets|ts)$/.test(new URL(context.parentURL).pathname) && specifier.startsWith('.') && !/\.[a-z]+$/i.test(specifier)) {
       const base = new URL(specifier, context.parentURL);
       return { url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true };
     }
@@ -98,6 +99,7 @@ registerHooks({
         `
       };
     }
+    if (url === 'parity:hilog') return { format: 'module', shortCircuit: true, source: 'export const hilog = { info() {} };' };
     if (url === 'parity:want-agent' || url === 'parity:noop') return { format: 'module', shortCircuit: true, source: 'export {};' };
     if (url === 'parity:arkts') {
       return {

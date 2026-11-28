@@ -1,3 +1,4 @@
+import { launcherModelLabel } from '../core/ModelLabel';
 import type { ClientModel } from './ClientModel';
 import type { HttpFailure } from '../platform/HubTransport';
 import { Wire } from './Wire';
@@ -171,7 +172,7 @@ export class AgentLaunchChoices {
       }
     }
   }
-  async loadModels(owner:ClientModel,machine:string,launcher:string): Promise<void> {
+  async loadModels(owner:ClientModel,machine:string,launcher:string,refresh:boolean=false): Promise<void> {
     this.clear();
     if (!launcher) return;
     const rev = this.revision, scope = owner.scope(), epoch = owner.connectionGeneration();
@@ -179,7 +180,7 @@ export class AgentLaunchChoices {
     this.loading = true;
     try {
       const value = await owner.repo().call('/api/v1/machines/' + encodeURIComponent(machine) + '/launchers/' +
-        encodeURIComponent(launcher) + '/models?purpose=agent.new');
+        encodeURIComponent(launcher) + '/models?purpose=agent.new' + (refresh ? '&refresh=1' : ''));
       if (!valid()) return;
       this.locked = Wire.text(value,'locked');
       this.acceptsTypedModel = !this.locked && ['claude','codex','pi','cursor','agy'].includes(Wire.text(value,'agent'));
@@ -188,7 +189,7 @@ export class AgentLaunchChoices {
       // Choosing the default keeps that semantic even after a launcher changes its default model.
       this.models = this.modelData.filter((v:Record<string,Object>) => !Wire.bool(v,'default') && !Wire.bool(v,'is_default'))
         .map((v:Record<string,Object>) => {
-          const id = Wire.text(v,'id'), title = launchModelName(id,Wire.text(v,'name')), resolved = Wire.text(v,'resolved');
+          const id = Wire.text(v,'id'), title = launchModelName(id,launcherModelLabel(v)), resolved = Wire.text(v,'resolved');
           const detail = [launcher, title !== id ? id : '', resolved && resolved !== id && resolved !== title ? '→ '+resolved : '']
             .filter((part:string) => !!part).join(' · ');
           const choice = new LaunchChoice(id,title,detail,false,Wire.text(v,'description'));
@@ -215,7 +216,7 @@ export class AgentLaunchChoices {
     if (this.locked) return new LaunchChoice('',title,this.locked);
     if (picked) {
       const model = this.modelData.find((item:Record<string,Object>) => Wire.text(item,'id') === picked);
-      const display = launchModelName(picked,model ? Wire.text(model,'name') : picked);
+      const display = launchModelName(picked,model ? launcherModelLabel(model) : picked);
       const resolved = model ? Wire.text(model,'resolved') : '';
       let detail = '';
       if (!model || Wire.bool(model,'custom')) {
@@ -232,7 +233,7 @@ export class AgentLaunchChoices {
     const def = this.modelData.find((item:Record<string,Object>) => Wire.bool(item,'is_default') || Wire.bool(item,'default'));
     if (!def) return new LaunchChoice('',title,word('flow_use_default'));
     const resolved = Wire.text(def,'resolved');
-    return new LaunchChoice('',title,resolved ? launchModelName(resolved,resolved) : launchModelName(Wire.text(def,'id'),Wire.text(def,'name')));
+    return new LaunchChoice('',title,resolved ? launchModelName(resolved,resolved) : launchModelName(Wire.text(def,'id'),launcherModelLabel(def)));
   }
   defaultModelName():string {
     const model = this.modelData.find((m:Record<string,Object>) => Wire.bool(m,'is_default') || Wire.bool(m,'default'));

@@ -1,8 +1,10 @@
+import { turnChangesFromWork } from '../core/WorkPresentation';
 import type { BackgroundRound } from '../core/BackgroundActivity';
 import { activityFeedRound, splitBackgroundRounds } from '../core/BackgroundActivity';
 import type { HubAccess } from '../core/HubAccess';
 import { liftedMessageWords } from '../core/Markdown';
 import type { ConversationRecapItem } from './Wire';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AssistantViewModel } from './AssistantView';
 import { SshTunnel } from './SshTunnel';
 import type { SshProxyLease } from './SshTunnel';
@@ -18,6 +20,7 @@ import { i18n } from '@kit.LocalizationKit';
 import { DemoRepository } from './DemoRepository';
 import { NavigationContext } from './NavigationContext';
 import { utf8Bytes } from '../core/TranscriptCache';
+import { decodeSessionSnapshot } from '../core/SessionSnapshot';
 import { ChatDraftStore, ChatDraft, ChatOutboxEntry, DraftForwardImage, draftForwardRows } from './ChatDraftStore';
 import { clearImagePreviews } from '../platform/NativePreview';
 import { forwardPrefix, forwardOrigin, forwardGroups } from '../core/ChatForwardWire';
@@ -37,20 +40,35 @@ import { HubTransport, EndpointConfig, HttpFailure } from '../platform/HubTransp
 import { CredentialVault } from '../platform/CredentialVault';
 import { LocalStore } from '../platform/LocalStore';
 import { HubRepository, segment } from './HubRepository';
+import { groupUserImages } from '../core/MessageImageGallery';
 import { Wire, ResourceRow, ChatMessage, Decision, HubProfile, HeldAgentMessage, ImageLimits } from './Wire';
 import { tr, Strings } from '../design/Strings';
 import { withSourceContext, messageDisplay } from './Compatibility';
 import { MutationRecord, MutationStore } from './MutationStore';
 import { TranscriptModel } from './TranscriptModel';
 import { Pairing, PairingTarget } from '../platform/Pairing';
-import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
-import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
+import { ConversationPlanReplay } from '../core/ConversationPlan';
+import type { ConversationPlan } from '../core/ConversationPlan';
+import { isAgentInput, recordedDuration } from '../core/AgentEvents';
+import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer, projectTranscriptRows, transcriptRecord, displayQuestionReply } from '../core/Domain';
+import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, JsonObject, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
 import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasRegisteredPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
 
 
 
 
+interface ExpandedAttachmentList {
+  attachmentOnly: boolean;
+  history: string;
+  seq: number;
+  at: number;
+  preview: string;
+  images: string[];
+  files: string[];
+}
+
+interface DirectoryCopy { row: ResourceRow; key: string; assistant: boolean; }
 interface DevicePreferenceChange { appearance?: number; style?: string; alerts?: boolean; }
 interface HeldActionReceipt { scope: string; pairing: number; target: string; expected: HeldAgentMessage; deleted: boolean; }
 
@@ -81,6 +99,7 @@ class PhoneListRead {
 export class ClientModel {
   readonly ssh: SshTunnel = new SshTunnel();
   private static pairingEpochs: Map<string, number> = new Map();
+  pairingRevision(profileId: string = this.profile.id): number { return ClientModel.pairingEpochs.get(profileId) || 0; }
   private static forgetHooks: Set<(hubId: string, context: common.Context) => Promise<void>> = new Set();
   static registerForgetHook(hook: (hubId: string, context: common.Context) => Promise<void>): void {
     ClientModel.forgetHooks.add(hook);
@@ -97,13 +116,12 @@ export class ClientModel {
       try { hook(pendingCount, workingCount, this.context); } catch (_) {}
     }
   }
-  pairingRevision(): number { return ClientModel.pairingEpochs.get(this.profile.id) || 0; }
   private retirePairing(id: string): void { ClientModel.pairingEpochs.set(id, (ClientModel.pairingEpochs.get(id) || 0) + 1); }
   retireHubConnections(id: string): void {
     const root = this.directoryParent || this;
     if (root.profile.id === id) {
       root.stopReconnect(); root.reconnectAttempt = 0; root.generation++; root.selectionGeneration++; root.connected = false;
-      root.clearPendingDecisions();
+      root.transcript?.clearLive(); root.clearPendingDecisions();
       root.ssh.stop(); root.repository?.close(); root.repository = undefined;
       root.releaseTerminal();
       root.scheduleReconnect();
@@ -166,6 +184,8 @@ export class ClientModel {
   @Trace connected: boolean = false;
   @Trace demo: boolean = false;
   @Trace profiles: HubProfile[] = [];
+  @Trace private pairingRequired: boolean = false;
+  @Trace private workspaceNames: Map<string, string> = new Map();
   @Trace profile: HubProfile = new HubProfile();
   @Trace managers: ResourceRow[] = [];
   @Trace rosterDefaultId: string = '';
@@ -217,6 +237,7 @@ export class ClientModel {
   private feedbackTimer: number = -1;
   private feedbackDeadline: number = 0;
   private renderedMessages: ChatMessage[] = [];
+  private liveTranscriptText: string = '';
   private echoedMessages: Set<string> = new Set();
   @Trace private heldActions: string[] = [];
   @Trace private heldReceipts: HeldActionReceipt[] = [];
@@ -284,9 +305,29 @@ export class ClientModel {
   setWorkspace(workspace: SessionWorkspace | undefined): void { if (this.workspace && this.workspace !== workspace) this.workspace.hide(); this.workspace = workspace; }
   selectWorkspaceTab(index: number): void { this.workspace?.selectTab(index); }
   @Trace transcriptHistoryReady: boolean = false;
+  @Trace chatHistoryLoading: boolean = false;
   private transcript: TranscriptModel | undefined;
   private transcriptKey: string = '';
   private revisionItems: TranscriptItem[] = [];
+  private publishedSource?: readonly TranscriptItem[];
+  private publishedRunning: boolean = false;
+  private revisionItemsVersion: number = 0;
+  get transcriptVersion(): number { return this.revisionItemsVersion; }
+  private expandedAttachments: Map<string, ExpandedAttachmentList> = new Map();
+  private planReplay: ConversationPlanReplay | undefined;
+  private planFromStart: boolean = true;
+  executionPlan(report?: JsonObject): ConversationPlan | undefined {
+    if (!this.planReplay) {
+      this.planReplay = new ConversationPlanReplay();
+      this.planReplay.accept(this.revisionItems);
+    }
+    return this.planReplay.view(report, this.planFromStart);
+  }
+  async readPlanDetails(plan: ConversationPlan, stillOpen: () => boolean): Promise<ConversationPlan | undefined> {
+    const transcript = this.transcript, target = this.target();
+    if (!transcript || !this.connected) throw new Error('offline');
+    return transcript.readPlanDetails(plan, () => stillOpen() && this.transcript === transcript && this.target() === target);
+  }
   transcriptItems(): readonly TranscriptItem[] { return this.revisionItems.slice(); }
 
   private activityOwner: string = '';
@@ -311,7 +352,7 @@ export class ClientModel {
       publish(this.demoRepository.historyItems(row) as Object as TranscriptItem[], false, true);
       return undefined;
     }
-    return new TranscriptModel(row, this.repo(), this.local, this.target(row), publish, failure, false);
+    return new TranscriptModel(row, this.repo(), this.local, this.target(row), publish, failure, undefined, undefined, false);
   }
 
   feedInBackground(kind: string, at: number): boolean {
@@ -360,7 +401,38 @@ export class ClientModel {
     return Array.from(this.views.values()).find((view: ClientModel) => !view.retired && view.profile.id === group && view.profile.manager === row.manager);
   }
   directoryOwners(): ClientModel[] { const owners: ClientModel[] = [this]; for (const owner of this.views.values()) if (!owner.retired && !this.forgettingProfiles.has(owner.profile.id)) owners.push(owner); return owners; }
-  groupName(row: ResourceRow): string { return this.profiles.find((profile: HubProfile) => profile.id === (row.group || this.profile.id))?.name || this.profile.name; }
+  workspaceName(profile: HubProfile): string {
+    return this.workspaceNames.get(profile.id) || profile.name || tr('hub');
+  }
+  workspaceStatus(profile: HubProfile): string {
+    if (profile.id === this.profile.id) {
+      if (this.pairingRequired) return 'workspace_pair_again';
+      return this.connected ? 'online' : this.error ? 'offline' : 'workspace_disconnected';
+    }
+    const views = Array.from(this.views.values()).filter((view: ClientModel) => !view.retired && view.profile.id === profile.id);
+    if (views.some((view: ClientModel) => view.connected)) return 'online';
+    if (views.some((view: ClientModel) => view.pairingRequired)) return 'workspace_pair_again';
+    return views.some((view: ClientModel) => !!view.error) ? 'offline' : 'workspace_disconnected';
+  }
+  groupName(row: ResourceRow): string {
+    const profile = this.profiles.find((p: HubProfile) => p.id === (row.group || this.profile.id)) || this.profile;
+    return (this.directoryParent || this).workspaceName(profile);
+  }
+  async renameWorkspace(profile: HubProfile, name: string): Promise<void> {
+    if (!this.profiles.includes(profile) || this.forgettingProfiles.has(profile.id)) throw new Error('request_updated');
+    const previous = this.workspaceNames.get(profile.id);
+    const alias = name.trim();
+    if (alias && alias !== profile.name) this.workspaceNames.set(profile.id, alias);
+    else this.workspaceNames.delete(profile.id);
+    try { await this.saveProfiles(); }
+    catch (error) {
+      if (this.profiles.includes(profile) && this.workspaceName(profile) === (alias || profile.name)) {
+        if (previous) this.workspaceNames.set(profile.id, previous);
+        else this.workspaceNames.delete(profile.id);
+      }
+      throw error as Error;
+    }
+  }
   async refreshDirectory(): Promise<void> {
     if (this.detached || this.demo) { this.publishDirectory(); return; }
     const generation = this.generation, scope = this.scope(), owner = JSON.stringify([generation, scope]);
@@ -392,9 +464,15 @@ export class ClientModel {
       if (this.owns(generation, scope)) { this.directoryLoading = false; this.directoryUnavailable = unavailable; this.directoryReady = true; this.publishDirectory(); }
     }
   }
-  private directoryRow(row: ResourceRow, view: ClientModel): ResourceRow {
-    const copy = NavigationContext.rowFrom(JSON.stringify(row)); copy.group = view.profile.id;
-    if (!view.connected) copy.state = 'offline'; return copy;
+  private directoryCopies = new WeakMap<ResourceRow, DirectoryCopy>();
+  private directoryRow(row: ResourceRow, view: ClientModel): DirectoryCopy {
+    const group = view.profile.id, state = view.connected ? row.state : 'offline';
+    const prior = this.directoryCopies.get(row);
+    if (prior && prior.row.matches(row, group, state)) return prior;
+    const copy = row.copy(group, state);
+    const entry: DirectoryCopy = { row: copy, key: copy.key(), assistant: row.kind === 'session' && Wire.bool(row.data(), 'assistant') };
+    this.directoryCopies.set(row, entry);
+    return entry;
   }
   private publishDirectory(): void {
     if (this.directoryParent) { this.directoryParent.publishDirectory(); return; }
@@ -404,10 +482,11 @@ export class ClientModel {
     const views: ClientModel[] = [this]; for (const view of this.views.values()) views.push(view);
     for (const view of views) {
       if (view.retired || !profiles.has(view.profile.id) || this.forgettingProfiles.has(view.profile.id)) continue;
-      for (const row of view.sessions) { const next = this.directoryRow(row, view); if (!Wire.bool(next.data(), 'assistant')) sessions.set(next.key(), next); }
-      for (const row of view.machines) { const next = this.directoryRow(row, view); machines.set(next.key(), next); }
+      for (const row of view.sessions) { const entry = this.directoryRow(row, view); if (!entry.assistant) sessions.set(entry.key, entry.row); }
+      for (const row of view.machines) { const entry = this.directoryRow(row, view); machines.set(entry.key, entry.row); }
     }
-    this.directorySessions = Array.from(sessions.values()); this.directoryMachines = Array.from(machines.values());
+    this.directorySessions = ResourceRow.reconcile(this.directorySessions, Array.from(sessions.values()));
+    this.directoryMachines = ResourceRow.reconcile(this.directoryMachines, Array.from(machines.values()));
   }
   private retireViews(id: string = ''): void {
     for (const key of this.views.keys()) {
@@ -463,20 +542,43 @@ export class ClientModel {
     try { await work; } finally { if (this.credentialWrites.get(id) === tail) this.credentialWrites.delete(id); }
   }
   private feedTimer: number = -1;
+  private queuedRefreshCanWait: boolean = false;
+  private heldRefresh: boolean = false;
   private draftTimer: number = -1;
   private foreground: boolean = true;
   private reconnectTimer: number = -1;
   private reconnectAttempt: number = 0;
+  private reconnectPaused: boolean = false;
+  private syncedGeneration: number = -1;
+  private savedSnapshotStamp: string = '';
   private stopReconnect(): void { if (this.reconnectTimer !== -1) clearTimeout(this.reconnectTimer); this.reconnectTimer = -1; }
   private scheduleReconnect(): void {
     if (this.error === 'cloudflare_access_required' || this.error === 'cloudflare_access_rejected') return;
-    if (!this.foreground || this.demo || !this.profile.id || this.cleanupProfiles.has(this.profile.id) || this.reconnectTimer !== -1 || this.pairingProfiles.size > 0) return;
+    if (!this.foreground || this.demo || this.reconnectPaused || this.pairingRequired || !this.profile.id || this.cleanupProfiles.has(this.profile.id) || this.reconnectTimer !== -1 || this.pairingProfiles.size > 0) return;
     const generation = this.generation, scope = this.scope(), delay = Math.min(30000, 1000 * Math.pow(2, Math.min(5, this.reconnectAttempt++)));
     this.reconnectTimer = setTimeout(() => { this.reconnectTimer = -1;
       if (this.foreground && this.owns(generation, scope) && !this.connected) this.selectProfile(this.profile, true).catch((error: Error) => this.failure(error));
     }, delay);
   }
+  private connectionFailure(error: Error): void {
+    const code = error instanceof HttpFailure ? error.code : error.message;
+    if (['frame_too_large', 'message_too_large', 'response_too_large'].includes(code)) {
+      this.error = 'hub_sync_too_large';
+    } else if (['hub_identity_mismatch', 'hub_pin_mismatch', 'tls_pin_mismatch'].includes(code)) {
+      this.error = 'hub_identity_error';
+    } else if (error instanceof HttpFailure && (error.status === 401 || error.status === 403)) {
+      this.pairingRequired = error.status === 401;
+      this.error = this.pairingRequired ? 'workspace_pair_again' : 'permission_denied';
+    } else {
+      this.error = 'offline';
+      this.scheduleReconnect();
+      return;
+    }
+    this.reconnectPaused = true;
+    this.stopReconnect();
+  }
   private chatVisible: boolean = false;
+  private chatVisibilityRevision: number = 0;
   private decisionsVisible: boolean = false;
   watchDecisions(visible: boolean): void { this.decisionsVisible = visible; if (visible && this.connected && this.isChat()) this.refreshDecisions().catch((error: Error) => this.failure(error)); }
   private clearPendingDecisions(): void {
@@ -544,6 +646,7 @@ export class ClientModel {
     this.personaQuestions = next.filter((request: Decision): boolean => isPersonaAskUserQuestion(request, this.selected.kind));
     this.decision = firstBlockingDecision(next, this.selected.kind);
     this.decisionReadyTarget = target;
+    if (this.transcript?.liveActive || this.transcript?.liveThinking) this.publishMessages();
   }
   async refreshDecisions(): Promise<void> {
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected;
@@ -593,13 +696,15 @@ export class ClientModel {
     await this.restoreCleanup();
     this.profiles = Wire.rows(saved, 'profiles').map((item: Record<string, Object>) => {
       const profile = new HubProfile(Wire.text(item, 'id'), Wire.text(item, 'name'), Wire.text(item, 'baseUrl'));
+      const label = Wire.text(item, 'label');
+      if (label) this.workspaceNames.set(profile.id, label);
       profile.addresses = Wire.strings(item, 'addresses'); profile.hubId = Wire.text(item, 'hubId'); profile.pin = Wire.text(item, 'pin'); profile.manager = Wire.text(item, 'manager');
       return profile;
     });
     this.ready = true;
     await this.retryCleanup();
     const active = Wire.text(saved, 'active');
-    const profile = this.profiles.find((item: HubProfile) => item.id === active);
+    const profile = this.profiles.find((item: HubProfile) => item.id === active) || this.profiles.find((item: HubProfile) => !this.cleanupProfiles.has(item.id));
     if (profile) { if (this.foreground) await this.selectProfile(profile); else this.profile = profile; }
   }
   scope(): string { return scopeKey({ groupId: this.profile.id, managerId: this.profile.manager }); }
@@ -620,18 +725,25 @@ export class ClientModel {
   reportError(error: Error): void { this.failure(error); }
   operationBlocked(path: string): boolean { return this.unresolvedWrites.some((record: MutationRecord) => record.path === path); }
   private failure(error: Error): void {
+    // Reads cancelled by a rejected socket must not replace the reason already shown for this connection.
+    if (!this.connected && this.reconnectPaused && this.error &&
+      !(error instanceof HttpFailure && (error.resultUnknown || error.resultPending))) return;
     if (error instanceof HttpFailure) {
       if (error.code === 'cloudflare_access_required' || error.code === 'cloudflare_access_rejected') {
         this.stopReconnect(); this.error = error.resultUnknown ? 'result_unknown' : error.code; return;
       }
       if (error.status === 401 || error.status === 403) this.stopReconnect();
-      this.error = error.resultPending ? 'pending' : error.resultUnknown ? 'result_unknown' : error.status === 401 ? 'welcome' :
+      if (error.status === 401) { this.pairingRequired = true; this.reconnectPaused = true; }
+      this.error = error.resultPending ? 'pending' : error.resultUnknown ? 'result_unknown' : error.code === 'response_too_large' ? 'hub_sync_too_large' : error.status === 401 ? 'welcome' :
         error.status === 403 ? 'permission_denied' : error.status === 409 || error.status === 410 ? 'request_updated' : 'failed';
     } else this.error = ['offline', 'pending_action'].includes(error.message) ? error.message : 'failed';
   }
   private async saveProfiles(): Promise<void> {
     if (this.detached) return;
-    await this.local.put('profiles', JSON.stringify({ profiles: this.profiles, active: this.profile.id }));
+    const profiles = this.profiles.map((p: HubProfile) => Wire.payload(
+      ['id', 'name', 'baseUrl', 'addresses', 'hubId', 'pin', 'manager', 'label'],
+      [p.id, p.name, p.baseUrl, p.addresses, p.hubId, p.pin, p.manager, this.workspaceNames.get(p.id) || '']));
+    await this.local.put('profiles', JSON.stringify({ profiles: profiles, active: this.profile.id }));
   }
   private async applyAppearance(change: DevicePreferenceChange): Promise<boolean> {
     let saved = false;
@@ -747,14 +859,17 @@ export class ClientModel {
     }
     this.local.allowHub(profile.id); ChatAttachments.allowHub(profile.hubId || profile.id);
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); const keep = preserve && profile.id === this.profile.id && profile.manager === this.profile.manager;
-    const saved = this.persistDraft(); this.closeTranscript(); this.releaseTerminal(); this.repository?.close(); this.repository = undefined;
+    this.reconnectPaused = false; this.pairingRequired = false;
+    if (!keep) this.reconnectAttempt = 0;
+    const saved = this.persistDraft();
     const generation = ++this.generation; this.selectionGeneration++; const selection = this.selected;
+    this.closeTranscript(); this.releaseTerminal(); this.repository?.close(); this.repository = undefined;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.managers = []; this.rosterDefaultId = '';
-    this.publishedImageLimits = {};
-    this.demo = false; this.demoRepository = undefined; this.error = '';
+    this.unresolvedWrites = []; this.operationState = '';
+    if (!keep) { this.sidebarConfig = ''; this.rosterDefaultId = ''; this.mainId = ''; this.mainMachineId = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.publishedImageLimits = {}; this.managers = []; this.error = ''; }
+    this.demo = false; this.demoRepository = undefined;
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
     if (!keep && !this.detached) { this.directoryReady = false; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory(); }
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
@@ -776,8 +891,9 @@ export class ClientModel {
     let access: HubAccess | undefined;
     const token = await this.vault?.get(profile.id, (value: HubAccess | undefined): void => { access = value; });
     if (!this.owns(generation, scope)) return;
-    if (!token) { this.error = 'welcome'; return; }
-    if (profile.manager) await this.restoreSnapshot(generation, scope);
+    if (!token) { this.error = 'workspace_pair_again'; this.pairingRequired = true; this.reconnectPaused = true; return; }
+    const restore = !keep || !this.sessionsReady;
+    if (profile.manager && restore) await this.restoreSnapshot(generation, scope);
     let proxy: SshProxyLease | undefined;
     try {
       await this.ssh.bind(this, (): boolean => this.foreground && !this.retired && !this.forgettingProfiles.has(profile.id));
@@ -805,7 +921,7 @@ export class ClientModel {
       if (!this.owns(generation, scope) || !this.foreground) return;
       if (!proxy && (policy === 'always' || policy === 'fallback')) this.ssh.usingDirectAddress();
       if (address !== profile.baseUrl) { profile.addresses = Array.from(new Set<string>([profile.baseUrl].concat(profile.addresses))).filter((value: string) => value !== address && value.startsWith('https://')); profile.baseUrl = address; await this.saveProfiles(); }
-    } catch (error) { if (this.owns(generation, scope)) { this.failure(error as Error); this.scheduleReconnect(); } return; }
+    } catch (error) { if (this.owns(generation, scope)) this.connectionFailure(error as Error); return; }
     if (!this.owns(generation, scope) || !this.foreground) return;
     let defaultOwner = '';
     const probe = new HubTransport(new EndpointConfig(profile.baseUrl, profile.hubId, token, profile.pin, '', [], proxy, access));
@@ -824,20 +940,27 @@ export class ClientModel {
     } catch (error) {
       if (!this.owns(generation, scope)) return;
       // A hub without manager support has one legacy scope. Never downgrade a named manager.
-      if (!(error instanceof HttpFailure && error.status === 404 && !profile.manager)) { this.failure(error as Error); this.scheduleReconnect(); return; }
+      if (!(error instanceof HttpFailure && error.status === 404 && !profile.manager)) { this.connectionFailure(error as Error); return; }
     } finally { probe.close(); }
-    if (!profile.manager) await this.restoreSnapshot(generation, scope);
+    if (!profile.manager && restore) await this.restoreSnapshot(generation, scope);
     if (!this.owns(generation, scope) || !this.foreground) return;
     const config = new EndpointConfig(profile.baseUrl, profile.hubId, token, profile.pin, profile.manager, [], proxy, access);
     this.repository = new HubRepository(config, this.local, () => { if (this.owns(generation, scope)) this.unresolvedWrites = this.repository?.mutations?.blocked() || []; }, defaultOwner);
     await this.repository.mutations?.load(); if (!this.owns(generation, scope) || !this.foreground) return; this.unresolvedWrites = this.repository.mutations?.blocked() || [];
+    let onlineSince = 0, closeHandled = false;
     await this.repository.transport.connect((payload: string) => {
       if (this.owns(generation, scope)) this.event(payload);
-    }, (state: string) => {
+    }, (state: string, cause?: Error) => {
       if (!this.owns(generation, scope)) return;
       this.connected = state === 'ready' || state === 'online';
-      if (this.connected) { this.reconnectAttempt = 0; this.stopReconnect(); }
-      if (state === 'offline' || state === 'closed') { this.helloGeneration = -1; this.clearPendingDecisions(); this.releaseTerminal(); this.error = 'offline'; this.scheduleReconnect(); }
+      if (this.connected) { if (!onlineSince) onlineSince = Date.now(); this.stopReconnect(); }
+      if (state === 'offline' || state === 'closed') {
+        closeHandled = true; this.helloGeneration = -1;
+        // The upgrade can succeed just before the initial snapshot fails. Keep backing off across short-lived sockets.
+        if (onlineSince && Date.now() - onlineSince >= 30000) this.reconnectAttempt = 0;
+        this.transcript?.clearLive(); this.clearPendingDecisions(); this.releaseTerminal();
+        this.connectionFailure(cause || new Error('offline'));
+      }
       else if (this.connected && this.isChat() && (this.chatVisible || this.decisionsVisible)) {
         const row = this.selected;
         if (this.chatVisible) this.loadChat(row).catch((error: Error) => this.failure(error));
@@ -845,15 +968,15 @@ export class ClientModel {
       }
       this.publishDirectory();
       if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
-    }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
+    }).catch((error: Error) => { if (this.owns(generation, scope) && !closeHandled) this.connectionFailure(error); });
     if (this.owns(generation, scope)) await this.flushNotification();
   }
   private async restoreSnapshot(generation: number, scope: string): Promise<void> {
     try {
       const owner = this.heldOwner(), heldRevision = owner.heldRevision(scope);
-      const cached = await new ChatDraftStore(this.local).readSessionSnapshot(scope);
-      if (!this.owns(generation, scope) || heldRevision !== owner.heldRevision(scope) || !cached) return;
-      const snapshot = Wire.record(JSON.parse(cached) as Object);
+      const snapshot = decodeSessionSnapshot(await new ChatDraftStore(this.local).readSessionSnapshot(scope));
+      // An unreadable snapshot (one stored before it was bounded was cut at 8 MiB) is no snapshot; the next sync replaces it.
+      if (!this.owns(generation, scope) || heldRevision !== owner.heldRevision(scope) || !snapshot) return;
       const restored = owner.heldReceipts.filter((receipt: HeldActionReceipt) => receipt.scope !== scope);
       for (const saved of Wire.rows(snapshot, 'heldActions')) {
         const target = Wire.text(saved, 'target'), expected = new HeldAgentMessage();
@@ -938,8 +1061,8 @@ export class ClientModel {
         try { await hook(id, this.context); } catch (_) {}
       }
     }
-    try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id); }); } catch (_) { cleanupFailed = true; }
-    this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
+    try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id, true); }); } catch (_) { cleanupFailed = true; }
+    this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.workspaceNames.delete(id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }
     if (cleanupFailed) { this.error = 'cleanup_incomplete'; throw new Error('cleanup_incomplete'); }
     this.cleanupProfiles.delete(id);
@@ -974,13 +1097,15 @@ export class ClientModel {
         this.repository?.transport.hello(nativeNotifications.features(!this.detached && this.alerts));
         const generation = this.generation, scope = this.scope();
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
+      } else if (type === 'sessions_list') {
+        if (!this.repository?.hasSessionRevision(Wire.text(data, 'revision'))) this.queueRefresh(true);
       } else if (type === 'notify') { if (!this.detached) nativeNotifications.receive(this, data); }
       else if (type === 'fleet') { if (!this.detached) nativeLiveView.receiveFleetEvent(this, data).catch(() => {}); }
       else if (type === 'navigation') {
         if (Wire.has(data, 'pages') || Wire.has(data, 'hidden') || Wire.has(data, 'hidden_pages')) this.applyNavigationConfig(data);
         else if (this.repository && !this.demo) this.refreshNavigation(this.repository, this.generation, this.scope()).catch(() => {});
       }
-      else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
+      else if (type === 'items' || type === 'items_replace' || type === 'delta' || type === 'live_tools' || type === 'live') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
       } else if (type === 'assistant_starred') {
@@ -988,18 +1113,22 @@ export class ClientModel {
       } else if (['interaction', 'interactions', 'interaction_resolved', 'session', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
         if (type === 'inbox') this.inboxRead.change++;
         if (type === 'todo') this.todoRead.change++;
-        this.queueRefresh();
+        this.queueRefresh(['session','sessions','sessions_delta','session_delta','machines','managers','todo','inbox'].includes(type));
       }
     } catch (_) { this.error = 'failed'; }
   }
-  private queueRefresh(): void {
+  private queueRefresh(background: boolean = false): void {
+    const canWait = background && (this.feedTimer === -1 || this.queuedRefreshCanWait);
+    this.queuedRefreshCanWait = canWait;
     if (this.feedTimer !== -1) clearTimeout(this.feedTimer);
     const generation = this.generation, scope = this.scope();
     this.feedTimer = setTimeout(() => {
       this.feedTimer = -1;
       // A push may arrive after an in-flight GET already read the previous row.
       Promise.resolve(this.refreshTask).then(async (): Promise<void> => {
-        if (this.owns(generation, scope)) await this.refresh();
+        if (!this.owns(generation, scope)) return;
+        if (canWait && this.transcript?.readingHistory) { this.heldRefresh = true; return; }
+        this.heldRefresh = false; await this.refresh();
       }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
     }, 100);
   }
@@ -1015,7 +1144,7 @@ export class ClientModel {
     const generation = this.generation, scope = this.scope(), repo = this.repository, owner = this.heldOwner(), heldRevision = owner.heldRevision(scope);
     this.busy = true;
     try {
-      const sessions = await repo.sessions(), assistant = await repo.call('/api/v1/assistant');
+      const sessions = await repo.sessions(this.features.includes('sessions_list')), assistant = await repo.call('/api/v1/assistant');
       const machines = await repo.machines();
       let managers: ResourceRow[] = [];
       let rosterDefault = this.rosterDefaultId;
@@ -1026,12 +1155,20 @@ export class ClientModel {
       if (!this.owns(generation, scope)) return;
       if (heldRevision !== owner.heldRevision(scope)) { this.queueRefresh(); return; }
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
-      this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers; this.rosterDefaultId = rosterDefault;
-      this.updateSendFeedbackSessions(sessions);
+      const previousSessions = this.sessions, previousChats = this.conversations;
+      this.sessions = ResourceRow.reconcile(this.sessions, sessions);
+      this.sessionsReady = true;
+      this.machines = ResourceRow.reconcile(this.machines, machines);
+      this.managers = ResourceRow.reconcile(this.managers, managers);
+      if (!this.detached && this.syncedGeneration !== generation) {
+        this.syncedGeneration = generation;
+        hilog.info(0x0000, 'PersonaNet', 'initial_sync_complete %{public}s', this.features.includes('sessions_list') ? 'paged' : 'legacy');
+      }
+      this.rosterDefaultId = rosterDefault; this.updateSendFeedbackSessions(sessions);
       this.notifyStatusHooks();
       if (owner.heldReceipts.length) owner.heldReceipts = owner.heldReceipts.filter((receipt: HeldActionReceipt) => {
         if (receipt.scope !== scope) return true;
-        const row = sessions.find((item: ResourceRow) => this.target(item) === receipt.target);
+        const row = this.sessions.find((item: ResourceRow) => this.target(item) === receipt.target);
         if (receipt.pairing !== this.pairingRevision()) return false;
         // The Hub can omit an entire computer while its manager still holds this operation.
         if (!row) return true;
@@ -1042,23 +1179,31 @@ export class ClientModel {
       this.publishDirectory();
       if (!this.detached) nativeLiveView.syncFromModel(this).catch(() => {});
       if (this.selected.kind === 'session') {
-        const selected = sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
+        const selected = this.sessions.find((item: ResourceRow) => item.id === this.selected.id && item.machine === this.selected.machine);
         if (selected) this.selected = selected;
         else { this.selected.raw = JSON.stringify(Wire.payload(['read_only'], [true])); this.selected.state = 'unknown'; this.clearPendingDecisions(); }
         this.reconcileMessageCopies();
       }
       this.acceptSidebarConfig(assistant);
       this.mainId = Wire.text(assistant, 'main'); this.mainMachineId = Wire.text(assistant, 'main_machine_id', Wire.text(assistant, 'machine_id'));
-      this.conversations = Wire.rows(assistant, 'conversations').map((data: Record<string, Object>) => {
+      const conversations = Wire.rows(assistant, 'conversations').map((data: Record<string, Object>) => {
         const row = ResourceRow.from(data, 'conversation'); row.manager = this.profile.manager;
         if (!row.machine) row.machine = Wire.text(assistant, 'machine_id'); if (!row.session) row.session = row.id;
         return row;
       });
+      this.conversations = ResourceRow.reconcile(this.conversations, conversations);
       const heldActions = owner.heldReceipts.filter((receipt: HeldActionReceipt) => receipt.scope === scope)
         .map((receipt: HeldActionReceipt) => this.cachedHeldAction(receipt));
-      try { await new ChatDraftStore(this.local).saveSessionSnapshot(scope, sessions, this.conversations, heldActions,
-        (): boolean => this.owns(generation, scope) && owner.heldRevision(scope) === heldRevision, this.sidebarConfig); }
-      catch (_) { if (this.owns(generation, scope)) this.error = 'cache_unavailable'; }
+      const revision = repo.sessionListRevision;
+      const stamp = revision ? JSON.stringify([generation, revision, heldRevision, heldActions.length, this.sidebarConfig]) : '';
+      if (!stamp || stamp !== this.savedSnapshotStamp || previousSessions !== this.sessions || previousChats !== this.conversations) {
+        this.savedSnapshotStamp = '';
+        const current = (): boolean => this.owns(generation, scope) && owner.heldRevision(scope) === heldRevision;
+        try {
+          await new ChatDraftStore(this.local).saveSessionSnapshot(scope, this.sessions, this.conversations, heldActions, current, this.sidebarConfig);
+          if (current()) this.savedSnapshotStamp = stamp;
+        } catch (_) { if (this.owns(generation, scope)) this.error = 'cache_unavailable'; }
+      }
       if (this.isChat() && this.chatVisible) await this.loadChat(this.selected);
       else if (this.isChat() && this.decisionsVisible) await this.refreshDecisions();
       else this.readInteractionSnapshot().catch(() => {});
@@ -1264,10 +1409,13 @@ export class ClientModel {
       if (this.scope() === scope && this.target() === target) this.error = 'cache_unavailable';
     }
   }
-  async select(row: ResourceRow): Promise<void> {
+  async select(row: ResourceRow, openConversation: boolean = true, admit?: () => boolean): Promise<void> {
+    if (admit && !admit()) return;
     if (row.group && row.group !== this.profile.id || row.manager && row.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), selection = ++this.selectionGeneration;
-    this.cancelDraftTimer(); await this.persistDraft(); if (!this.owns(generation, scope) || selection !== this.selectionGeneration) return;
+    this.cancelDraftTimer(); await this.persistDraft();
+    if (!this.owns(generation, scope) || selection !== this.selectionGeneration || (admit && !admit())) return;
+    this.chatVisible = false; this.chatHistoryLoading = false; this.chatVisibilityRevision++;
     this.closeTranscript(); this.releaseTerminal(); this.selected = row; this.messages = []; this.clearPendingDecisions(); this.error = '';
     this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = true;
     this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.operationState = '';
@@ -1279,9 +1427,11 @@ export class ClientModel {
       await this.restoreOutbox(generation, scope);
     } finally { if (this.owns(generation, scope) && selection === this.selectionGeneration) this.draftLoading = false; }
     if (!this.owns(generation, scope) || selection !== this.selectionGeneration) return;
-    this.chatVisible = this.isChat();
+    if (admit && !admit()) return;
+    this.chatVisible = this.isChat() && openConversation;
     this.feedbackChanged();
-    if (this.chatVisible) await this.loadChat(row);
+    if (this.chatVisible) { void this.acknowledgeVisibleSession(row); await this.loadChat(row); }
+    else if (this.isChat()) await this.restoreCachedTranscript(row);
     // Dedicated resource workspaces own their reads and endpoint-specific loading/error state.
   }
   updateDraft(text: string): void {
@@ -1356,23 +1506,78 @@ export class ClientModel {
       message.at = entry.at; message.source = display.sources; message.imagePaths = content.images; message.filePaths = content.files;
       message.ownerTarget = entry.target; message.localImageCount = entry.imageCount; message.localOperation = entry.id; message.deliveryState = entry.state; message.failed = entry.state === 'failed'; return message;
     });
-    this.messages = this.renderedMessages.concat(heldBubbles, messages);
+    const stream = this.transcript;
+    const tailWork = this.renderedMessages[this.renderedMessages.length - 1]?.work;
+    const phase = tailWork?.latestExchange && tailWork.running && !stream?.liveCompacting && !this.liveTranscriptText ? tailWork.phaseTitle || '' : '';
+    const claudeCall = tailWork?.agent === 'claude' && tailWork.running && tailWork.unresolvedToolCount > 0;
+    const proposed = claudeCall ? '' : stream?.liveSummary || (tailWork?.unresolvedToolCount ? '' : phase);
+    const summary = /^(?:functions\.)?exec(?:_command)?$/i.test(proposed.trim()) ? '' : proposed;
+    const retryCount = stream?.liveRetryCount || '';
+    let pulse = retryCount ? tr('work_live_reconnecting') + ' ' + retryCount : summary;
+    let hideEmptyWork = !!pulse || !!this.liveTranscriptText;
+    if (!pulse && !this.liveTranscriptText && !stream?.liveTools?.length && (stream?.liveActive || stream?.liveThinking || stream?.liveCompacting)) {
+      const row = this.sessionRow(), data = row.data();
+      const waiting = !!this.decision || this.pendingDecisions.length > 0 || row.state === 'needs_you' || row.state === 'blocked' ||
+        Wire.text(data, 'status') === 'blocked' || Wire.number(data, 'pending_interactions') > 0 || Wire.bool(data, 'background_working');
+      const visibleCall = this.renderedMessages.some(message => message.work?.latestExchange === true &&
+        message.work.running && message.work.unresolvedToolCount > 0);
+      hideEmptyWork = true;
+      if (!waiting && !visibleCall) {
+        if (stream.liveCompacting) pulse = tr('work_live_compacting');
+        else if (!stream.liveThinking && Wire.text(data, 'agent') !== 'codex' &&
+          !(tailWork?.agent === 'claude' && tailWork.sectionTitle)) pulse = tr('work_live_active');
+      }
+    }
+    const display = this.renderedMessages.filter(message => !hideEmptyWork || !message.work || message.work.inspectionSteps.length > 0);
+    if (this.liveTranscriptText) {
+      const last = display[display.length - 1];
+      const continues = last?.role === 'assistant' && !!last.text && !last.turnDuration && !last.processIds && this.liveTranscriptText.startsWith(last.text);
+      const live = new ChatMessage(continues ? last.id : 'live-reply:' + this.target(), 'assistant', this.liveTranscriptText);
+      live.ownerTarget = this.target(); live.narration = continues && last?.narration === true;
+      if (continues) display[display.length - 1] = live; else display.push(live);
+    }
+    const visible = display.concat(heldBubbles, messages);
+    const last = visible[visible.length - 1];
+    const calls = stream?.liveTools;
+    const latestCall = calls?.length ? calls[calls.length - 1].id : '';
+    const phaseBetweenCalls = !latestCall && stream?.liveActive && last?.work?.running && !!summary;
+    if ((summary || retryCount) && last?.work?.latestExchange && (phase || phaseBetweenCalls || (latestCall && last.work.inspectionSteps.some(step =>
+      step.kind === 'tool' && !step.result && step.use.live_tool === true &&
+      (step.use.tool_use_id || step.use.toolUseId) === latestCall)))) {
+      // Decorate the visible copy only. The same group can stop being last when prose or a queued message arrives.
+      const current = new ChatMessage(last.id, 'work');
+      current.ownerTarget = last.ownerTarget; current.work = last.work; current.at = last.at;
+      current.liveSummary = pulse; current.providerRetry = !!retryCount;
+      visible[visible.length - 1] = current;
+    } else if (pulse && (last?.role !== 'assistant' || last.text.trim() !== pulse)) {
+      const activity = new ChatMessage('live-activity:' + this.target(), 'live_activity', pulse);
+      activity.ownerTarget = this.target(); activity.providerRetry = !!retryCount; visible.push(activity);
+    }
+    this.messages = visible;
   }
   dictationLocaleForChat(): string {
     const language = this.language === 'default' ? i18n.System.getSystemLanguage() : this.language;
     return dictationLocale(dictationPreference.choice, dictationTexts(this.draft, this.revisionItems), dictationPreference.last, language);
   }
   rememberDictationLocale(locale: string): void { dictationPreference.remember(locale); }
-  private publishTranscript(items: readonly TranscriptItem[], running: boolean): void {
-    this.revisionItems = items.slice();
-    const isMain = this.isMainActivityRow(this.selected);
-    const projection = isMain ? splitBackgroundRounds(items, running) : undefined;
-    this.activityOwner = isMain ? this.target() : '';
-    this.activityRounds = projection?.rounds || [];
-    this.renderedMessages = this.projectMessages(projection?.timeline || items, running);
-    const feedback = this.sendAttempts.get(this.target());
-    if (feedback) { feedback.observeItems(projection?.timeline || items); this.feedbackChanged(); }
-    this.echoedMessages = new Set(items.filter((item: TranscriptItem) => item.role === 'user').map((item: TranscriptItem) => Wire.text(Wire.record(item as Object), 'client_msg_id')).filter((id: string) => !!id));
+  private publishTranscript(items: readonly TranscriptItem[], running: boolean, fromStart: boolean = !this.hasMoreMessages, stableItems: boolean = false): void {
+    const changed = !stableItems || items !== this.publishedSource, working = running || !!this.transcript?.liveActive;
+    if (changed || this.planFromStart !== fromStart) this.planReplay = undefined;
+    this.planFromStart = fromStart;
+    if (changed) {
+      this.publishedSource = stableItems ? items : undefined; this.revisionItems = items.slice(); this.revisionItemsVersion++;
+      this.echoedMessages = new Set(items.filter((item: TranscriptItem) => item.role === 'user').map((item: TranscriptItem) => Wire.text(Wire.record(item as Object), 'client_msg_id')).filter((id: string) => !!id));
+    }
+    if (changed || this.publishedRunning !== working) {
+      const isMain = this.isMainActivityRow(this.selected);
+      const projection = isMain ? splitBackgroundRounds(items, running) : undefined;
+      this.activityOwner = isMain ? this.target() : '';
+      this.activityRounds = projection?.rounds || [];
+      this.renderedMessages = this.projectMessages(projection?.timeline || items, running);
+      const feedback = this.sendAttempts.get(this.target());
+      if (feedback) { feedback.observeItems(projection?.timeline || items); this.feedbackChanged(); }
+    }
+    this.publishedRunning = working;
     this.reconcileMessageCopies();
   }
   private reconcileMessageCopies(): void {
@@ -1408,7 +1613,7 @@ export class ClientModel {
     entry.state = 'done';
     if (this.target() === entry.target) {
       this.operationState = 'done';
-      if (this.draftRevision === entry.revision) { this.cancelDraftTimer(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; }
+      if (entry.revision && this.draftRevision === entry.revision) { this.cancelDraftTimer(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; }
       this.publishMessages();
     }
     const store = new ChatDraftStore(this.local);
@@ -1422,96 +1627,230 @@ export class ClientModel {
       await store.attachmentsCommitted(scope, entry.id); entry.attachmentSnapshot = '';
     }
   }
+  private async restoreCachedTranscript(row: ResourceRow): Promise<void> {
+    const generation = this.generation, scope = this.scope(), target = this.target(row), selection = this.selectionGeneration;
+    try {
+      const saved = await this.local.get('transcript:' + target);
+      if (!saved || !this.owns(generation, scope) || selection !== this.selectionGeneration || target !== this.target() || this.transcript) return;
+      const reducer = new TranscriptReducer(); reducer.restore(JSON.parse(saved) as TranscriptSnapshot);
+      this.publishTranscript(reducer.items, false, reducer.hasMore === false); this.hasMoreMessages = false;
+    } catch (_) { /* A missing or unreadable preview can be filled by the normal history read. */ }
+  }
   private async cachedChat(row: ResourceRow): Promise<void> {
-    const generation = this.generation, scope = this.scope(), target = this.target(row);
-    const saved = await this.local.get('transcript:' + target);
-    if (!this.owns(generation, scope) || target !== this.target()) return;
-    if (saved) { const reducer = new TranscriptReducer(); reducer.restore(JSON.parse(saved) as TranscriptSnapshot); this.publishTranscript(reducer.items, false); this.hasMoreMessages = false; }
+    const generation = this.generation, scope = this.scope(), target = this.target(row), visibility = this.chatVisibilityRevision;
+    await this.restoreCachedTranscript(row);
+    if (!this.owns(generation, scope) || visibility !== this.chatVisibilityRevision || target !== this.target()) return;
     this.clearPendingDecisions(); this.error = 'offline';
   }
+  private seenPending = new Set<string>();
+
+  private async acknowledgeVisibleSession(row: ResourceRow): Promise<void> {
+    if (row.kind !== 'session' || !this.chatVisible || !this.connected || this.target(row) !== this.target()) return;
+    const session = this.sessionRow(row), raw = session.data();
+    if (session.state !== 'unread' && !(session.state === 'idle' && Wire.bool(Wire.object(raw, 'work'), 'just_finished'))) return;
+    const target = this.target(row), repo = this.repo(), generation = this.generation, scope = this.scope();
+    const path = '/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/seen';
+    const key = JSON.stringify([generation, scope, target]);
+    if (!row.machine || this.seenPending.has(key) || this.operationBlocked(path)) return;
+    const owner = (): boolean => this.owns(generation, scope) && this.repository === repo;
+    const visible = (): boolean => owner() && this.chatVisible && target === this.target();
+    this.seenPending.add(key);
+    try {
+      // Opening the chat counts as reading even if the user goes back before the journal dispatches.
+      const sameResult = (): boolean => owner() && this.sessionRow(row).raw === session.raw && this.sessionRow(row).state === session.state;
+      await repo.call(path, 'POST', {}, '', sameResult);
+      if (!owner()) return;
+      const update = (item: ResourceRow): ResourceRow => {
+        if (this.target(item) !== target || item.raw !== session.raw || item.state !== session.state) return item;
+        const read = item.copy(item.group, 'idle'), data = read.data();
+        data['state'] = 'idle'; data['unread'] = false;
+        const work = Wire.object(data, 'work');
+        if (Wire.has(work, 'just_finished')) { work['just_finished'] = false; data['work'] = work; }
+        read.raw = JSON.stringify(data); return read;
+      };
+      this.sessions = this.sessions.map(update);
+      if (this.target() === target) this.selected = update(this.selected);
+      this.publishDirectory();
+    } catch (error) { if (visible()) this.failure(error as Error); }
+    finally { this.seenPending.delete(key); }
+  }
+
   async loadChat(row: ResourceRow): Promise<void> {
-    if (this.demo && this.demoRepository) { this.publishTranscript(this.demoRepository.historyItems(row) as Object as TranscriptItem[], false); this.hasMoreMessages = false; this.transcriptHistoryReady = true; await this.refreshDecisions(); return; }
+    if (this.demo && this.demoRepository) { this.publishTranscript(this.demoRepository.historyItems(row) as Object as TranscriptItem[], this.turnWorking(), true); this.hasMoreMessages = false; this.transcriptHistoryReady = true; void this.acknowledgeVisibleSession(row); await this.refreshDecisions(); return; }
     const generation = this.generation, scope = this.scope(), target = this.target(row);
     if (!this.connected) { await this.cachedChat(row); return; }
+    const visibility = this.chatVisibilityRevision;
+    const current = (): boolean => this.owns(generation, scope) && this.target() === target && this.chatVisibilityRevision === visibility;
     const sequence = ++this.decisionRefreshSequence;
     let interactions: Record<string, Object>[] = [], decisionsRead = false;
     try { interactions = await this.readInteractionSnapshot(); decisionsRead = true; }
-    catch (error) { if (this.owns(generation, scope) && this.target() === target) this.failure(error as Error); }
-    if (!this.owns(generation, scope) || this.target() !== target) return;
+    catch (error) { if (current()) this.failure(error as Error); }
+    if (!current()) return;
     if (decisionsRead) this.replacePendingDecisions(interactions, row, target, generation, scope, sequence);
     if (!this.transcript || this.transcriptKey !== target) {
       this.closeTranscript(); this.transcriptKey = target;
       this.transcript = new TranscriptModel(row, this.repo(), this.local, target, (items: readonly TranscriptItem[], hasMore: boolean, historyReady: boolean) => {
         if (!this.owns(generation, scope) || this.target() !== target) return;
-        this.hasMoreMessages = hasMore; this.transcriptHistoryReady = historyReady; this.publishTranscript(items, this.turnWorking());
-      }, (error: Error) => { if (this.owns(generation, scope) && this.target() === target) this.failure(error); });
+        this.hasMoreMessages = hasMore; this.transcriptHistoryReady = historyReady; this.publishTranscript(items, this.turnWorking(), !hasMore, true);
+        if (historyReady) void this.acknowledgeVisibleSession(row);
+      }, (error: Error) => { if (this.owns(generation, scope) && this.target() === target) this.failure(error); },
+      (text: string) => {
+        if (!this.owns(generation, scope) || this.target() !== target) return;
+        this.liveTranscriptText = text; this.publishMessages();
+      }, () => {
+        if (!this.owns(generation, scope) || this.target() !== target) return;
+        this.renderedMessages = this.projectMessages(this.revisionItems, this.turnWorking());
+        this.publishMessages();
+      });
       await this.transcript.open();
     } else await this.transcript.latest();
+    if (current()) void this.acknowledgeVisibleSession(row);
   }
   private projectMessages(items: readonly TranscriptItem[], running: boolean): ChatMessage[] {
-    const turns: TranscriptItem[][] = []; let turn: TranscriptItem[] = [];
-    const isRecap = (item: TranscriptItem): boolean => item.kind === 'recap' && item.role === 'system' && !!item.id && !!item.text?.trim();
-    items.forEach((item: TranscriptItem) => {
-      const startsTurn = item.wake === true || (item.role === 'user' && item.kind === 'text');
-      if (turn.length && (startsTurn || isRecap(item) !== isRecap(turn[0]))) {
-        turns.push(turn); turn = [];
+    const target = this.target();
+    const messages = projectTranscriptRows(items, running || !!this.transcript?.liveActive, this.transcript?.liveTools, Wire.text(this.sessionRow().data(), 'agent'),
+      (action: string): string => tr('next_step_' + action)).map((row): ChatMessage => {
+      if (row.kind === 'work') {
+        const summary = new ChatMessage(row.id, 'work');
+        summary.work = row.work; summary.turnChanges = turnChangesFromWork(row.work); summary.ownerTarget = target;
+        summary.at = row.work.userMessages.length ? this.itemTime(row.work.userMessages[0]) : 0;
+        summary.running = row.work.running; summary.toolCount = row.work.toolCount; summary.thoughtCount = row.work.thoughtCount;
+        return summary;
       }
-      turn.push(item);
+      const item = row.item;
+      const message = new ChatMessage(row.id);
+      message.ownerTarget = target; message.itemId = item.id; message.at = this.itemTime(item);
+      message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : '';
+      if (row.kind === 'next_step') {
+        message.role = 'next_step'; message.nextStep = row.proposal;
+      } else if (row.kind === 'image') {
+        message.role = item.role === 'user' ? 'user' : 'assistant'; message.imageId = item.id;
+      } else if (row.kind === 'event' || (row.kind === 'input' && isAgentInput(item))) {
+        message.role = 'event'; message.event = item;
+      } else if (row.kind === 'input') {
+        message.userTextClipped = Number(item.full_size) > 0 || item.question_replies_cut === true;
+        const display = messageDisplay(item.text || ''), content = parseMessageContent(display.text, message.userTextClipped);
+        message.role = 'user'; message.text = content.text; message.source = display.sources;
+        const expanded = message.userTextClipped ? this.expandedAttachments.get(item.id) : undefined;
+        const same = expanded && expanded.history === (this.transcript?.historyKey || '') && expanded.seq === item.seq &&
+          expanded.at === message.at && expanded.preview === item.text;
+        if (same && expanded!.attachmentOnly) message.text = '';
+        message.imagePaths = same ? expanded!.images : content.images;
+        message.filePaths = same ? expanded!.files : content.files;
+        message.queued = item.queued === true;
+      } else {
+        message.role = 'assistant'; message.text = item.text || ''; message.narration = row.kind === 'narration';
+        const milliseconds = transcriptRecord(row.duration?.turn_duration)?.duration_ms;
+        message.turnDuration = recordedDuration(milliseconds);
+        message.turnMilliseconds = typeof milliseconds === 'number' ? milliseconds : undefined;
+        message.processIds = row.processIds;
+        message.leadIds = row.leadIds;
+        message.partialProcess = row.partialProcess === true;
+      }
+      return message;
     });
-    if (turn.length) turns.push(turn);
-    const messages: ChatMessage[] = [];
-    turns.forEach((group: TranscriptItem[], index: number) => {
-      if (isRecap(group[0])) {
-        const message = new ChatMessage('recap:' + group[0].id, 'recap', group[group.length - 1].text || '');
-        message.ownerTarget = this.target();
-        message.itemId = group[0].id;
-        message.at = this.itemTime(group[0]);
-        message.terminalRecap = index === turns.length - 1;
-        message.recaps = group.map((item: TranscriptItem): ConversationRecapItem => {
-          return { id: item.id, at: this.itemTime(item), text: item.text || '' };
-        });
-        messages.push(message);
-        return;
-      }
-      const projection = projectToolTurn(group[0].id, group, running && index === turns.length - 1);
-      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
-      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.at = this.itemTime(item); messages.push(message); });
-      if (projection.summaryVisible) {
-        const summary = new ChatMessage(projection.workKey, 'work');
-        summary.at = this.itemTime(group[0]);
-        summary.toolCount = projection.toolCount; summary.thoughtCount = projection.thoughtCount; summary.running = projection.running;
-        summary.work = projection.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((value: string) => !!value).join('\n\n');
-        summary.raw = JSON.stringify(group); messages.push(summary);
-      }
-      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; message.sourceFingerprint = typeof projection.visibleAssistantText['source_fingerprint'] === 'string' ? projection.visibleAssistantText['source_fingerprint'] as string : ''; message.at = this.itemTime(projection.visibleAssistantText); messages.push(message); }
+    const combined: ChatMessage[] = [];
+    messages.forEach((message: ChatMessage) => {
+      const item = message.event;
+      if (item?.kind === 'recap' && item.role === 'system' && item.id && item.text?.trim()) {
+        const previous = combined[combined.length - 1];
+        const recap = previous?.role === 'recap' ? previous : new ChatMessage('recap:' + item.id, 'recap');
+        if (recap !== previous) { recap.ownerTarget = target; recap.at = this.itemTime(item); recap.itemId = item.id; combined.push(recap); }
+        recap.text = item.text; recap.recaps.push({id:item.id, at:this.itemTime(item), text:item.text});
+      } else combined.push(message);
     });
-    return messages;
+    const last = combined[combined.length - 1];
+    if (last?.role === 'recap') last.terminalRecap = true;
+    return groupUserImages(combined);
   }
   private itemTime(item: TranscriptItem): number {
     const value = item['ts']; const parsed = typeof value === 'string' ? Date.parse(value) : 0;
     return Number.isFinite(parsed) ? parsed : 0;
   }
-  private workText(step: WorkInspectionStep): string {
-    if (step.kind === 'narration') return step.item.text || '';
-    if (step.kind === 'fold') return tr('work_summary') + ' · ' + (step.toolCount + step.thoughtCount);
-    const use = Wire.record(JSON.parse(JSON.stringify(step.use)) as Object);
-    const name = Wire.text(use, 'tool', Wire.text(use, 'name', tr('work_summary')));
-    const input = Wire.object(use, 'input');
-    return [name, Object.keys(input).length ? JSON.stringify(input, null, 2) : step.use.text || '',
-      step.results.map((item: TranscriptItem) => item.text || '').join('\n')].filter((value: string) => !!value).join('\n');
+  private closeTranscript(): void { this.expandedAttachments.clear();this.transcriptHistoryReady = false; this.transcript?.close(); this.liveTranscriptText = ''; this.transcript = undefined; this.transcriptKey = ''; this.planReplay = undefined; this.publishedSource = undefined; this.revisionItems = []; this.revisionItemsVersion++; }
+  showConversation(row: ResourceRow): void {
+    this.chatVisible = true; this.feedbackChanged(); this.chatHistoryLoading = true;
+    void this.acknowledgeVisibleSession(row);
+    const visibility = ++this.chatVisibilityRevision, generation = this.generation, scope = this.scope(), target = this.target(row);
+    const current = (): boolean => this.chatVisibilityRevision === visibility && this.owns(generation, scope) && this.target() === target;
+    this.loadChat(row).catch((error: Error) => { if (current()) this.failure(error); })
+      .finally(() => { if (current()) this.chatHistoryLoading = false; });
   }
-  private closeTranscript(): void { this.transcriptHistoryReady = false; this.transcript?.close(); this.transcript = undefined; this.transcriptKey = ''; this.revisionItems = []; }
-  showConversation(row: ResourceRow): void { this.chatVisible = true; this.feedbackChanged(); this.loadChat(row).catch((error: Error) => this.failure(error)); }
-  hideConversation(releaseTools: boolean = true): void { this.chatVisible = false; this.feedbackChanged(); this.closeTranscript(); this.clearPendingDecisions(); if (releaseTools) this.releaseTerminal(); this.persistDraft().catch(() => this.error = 'failed'); }
+  hideConversation(releaseTools: boolean = true): void { this.chatVisible = false; this.feedbackChanged(); this.chatHistoryLoading = false; this.chatVisibilityRevision++; this.closeTranscript(); this.clearPendingDecisions(); if (releaseTools) this.releaseTerminal(); this.persistDraft().catch(() => this.error = 'failed'); }
   decisionSourceMessage(toolUseId: string): string {
     return this.transcriptKey === this.target() ? this.transcript?.decisionSource(toolUseId) || '' : '';
   }
-  async loadOlder(): Promise<boolean> { try { if (!this.transcript) return false; await this.transcript.older(); return true; } catch (error) { this.failure(error as Error); return false; } }
+  holdHistoryRendering(): (() => void) | undefined {
+    const stream = this.transcript;
+    if (!stream) return undefined;
+    const release = stream.holdHistoryRendering(), generation = this.generation, scope = this.scope();
+    return (): void => {
+      release();
+      if (this.heldRefresh && !this.transcript?.readingHistory && this.owns(generation, scope)) {
+        this.heldRefresh = false; this.queueRefresh(true);
+      }
+    };
+  }
+  get oldestTranscriptSeq(): number { return this.revisionItems[0]?.seq ?? 0; }
+  prefetchOlder(): void {
+    if (this.connected && this.hasMoreMessages) this.transcript?.prefetchOlder(this.oldestTranscriptSeq);
+  }
+  /** An earlier page that cannot be read is reported by the Load more row with its Retry, not as a page notice. */
+  async loadOlder(): Promise<boolean> {
+    try { if (!this.transcript) return false; await this.transcript.older(); return true; }
+    catch (error) {
+      if (error instanceof HttpFailure && (error.status === 401 || error.status === 403)) this.failure(error as Error);
+      return false;
+    }
+  }
+  async readFullUserText(message: ChatMessage): Promise<string> {
+    const repo = this.repository, owner = this.transcript;
+    const target = this.target(), row = this.selected;
+    const history = owner?.historyKey || '';
+    const partial = this.revisionItems.find(item => item.id === message.itemId);
+    const admitted = (): boolean => !!repo && this.repository === repo && !!owner && owner === this.transcript && (owner.historyKey || '') === history &&
+      message.role === 'user' && message.ownerTarget === target && this.target() === target && !!message.itemId &&
+      this.revisionItems.some(item => item.id === message.itemId && item.role === 'user' && item.kind === 'text' && this.itemTime(item) === message.at && item.seq === partial?.seq && item.text === partial?.text);
+    if (!repo || !admitted()) throw new Error('request_updated');
+    const path = '/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/items/' + segment(message.itemId) + '/full';
+    const data = await repo.call(path, 'GET', {}, '', admitted);
+    const item = data as Object as TranscriptItem;
+    if (!admitted() || item.id !== message.itemId || item.role !== 'user' || item.kind !== 'text' || !item.text) throw new Error('request_updated');
+    const content = parseMessageContent(messageDisplay(displayQuestionReply(item).text || '').text);
+    if (partial && (content.images.length || content.files.length)) {
+      this.expandedAttachments.set(partial.id, { attachmentOnly:!content.text, history, seq:partial.seq, at:message.at, preview:displayQuestionReply(partial).text || '',
+        images:content.images, files:content.files });
+      this.renderedMessages = this.projectMessages(this.revisionItems, this.turnWorking());
+      this.publishMessages();
+    }
+    return content.text;
+  }
+  async expandTurnProcess(reply: ChatMessage, isOpen: () => boolean): Promise<void> {
+    const transcript = this.transcript, target = this.target();
+    if (!transcript || reply.ownerTarget !== target) return;
+    const valid = (): boolean => this.transcript === transcript && this.target() === target && this.connected && isOpen();
+    let current: ChatMessage | undefined = reply;
+    while (valid() && current?.partialProcess && this.hasMoreMessages) {
+      const first = this.revisionItems[0]?.id;
+      if (!await this.loadOlder() || !valid() || first === this.revisionItems[0]?.id) break;
+      current = this.renderedMessages.find(m => m.itemId === reply.itemId && !!m.processIds);
+    }
+    if (!valid() || !current?.processIds) return;
+    const ids = new Set(current.processIds);
+    for (const m of this.renderedMessages) {
+      if (!valid()) return;
+      if (ids.has(m.id) && m.work?.inspectionSteps.some(step => step.kind === 'fold')) await this.expandWork(m);
+    }
+  }
   async expandWork(message: ChatMessage): Promise<void> {
+    const transcript = this.transcript;
+    if (!transcript || !message.work || message.ownerTarget !== this.target()) return;
     try {
-      const items: TranscriptItem[] = JSON.parse(message.raw) as TranscriptItem[];
-      for (const item of items) if (item.kind === 'fold') await this.transcript?.unfold(item.id);
-    } catch (error) { this.failure(error as Error); }
+      for (const step of message.work.inspectionSteps) {
+        if (this.transcript !== transcript) return;
+        if (step.kind === 'fold') await transcript.unfold(step.id);
+      }
+    } catch (error) { if (this.transcript === transcript) this.failure(error as Error); }
   }
   private decodeDecision(data: Record<string, Object>): Decision {
     const decision = decodeInteractionDecision(data);
@@ -1614,18 +1953,22 @@ export class ClientModel {
     try { await this.persistDraft();await new ChatDraftStore(this.local).discardForwardMedia(key,before,this.sourceContext); }
     catch (_) { if(this.target()===key && this.draftRevision===current){this.sourceContext=before;this.draftRevision=old;this.error='cache_unavailable';} }
   }
-  async send(admit?: () => boolean): Promise<boolean> {
+  async send(admit?: () => boolean, choiceText?: string): Promise<boolean> {
     if (admit && !admit()) return false;
-    const text = this.draft;
+    const fromDraft = choiceText === undefined, text = choiceText ?? this.draft;
     if (utf8Bytes(text) > 100000) { this.error = 'chat_attachment_text_too_large'; return false; }
-    if (this.draftLoading || !this.canSend() || (!text.trim() && !this.hasSendableContext()) || ['pending', 'unknown'].includes(this.operationState)) return false;
+    if (this.draftLoading || this.decisionBlocksMessage() || !this.canSend() || (!text.trim() && !this.hasSendableContext()) || ['pending', 'unknown'].includes(this.operationState)) return false;
+    const prepared = fromDraft ? this.prepareMessageText(text) : text;
+    if (utf8Bytes(prepared) > 100000) { this.error = 'chat_attachment_request_too_large'; return false; }
     if (this.demo && this.demoRepository) {
-      const prepared = this.prepareMessageText(text); if (utf8Bytes(prepared) > 100000) { this.error = 'chat_attachment_request_too_large'; return false; }
-      try { this.demoRepository.sendLocal(this.selected, prepared); this.sourceContext = ''; this.updateDraft(''); await this.loadChat(this.selected); return true; }
-      catch (error) { this.failure(error as Error); return false; }
+      try {
+        this.demoRepository.sendLocal(this.selected, prepared);
+        if (fromDraft) { this.sourceContext = ''; this.updateDraft(''); }
+        await this.loadChat(this.selected); return true;
+      } catch (error) { this.failure(error as Error); return false; }
     }
-    const preparedText = this.prepareMessageText(text); if (utf8Bytes(preparedText) > 100000) { this.error = 'chat_attachment_request_too_large'; return false; }
-    return this.dispatchMessage(this.repo(), this.selected, preparedText, [], this.generation, this.scope(), this.target(), text, this.sourceContext, '', admit);
+    return this.dispatchMessage(this.repo(), this.selected, prepared, [], this.generation, this.scope(), this.target(),
+      fromDraft ? text : undefined, fromDraft ? this.sourceContext : '', '', admit);
   }
   async sendPrepared(prepared: PreparedAttachmentSend, draft: string, context: string, admit?: () => boolean): Promise<boolean> {
     if (admit && !admit() || !prepared.repository || this.draftLoading || !this.canSend() || ['pending', 'unknown'].includes(this.operationState) ||
@@ -1634,19 +1977,27 @@ export class ClientModel {
     if (this.draft !== draft || this.sourceContext !== context) { this.error = 'chat_attachment_selection_changed'; return false; }
     return this.dispatchMessage(prepared.repository, prepared.row, prepared.text, prepared.images, prepared.generation, prepared.scope, prepared.modelTarget, draft, context, JSON.stringify(prepared.snapshot), admit);
   }
-  private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string, context: string, attachmentSnapshot: string = '', admit?: () => boolean): Promise<boolean> {
+  private async dispatchMessage(repo: HubRepository, row: ResourceRow, text: string, images: Object[], generation: number, scope: string, target: string, draft: string | undefined, context: string, attachmentSnapshot: string = '', admit?: () => boolean): Promise<boolean> {
     const store = new ChatDraftStore(this.local), entry = new ChatOutboxEntry();
     const hub = this.profile.id, pairing = this.pairingRevision();
     const paired = (): boolean => (ClientModel.pairingEpochs.get(hub) || 0) === pairing && this.local.accepts('outbox:' + scope, entry.localEpoch);
-    if (!this.draftRevision) this.draftRevision = util.generateRandomUUID();
-    entry.id = util.generateRandomUUID(); entry.target = target; entry.revision = this.draftRevision; entry.text = text; entry.context = context; entry.draft = draft; entry.imageCount = images.length; entry.attachmentSnapshot = attachmentSnapshot; entry.at = Date.now(); entry.localEpoch = this.local.revision('outbox:' + scope);
+    entry.id = util.generateRandomUUID(); entry.target = target; entry.text = text; entry.context = context;
+    entry.draft = draft ?? text; entry.imageCount = images.length; entry.attachmentSnapshot = attachmentSnapshot;
+    entry.at = Date.now(); entry.localEpoch = this.local.revision('outbox:' + scope);
+    if (draft !== undefined) {
+      if (!this.draftRevision) this.draftRevision = util.generateRandomUUID();
+      entry.revision = this.draftRevision; this.cancelDraftTimer();
+    }
+    const draftCurrent = (): boolean => draft === undefined || this.draftRevision === entry.revision;
     entry.afterSequence = this.revisionItems.length ? this.revisionItems[this.revisionItems.length-1].seq : 0;
     const feedback = this.makeSendFeedback(row,entry);
     this.sendAttempts.set(target,feedback); this.feedbackChanged();
-    this.activeMessages.add(entry.id); this.cancelDraftTimer(); this.operationState = 'pending'; this.error = ''; let dispatched = false, staged = false;
+    this.activeMessages.add(entry.id); this.operationState = 'pending'; this.error = ''; let dispatched = false, staged = false;
     try {
-      const captured = new ChatDraft(); captured.text = draft; captured.context = context; captured.revision = entry.revision;
-      await store.save(target, captured);
+      if (draft !== undefined) {
+        const captured = new ChatDraft(); captured.text = draft; captured.context = context; captured.revision = entry.revision;
+        await store.save(target, captured);
+      }
       if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo) { feedback.finish(); this.feedbackChanged(); this.activeMessages.delete(entry.id); if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; } return false; }
       if (context.includes('"forward"') && draftForwardRows(context).length) {
         const current=():boolean=>this.owns(generation,scope) && this.target()===target && this.repository===repo && this.draftRevision===entry.revision && (!admit || admit());
@@ -1655,10 +2006,10 @@ export class ClientModel {
         if (utf8Bytes(JSON.stringify(Wire.payload(['text','images'],[text,images])))>=4*1024*1024) throw new Error('chat_attachment_request_too_large');
       }
       await store.stage(scope, entry); staged = true;
-      if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo || this.draftRevision !== entry.revision || !this.canSend()) { feedback.finish(); this.feedbackChanged(); await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
+      if (admit && !admit() || !this.owns(generation, scope) || this.target() !== target || this.repository !== repo || !draftCurrent() || this.decisionBlocksMessage() || !this.canSend()) { feedback.finish(); this.feedbackChanged(); await store.settle(scope, entry.id, 'failed'); this.activeMessages.delete(entry.id); entry.state = 'failed'; if (this.owns(generation, scope) && this.target() === target) { this.operationState = 'failed'; this.error = 'request_updated'; this.publishMessages(); } return false; }
       this.localMessages = this.localMessages.concat([entry]); this.publishMessages();
       dispatched = true;
-      const reply = await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && this.draftRevision === entry.revision && !this.decision && this.canSend(), this.imageLimits(row).requestBytes);
+      const reply = await repo.send(row, text, entry.id, '', images, (): boolean => (!admit || admit()) && this.owns(generation, scope) && this.target() === target && this.repository === repo && draftCurrent() && !this.decisionBlocksMessage() && this.canSend(), this.imageLimits(row).requestBytes);
       if (reply && Wire.text(reply,'delivered') === 'later') feedback.finish();
       else if (paired()) {
         const now = Date.now(); feedback.accept(now);
@@ -1751,24 +2102,34 @@ export class ClientModel {
   }
   @Trace interruptPendingKey: string = '';
   private interruptIdentity(): string { return JSON.stringify([this.generation, this.target()]); }
-  private turnWorking(): boolean {
-    const row = this.sessionRow();
-    const data = row.data(), status = Wire.text(data, 'status', row.state);
-    return row.state === 'working' || status === 'working' || Wire.bool(data, 'working') ||
-      this.selected.kind === 'session' && status === 'blocked';
+  /** A turn is running. A row the hub reports as working only because of background work (background_working) has
+   *  ended its turn: its closing reply, next-step box and finished plan show as for an idle session. */
+  turnWorking(): boolean {
+    const row = this.sessions.find((item: ResourceRow) => item.machine === this.selected.machine && (item.session || item.id) === (this.selected.session || this.selected.id)) || this.selected;
+    const data = row.data();
+    if (Wire.bool(data, 'background_working')) return false;
+    return row.state === 'working' || Wire.text(data, 'status') === 'working' || Wire.bool(data, 'working') ||
+      this.selected.kind === 'session' && Wire.text(data, 'status', row.state) === 'blocked';
   }
   assistantReplyWorking(): boolean { return this.selected.kind === 'conversation' && this.turnWorking(); }
   agentQueuesMessages(): boolean { return this.selected.kind === 'session' && this.turnWorking(); }
   stopPending(): boolean { return this.interruptPendingKey === this.interruptIdentity(); }
+  private interruptibleTurn(): boolean {
+    if (!this.isChat() || !this.canInterrupt()) return false;
+    const row = this.sessionRow(), data = row.data(), status = Wire.text(data, 'status', row.state);
+    if (status === 'offline' || Wire.bool(data, 'archived') || Wire.bool(data, 'deleted')) return false;
+    return this.turnWorking() || status === 'blocked' ||
+      (this.transcriptKey === this.target() && this.transcript?.liveActive === true);
+  }
   canStop(): boolean {
     const path = '/api/v1/sessions/' + encodeURIComponent(this.selected.machine) + '/' + encodeURIComponent(this.selected.session || this.selected.id) + '/interrupt';
-    return this.canInterrupt() && this.turnWorking() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
+    return this.interruptibleTurn() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
   }
   async stop(admission?: () => boolean): Promise<boolean> {
     if (!this.canStop() || admission && !admission()) return false;
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
     const feedback = this.sendAttempts.get(target);
-    const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.canInterrupt() && this.turnWorking() && (!admission || admission());
+    const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.interruptibleTurn() && (!admission || admission());
     this.interruptPendingKey = pending;
     try { await repo.stop(row, admit); } catch (error) {
       if (this.owns(generation, scope) && this.target() === target && this.repository === repo) this.failure(error as Error);
@@ -1776,7 +2137,7 @@ export class ClientModel {
     } finally { if (this.interruptPendingKey === pending) this.interruptPendingKey = ''; }
     if (feedback && this.owns(generation,scope) && this.sendAttempts.get(target) === feedback) await this.endSendFeedback(scope,target,feedback);
     if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return false;
-    if (this.demo && this.demoRepository === repo) this.refreshDemo();
+    if (this.demo && this.demoRepository === repo) this.refreshDemo(); else this.queueRefresh();
     return true;
   }
   async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
@@ -1920,10 +2281,55 @@ export class ClientModel {
         approve: Wire.bool(caps, 'approve'), terminal: Wire.bool(caps, 'terminal'), attach: Wire.bool(caps, 'attach') } };
     return sessionCapabilities(input);
   }
+  takeoverOffered(): boolean {
+    const row = this.sessionRow(), data = row.data();
+    return this.connected && this.selected.kind === 'session' && !!row.machine && !this.capabilities().canSend &&
+      (Wire.text(data, 'agent') === 'codex' || Wire.text(data, 'source_kind').startsWith('codex')) &&
+      Object.keys(Wire.object(Wire.object(data,'capabilities'),'takeover')).length > 0;
+  }
+
+  takeoverCanResume(): boolean {
+    return this.takeoverOffered() && Wire.bool(Wire.object(Wire.object(this.sessionRow().data(),'capabilities'),'takeover'),'can_resume');
+  }
+
+  async takeOverSession(continueInstead: boolean, confirm: (continuation: boolean) => Promise<boolean>, admit: () => boolean): Promise<ResourceRow | undefined> {
+    if (!admit() || !this.takeoverOffered()) return undefined;
+    const row = this.sessionRow(), generation = this.generation, scope = this.scope(), target = this.target(), repo = this.repo();
+    const owner = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && admit();
+    const current = (): boolean => owner() && this.takeoverOffered();
+    const path = '/api/v1/machines/' + segment(row.machine) + '/codex/' + segment(row.session || row.id) + '/takeover';
+    if (this.operationBlocked(path)) throw new Error('pending_action');
+    const plan = await repo.call(path);
+    if (!current()) return undefined;
+    if (!Wire.has(plan, 'can_resume') || !Wire.has(plan, 'running') || !Wire.text(plan, 'token')) throw new Error('request_updated');
+    if (!continueInstead && Wire.bool(plan,'can_resume')) {
+      const running = Wire.bool(plan,'running');
+      if (running && !await confirm(false) || !current()) return undefined;
+      try {
+        const result = await repo.call(path,'POST',Wire.payload(['token','confirm_stop'],[Wire.text(plan,'token'),running]),'',current,false,
+          (reply: Record<string,Object>): boolean => !!Wire.text(Wire.object(reply,'session'),'session_id') && Wire.text(Wire.object(reply,'session'),'machine_id',row.machine) === row.machine);
+        if (!owner()) return undefined;
+        const taken = ResourceRow.from(Wire.object(result,'session'),'session');
+        taken.machine = taken.machine || row.machine; taken.manager = row.manager; taken.group = this.profile.id;
+        await this.refresh();
+        return owner() ? taken : undefined;
+      } catch (error) {
+        if ((error as HttpFailure).code !== 'codex_takeover_continue_only') throw error as Error;
+        if (!current()) return undefined;
+      }
+    }
+    const prompt = Wire.text(plan,'continuation_prompt');
+    if (!prompt || !await confirm(true) || !current()) return undefined;
+    const machine = this.machines.find(item => item.id === row.machine && item.manager === this.profile.manager);
+    if (!machine) throw new Error('offline');
+    return this.createAgent(prompt,machine,Wire.text(plan,'cwd'),'codex',Wire.text(Wire.object(row.data(),'todo'),'id'),current,'codex');
+  }
+
   canAttach(): boolean { return this.connected && this.capabilities().canAttach; }
-  async attach(): Promise<void> {
+  async attach(admit?: () => boolean): Promise<void> {
     if (!this.canAttach()) return; const generation = this.generation, scope = this.scope(), row = this.selected;
-    try { await this.repo().call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/attach', 'POST');
+    const current = (): boolean => this.owns(generation, scope) && this.target(row) === this.target() && this.canAttach() && (!admit || admit());
+    try { await this.repo().call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/attach', 'POST', {}, '', current);
       await this.refresh(); if (this.owns(generation, scope) && this.target(row) === this.target()) { const updated = this.sessions.find((item: ResourceRow) => item.key() === row.key()); if (updated) await this.select(updated); }
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
   }
@@ -2178,10 +2584,10 @@ export class ClientModel {
     const previous=this.sourceContext,target=this.target();this.sourceContext='';this.draftRevision=util.generateRandomUUID();
     this.persistDraft().then(()=>new ChatDraftStore(this.local).discardForwardMedia(target,previous,'')).catch(()=>this.error='failed');
   }
-  async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = ''): Promise<ResourceRow> {
+  async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = '', agent: string = ''): Promise<ResourceRow> {
     if (machine.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), repo = this.repo();
-    const row = await repo.createAgent(prompt, machine, directory, launcher, util.generateRandomUUID(), todoId, (): boolean => this.owns(generation, scope) && (!admit || admit()), workspaceId, host, model, effort, tabName);
+    const row = await repo.createAgent(prompt, machine, directory, launcher, util.generateRandomUUID(), todoId, (): boolean => this.owns(generation, scope) && (!admit || admit()), workspaceId, host, model, effort, tabName, agent);
     if (!this.owns(generation, scope)) throw new Error('request_updated');
     try { await this.refresh(); } catch (_) { if (this.owns(generation, scope)) this.error = 'failed'; }
     if (!this.owns(generation, scope)) throw new Error('request_updated'); row.group = this.profile.id; return row;
@@ -2233,12 +2639,12 @@ export class ClientModel {
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.publishedImageLimits = {};
-    this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
+    this.demo = true; this.pairingRequired = false; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
     this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
-    this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
+    this.selected = new ResourceRow(); this.messages = []; this.publishedSource = undefined; this.revisionItems = []; this.revisionItemsVersion++; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;
     this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.unresolvedWrites = []; this.operationState = ''; this.resourceRows = []; this.detail = ''; this.reply = '';
     this.knowledgeKind = 'projects'; this.refreshDemo(); this.error = ''; this.section = 0;
   }

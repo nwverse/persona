@@ -1,5 +1,5 @@
 /** A small, dependency-free Markdown tree for chat and resource text. */
-export type MarkdownInlineKind = 'text' | 'bold' | 'italic' | 'code' | 'link';
+export type MarkdownInlineKind = 'text' | 'bold' | 'italic' | 'code' | 'link' | 'file' | 'image';
 export type MarkdownBlockKind = 'paragraph' | 'heading' | 'code' | 'rule' | 'quote' | 'list' | 'list-item' | 'table' | 'raw';
 
 // System body, the rounded MarkdownUI 17-point ScaledMetric, and the CJK fallback's measured advance.
@@ -56,6 +56,9 @@ export class MarkdownInline {
   url: string = '';
   source: string = '';
   children: MarkdownInline[] = [];
+  /** Inline code (or a file label drawn as code) that meets a CJK letter directly gets a thin space on that side. */
+  gapBefore: boolean = false;
+  gapAfter: boolean = false;
 
   constructor(kind: MarkdownInlineKind = 'text', text: string = '', url: string = '', children: MarkdownInline[] = [], source: string = '') {
     this.kind = kind;
@@ -171,7 +174,7 @@ function splitTableCells(line: string): string[] {
   for (let index = 0; index < value.length;) {
     const character = value[index];
     if (character === '\\' && index + 1 < value.length) {
-      cell += character + value[index + 1];
+      cell += codeTicks && value[index + 1] === '|' ? '|' : character + value[index + 1];
       index += 2;
       continue;
     }
@@ -184,6 +187,10 @@ function splitTableCells(line: string): string[] {
       cell += value.slice(index, end);
       index = end;
       continue;
+    }
+    if (character === '<' && codeTicks === 0) {
+      const br = /^<br\s*\/?>/i.exec(value.slice(index));
+      if (br) { cell += '\n'; index += br[0].length; continue; }
     }
     if (character === '|' && codeTicks === 0) {
       cells.push(cell.trim());
@@ -220,6 +227,156 @@ function tableAlignments(line: string, columns: number): string[] | undefined {
     result.push(left && right ? 'center' : right ? 'end' : 'start');
   }
   return result;
+}
+
+// File references are presented separately from links that can open a web reader.
+export function markdownFilePath(destination: string): string {
+  if (!destination || destination.startsWith('//') || /[\u0000-\u001f\u007f\\<>?"%]/.test(destination)) return '';
+  const path = destination.replace(/(?::[1-9]\d*(?::[1-9]\d*)?|#L[1-9]\d*(?:-L?[1-9]\d*)?)$/, '');
+  if (path.includes(':') || path.includes('#') || path.split('/').includes('..')) return '';
+  return /(?:^|\/)[^/]+\.[a-zA-Z0-9][a-zA-Z0-9_+-]{0,15}$/.test(path) ? path : '';
+}
+
+export function chatFilePath(destination: string, cwd: string): string {
+  const path = markdownFilePath(destination), root = cwd.replace(/\/+$/, '');
+  if (!path || !cwd.startsWith('/') || cwd.split('/').includes('..')) return '';
+  if (path.startsWith('/')) return path.startsWith(root + '/') ? path : '';
+  return root + '/' + path.replace(/^\.\//, '');
+}
+
+function localImageDestination(url: string): string {
+  if (!/\.(png|jpe?g|gif|webp|heic|heif)$/i.test(url) || /%(?:2f|5c|2e|25)/i.test(url)) return '';
+  try { return markdownFilePath(decodeURIComponent(url).replace(/\\([()])/g, '$1')); }
+  catch (_) { return ''; }
+}
+
+/** Resolve images on the paired machine, including the current user’s temporary exports. */
+export function chatImagePath(url: string, cwd: string): string {
+  const path = localImageDestination(url);
+  if (!path || path.includes('//')) return '';
+  const workspacePath = chatFilePath(path, cwd);
+  if (workspacePath) return workspacePath;
+  const home = /^(\/(?:Users|home)\/[^/]+)(?:\/|$)/.exec(cwd);
+  if (home && !cwd.split('/').includes('..') && path.startsWith(home[1] + '/tmp/')) return path;
+  return /^\/(?:[^/]+\/)*\.codex(?:-[\w-]+)?\/visualizations\/\d{4}\/\d{2}\/\d{2}\/[\w-]+\/(?:[^/.][^/]*\/)*[^/]+$/.test(path) ? path : '';
+}
+
+export type MarkdownLinkProvider = 'github' | 'figma' | 'linear' | 'notion' | 'googledrive';
+
+/** Match the provider by the URL authority, independent of the visible Markdown label. */
+export function markdownLinkProvider(url: string): MarkdownLinkProvider | undefined {
+  if (!safeHttpUrl(url)) return undefined;
+  const match = /^https?:\/\/([a-z0-9.-]+)(?::[0-9]+)?(?:[/?#]|$)/i.exec(url);
+  const host = match?.[1].toLowerCase();
+  if (!host) return undefined;
+  if (host === 'github.com' || host.endsWith('.github.com')) return 'github';
+  if (host === 'figma.com' || host.endsWith('.figma.com')) return 'figma';
+  if (host === 'linear.app') return 'linear';
+  if (host === 'notion.so' || host.endsWith('.notion.so') || host === 'app.notion.com') return 'notion';
+  if (['docs.google.com', 'drive.google.com', 'sheets.google.com', 'slides.google.com'].includes(host)) return 'googledrive';
+  return undefined;
+}
+
+/** Keep the slash with a short command in prose. Leave URLs, paths and inline code literal. */
+export function markdownProseText(text: string): string {
+  return text.replace(/(^|[\s（(「“])\/(?=[a-zA-Z][\w-]{0,31}(?:$|[\s.,!?;:，。！？、；：）)”」]|[\u3400-\u9fff]))/g, '$1/\u2060');
+}
+
+/** Convert native UTF-16 offsets to source text, omitting only marks inserted by the renderer. */
+export function markdownCodeSelection(nodes: readonly MarkdownInline[], start: number, end: number, transcriptMarks: boolean = false,
+  workspaceRoot: string = '', hasMediaOwner: boolean = false): string | undefined {
+  let cursor = 0, selected = '', decoration = false;
+  function append(value: string): void {
+    selected += value.slice(Math.max(0, start - cursor), Math.max(0, end - cursor));
+    cursor += value.length;
+  }
+  function pad(): void { if (cursor >= start && cursor < end) decoration = true; cursor++; }
+  function prose(value: string): void {
+    const rendered = transcriptMarks ? markdownProseText(value) : value;
+    if (rendered === value) { append(value); return; }
+    let original = 0;
+    for (let i = 0; i < rendered.length; i++) {
+      if (rendered[i] === value[original]) append(value[original++]);
+      else pad();
+    }
+  }
+  function code(node: MarkdownInline, value: string): void {
+    if (node.gapBefore) pad();
+    append(value);
+    if (node.gapAfter) pad();
+  }
+  function read(parts: readonly MarkdownInline[]): void {
+    for (const node of parts) {
+      if (node.kind === 'code') code(node, node.text);
+      else if (node.kind === 'text') prose(node.text);
+      else if (node.kind === 'image') prose(markdownInlineText(node.children));
+      else if (node.kind === 'file') {
+        const label = markdownInlineText(node.children);
+        if (hasMediaOwner && chatImagePath(node.url, workspaceRoot)) { pad(); pad(); append(label); }
+        else if (chatFilePath(node.url, workspaceRoot)) append(label);
+        else code(node, label);
+      } else {
+        if (transcriptMarks && node.kind === 'link' && markdownLinkProvider(node.url)) pad();
+        read(node.children);
+      }
+    }
+  }
+  read(nodes);
+  return decoration && end <= cursor ? selected : undefined;
+}
+
+export class MarkdownMediaRun {
+  nodes: MarkdownInline[] = [];
+  path: string;
+  label: string;
+  constructor(path: string = '', label: string = '') { this.path = path; this.label = label; }
+}
+
+/** Keep text and its styling on both sides of each image in source order. */
+export function markdownMediaRuns(nodes: MarkdownInline[], cwd: string): MarkdownMediaRun[] {
+  const runs: MarkdownMediaRun[] = [];
+  function append(node: MarkdownInline): void {
+    if (!runs.length || runs[runs.length - 1].path) runs.push(new MarkdownMediaRun());
+    runs[runs.length - 1].nodes.push(node);
+  }
+  for (const node of nodes) {
+    const path = node.kind === 'image' ? chatImagePath(node.url, cwd) : '';
+    if (path) runs.push(new MarkdownMediaRun(path, markdownInlineText(node.children)));
+    else if (node.children.length && node.kind !== 'image') {
+      const children = markdownMediaRuns(node.children, cwd);
+      if (!children.some(run => !!run.path)) append(node);
+      else for (const child of children) {
+        if (child.path) runs.push(child);
+        else append(new MarkdownInline(node.kind, node.text, node.url, child.nodes, node.source));
+      }
+    } else append(node);
+  }
+  return runs;
+}
+
+export function markdownImagePaths(blocks: MarkdownBlock[], cwd: string): string[] {
+  const paths = new Set<string>();
+  function inline(nodes: MarkdownInline[]): void {
+    for (const node of nodes) {
+      if (node.kind === 'image' || node.kind === 'file') {
+        const path = chatImagePath(node.url, cwd);
+        if (path) paths.add(path);
+      } else inline(node.children);
+    }
+  }
+  function visit(list: MarkdownBlock[]): void {
+    for (const block of list) {
+      inline(block.inlines);
+      for (const row of block.rows) for (const cell of row.cells) inline(cell);
+      visit(block.children); visit(block.items);
+    }
+  }
+  visit(blocks);
+  return Array.from(paths);
+}
+
+export function structuredBubble(text: string): boolean {
+  return text.includes('\n') || /^ {0,3}(?:>|#{1,6}\s|[-+*]\s|\d+[.)]\s|~~~|```)/.test(text);
 }
 
 function safeHttpUrl(value: string): boolean {
@@ -375,6 +532,42 @@ function appendPlain(nodes: MarkdownInline[], text: string): void {
   } else nodes.push(new MarkdownInline('text', text, '', [], text));
 }
 
+/** A Han, kana, Hangul or bopomofo letter; CJK punctuation is not one. */
+function cjkLetter(ch: string | undefined): boolean {
+  const code = ch === undefined ? 0 : ch.codePointAt(0) ?? 0;
+  if (code === 0x30fb || code === 0x30fc) return false;
+  return (code >= 0x1100 && code <= 0x11ff) || (code >= 0x3040 && code <= 0x30ff) || (code >= 0x3100 && code <= 0x318f) ||
+    (code >= 0x31f0 && code <= 0x31ff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0x4e00 && code <= 0x9fff) ||
+    (code >= 0xac00 && code <= 0xd7af) || (code >= 0xf900 && code <= 0xfaff) || (code >= 0xff66 && code <= 0xff9f) ||
+    (code >= 0x20000 && code <= 0x3ffff);
+}
+
+/** Mark inline code that meets a CJK letter directly, across emphasis and link edges (docs/design/DESIGN_SYSTEM.md 3.11). */
+function markCodeGaps(nodes: MarkdownInline[]): MarkdownInline[] {
+  const leaves: MarkdownInline[] = [];
+  const walk = (parts: MarkdownInline[]): void => {
+    for (const node of parts) {
+      if (node.kind === 'bold' || node.kind === 'italic' || node.kind === 'link') walk(node.children);
+      else leaves.push(node);
+    }
+  };
+  walk(nodes);
+  const words = (node: MarkdownInline | undefined): string[] => !node || node.kind === 'code' ? [] :
+    Array.from(node.kind === 'text' ? node.text : markdownInlineText(node.children));
+  leaves.forEach((node: MarkdownInline, index: number) => {
+    if (node.kind !== 'code' && node.kind !== 'file') return;
+    const before = words(leaves[index - 1]), after = words(leaves[index + 1]);
+    node.gapBefore = cjkLetter(before[before.length - 1]);
+    node.gapAfter = cjkLetter(after[0]);
+  });
+  return nodes;
+}
+
+/** A block's inline nodes, with the room inline code keeps beside CJK letters marked. */
+function parseInlines(value: string): MarkdownInline[] {
+  return markCodeGaps(parseInlineMarkdown(value));
+}
+
 export function parseInlineMarkdown(value: string): MarkdownInline[] {
   const nodes: MarkdownInline[] = [];
   let plain = '';
@@ -404,8 +597,10 @@ export function parseInlineMarkdown(value: string): MarkdownInline[] {
       if (candidate) {
         const source = imagePrefix ? value.slice(index, candidate.end) : candidate.source;
         flush();
-        if (imagePrefix || !safeHttpUrl(candidate.url)) appendPlain(nodes, source);
-        else nodes.push(new MarkdownInline('link', '', candidate.url, parseInlineMarkdown(candidate.label), source));
+        if (imagePrefix && localImageDestination(candidate.url)) nodes.push(new MarkdownInline('image', '', candidate.url, parseInlineMarkdown(candidate.label), source));
+        else if (!imagePrefix && safeHttpUrl(candidate.url)) nodes.push(new MarkdownInline('link', '', candidate.url, parseInlineMarkdown(candidate.label), source));
+        else if (!imagePrefix && (markdownFilePath(candidate.url) || localImageDestination(candidate.url))) nodes.push(new MarkdownInline('file', '', candidate.url, parseInlineMarkdown(candidate.label), source));
+        else appendPlain(nodes, source);
         index = candidate.end;
         continue;
       }
@@ -487,7 +682,7 @@ class MarkdownParser {
       if (heading) {
         const block = new MarkdownBlock('heading', line);
         block.level = heading[2].length;
-        block.inlines = parseInlineMarkdown(headingBody(heading[3]));
+        block.inlines = parseInlines(headingBody(heading[3]));
         blocks.push(block); this.index++; continue;
       }
       if (isRule(line)) { blocks.push(new MarkdownBlock('rule', line)); this.index++; continue; }
@@ -581,14 +776,13 @@ class MarkdownParser {
     block.alignments = alignments;
     const header = new MarkdownTableRow();
     header.header = true;
-    header.cells = headerCells.map((cell: string) => parseInlineMarkdown(cell));
+    header.cells = headerCells.map((cell: string) => parseInlines(cell));
     block.rows.push(header);
     this.index += 2;
     while (this.index < this.lines.length && this.lines[this.index].trim() && hasTableSeparator(this.lines[this.index])) {
       const cells = splitTableCells(this.lines[this.index]);
-      if (cells.length !== headerCells.length) break;
       const row = new MarkdownTableRow();
-      row.cells = cells.map((cell: string) => parseInlineMarkdown(cell));
+      row.cells = headerCells.map((_label: string, index: number) => parseInlines(cells[index] || ''));
       block.rows.push(row);
       this.index++;
     }
@@ -602,7 +796,7 @@ class MarkdownParser {
     while (this.index < this.lines.length && this.lines[this.index].trim() && !this.isBlockStart(this.index)) this.index++;
     const source = this.lines.slice(start, this.index).join('\n');
     const block = new MarkdownBlock('paragraph', source);
-    block.inlines = parseInlineMarkdown(source);
+    block.inlines = parseInlines(source);
     return block;
   }
 
@@ -631,6 +825,23 @@ export function markdownInlineText(nodes: MarkdownInline[]): string {
   return result;
 }
 
+/** Allocate one set of column widths for the whole table. Short values leave space for prose. */
+export function markdownTableWidths(measured: readonly number[], viewport: number, fontScale: number): number[] {
+  if (!measured.length) return [];
+  const scale = Math.max(1, fontScale);
+  const ideal = measured.map(width => Math.max(52 * scale, Math.min(310 * scale, width + 18)));
+  const wide = measured.length >= 4;
+  const minimum = ideal.map(width => Math.min(width, wide
+    ? Math.max(96 * scale, Math.min(148 * scale, width * 0.85))
+    : Math.max(66 * scale, Math.min(128 * scale, width * 0.62))));
+  const total = (widths: number[]): number => widths.reduce((a, b) => a + b, 0);
+  const floor = total(minimum), preferred = total(ideal);
+  if (viewport <= floor) return minimum;
+  if (viewport >= preferred) return ideal.map(width => width * viewport / preferred);
+  const fraction = (viewport - floor) / (preferred - floor);
+  return minimum.map((width, index) => width + (ideal[index] - width) * fraction);
+}
+
 export function markdownVisibleText(blocks: MarkdownBlock[]): string {
   const pieces: string[] = [];
   for (const block of blocks) {
@@ -644,6 +855,27 @@ export function markdownVisibleText(blocks: MarkdownBlock[]): string {
     }
   }
   return pieces.join('\n');
+}
+
+/** A reading view owns this small cache; immutable syntax trees survive leaving and reentering the viewport. */
+export class ConversationMarkdownCache {
+  private documents = new Map<string, MarkdownBlock[]>();
+  private characters = 0;
+  parse(source: string): MarkdownBlock[] {
+    const hit = this.documents.get(source);
+    if (hit) {
+      this.documents.delete(source); this.documents.set(source, hit);
+      return hit;
+    }
+    const blocks = parseMarkdown(source);
+    if (!source || source.length > 128 * 1024) return blocks;
+    while (this.documents.size >= 32 || this.characters + source.length > 128 * 1024) {
+      const first = this.documents.keys().next().value as string;
+      this.documents.delete(first); this.characters -= first.length;
+    }
+    this.documents.set(source, blocks); this.characters += source.length;
+    return blocks;
+  }
 }
 
 /** The selectable words of a lifted chat message. A table copies as its original Markdown. */

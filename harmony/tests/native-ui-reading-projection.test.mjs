@@ -1,22 +1,26 @@
+import { onlyPlanUpdates } from '../entry/src/main/ets/core/ConversationPlan.ts';
+import { groupUserImages } from '../entry/src/main/ets/core/MessageImageGallery.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
-import { projectToolTurn } from '../entry/src/main/ets/core/Domain.ts';
+import { projectTranscriptRows, projectToolTurn, transcriptRecord } from '../entry/src/main/ets/core/Domain.ts';
+import { isAgentInput, recordedDuration } from '../entry/src/main/ets/core/AgentEvents.ts';
+import { turnChangesFromWork, workStatusFailed, workToolArguments, workToolName, workToolStatus, workToolSubject } from '../entry/src/main/ets/core/WorkPresentation.ts';
 import { workingTurnLabel } from '../entry/src/main/ets/core/PhoneDate.ts';
 import { stepsToItems } from '../../integrations/antigravity/lib/map.js';
 
 const source = readFileSync(new URL('../entry/src/main/ets/models/ClientModel.ets', import.meta.url), 'utf8');
 
-function method(name, file = source) {
-  const match = new RegExp('  private ' + name + '\\(').exec(file);
+function method(name, input = source) {
+  const match = new RegExp('  (?:private )?(?:async )?' + name + '\\(').exec(input);
   assert.ok(match, name);
-  const start = match.index, body = file.indexOf('{', start);
+  const start = match.index, body = input.indexOf('{', start);
   let depth = 1, quote = '', escape = false, index = body + 1;
-  for (; index < file.length && depth; index += 1) {
-    const character = file[index];
+  for (; index < input.length && depth; index += 1) {
+    const character = input[index];
     if (quote) {
       if (escape) escape = false;
       else if (character === '\\') escape = true;
@@ -25,21 +29,22 @@ function method(name, file = source) {
     else if (character === '{') depth += 1;
     else if (character === '}') depth -= 1;
   }
-  return file.slice(start, index);
+  return input.slice(start, index);
 }
 
 class ChatMessage {
-  constructor(id, role, text = '') { Object.assign(this, { id, role, text }); }
+  constructor(id, role, text = '') { Object.assign(this, { id, role, text, recaps: [], running:false, toolCount:0, thoughtCount:0, terminalRecap:false }); }
 }
 
 const ProjectionHarness = new Function(
-  'projectToolTurn', 'ChatMessage', 'messageDisplay', 'parseMessageContent',
-  'return ' + stripTypeScriptTypes('class ProjectionHarness {' + method('projectMessages') + method('itemTime') + '}'),
+  'turnChangesFromWork', 'groupUserImages', 'projectTranscriptRows', 'isAgentInput', 'recordedDuration', 'transcriptRecord', 'ChatMessage', 'messageDisplay', 'parseMessageContent',
+  'Wire', 'return ' + stripTypeScriptTypes('class ProjectionHarness {' + method('projectMessages') + method('expandWork') + '}'),
 )(
-  projectToolTurn,
+  turnChangesFromWork, groupUserImages, projectTranscriptRows, isAgentInput, recordedDuration, transcriptRecord,
   ChatMessage,
   text => ({ text, sources: [] }),
   text => ({ text, images: [], files: [] }),
+  {text:(record,key) => record[key] || ''},
 );
 
 const configs = [
@@ -60,13 +65,86 @@ const transcripts = JSON.parse(execFileSync(
   'python3', ['-c', python, fixturePath, JSON.stringify(configs)], { encoding: 'utf8' },
 ));
 
-function project(items, running = false) {
+function project(items, running = false, agent = '') {
   const model = Object.assign(new ProjectionHarness(), {
     target: () => 'fixture-reading-target',
+    sessionRow: () => ({data:() => ({agent})}),
+    expandedAttachments:new Map(),
+    itemTime: item => Date.parse(item.ts) || 0,
     workText: step => step.item?.text ?? '',
   });
   return model.projectMessages(items, running);
 }
+
+test('a live turn has a readable work row before its first tool, and a finished text-only turn has none', () => {
+  const user = { id: 'input', seq: 1, role: 'user', kind: 'text', text: 'Check the tests' };
+  const live = project([user], true);
+  assert.equal(live[1].work.running, true);
+  assert.equal(live[1].work.inspectionSteps.length, 0);
+  const finished = project([user, { id: 'reply', seq: 2, role: 'assistant', kind: 'text', text: 'Ready' }]);
+  assert.deepEqual(finished.map(row => row.role), ['user', 'assistant']);
+});
+
+test('a completed exchange keeps wire tool names, arguments, results and folded counts out of the reply', () => {
+  const rows = project([
+    { id: 'question', seq: 1, role: 'user', kind: 'text', text: 'Check the settings' },
+    { id: 'fold', seq: 2, kind: 'fold', fold: { through_seq: 6, through_id: 'six', tools: 3, thoughts: 1 } },
+    { id: 'call', seq: 7, role: 'assistant', kind: 'tool_use', tool_use_id: 'sh', tool_name: 'Bash', tool_input: { command: 'npm test' } },
+    { id: 'result', seq: 8, role: 'user', kind: 'tool_result', tool_use_id: 'sh', text: '1 failed', outcome: { status: 'failed' } },
+    { id: 'answer', seq: 9, role: 'assistant', kind: 'text', text: 'One test failed.' },
+  ]);
+  assert.deepEqual(rows.map(row => row.role), ['user', 'work', 'assistant']);
+  assert.equal(rows[2].text, 'One test failed.');
+  const { work, ownerTarget } = rows[1];
+  assert.equal(ownerTarget, 'fixture-reading-target');
+  assert.equal(work.toolCount, 4);
+  assert.deepEqual(work.inspectionSteps.map(step => step.kind), ['fold', 'tool']);
+  const call = work.inspectionSteps[1];
+  assert.equal(workToolName(call.use), 'Bash');
+  assert.equal(workToolSubject(call.use), 'npm test');
+  assert.deepEqual(JSON.parse(workToolArguments(call.use)), { command: 'npm test' });
+  assert.equal(call.results[0].text, '1 failed');
+  assert.equal(workStatusFailed(workToolStatus(call, false)), true);
+});
+
+test('projected work keeps file changes and the reply fingerprint used by starring', () => {
+  const rows = project([
+    { id: 'question', seq: 1, kind: 'text', role: 'user', text: 'Update a sample file' },
+    { id: 'edit', seq: 2, kind: 'tool_use', role: 'assistant', tool_name: 'Edit', tool_id: 'a',
+      input: { file_path: 'sample.txt', old_string: 'one', new_string: 'two' } },
+    { id: 'result', seq: 3, kind: 'tool_result', role: 'tool', tool_id: 'a', text: 'Done' },
+    { id: 'answer', seq: 4, kind: 'text', role: 'assistant', text: 'Updated', source_fingerprint: 'fixture-fingerprint' }
+  ]);
+  assert.equal(rows.find(row => row.work)?.turnChanges?.files[0]?.path, 'sample.txt');
+  assert.equal(rows.find(row => row.itemId === 'answer')?.sourceFingerprint, 'fixture-fingerprint');
+});
+
+test('older tool spellings remain inspectable and stopped or denied tools are not reported as running or failed', () => {
+  const use = { id: 'read', seq: 1, kind: 'tool_use', tool: 'Read', input: { file_path: 'src/settings.ts' } };
+  assert.equal(workToolName(use), 'Read');
+  assert.equal(workToolSubject(use), 'src/settings.ts');
+  assert.deepEqual(JSON.parse(workToolArguments(use)), use.input);
+  assert.equal(workToolArguments({ ...use, input: undefined, text: 'legacy input' }), 'legacy input');
+  const step = projectToolTurn('test', [use], true).inspectionSteps[0];
+  assert.equal(workToolStatus(step, true), 'working');
+  assert.equal(workToolStatus(step, false), 'work_no_result');
+  assert.equal(workToolStatus({ ...step, failed: true, result: { outcome: { status: 'denied' } } }, false), 'work_denied');
+});
+
+test('a delayed fold expansion cannot request the next range on a replacement transcript', async () => {
+  const model = new ProjectionHarness(), calls = [];
+  let release;
+  model.target = () => 'first';
+  model.transcript = { unfold(id) { calls.push(id); return new Promise(resolve => { release = resolve; }); } };
+  const message = { ownerTarget: 'first', work: { inspectionSteps: [{ kind: 'fold', id: 'a' }, { kind: 'fold', id: 'b' }] } };
+  const expanding = model.expandWork(message);
+  model.target = () => 'second';
+  model.transcript = { async unfold(id) { calls.push('wrong: ' + id); } };
+  release();
+  await expanding;
+  await model.expandWork(message);
+  assert.deepEqual(calls, ['a']);
+});
 
 test('a live final turn keeps its work line between the real input and answer without fabricating tool activity', () => {
   const at='2026-11-23T01:00:00Z';
@@ -74,7 +152,7 @@ test('a live final turn keeps its work line between the real input and answer wi
                {id:'answer',role:'assistant',kind:'text',text:'The plan is ready',ts:'2026-11-23T01:04:00Z'}];
   const rows=project(items,true);
   assert.deepEqual(rows.map(row=>row.role),['user','work','assistant']);
-  assert.equal(rows[1].at,Date.parse(at));assert.equal(rows[1].work,'');assert.equal(rows[1].running,true);
+  assert.equal(rows[1].at,Date.parse(at));assert.deepEqual(rows[1].work.inspectionSteps,[]);assert.equal(rows[1].running,true);
   assert.equal(rows[1].toolCount,0);assert.equal(rows[1].thoughtCount,0);
   assert.deepEqual(project(items).map(row=>row.role),['user','assistant']);
   const strings={working:'Working',phone_working_seconds:'Working {s} s',phone_working_minutes:'Working {m} min',
@@ -112,7 +190,7 @@ test('an Antigravity wake keeps the finished reply and its attachment in the con
   assert.deepEqual(replies[0], prior.find(row => row.role === 'assistant'));
   assert.match(replies[0].text, /file: \/synthetic\/chart\.png/);
   assert.equal(after.filter(row => row.role === 'user').length, 2);
-  assert.ok(after.every(row => !row.work?.includes(steps[2].content)));
+  assert.ok(after.every(row => !row.work?.inspectionSteps.some(step=>step.item?.text===steps[2].content)));
 
   const wake = history.findIndex(item => item.wake === true);
   assert.ok(wake >= 0);
@@ -384,4 +462,153 @@ test('the selected language mark scales its painted strokes inside the accessibi
   assert.match(row,/PhoneOutlineIcon\(\{name:'inlinePickerCheck',color:Colors\.link\}\)\s*\}\s*\.width\(15\)\.height\(14\.67\)\.scale\(\{x:this\.inlinePickerScale,y:this\.inlinePickerScale\}\)/);
   assert.match(row,/\.width\(15\*this\.inlinePickerScale\)\.height\(14\.67\*this\.inlinePickerScale\)/);
   assert.match(row,/accessibilitySelected\(this\.model\.language===lang\)[\s\S]*this\.choose\(lang\)/);
+});
+
+test('completed turns collapse independently; expanding preserves the reply, original order and child work keys', () => {
+  const chat=readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
+  const start=chat.indexOf('class ConversationLine {'),end=chat.indexOf('\n}',start)+2;
+  const Line=new Function('return '+stripTypeScriptTypes(chat.slice(start,end)))();
+  const methods=chat.slice(chat.indexOf('  private processLines('),chat.indexOf('  private toggleProcess('));
+  const View=new Function('ConversationLine','return '+stripTypeScriptTypes('class View {'+methods+'}'))(Line);
+  const view=new View();view.openProcesses=[];view.hiddenProcessAnchors=new Map();view.model={messages:[]};
+  const items=[
+    {id:'q',seq:1,kind:'text',role:'user',text:'first'},
+    {id:'progress',seq:2,kind:'text',role:'assistant',text:'update',narration:true},
+    {id:'tool',seq:3,kind:'tool_use',tool_use_id:'t',tool_name:'Read'},
+    {id:'receipt',seq:4,kind:'tool_result',tool_use_id:'t',text:'ok'},
+    {id:'final',seq:5,kind:'text',role:'assistant',text:'answer'},
+  ];
+  const rows=(live=false)=>view.processLines(project(items,live).map(m=>new Line(m.id,m)));
+  assert.equal(rows(true).length,4,'a tool receipt and a still-streaming answer leave the process visible');
+  items.push({id:'duration',seq:6,kind:'turn_duration',turn_duration:{duration_ms:399000}},
+    {id:'q2',seq:7,kind:'text',role:'user',text:'second'},
+    {id:'note2',seq:8,kind:'text',role:'assistant',text:'more',narration:true},
+    {id:'final2',seq:9,kind:'text',role:'assistant',text:'answer2'});
+  assert.deepEqual(rows().map(l=>l.processReply?'header':l.message.text),['first','header','answer','second','header','answer2']);
+  const header=rows()[1];assert.equal(header.processReply.turnMilliseconds,399000);
+  assert.equal(view.hiddenProcessAnchors.get('message:progress'),header.id);
+  view.openProcesses=['final'];
+  const opened=rows();assert.deepEqual(opened.map(l=>l.processReply?'header':l.message.role),['user','header','assistant','work','assistant','user','header','assistant']);
+  assert.equal(opened[3].message.work.inspectionSteps[0].result.id,'receipt');
+  assert.equal(opened[4].hasProcess,true);assert.equal(opened[6].processReply.itemId,'final2');
+  view.openProcesses=[];assert.deepEqual(rows().map(l=>l.id),['q','process:final','visible-q','q2','process:final2','visible-q2']);
+  assert.equal(project([{id:'plain',seq:1,kind:'text',role:'assistant',text:'simple'}])[0].processIds,undefined);
+  assert.ok(project(items.slice(0,4)).every(m=>!m.processIds),'unfinished work has no disclosure');
+});
+
+test('steers stay visible when collapsed, and expanding a single batch makes its calls available immediately', () => {
+  const chat=readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
+  const start=chat.indexOf('class ConversationLine {'),end=chat.indexOf('\n}',start)+2;
+  const Line=new Function('return '+stripTypeScriptTypes(chat.slice(start,end)))();
+  const methods=chat.slice(chat.indexOf('  private processLines('),chat.indexOf('  private toggleProcess('));
+  const View=new Function('ConversationLine','return '+stripTypeScriptTypes('class View {'+methods+'}'))(Line);
+  const view=new View();Object.assign(view,{openProcesses:[],hiddenProcessAnchors:new Map(),model:{hasMoreMessages:false}});
+  const messages=[{id:'q',itemId:'q',role:'user'},{id:'w',role:'work',work:{}},
+    {id:'add',role:'user',itemId:'add'},{id:'reply',itemId:'f',role:'assistant',processIds:['w']}];
+  const visible=()=>view.processLines(messages.map(m=>new Line(m.id,m)));
+  assert.deepEqual(visible().map(l=>l.id),['q','add','process:f','reply']);
+  view.openProcesses=['f'];const open=visible();
+  assert.deepEqual(open.map(l=>l.id),['q','process:f','w','add','reply']);assert.equal(open[2].soleProcessGroup,true);
+  view.openProcesses=[];view.model.hasMoreMessages=true;
+  const only=new Line('result',{id:'result',itemId:'f',role:'assistant',partialProcess:true,processIds:[]});
+  assert.deepEqual(view.processLines([only]).map(l=>l.id),['process:f','result']);
+});
+
+test('large open disclosures reuse stable virtual batches and closing removes every continuation',()=>{
+ const Controller=new Function('ConversationLine','inlineWorkLimit','workBatchSize','return '+stripTypeScriptTypes('class C {'+method('virtualWorkLines',readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8'))+'}'))(
+   class Line{constructor(id,message){this.id=id;this.message=message;}},18,6);
+ const view=new Controller();Object.assign(view,{expanded:['work'],closedSoloGroups:[],workBatches:new WeakMap()});
+ const steps=Array.from({length:240},(_,i)=>({id:'c'+i,kind:'tool'})),message={id:'work',work:{inspectionSteps:steps}};
+ const raw=()=>[{id:'header',readingId:'message:work',message}];
+ const open=view.virtualWorkLines(raw());assert.equal(open.length,40);
+ assert.deepEqual(open.flatMap(l=>l.workBatch.map(x=>x.id)),steps.map(x=>x.id));
+ assert.equal(new Set(open.map(l=>l.id)).size,40);assert.equal(open[1].workBatch,view.virtualWorkLines(raw())[1].workBatch);
+ view.expanded=[];assert.equal(view.virtualWorkLines(raw()).length,1);
+});
+
+test('the native Claude message view keeps a tool-bound text update in progress prose', () => {
+  const rows = project([
+    {id:'u',seq:1,kind:'text',role:'user',text:'inspect'},
+    {id:'p',seq:2,kind:'text',role:'assistant',text:'Reading the logs'},
+    {id:'b',seq:3,kind:'tool_use',tool_name:'Bash',tool_use_id:'b',tool_input:{description:'Wait for statistics'}},
+  ],true,'claude');
+  assert.equal(rows.find(row=>row.itemId==='p').narration,true);
+  assert.equal(rows.at(-1).work.agent,'claude');
+});
+
+test('a plan on its own has no completed-process toggle; mixed turns retain their plan and tools', () => {
+  const chat=readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
+  const from=chat.indexOf('class ConversationLine {'), end=chat.indexOf('\n}',from)+2;
+  const Line=new Function('return '+stripTypeScriptTypes(chat.slice(from,end)))();
+  const Controller=new Function('ConversationLine','return '+stripTypeScriptTypes('class View {'+method('processLines',chat)+'}'))(Line);
+  const view=new Controller();view.hiddenProcessAnchors=new Map();
+  const prompt={id:'u',seq:1,role:'user',kind:'text',text:'Review'};
+  const planUse={id:'p',seq:2,role:'assistant',kind:'tool_use',tool_name:'TodoWrite',tool_use_id:'p',tool_input:{todos:[{content:'Prepare',status:'completed'}]}};
+  const receipt={id:'r',seq:3,kind:'tool_result',tool_use_id:'p',text:'ok'};
+  const reply={id:'a',seq:10,kind:'text',role:'assistant',text:'Result'};
+  const plan={sourceId:'p'};
+  const render=(extra=[],done=true,card=true,receiptItem=receipt)=>{
+    const msgs=project([prompt,planUse,receiptItem,...extra,...(done?[reply]:[])],!done,'claude');
+    view.model={messages:msgs,hasMoreMessages:false};
+    const lines=msgs.map(m=>new Line(m.id,m)).filter(l=>!onlyPlanUpdates(l.message.work));
+    if(card){const c=new Line('plan');c.plan=plan;lines.splice(1,0,c);}
+    return view.processLines(lines,card?plan:undefined).map(l=>l.processReply?'process':l.plan?'plan':l.message.role);
+  };
+  for(const open of [[],['a']]){
+    view.openProcesses=open;
+    assert.deepEqual(render(),['user','assistant']);
+    assert.deepEqual(render([],true,false),['user','assistant']);
+    assert.ok(render([],false).includes('plan'));
+  }
+  const command={id:'b',seq:4,kind:'tool_use',role:'assistant',tool_name:'Bash',tool_use_id:'b'};
+  assert.deepEqual(render([command,{id:'c',seq:5,kind:'tool_result',tool_use_id:'b',text:'ok'}]),
+    ['user','process','plan','work','assistant']);
+  assert.ok(render([],true,false,{...receipt,is_error:true}).includes('work'));
+});
+
+test('known plans open as checklists and refill their rows immediately on a second tap or scope change', () => {
+  const source = readFileSync(new URL('../entry/src/main/ets/components/ConversationPlanCard.ets',import.meta.url),'utf8');
+  const methods = ['receivePlan','syncRows','toggle'].map(name => method(name,source)).join('\n');
+  const Card = new Function('reconcileBoundRows','return '+stripTypeScriptTypes('class Card {'+methods+'}'))(
+    (_previous,values) => values.map(value=>({value})));
+  const plan = {sourceId:'p',at:1,done:1,total:2,current:'Verify',complete:true,steps:[
+    {id:'1',title:'Read',status:'completed'}, {id:'2',title:'Verify',status:'in_progress'}]};
+  const card = Object.assign(new Card(),{scope:'chat',plan,shown:plan,expanded:false,active:true,request:0,
+    hold:change=>change(),onExpansion:()=>{}});
+  // ArkUI may still return the previous @Computed value during a state mutation.
+  card.receivePlan();assert.deepEqual(card.rows.map(r=>r.value.id),['1','2']);
+  card.expanded=true;card.toggle();assert.equal(card.rows.length,0);
+  card.expanded=false;card.toggle();assert.deepEqual(card.rows.map(r=>r.value.id),['1','2']);
+  card.userExpanded=false;card.scope='next';card.receivePlan();
+  assert.deepEqual(card.rows.map(r=>r.value.id),['1','2']);
+});
+
+test('next-step buttons send once and retain the accepted choice on the original card', async () => {
+  const chat = readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets',import.meta.url),'utf8');
+  const methods = ['selectedNextStep','nextStepCurrent','canSendNextStep','useNextStep'].map(name => method(name,chat)).join('\n');
+  const View = new Function('return '+stripTypeScriptTypes('class V {'+methods+'}'))();
+  for (const outcome of ['accepted','failed','switch','updated','pending','readonly']) {
+    const message = {id:'wrap',ownerTarget:'chat',nextStep:{choices:[{label:'继续'}]}};
+    const sent = [], receipts = [];
+    let finish, scope = 'chat', admission;
+    const model = {draft:'已有草稿',target:() => scope,messages:[message],canSend:() => outcome !== 'readonly',
+      captureView(){return {write: async value => {receipts.push(JSON.parse(value));}};},
+      operationState:outcome === 'pending' ? 'unknown' : '',send(current,text) {
+        assert.ok(current()); sent.push(text); admission = current; return new Promise(resolve => {finish=resolve;});
+      }};
+    const view = Object.assign(new View(),{model,sendCurrent:() => true,composerOwnerKey:() => scope,nextStepStateReady:true});
+    const pending = view.useNextStep(message,'继续');
+    await view.useNextStep(message,'另一项');
+    assert.deepEqual(receipts,[]);
+    if (outcome === 'switch') scope = 'another chat';
+    if (outcome === 'updated') model.messages = [{...message,nextStep:{choices:[{label:'更新'}]}}];
+    if (admission) assert.equal(admission(),!['switch','updated'].includes(outcome));
+    if (finish) finish(outcome !== 'failed');
+    await pending;
+    if (outcome === 'accepted') await view.useNextStep(message,'继续');
+    assert.deepEqual(sent,['pending','readonly'].includes(outcome) ? [] : ['继续']);
+    assert.deepEqual(receipts,outcome === 'accepted' ? [{id:'wrap',answer:'继续'}] : []);
+    assert.equal(view.selectedNextStep(message),outcome === 'accepted' ? '继续' : '');
+    assert.equal(model.draft,'已有草稿');
+  }
 });

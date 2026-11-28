@@ -706,7 +706,7 @@ export struct TodoWorkspacePage {
 
   @Builder advancedMenu() {
     Menu() {
-      MenuItem({ content: tr('new_agent') }).enabled(!this.workspace.saving && !this.workspace.targetGone)
+      MenuItem({ content: tr('agent_new_session') }).enabled(!this.workspace.saving && !this.workspace.targetGone)
         .onClick(() => this.onCreateAgent(this.workspace.todoResource(this.workspace.selected)))
     }
   }

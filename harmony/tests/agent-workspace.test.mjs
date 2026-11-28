@@ -786,6 +786,49 @@ test('a retired pin completion cannot release the busy lock of a new list operat
  releases[1]();assert.equal(await fresh,true);assert.equal(workspace.busy,false);assert.equal(state.calls.filter(c=>c.method==='PUT').length,1);
 });
 
+test('machine idle rows expand, survive a directory update, and collapse again', async () => {
+  const {workspace,client} = await opened({sessions:[agent('busy'),agent('quiet',{state:'idle',status:'idle'})]});
+  workspace.setGroupingMode('machine');
+  const group = workspace.groups.find(item => item.id.startsWith('machine/'));
+  assert.deepEqual(group.rows.map(item => item.id), ['busy']);
+  workspace.toggleIdleRows(group.id);
+  workspace.update(client);
+  assert.equal(workspace.idleRowsExpanded(group.id),true);
+  assert.deepEqual(workspace.visibleRows().map(item=>item.id).sort(),['busy','quiet']);
+  workspace.toggleIdleRows(group.id);
+  assert.deepEqual(workspace.visibleRows().map(item=>item.id),['busy']);
+});
+
+test('Needs you sits above computers and spaces, even when their folds hide the row, and counts match', async () => {
+  const asking = agent('asking', { state: 'needs_you', status: 'needs_you', machine_id: 'm2' });
+  const { workspace } = await opened({ sessions: [agent('busy'), asking, agent('quiet', { state: 'idle', status: 'idle' })],
+    machines: [machine('m1'), machine('m2')] });
+  assert.equal(workspace.groups.filter(group => group.id === 'state/needs').length, 1);
+  assert.equal(workspace.counts.needsYou, 1);
+  assert.equal(workspace.counts.working, 1);
+  workspace.setGroupingMode('machine');
+  const folded = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  workspace.toggleFold(folded.id);
+  const needs = workspace.groups[0];
+  assert.equal(needs.id, 'state/needs');
+  assert.deepEqual(needs.rows.map((row) => row.id), ['asking']);
+  const machineGroup = workspace.groups.find((group) => group.id === 'machine/work|m2');
+  assert.equal(machineGroup.folded, true);
+  assert.equal(machineGroup.rows.length, 0);
+  assert.equal(machineGroup.stateCounts.needs_you, 1, 'the folded computer still says what it hides');
+  assert.deepEqual(workspace.groups.find((group) => group.id === 'machine/work|m1').stateCounts, { working: 1, idle: 1 });
+  assert.equal(workspace.counts.needsYou, needs.rows.length, 'the chip and the section show one number');
+  assert.deepEqual(workspace.visibleRows().map((row) => row.id), ['busy', 'asking'], 'each row once');
+  workspace.setGroupingMode('space');
+  assert.equal(workspace.groups[0].id, 'state/needs');
+  workspace.setQuickFilter('working');
+  assert.ok(!workspace.groups.some((group) => group.id === 'state/needs'), 'another quick filter shows only its own rows');
+  assert.equal(workspace.counts.needsYou, 1, 'chip counts are taken before the filter narrows the list');
+  workspace.setQuickFilter('all');
+  workspace.setSearch('busy');
+  assert.ok(!workspace.groups.some((group) => group.id === 'state/needs'), 'search results stand alone, as iOS');
+});
+
 test('a Projects query uses the same real Hub and machine source inventory without changing the current Agents view', async () => {
   const input=(group,id,pane,title)=>{const row=agent(id,{title,pane_id:pane,manager:'work',cwd:'/other',state:'idle'});row.group=group;return row;};
   const one=input('one','shared','w:p1','weather'), two=input('two','shared','botmux:p1','weather');

@@ -2,6 +2,7 @@ import { HubAccess } from '../core/HubAccess';
 import { common } from '@kit.AbilityKit';
 import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
+import { ScreenCredentialStore } from './ScreenCredentialStore';
 
 const PREFIX: string = 'persona.harmony.device-token.v1:';
 
@@ -61,10 +62,11 @@ export class CredentialVault {
     }
   }
 
-  async remove(hubId: string): Promise<void> {
+  async remove(hubId: string, forgetScreenLogins: boolean = false): Promise<void> {
     try { await asset.remove(assetAlias(hubId)); }
     catch (error) {
       if (assetErrorCode(error as Error) !== 24000002) throw new Error('storage_unavailable');
     }
+    finally { if (forgetScreenLogins) await ScreenCredentialStore.forgetProfile(hubId); }
   }
 }

@@ -19,6 +19,10 @@ class NativeColors {
   readonly codeAddedFill: ResourceColor = $r('app.color.persona_code_added_fill');
   readonly codeRemovedFill: ResourceColor = $r('app.color.persona_code_removed_fill');
   get canvas(): ResourceColor { return this.stylePage || $r('app.color.persona_canvas'); }
+  readonly planSurface: ResourceColor = $r('app.color.persona_plan_surface');
+  readonly planBorder: ResourceColor = $r('app.color.persona_plan_border');
+  readonly planSecondary: ResourceColor = $r('app.color.persona_plan_secondary');
+  readonly planCurrent: ResourceColor = $r('app.color.persona_plan_current');
   get grouped(): ResourceColor { return this.stylePage || $r('app.color.persona_grouped'); }
   get sheetBackground(): ResourceColor { return this.stylePage || $r('app.color.persona_sheet_background'); }
   get sheetCard(): ResourceColor { return this.styleCard || $r('app.color.persona_sheet_card'); }
@@ -30,6 +34,11 @@ class NativeColors {
   card(elevated: boolean): ResourceColor { return elevated ? this.sheetCard : this.surface; }
   listGroup(elevated: boolean): ResourceColor { return elevated ? this.sheetBackground : this.grouped; }
   readonly ink: ResourceColor = $r('app.color.persona_ink');
+  readonly progress: ResourceColor = $r('app.color.persona_progress_text');
+  /** Inline code in replies: the body ink and the secondary ink blended 55:45 (DESIGN_SYSTEM 3.11). */
+  readonly inlineCode: ResourceColor = $r('app.color.persona_inline_code_ink');
+  readonly reference: ResourceColor = $r('app.color.persona_reference');
+  readonly activity: ResourceColor = $r('app.color.persona_activity');
   readonly secondary: ResourceColor = $r('app.color.persona_secondary');
   readonly tertiary: ResourceColor = $r('app.color.project_card_tertiary');
   readonly tertiaryFill: ResourceColor = $r('app.color.machine_session_avatar_fill');
@@ -57,7 +66,12 @@ class NativeColors {
   readonly needsMark: ResourceColor = $r('app.color.persona_needs_mark');
   readonly workingMark: ResourceColor = $r('app.color.persona_working_mark');
   readonly unreadMark: ResourceColor = $r('app.color.persona_unread_mark');
+  readonly diffAddedBackground: ResourceColor = $r('app.color.persona_diff_added_background');
+  readonly diffRemovedBackground: ResourceColor = $r('app.color.persona_diff_removed_background');
   readonly positive: ResourceColor = $r('app.color.persona_positive');
+  readonly codeKeyword: ResourceColor = $r('app.color.persona_code_keyword');
+  readonly codeString: ResourceColor = $r('app.color.persona_code_string');
+  readonly codeLiteral: ResourceColor = $r('app.color.persona_code_literal');
   readonly divider: ResourceColor = $r('app.color.persona_divider');
   readonly danger: ResourceColor = $r('app.color.persona_danger');
   readonly ai: ResourceColor = $r('app.color.persona_ai');

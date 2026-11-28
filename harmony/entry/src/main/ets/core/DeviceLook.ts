@@ -236,6 +236,15 @@ function readableBubble(fill: string, suppliedText: string | undefined): [string
   return [result, textColor];
 }
 
+export function deviceLookQuoteInk(colors: DeviceLookColorSet): string {
+  if (colors.userBubble === '#E9F3FE' && colors.userBubbleText === '#0C2849') return '#4F6580';
+  for (let amount = 0.28; amount > 0; amount -= 0.04) {
+    const color = mix(colors.userBubbleText, colors.userBubble, amount);
+    if (contrastRatio(color, colors.userBubble) >= 4.5) return color;
+  }
+  return colors.userBubbleText;
+}
+
 export function usesSystemStyleColors(style: string): boolean {
   return style === 'system' || style === 'glass' || style === 'beautiful';
 }

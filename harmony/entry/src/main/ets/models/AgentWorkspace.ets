@@ -67,6 +67,10 @@ export class AgentWorkspaceGroup {
   }
 }
 
+/** The Needs you section above every grouping but By Status, which has its own (DESIGN_SYSTEM 3.4). */
+export const NEEDS_GROUP: string = 'state/needs';
+const STATE_COUNT_KEYS: string[] = ['needs_you', 'working', 'unread', 'idle'];
+
 function segment(value: string): string { return encodeURIComponent(value); }
 function rowSession(row: ResourceRow): string { return row.session || Wire.text(row.data(), 'session_id') || row.id; }
 function rowMachine(row: ResourceRow): string { return row.machine || Wire.text(row.data(), 'machine_id'); }
@@ -77,12 +81,6 @@ function rowSpaceKey(row: ResourceRow, space?: string): string {
 }
 export function coreRowId(row: ResourceRow): string {
   return (row.group ? row.group + '|' : '') + (row.manager ? row.manager + '|' : '') + rowMachine(row) + '|' + rowSession(row);
-}
-function cloneRow(row: ResourceRow): ResourceRow {
-  const copy = new ResourceRow(row.id, row.title, row.kind);
-  copy.group = row.group; copy.detail = row.detail; copy.state = row.state; copy.manager = row.manager; copy.machine = row.machine;
-  copy.session = row.session; copy.path = row.path; copy.raw = row.raw;
-  return copy;
 }
 function stringsFrom(value: Record<string, Object>, key: string, optional: boolean = false): string[] {
   if (!Wire.has(value, key) && optional) return [];
@@ -107,6 +105,8 @@ class AgentPreferences {
 export class AgentWorkspace {
   @Trace groups: AgentWorkspaceGroup[] = [];
   @Trace unpinnedRows: ResourceRow[] = [];
+  /** The quick filters' counts, before the filter narrows the list; Needs you counts the section's rows. */
+  @Trace counts: Record<string, number> = {};
   @Trace unreadShownRows: ResourceRow[] = [];
   @Trace quickFilter: string = 'all';
   @Trace filterCounts:Record<string,Object> = {};
@@ -182,9 +182,21 @@ export class AgentWorkspace {
   }
   rowOnline(row: ResourceRow): boolean { return this.ownerFor(row)?.connected === true; }
   hasRows(): boolean { return this.groups.some((group: AgentWorkspaceGroup) => group.totalRowCount > 0); }
+  /** No list has arrived yet, from the Hub or a launch snapshot: no rows means "not known yet", not "none". */
+  awaitingSource(): boolean {
+    return !this.history && !!this.client && !this.client.sessionsReady && !this.client.directoryReady;
+  }
+  /** Why an unknown list stays unknown: the owner's connection error, '' while it is still connecting. */
+  sourceProblem(): string {
+    if (!this.awaitingSource() || !this.client || this.client.connected || !this.client.error) return '';
+    return this.client.error === 'offline' ? 'hub_unreachable' : this.client.error;
+  }
+  /** Each row on screen once, though Needs you repeats a row from its group. */
   visibleRows(): ResourceRow[] {
-    const rows: ResourceRow[] = [];
-    this.groups.forEach((group: AgentWorkspaceGroup) => group.rows.forEach((row: ResourceRow) => rows.push(row)));
+    const rows: ResourceRow[] = [], seen = new Set<string>();
+    const add = (row: ResourceRow): void => { const key = rowKey(row); if (!seen.has(key)) { seen.add(key); rows.push(row); } };
+    this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id !== NEEDS_GROUP) group.rows.forEach(add); });
+    this.groups.forEach((group: AgentWorkspaceGroup) => { if (group.id === NEEDS_GROUP) group.rows.forEach(add); });
     return rows;
   }
   isSelected(row: ResourceRow): boolean { return this.selectedKey === rowKey(row); }
@@ -372,8 +384,7 @@ export class AgentWorkspace {
       this.expandedQuiet = this.expandedQuiet.includes(id) ? removeKey(this.expandedQuiet, id) : this.expandedQuiet.concat([id]);
     } else if (id === 'state/idle') {
       this.folded = this.folded.includes('!state/idle') ? removeKey(this.folded, '!state/idle') : this.folded.concat(['!state/idle']);
-      this.toggleIdleRows(id);
-      return;
+
     } else {
       this.folded = this.folded.includes(id) ? removeKey(this.folded, id) : this.folded.concat([id]);
     }
@@ -381,7 +392,16 @@ export class AgentWorkspace {
     this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
+  idleRowsExpanded(id: string): boolean {
+    return this.expandedIdle.includes(this.idleRowsKey(id));
+  }
+
+  private idleRowsKey(id: string): string {
+    return id.startsWith('machine/') ? 'machine-' + id.slice(8) : id;
+  }
+
   toggleIdleRows(id: string): void {
+    id = this.idleRowsKey(id);
     this.releaseFreeze();
     this.expandedIdle = this.expandedIdle.includes(id) ? removeKey(this.expandedIdle, id) : this.expandedIdle.concat([id]);
     this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
@@ -774,7 +794,7 @@ export class AgentWorkspace {
     const keys = new Set<string>(rows.map((row: ResourceRow) => rowKey(row)));
     const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => {
       if (!keys.has(rowKey(item))) return item;
-      const next = cloneRow(item), data = next.data();
+      const next = item.copy(), data = next.data();
       if (state === 'idle') {
         const work = Wire.object(data, 'work');
         if (Wire.bool(work, 'just_finished')) { work['just_finished'] = false; data['work'] = work; }
@@ -840,10 +860,11 @@ export class AgentWorkspace {
       !Wire.bool(row.data(), 'archived') && !Wire.bool(row.data(), 'assistant'));
   }
 
-  private syncSelected(client: ClientModel): void {
+  syncSelected(client: ClientModel): void {
     const selected = this.externalSelection || client.selected;
     if (!selected.kind) { if (this.externalSelection) this.selectedKey = ''; return; }
-    const next = selected.kind === 'session' && this.sourceRows.some((row: ResourceRow) => rowKey(row) === rowKey(selected)) ? rowKey(selected) : '';
+    const key = selected.kind === 'session' ? rowKey(selected) : '';
+    const next = key && this.sourceRows.some((row: ResourceRow) => rowKey(row) === key) ? key : '';
     if (next === this.selectedKey) return;
     this.selectedKey = next; this.saveViewLater();
   }
@@ -907,6 +928,7 @@ export class AgentWorkspace {
 
   private rebuild(): void {
     let groups: CoreAgentListGroup[];
+    let counts: Record<string, Object>;
     let unpinned: string[];
     let matches: string[];
     let unreadIds: string[];
@@ -918,6 +940,7 @@ export class AgentWorkspace {
       unpinned = projection.unpinned || [];
       unreadIds = projection.unread_shown || [];
       this.filterCounts = projection.filter_counts || {};
+      counts = projection.counts || {};
     } catch (_) {
       // Preserve both rows and action authority from the same successful snapshot.
       this.error = 'failed';
@@ -938,6 +961,11 @@ export class AgentWorkspace {
     } else if (this.quickFilter === 'all' && this.filterKept.length) {
       this.filterKept = [];
     }
+    const needs = this.needsGroup(groups, byId);
+    const nextCounts: Record<string, number> = {};
+    ['needsYou', 'unread', 'working', 'backgroundWaiting'].forEach((key: string) => nextCounts[key] = Wire.number(counts, key));
+    if (needs) nextCounts['needsYou'] = needs.rows.length;
+    if (JSON.stringify(nextCounts) !== JSON.stringify(this.counts)) this.counts = nextCounts;
     if (this.readingDetail && !this.freezeSuppressed && this.frozenGroups) {
       const frozenIds = new Set<string>(this.frozenGroups.flatMap((group) => group.memberIds));
       const rowsById = new Map<string, ResourceRow>();
@@ -952,7 +980,7 @@ export class AgentWorkspace {
         copy.rows = [];
         if (group.presentation !== 'app-parent' && !copy.folded) {
           const previous = group.presentation ? group.rows.map((row:ResourceRow)=>coreRowId(row)) : group.memberIds;
-          previous.forEach((id: string) => { const row = rowsById.get(id); if (row) copy.rows.push(row); });
+          previous.forEach((id: string) => { const row = (group.id === NEEDS_GROUP ? byId : rowsById).get(id); if (row) copy.rows.push(row); });
         }
         return copy;
       }).filter((group) => group.rows.length > 0 || group.totalRowCount > 0);
@@ -962,7 +990,9 @@ export class AgentWorkspace {
     this.unpinnedRows = unpinned.flatMap((id:string):ResourceRow[]=>{ const row=byId.get(id); return row ? [row] : []; });
     this.groups = groups.map((group) => {
       const native = new AgentWorkspaceGroup(group.id, '', group.title, '', '', '', '', '');
-      native.folded = group.folded; native.parent = group.parent || ''; native.stateCounts = group.state_counts || {};      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
+      native.folded = group.folded; native.parent = group.parent || '';
+      native.stateCounts = group.state_counts || (group.id.startsWith('machine/') ? this.stateCounts(group.rows, byId) : {});
+      native.spoken = group.spoken || ''; native.totalRowCount = group.rows.length;
       native.memberIds = group.rows.slice();
       native.presentation = group.presentation || ''; native.titleKey = group.titleKey || ''; native.capped = !!group.capped; native.subtitle=group.subtitle || '';
       native.firstProject=!!group.firstProject; native.lastProject=!!group.lastProject;
@@ -971,6 +1001,7 @@ export class AgentWorkspace {
       group.visible_rows.forEach((id: string) => { const row = byId.get(id); if (row) native.rows.push(row); });
       return native;
     });
+    if (needs && !this.groups.some((group: AgentWorkspaceGroup) => group.id === NEEDS_GROUP)) this.groups.unshift(needs);
     if (this.readingDetail && this.sourceReady() && !this.freezeSuppressed && !this.frozenGroups) this.frozenGroups = this.copyGroups(this.groups);
     this.applySupervisorHolds(matches);
   }
@@ -1009,6 +1040,34 @@ export class AgentWorkspace {
       raw['cwd'] = row.path; raw['state'] = row.state; raw['manager'] = row.manager; raw['app_hub_group'] = row.group;
       return {id:coreRowId(row), raw, source:row};
     });
+  }
+
+  /** Every agent that waits for the user, once, above the computers and spaces whose folds could hide it. */
+  private needsGroup(groups: CoreAgentListGroup[], byId: Map<string, ResourceRow>): AgentWorkspaceGroup | undefined {
+    if (this.groupingMode === 'state' || this.search.trim() || (this.quickFilter !== 'all' && this.quickFilter !== 'needsYou')) return undefined;
+    const ids: string[] = [], rows: ResourceRow[] = [], seen = new Set<string>();
+    groups.forEach((group: CoreAgentListGroup) => group.rows.forEach((id: string) => {
+      const row = byId.get(id);
+      if (!row || row.state !== 'needs_you' || seen.has(id)) return;
+      seen.add(id); ids.push(id); rows.push(row);
+    }));
+    if (!rows.length) return undefined;
+    const group = new AgentWorkspaceGroup(NEEDS_GROUP, '', '', '', '', '', '', '', rows);
+    group.memberIds = ids;
+    return group;
+  }
+
+  /** A computer's header counts what its folded rows hide, as the core does for spaces. */
+  private stateCounts(ids: string[], byId: Map<string, ResourceRow>): Record<string, Object> {
+    const counts: Record<string, Object> = {};
+    let unknown = 0;
+    ids.forEach((id: string) => {
+      const state = byId.get(id)?.state || '';
+      if (STATE_COUNT_KEYS.includes(state)) counts[state] = Wire.number(counts, state) + 1;
+      else unknown++;
+    });
+    if (unknown) counts['unknown'] = unknown;
+    return counts;
   }
 
   private makeListInput(): AgentListInput {

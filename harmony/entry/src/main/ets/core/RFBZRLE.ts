@@ -1,6 +1,5 @@
 import { zlib } from '@kit.BasicServicesKit';
 
-const MAX_COMPRESSED_BYTES: number = 1024 * 1024;
 const MAX_INFLATED_BYTES: number = 72 * 1024 * 1024;
 
 function copyBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -11,6 +10,7 @@ function copyBuffer(bytes: Uint8Array): ArrayBuffer {
 
 /** One persistent raw-DEFLATE stream per RFB connection, as required by ZRLE. */
 export class RFBZRLE {
+  static readonly maxCompressedBytes: number = 32 * 1024 * 1024;
   private zip: zlib.Zip = zlib.createZipSync();
   private stream: zlib.ZStream | undefined;
   private started: boolean = false;
@@ -18,7 +18,7 @@ export class RFBZRLE {
   private closed: boolean = false;
 
   async inflate(compressed: Uint8Array, outputLimit: number): Promise<Uint8Array> {
-    if (this.closed || compressed.length > MAX_COMPRESSED_BYTES || !Number.isInteger(outputLimit) ||
+    if (this.closed || compressed.length > RFBZRLE.maxCompressedBytes || !Number.isInteger(outputLimit) ||
       outputLimit < 1 || outputLimit > MAX_INFLATED_BYTES) throw new Error('rfb_zrle_limit');
     await this.ensureStarted();
     let input: Uint8Array = compressed;
@@ -39,7 +39,7 @@ export class RFBZRLE {
     const produced: number = output.length - unusedOutput;
     if ((status !== zlib.ReturnStatus.OK && status !== zlib.ReturnStatus.BUF_ERROR) || remaining !== 0 ||
       produced < 0 || produced > output.length) throw new Error('rfb_zrle_inflate');
-    return output.slice(0, produced);
+    return output.subarray(0, produced);
   }
 
   close(): void {

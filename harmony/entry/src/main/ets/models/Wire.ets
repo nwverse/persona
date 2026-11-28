@@ -1,3 +1,6 @@
+import type { TurnChangeSet } from '../core/WorkPresentation';
+import type { NextStepProposal, ToolTurnProjection, TranscriptItem } from '../core/Domain';
+
 // Decode untrusted JSON at the transport boundary. Unknown keys never become executable actions.
 export class Wire {
   static readonly legacyStartedBy: string = 'started_by_jarvis';
@@ -95,6 +98,50 @@ export class SessionBadgeFields {
 
 const sessionBadgeFields: WeakMap<ResourceRow, SessionBadgeFields> = new WeakMap();
 
+export class SessionLauncher {
+  readonly name: string;
+  readonly agent: string;
+  readonly label: string;
+  readonly promptOptional: boolean;
+  constructor(name: string, agent: string, label: string, promptOptional: boolean) { this.promptOptional = promptOptional; this.name = name; this.agent = agent; this.label = label; }
+  static choices(records: Record<string, Object>[]): SessionLauncher[] {
+    const found = new Set<string>(), choices: SessionLauncher[] = [];
+    for (const record of records) {
+      const name = Wire.text(record, 'name').trim();
+      if (!name || found.has(name)) continue;
+      found.add(name);
+      const agent = Wire.text(record, 'agent_type', Wire.text(record, 'agent')) ||
+        (name === 'codex' || name === 'codex-app' ? 'codex' : 'claude');
+      const family = agent === 'claude' ? 'Claude Code' : agent === 'codex' ? 'Codex' : agent;
+      const title = Wire.text(record, 'display_name') || name;
+      const label = title.toLowerCase() === agent || title.toLowerCase() === family.toLowerCase() ? family : family + ' · ' + title;
+      choices.push(new SessionLauncher(name, agent, label, agent !== 'codex' || Wire.bool(record, 'prompt_optional')));
+    }
+    return choices;
+  }
+}
+
+export class SessionModelCatalog {
+  readonly models: Record<string,Object>[];
+  readonly locked: boolean;
+
+  constructor(result: Record<string,Object>) {
+    if (!Array.isArray(result['models'])) throw new Error('response_invalid');
+    this.locked = !!Wire.text(result,'locked');
+    const seen = new Set<string>();
+    this.models = Wire.rows(result,'models').filter(model => {
+      const id = Wire.text(model,'id');
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  static validTypedId(id: string): boolean {
+    return id.length <= 256 && /^~?[A-Za-z0-9][A-Za-z0-9._/:@\[\]-]*$/.test(id);
+  }
+}
+
 export class ResourceRow {
   id: string = '';
   title: string = '';
@@ -109,6 +156,11 @@ export class ResourceRow {
   raw: string = '{}';
   constructor(id: string = '', title: string = '', kind: string = '') { this.id = id; this.title = title; this.kind = kind; }
   data(): Record<string, Object> { return Wire.parse(this.raw); }
+  supportsScreen(): boolean {
+    const data = this.data(), os = Wire.text(data, 'os', Wire.text(Wire.object(data, 'system'), 'os'));
+    return this.kind === 'machine' && ['', 'mac', 'macos', 'darwin'].includes(os.toLowerCase()) && Wire.bool(data, 'online') &&
+      !Wire.bool(data, 'pending') && !Wire.bool(data, 'pending_confirm') && ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust'));
+  }
   badgeFields(): SessionBadgeFields {
     const known = sessionBadgeFields.get(this);
     if (known && known.snapshot === this.raw) return known;
@@ -116,6 +168,29 @@ export class ResourceRow {
     sessionBadgeFields.set(this, fields);
     return fields;
   }
+  copy(group: string = this.group, state: string = this.state): ResourceRow {
+    const row = new ResourceRow(this.id, this.title, this.kind);
+    row.group = group; row.state = state; row.manager = this.manager; row.machine = this.machine;
+    row.session = this.session; row.path = this.path; row.detail = this.detail; row.raw = this.raw;
+    return row;
+  }
+  matches(other: ResourceRow, group: string = other.group, state: string = other.state): boolean {
+    return this.group === group && this.state === state && this.id === other.id && this.kind === other.kind &&
+      this.manager === other.manager && this.machine === other.machine && this.session === other.session &&
+      this.title === other.title && this.detail === other.detail && this.path === other.path && this.raw === other.raw;
+  }
+  static reconcile(previous: ResourceRow[], next: ResourceRow[]): ResourceRow[] {
+    if (previous === next) return previous;
+    let unchanged = previous.length === next.length;
+    const rows = next.map((row: ResourceRow, i: number): ResourceRow => {
+      const old = previous[i];
+      if (old && (old === row || old.matches(row))) return old;
+      unchanged = false;
+      return row;
+    });
+    return unchanged ? previous : rows;
+  }
+
   static from(data: Record<string, Object>, kind: string): ResourceRow {
     const row = new ResourceRow(Wire.text(data, 'id', Wire.text(data, 'session_id')),
       Wire.text(data, 'title', Wire.text(data, 'name', Wire.text(data, 'subject', Wire.text(data, 'label')))), kind);
@@ -165,17 +240,31 @@ export interface ConversationRecapItem {
 }
 
 export class ChatMessage {
+  turnChanges?: TurnChangeSet;
   id: string = '';
   role: string = 'assistant';
   recaps: ConversationRecapItem[] = [];
   terminalRecap: boolean = false;
   at: number = 0;
   text: string = '';
-  work: string = '';
+  liveSummary: string = '';
+  providerRetry: boolean = false;
+  narration: boolean = false;
+  work?: ToolTurnProjection;
   toolCount: number = 0;
   thoughtCount: number = 0;
+  nextStep?: NextStepProposal;
+  event?: TranscriptItem;
+  queued: boolean = false;
+  turnDuration: string = '';
+  turnMilliseconds?: number;
+  processIds?: string[];
+  leadIds?: string[];
+  partialProcess: boolean = false;
   imageId: string = '';
+  imageIds: string[] = [];
   itemId: string = '';
+  userTextClipped: boolean = false;
   sourceFingerprint: string = '';
   ownerTarget: string = '';
   imagePaths: string[] = [];
@@ -187,7 +276,6 @@ export class ChatMessage {
   localOperation: string = '';
   localImageCount: number = 0;
   source: string = '';
-  raw: string = '{}';
   constructor(id: string = '', role: string = 'assistant', text: string = '') { this.id = id; this.role = role; this.text = text; }
 }
 
