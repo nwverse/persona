@@ -108,7 +108,8 @@ internal class OrcaWorktreeActions(val api: WorktreeManagement, val registry: Wo
 @Composable
 internal fun rememberOrcaWorktreeActions(service: AgentCreationService?, machines: List<Machine>, rows: List<AgentWorkspace>,
                                          onChanged: () -> Unit): OrcaWorktreeActions? {
-    val api = service?.worktrees ?: return null
+    if (service == null) return null
+    val api = service.worktrees ?: return null
     val registry = remember(service.scope) { WorktreeActionsRegistry.of(service.scope) }
     val access by registry.access.collectAsState()
     val dispatched by registry.dispatched.collectAsState()

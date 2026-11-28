@@ -56,8 +56,8 @@ internal class HttpWorktreeManagement(
         val tokens = body["tokens"] as? JsonArray
         val current = (body["current"] as? JsonPrimitive)?.takeIf { it.isString }?.content
         tokens != null && current != null && (current.isEmpty() || tokens.any { token ->
-            val entry = token as? JsonObject
-            entry?.get("id")?.jsonPrimitive?.contentOrNull == current && entry["role"]?.jsonPrimitive?.contentOrNull == "full"
+            val entry = token as? JsonObject ?: return@any false
+            entry["id"]?.jsonPrimitive?.contentOrNull == current && entry["role"]?.jsonPrimitive?.contentOrNull == "full"
         })
     } catch (cancelled: CancellationException) { throw cancelled }
     catch (_: Exception) { false }
