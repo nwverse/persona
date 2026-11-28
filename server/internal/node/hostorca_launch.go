@@ -252,7 +252,11 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 	)
 }
 
-func (h *orcaHost) canAutoRegister(path string) bool {
+func (h *orcaHost) canAutoRegister(path string) bool { return orcaCanAutoRegister(path) }
+
+// orcaCanAutoRegister: a start in path may add the Git repository holding it to Orca (repo.add): not the root, the
+// home folder or a temporary folder.
+func orcaCanAutoRegister(path string) bool {
 	clean := filepath.Clean(path)
 	if clean == "/" {
 		return false

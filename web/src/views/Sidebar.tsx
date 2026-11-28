@@ -21,6 +21,7 @@ import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentList
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
+import { engineName } from "../lib/engine-names";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
 import { reportBoundary } from "../lib/error-reports";
 import { isChunkError, reloadForStaleChunk, reloadPage } from "./PageBoundary";
@@ -1712,7 +1713,7 @@ function AgentSection({ group, byTodo, showHost, reg, hover, activeKey, go, onRo
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds: holdsRow(group.sessions, activeKey) });
   const row = (s: Session) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
-    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" ? sessionHost(s) : undefined} showTodoTag={!byTodo} onMenu={onRowMenu} />;
+    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" ? engineName(sessionHost(s)) : undefined} showTodoTag={!byTodo} onMenu={onRowMenu} />;
   };
 
   const statusInfo = group.todoStatus ? TODO_STATUS_INFO[group.todoStatus as TodoStatus] : undefined;

@@ -18,15 +18,32 @@ type PaneHost struct {
 	NewTab bool `json:"new_tab"`
 	// Worktree: the host can make a Git worktree of a workspace's repository and open it as a workspace (worktree.create).
 	Worktree bool `json:"worktree"`
-	// Split: the host can split a pane (panes.split). CloseTab: it can close a whole tab (tabs.close). Rename: it can
-	// rename a tab (tabs.rename) and a workspace (worktree.rename). Older nodes leave them out: a client then keeps its
-	// own rule for the host.
-	Split      bool        `json:"split,omitempty"`
-	CloseTab   bool        `json:"close_tab,omitempty"`
-	Rename     bool        `json:"rename,omitempty"`
-	Workspaces []PaneSpace `json:"workspaces"`
-	Tabs       []PaneTab   `json:"tabs"`
-	Panes      []PaneItem  `json:"panes"`
+	// Abilities: what else the node does with the host's workspaces, tabs and panes, for the clients' menus (#17053).
+	// Clients offer an action where it says so, never by the host's name. An older node leaves it out; clients then keep
+	// a table of what such a node does.
+	Abilities  *PaneAbilities `json:"abilities,omitempty"`
+	Workspaces []PaneSpace    `json:"workspaces"`
+	Tabs       []PaneTab      `json:"tabs"`
+	Panes      []PaneItem     `json:"panes"`
+}
+
+// PaneAbilities is what the node's menu methods (docs/integrations/terminal.md "Node menus") do on one terminal host,
+// read from what the host implements, so a client follows a host that gains an ability without knowing its name.
+type PaneAbilities struct {
+	// Rename: its workspaces and tabs can be renamed (spaces rename, tabs.rename; host.Organizer).
+	Rename bool `json:"rename"`
+	// ClosePane: one pane can be closed (panes.close; host.Organizer).
+	ClosePane bool `json:"close_pane"`
+	// Split: a pane can be split in two (panes.split; host.Splitter).
+	Split bool `json:"split"`
+	// CloseTab: a whole tab can be closed with every pane in it (tabs.close; host.SlotCloser).
+	CloseTab bool `json:"close_tab"`
+	// Git: Pull, Push and Fetch run in its panes' and workspaces' folders (panes.git); false for a host whose terminals
+	// the node does not drive (botmux).
+	Git bool `json:"git"`
+	// RunHere: "Run agent here" starts an agent in one of its plain shell panes (panes.agent): the host is the
+	// default engine's and can name a pane's foreground programs.
+	RunHere bool `json:"run_here"`
 }
 
 type PaneSpace struct {

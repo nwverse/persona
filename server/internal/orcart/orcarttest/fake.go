@@ -623,6 +623,14 @@ func validate(method string, p map[string]any) string {
 		return str("sessionId", true)
 	case "agentSession.cancel":
 		return envelopeOf(p)
+	case "preflight.installedAgents":
+		return ""
+	case "agentSession.createSupport":
+		return first(str("worktree", true), str("agent", true))
+	case "agent.launch":
+		return launchInvalid(p)
+	case "agentSession.create":
+		return createInvalid(p)
 	case "agentSession.send":
 		if r := envelopeOf(p); r != "" {
 			return r
@@ -723,6 +731,129 @@ func positiveInt(p map[string]any, k string) string {
 		return k + " must be a positive integer"
 	}
 	return ""
+}
+
+// orcaSessionID is what Orca 1.4.277 takes as a session id.
+func orcaSessionID(id string) bool {
+	if len(id) < 8 || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// stringMap checks that v, when present, is an object of at most 32 string values ("" when it is).
+func stringMap(v any, name string) string {
+	if v == nil {
+		return ""
+	}
+	m, ok := v.(map[string]any)
+	if !ok || len(m) > 32 {
+		return name + " must be an object of at most 32 strings"
+	}
+	for _, x := range m {
+		if s, ok := x.(string); !ok || s == "" {
+			return name + " values must be non-empty strings"
+		}
+	}
+	return ""
+}
+
+// userMessage checks a user message body as agentSession.send and agentSession.create take it.
+func userMessage(v any) string {
+	body, ok := v.(map[string]any)
+	if !ok || body["kind"] != "message" || body["role"] != "user" {
+		return "body must be a user message"
+	}
+	if blocks, ok := body["blocks"].([]any); !ok || len(blocks) == 0 || len(blocks) > 64 {
+		return "body.blocks must contain 1–64 blocks"
+	}
+	return ""
+}
+
+// launchInvalid checks agent.launch's params as Orca 1.4.277 does ("" when they pass): the agent, a launch operation
+// id ("<13-digit ms>-<32 hex>"), an existing worktree target, a prompt to submit or draft, string chat options, and
+// the session id and surface it may name.
+func launchInvalid(p map[string]any) string {
+	if agent, _ := p["agent"].(string); agent == "" {
+		return "Missing agent"
+	}
+	if op, ok := p["operationId"]; ok {
+		s, _ := op.(string)
+		head, hexPart, cut := strings.Cut(s, "-")
+		if !cut || len(head) != 13 || len(hexPart) != 32 || strings.Trim(head, "0123456789") != "" ||
+			strings.Trim(hexPart, "0123456789abcdef") != "" {
+			return "Malformed launch operation id"
+		}
+	}
+	target, _ := p["target"].(map[string]any)
+	if worktree, _ := target["worktree"].(string); target["kind"] != "existing" || worktree == "" {
+		return "target must be an existing worktree"
+	}
+	if prompt, ok := p["prompt"]; ok {
+		pr, _ := prompt.(map[string]any)
+		if _, isText := pr["text"].(string); !isText || pr["delivery"] != "submit" && pr["delivery"] != "draft" {
+			return "prompt must have text and a delivery"
+		}
+	}
+	if r := stringMap(p["chatOptions"], "chatOptions"); r != "" {
+		return r
+	}
+	if id, ok := p["sessionId"]; ok {
+		if s, _ := id.(string); !orcaSessionID(s) {
+			return "Invalid session id"
+		}
+	}
+	if surface, ok := p["surface"]; ok && surface != "chat" && surface != "terminal" {
+		return "surface must be chat or terminal"
+	}
+	return ""
+}
+
+// createInvalid checks agentSession.create's params as Orca 1.4.277 does ("" when they pass): an envelope naming no
+// fence (the session does not exist yet), the worktree and agent, a first message, string options, nothing else.
+func createInvalid(p map[string]any) string {
+	envelope, ok := p["envelope"].(map[string]any)
+	if !ok {
+		return "Missing envelope"
+	}
+	if fence, has := envelope["expectedRuntimeFence"]; !has || fence != nil {
+		return "agent_session_operation_invalid: requestMalformed (a create names no fence)"
+	}
+	if id, _ := envelope["sessionId"].(string); !orcaSessionID(id) {
+		return "Invalid session id"
+	}
+	for _, field := range []string{"clientOperationId", "payloadFingerprint"} {
+		if value, _ := envelope[field].(string); value == "" {
+			return "Missing envelope." + field
+		}
+	}
+	for k := range p {
+		if !slices.Contains([]string{"envelope", "worktree", "agent", "firstMessage", "options", "optionsMode", "tabId",
+			"tabPlacement", "resumeFrom", "forkFrom"}, k) {
+			return "Unrecognized key " + k
+		}
+	}
+	if worktree, _ := p["worktree"].(string); worktree == "" {
+		return "Missing worktree"
+	}
+	if agent, _ := p["agent"].(string); agent == "" {
+		return "Missing agent"
+	}
+	if msg, ok := p["firstMessage"]; ok {
+		f, _ := msg.(map[string]any)
+		if id, _ := f["clientMessageId"].(string); id == "" {
+			return "Missing firstMessage.clientMessageId"
+		}
+		if r := userMessage(f["body"]); r != "" {
+			return r
+		}
+	}
+	return stringMap(p["options"], "options")
 }
 
 // Write is one terminal.send or terminal.close the fake took: what reached the terminal.

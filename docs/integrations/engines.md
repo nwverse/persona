@@ -117,8 +117,8 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 | Close sessions from phone | Yes | Yes | Yes | Yes | Yes (`block.close` / `session.close_window`) | Backend supports archiving in Paseo; app button currently only for terminal sessions |
 | Create sessions from phone; Resume a stopped one from its terminal page (a message does not, #4754) | Yes | Yes (a new tab in the Herdr App space for the directory, #2532) | Yes (create; resume a stopped Claude Code, Codex, TRAE CLI or pi session in a new terminal, #17044; not omp) | Yes | Yes (`session.create` / `session.new_window` with `focus: false`) | Yes (each Paseo provider is a launcher; a message continues a Paseo session) |
 | Create a worktree from a workspace ([terminal.md](terminal.md), "23. New worktree…") | Yes (herdr 0.9 creates it; older versions fall back to git) | Yes (Persona falls back to git and opens a Herdr App space) | Yes (Orca creates it under the original workspace and owns the checkout directory) | No | No (git fallback) | Yes on the web (Paseo creates it in its own worktrees folder as a Paseo workspace, #6295, and deletes one it made, #6297; `docs/integrations/paseo.md` ("Spaces and workspaces")) |
-| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | Yes (`worktree.set` display name; `terminal.rename` for tabs, the assistant's guarded tab rename and the bulk rename included, #17043) | Yes | Yes (`session.set_label` / `session.set_window_label`) | Spaces (Paseo's projects) and workspace titles on the web, #6297; no tabs (backend supports session names; app button currently only for terminal sessions) |
-| Split a pane, close a whole tab ([terminal.md](terminal.md), "21. Node menus") | Yes | No | Yes (`terminal.split`, `terminal.closeTab`; an Orca without them is refused and not offered, #17043) | No | Yes | No (no terminal) |
+| Rename spaces / tabs | Yes | Yes (written into Herdr App's layout) | Yes (`worktree.set` display name; `terminal.rename` for tabs, the assistant's guarded tab rename and the bulk rename included, #17043; on the web also a native chat's space, #17053) | Yes | Yes (`session.set_label` / `session.set_window_label`) | Spaces (Paseo's projects) and workspace titles on the web, #6297; no tabs (backend supports session names; app button currently only for terminal sessions) |
+| Split a pane, close a whole tab ([terminal.md](terminal.md), "21. Node menus") | Yes | No | Yes (`terminal.split`, `terminal.closeTab`; an Orca without them is refused and its `abilities` say so, #17043) | No | Yes | No (no terminal) |
 | Live terminal, phone takeover | Yes | No | No | No | No | No (no terminal) |
 | Colored screen reads, draft detection | Yes | No (plain text, dialogs only) | No colors; drafts seen (Orca 1.4.277 hands back the input box's text, which a plain read puts back in its row), and Claude's grey suggestion reads as text too (#17042) | Yes | Yes (`rex capture --format=vt`) | No (no terminal) |
 | Change permission mode / thinking effort | Yes | Supported, untested | Yes (fake-runtime tests; checked on an isolated Orca 1.4.277 with Claude Code 2.1.331): the mode by shift+tab; effort and speed only while the input box shows no text, so also not while Claude's grey suggestion shows (#17042) | Supported, untested | Supported, untested | Yes (end-to-end tested) |
@@ -191,8 +191,11 @@ List, state, send text / images, interrupt, close, answer approvals / questions,
 included, only those Orca takes for the chat's provider), thinking and model, rename, rewind the conversation, and mark read; no
 screen reads, keys, or live terminal. A Claude chat reads as its Claude transcript, a Codex chat is listed once as its Codex thread,
 and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
-running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card. See
-`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats, the cards and the controls.
+running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card.
+New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
+chats): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
+Agent's default launcher still opens a terminal. See `docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the
+closed chats, the cards, the controls and starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).

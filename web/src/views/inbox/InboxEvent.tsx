@@ -12,7 +12,8 @@ import { conversationRoute } from "../../lib/conversation-page";
 import { api, ApiError, errorText } from "../../lib/api";
 import { markdownBody, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { docChangeLine, inboxSessionRoute, openInboxConversation } from "../../lib/inbox-page";
-import { otherManager } from "../../lib/manager-choice";
+import { mainConversationMachine } from "../../lib/feed-cache";
+import { otherManager, sameManager } from "../../lib/manager-choice";
 import { nowText } from "../../lib/inbox-now";
 import { connectorBrand } from "../../lib/connectors";
 import { activityOf } from "../../lib/format";
@@ -37,6 +38,14 @@ import { useItemReadOnly } from "./item-write-gate";
 /** Where a tapped `source` entry (or "Original") opens the item's own page: at a Feishu position, a mail's uid, or a URL. */
 export type SourceAt = { position?: string; uid?: number; url?: string };
 
+/** An untitled main chat can be named from this manager's loaded snapshot, without looking up the target. */
+function SuggestionLabel({ item, suggestion }: { item: InboxItem; suggestion: InboxSuggestion }) {
+  const main = useStore(({ assistant }) => suggestion.kind === "handoff" && !suggestion.target_title && !!assistant?.main
+    && sameManager(item.manager, assistant.manager) && suggestion.session_id === assistant.main
+    && suggestion.machine_id === mainConversationMachine(assistant));
+  return suggestionTitle(suggestion, main);
+}
+
 // ── the row ──────────────────────────────────────────────
 
 /** Under a row: a known manager state always has its own line; an older hub keeps the handling or suggestion line. */
@@ -44,7 +53,8 @@ export function EventMark({ it }: { it: InboxItem }) {
   const now = nowText(it);
   if (now !== undefined) {
     const key = it.now!;
-    const needsYou = key === "confirm_reply" || key === "confirm_agent" || key === "decide" || key === "follow_up_ask" || key === "check_due" || key === "failed" || key === "needs_you";
+    const needsYou = key === "confirm_reply" || key === "confirm_agent" || key === "confirm_handoff" || key === "decide" || key === "follow_up_ask" || key === "check_due" || key === "failed" || key === "needs_you";
+    const handoff = (key === "confirm_handoff" || key === "decide") && it.suggestion?.kind === "handoff" ? it.suggestion : undefined;
     const working = key === "queued" || key === "looking" || key === "agent_working";
     const icon = key === "waiting" ? "clock" : working ? "spinner" : needsYou ? "needs-you" : key.startsWith("done_") ? "check" : "none";
     return (
@@ -58,7 +68,9 @@ export function EventMark({ it }: { it: InboxItem }) {
           </span>
         )}
         {icon === "check" && <Icon name="check" size={12} stroke={2.4} className="shrink-0" />}
-        {key === "looking" ? <Shimmer className="truncate">{now}</Shimmer> : <span className="truncate">{now}</span>}
+        {key === "looking" ? <Shimmer className="truncate">{now}</Shimmer> : <span className="truncate">
+          {handoff ? <>{key === "decide" && `${now} · `}<SuggestionLabel item={it} suggestion={handoff} /></> : now}
+        </span>}
       </p>
     );
   }
@@ -76,7 +88,7 @@ export function EventMark({ it }: { it: InboxItem }) {
   if (s) {
     return (
       <p className="flex min-w-0 items-center gap-1.5 text-submeta whitespace-nowrap" data-event-mark="suggestion">
-        <span className="shrink-0 font-medium text-accent-ink"><Spark />{suggestionTitle(s)}</span>
+        <span className="max-w-full shrink-0 truncate font-medium text-accent-ink"><Spark /><SuggestionLabel item={it} suggestion={s} /></span>
         <span className="min-w-0 truncate text-ink-2">{firstLine(s.text)}</span>
       </p>
     );
@@ -526,8 +538,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   }
   return (
     <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-handback={s.handback ? "" : undefined}>
-      <p className="flex items-center gap-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink">
-        <span><Spark />{suggestionTitle(s)}</span>
+      <p className="flex items-center gap-1.5 text-submeta font-medium text-accent-ink">
+        <span className="min-w-0 wrap-anywhere"><Spark /><SuggestionLabel item={item} suggestion={s} /></span>
         {s.handback && <span className="text-ink-3">· {t("inbox-inboxevent.handback")}</span>}
       </p>
       {editing ? (
@@ -579,7 +591,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-meta leading-relaxed whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
+          <p className="mt-1.5 text-meta leading-relaxed wrap-anywhere whitespace-pre-wrap text-ink" data-suggestion-text>{s.text}</p>
           {(s.changes ?? []).map((c) => (
             <p key={`${c.ref}|${c.field}`} className="mt-1 flex items-center gap-1.5 truncate text-submeta text-ink-2">
               <Icon name="chevronRight" size={11} stroke={2.4} className="shrink-0 text-ink-3" />

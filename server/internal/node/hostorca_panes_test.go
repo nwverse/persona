@@ -14,20 +14,20 @@ import (
 // Split, close a whole tab and the guarded tab rename on Orca (#17043), against the fake runtime, which checks each
 // request against Orca's schema. Orca 1.4.277 did each of them live on an isolated runtime.
 
-// orcaPaneHost is the Orca host of the panes listing, or a failed test.
-func orcaPaneHost(t *testing.T, n *Node) proto.PaneHost {
+// orcaPaneHost is what the panes listing says the Orca host can do, or a failed test.
+func orcaPaneHost(t *testing.T, n *Node) proto.PaneAbilities {
 	t.Helper()
 	res, err := n.listPanes(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, h := range res.Hosts {
-		if h.Kind == host.Orca {
-			return h
+		if h.Kind == host.Orca && h.Abilities != nil {
+			return *h.Abilities
 		}
 	}
-	t.Fatalf("no Orca host in %+v", res)
-	return proto.PaneHost{}
+	t.Fatalf("no Orca host with abilities in %+v", res)
+	return proto.PaneAbilities{}
 }
 
 // A pane splits to the right (Orca's "vertical") or down ("horizontal"), fenced to the terminal's process; the new
