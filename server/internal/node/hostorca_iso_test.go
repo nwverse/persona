@@ -274,7 +274,7 @@ func (o *orcaIso) stop(t *testing.T) {
 			}
 		}
 		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline) && (running() || len(o.processes()) > 0); {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond) // sleep-ok: polls for the processes to exit, bounded by the deadline
 		}
 	}
 	if left := o.processes(); len(left) > 0 || running() {
