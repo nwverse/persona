@@ -75,6 +75,7 @@
   "routing_hub_unsupported": "グループ・トピックのルーティングや無操作タイムアウトを設定するには、このアシスタントを更新してください。",
   "routing_saved": "保存しました。新しく届くメッセージからすぐに適用されます。",
   "connector_status_title": "接続状態",
+  "link_conflict": "このリンクには別々のアシスタントが指定されています。戻って連携を選び直してください。",
   "channel_unavailable": "チャンネル設定を読み込めませんでした：{error}",
   "connector_unavailable": "コネクタの状態を読み込めませんでした：{error}",
   "mail_description": "メールアカウントを連携すると、Persona がメールの閲覧・検索や受信箱への取り込みを行えます。",

@@ -2434,11 +2434,23 @@ Settings search entries for Inbox Sources redirect cleanly into the unified view
 when enabled, and `/settings/integrations/...` links (including `-sources...`) fall back cleanly to the corresponding legacy tab
 (restoring the standalone `Inbox Sources` menu, routes, `manager`, and `state`) when disabled, with zero data migration or data
 loss. Older hubs that do not expose boolean `integrations_v2` degrade gracefully to a read-only row with an update hint.
+Integration addresses accept an independent `manager` parameter. An address without one or a legacy owner follows the
+sidebar's current assistant. The linked assistant's Labs setting selects the unified or legacy page, keeping the object,
+filter, push-source state, and proposed `set` values. Shareable object URLs carry the legacy owner suffix during the trial.
+When the two owner spellings disagree, Settings shows Back and leaves the integration unopened.
 Under the trial, Assistant settings shows the state of `inbox_todo_forward` and links to its single editable switch in
 **Data flow** (#16190), preserving the assistant named in the link. GitHub detail opens saved Repositories in Assistant
 settings. Mail, Feishu and sources with history link to the sync scope in Knowledge. Turning off the trial restores the
 original forwarding switch. See the [split layout](../design/DESIGN_SYSTEM.md#integrations--extensions-in-web-settings),
 [channel settings](../extensions/channels.md#7-ui) and [connector overview](../extensions/connectors.md).
+
+Channel and extension editors keep their configuration in tab memory under the bound hub credential, assistant, resource
+kind, and ID (#17762). The split breakpoint and legacy Extensions entry read the same drafts. Saves run in order for a
+resource, and a refresh requested during a write reads again after it. The channel form checks the document revision
+and sends only the named fields. Extension saves first load a fresh baseline for their full-config PUT, apply the
+edited fields, and keep the entry-preserving mode for immediate machine switches. Overlapping changes and the hub's
+`settings_moved` refusal keep the draft for review. If the save response is lost, the editor reads the same resource and
+compares the submitted fields with the confirmed values before showing a receipt. Pairing again clears these drafts.
 
 Graduation (making the new experience the default for at least one release with rollback kept) or removal is tracked in #14802.
 
@@ -2686,6 +2698,8 @@ filters. `views/inbox/StoredMailBody.tsx` reads the archived item from `GET /api
 `mail_body_truncated` flag. The reader can display an already saved translation. Draft text, Hand to AI, Done,
 folders and other Inbox actions remain available. Live account requests, message reads, attachments and sending
 require the enabled provider.
+
+**Source availability (#17399).** The Inbox reads the optional `stored_sources` from full, delta, refresh, and 304-held responses. The Lark chip and the source words in the caught-up hint follow the shared rule: the existing Lark extension capability or `hubServes(module.lark)` wins, then stored Lark items, with missing / `null` treated as unknown and visible. Mail wording follows `hubServes(module.mail)` and stored mail independently; the browser's optional-feature switch is not mistaken for hub availability. A hidden persisted Lark selection is cleared so it cannot filter invisibly. The fixed Mail *kind* chip (`KIND_FILTERS` key `mail`) follows the same mail decision through `visibleInboxKinds` (#17814), and a persisted `inbox.kind=mail` is cleared when it hides; the other kind chips stay. Per-account Mail source chips and all stored readers are unchanged. Shared cases: `spec/fixtures/inbox-sources/presence.json`; rendered coverage: `InboxList.source-availability.test.tsx`.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
@@ -3641,7 +3655,7 @@ The defaults add nothing to the page (no attribute, no stylesheet), so the defau
   - Explicit choices precede the theme's fallback stack. Default restores it for that family. Terminals read the code stack when opened and preserve their separate font size and CJK width correction. A retained Full UI feed also reads the stack when another terminal surface attaches.
 - **Recent chats in the sidebar** (`persona.sidebar-recent`, #5146): 5 / 10 / 15 / 25, default 5 (#6228), how many of the latest chats the sidebar's Persona chats › 最近 lists before **Show N more**. iOS and Android list 5 and have no such setting yet. The fold of the 最近 group itself is `fold:recent-chats` (#6228).
 - **Sidebar icons** (`persona.sidebar-icons`, #10822): Monochrome (stores nothing, the default) or Colored (`colored`), a color for each page's icon in the sidebar ("The sidebar's pages", **Icon colors**). Other tabs follow through the `storage` event.
-- **Window style** (`persona.surface-style`, #16607, #16776, #17012, #17112): Default (stores nothing, preserving crisp opaque surfaces) or **Frosted Glass** (`liquid-glass`), an opt-in translucent frosted surface style under Settings › Advanced › Appearance that clears opaque root backgrounds on macOS desktop (`setSurfaceStyle` + `data-desktop-glass`), syncs `persona.theme` via `setThemeSource` so native vibrancy matches light/dark mode, skips redundant shell CSS `backdrop-filter` when `data-desktop-glass` is active, maps the **Glass translucency** slider (`persona.glass-translucency`, `0%–100%`, `step 5%`, default `75%`) 1:1 to sidebar/bezel translucency (`0%` fully opaque to `100%` pure vibrancy) over a subtly translucent flat inset `<main>` workspace aligned with Default's flat card, button, and border tokens (with flat alpha-modulated controls scoped to the frosted sidebar and macOS control bay), and respects `prefers-reduced-transparency`. Other tabs follow through the `storage` event.
+- **Window style** (`persona.surface-style`, #16607, #16776, #17012, #17112): Default (stores nothing, preserving crisp opaque surfaces) or **Frosted Glass** (`liquid-glass`), an opt-in translucent frosted surface style under Settings › Advanced › Appearance that clears opaque root backgrounds on macOS desktop (`setSurfaceStyle` + `data-desktop-glass`), syncs `persona.theme` via `setThemeSource` so native vibrancy matches light/dark mode, disables document-wide CSS `backdrop-filter` utilities across `<main>`, the split panel `<aside>`, and overlays when `data-desktop-glass` is active, maps the **Glass translucency** slider (`persona.glass-translucency`, `0%–100%`, `step 5%`, default `75%`) 1:1 to sidebar/bezel translucency (`0%` fully opaque to `100%` pure vibrancy) over a subtly translucent flat inset `<main>` workspace aligned with Default's flat card, button, and border tokens (with flat alpha-modulated controls scoped to the frosted sidebar and macOS control bay), and respects `prefers-reduced-transparency`. Other tabs follow through the `storage` event.
 - **Launcher quota in the sidebar** (`persona.sidebar-usage`, #13493): on by default (stores nothing); off (`0`) stops the sidebar mounting its usage card (`lib/sidebar-usage.ts`, `views/UsageBars.tsx`). Settings › General › Appearance. Other tabs follow through the `storage` event.
 
 ## New versions

@@ -807,19 +807,24 @@ Never archived by this pass: a session still in a host (a pane or an engine host
 
 An Agent is gone when its computer is not connected, the computer no longer lists the session, or the session is closed in the sense of "Closed sessions archive themselves" (no pane and no host, not working or starting, whatever its status reads: `offline`, `interrupted`, `idle` or `unknown`). For 2 minutes after its computer's node connects again, none of that computer's Agents is gone: a node that started over (an ssh node whose link dropped) lists its Agents again only once it has found them. It is not gone, whatever its status, when it is an assistant conversation, is starting, has a card waiting or queued input, has a wake or continuation pending or waits on something the manager follows (`work.phase` `blocked`, or `work.wake_at` set), or waits out a subscription usage limit.
 
-`GET /api/v1/todos` then carries `orphaned: {"reason", "since"}` on the to-do, and the apps are told to read the to-dos again (`{"type":"todos"}`) when it appears, changes reason or goes. `since` is when the manager first saw it so (it restarts with the manager). `reason` is the first that applies to any of its Agents:
+`GET /api/v1/todos` then carries `orphaned: {"reason", "since"}` on the to-do, and the apps are told to read the to-dos again (`{"type":"todos"}`) when it appears, changes reason or goes. For a queued task, `since` is the durable time that wait began. For the other reasons, it is when the manager first saw the condition.
 
 | `reason` | Meaning |
 | --- | --- |
 | `error` | An Agent is closed and its last turn ended on a model error (`turn_error`) that nothing is set to retry |
 | `offline` | An Agent's computer is not connected. Reported only after the computer has been away for 10 minutes, so a dropped link or a node restart flags nothing |
 | `closed` | The Agents are not running: stopped by the finished-task or idle rule ("Stop Agents of completed tasks"; their terminals stay) or closed by the user, and nothing is set to wake them |
+| `queued` | No Agent or start is active, and the plan has waited at least 10 minutes for a computer or workspace. The supervisor hears the queue's reason once for that stretch |
 
-Not orphaned: a done to-do; one with no Agent yet (not started, or its start failed: "Remedying a start"); a supervised task waiting for its review or for the user's decision, which waits on them and not on an Agent. A to-do whose computer is connected but could not be asked this minute keeps what was found before.
+A done to-do, one with no Agent or queued start, and one intentionally waiting for a prerequisite, review, verification, or owner decision skip the orphan check. A to-do whose computer is connected but could not be asked this minute keeps what was found before.
 
 The assistant's snapshot says it on the task's line, and a supervised task's supervisor gets the `orphaned` signal once (`docs/assistant/unified-entry.md`, "Supervision": the supervisor loop's signals). Clients that do not know the field show the to-do as before; showing it on the task card and row is each client's own work: the web (`docs/web/web.md`), Android (`docs/android/android.md`, "Closeout, decisions and tasks nobody works on") and the iOS app (`OrphanedLine`, `docs/apple/ios.md` "Closeout, orphaned tasks and answerable decisions (#3612, #3618, #3804)") do.
 
 ## Decision records
+
+A recorded owner decision that could not reach any Agent is handed to the assigned supervisor immediately through the
+existing supervision route. The handoff names the decision and the delivery failure. A busy conversation can still
+receive it through its relay queue, and the decision is not sent to the original Agent again.
 
 A standing authorization answer records an Agent decision naming the grant, original user words and source. It is
 committed in the same transaction as the hook's resolved question or plan, before the answer is delivered. It is not
@@ -1447,6 +1452,10 @@ An owner can set `{"require_accepted_after":true}` on the root to-do with `POST 
 
 An approved start is remembered across manager restarts and rechecked by the task queue (normally within a minute). After it clears prerequisites, normal capacity checks still apply. A waiting start checks the prerequisites it was approved with as well as any new links; removing a link or turning enforcement off does not waive that approval's prerequisites. To release work with revised prerequisites, cancel the old start and approve a new plan. If the manager loses confirmation of a launch, it does not send it a second time automatically: check the computer. This version does not support direct Retry or a `continues` handoff for gated starts; after a definitive failure, make a new plan on the same to-do and approve it.
 
+The manager uses the same prerequisite verdict for the to-do view, dependency wakes, the task queues, and the final launch check. A stored `after` mirror follows the live dependency, including reopening. Plain legacy `after` links still notify the supervisor and gate existing workspace queues. If a blocker read fails, the task stays queued for another check. Turning off To-dos v2 keeps an already approved PR wait in force until the existing blocker clears.
+
+External PR observations run separately from the supervision tick and reuse recent results. A failed lookup backs off and leaves the blocker in place. The merge train tracks each PR by its canonical URL within its repository's queue. An observed conflict records a wait and can notify the supervisor. The rebase failure count tracks explicit attempt results.
+
 ## The assistant's todo tools
 
 #1683. The assistant has the user's to-dos as MCP tools (`todo_tools.go`, descriptions in `prompts/mcp/todo/`), so it can note what the user asks it to, or a batch of deadlines from a mail, without a hub token:
@@ -1659,9 +1668,19 @@ linking pass, including after a manager restart. The deterministic Inbox linker
 reads these saved links as well as legacy task references, so a comment or review
 on any linked PR can return to the existing task Agent even when `pr_url` names
 another PR. Ambiguous or closed tasks are not selected.
-Old stage and delivery fields retain their existing
-judgment semantics. A stored receipt prevents historical imports and repeated reports
-from restoring links removed by the user. An explicit additive call can restore them.
+
+The manager stores delivery provenance with each saved link (#17792). An
+explicit delivery binding stays authoritative even if the stage names the same
+PR. A complete non-PR closeout or a forge-confirmed non-PR can clear a stage
+mirror. For links saved before provenance was recorded, the manager uses the
+existing match against the current or earlier stage PRs (#17796).
+The additive tool binds delivery links explicitly. A full-list save binds newly
+added delivery links and links switched to delivery. Retained links with the
+same role keep their provenance, including after a title edit. Switching to
+reference or removing the link clears the binding.
+
+A stored receipt prevents historical imports and repeated reports from restoring
+links removed by the user. An explicit additive call can restore them.
 Imports and interactive edits lock the same Todo and commit atomically; changes
 broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
 Metadata import errors are logged and leave non-PR progress intact, but cannot

@@ -155,6 +155,8 @@
   "orca_start_unsupported": "This version of Orca can’t start chats from Persona, so nothing was started. Start the chat in Orca, or update Orca.",
   "orca_start_folder": "No project in Orca holds this folder, so nothing was started. Open the folder in Orca, then start the chat again.",
   "orca_start_launcher": "Orca on that computer can’t start this kind of chat ({detail}), so nothing was started. Pick another launcher.",
+  "orca_chat_runtime_missing": "{program}’s chat runtime isn’t installed in Orca on that computer, so nothing was started. Start it in a terminal, or install it from a new chat tab in Orca.",
+  "orca_chat_unavailable": "Orca on that computer can’t open {program} as a chat here, so nothing was started. Start it in a terminal instead.",
   "orca_not_registered": "Orca on that computer has no project open, so nothing was started. Open a project in Orca there, then start the Agent again.",
   "orca_workspace_unavailable": "The chosen Orca workspace isn’t available any more, or doesn’t hold this folder, so nothing was started. Refresh and pick the workspace again.",
   "runtime_session": "This session belongs to another app (an Orca chat, for example), so nothing was started. Continue it there.",

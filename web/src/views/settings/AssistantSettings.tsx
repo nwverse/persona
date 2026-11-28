@@ -6,10 +6,10 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
-import { formatIntegrationsSub } from "./integrations-route";
+import { integrationHref, integrationScope } from "./integrations-route";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
 import { useInboxSourcesShown } from "../../lib/subscriptions";
 import { mainRuntimeDetails, type MainExecution } from "../../lib/main-runtime";
 import { PERMISSION_MODES } from "../../lib/session-actions";
@@ -160,9 +160,9 @@ const RETENTION = {
 } as const;
 type Retention = keyof typeof RETENTION;
 
-export function AssistantSettings({ bare }: { /** Without its header (the profile page has its own). */ bare?: boolean } = {}) {
+export function AssistantSettings({ bare, manager }: { /** Without its header (the profile page has its own). */ bare?: boolean; manager?: string } = {}) {
   const owner = useSyncExternalStore(subscribeCredentialOwner, credentialOwner);
-  return <ConfigurationManager>{(manager) => <AssistantSettingsForManager key={JSON.stringify([manager, owner])} manager={manager} owner={owner} bare={bare} />}</ConfigurationManager>;
+  return <ConfigurationManager manager={manager}>{(target) => <AssistantSettingsForManager key={JSON.stringify([target, owner])} manager={target} owner={owner} bare={bare} />}</ConfigurationManager>;
 }
 
 function AssistantSettingsForManager({ manager, owner, bare }: { manager: string; owner: string; bare?: boolean }) {
@@ -506,12 +506,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const on = tasks?.filter((task) => task.enabled).length ?? 0;
   const next = tasks ? upcoming(tasks, 1)[0] : undefined;
   const deduplicateInboxForward = info?.integrations_v2 === true && hasInboxSources;
-  const nonDefaultManager = manager && manager !== (defaultId || defaultManager()) ? manager : undefined;
-  const inboxForwardSourcesHref = settingsHref(
-    "integrations",
-    formatIntegrationsSub({ kind: "sources", ...(nonDefaultManager ? { manager: nonDefaultManager } : {}) }),
-    false,
-  );
+  const inboxForwardSourcesHref = integrationHref({ scope: integrationScope(manager), view: { kind: "data-flow" }, filter: "all" });
 
   if (!info && !error) return <Loading />;
 

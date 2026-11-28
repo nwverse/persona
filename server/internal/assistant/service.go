@@ -88,10 +88,15 @@ type Options struct {
 	// knob as RecordingTimings is. Unset, the module runs with its defaults.
 	LarkTimings     map[string]time.Duration
 	LarkTimingLists map[string][]time.Duration
+	// SpeakerTurnsImport enables the debug-only PUT /api/v1/recordings/{id}/speakers/turns route (#17674), matching
+	// manager.json's kb.speaker_turns_import. Read at start only; off by default.
+	SpeakerTurnsImport bool
 }
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	blockerReconcile todoBlockerReconciler
+	mergeTrain       mergeTrainCoordinator
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules *kernel.Kernel
 	// moduleSwitch is the same list as the provider seams read it (moduleswitch): recording's and Lark's layers.
@@ -124,6 +129,8 @@ type Service struct {
 	inboxExt inboxExtensionCache
 	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
 	extTr extTranscriptions
+	// integrationReads is the owning extension manager's settings reader, installed before Run.
+	integrationReads integrationReads
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
@@ -458,6 +465,9 @@ type Service struct {
 	healthMod    healthhost.Layer      // the Health module, nil without it (health_layer.go)
 	recOpts      recordingOptions      // Options' recording knobs, for the module's Host
 	meetingModel kb.Model
+	// speakerTurnsImport is kb.speaker_turns_import read once at start (off by default); no app or PUT /api/v1/assistant
+	// can change it.
+	speakerTurnsImport atomic.Bool
 	// sockets makes socketMux, ServeSocket's (sockets.go).
 	sockets   sync.Once
 	socketMux *http.ServeMux
@@ -473,6 +483,15 @@ func New(o Options) *Service {
 	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, orcaChats: o.OrcaChats, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
+	if o.SpeakerTurnsImport {
+		s.speakerTurnsImport.Store(true)
+	} else if b, ok := o.Hub.(*BusHub); ok && b.speakerTurnsImport {
+		s.speakerTurnsImport.Store(true)
+	} else if o.RepositoryConfig != "" {
+		if own, err := readOwnConfig(o.RepositoryConfig); err == nil && own.KB != nil && own.KB.SpeakerTurnsImport {
+			s.speakerTurnsImport.Store(true)
+		}
+	}
 	bootEpoch := "boot_" + randomHex(8)
 	s.todosV2BootEpoch.Store(&bootEpoch)
 	s.setStore(o.Store)
@@ -545,6 +564,7 @@ func New(o Options) *Service {
 	// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
 	reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
 	reg.Register(externalSourceRoutes{service: s})
+	reg.Register(integrationRoutes{s: s})
 	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.repoMirrorRoutes()
