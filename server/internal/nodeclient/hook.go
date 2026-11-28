@@ -85,6 +85,9 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 		ReportHook(ctx, input, HookPane(os.Getenv))
 		return
 	}
+	if len(args) >= 2 && args[0] == GateWordsFlag && !mentionsGateWord(input, args[1]) {
+		return // an Agent's Bash command mentioning none of the gate's words: nothing to ask the node
+	}
 	if len(args) > 0 && args[0] == CuaOnlyFlag && !runsCua(input) {
 		return // an Agent's Bash command that does not run cua-driver: nothing to ask the node
 	}
@@ -99,10 +102,63 @@ func RunHook(ctx context.Context, args []string, stdin io.Reader, stdout io.Writ
 	_, _ = stdout.Write(append(out, '\n'))
 }
 
-// CuaOnlyFlag marks the Bash hook of the Agents Persona starts on a Mac (node/generated.go): only a command that
-// mentions cua-driver goes to the node's gate (node/cua_gate.go, #4349); any other returns at once, so the Agent's
-// Bash never waits on the node, not even while it restarts.
+// GateWordsFlag marks the Bash hook of the Agents Persona starts on a Mac (node/generated.go): only a Bash command
+// that mentions one of its words (comma-separated) goes to the node's gates (node/cua_gate.go, node/op_gate.go); any
+// other returns at once, so the Agent's Bash never waits on the node, not even while it restarts. The words are
+// matched as whole words, so "open" and "grep op" do not count as an `op` call.
+const GateWordsFlag = "--gate-words"
+
+// CuaOnlyFlag is the older spelling of GateWordsFlag with the one word "cua-driver" (#4349). Settings written by an
+// earlier node still carry it; generated.go now writes GateWordsFlag so the op gate is reached too.
 const CuaOnlyFlag = "--cua-only"
+
+// mentionsGateWord: the hook is a Bash PreToolUse whose command mentions one of the words.
+func mentionsGateWord(input json.RawMessage, words string) bool {
+	var in struct {
+		Event     string `json:"hook_event_name"`
+		Tool      string `json:"tool_name"`
+		ToolInput struct {
+			Command string `json:"command"`
+		} `json:"tool_input"`
+	}
+	if json.Unmarshal(input, &in) != nil || in.Event != "PreToolUse" || in.Tool != "Bash" {
+		return false
+	}
+	for _, w := range strings.Split(words, ",") {
+		if w != "" && containsWord(in.ToolInput.Command, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsWord: word appears in s between boundaries that are not letters, digits or underscores ("op" in "op vault",
+// not in "open"; "cua-driver" in "cua-driver call").
+func containsWord(s, word string) bool {
+	for i := 0; ; {
+		j := strings.Index(s[i:], word)
+		if j < 0 {
+			return false
+		}
+		at := i + j
+		before := byte(0)
+		if at > 0 {
+			before = s[at-1]
+		}
+		after := byte(0)
+		if end := at + len(word); end < len(s) {
+			after = s[end]
+		}
+		if !wordByte(before) && !wordByte(after) {
+			return true
+		}
+		i = at + 1
+	}
+}
+
+func wordByte(b byte) bool {
+	return b == '_' || '0' <= b && b <= '9' || 'A' <= b && b <= 'Z' || 'a' <= b && b <= 'z'
+}
 
 // runsCua: the hook is a Bash PreToolUse whose command mentions cua-driver.
 func runsCua(input json.RawMessage) bool {

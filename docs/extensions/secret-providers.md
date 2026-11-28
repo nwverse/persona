@@ -300,3 +300,22 @@ when the App locks**. The resident node refreshes an active foreground-authorize
 minutes without use, discards its output, stops after a failed refresh, and stops before its locally observed 12-hour
 window. A lock or a session authorized earlier than the node observed can still require authorization. Keepalive never
 changes lock settings or approves a prompt. See [1Password's authorization model](https://developer.1password.com/docs/cli/app-integration-security/).
+
+## The CLI in the sessions Persona starts
+
+1Password authorizes `op` per process chain: the resident node and the provider extension hold the approval, and a
+process they did not start is another chain. An Agent Persona starts is such a chain, so an `op` call from its shell
+would ask for a new approval; on a Mac without Touch ID nobody can answer it, and it waits until it expires (#17679).
+
+The node therefore refuses those calls before they run, at once and with no card: `server/internal/node/op_gate.go`
+reads the Bash command (after variable assignments and wrappers such as `env`, `sudo` and `timeout`, inside
+`sh`/`bash`/`zsh -c`, and through absolute paths) and refuses every `op` call except `op --version` and `op whoami`.
+The refusal names the tools that keep the secret out of the model's context: `onepassword_vaults`,
+`onepassword_items` and `onepassword_item` for references, `agent_start` with `secret_env` for a value, and
+`personad tool secret_store --from-file -` for a write. `OP_SERVICE_ACCOUNT_TOKEN` authorizes without the App, so a
+command that carries one (in the session's environment or inline) passes.
+
+Limits: a script that starts `op` in a way its command line does not show is not covered, and the sessions the user
+starts themselves keep their report-only global hooks, so they are not blocked either. Dispatch instructions must not
+tell an Agent to run `op read`; the template that still does lives in the `onepassword` extension's documentation
+(`nwverse/persona-extensions`), outside this repository.

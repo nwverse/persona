@@ -567,6 +567,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 				n.logf("refused a cua-driver call in Bash for %s: protected app, or not checked", in.SessionID)
 				return preToolDecision("deny", why), nil
 			}
+			if why := opBashVerdict(c.Command); why != "" { // its own 1Password CLI calls (op_gate.go, #17679)
+				n.logf("refused a direct op call in Bash for %s: 1Password authorizes per process chain", in.SessionID)
+				return preToolDecision("deny", why), nil
+			}
 		}
 		if !n.isAssistantSession(in.SessionID) {
 			return nil, nil

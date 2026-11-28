@@ -50,26 +50,26 @@ func TestHooksPluginsCarryTheSettingsHooks(t *testing.T) {
 		}
 	}
 	// The assistant's have the Feishu gate on Bash, every command. The agents' have a Bash hook only on a Mac, and only
-	// for commands running cua-driver (cua_gate.go, #4349).
-	bash := func(kind string) (all, cuaOnly bool) {
+	// for commands mentioning one of the gate's words: cua-driver (cua_gate.go, #4349) or op (op_gate.go, #17679).
+	bash := func(kind string) (all, gated bool) {
 		pre := readSettings(t, filepath.Join(n.dir, kind+"-hooks", "hooks", "hooks.json"))["hooks"].(map[string]any)["PreToolUse"].([]any)
 		for _, m := range pre {
 			if m.(map[string]any)["matcher"] != "Bash" {
 				continue
 			}
 			cmd, _ := m.(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)
-			if strings.HasSuffix(cmd, " "+nodeclient.CuaOnlyFlag) {
-				cuaOnly = true
+			if strings.Contains(cmd, " "+nodeclient.GateWordsFlag+" ") {
+				gated = true
 			} else {
 				all = true
 			}
 		}
-		return all, cuaOnly
+		return all, gated
 	}
-	agentsAll, agentsCua := bash("claude")
-	assistantAll, assistantCua := bash("assistant")
-	if agentsAll || agentsCua != (runtime.GOOS == "darwin") || !assistantAll || assistantCua {
-		t.Errorf("the Bash gates: agents every command %v / cua-driver only %v, assistant %v / %v", agentsAll, agentsCua, assistantAll, assistantCua)
+	agentsAll, agentsGated := bash("claude")
+	assistantAll, assistantGated := bash("assistant")
+	if agentsAll || agentsGated != (runtime.GOOS == "darwin") || !assistantAll || assistantGated {
+		t.Errorf("the Bash gates: agents every command %v / gated words only %v, assistant %v / %v", agentsAll, agentsGated, assistantAll, assistantGated)
 	}
 }
 

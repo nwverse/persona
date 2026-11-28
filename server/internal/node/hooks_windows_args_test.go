@@ -65,7 +65,7 @@ func withoutCuaGate(settings map[string]any) map[string]any {
 		b := block.(map[string]any)
 		h := b["hooks"].([]any)[0].(map[string]any)
 		cmd, _ := h["command"].(string)
-		if b["matcher"] == cuaMCPMatcher || strings.HasSuffix(cmd, " "+nodeclient.CuaOnlyFlag) {
+		if b["matcher"] == cuaMCPMatcher || strings.Contains(cmd, " "+nodeclient.GateWordsFlag+" ") || strings.HasSuffix(cmd, " "+nodeclient.CuaOnlyFlag) {
 			continue
 		}
 		pre = append(pre, block)

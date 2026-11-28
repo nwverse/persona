@@ -64,10 +64,12 @@ func hookSettingsForOS(goos, bin, dir string, assistant bool) map[string]any {
 		pre = append(pre, blocking("Bash"))
 	}
 	if goos == "darwin" {
-		// An Agent's own Cua Driver never operates System Settings or a permission prompt (cua_gate.go, #4349): its
-		// MCP tools, and Bash commands running cua-driver. Decided at once, so a short timeout. The assistant's
-		// Bash hook above takes its commands to the gate too; an Agent's goes to the node only when the command
-		// mentions cua-driver (nodeclient.CuaOnlyFlag), so other Bash commands cost a process start and nothing else.
+		// An Agent's own Cua Driver never operates System Settings or a permission prompt (cua_gate.go, #4349), and its
+		// own `op` calls never ask 1Password for a per-process approval nobody may be able to answer (op_gate.go,
+		// #17679): its MCP tools, and Bash commands running cua-driver or op. Decided at once, so a short timeout. The
+		// assistant's Bash hook above takes its commands to the gates too; an Agent's goes to the node only when the
+		// command mentions one of the gate's words (nodeclient.GateWordsFlag), so other Bash commands cost a process
+		// start and nothing else.
 		quick := func(matcher, command string) map[string]any {
 			h := hook(60)
 			h["command"] = command
@@ -75,7 +77,7 @@ func hookSettingsForOS(goos, bin, dir string, assistant bool) map[string]any {
 		}
 		pre = append(pre, quick(cuaMCPMatcher, cmd))
 		if !assistant {
-			pre = append(pre, quick("Bash", cmd+" "+nodeclient.CuaOnlyFlag))
+			pre = append(pre, quick("Bash", cmd+" "+nodeclient.GateWordsFlag+" cua-driver,op"))
 		}
 	}
 	return map[string]any{"hooks": map[string]any{
