@@ -77,11 +77,11 @@ func (s *Service) orcaChatFor(ctx context.Context, m Device, own startPick, para
 		return orcaChatRoute{}, false
 	}
 	provider := str("launcher")
-	if provider != "claude" && provider != "codex" || slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == provider }) {
+	if provider != "claude" && provider != "codex" || !s.orcaChats.OrcaChatStarts(ctx, m.ID) {
 		return orcaChatRoute{}, false
 	}
-	if !s.orcaChats.OrcaChatStarts(ctx, m.ID) {
-		return orcaChatRoute{}, false
+	if slices.ContainsFunc(s.storedLaunchers(ctx), func(l storedLauncher) bool { return l.Name == provider }) {
+		return orcaChatRoute{}, false // a provider kept in Persona under that name: not the plain CLI
 	}
 	list, known := s.launchersHere(ctx, m.ID) // the hidden ones left out: a hidden Orca chat launcher is not routed to
 	if !known {
