@@ -175,7 +175,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusConflict, i18n.Err("assistant-models_launchers.err_name_taken", i18n.Args{"name": in.Name}))
 			return
 		}
-		if err := s.sealKeyReferences(ctx, &in, false); err != nil {
+		if err := s.sealKeyReferences(ctx, &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -238,7 +238,7 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		if err := s.sealKeyReferences(r.Context(), &in, true); err != nil {
+		if err := s.sealKeyReferences(r.Context(), &in); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
@@ -334,6 +334,9 @@ func (s *Service) launcherRoutes() {
 		}
 		apierr.WriteJSON(w, out)
 	})
+	// "Refresh key": the provider extension is asked again for the launcher's keys that are references (the secret was
+	// rotated in it); until then what is kept answers every use (launcher_secrets.go). Never a value in the answer.
+	s.handle("POST /api/v1/launchers/{name}/refresh-key", s.refreshLauncherKey)
 	// What still names a launcher as its own (Model configuration's purposes, extensions' too, scheduled tasks, model
 	// profiles and their tiers), in words, for the hide confirmation (#4661): hiding an rc-file launcher only takes it
 	// out of the pickers, and these keep running on it.
