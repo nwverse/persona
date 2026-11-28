@@ -29,7 +29,7 @@ import { useScrollMemory } from "../lib/scroll-memory";
 import { useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { scoped, useScope } from "../lib/current-assistant";
 import { lazyPage } from "../lib/lazy-page";
-import { dropTodo, loadOlderClosed, putTodo, refresh, refreshTodos, useStore } from "../lib/store";
+import { dropTodo, putTodo, refresh, refreshTodos, useStore } from "../lib/store";
 import {
   addTodoDecision,
   addTodoExternalPRBlocker,
@@ -149,6 +149,7 @@ import {
 import { DecisionQueuePanel, decisionQueueCandidates } from "../features/todos/DecisionQueuePanel";
 import { TodoCausalTraceSection } from "../features/todos/TodoCausalTraceSection";
 import { boardAttention, boardSectionMap, consumeBoardDirectionGroups, consumeBoardStatusGroups, isBoardOpen } from "../features/todos/board-consumer";
+import { loadOlderClosed } from "../features/todos/closed-history";
 import { pref, setPref, useTodoPreference } from "../features/todos/preferences";
 import { formatRowRepoGate, repoGatePRLook, repoGateTone, shouldShowRowRepoGate, type RepoGateTone } from "../features/todos/repo-gate";
 import { useRestoredTodos } from "../lib/todo-restore";
