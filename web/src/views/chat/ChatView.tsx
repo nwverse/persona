@@ -2772,7 +2772,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         </Suspense>
       )}
       <div className="relative min-h-0 flex-1">
-        {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
         <div ref={scrollRef} onScroll={onScroll} data-chat-scroll data-chat-context-window={detached || undefined} className="relative h-full overflow-y-auto [overflow-anchor:none]">
           <ChatActionsContext.Provider value={actions}>
           <div data-chat-content className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-5 pt-7 pb-10 sm:px-8">
@@ -2936,6 +2935,18 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         )}
         {(away || detached) && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
+        {(tr.notLive || refreshFailed) && (
+          <NotLivePill
+            error={refreshFailed}
+            reloading={Boolean(tr.reloading)}
+            onReload={() => {
+              if (tr.reloading) return;
+              tr.reload();
+              onRefresh?.();
+            }}
+            lower={Boolean(picked && !search.open)}
+          />
+        )}
       </div>
 
       <div
@@ -3191,13 +3202,19 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
 }
 
 /** Over the chat's top edge when the page keeps getting its items by asking for them, not by push (lib/stale-page.ts). */
-function NotLivePill({ onReload, lower, error }: { onReload: () => void; /** The search's return pill is at the same edge: under it. */ lower?: boolean; error?: string }) {
+export function NotLivePill({ onReload, lower, error, reloading = false }: { onReload: () => void; /** The search's return pill is at the same edge: under it. */ lower?: boolean; error?: string; reloading?: boolean }) {
   return (
-    <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-10 -translate-x-1/2" : "absolute top-3 left-1/2 z-10 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
+    <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-20 -translate-x-1/2" : "absolute top-3 left-1/2 z-20 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
       <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-label leading-none whitespace-nowrap text-ink-2 shadow-raised">
         <span title={error}>{t(error ? "chat-chatview.refresh_failed" : "chat-chatview.not_live")}</span>
-        <button type="button" onClick={onReload} className="touch-hit font-medium text-accent-ink hover:underline">
-          {t("chat-chatview.not_live_reload")}
+        <button
+          type="button"
+          disabled={reloading}
+          aria-busy={reloading || undefined}
+          onClick={onReload}
+          className="touch-hit inline-flex cursor-pointer items-center gap-1.5 font-medium text-accent-ink hover:underline disabled:cursor-wait disabled:opacity-60 disabled:no-underline"
+        >
+          {reloading ? t("chat-chatview.not_live_reloading") : t("chat-chatview.not_live_reload")}
         </button>
       </div>
     </div>
