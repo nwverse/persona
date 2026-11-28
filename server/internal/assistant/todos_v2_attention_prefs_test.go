@@ -576,9 +576,12 @@ func TestTodosV2AttentionPrefsFoldChildrenAndRollback(t *testing.T) {
 	if len(foldedPayload.Board.SidebarTree) != 2 {
 		t.Fatalf("fold_children=true sidebar_tree len = %d, want 2", len(foldedPayload.Board.SidebarTree))
 	}
-	waitGroup := foldedPayload.Board.StatusGroups[3]
-	if waitGroup.Key != boardSectionWaiting || waitGroup.TotalCount != 1 || waitGroup.VisibleCount != 0 {
-		t.Fatalf("fold_children=true waiting group = %+v, want total=1 visible=0", waitGroup)
+	todoGroup := requireBoardStatusGroup(t, foldedPayload.Board, boardSectionTodo)
+	if todoGroup.TotalCount != 1 || todoGroup.VisibleCount != 0 {
+		t.Fatalf("fold_children=true todo group = %+v, want total=1 visible=0", todoGroup)
+	}
+	if got, want := foldedPayload.Board.Counts, flatPayload.Board.Counts; got != want || got.NeedsYou != 1 || got.OpenTotal != 1 {
+		t.Fatalf("folding changed counts or counted steps separately: folded=%+v flat=%+v", got, want)
 	}
 	var foundGoalFold bool
 	for _, e := range foldedPayload.Board.StatusGroups[0].Entries {
