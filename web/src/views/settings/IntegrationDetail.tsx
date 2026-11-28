@@ -3,33 +3,28 @@
 // Inbox & Sync, section-grouped Extension Settings, and Extension management on a single page
 // for both built-in services and installed extensions. Strictly gated by integrations_v2.
 import { useMailboxEnabled } from "../../lib/mail";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { hubServes, moduleFeature } from "../../core/module-host";
 import { formatList, t } from "../../i18n";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { ago } from "../../lib/format";
-import { api, enc, errorText } from "../../lib/api";
+import { api, enc, errorText, isAbort } from "../../lib/api";
 import { canBind, isBound, settingsTarget, type ChannelDetail } from "../../lib/channels";
 import {
   connectorBrand, connectorState, connectorTone, type ConnectorTone,
 } from "../../lib/connectors";
-import { getAuth, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
-import { operations, operationsListed, opOf, watchOperations } from "../../lib/extension-operations";
+import { shownPages, signInAsked, takeSignIn } from "../../lib/extension-auth";
 import { marketOf } from "../../lib/extension-market";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
 import {
-  changed, channelOf, checkError, clearedSecrets, compact, configError, extensionDetail,
-  extensionTone, fieldLabel, fieldPath, isDirty, isEntryList, numberProblems, pointText, prefillDraft,
-  readNumber, rebaseDraft, runNote, saveFooter, secretState, setAt, setContribution,
-  setExtensionAutoUpgrade, setExtensionConfig, setExtensionConfigPreservingEntries,
-  setExtensionEnabled, setupSecret, stateLine, valueAt,
-  type ExtensionField, type ExtensionSecret, type HubExtensionDetail, type Json, type JsonObject,
+  channelOf, extensionTone, fieldLabel, pointText, runNote, saveFooter, secretState, setContribution,
+  setExtensionAutoUpgrade, setExtensionEnabled, setupSecret, stateLine,
+  type ExtensionField, type ExtensionSecret, type JsonObject,
 } from "../../lib/extensions";
-import { defaultManager, ownerHeaders, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
+import { ownerHeaders, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
-import { isResumed } from "../../lib/reconnect";
 import { navigate } from "../../lib/router";
-import { onHubEvent, useStore } from "../../lib/store";
+import { useStore } from "../../lib/store";
 import { Button, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { ChannelMark } from "../../ui/ChannelMark";
@@ -43,7 +38,7 @@ import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
 import { PackMemberRow, UninstallDialog, useInstalledNames } from "./ExtensionMarket";
 import {
   FieldRow, hasLauncherField, SandboxGroup, SecretDialog, SecretProviderGroups,
-  useFormLaunchers, type FieldProps, type Typed,
+  useFormLaunchers, type FieldProps,
 } from "./Extensions";
 import {
   enableFooter, Information as ExtensionInformationGroup, lifecycleReason,
@@ -53,7 +48,7 @@ import { OwnerMark } from "./OwnerMark";
 import { Disclosure } from "./ProviderFields";
 import { settingsHref } from "./href";
 import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
-import { integrationDraft, keepIntegrationDraft } from "./integrations/extensionDrafts";
+import { useExtensionBinding, useExtensionConfiguration, type ExtensionBinding } from "./integrations/extensionDrafts";
 import { useDetailConnectors } from "./integrations/useDetailConnectors";
 import { ChannelBindingBlock, ChannelDeliveryBlock, ChannelStateInline, useChannelController } from "./integrations/ChannelSection";
 import { ConnectorConnectionBlock, connectorHasInbox, ConnectorInboxBlock } from "./integrations/ConnectorSection";
@@ -335,10 +330,17 @@ function LastChannelEvent({ detail }: { detail: ChannelDetail | null }) {
     : null;
 }
 
-function ConnectorReadError({ error }: { error: string }) {
+function ConnectorReadError({ error, onRetry, loading = false }: { error: string; onRetry?: () => void; loading?: boolean }) {
   return (
     <Group>
       <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error })}</SettingsHint>
+      {onRetry && (
+        <div className="px-4 py-2.5">
+          <Button tone="secondary" icon="retry" onClick={onRetry} busy={loading}>
+            {t("settings-hubconnector.recheck")}
+          </Button>
+        </div>
+      )}
     </Group>
   );
 }
@@ -386,7 +388,7 @@ function FeishuBotBuiltinDetail({
   const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
 
   const refreshAll = () => {
-    void loadLarkcli();
+    void loadLarkcli({ fresh: true });
     void channelCtl.load();
     void feishuCtl.load();
   };
@@ -440,7 +442,7 @@ function FeishuBotBuiltinDetail({
 
       {/* 1. Account & Connection */}
       <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-        {connectorError && <ConnectorReadError error={connectorError} />}
+        {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadLarkcli({ fresh: true })} loading={connectorLoading} />}
         <FeishuBotConnectionPanel
           ctl={feishuCtl}
           larkcli={larkcli ?? null}
@@ -516,7 +518,7 @@ function BuiltinIntegrationDetail({
 
   const refreshAll = () => {
     if (isMail || isLarkGateway) setReloadKey((key) => key + 1);
-    void loadConnector();
+    void loadConnector({ fresh: true });
     if (channelId) void channelCtl.load();
   };
 
@@ -609,8 +611,8 @@ function BuiltinIntegrationDetail({
           {isLarkGateway && <Feishu reloadKey={reloadKey} manager={manager} />}
           {connectorId && (
             <>
-              {connectorError && <ConnectorReadError error={connectorError} />}
-              {connector && <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />}
+              {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnector({ fresh: true })} loading={connectorLoading} />}
+              {connector && <ConnectorConnectionBlock connector={connector} reload={() => loadConnector({ fresh: true })} loading={connectorLoading} />}
               {!connector && !connectorError && <Group><div className="px-4 py-3"><Loading /></div></Group>}
             </>
           )}
@@ -650,17 +652,7 @@ function BuiltinIntegrationDetail({
 
 // ── External extensions (including composite connector + channel + config plugins like larkx) ──
 
-function ExtensionIntegrationDetail({
-  target,
-  manager,
-  prefill,
-  onBack: back,
-  onUninstalled,
-  onPage,
-  onUpgrade,
-  onSettings,
-  onOpenSources,
-}: {
+type ExtensionIntegrationProps = {
   target: Extract<IntegrationTarget, { kind: "extension" }>;
   manager?: string;
   prefill?: JsonObject;
@@ -670,98 +662,45 @@ function ExtensionIntegrationDetail({
   onUpgrade?: (market: string, id: string, manager?: string) => void;
   onSettings?: (url: string, manager?: string) => void;
   onOpenSources?: (state?: string, manager?: string) => void;
-}) {
+};
+
+function ExtensionIntegrationDetail(props: ExtensionIntegrationProps) {
+  const binding = useExtensionBinding(props.target.id, props.manager);
+  return <ExtensionIntegrationResource key={binding.client.key} {...props} binding={binding} />;
+}
+
+function ExtensionIntegrationResource({
+  binding,
+  target,
+  manager,
+  prefill,
+  onBack: back,
+  onUninstalled,
+  onPage,
+  onUpgrade,
+  onSettings,
+  onOpenSources,
+}: ExtensionIntegrationProps & { binding: ExtensionBinding }) {
   const id = target.id;
 
   const roster = useRoster();
-  const offline = roster?.managers.find((m) => m.id === (manager || defaultManager()))?.online === false;
-
-  const [detail, setDetail] = useState<HubExtensionDetail | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [draft, setDraft] = useState<JsonObject>({});
-  const [typed, setTyped] = useState<Typed>({});
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [checkFailed, setCheckFailed] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [toggling, setToggling] = useState(false);
+  const offline = roster?.managers.find((m) => m.id === binding.client.managerId)?.online === false;
+  const {
+    detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, dirty, editable,
+    canSave, problems, load, reload, authChanged, connectorRefreshKey, mutate, remove: exit, edit, type, revert, save, saveNow,
+  } = useExtensionConfiguration(id, binding, prefill, onUninstalled ?? back);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
   const [removing, setRemoving] = useState(false);
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
   const [packOff, setPackOff] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-
   const [startSignIn] = useState(() => signInAsked(id));
   useEffect(() => void takeSignIn(id), [id]);
-  const draftKey = JSON.stringify([manager || defaultManager(), id]);
-
-  const order = useRef({ asked: 0, shown: 0 });
-  const editRevision = useRef(0);
-  const draftNow = useRef(draft);
-  const typedNow = useRef(typed);
-  draftNow.current = draft;
-  typedNow.current = typed;
-
-  const apply = useCallback((d: HubExtensionDetail, preserveEdits = true) => {
-    const kept = preserveEdits && integrationDraft(draftKey);
-    const config = d.config ?? {};
-    const required = new Set(d.form?.fields?.filter((f) => isEntryList(f) && f.required).map((f) => f.name));
-    const next = kept ? rebaseDraft(kept, config, required) : { draft: config, typed: {} };
-    setDetail(d);
-    setDraft(next.draft);
-    setTyped(next.typed);
-    setError("");
-  }, [draftKey]);
-
-  const readDetail = useCallback((then: (d: HubExtensionDetail) => void, failed?: (e: unknown) => void) => {
-    const n = ++order.current.asked;
-    return extensionDetail(id).then(
-      (d) => {
-        if (n <= order.current.shown) return;
-        order.current.shown = n;
-        then(d);
-      },
-      (e) => void (n > order.current.shown && failed?.(e)),
-    );
-  }, [id]);
-
-  const writing = () => ++order.current.asked;
-  const wrote = (n: number, d: HubExtensionDetail, preserveEdits = true) => {
-    if (n <= order.current.shown) return false;
-    order.current.shown = n;
-    apply(d, preserveEdits);
-    return true;
-  };
-
-  const load = useCallback(() => {
-    setLoading(true);
-    void readDetail((d) => {
-      apply(d);
-      setFieldErrors({});
-    }, (e) => setError(errorText(e))).finally(() => setLoading(false));
-  }, [apply, readDetail]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // Keep extension auth updates in sync.
-  useEffect(
-    () => onAuthChange((x, auth, from) => (manager || defaultManager()) === from && setDetail((cur) => (cur ? withAuth(cur, x, auth) : cur))),
-    [manager],
-  );
-  const authChanged = useCallback((a?: ExtensionAuth) => {
-    if (a) setDetail((cur) => (cur ? { ...cur, auth: a } : cur));
-    else void getAuth(id).then((v) => setDetail((cur) => (cur ? { ...cur, auth: v } : cur)), () => {});
-  }, [id]);
-  const signsIn = !!detail?.auth;
-  useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn, authChanged]);
 
   // Associated channel (from explicit target override or extension's contributes.channel).
   const channelId = target.channelId ?? (detail ? channelOf(detail) : null);
   const channelCtl = useChannelController(channelId, manager);
 
-  // Associated connectors (from explicit target override or extension's contributes.connectors).
   const connectorIds = useMemo(() => {
     const ids = new Set<string>();
     if (target.connectorId) ids.add(target.connectorId);
@@ -771,25 +710,22 @@ function ExtensionIntegrationDetail({
     return [...ids];
   }, [target.connectorId, detail?.contributes?.connectors]);
   const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
+  const lastConnectorRefresh = useRef(connectorRefreshKey);
+  useEffect(() => {
+    if (lastConnectorRefresh.current === connectorRefreshKey) return;
+    lastConnectorRefresh.current = connectorRefreshKey;
+    void loadConnectors({ fresh: true });
+  }, [connectorRefreshKey, loadConnectors]);
+
   useLayoutEffect(() => {
     const ids = new Set([...connectorIds, ...connectors.map((c) => c.id)]);
-    const prefixes = [`/extensions/${enc(id)}`, `/plugins/${enc(id)}`];
-    for (const cid of ids) prefixes.push(`/connectors/${enc(cid)}`);
+    const prefixes = [...ids].map((cid) => `/connectors/${enc(cid)}`);
     if (ids.has("imessage")) prefixes.push("/imessage");
     return pinManagerAt(prefixes, manager);
-  }, [id, manager, connectorIds, connectors]);
+  }, [manager, connectorIds, connectors]);
 
-  const problems = useMemo(() => numberProblems(typed), [typed]);
-  const allFields = useMemo(() => detail?.form?.fields ?? [], [detail?.form?.fields]);
+  const allFields = detail?.form?.fields;
   const sections = useMemo(() => partitionExtensionFields(allFields), [allFields]);
-  const requiredEntryLists = useMemo(
-    () => new Set(allFields.filter((f) => isEntryList(f) && f.required).map((f) => f.name)),
-    [allFields],
-  );
-  const dirty = !!detail && (isDirty(draft, detail.config, requiredEntryLists) || Object.keys(problems).length > 0);
-  useLayoutEffect(() => {
-    if (detail) keepIntegrationDraft(draftKey, dirty ? { base: detail.config ?? {}, draft, typed } : undefined);
-  }, [detail, draftKey, dirty, draft, typed]);
 
   const saveBar = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -801,46 +737,6 @@ function ExtensionIntegrationDetail({
     if (bounds.bottom > footer.top && bounds.top < footer.bottom) field.scrollIntoView({ block: "center" });
   }, [dirty]);
 
-  const exit = () => {
-    keepIntegrationDraft(draftKey);
-    (onUninstalled ?? back)?.();
-  };
-  const exitNow = useRef(exit);
-  exitNow.current = exit;
-  useEffect(() => {
-    const ended = () => operations().filter((o) => o.extension === id && opOf(o, manager) && o.state === "succeeded");
-    const seen = new Set(ended().map((o) => o.id));
-    let listed = operationsListed();
-    return watchOperations(() => {
-      const fresh = ended().filter((o) => !seen.has(o.id));
-      fresh.forEach((o) => seen.add(o.id));
-      // The first list can include operations completed before the detail opened.
-      if (!listed && operationsListed()) {
-        listed = true;
-        return;
-      }
-      if (fresh[0]?.kind === "uninstall") exitNow.current();
-      else if (fresh.length) load();
-    });
-  }, [id, manager, load]);
-  const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
-  const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
-  const prefillKey = prefill ? JSON.stringify(prefill) : "";
-  const prefilled = useRef("");
-  useEffect(() => {
-    if (!prefill) {
-      prefilled.current = "";
-      return;
-    }
-    if (!editable || prefillKey === "{}" || prefilled.current === prefillKey) return;
-    prefilled.current = prefillKey;
-    editRevision.current++;
-    setDraft((cur) => prefillDraft(cur, prefill, allFields));
-    setTyped({});
-    setFieldErrors({});
-    setCheckFailed("");
-  }, [allFields, editable, prefill, prefillKey]);
-
   // Auto-open the Advanced disclosure when a validation error targets a field inside it.
   const advancedError = useMemo(
     () => fieldsHaveError(sections.advanced, fieldErrors, problems),
@@ -850,122 +746,36 @@ function ExtensionIntegrationDetail({
     if (advancedError) setAdvancedOpen(true);
   }, [advancedError]);
 
-  const edit = (path: string[], value: Json | undefined) => {
-    editRevision.current++;
-    setDraft((d) => setAt(d, path, value));
-    const key = fieldPath(path);
-    if (fieldErrors[key] || fieldErrors[""]) setFieldErrors(({ [key]: _a, [""]: _b, ...rest }) => rest);
-    setCheckFailed("");
-  };
-  const type = (path: string[], text: string, integer: boolean) => {
-    const key = fieldPath(path);
-    setTyped((prev) => ({ ...prev, [key]: { text, integer } }));
-    setCheckFailed("");
-    const n = readNumber(text, integer);
-    if (!n.error) edit(path, n.value);
-    else editRevision.current++;
-  };
-  const revert = () => {
-    if (!detail) return;
-    editRevision.current++;
-    setDraft(detail.config ?? {});
-    setTyped({});
-    setFieldErrors({});
-    setCheckFailed("");
-  };
-
-  const save = async () => {
-    if (!canSave) return;
-    setSaving(true);
-    setFieldErrors({});
-    setCheckFailed("");
-    const n = writing();
-    const submitted = draft;
-    const revision = editRevision.current;
-    try {
-      const d = await setExtensionConfig(id, compact(draft, requiredEntryLists));
-      const unchanged = editRevision.current === revision;
-      // A save can finish after the user has left the pane. Retire only the draft it submitted.
-      if (integrationDraft(draftKey)?.draft === submitted) keepIntegrationDraft(draftKey);
-      if (wrote(n, d, false) && !unchanged) {
-        const fresh = d.config ?? {};
-        const next = rebaseDraft({ base: submitted, draft: draftNow.current, typed: typedNow.current }, fresh, requiredEntryLists);
-        setDraft(next.draft);
-        setTyped(next.typed);
-      }
-      toast(t("settings-extensions.saved_restart"), "ok");
-    } catch (e) {
-      const ce = configError(e);
-      const refused = checkError(e);
-      if (ce) setFieldErrors({ [ce.field]: ce.message });
-      else if (refused) setCheckFailed(refused);
-      else toast(t("settings-extensions.not_saved", { error: errorText(e) }), "error");
-      if (clearedSecrets(e).length) {
-        changed(null);
-        void readDetail(apply);
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const saveNow = async (path: string[], value: Json | undefined) => {
-    if (!detail) return;
-    const saved = detail.config ?? {};
-    editRevision.current++;
-    setDraft((d) => setAt(d, path, value));
-    const n = writing();
-    try {
-      const d = await setExtensionConfigPreservingEntries(id, compact(setAt(saved, path, value), requiredEntryLists));
-      if (wrote(n, d)) setDraft((cur) => setAt(cur, path, valueAt(d.config ?? {}, path)));
-    } catch (e) {
-      setDraft((cur) => setAt(cur, path, valueAt(saved, path)));
-      toast(t("settings-extensions.not_saved", { error: errorText(e) }), "error");
-    }
-  };
-
   const toggle = async (on: boolean, cascade = false) => {
-    setToggling(true);
-    const n = writing();
     try {
-      const d = await setExtensionEnabled(id, on, cascade);
-      wrote(n, d);
+      const detail = await mutate("management", (client) => setExtensionEnabled(id, on, cascade, client));
       setDependents(null);
       setPackOff(false);
-      toast(t(on ? "settings-extensions.enabled_name" : "settings-extensions.disabled_name", { name: d.name }), "ok");
-    } catch (e) {
-      const deps = dependentError(e);
+      toast(t(on ? "settings-extensions.enabled_name" : "settings-extensions.disabled_name", { name: detail.name }), "ok");
+    } catch (error) {
+      if (isAbort(error)) return;
+      const deps = dependentError(error);
       setPackOff(false);
       if (!on && deps) setDependents(deps);
-      else toast(t(on ? "settings-extensions.enable_failed" : "settings-extensions.disable_failed", { error: errorText(e) }), "error");
-    } finally {
-      setToggling(false);
+      else toast(t(on ? "settings-extensions.enable_failed" : "settings-extensions.disable_failed", { error: errorText(error) }), "error");
     }
   };
 
   const toggleAutoUpgrade = async (on: boolean) => {
-    setToggling(true);
-    const n = writing();
     try {
-      wrote(n, await setExtensionAutoUpgrade(id, on));
-      toast(on ? t("settings-extensions.auto_upgrade_on") : t("settings-extensions.auto_upgrade_off"), "ok");
-    } catch (e) {
-      toast(t(on ? "settings-extensions.auto_upgrade_on_failed" : "settings-extensions.auto_upgrade_off_failed", { error: errorText(e) }), "error");
-    } finally {
-      setToggling(false);
+      await mutate("management", (client) => setExtensionAutoUpgrade(id, on, client));
+      toast(t(on ? "settings-extensions.auto_upgrade_on" : "settings-extensions.auto_upgrade_off"), "ok");
+    } catch (error) {
+      if (!isAbort(error)) toast(t(on ? "settings-extensions.auto_upgrade_on_failed" : "settings-extensions.auto_upgrade_off_failed", { error: errorText(error) }), "error");
     }
   };
 
   const toggleContribution = async (c: Contribution, on: boolean) => {
-    setToggling(true);
-    const n = writing();
     try {
-      wrote(n, await setContribution(id, c.point, c.id, on));
-      toast(on ? t("settings-extensions.contribution_on") : t("settings-extensions.contribution_off"), "ok");
-    } catch (e) {
-      toast(t("settings-extensions.change_failed", { error: errorText(e) }), "error");
-    } finally {
-      setToggling(false);
+      await mutate("management", (client) => setContribution(id, c.point, c.id, on, client));
+      toast(t(on ? "settings-extensions.contribution_on" : "settings-extensions.contribution_off"), "ok");
+    } catch (error) {
+      if (!isAbort(error)) toast(t("settings-extensions.change_failed", { error: errorText(error) }), "error");
     }
   };
 
@@ -1021,7 +831,7 @@ function ExtensionIntegrationDetail({
     sections.connection.length > 0 || sections.channel.length > 0 || sections.inbox.length > 0 ||
     !!p?.auth || connectors.length > 0 || !!channelId;
   const noConfiguration =
-    !!p && editable && !allFields.length && !topSecrets.length && !uiPages.length && !hasAnyConfigElsewhere;
+    !!p && editable && !allFields?.length && !topSecrets.length && !uiPages.length && !hasAnyConfigElsewhere;
 
   const market = p ? (marketOf(p.origin) || p.upgrade?.market || "") : "";
   const marketManaged = !!p && p.source === "installed" && !p.attached && !p.read_only && !!market;
@@ -1043,7 +853,7 @@ function ExtensionIntegrationDetail({
   const refreshAll = () => {
     load();
     if (channelId) void channelCtl.load();
-    void loadConnectors();
+    void loadConnectors({ fresh: true });
   };
 
   return (
@@ -1129,13 +939,14 @@ function ExtensionIntegrationDetail({
           {hasConnectionSection && (
             <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
               {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
-              {connectorError && <ConnectorReadError error={connectorError} />}
+              {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnectors({ fresh: true })} loading={connectorsLoading} />}
               {connectors.map((c) => (
                 <ConnectorConnectionBlock
                   key={`${c.manager ?? ""}:${c.id}`}
                   connector={c}
-                  reload={loadConnectors}
+                  reload={() => loadConnectors({ fresh: true })}
                   loading={connectorsLoading}
+                  authManagedByHost={!!p.auth}
                 />
               ))}
               {channelId && <ChannelBindingBlock ctl={channelCtl} />}
@@ -1293,9 +1104,7 @@ function ExtensionIntegrationDetail({
               reason={noUpdates}
               onToggle={(on) => void toggleAutoUpgrade(on)}
               onUpgrade={(m, extId) => onUpgrade?.(m, extId, manager)}
-              onChecked={async () => {
-                await readDetail(apply, (err) => { throw err; });
-              }}
+              onChecked={reload}
             />
 
             <ExtensionInformationGroup d={p} />
@@ -1305,10 +1114,9 @@ function ExtensionIntegrationDetail({
               users={p.secret_users}
               rules={p.handoff_rules}
               editable={editable}
-              onStart={writing}
-              onDone={wrote}
+              mutate={mutate}
             />
-            {!manager && <ExtensionInfoAccess extension={id} editable={editable} />}
+            <ExtensionInfoAccess client={binding.client} extension={id} editable={editable && !offline} />
             {!!p.depends?.length && (
               <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
                 {p.depends.map((d) => (
@@ -1378,7 +1186,7 @@ function ExtensionIntegrationDetail({
                 {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
                 <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
                   <Button className="min-h-11" tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
-                  <Button className="min-h-11" tone="accent" busy={saving} disabled={!canSave} onClick={() => void save()}>{t("common.save")}</Button>
+                  <Button className="min-h-11" tone="accent" busy={saving} disabled={!canSave || offline} onClick={() => void save()}>{t("common.save")}</Button>
                 </Row>
               </Group>
             </div>
@@ -1437,8 +1245,7 @@ function ExtensionIntegrationDetail({
           extension={id}
           secret={secret.list && secret.entry_title ? { ...secret, title: `${secret.entry_title} · ${secret.title}` } : secret}
           onClose={() => setSecret(null)}
-          onStart={writing}
-          onDone={wrote}
+          mutate={mutate}
         />
       )}
     </div>

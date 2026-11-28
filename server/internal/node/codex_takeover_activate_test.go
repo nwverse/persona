@@ -443,18 +443,21 @@ func TestCodexTakeoverColdActivatesOnSharedRemoteWithoutTerminalEngine(t *testin
 	}
 }
 
-func TestSendCodexColdResumesOnSharedRemote(t *testing.T) {
+// A stopped thread a connected shared app-server has not loaded is read-only like any stopped Agent (#4754, #17809): a
+// message to it is refused and loads nothing there; the explicit takeover above is what activates it.
+func TestSendCodexDoesNotColdResumeOnSharedRemote(t *testing.T) {
 	n := remoteTestNode(t)
 	home := n.codexHome()
 	path := writeCodexTestRollout(t, home, remoteRaw, t.TempDir(), "codex-tui", "cli", time.Now())
 	id := n.registerCodex(home, remoteRaw, path)
 	f, _ := connectRemoteFixture(t, n, home, "shared-cold")
-	if row := requireCodexSession(t, n.codexSessions(map[string]bool{}), id); !row.Capabilities.Send {
-		t.Fatalf("cold history is read-only: %+v", row.Capabilities)
+	row := requireCodexSession(t, n.codexSessions(map[string]bool{}), id)
+	if row.Capabilities.Send || row.Capabilities.Takeover == nil || !row.Capabilities.Takeover.CanResume {
+		t.Fatalf("cold history should be read-only with its takeover offered: %+v (%+v)", row.Capabilities, row.Capabilities.Takeover)
 	}
 	err := n.send(t.Context(), id, "continue", nil, sendOpts{})
-	if turns := f.sent("turn/start"); err != nil || f.count("thread/resume") != 1 || len(turns) != 1 || inputText(turns[0]) != "continue" || turns[0]["threadId"] != remoteRaw {
-		t.Fatalf("resumes = %v, turns = %v, send = %v", f.sent("thread/resume"), turns, err)
+	if refusalCode(err) == "" || f.count("thread/resume") != 0 || f.count("turn/start") != 0 {
+		t.Fatalf("send = %v, resumes = %v, turns = %v", err, f.sent("thread/resume"), f.sent("turn/start"))
 	}
 }
 

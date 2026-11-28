@@ -127,6 +127,8 @@ func (rh *RuntimeHost) runOrcaBridge(ctx context.Context, c *orcart.Client) erro
 		cancel()
 	}()
 	b := newOrcaBridge(c, bridgeEnd, rh.logger.Printf)
+	b.onBotHomes = rh.setOrcaBotHomes
+	defer rh.setOrcaBotHomes(nil) // the bridge's connection ended: nothing folds until it reads the bots again
 	rh.orca.mu.Lock()
 	rh.orca.instance = b.instance
 	rh.orca.mu.Unlock()
@@ -176,6 +178,11 @@ type orcaBridge struct {
 	repush   bool
 	noChat   map[string]map[string]int64
 	openRevs map[string]map[string]int64
+
+	// bots is the bridge's part for Orca's bots (orcabots.go): their item cards and what folds under their Home Chats;
+	// onBotHomes hears of a fold that changed (nil: nobody listens).
+	bots       orcaBotsState
+	onBotHomes func(*orcaBotHomes)
 }
 
 // orcaHead is what the bridge knows of one Orca session beyond its worktree.ps row.
@@ -329,6 +336,7 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 		}
 	}
 	b.prompts(ctx, waiting)
+	b.botsTick(ctx, chats, orcaOf, closed)
 }
 
 // chatTabs are the chat tabs, read again every orcaTabsPoll (the last ones meanwhile); none from a host without them.

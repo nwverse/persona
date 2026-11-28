@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectModuleHub } from "../../core/module-host";
 import { t } from "../../i18n";
+import { setPairedToken } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { channelStateText, type ChannelDetail } from "../../lib/channels";
 import type { HubConnector } from "../../lib/connectors";
@@ -14,12 +15,34 @@ import { track, type ExtensionOperation } from "../../lib/extension-operations";
 import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 import { chooseManager, chosenManager, managerHeaderFor, pinManagerAt, resetManagerChoice } from "../../lib/manager-choice";
-import { setRoster } from "../../lib/managers";
+import { setRoster, type ManagerList } from "../../lib/managers";
 import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
+import type { ExtensionTrust } from "../../lib/tracks";
 import { FEATURES } from "./FeishuBot";
+import { Extensions } from "./Extensions";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
 import { Integrations } from "./Integrations";
 import { decodeIntegrationsRoute } from "./integrations-route";
+
+const hubEvents = vi.hoisted(() => ({
+  listeners: new Map<string, Set<(msg: Record<string, unknown>) => void>>(),
+}));
+
+vi.mock("../../lib/store", async (original) => {
+  const real = await original<typeof import("../../lib/store")>();
+  return {
+    ...real,
+    onHubEvent: (type: string, listener: (msg: Record<string, unknown>) => void) => {
+      if (!hubEvents.listeners.has(type)) hubEvents.listeners.set(type, new Set());
+      hubEvents.listeners.get(type)!.add(listener);
+      const off = real.onHubEvent(type, listener);
+      return () => {
+        hubEvents.listeners.get(type)?.delete(listener);
+        off();
+      };
+    },
+  };
+});
 
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
@@ -170,6 +193,8 @@ let currentConnectors: HubConnector[];
 let currentMailAccounts: { id: string; email: string; provider: string; status: string }[];
 let currentFeishuBot: FeishuBotStatus;
 let currentRepositories: { id: string; provider?: string }[] | "error" | null;
+let servedRoster: ManagerList;
+let grants: Record<string, ExtensionTrust>;
 
 const flush = async () => {
   for (let i = 0; i < 14; i++) {
@@ -215,6 +240,7 @@ function setInputValue(input: HTMLInputElement | HTMLTextAreaElement, value: str
 beforeEach(() => {
   requests = [];
   currentExt = structuredClone(COMPOSITE_EXTENSION);
+  grants = {};
   currentChannels = {
     larkx_chat: structuredClone(COMPOSITE_CHANNEL),
     feishu: structuredClone(FEISHU_CHANNEL),
@@ -239,7 +265,9 @@ beforeEach(() => {
   currentRepositories = [{ id: "repo-1", provider: "github" }, { id: "repo-2", provider: "github" }];
 
   resetManagerChoice();
-  setRoster(ROSTER);
+  setPairedToken("");
+  servedRoster = ROSTER;
+  setRoster(servedRoster);
   setStoreAssistant(true);
   connectModuleHub(getState, subscribe);
 
@@ -253,6 +281,16 @@ beforeEach(() => {
     const manager = new Headers(init?.headers).get("X-Persona-Manager");
     requests.push({ url, method, body, manager });
 
+    if (url.endsWith("/managers")) return ok(servedRoster);
+    if (url.endsWith("/assistant/extension-trust")) {
+      const grant = grants[manager ?? "assistant"];
+      return grant ? ok({ items: [grant] }) : notFound();
+    }
+    if (url.endsWith(`/assistant/extension-trust/${currentExt.id}`) && method === "PUT") {
+      const grant = { ...(body as ExtensionTrust), extension: currentExt.id };
+      grants[manager ?? "assistant"] = grant;
+      return ok(grant);
+    }
     if (url.includes("/mail/accounts")) {
       return ok({ accounts: currentMailAccounts });
     }
@@ -331,9 +369,6 @@ beforeEach(() => {
     }
     if (url.includes("/lark/accounts")) {
       return ok({ accounts: [] });
-    }
-    if (url.includes("/trust")) {
-      return notFound();
     }
     return ok({});
   }));
@@ -738,11 +773,11 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     )!;
     const enable = delivery.querySelector<HTMLButtonElement>('[role="switch"]')!;
     const topic = t("settings-integrations.thread_mode_topic_title");
-    await act(async () => option(topic).click());
-    expect(enable.disabled).toBe(true);
     delayNextRead = true;
     const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!;
     await act(async () => refresh.click());
+    await act(async () => option(topic).click());
+    expect(enable.disabled).toBe(true);
     expect(option(topic).getAttribute("aria-checked")).toBe("true");
 
     currentChannels.larkx_chat.thread_mode = "per_group_and_topic";
@@ -776,8 +811,11 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     expect(input().value).toBe("48");
     expect(section("channel")?.querySelector('[role="radio"][aria-checked="true"]')?.textContent)
       .toContain(t("settings-integrations.thread_mode_topic_title"));
+    // The narrow Settings host can also replace the detail subtree.
+    await act(async () => root.render(null));
     for (const wide of [false, true]) {
       await draw(wide);
+      await act(async () => vi.dynamicImportSettled());
       expect(input().value).toBe("48");
       expect(!!host.querySelector("[data-integrations-split]")).toBe(wide);
     }
@@ -967,6 +1005,44 @@ describe("Older Hub and legacy extension graceful degradation", () => {
 
 describe("manager-owned integration links", () => {
   it.each([
+    ["work", null],
+    ["assistant", "work"],
+  ] as const)("reads and writes the named %s extension's grants in Labs Integrations", async (manager, sidebar) => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    chooseManager(sidebar);
+    grants = {
+      assistant: { extension: currentExt.id, trust: "owner", categories: [] },
+      work: { extension: currentExt.id, trust: "third_party", categories: ["finance"] },
+    };
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: currentExt.id, manager }} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe(String(manager === "assistant"));
+    await act(async () => owner.click());
+    const trustRequests = requests.filter(({ url }) => url.includes("/assistant/extension-trust"));
+    expect(trustRequests.map((r) => [r.method, r.manager])).toEqual([["GET", manager], ["PUT", manager], ["GET", manager]]);
+    expect(grants.assistant.trust).toBe(manager === "assistant" ? "third_party" : "owner");
+    expect(grants.work.trust).toBe(manager === "work" ? "owner" : "third_party");
+    expect(chosenManager()).toBe(sidebar);
+  });
+
+  it("shows the supported assistant's confirmed grants on a read-only integration", async () => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    currentExt = { ...currentExt, read_only: true };
+    grants.work = { extension: currentExt.id, trust: "owner", categories: [] };
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: currentExt.id, manager: "work" }} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe("true");
+    expect(owner.disabled).toBe(true);
+    await act(async () => owner.click());
+    expect(requests.filter(({ url }) => url.includes("/assistant/extension-trust")).map(({ method, manager }) => [method, manager]))
+      .toEqual([["GET", "work"]]);
+  });
+
+  it.each([
     ["feishu-bot", "/bots/feishu"],
     ["lark", "/lark/status"],
     ...(installedMailbox ? [["mail", "/mail/accounts"]] : []),
@@ -1034,6 +1110,170 @@ describe("integration detail parity", () => {
   const refresh = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!.click();
   const unloadWarns = () => !window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   const input = (name: string) => host.querySelector<HTMLInputElement>(`#extension-field-${name}`)!;
+
+  it("keeps a draft after settings_moved and retries on the refreshed configuration", async () => {
+    const fetchNow = fetch;
+    let fail!: (answer: ReturnType<typeof ok>) => void;
+    let first = true;
+    const writes: unknown[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && url.includes("/-/config")) {
+        writes.push(JSON.parse(String(init.body)));
+        if (first) {
+          first = false;
+          return new Promise((resolve) => { fail = resolve; });
+        }
+      }
+      return fetchNow(url, init);
+    });
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    act(() => setInputValue(input("endpoint"), "https://edited.example.com"));
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => { save.click(); save.click(); });
+    expect(writes).toHaveLength(1);
+    act(() => setInputValue(input("endpoint"), "https://newer.example.com"));
+    currentExt = { ...currentExt, config: { ...currentExt.config, display_alias: "Changed elsewhere" } };
+    await act(async () => fail({
+      ...ok({ code: "settings_moved", error: "Settings moved. Try again." }), ok: false, status: 409,
+    }));
+    expect(host.textContent).toContain("Settings moved. Try again.");
+    expect(input("endpoint").value).toBe("https://newer.example.com");
+    expect(input("display_alias").value).toBe("Changed elsewhere");
+    await act(async () => save.click());
+    expect(writes).toHaveLength(2);
+    expect(currentExt.config).toMatchObject({ endpoint: "https://newer.example.com", display_alias: "Changed elsewhere" });
+    expect(unloadWarns()).toBe(false);
+  });
+
+  it("keeps both resource drafts across the measured 740 px Settings breakpoint", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+    const { Settings } = await import("../Settings");
+    let width = 740;
+    let resize!: () => void;
+    const measure = vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(() => width);
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private notify: () => void) {}
+      observe(element: Element) { if (element.matches('[role="region"]')) resize = this.notify; }
+      disconnect() {}
+    });
+    const original = location.href;
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    try {
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      await act(async () => vi.dynamicImportSettled());
+      const hours = () => host.querySelector<HTMLInputElement>('[data-configuration-field="thread_idle_hours"] input')!;
+      await act(async () => {
+        setInputValue(input("endpoint"), "https://edited.example.com");
+        setInputValue(hours(), "48");
+      });
+      for (width of [739, 740, 739, 740]) {
+        await act(async () => resize());
+        expect(!!host.querySelector("[data-integrations-split]")).toBe(width >= 740);
+        expect(hours().value).toBe("48");
+        expect(input("endpoint").value).toBe("https://edited.example.com");
+      }
+      expect(requests.filter(({ method }) => method === "PUT")).toEqual([]);
+    } finally {
+      measure.mockRestore();
+      history.replaceState(null, "", original);
+    }
+  }, 30000);
+
+  it("shares an extension draft with the legacy page and clears it on re-pairing", async () => {
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    await act(async () => setInputValue(input("endpoint"), "https://edited.example.com"));
+    await act(async () => root.render(<Extensions open="larkx" onOpen={() => {}} />));
+    expect(input("endpoint").value).toBe("https://edited.example.com");
+    expect(unloadWarns()).toBe(true);
+    await act(async () => {
+      setPairedToken("");
+      setRoster(structuredClone(ROSTER));
+    });
+    expect(input("endpoint").value).toBe(currentExt.config?.endpoint);
+    expect(unloadWarns()).toBe(false);
+  });
+
+  it("acknowledges a lost configuration reply only after reading the edited resource", async () => {
+    const fetchNow = fetch;
+    const calls: { method: string; manager: string | null }[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (!url.includes("/larkx/-/")) return fetchNow(url, init);
+      const method = init?.method ?? "GET";
+      if (!url.includes("entry_lists=1")) return fetchNow(url, init);
+      calls.push({ method, manager: new Headers(init?.headers).get("X-Persona-Manager") });
+      if (method !== "PUT") return fetchNow(url, init);
+      currentExt = { ...currentExt, config: JSON.parse(String(init?.body)).config };
+      return Promise.reject(new TypeError("Failed to fetch"));
+    });
+    await act(async () => root.render(<IntegrationDetail target={{ ...extension, manager: "assistant" }} integrationsV2 />));
+    await act(async () => setInputValue(input("endpoint"), "https://saved.example.com"));
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(calls).toEqual(["GET", "GET", "PUT", "GET"].map((method) => ({ method, manager: "assistant" })));
+    expect(input("endpoint").value).toBe("https://saved.example.com");
+    expect(unloadWarns()).toBe(false);
+  });
+
+  it.each([false, true])("loads a fresh full-config baseline before saving (overlap=%s)", async (overlap) => {
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    await act(async () => setInputValue(input("endpoint"), "https://edited.example.com"));
+    currentExt = {
+      ...currentExt,
+      config: {
+        ...currentExt.config, display_alias: "Updated elsewhere",
+        ...(overlap && { endpoint: "https://remote.example.com" }),
+      },
+    };
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(input("display_alias").value).toBe("Updated elsewhere");
+    expect(input("endpoint").value).toBe("https://edited.example.com");
+    expect(requests.filter(({ url, method }) => url.includes("/-/config") && method === "PUT")).toHaveLength(overlap ? 0 : 1);
+    expect(unloadWarns()).toBe(overlap);
+    if (overlap) expect(host.textContent).toContain(t("settings-configuration.error_configuration_conflict"));
+    else expect(currentExt.config).toMatchObject({ endpoint: "https://edited.example.com", display_alias: "Updated elsewhere" });
+  });
+
+  it("keeps a late PUT on its original assistant while editing another copy", async () => {
+    const fetchNow = fetch;
+    const copies = { assistant: structuredClone(currentExt), work: structuredClone(currentExt) };
+    copies.work.config = { ...copies.work.config, endpoint: "https://work.example.com" };
+    const writes: (string | null)[] = [];
+    let finish!: () => void;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (!url.includes("/larkx/-/") || !url.includes("entry_lists=1")) return fetchNow(url, init);
+      const owner = new Headers(init?.headers).get("X-Persona-Manager");
+      const copy = owner === "work" ? copies.work : copies.assistant;
+      if (init?.method !== "PUT") return Promise.resolve(ok(copy));
+      writes.push(owner);
+      return new Promise((resolve) => {
+        finish = () => {
+          copy.config = JSON.parse(String(init.body)).config;
+          resolve(ok(copy));
+        };
+      });
+    });
+    const draw = (manager: string) =>
+      act(async () => root.render(<IntegrationDetail target={{ ...extension, manager }} integrationsV2 />));
+    await act(async () => chooseManager("work"));
+    await draw("assistant");
+    await act(async () => setInputValue(input("endpoint"), "https://home-edit.example.com"));
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(writes).toEqual(["assistant"]);
+    await draw("work");
+    expect(input("endpoint").value).toBe("https://work.example.com");
+    await act(async () => setInputValue(input("endpoint"), "https://work-edit.example.com"));
+    await act(async () => finish());
+    expect(input("endpoint").value).toBe("https://work-edit.example.com");
+    await draw("assistant");
+    expect(input("endpoint").value).toBe("https://home-edit.example.com");
+    expect(writes).toEqual(["assistant"]);
+  });
 
   it("puts link-prefilled values in an editable draft once and saves only recognized fields on request", async () => {
     const page = <IntegrationDetail target={extension} prefill={{ display_alias: "From a link", unknown_key: "ignored", app_secret: "ignored" }} />;
@@ -1246,5 +1486,352 @@ describe("integration detail parity", () => {
     for (const id of ["larkx_chat", "second_chat", "larkx_conn"]) {
       expect(requests.some((r) => r.url.includes(`provider=${id}`)), id).toBe(true);
     }
+  });
+});
+
+describe("extension auth-to-connector sync and host-auth contract (#17803)", () => {
+  const emitHubEvent = (type: string, msg: Record<string, unknown>) => {
+    hubEvents.listeners.get(type)?.forEach((listener) => listener({ type, ...msg }));
+  };
+
+  function setupHostAuthExtension(manager?: string) {
+    currentExt = {
+      id: "storefront",
+      name: "Storefront",
+      kind: "process",
+      source: "installed",
+      status: "running",
+      version: "0.3.1",
+      enabled: true,
+      origin: "market:official/storefront",
+      contributes: { connectors: ["storefront_conn"] },
+      auth: {
+        title: "Storefront Sign-in",
+        state: "signed_out",
+      },
+      form: {
+        fields: [{ name: "region", type: "string", title: "Region" }],
+      },
+      config: { region: "us" },
+    };
+    currentConnectors = [
+      {
+        id: "storefront_conn",
+        name: "Storefront Library",
+        status: "not_signed_in",
+        enabled: true,
+        capabilities: ["read"],
+        ...(manager ? { manager } : {}),
+      },
+    ];
+  }
+
+  it("refreshes associated connector status after AuthGroup sign-in, preserves unsaved drafts, and hides hub_side_note", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let extAuth = structuredClone(currentExt.auth!);
+    mockFetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/step") && method === "POST") {
+        extAuth = { title: "Storefront Sign-in", state: "signed_in", account: "player1" };
+        currentConnectors = [
+          {
+            id: "storefront_conn",
+            name: "Storefront Library",
+            status: "ok",
+            account: "player1",
+            enabled: true,
+            capabilities: ["read"],
+          },
+        ];
+        return ok({ done: true, account: "player1" }) as Response;
+      }
+      if (url.endsWith("/-/auth") && method === "GET") {
+        return ok(extAuth) as Response;
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+
+    const connSection = () => section("connection")!;
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_out"));
+    expect(connSection().textContent).toContain(t("lib-connectors.state_not_signed_in"));
+    // Top-level interactive AuthGroup is rendered -> suppress misleading manager.json note.
+    expect(connSection().textContent).not.toContain(t("settings-hubconnector.hub_side_note"));
+
+    // Create an unsaved config draft before signing in.
+    const regionInput = host.querySelector<HTMLInputElement>("#extension-field-region")!;
+    act(() => setInputValue(regionInput, "jp"));
+    await flush();
+    expect(regionInput.value).toBe("jp");
+
+    const signInBtn = [...connSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("lib-extension-auth.sign_in"),
+    )!;
+    expect(signInBtn).toBeDefined();
+    await act(async () => signInBtn.click());
+    await flush();
+
+    // Both top AuthGroup and lower Connection status card reflect signed-in state.
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_in_as", { account: "player1" }));
+    expect(connSection().textContent).toContain(t("lib-connectors.state_ok"));
+    expect(connSection().textContent).not.toContain(t("lib-connectors.state_not_signed_in"));
+    expect(connSection().textContent).not.toContain(t("settings-hubconnector.hub_side_note"));
+    // Unsaved draft stays intact.
+    expect(host.querySelector<HTMLInputElement>("#extension-field-region")!.value).toBe("jp");
+  });
+
+  it("syncs connector status on sign-out under secondary assistant scope and ignores other assistant auth pushes", async () => {
+    setupHostAuthExtension("work");
+    currentExt.auth = { title: "Storefront Sign-in", state: "signed_in", account: "work-player" };
+    currentConnectors = [
+      { id: "storefront_conn", name: "Storefront Library", status: "ok", account: "default-player", enabled: true, capabilities: ["read"] },
+      { id: "storefront_conn", name: "Storefront Library", status: "ok", account: "work-player", enabled: true, capabilities: ["read"], manager: "work" },
+    ];
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/logout") && method === "POST") {
+        const manager = new Headers(init?.headers).get("X-Persona-Manager");
+        requests.push({ url, method, body: undefined, manager });
+        currentConnectors = [
+          currentConnectors[0],
+          { id: "storefront_conn", name: "Storefront Library", status: "not_signed_in", enabled: true, capabilities: ["read"], manager: "work" },
+        ];
+        return ok({ title: "Storefront Sign-in", state: "signed_out" }) as Response;
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: "storefront", manager: "work" }} />));
+    await flush();
+
+    const connSection = () => section("connection")!;
+    expect(connSection().textContent).toContain("work-player");
+    expect(connSection().textContent).toContain(t("lib-connectors.state_ok"));
+
+    // An extension_auth event from another assistant must not touch work's auth or reload connectors.
+    const connectorReadsBefore = requests.filter((r) => /\/connectors(\?|$)/.test(r.url)).length;
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        manager: "assistant",
+        auth: { title: "Storefront Sign-in", state: "signed_out" },
+      });
+    });
+    await flush();
+    expect(connSection().textContent).toContain("work-player");
+    expect(requests.filter((r) => /\/connectors(\?|$)/.test(r.url)).length).toBe(connectorReadsBefore);
+
+    // Signing out routes with X-Persona-Manager: work and refreshes work's connector snapshot.
+    const signOutBtn = [...connSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("settings-extensionauth.sign_out"),
+    )!;
+    expect(signOutBtn).toBeDefined();
+    await act(async () => signOutBtn.click());
+    await flush();
+
+    expect(requests).toContainEqual(expect.objectContaining({ url: expect.stringContaining("/-/auth/logout"), method: "POST", manager: "work" }));
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_out"));
+    expect(connSection().textContent).toContain(t("lib-connectors.state_not_signed_in"));
+    expect(connSection().textContent).not.toContain("default-player");
+  });
+
+  it("guards against stale out-of-order connector responses across rapid auth transitions", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let intercept = false;
+    let resolveFirst!: (r: Response) => void;
+    let resolveSecond!: (r: Response) => void;
+    let call = 0;
+
+    mockFetch.mockImplementation((input, init) => {
+      const url = String(input);
+      if (intercept && /\/connectors(\?|$)/.test(url)) {
+        call++;
+        if (call === 1) return new Promise<Response>((resolve) => { resolveFirst = resolve; });
+        if (call === 2) return new Promise<Response>((resolve) => { resolveSecond = resolve; });
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+    intercept = true;
+
+    // Transition 1: signed_in (slow response #1).
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        auth: { title: "Storefront Sign-in", state: "signed_in", account: "player1" },
+      });
+    });
+    // Transition 2: expired (faster response #2).
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        auth: { title: "Storefront Sign-in", state: "expired" },
+      });
+    });
+
+    expect(call).toBe(2);
+    // Newer response #2 lands first -> not_signed_in.
+    await act(async () => {
+      resolveSecond(ok({
+        connectors: [{ id: "storefront_conn", name: "Storefront Library", status: "not_signed_in", enabled: true, capabilities: ["read"] }],
+      }) as Response);
+    });
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("lib-connectors.state_not_signed_in"));
+
+    // Stale response #1 resolves later -> must be ignored.
+    await act(async () => {
+      resolveFirst(ok({
+        connectors: [{ id: "storefront_conn", name: "Storefront Library", status: "ok", account: "player1", enabled: true, capabilities: ["read"] }],
+      }) as Response);
+    });
+    await flush();
+
+    expect(section("connection")!.textContent).toContain(t("lib-extension-auth.expired"));
+    expect(section("connection")!.textContent).toContain(t("lib-connectors.state_not_signed_in"));
+    expect(section("connection")!.textContent).not.toContain("player1");
+  });
+
+  it("drops a stale getAuth response when a newer auth state arrives first", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let resolveStaleAuth!: (r: Response) => void;
+
+    mockFetch.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/step") && method === "POST") {
+        return Promise.resolve(ok({ done: true, account: "player1" }) as Response);
+      }
+      if (url.endsWith("/-/auth") && method === "GET") {
+        return new Promise<Response>((resolve) => { resolveStaleAuth = resolve; });
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+
+    // Start sign-in (triggers deferred GET /-/auth).
+    const signInBtn = [...section("connection")!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("lib-extension-auth.sign_in"),
+    )!;
+    await act(async () => signInBtn.click());
+    await flush();
+
+    // A newer pushed status arrives before the deferred GET /-/auth resolves.
+    await act(async () => {
+      emitHubEvent("extension_auth", {
+        extension: "storefront",
+        auth: { title: "Storefront Sign-in", state: "expired" },
+      });
+    });
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("lib-extension-auth.expired"));
+
+    // Resolve the older GET /-/auth -> must be ignored.
+    await act(async () => {
+      resolveStaleAuth(ok({ title: "Storefront Sign-in", state: "signed_in", account: "player1" }) as Response);
+    });
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("lib-extension-auth.expired"));
+    expect(section("connection")!.textContent).not.toContain("player1");
+  });
+
+  it("preserves updated detail.auth on transient connector reload failure and recovers via retry", async () => {
+    setupHostAuthExtension();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    let failConnectors = false;
+    let extAuth = structuredClone(currentExt.auth!);
+
+    mockFetch.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = (init?.method || "GET").toUpperCase();
+      if (url.endsWith("/-/auth/step") && method === "POST") {
+        extAuth = { title: "Storefront Sign-in", state: "signed_in", account: "player1" };
+        currentConnectors = [
+          { id: "storefront_conn", name: "Storefront Library", status: "ok", account: "player1", enabled: true, capabilities: ["read"] },
+        ];
+        return ok({ done: true, account: "player1" }) as Response;
+      }
+      if (url.endsWith("/-/auth") && method === "GET") {
+        return ok(extAuth) as Response;
+      }
+      if (failConnectors && /\/connectors(\?|$)/.test(url)) {
+        return new Response(JSON.stringify({ error: "Connector reload timed out" }), { status: 503 });
+      }
+      return fallback(input, init);
+    });
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "storefront" }} />));
+    await flush();
+
+    failConnectors = true;
+    const signInBtn = [...section("connection")!.querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("lib-extension-auth.sign_in"),
+    )!;
+    await act(async () => signInBtn.click());
+    await flush();
+
+    // Auth card stays updated even though connector reload failed.
+    const connSection = () => section("connection")!;
+    expect(connSection().textContent).toContain(t("lib-extension-auth.signed_in_as", { account: "player1" }));
+    expect(connSection().querySelector('[role="alert"]')?.textContent).toContain("Connector reload timed out");
+
+    // Retry button inside the error card recovers the connector status cleanly.
+    failConnectors = false;
+    const retryBtn = [...connSection().querySelectorAll<HTMLButtonElement>("button")].find(
+      (b) => b.textContent === t("settings-hubconnector.recheck"),
+    )!;
+    expect(retryBtn).toBeDefined();
+    await act(async () => retryBtn.click());
+    await flush();
+
+    expect(connSection().querySelector('[role="alert"]')).toBeNull();
+    expect(connSection().textContent).toContain(t("lib-connectors.state_ok"));
+    expect(connSection().textContent).toContain("player1");
+  });
+
+  it("keeps hub_side_note visible for hub-configured connectors when no top-level interactive auth is present", async () => {
+    currentExt = {
+      id: "hub-managed-ext",
+      name: "Hub Managed Extension",
+      kind: "process",
+      source: "installed",
+      status: "running",
+      version: "1.0.0",
+      enabled: true,
+      origin: "market:official/hub-managed-ext",
+      contributes: { connectors: ["hub_managed_conn"] },
+    };
+    currentConnectors = [
+      { id: "hub_managed_conn", name: "Hub Managed", status: "not_signed_in", enabled: true, capabilities: ["read"] },
+    ];
+
+    await act(async () => root.render(<IntegrationDetail target={{ kind: "extension", id: "hub-managed-ext" }} />));
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("settings-hubconnector.hub_side_note"));
+
+    // Standalone built-in hub-configured connector also keeps hub_side_note.
+    act(() => root.render(null));
+    await act(async () => root.render(
+      <IntegrationDetail target={{ kind: "builtin", id: "hub_managed_conn", connectorId: "hub_managed_conn" }} />,
+    ));
+    await flush();
+    expect(section("connection")!.textContent).toContain(t("settings-hubconnector.hub_side_note"));
   });
 });

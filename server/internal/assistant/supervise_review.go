@@ -1089,6 +1089,15 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 	}
 	return &row, func() {
 		s.todoRowSet(ctx, doneKeys)
+		if before.failedStart() {
+			if p, _, err := s.currentPlanAssignment(ctx, before); err == nil {
+				s.tasks.planEdits.acquire(p.ID)
+				if current, err := s.loadPlan(ctx, p.ID); err == nil {
+					s.publishTaskPlan(ctx, current)
+				}
+				s.tasks.planEdits.release(p.ID)
+			}
+		}
 		s.afterReviewClose(ctx, before, row, accepted)
 	}, nil
 }

@@ -244030,6 +244030,75 @@
           }
         }
       }
+    },
+    "Message Persona": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message Persona"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaにメッセージ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "给 Persona 发消息"
+          }
+        }
+      }
+    },
+    "Opens your main chat with Persona with the keyboard up, ready to type.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens your main chat with Persona with the keyboard up, ready to type."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Personaとのメインチャットをキーボードを出した状態で開き、すぐに入力できます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开和 Persona 的主对话并弹出键盘，直接打字。"
+          }
+        }
+      }
+    },
+    "Opens your main chat with the keyboard up.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opens your main chat with the keyboard up."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メインチャットをキーボードを出した状態で開きます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开主对话并弹出键盘。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
