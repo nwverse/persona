@@ -146,6 +146,8 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "models", group: t("settings.add_provider"), hint: words("API Key", t("settings.search_key_words"), t("settings-providerimport.import")), anchor: "settings-providers" },
   { tab: "models", group: t("settings-nav.tab_model_config"), anchor: "settings-model-config" },
   { tab: "models", group: path(t("settings-nav.tab_model_config"), t("settings-modelconfiguration.effort")), hint: words(t("settings-modelconfiguration.model_provider"), t("settings-modelconfiguration.model")), anchor: "settings-model-config" },
+  { tab: "models", group: t("execution.runtimes_title"), anchor: "settings-runtimes" },
+  { tab: "models", group: t("execution.channels_title"), hint: words(t("execution.channel_base_url"), t("execution.rollback")), anchor: "settings-execution-channels" },
   { tab: "models", group: t("settings-modelprofiles.title"), anchor: "model-profiles" },
   { tab: "agents", group: "Claude Code", anchor: "settings-claude" },
   { tab: "agents", group: "Codex", anchor: "settings-codex" },
