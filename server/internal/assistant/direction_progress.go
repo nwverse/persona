@@ -221,6 +221,17 @@ func (s *Service) directionOf(id string) *direction {
 // the knowledge base while publish holds pubMu. directionsSync publishes refreshed
 // project fallbacks once the knowledge base is available; explicit names are immediate.
 func (s *Service) directionSessionNames(ctx context.Context, cfg Settings, titles map[string]shownTitle) map[string]string {
+	return s.directionNames(ctx, cfg, titles, false)
+}
+
+// todoDirectionLabels includes recorded directions even after they stop receiving new work.
+func (s *Service) todoDirectionLabels(ctx context.Context, cfg Settings) map[string]string {
+	titles, _ := s.conversationTitles()
+	return s.directionNames(ctx, cfg, titles, true)
+}
+
+// directionNames can include ended directions for to-do attribution. Only cfg.Leaders are current leaders.
+func (s *Service) directionNames(ctx context.Context, cfg Settings, titles map[string]shownTitle, includeEnded bool) map[string]string {
 	projects, available := map[string]string{}, false
 	if opened := s.kb.cur.Load(); opened != nil && s.kbOn(ctx) {
 		available = true
@@ -231,7 +242,8 @@ func (s *Service) directionSessionNames(ctx context.Context, cfg Settings, title
 	b := &s.directions
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !s.directionsLocked(ctx) {
+	loaded := s.directionsLocked(ctx)
+	if !loaded && !includeEnded {
 		return nil
 	}
 	names := make(map[string]string, len(cfg.Leaders))
@@ -240,10 +252,20 @@ func (s *Service) directionSessionNames(ctx context.Context, cfg Settings, title
 			continue
 		}
 		name := directionName(nil, titles[id].title, "")
-		if d := b.m[id]; d != nil {
+		if d := b.m[id]; loaded && d != nil {
 			name = nameOf(d, titles[id].title, projects, available)
 		}
 		names[id] = name
+	}
+	if includeEnded && loaded {
+		for id, d := range b.m {
+			if id == "" || id == cfg.Main || d == nil {
+				continue
+			}
+			if _, current := names[id]; !current {
+				names[id] = nameOf(d, titles[id].title, projects, available)
+			}
+		}
 	}
 	return names
 }

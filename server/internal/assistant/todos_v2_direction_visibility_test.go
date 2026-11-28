@@ -235,12 +235,13 @@ func TestTodosV2DirectionVisibilityPrecedenceAndInheritance(t *testing.T) {
 		}
 	}
 
-	assertResolved("resolveEffectiveDirections", resolveEffectiveDirections(items, directions))
+	s := &Service{}
+	assertResolved("resolveEffectiveDirections", s.directionOwners(items).resolveEffectiveDirections(items, directions))
 
 	// Verify order-independence by reversing the input slice.
 	rev := slices.Clone(items)
 	slices.Reverse(rev)
-	assertResolved("resolveEffectiveDirections(reversed)", resolveEffectiveDirections(rev, directions))
+	assertResolved("resolveEffectiveDirections(reversed)", s.directionOwners(rev).resolveEffectiveDirections(rev, directions))
 }
 
 func TestTodosV2DetailInheritsDirectionOnlyFromVisibleAncestors(t *testing.T) {

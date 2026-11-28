@@ -175,7 +175,7 @@ func (s *Service) viewedTodoRuns(ctx context.Context, id string, extension bool)
 		return listedTodo{}, nil, false, nil
 	}
 	sessions := p.facts[i].Sessions
-	if s.settings(ctx).todosV2On() {
+	if cfg := s.settings(ctx); cfg.todosV2On() {
 		if extension {
 			// The requested row passed todoScoped. Its direction can also come from another row, so
 			// apply the extension's list visibility rules to the graph before resolving that field.
@@ -188,7 +188,7 @@ func (s *Service) viewedTodoRuns(ctx context.Context, id string, extension bool)
 				return listedTodo{}, nil, false, nil
 			}
 		}
-		populateTodoEffectiveDirections(list, s.todoBoardDirectionLabels(ctx))
+		s.populateTodoEffectiveDirections(list, s.todoDirectionLabels(ctx, cfg))
 	}
 	t := list[i]
 	t.Todo = s.withBrief(t.Todo)
