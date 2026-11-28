@@ -148,5 +148,8 @@
   "orca_session_gone": "This chat is no longer in Orca.",
   "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings.",
   "orca_mode_unsupported": "Orca’s chats of this kind don’t take that permission mode ({detail}), so nothing was changed.",
-  "orca_rename_unsupported": "This version of Orca can’t rename chats from Persona. Rename it in Orca, or update Orca."
+  "orca_rename_unsupported": "This version of Orca can’t rename chats from Persona. Rename it in Orca, or update Orca.",
+  "orca_start_unsupported": "This version of Orca can’t start chats from Persona, so nothing was started. Start the chat in Orca, or update Orca.",
+  "orca_start_folder": "No project in Orca holds this folder, so nothing was started. Open the folder in Orca, then start the chat again.",
+  "orca_start_launcher": "Orca on that computer can’t start this kind of chat ({detail}), so nothing was started. Pick another launcher."
 }

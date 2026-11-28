@@ -47,6 +47,7 @@ import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } fro
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
 import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasRegisteredPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
+import { buildNextSuggestionsPayload, parseAssistantNextSuggestions, resolveAuthoritativeNextSuggestions } from '../core/NextSuggestions';
 
 
 
@@ -121,6 +122,11 @@ export class ClientModel {
   @Trace agentsDisplaySupported: boolean = false;
   @Trace agentsDisplaySaving: boolean = false;
   private agentsDisplayRevision: number = 0;
+  @Trace nextSuggestionsValue: boolean | null = null;
+  @Trace nextSuggestionsLoaded: boolean = false;
+  @Trace nextSuggestionsSaving: boolean = false;
+  @Trace nextSuggestionsError: string = '';
+  private nextSuggestionsRevision: number = 0;
   openXiaoYiRoute(routeJson: string): void {
     if (!routeJson || routeJson.length > 16384) return;
     this.pendingXiaoYiRoute = routeJson;
@@ -133,6 +139,9 @@ export class ClientModel {
   }
   isRecordingModuleAllowed(): boolean {
     return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
+  }
+  canPreviewDemoRecordings(): boolean {
+    return this.demo;
   }
   mailModuleAllowed(): boolean {
     return this.demo || isHubModuleAllowed(MAIL_MODULE_FEATURE, this.features, this.rememberedHubModules);
@@ -752,7 +761,7 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.managers = []; this.rosterDefaultId = '';
     this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
@@ -915,7 +924,7 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.error = '';
       this.publishedImageLimits = {};
     }
     this.publishDirectory();
@@ -1137,6 +1146,64 @@ export class ClientModel {
       return false;
     } finally {
       if (this.owns(generation, scope) && rev === this.agentsDisplayRevision) this.agentsDisplaySaving = false;
+    }
+  }
+  syncNextSuggestions(assistant: Record<string, Object>): void {
+    const parsed = parseAssistantNextSuggestions(assistant);
+    if (parsed !== null) {
+      this.nextSuggestionsValue = parsed;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+    }
+    const parent = this.directoryParent;
+    if (parsed !== null && parent && parent.scope() === this.scope() && parent.profile.hubId === this.profile.hubId) {
+      parent.nextSuggestionsValue = parsed;
+      parent.nextSuggestionsLoaded = true;
+      if (parent.demo) parent.refreshDemo();
+    }
+  }
+  async loadNextSuggestions(): Promise<void> {
+    if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsSaving) return;
+    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const rev = ++this.nextSuggestionsRevision;
+    this.nextSuggestionsError = '';
+    try {
+      const result = await repo.call('/api/v1/assistant');
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.nextSuggestionsRevision) return;
+      this.nextSuggestionsValue = parseAssistantNextSuggestions(result);
+      this.nextSuggestionsLoaded = true;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.nextSuggestionsRevision) {
+        this.nextSuggestionsError = error instanceof Error ? error.message : 'failed';
+      }
+    }
+  }
+  async setNextSuggestions(enabled: boolean): Promise<boolean> {
+    if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsValue === null || this.nextSuggestionsSaving) return false;
+    const previous = this.nextSuggestionsValue;
+    if (previous === enabled) return true;
+    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const rev = ++this.nextSuggestionsRevision;
+    this.nextSuggestionsSaving = true;
+    this.nextSuggestionsError = '';
+    this.nextSuggestionsValue = enabled;
+    try {
+      const result = await repo.call('/api/v1/assistant', 'PUT', buildNextSuggestionsPayload(enabled));
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.nextSuggestionsRevision) return false;
+      const authoritative = resolveAuthoritativeNextSuggestions(result, enabled);
+      this.nextSuggestionsValue = authoritative;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+      return authoritative === enabled;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.nextSuggestionsRevision) {
+        this.nextSuggestionsValue = previous;
+        this.nextSuggestionsError = error instanceof Error ? error.message : 'failed';
+        this.failure(error as Error);
+      }
+      return false;
+    } finally {
+      if (this.owns(generation, scope) && rev === this.nextSuggestionsRevision) this.nextSuggestionsSaving = false;
     }
   }
   private async refreshPhoneList(kind: string, repo: HubRepository, generation: number, scope: string, force: boolean): Promise<void> {
@@ -2236,6 +2303,7 @@ export class ClientModel {
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
     this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
+    this.nextSuggestionsValue = true; this.nextSuggestionsLoaded = true; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;

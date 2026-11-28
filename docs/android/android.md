@@ -1044,8 +1044,8 @@ shrinking stays off (below), and debug builds are not shrunk.
   came out as `coil3.network.HttpException`), so `-keepnames class * extends java.lang.Throwable` keeps every
   Throwable's name, the libraries' too: reports, and messages that fall back to the simple name, print whatever was
   thrown. R8 keeps the InnerClass annotation that gives a nested exception its simple name only when it keeps the names
-  of both the exception and its outer class (seven persona nested exceptions lost theirs), so the rules also keep those
-  five outer classes' names. Library exceptions nested in a class that is no Throwable (11, such as
+  of both the exception and its outer class (seven persona nested exceptions lost theirs, then the four SAX stop signals of
+  `DocumentText` and `Xlsx`, #17578), so the rules also keep those eight outer classes' names. Library exceptions nested in a class that is no Throwable (11, such as
   `FrameworkSQLiteOpenHelper$OpenHelper$CallbackException`) report their simple name as `Outer$Inner`. All 45 route
   classes keep their names without a rule. Frames are another matter: an
   inlined method runs inside its caller, a merged class's code under the class it went into, and outlined or desugared

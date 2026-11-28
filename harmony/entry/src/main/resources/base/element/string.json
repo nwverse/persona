@@ -9671,6 +9671,374 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "Knowledge Page"
+    },
+    {
+      "name": "todo_stage_plan",
+      "value": "Plan"
+    },
+    {
+      "name": "todo_stage_develop",
+      "value": "Develop"
+    },
+    {
+      "name": "todo_stage_review",
+      "value": "Review"
+    },
+    {
+      "name": "todo_stage_merge",
+      "value": "Merge"
+    },
+    {
+      "name": "todo_stage_deploy",
+      "value": "Deploy"
+    },
+    {
+      "name": "todo_stage_verify",
+      "value": "Verified"
+    },
+    {
+      "name": "todo_stage_done",
+      "value": "Done"
+    },
+    {
+      "name": "todo_stage_state_done",
+      "value": "done"
+    },
+    {
+      "name": "todo_stage_state_current",
+      "value": "current step"
+    },
+    {
+      "name": "todo_stage_state_ahead",
+      "value": "still ahead"
+    },
+    {
+      "name": "todo_stage_step_of",
+      "value": "step {current} of {total}"
+    },
+    {
+      "name": "todo_stage_step_summary",
+      "value": "Step {current} of {total} · {stage}"
+    },
+    {
+      "name": "todo_decisions_title",
+      "value": "Decisions"
+    },
+    {
+      "name": "todo_decisions_loading",
+      "value": "Loading decisions…"
+    },
+    {
+      "name": "todo_decisions_load_failed",
+      "value": "Couldn't load decisions."
+    },
+    {
+      "name": "todo_decisions_empty",
+      "value": "Decisions made on this to-do go here. Your answers to an agent's questions and finished task outcomes are recorded automatically; you can also add your own."
+    },
+    {
+      "name": "todo_decisions_show_all",
+      "value": "Show All {count} Decisions"
+    },
+    {
+      "name": "todo_decisions_show_first",
+      "value": "Show First {count}"
+    },
+    {
+      "name": "todo_decisions_full_history",
+      "value": "Full History ({count} Revised)"
+    },
+    {
+      "name": "todo_decisions_current_only",
+      "value": "Current Only"
+    },
+    {
+      "name": "todo_decision_chose",
+      "value": "Chose:"
+    },
+    {
+      "name": "todo_decision_reason_prefix",
+      "value": "Reason:"
+    },
+    {
+      "name": "todo_decision_revise",
+      "value": "Revise"
+    },
+    {
+      "name": "todo_decision_revised_badge",
+      "value": "Revised"
+    },
+    {
+      "name": "todo_decision_revises",
+      "value": "Revises “{choice}”"
+    },
+    {
+      "name": "todo_decision_revises_item",
+      "value": "Revises “{question} → {choice}”"
+    },
+    {
+      "name": "todo_decision_undo_revision",
+      "value": "Undo Revision"
+    },
+    {
+      "name": "todo_decision_record_title",
+      "value": "Record a Decision"
+    },
+    {
+      "name": "todo_decision_save",
+      "value": "Record"
+    },
+    {
+      "name": "todo_decision_revise_note",
+      "value": "The earlier choice “{choice}” stays struck through in history; only the new choice goes to agents."
+    },
+    {
+      "name": "todo_decision_question_label",
+      "value": "Question"
+    },
+    {
+      "name": "todo_decision_question_placeholder",
+      "value": "What needs deciding…"
+    },
+    {
+      "name": "todo_decision_choice_label",
+      "value": "Choice"
+    },
+    {
+      "name": "todo_decision_choice_placeholder",
+      "value": "What was decided…"
+    },
+    {
+      "name": "todo_decision_reason_label",
+      "value": "Reason (Optional)"
+    },
+    {
+      "name": "todo_decision_reason_placeholder",
+      "value": "Why, and what was ruled out…"
+    },
+    {
+      "name": "todo_decision_source_manual",
+      "value": "Added by hand"
+    },
+    {
+      "name": "todo_decision_source_outcome",
+      "value": "Recorded when the agent finished"
+    },
+    {
+      "name": "todo_decision_source_agent",
+      "value": "Noted by an agent while working"
+    },
+    {
+      "name": "todo_decision_source_thread",
+      "value": "Said in the Lark topic"
+    },
+    {
+      "name": "todo_decision_source_card",
+      "value": "Answered in an agent's question"
+    },
+    {
+      "name": "todo_decision_recorded_toast",
+      "value": "Decision recorded"
+    },
+    {
+      "name": "todo_decision_revised_toast",
+      "value": "Decision revised"
+    },
+    {
+      "name": "todo_decision_marked_revised",
+      "value": "Marked as revised"
+    },
+    {
+      "name": "todo_decision_revision_undone",
+      "value": "Revision undone"
+    },
+    {
+      "name": "expand_all",
+      "value": "Expand All"
+    },
+    {
+      "name": "collapse_all",
+      "value": "Collapse All"
+    },
+    {
+      "name": "saving",
+      "value": "Saving…"
+    },
+    {
+      "name": "token_usage_recent_hourly",
+      "value": "Recent Hourly Activity"
+    },
+    {
+      "name": "token_usage_by_machine_7d",
+      "value": "By Computer · Last 7 Days"
+    },
+    {
+      "name": "token_usage_by_agent_7d",
+      "value": "By Agent · Last 7 Days"
+    },
+    {
+      "name": "token_usage_by_agent",
+      "value": "By Agent"
+    },
+    {
+      "name": "token_usage_by_launcher",
+      "value": "By Launcher"
+    },
+    {
+      "name": "token_usage_by_place",
+      "value": "Folders and Worktrees"
+    },
+    {
+      "name": "token_usage_requests",
+      "value": "Requests"
+    },
+    {
+      "name": "token_usage_worktree",
+      "value": "Linked Worktree"
+    },
+    {
+      "name": "token_usage_removed_computer",
+      "value": "Removed Computer"
+    },
+    {
+      "name": "token_usage_not_split",
+      "value": "Not Split (Before the Update)"
+    },
+    {
+      "name": "token_usage_launcher_terminal",
+      "value": "Opened in a Terminal"
+    },
+    {
+      "name": "token_usage_project_by_hour",
+      "value": "By Hour"
+    },
+    {
+      "name": "token_usage_project_each_day",
+      "value": "Each Day"
+    },
+    {
+      "name": "next_suggestions_title",
+      "value": "Suggest the Next Message"
+    },
+    {
+      "name": "next_suggestions_note",
+      "value": "After a reply in an open chat, suggest what you might send next above the empty message box."
+    },
+    {
+      "name": "suggestion_use",
+      "value": "Use"
+    },
+    {
+      "name": "suggestion_fill_in",
+      "value": "Fill In"
+    },
+    {
+      "name": "suggestion_send_now",
+      "value": "Send Now"
+    },
+    {
+      "name": "suggestion_hint_safe",
+      "value": "Tap to fill input. Touch and hold to send right away."
+    },
+    {
+      "name": "suggestion_hint_risky",
+      "value": "Tap to fill input for review."
+    },
+    {
+      "name": "rule_suggestion_always",
+      "value": "Always"
+    },
+    {
+      "name": "rule_suggestion_not_now",
+      "value": "Not Now"
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust",
+      "value": "Always adds this kind of task to Auto-Start Tasks so it starts without asking first."
+    },
+    {
+      "name": "rule_suggestion_creates_task_trust_scoped",
+      "value": "Always adds a rule to Auto-Start Tasks: tasks changing files in {directory} on {machine} start without asking first."
+    },
+    {
+      "name": "rule_suggestion_creates_standing",
+      "value": "Always creates a standing authorization for “{action}” in {directory} on {machine}."
+    },
+    {
+      "name": "rule_suggestion_creates_setting",
+      "value": "Always puts this suggestion away for 30 days without storing a rule."
+    },
+    {
+      "name": "rule_suggestion_made_task_trust",
+      "value": "Rule added: these tasks start without asking first."
+    },
+    {
+      "name": "rule_suggestion_made_standing",
+      "value": "Standing authorization added."
+    },
+    {
+      "name": "rule_suggestion_made_setting",
+      "value": "This suggestion stays quiet for {setting}."
+    },
+    {
+      "name": "rule_suggestion_made_none",
+      "value": "Done. Nothing was stored."
+    },
+    {
+      "name": "rule_suggestion_conflict",
+      "value": "Standing authorizations changed meanwhile. Try again."
+    },
+    {
+      "name": "rule_suggestion_failed",
+      "value": "Couldn't save your answer."
+    },
+    {
+      "name": "recording_bookmark",
+      "value": "Bookmark"
+    },
+    {
+      "name": "recording_transcript_review",
+      "value": "Review Transcript"
+    },
+    {
+      "name": "recording_transcript_find",
+      "value": "Find in transcript…"
+    },
+    {
+      "name": "recording_transcript_previous",
+      "value": "Previous match"
+    },
+    {
+      "name": "recording_transcript_next",
+      "value": "Next match"
+    },
+    {
+      "name": "recording_transcript_bookmarks",
+      "value": "Bookmarks"
+    },
+    {
+      "name": "recording_transcript_copy",
+      "value": "Copy Text"
+    },
+    {
+      "name": "recording_transcript_copied",
+      "value": "Transcript copied"
+    },
+    {
+      "name": "recording_transcript_no_matches",
+      "value": "No matches"
+    },
+    {
+      "name": "recording_transcript_matches",
+      "value": "matches"
+    },
+    {
+      "name": "recording_transcript_expired",
+      "value": "Speech has expired and only retained bookmarks remain."
+    },
+    {
+      "name": "recording_transcript_empty",
+      "value": "No retained transcript passages."
     }
   ]
 }
