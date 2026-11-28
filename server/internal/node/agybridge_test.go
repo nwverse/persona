@@ -767,8 +767,9 @@ func TestAgyBridgeRestartWaitsForAWorkingSession(t *testing.T) {
 }
 
 // A session whose turn ended keeps the companion working while finite background work it started still runs (#17200):
-// a command, workflow or subagent, as a Background entry or a running Subagents / Workflows entry. A standing schedule
-// (kind monitor) never ends and does not.
+// a command, workflow, subagent or one-shot timer, as a Background entry or a running Subagents / Workflows entry. A
+// recurring schedule (a monitor that is no "Timer:", or a shell with a "Cron:" description and no command) never ends
+// and does not.
 func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
 	idle := func(edit func(*proto.Session)) proto.Session {
 		s := proto.Session{SessionID: "s1", Status: proto.StatusIdle}
@@ -794,6 +795,16 @@ func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
 		{"only monitor schedules", []proto.Session{idle(func(s *proto.Session) {
 			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "monitor"}}
 		})}, false},
+		{"one-shot timer", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "monitor", Description: "Timer: 60s"}}
+		})}, true},
+		{"recurring cron schedule", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "monitor", Description: "Cron: */5 * * * * Poll"}}
+		})}, false},
+		{"timer beside a cron schedule", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "monitor", Description: "Cron: */5 * * * * Poll"},
+				{ID: "s1/task-2", Kind: "monitor", Description: "Timer: 60s"}}
+		})}, true},
 		{"cron schedule reported as a shell", []proto.Session{idle(func(s *proto.Session) {
 			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: */5 * * * * Poll"}}
 		})}, false},
@@ -874,6 +885,16 @@ func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
 	unmatchedCron := `{"id":"` + agyTestID + `/task-1","kind":"shell","description":"Cron: */30 * * * * Check status","started_at":"2026-11-28T09:00:00Z"}`
 	if pushTasks(proto.StatusIdle, unmatchedCron) {
 		t.Error("a cron schedule reported as a shell holds the drain")
+	}
+	// A one-shot timer arrives as a monitor like a cron job; its description tells them apart, and it holds the drain
+	// until it fires.
+	cron := `{"id":"` + agyTestID + `/task-4","kind":"monitor","description":"Cron: */30 * * * * Check status","started_at":"2026-11-28T09:00:00Z"}`
+	timer := `{"id":"` + agyTestID + `/task-5","kind":"monitor","description":"Timer: 60s","started_at":"2026-11-28T09:00:00Z"}`
+	if pushTasks(proto.StatusIdle, cron) {
+		t.Error("a recurring cron schedule holds the drain")
+	}
+	if !pushTasks(proto.StatusIdle, timer) || !pushTasks(proto.StatusIdle, cron, timer) {
+		t.Error("a one-shot timer, alone or beside a cron schedule, does not hold the drain")
 	}
 	command := `{"id":"` + agyTestID + `/task-2","kind":"shell","description":"Run the tests","command":"make test","started_at":"2026-11-28T09:00:00Z"}`
 	unmatchedCommand := `{"id":"` + agyTestID + `/task-3","kind":"shell","description":"Wait for ready","started_at":"2026-11-28T09:00:00Z"}`
