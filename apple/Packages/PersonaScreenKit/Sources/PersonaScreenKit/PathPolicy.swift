@@ -57,24 +57,38 @@ public struct PathPolicy: Sendable {
     /// the routes that failed since the last look, `networkChanged` whether the phone's networks changed meanwhile.
     public mutating func decide(_ routes: [String: LinkStats], lost: Set<String> = [], networkChanged: Bool = false,
                                 now: Double) -> Decision {
+        guard now.isFinite else { return .stay }
         startedAt = startedAt ?? now
         for id in lost {
             healthySince[id] = nil
             leftBad.insert(id)
         }
+        let floorWindow = config.floorWindow.isFinite ? max(0, config.floorWindow) : 0
         for (id, s) in routes where !lost.contains(id) {
-            if s.healthy { healthySince[id] = healthySince[id] ?? now } else { healthySince[id] = nil }
+            if s.healthy {
+                let since = healthySince[id] ?? now
+                healthySince[id] = since
+                if leftBad.contains(id), now - since >= config.stableWindow {
+                    leftBad.remove(id)
+                }
+            } else {
+                healthySince[id] = nil
+            }
             if let ms = s.minRttMs, ms.isFinite, ms >= 0 {
                 floors[id, default: []].append((now, ms))
-                floors[id]?.removeAll { now - $0.at > config.floorWindow }
+                floors[id]?.removeAll { now - $0.at > floorWindow }
             }
         }
         let live = routes.filter { !lost.contains($0.key) }
+        for id in Array(healthySince.keys) where live[id] == nil {
+            healthySince[id] = nil
+        }
 
-        // Lost: at once to the best route that qualifies.
+        // Lost: at once to the best healthy route; only fall back to an unhealthy/unmeasured relay if none is healthy.
         if lost.contains(current) || live[current] == nil {
             degradedSince = nil
-            guard let to = best(live, excluding: current, now: now, stable: false) else { return .stay }
+            guard let to = best(live, excluding: current, now: now, stable: false, requireHealthy: true)
+                ?? best(live, excluding: current, now: now, stable: false, requireHealthy: false) else { return .stay }
             return move(to, networkChanged ? .networkChanged : .lost, now: now, leaving: true)
         }
         let here = live[current]!
@@ -82,9 +96,12 @@ public struct PathPolicy: Sendable {
         // Degraded: losing packets or slower than its own floor, with a healthy alternative.
         if degraded(current, here) {
             degradedSince = degradedSince ?? now
-            if now - degradedSince! >= config.degradedFor, lastMove.map({ now - $0 >= config.degradedDwell }) ?? true,
-               let to = best(live, excluding: current, now: now, stable: false), live[to]?.healthy == true {
-                return move(to, .degraded, now: now, leaving: true)
+            if now - degradedSince! >= config.degradedFor, lastMove.map({ now - $0 >= config.degradedDwell }) ?? true {
+                let fallback = best(live, excluding: current, now: now, stable: false, requireHealthy: true)
+                    ?? (current != relay && live[relay]?.healthy == true ? relay : nil)
+                if let to = fallback {
+                    return move(to, .degraded, now: now, leaving: true)
+                }
             }
         } else {
             degradedSince = nil
@@ -93,7 +110,7 @@ public struct PathPolicy: Sendable {
         // Faster: right away near the stream's start; later only after the stable window and the dwell.
         let first = lastMove == nil && now - startedAt! <= config.startWindow
         if !first, let last = lastMove, now - last < config.dwell { return .stay }
-        guard let to = best(live, excluding: nil, now: now, stable: !first), to != current, let there = live[to],
+        guard let to = best(live, excluding: nil, now: now, stable: !first, requireHealthy: true), to != current, let there = live[to],
               better(there, than: here) else { return .stay }
         return move(to, .faster, now: now, leaving: false)
     }
@@ -108,7 +125,7 @@ public struct PathPolicy: Sendable {
         if bad { leftBad.insert(current) }
         leftBad.remove(to)
         current = to
-        lastMove = now
+        if now.isFinite { lastMove = now }
         degradedSince = nil
         return .move(to: to, reason: reason)
     }
@@ -119,10 +136,10 @@ public struct PathPolicy: Sendable {
         return false
     }
 
-    /// Whether a route may be moved to now: healthy (the relay: open), healthy for the stable window when that's asked
-    /// or when it was left as bad.
-    private func qualifies(_ id: String, _ s: LinkStats, now: Double, stable: Bool) -> Bool {
-        if id == relay { return true }
+    /// Whether a route may be moved to now: healthy (or the relay as last-resort fallback when `!requireHealthy`),
+    /// and healthy for `stableWindow` when stability is required or it was previously left as bad.
+    private func qualifies(_ id: String, _ s: LinkStats, now: Double, stable: Bool, requireHealthy: Bool) -> Bool {
+        if id == relay, !requireHealthy { return true }
         guard s.healthy, let since = healthySince[id] else { return false }
         if stable || leftBad.contains(id) { return now - since >= config.stableWindow }
         return true
@@ -130,8 +147,8 @@ public struct PathPolicy: Sendable {
 
     /// The best qualifying route: within `tieMs` of the fastest measured route, the preferred kind wins (then lower
     /// minimum round trip, then route id). Unmeasured routes rank after measured ones, by kind order then route id.
-    private func best(_ routes: [String: LinkStats], excluding: String?, now: Double, stable: Bool) -> String? {
-        let candidates = routes.filter { $0.key != excluding && qualifies($0.key, $0.value, now: now, stable: stable) }
+    private func best(_ routes: [String: LinkStats], excluding: String?, now: Double, stable: Bool, requireHealthy: Bool) -> String? {
+        let candidates = routes.filter { $0.key != excluding && qualifies($0.key, $0.value, now: now, stable: stable, requireHealthy: requireHealthy) }
         guard !candidates.isEmpty else { return nil }
         let measured = candidates.compactMap { id, stats -> (id: String, stats: LinkStats, ms: Double)? in
             guard let ms = stats.minRttMs, ms.isFinite, ms >= 0 else { return nil }
