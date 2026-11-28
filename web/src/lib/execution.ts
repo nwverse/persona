@@ -168,7 +168,7 @@ export type SpecPick = ModelPick & { runtime?: string; channel?: string };
 
 /** GET /execution/catalog (?machine= adds every alias's verdict on that computer). */
 export const executionCatalog = (machine?: string) =>
-  api<ExecutionCatalog>("/execution/catalog", machine ? { query: { machine } } : {});
+  api<ExecutionCatalog>(`/execution/catalog${machine ? `?machine=${enc(machine)}` : ""}`);
 
 /** POST /execution/validate: one combination's verdict, its text in the request's language. */
 export const validateExecution = (spec: ExecutionSpec, machine?: string) =>
@@ -184,9 +184,8 @@ export const saveExecutionChannel = (config: ChannelConfig, revision?: number) =
   });
 
 export const deleteExecutionChannel = (name: string, revision?: number) =>
-  api<{ ok: boolean; revision: number }>(`/execution/channels/${enc(name)}`, {
+  api<{ ok: boolean; revision: number }>(`/execution/channels/${enc(name)}${revision !== undefined ? `?revision=${enc(String(revision))}` : ""}`, {
     method: "DELETE",
-    ...(revision !== undefined ? { query: { revision: String(revision) } } : {}),
   });
 
 /** POST /execution/channels/rollback: `revision` none is the newest point. */
