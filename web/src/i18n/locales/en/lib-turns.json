@@ -49,6 +49,8 @@
   "persona_computer_run": "Use computer",
   "persona_browser_run": "Use browser",
   "persona_browser_look": "Look at browser",
+  "persona_cloud_hosts": "Look at cloud servers",
+  "persona_cloud_host_action": "Act on cloud server",
   "persona_secret_run": "Run with password",
   "persona_phone": "iPhone",
   "persona_mail": "Mail"

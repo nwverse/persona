@@ -1,6 +1,6 @@
 package conformance_test
 
-// The plugin protocol's schemas (schema/extension/connector.schema.json, channel.schema.json, kb.schema.json, todos.schema.json, leaders.schema.json, models.schema.json, repository.schema.json, offload.schema.json) describe what the server's
+// The plugin protocol's schemas (schema/extension/connector.schema.json, channel.schema.json, kb.schema.json, todos.schema.json, leaders.schema.json, models.schema.json, repository.schema.json, offload.schema.json, cloud.schema.json) describe what the server's
 // own code sends and reads: every call and event they list is held to the Go types the hub and connector/serve put on
 // the wire, field by field, and every connector method the server knows is in them. The schema is what an extension
 // is written from; this keeps it from drifting from the code.
@@ -187,6 +187,17 @@ var goTypes = map[string]any{
 	"OffloadJobParams":       wire.OffloadJobParams{},
 	"OffloadJob":             wire.OffloadJob{},
 
+	// The manager calls a cloud_hosts provider with the generated wire types and reads its answers into them
+	// (extmgr/extension_cloud.go), re-checking each answer before it is used.
+	"CloudInstancesParams": wire.CloudInstancesParams{},
+	"CloudInstanceList":    wire.CloudInstanceList{},
+	"CloudInstanceParams":  wire.CloudInstanceParams{},
+	"CloudInstance":        wire.CloudInstance{},
+	"CloudActionParams":    wire.CloudActionParams{},
+	"CloudActionResult":    wire.CloudActionResult{},
+	"CloudSnapshotsParams": wire.CloudSnapshotsParams{},
+	"CloudSnapshotList":    wire.CloudSnapshotList{},
+
 	// The manager asks a routine_facts contribution with the generated wire params and reads its answer into the
 	// generated result (extmgr/routine_contributions.go), re-checking it before the routine uses it.
 	"RoutineFactsParams": wire.RoutineFactsParams{},
@@ -293,6 +304,10 @@ var routineCalls = []string{"routine_facts.collect"}
 var offloadCalls = []string{ext.OffloadNamespace + ".inventory", ext.OffloadNamespace + ".run", ext.OffloadNamespace + ".job",
 	ext.OffloadNamespace + ".cancel"}
 
+// The calls the manager makes to a cloud_hosts contribution's program (cloud.schema.json).
+var cloudCalls = []string{ext.CloudNamespace + ".instances", ext.CloudNamespace + ".instance", ext.CloudNamespace + ".action",
+	ext.CloudNamespace + ".snapshots"}
+
 var storageCalls = []string{"storage.request", "storage.get", "storage.list", "storage.transaction",
 	"storage.queue.list", "storage.queue.enqueue", "storage.queue.claim", "storage.queue.renew", "storage.queue.ack", "storage.queue.forget", "storage.queue.retry",
 	"storage.blob.create", "storage.blob.write", "storage.blob.finish", "storage.blob.delete", "storage.blob.read"}
@@ -315,6 +330,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	want = append(want, storageCalls...)
 	want = append(want, repoCalls...)
 	want = append(want, offloadCalls...)
+	want = append(want, cloudCalls...)
 	want = append(want, routineCalls...)
 	for _, name := range want {
 		if _, ok := wire.Calls[name]; !ok {
@@ -323,7 +339,7 @@ func TestPluginSchemasListTheServersCalls(t *testing.T) {
 	}
 	for name := range wire.Calls {
 		if (strings.HasPrefix(name, serve.Namespace+".") || strings.HasPrefix(name, channel.Namespace+".") ||
-			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "transcription.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.") || strings.HasPrefix(name, ext.RepositoryNamespace+".") || strings.HasPrefix(name, ext.OffloadNamespace+".") || strings.HasPrefix(name, "routine_facts.")) &&
+			strings.HasPrefix(name, "kb.") || strings.HasPrefix(name, "event.kb.") || strings.HasPrefix(name, "event.todo.") || strings.HasPrefix(name, "event.leader.") || strings.HasPrefix(name, "sent.") || strings.HasPrefix(name, "model.") || strings.HasPrefix(name, "transcription.") || strings.HasPrefix(name, "assistant.") || strings.HasPrefix(name, "storage.") || strings.HasPrefix(name, ext.RepositoryNamespace+".") || strings.HasPrefix(name, ext.OffloadNamespace+".") || strings.HasPrefix(name, ext.CloudNamespace+".") || strings.HasPrefix(name, "routine_facts.")) &&
 			!slices.Contains(want, name) {
 			t.Errorf("%s: schema/extension lists it, the server has no such call", name)
 		}

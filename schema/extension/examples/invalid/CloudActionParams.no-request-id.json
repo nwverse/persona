@@ -1,0 +1,9 @@
+{
+  "contribution": "main",
+  "locale": "en",
+  "instance": {
+    "account": "lab",
+    "id": "i-0a1b2c3d"
+  },
+  "action": "start"
+}

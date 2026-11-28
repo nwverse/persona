@@ -1,0 +1,18 @@
+{
+  "bindings": [
+    {
+      "machine_id": "m1",
+      "extension": "example-hosts",
+      "provider": "main",
+      "account": "lab",
+      "instance": "i-0a1b2c3d",
+      "bound_at": "2026-11-20T08:00:00Z",
+      "provider_name": "Example Hosts",
+      "vendor": "examplehosts",
+      "display_name": "build-box",
+      "state": "preempted",
+      "public_ip": "203.0.113.80",
+      "seen_at": "2026-11-27T08:00:00Z"
+    }
+  ]
+}

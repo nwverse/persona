@@ -1,0 +1,72 @@
+{
+  "instances": [
+    {
+      "account": "lab",
+      "id": "i-0a1b2c3d",
+      "display_name": "build-box",
+      "state": "preempted",
+      "state_detail": "The vendor took this spot instance back.",
+      "region": "us-central1",
+      "zone": "us-central1-a",
+      "private_ips": [
+        "198.51.100.12"
+      ],
+      "spec": {
+        "size": "e2-standard-4",
+        "cpu": 4,
+        "memory_mb": 16384,
+        "disk_gb": 100,
+        "arch": "x86_64",
+        "os": "Debian 13"
+      },
+      "lifecycle": {
+        "spot": true
+      },
+      "console_url": "https://console.examplehosts.test/instances/i-0a1b2c3d",
+      "actions": [
+        "start",
+        "sync_ip",
+        "snapshot_list",
+        "snapshot_create",
+        "console"
+      ],
+      "observed_at": "2026-11-27T08:00:00Z"
+    },
+    {
+      "account": "panel-1",
+      "id": "vps-7781",
+      "display_name": "tokyo-1",
+      "state": "running",
+      "region": "jp-tokyo",
+      "public_ips": [
+        "203.0.113.24",
+        "2001:db8::24"
+      ],
+      "spec": {
+        "cpu": 1,
+        "memory_mb": 1024,
+        "disk_gb": 20
+      },
+      "lifecycle": {
+        "expires_at": "2027-01-15T00:00:00Z",
+        "renews_at": "2027-01-15T00:00:00Z"
+      },
+      "console_url": "https://panel.examplehosts.test/vps/7781",
+      "actions": [
+        "stop",
+        "reboot",
+        "hard_reset",
+        "force_stop",
+        "sync_ip",
+        "console"
+      ],
+      "custom_actions": [
+        "renew",
+        "probe"
+      ],
+      "observed_at": "2026-11-27T08:00:00Z"
+    }
+  ],
+  "partial": true,
+  "detail": "The account archive could not be read."
+}

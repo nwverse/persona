@@ -1,0 +1,5 @@
+{
+  "error": "Type the instance's id to confirm.",
+  "code": "acknowledgement_required",
+  "safety": "destructive"
+}

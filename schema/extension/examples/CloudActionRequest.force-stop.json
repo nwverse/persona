@@ -1,0 +1,5 @@
+{
+  "action": "force_stop",
+  "confirm": true,
+  "acknowledge": "vps-7781"
+}

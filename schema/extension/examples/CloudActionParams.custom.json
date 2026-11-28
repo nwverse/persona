@@ -1,0 +1,11 @@
+{
+  "contribution": "main",
+  "locale": "ja",
+  "instance": {
+    "account": "panel-1",
+    "id": "vps-7781"
+  },
+  "action": "custom",
+  "custom": "renew",
+  "request_id": "1f3a9c2b11d4e5f6a7b8c9d0"
+}

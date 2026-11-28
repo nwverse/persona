@@ -48,6 +48,8 @@
   "persona_computer_run": "操作电脑",
   "persona_browser_run": "操作浏览器",
   "persona_browser_look": "查看浏览器",
+  "persona_cloud_hosts": "查看云服务器",
+  "persona_cloud_host_action": "操作云服务器",
   "persona_secret_run": "使用密码运行",
   "persona_phone": "iPhone",
   "persona_mail": "邮件"

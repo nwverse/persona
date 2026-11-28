@@ -116,6 +116,10 @@ func TestMain(m *testing.M) {
 		serveOffloadExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "cloud" { // extension_cloud_test.go
+		serveCloudExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "repos" {
 		serveRepositoryProviderExtensionForTest()
 		return

@@ -7,7 +7,7 @@
 // module's page of its own (core/module-host.ts `standalonePages`): while that module is off there is no button.
 import { MoveToManager } from "../ManagerParts";
 import { hostedManagersForMachine, offlineManagerOf, useRoster } from "../../lib/managers";
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { api, ApiError, enc, errorText, isAbort } from "../../lib/api";
 import { ago, byAttention, stateOf } from "../../lib/format";
 import { openUsageMap } from "../../lib/usage-map-link";
@@ -88,6 +88,10 @@ const MachineDeploy = lazyOverlay<MachineDeployProps & { onClose: () => void }>(
     return <Deploy machine={props.machine} className={props.className} onDetails={props.onDetails} hostedManagers={props.hostedManagers} />;
   }),
 );
+
+// The computer's cloud server (docs/design/machine-cloud-ops.md "The web"): its own chunk, drawn on the management view;
+// it draws nothing without a binding or an enabled provider.
+const CloudSection = lazy(() => import("./CloudSection").then((m) => ({ default: m.CloudSection })));
 
 // RenameMachine edits what the hub calls the computer, in place of its title row: the hub writes hub.json and every
 // app and the computer's Persona Link follow (a machines event), with no restart or reconnect. Empty is its id again.
@@ -529,6 +533,10 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
           />
           <HostedManagersList managers={hostedManagers} nodeVersion={m.node_version} className="border-t border-line px-4 py-3" />
         </section>
+
+        <Suspense fallback={null}>
+          <CloudSection mid={mid} machineName={m.name} heading={(title, right) => <Heading title={title} right={right} />} />
+        </Suspense>
 
         {m.computer && <ComputerSection mid={mid} computer={m.computer} online={online} manager={m.manager} />}
         {m.browser && <BrowserSection mid={mid} browser={m.browser} online={online} />}

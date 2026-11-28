@@ -1,0 +1,54 @@
+{
+  "manifest_version": 1,
+  "id": "example-hosts",
+  "name": "Example Hosts",
+  "version": "1.0.0",
+  "description": "Lists the instances of your Example Hosts accounts, starts, stops and restarts them, snapshots them and renews them.",
+  "engines": {
+    "persona": ">=202611270000",
+    "extension_protocol": 1
+  },
+  "runtime": {
+    "command": {
+      "linux-amd64": "bin/example-hosts-linux-amd64",
+      "darwin-arm64": "bin/example-hosts-darwin-arm64"
+    }
+  },
+  "activation_events": [
+    "on_startup"
+  ],
+  "contributes": {
+    "cloud_hosts": [
+      {
+        "id": "main",
+        "name": "Example Hosts",
+        "vendor": "examplehosts",
+        "custom_actions": [
+          {
+            "id": "renew",
+            "title": "Renew",
+            "safety": "confirm",
+            "confirm": "Renew this server for another term? Your account is charged."
+          },
+          {
+            "id": "probe",
+            "title": "Keep-alive check",
+            "safety": "read"
+          }
+        ]
+      }
+    ]
+  },
+  "secrets": [
+    {
+      "name": "api_key",
+      "title": "API key",
+      "required": true
+    }
+  ],
+  "permissions": {
+    "network": [
+      "api.examplehosts.test"
+    ]
+  }
+}

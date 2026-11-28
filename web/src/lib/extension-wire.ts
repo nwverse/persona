@@ -372,6 +372,7 @@ export interface Contributes {
   text_lookup?: TextLookupItem[];
   memory_sources?: MemorySourceItem[];
   disk_offload?: DiskOffloadItem[];
+  cloud_hosts?: CloudHostItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -652,6 +653,66 @@ export interface DiskOffloadItem {
   kinds?: DiskOffloadKind[];
   /** Items it holds can be brought back (Restore on the map's cloud side). */
   restore?: boolean;
+}
+
+/**
+ * A provider of cloud instances and hosted servers (docs/design/machine-cloud-ops.md): it lists the instances of the
+ * accounts the user set it up with, says how each is, and starts, stops and restarts them, reads their addresses
+ * back, snapshots them and opens their console, for the computers' page and the assistant. The manager asks the
+ * program (cloud.instances, cloud.instance, cloud.action, cloud.snapshots; cloud.schema.json), a write only after its
+ * safety gate passed. The vendor's credentials are the extension's own secrets. Needs the program to speak the
+ * protocol.
+ */
+export interface CloudHostItem {
+  id: CloudProviderID;
+  /** What the computers' page calls the provider (Example Cloud). Not only spaces, no control characters. */
+  name: string;
+  /**
+   * A short lowercase id of whose machines these are (aws, gcp, oci, a panel's own name): the badge beside a bound
+   * computer. Several contributions may share one.
+   */
+  vendor: string;
+  /**
+   * Actions of its own beside the standard ones (renew, a keep-alive probe), each id once. An instance offers one by
+   * naming its id in custom_actions.
+   */
+  custom_actions?: CloudCustomAction[];
+}
+
+/**
+ * A provider's own action on an instance. safety is the gate the hub holds it to; confirm is what the confirmation
+ * asks, in a sentence (needed unless safety is read).
+ */
+export interface CloudCustomAction {
+  id: CloudCustomActionID;
+  /** The button's words (Renew). Not only spaces, no control characters. */
+  title: string;
+  safety: CloudSafety;
+  /** The confirmation's sentence. Not only spaces, no control characters. */
+  confirm?: string;
+}
+
+/**
+ * The gate an action on a cloud instance passes before a program hears of it: read (none: it changes nothing),
+ * confirm (a person agreed to exactly this action), destructive (a person agreed and acknowledged the instance by its
+ * id: it may lose what is unsaved).
+ */
+export type CloudSafety = "read" | "confirm" | "destructive";
+export const CLOUD_SAFETIES: readonly CloudSafety[] = ["read", "confirm", "destructive"];
+
+/** A CloudSafety this app does not know, kept as it came. */
+export interface UnknownCloudSafety {
+  unknown: string;
+}
+
+/** A raw CloudSafety: one this app knows, or UnknownCloudSafety with the raw value. */
+export function parseCloudSafety(raw: string): CloudSafety | UnknownCloudSafety {
+  const known = CLOUD_SAFETIES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudSafety = { unknown: raw };
+  return unknown;
 }
 
 /**
@@ -4570,4 +4631,575 @@ export interface OffloadError {
   tool?: OffloadTool;
   detail?: string;
   items?: OffloadRunItem[];
+}
+
+/**
+ * A provider's own name for a set of credentials, a project or a panel login: opaque to the hub, never a secret.
+ */
+export type CloudAccountID = string & { readonly __brand: "CloudAccountID" };
+/** A CloudAccountID from its raw string. */
+export function cloudAccountID(raw: string): CloudAccountID {
+  return raw as CloudAccountID;
+}
+
+/**
+ * An instance's id at its vendor: opaque to the hub, kept as given.
+ */
+export type CloudInstanceID = string & { readonly __brand: "CloudInstanceID" };
+/** A CloudInstanceID from its raw string. */
+export function cloudInstanceID(raw: string): CloudInstanceID {
+  return raw as CloudInstanceID;
+}
+
+/**
+ * A snapshot's id at its vendor.
+ */
+export type CloudSnapshotID = string & { readonly __brand: "CloudSnapshotID" };
+/** A CloudSnapshotID from its raw string. */
+export function cloudSnapshotID(raw: string): CloudSnapshotID {
+  return raw as CloudSnapshotID;
+}
+
+/**
+ * One request to act, the same for its retries.
+ */
+export type CloudRequestID = string & { readonly __brand: "CloudRequestID" };
+/** A CloudRequestID from its raw string. */
+export function cloudRequestID(raw: string): CloudRequestID {
+  return raw as CloudRequestID;
+}
+
+/**
+ * A computer's id at the hub.
+ */
+export type CloudMachineID = string & { readonly __brand: "CloudMachineID" };
+/** A CloudMachineID from its raw string. */
+export function cloudMachineID(raw: string): CloudMachineID {
+  return raw as CloudMachineID;
+}
+
+/**
+ * A cloud_hosts contribution's id (manifest.schema.json ID).
+ */
+export type CloudProviderID = string & { readonly __brand: "CloudProviderID" };
+/** A CloudProviderID from its raw string. */
+export function cloudProviderID(raw: string): CloudProviderID {
+  return raw as CloudProviderID;
+}
+
+/**
+ * A custom action's id, as the manifest declares it (manifest.schema.json ID).
+ */
+export type CloudCustomActionID = string & { readonly __brand: "CloudCustomActionID" };
+/** A CloudCustomActionID from its raw string. */
+export function cloudCustomActionID(raw: string): CloudCustomActionID {
+  return raw as CloudCustomActionID;
+}
+
+/**
+ * One line for people, in the reader's language: why something failed or was refused. Free text, not a closed set.
+ */
+export type CloudMessage = string;
+
+/**
+ * error.code a provider answers besides the base ErrorCode: not_found (no such instance or account, or the
+ * credentials cannot see it), not_signed_in (credentials are missing, expired or refused: the user sets them in the
+ * extension's settings), unsupported (this instance has no such action), invalid_state (the action does not apply to
+ * the state the instance is in, such as start on a running one), rate_limited (the vendor's API asks to slow down),
+ * capacity (the vendor has no capacity or quota for it now, such as a spot instance that cannot be placed), refused
+ * (the vendor said no: say why in message), failed (anything else, say why in message). The manager shows the message
+ * on one line, clipped.
+ */
+export type CloudErrorCode = "not_found" | "not_signed_in" | "unsupported" | "invalid_state" | "rate_limited" | "capacity" | "refused" | "failed";
+export const CLOUD_ERROR_CODES: readonly CloudErrorCode[] = ["not_found", "not_signed_in", "unsupported", "invalid_state", "rate_limited", "capacity", "refused", "failed"];
+
+/** A CloudErrorCode this app does not know, kept as it came. */
+export interface UnknownCloudErrorCode {
+  unknown: string;
+}
+
+/** A raw CloudErrorCode: one this app knows, or UnknownCloudErrorCode with the raw value. */
+export function parseCloudErrorCode(raw: string): CloudErrorCode | UnknownCloudErrorCode {
+  const known = CLOUD_ERROR_CODES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudErrorCode = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * An instance's state in the words every vendor's are mapped to: running; stopped (off, and can be started);
+ * starting; stopping; rebooting; preempted (a spot instance the vendor took back: off, and start may bring it back);
+ * terminated (gone or being deleted: nothing acts on it); unknown (the provider cannot say).
+ */
+export type CloudInstanceState = "running" | "stopped" | "starting" | "stopping" | "rebooting" | "preempted" | "terminated" | "unknown";
+export const CLOUD_INSTANCE_STATES: readonly CloudInstanceState[] = ["running", "stopped", "starting", "stopping", "rebooting", "preempted", "terminated", "unknown"];
+
+/** A CloudInstanceState this app does not know, kept as it came. */
+export interface UnknownCloudInstanceState {
+  unknown: string;
+}
+
+/** A raw CloudInstanceState: one this app knows, or UnknownCloudInstanceState with the raw value. */
+export function parseCloudInstanceState(raw: string): CloudInstanceState | UnknownCloudInstanceState {
+  const known = CLOUD_INSTANCE_STATES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudInstanceState = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * What can be asked of an instance. Power: start, stop (a graceful shutdown), reboot (a graceful restart), hard_reset
+ * (reset without shutting the system down), force_stop (power off without shutting it down). Operations: sync_ip
+ * (read its addresses back from the vendor now), snapshot_list (its snapshots, asked with cloud.snapshots, never
+ * cloud.action), snapshot_create, console (a link to its page or console at the vendor), custom (one of the
+ * manifest's custom_actions, named by its id). The safety level of each is the hub's (manifest.schema.json
+ * CloudSafety): sync_ip, snapshot_list and console read; start, stop, reboot and snapshot_create confirm; hard_reset
+ * and force_stop destructive; a custom action's is the manifest's.
+ */
+export type CloudActionKind = "start" | "stop" | "reboot" | "hard_reset" | "force_stop" | "sync_ip" | "snapshot_list" | "snapshot_create" | "console" | "custom";
+export const CLOUD_ACTION_KINDS: readonly CloudActionKind[] = ["start", "stop", "reboot", "hard_reset", "force_stop", "sync_ip", "snapshot_list", "snapshot_create", "console", "custom"];
+
+/** A CloudActionKind this app does not know, kept as it came. */
+export interface UnknownCloudActionKind {
+  unknown: string;
+}
+
+/** A raw CloudActionKind: one this app knows, or UnknownCloudActionKind with the raw value. */
+export function parseCloudActionKind(raw: string): CloudActionKind | UnknownCloudActionKind {
+  const known = CLOUD_ACTION_KINDS.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudActionKind = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * cloud.action's answer: done (it has taken effect: instance, snapshot or url say what is there now), accepted (the
+ * vendor took the request and the instance is on its way: read its state to follow), refused (nothing happened;
+ * message says why).
+ */
+export type CloudActionStatus = "done" | "accepted" | "refused";
+export const CLOUD_ACTION_STATUSES: readonly CloudActionStatus[] = ["done", "accepted", "refused"];
+
+/** A CloudActionStatus this app does not know, kept as it came. */
+export interface UnknownCloudActionStatus {
+  unknown: string;
+}
+
+/** A raw CloudActionStatus: one this app knows, or UnknownCloudActionStatus with the raw value. */
+export function parseCloudActionStatus(raw: string): CloudActionStatus | UnknownCloudActionStatus {
+  const known = CLOUD_ACTION_STATUSES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudActionStatus = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * A snapshot: creating, ready, failed or deleting.
+ */
+export type CloudSnapshotState = "creating" | "ready" | "failed" | "deleting";
+export const CLOUD_SNAPSHOT_STATES: readonly CloudSnapshotState[] = ["creating", "ready", "failed", "deleting"];
+
+/** A CloudSnapshotState this app does not know, kept as it came. */
+export interface UnknownCloudSnapshotState {
+  unknown: string;
+}
+
+/** A raw CloudSnapshotState: one this app knows, or UnknownCloudSnapshotState with the raw value. */
+export function parseCloudSnapshotState(raw: string): CloudSnapshotState | UnknownCloudSnapshotState {
+  const known = CLOUD_SNAPSHOT_STATES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudSnapshotState = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * One instance of a provider: the account that holds it (the provider's own name for a set of credentials, a project
+ * or a panel login, never a secret) and its id at the vendor. Both are opaque to the hub and kept as given.
+ */
+export interface CloudInstanceRef {
+  account: CloudAccountID;
+  id: CloudInstanceID;
+}
+
+/**
+ * An instance's size. size is the vendor's name for it (its instance type, machine type or shape); cpu its virtual
+ * CPUs (a burstable share may be a fraction); memory_mb and disk_gb what it has.
+ */
+export interface CloudSpec {
+  size?: string;
+  cpu?: number;
+  memory_mb?: number;
+  disk_gb?: number;
+  arch?: string;
+  os?: string;
+}
+
+/**
+ * What ends or interrupts an instance. spot: the vendor may take it back at any time (spot, preemptible). expires_at:
+ * when what was paid for ends. renews_at: when it is charged or renewed next. keepalive_at: by when the account has
+ * to show activity to keep it (a free tier's idle rule). auto_renew: it renews by itself.
+ */
+export interface CloudLifecycle {
+  spot?: boolean;
+  expires_at?: string;
+  renews_at?: string;
+  keepalive_at?: string;
+  auto_renew?: boolean;
+}
+
+/**
+ * One instance as its provider reads it. account and id name it (CloudInstanceRef); display_name is what people call
+ * it. public_ips and private_ips are plain IPv4 or IPv6 addresses, the one to reach it by first. console_url is an
+ * https address of its page at the vendor, without credentials. actions are what can be asked of this instance now
+ * (never custom; snapshot_list means cloud.snapshots answers), custom_actions the manifest's custom actions that
+ * apply to it. observed_at is when the provider read it from the vendor. state_detail says more about the state in
+ * the caller's language, one line.
+ */
+export interface CloudInstance {
+  account: CloudAccountID;
+  id: CloudInstanceID;
+  display_name?: string;
+  state: CloudInstanceState;
+  state_detail?: string;
+  region?: string;
+  zone?: string;
+  public_ips?: string[];
+  private_ips?: string[];
+  spec?: CloudSpec;
+  lifecycle?: CloudLifecycle;
+  console_url?: string;
+  actions?: CloudActionKind[];
+  custom_actions?: CloudCustomActionID[];
+  observed_at?: string;
+}
+
+/**
+ * cloud.instances: every instance of every account the provider is set up with. refresh asks it not to answer from
+ * its own cache.
+ */
+export interface CloudInstancesParams {
+  contribution: string;
+  locale: string;
+  refresh?: boolean;
+}
+
+/**
+ * The provider's instances, at most 500. partial when the list may be incomplete (an account could not be read:
+ * detail says which, in the caller's language). instances may be left out when there are none.
+ */
+export interface CloudInstanceList {
+  instances?: CloudInstance[];
+  partial?: boolean;
+  detail?: string;
+}
+
+/**
+ * cloud.instance: how one instance is now. refresh asks the vendor rather than the provider's cache. Answered with
+ * the CloudInstance of that account and id, or not_found.
+ */
+export interface CloudInstanceParams {
+  contribution: string;
+  locale: string;
+  instance: CloudInstanceRef;
+  refresh?: boolean;
+}
+
+/**
+ * cloud.action: act on one instance. action is never snapshot_list; custom carries the manifest's custom action id in
+ * custom. name is a new snapshot's name (snapshot_create). The gate of the action's safety level has passed before
+ * the program hears of it. request_id is the same for a retry of the same request: a program that already did it
+ * answers what it answered.
+ */
+export interface CloudActionParams {
+  contribution: string;
+  locale: string;
+  instance: CloudInstanceRef;
+  action: CloudActionKind;
+  custom?: CloudCustomActionID;
+  name?: string;
+  request_id: CloudRequestID;
+}
+
+/**
+ * One snapshot of an instance.
+ */
+export interface CloudSnapshot {
+  id: CloudSnapshotID;
+  name?: string;
+  state: CloudSnapshotState;
+  created_at?: string;
+  size_gb?: number;
+}
+
+/**
+ * cloud.action's answer (CloudActionStatus). instance is the instance after the request when the program knows it
+ * (sync_ip always answers it); snapshot the one snapshot_create made; url what console opens: an https address, which
+ * may be signed and short-lived (expires_at). message is one line for people in the caller's language: why it was
+ * refused, or what a custom action found.
+ */
+export interface CloudActionResult {
+  status: CloudActionStatus;
+  instance?: CloudInstance;
+  snapshot?: CloudSnapshot;
+  url?: string;
+  expires_at?: string;
+  message?: string;
+}
+
+/**
+ * cloud.snapshots: one instance's snapshots, newest first. Asked only of an instance whose actions name
+ * snapshot_list.
+ */
+export interface CloudSnapshotsParams {
+  contribution: string;
+  locale: string;
+  instance: CloudInstanceRef;
+}
+
+/**
+ * An instance's snapshots, at most 200. snapshots may be left out when there are none; the manager's answer to the
+ * apps always has it.
+ */
+export interface CloudSnapshotList {
+  snapshots?: CloudSnapshot[];
+}
+
+/**
+ * One enabled cloud_hosts contribution, as the manager lists it for the apps.
+ */
+export interface CloudProvider {
+  extension: string;
+  id: CloudProviderID;
+  name: string;
+  vendor: string;
+}
+
+/**
+ * GET /api/v1/extensions/-/cloud: the enabled providers. No program is asked.
+ */
+export interface CloudProviders {
+  providers: CloudProvider[];
+}
+
+/**
+ * One thing the apps can ask of a host, with the gate the hub holds it to (safety). id, title and confirm_text are a
+ * custom action's, from the manifest.
+ */
+export interface CloudHostAction {
+  action: CloudActionKind;
+  id?: CloudCustomActionID;
+  title?: string;
+  safety: CloudSafety;
+  confirm_text?: string;
+}
+
+/**
+ * One instance as the manager gives it to the apps: its provider (extension, provider, provider_name, vendor), the
+ * instance as the program answered it and the hub re-checked it, the actions it takes with their safety levels, and
+ * machine_id when a computer is bound to it.
+ */
+export interface CloudHost {
+  extension: string;
+  provider: CloudProviderID;
+  provider_name: string;
+  vendor: string;
+  instance: CloudInstance;
+  actions: CloudHostAction[];
+  machine_id?: CloudMachineID;
+}
+
+/**
+ * A provider whose instances could not be listed: code is a CloudError code, error says why in the reader's language.
+ */
+export interface CloudProviderProblem {
+  extension: string;
+  provider: CloudProviderID;
+  provider_name: string;
+  code: string;
+  error: CloudMessage;
+}
+
+/**
+ * GET /api/v1/extensions/-/cloud/instances: every enabled provider's instances together, the bound ones naming their
+ * computer. A provider that failed is in problems and the others' instances are still listed; partial when a provider
+ * said its own list may be incomplete.
+ */
+export interface CloudHosts {
+  hosts: CloudHost[];
+  problems: CloudProviderProblem[];
+  partial?: boolean;
+}
+
+/**
+ * A computer bound to an instance: machine_id ↔ (extension, provider, account, instance). The rest is what the hub
+ * last read of it, kept so the computers' list draws a badge without asking a program: provider_name, vendor,
+ * display_name, state and public_ip as of seen_at.
+ */
+export interface CloudBinding {
+  machine_id: CloudMachineID;
+  extension: string;
+  provider: CloudProviderID;
+  account: CloudAccountID;
+  instance: CloudInstanceID;
+  bound_at: string;
+  provider_name?: string;
+  vendor?: string;
+  display_name?: string;
+  state?: CloudInstanceState;
+  public_ip?: string;
+  seen_at?: string;
+}
+
+/**
+ * GET /api/v1/extensions/-/cloud/bindings: every binding, by machine id. No program is asked.
+ */
+export interface CloudBindings {
+  bindings: CloudBinding[];
+}
+
+/**
+ * PUT /api/v1/machines/{mid}/cloud: bind the computer to this instance (replacing its binding). The instance must be
+ * one the provider answers now, and bound to no other computer.
+ */
+export interface CloudBindRequest {
+  extension: string;
+  provider: CloudProviderID;
+  account: CloudAccountID;
+  instance: CloudInstanceID;
+}
+
+/**
+ * Where a start-and-reconnect is: starting (waiting for the instance to run), reconnecting (it runs: the computer's
+ * node is being connected again), done (the computer is connected), failed (error says why; the instance may still be
+ * running).
+ */
+export type CloudRecoveryPhase = "starting" | "reconnecting" | "done" | "failed";
+export const CLOUD_RECOVERY_PHASES: readonly CloudRecoveryPhase[] = ["starting", "reconnecting", "done", "failed"];
+
+/** A CloudRecoveryPhase this app does not know, kept as it came. */
+export interface UnknownCloudRecoveryPhase {
+  unknown: string;
+}
+
+/** A raw CloudRecoveryPhase: one this app knows, or UnknownCloudRecoveryPhase with the raw value. */
+export function parseCloudRecoveryPhase(raw: string): CloudRecoveryPhase | UnknownCloudRecoveryPhase {
+  const known = CLOUD_RECOVERY_PHASES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownCloudRecoveryPhase = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * A start-and-reconnect the manager is running or last ran for a computer. It lives in the manager's memory: after
+ * its restart there is none, and the instance's state and the computer's own Reconnect say the rest. ip_changed: the
+ * instance came back with another public address than the binding last had.
+ */
+export interface CloudRecovery {
+  phase: CloudRecoveryPhase;
+  started_at: string;
+  error?: CloudMessage;
+  ip_changed?: boolean;
+}
+
+/**
+ * GET /api/v1/machines/{mid}/cloud: the computer's binding and, when the provider answered, its host now. bound
+ * false: no binding, nothing else. problem: the provider could not be asked or failed (the binding still stands),
+ * with a CloudError code. recovery: a start-and-reconnect in progress or just ended.
+ */
+export interface CloudMachine {
+  bound: boolean;
+  binding?: CloudBinding;
+  host?: CloudHost;
+  problem?: CloudProviderProblem;
+  recovery?: CloudRecovery;
+}
+
+/**
+ * POST /api/v1/machines/{mid}/cloud/actions, an app's request on the instance the computer is bound to. id names a
+ * custom action. confirm: a person agreed to exactly this action (needed for safety confirm and destructive, else
+ * confirmation_required). acknowledge: the instance's id typed or shown back (needed for destructive, else
+ * acknowledgement_required). name: a new snapshot's name. reconnect (start only): once the instance runs, connect the
+ * computer's node again (CloudRecovery).
+ */
+export interface CloudActionRequest {
+  action: CloudActionKind;
+  id?: CloudCustomActionID;
+  confirm?: boolean;
+  acknowledge?: string;
+  name?: string;
+  reconnect?: boolean;
+}
+
+/**
+ * The actions route's answer: status done or accepted (a refusal is a CloudError), the host after it when the program
+ * said, the snapshot it made, the url to open (console), the provider's one line (message) and the
+ * start-and-reconnect it began (recovery).
+ */
+export interface CloudActionOutcome {
+  status: CloudActionStatus;
+  host?: CloudHost;
+  snapshot?: CloudSnapshot;
+  url?: string;
+  expires_at?: string;
+  message?: string;
+  recovery?: CloudRecovery;
+}
+
+/**
+ * GET /api/v1/machines/{mid}/cloud/snapshots: the bound instance's snapshots, newest first.
+ */
+export interface CloudSnapshots {
+  snapshots: CloudSnapshot[];
+}
+
+/**
+ * One audited change: a bind, an unbind or an action asked of an instance, with who asked (actor: a device, or the
+ * assistant for a tool call a person approved) and how it ended (outcome: done, accepted, refused, failed). Never a
+ * credential, an address or a provider's words.
+ */
+export interface CloudAuditEntry {
+  at: string;
+  extension: string;
+  event: string;
+  actor: string;
+  machine_id?: CloudMachineID;
+  provider?: CloudProviderID;
+  instance?: CloudInstanceID;
+  action?: string;
+  safety?: string;
+  outcome?: string;
+}
+
+/**
+ * GET /api/v1/machines/{mid}/cloud/audit: what was asked of the computer's instances, newest first.
+ */
+export interface CloudAudit {
+  audit: CloudAuditEntry[];
+}
+
+/**
+ * A cloud route's error: error in the reader's language and a code: bad_request, read_only, not_found (no such
+ * computer, provider or instance), not_bound, already_bound (machine_id: the computer that holds the instance),
+ * confirmation_required and acknowledgement_required (safety says which gate), unsupported, invalid_state,
+ * not_signed_in, rate_limited, capacity, refused, plugin_failed (detail: the provider's own words, one line),
+ * provider_off, deadline, no_database.
+ */
+export interface CloudError {
+  error: CloudMessage;
+  code: string;
+  safety?: CloudSafety;
+  detail?: string;
+  machine_id?: CloudMachineID;
 }

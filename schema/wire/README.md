@@ -35,7 +35,9 @@ The keywords below turn the open shapes the generator writes by default into clo
 plan's 2.1–2.5). Each is off unless a schema names it, so a schema without them generates the same bytes as before;
 `scripts/test/test_wiregen_typed.py` checks every one in every language against
 `scripts/test/fixtures/wiregen/typed.schema.json` and compiles the output where the toolchain is on the machine. A
-misused keyword stops the generator.
+misused keyword stops the generator. The extension schemas in `schema/extension/` take the same keywords through the
+same generator (`cloud.schema.json` and the Cloud definitions of `manifest.schema.json`, for example), which is how a
+new type passes `scripts/ci/wire_types_ratchet.py` without a baseline exception.
 
 | Keyword | Where | Generates |
 | --- | --- | --- |

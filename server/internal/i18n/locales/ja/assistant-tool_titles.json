@@ -3,6 +3,7 @@
   "computer_state": "コンピュータの閲覧",
   "browser_run": "ブラウザのスクリプト",
   "browser_fetch_download": "ブラウザのダウンロード",
+  "cloud_host_action": "クラウドサーバーの操作",
   "iphone_do": "iPhone の操作",
   "extension_ui": "拡張機能の操作",
   "persona_settings": "Persona の設定変更",

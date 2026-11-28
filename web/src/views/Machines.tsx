@@ -1,6 +1,6 @@
 // Machines: every computer's CPU / memory / network now and over the last hour (docs/server/machines.md), as Insight Cards. "Add computer"
 // (feature machines_add) adds one from here, and a computer waiting to be confirmed (trust pending) says so on its card.
-import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { storedValue, storeValue } from "../lib/compatibility";
 import { lazyPage } from "../lib/lazy-page";
 import { useScrollMemory } from "../lib/scroll-memory";
@@ -10,6 +10,8 @@ import { t as tr } from "../i18n";
 import { canAddComputer, isPending, machineErrorText, neverConnected } from "../lib/add-computer";
 import { api, enc, errorText } from "../lib/api";
 import { readinessChanged } from "../lib/readiness";
+import { bindingOf, stateWord, useCloudStore, vendorLabel } from "../lib/cloud-hosts";
+import type { CloudBinding } from "../lib/extension-wire";
 import "./machines/machine-views.css";
 import { ENGINE_SECTION_ID } from "./machines/engine-anchor";
 import { openNewAgent } from "../lib/new-agent";
@@ -25,7 +27,7 @@ import { onHubEvent, useStore } from "../lib/store";
 import { useFullAgentSessions } from "../lib/sessions";
 import { documentPage, visiblePoll } from "../lib/visible-poll";
 import type { Machine, MachineMetrics, Session } from "../lib/types";
-import { Button, cx, EASE, IconButton, Loading, toast } from "../ui/atoms";
+import { Button, cx, EASE, IconButton, Loading, Pill, toast } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Empty } from "./assistant/parts";
 import { lazyDialog, lazyOverlay } from "./LazyOverlay";
@@ -42,6 +44,10 @@ import { addTokens, formatTokens, hitRate, percentText, totalTokens, type UsageT
 
 const MachineDetail = lazyPage(() => import("./machines/MachineDetail").then(m => m.MachineDetail));
 const ResourcesPanel = lazyPage(() => import("./machines/ResourcesPanel").then((m) => m.ResourcesPanel));
+
+// The cloud servers no computer is linked to (docs/design/machine-cloud-ops.md "The web"): its own chunk, loaded only
+// once the providers list says a provider is enabled.
+const CloudUnbound = lazy(() => import("./machines/CloudUnbound").then((m) => ({ default: m.CloudUnbound })));
 
 const NOOP = () => {};
 type MachineDeployProps = ComponentProps<typeof import("./machines/MachineDeploy").MachineDeploy>;
@@ -66,6 +72,8 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const [helping, setHelping] = useState(false);
   const [answering, setAnswering] = useState("");
   const { metrics, error } = useMachineMetrics();
+  // the computers bound to a cloud instance and the enabled providers: one read of each, no program asked
+  const cloud = useCloudStore();
   // Each computer's agents. A hub that pages its Agents list pushes no sessions, so the store holds none of them: they
   // are read as the Agents list reads them (each parent once, folded; the assistant's conversations are no agents),
   // and until that read is in, a card says so rather than "No agents running".
@@ -258,11 +266,15 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 known={known}
                 launcherIssues={issues.get(m.id) ?? 0}
                 onAlert={openAlert}
+                cloud={bindingOf(cloud, m.id)}
               />
           ))}
           {/* what load counts, under the cards that show it (#12519; the apps' footnote) */}
           {view === "cards" && metrics && machines.length > 0 && (
             <p className="col-span-full px-1 text-submeta leading-relaxed text-ink-3" data-testid="load-definition">{loadDefinition()}</p>
+          )}
+          {view === "cards" && machines.length > 0 && !!cloud.providers?.length && (
+            <Suspense fallback={null}><CloudUnbound machines={machines} /></Suspense>
           )}
         </div>
       </FleetScroll>
@@ -299,6 +311,8 @@ type CardProps = {
   launcherIssues: number;
   /** Opens the alert sheet on one of its alerts. */
   onAlert: (mid: string, kind: AlertKind) => void;
+  /** The cloud instance it is bound to, as the hub last read it: a vendor badge with that state. */
+  cloud?: CloudBinding;
 };
 
 type AgentsKnown = "yes" | "loading" | "failed";
@@ -306,7 +320,7 @@ type AgentsKnown = "yes" | "loading" | "failed";
 // One computer's card. It is memoized and gets its own computer's agents as numbers: a change to another computer's
 // agents leaves its props as they were, so it (and its Stat, Spark, MachineDeploy) does not render again. Nor does a
 // machines push that only moved last_seen on (sameCard).
-const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, needsYou, waitingSid, known, launcherIssues, onAlert }: CardProps) {
+const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, needsYou, waitingSid, known, launcherIssues, onAlert, cloud }: CardProps) {
   const detail = { name: "machine" as const, mid: m.id };
   const waiting: Route = waitingSid ? { name: "session", mid: m.id, sid: waitingSid } : detail;
   const deployment = machineDeployment(m);
@@ -338,6 +352,16 @@ const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics:
                 <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} />
                 {m.online ? t("machines.online") : neverConnected(m) ? t("machines.not_connected_yet") : t("machines.offline")}
               </span>
+              {cloud && (
+                <span title={[cloud.provider_name, cloud.display_name || cloud.instance].filter(Boolean).join(" · ")} data-testid="cloud-badge" data-cloud-state={cloud.state}
+                  className="inline-flex min-w-0 shrink">
+                  <Pill size="sm">
+                    <Icon name="cloud" size={11} className="me-1 shrink-0" />
+                    {vendorLabel(cloud)}
+                    {cloud.state && <span className="ms-1 text-ink-3">{stateWord(cloud.state)}</span>}
+                  </Pill>
+                </span>
+              )}
             </div>
             <p className="truncate text-[11.5px] text-ink-3">{[m.system?.name || m.os, m.system?.model, m.system?.cpu].filter(Boolean).join(" · ") || m.hostname}</p>
           </a>

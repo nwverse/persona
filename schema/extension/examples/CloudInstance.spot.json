@@ -1,0 +1,32 @@
+{
+  "account": "lab",
+  "id": "i-0a1b2c3d",
+  "display_name": "build-box",
+  "state": "preempted",
+  "state_detail": "The vendor took this spot instance back.",
+  "region": "us-central1",
+  "zone": "us-central1-a",
+  "private_ips": [
+    "198.51.100.12"
+  ],
+  "spec": {
+    "size": "e2-standard-4",
+    "cpu": 4,
+    "memory_mb": 16384,
+    "disk_gb": 100,
+    "arch": "x86_64",
+    "os": "Debian 13"
+  },
+  "lifecycle": {
+    "spot": true
+  },
+  "console_url": "https://console.examplehosts.test/instances/i-0a1b2c3d",
+  "actions": [
+    "start",
+    "sync_ip",
+    "snapshot_list",
+    "snapshot_create",
+    "console"
+  ],
+  "observed_at": "2026-11-27T08:00:00Z"
+}

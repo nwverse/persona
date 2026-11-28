@@ -1,0 +1,25 @@
+{
+  "audit": [
+    {
+      "at": "2026-11-27T08:00:05Z",
+      "extension": "example-hosts",
+      "event": "cloud_action",
+      "actor": "device:phone",
+      "machine_id": "m1",
+      "provider": "main",
+      "instance": "i-0a1b2c3d",
+      "action": "start",
+      "safety": "confirm",
+      "outcome": "accepted"
+    },
+    {
+      "at": "2026-11-20T08:00:00Z",
+      "extension": "example-hosts",
+      "event": "cloud_bind",
+      "actor": "device:phone",
+      "machine_id": "m1",
+      "provider": "main",
+      "instance": "i-0a1b2c3d"
+    }
+  ]
+}

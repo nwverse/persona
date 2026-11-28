@@ -49,6 +49,8 @@ var Routes = []string{
 	"/api/v1/machines/{mid}/browser/",
 	"/api/v1/machines/{mid}/iphone",
 	"/api/v1/machines/{mid}/iphone/",
+	"/api/v1/machines/{mid}/cloud",
+	"/api/v1/machines/{mid}/cloud/",
 	"/api/v1/iphone",
 	"/api/v1/iphone/",
 	"/api/v1/error-reports",
