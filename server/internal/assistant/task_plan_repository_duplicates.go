@@ -136,7 +136,7 @@ func (s *Service) checkPlanRepositoryDuplicates(ctx context.Context, tasks []Pla
 			conflicts = append(conflicts, fmt.Sprintf("to-do %s (%q): %s", row.todo.ID, row.todo.Title, strings.Join(shared, ", ")))
 		}
 		if len(conflicts) != 0 {
-			return fmt.Errorf("task %d (%s): repository references already belong to open %s. For the same work, use continues "+
+			return fmt.Errorf("task %d (%s): repository references already belong to open %s. For the same work, send to its Agent with agent_send if available, or use continues "+
 				"with continues_why, or todo_id, naming that to-do; do not create another one. For different work, give "+
 				"distinct_from: [{\"todo_id\":\"<existing to-do>\",\"reason\":\"<why this is separate work>\"}] for every "+
 				"conflicting to-do; the reasons are kept in the new task's brief. Nothing was dispatched",

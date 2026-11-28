@@ -80,6 +80,7 @@ type fakeHub struct {
 	modelExts      []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage     []string
 	ownModels      bool                         // the test sets hello.Models itself: no fake model
+	dispatchMatch  string                       // optional response from the dispatch overlap judge
 	infoTagModel   bool                         // the service tags with information categories (Service.noInfoTag off)
 	devices        []Device                     // devices.list answers these when set (else one per machine with sessions)
 	devicesFull    bool                         // devices.list says its list is complete (a machine not in it was removed)
@@ -1741,6 +1742,7 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	}
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
+	dispatchReuse := strings.TrimSpace(prompts.RenderDispatchReuse())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.modelRequests++
@@ -1793,6 +1795,8 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		case strings.Contains(in.System, `{"lessons":[`): // the lessons of an accepted task (task_lessons.go), in any language
 			f.lessonsAsked = append(f.lessonsAsked, modelCall{in.System, user})
 			reply, fail = f.lessons, f.lessons == ""
+		case strings.HasPrefix(in.System, dispatchReuse):
+			reply = cmp.Or(f.dispatchMatch, `{"candidate":0}`)
 		case strings.HasSuffix(strings.TrimSpace(in.System), jsonOnly):
 			f.judged++
 			f.judgeAsked = append(f.judgeAsked, user)

@@ -1,8 +1,10 @@
-Start a new agent on one of the user's computers, in a project directory, with a first prompt. Use for real development work instead of doing it here. Check machines_list before choosing a machine. Returns the new session id. When the launcher failed its last health check on that machine, the agent starts on a machine where it works (a directory under the home moves to that home) and the answer says so. Claude-family launchers and Paseo providers with Auto Accept always start in bypassPermissions. TRAE CLI takes model and effort overrides. Omp takes no effort setting.
+Start a new Agent on one of the user's computers with a project directory and first prompt. Check machines_list. Returns the session ID. Failed launcher health may move the start to a working machine and map a home-relative directory there. Claude-family launchers and Paseo Auto Accept use bypassPermissions. TRAE CLI takes model and effort overrides. Omp takes no effort.
+
+Send to the existing Agent, or replace it using task_plan with continues. Separate work needs distinct_from (todo_id and reason).
 
 The launcher decides the agent: Claude Code's starts Claude Code; pi or cursor (or one listed as that agent) starts pi or the Cursor CLI in a herdr pane with the model you give; agy starts the Antigravity CLI on the computer's companion when connected, else in a pane. Those three take no permission mode and no ultracode; their effort is their own.
 
-For parallel work needing its own checkout, give `worktree.branch`: Persona uses the machine's engine (herdr or Orca) to create and list it under the workspace containing `cwd`, then starts the agent there. Never tell the agent to run `git worktree add`: that hides it from Orca and the app. Existing branches are checked out; new ones start at that workspace's HEAD. A branch checked out elsewhere is refused.
+For parallel work, worktree.branch uses the machine engine to create a visible checkout. Never ask the Agent to run git worktree add. Existing branches are checked out, new ones start at the workspace HEAD, and a branch checked out elsewhere is refused.
 
 Claude Code only: `secret_env` maps variable names to secret references (e.g. `op://vault/item/field`), never values. The owner approves before launch; values reach only this Agent on a connected computer. The receipt lists the grant status. Tell the Agent the names, never ask it to print values.
 
@@ -19,6 +21,18 @@ Give `ultracode: true` for a large task: one that spans many files or needs chec
     "prompt"
   ],
   "properties": {
+    "distinct_from": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["todo_id", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,

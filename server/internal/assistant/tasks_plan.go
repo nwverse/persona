@@ -98,6 +98,19 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err := s.checkPlanRepositoryDuplicates(ctx, a.Tasks); err != nil {
 		return "", err
 	}
+	var origin *briefRecord
+	for i := range a.Tasks {
+		task := &a.Tasks[i]
+		if task.Continues == "" && task.ReuseTodo == "" {
+			if origin == nil {
+				value := s.briefOrigin(ctx, machine, sessionID)
+				origin = &value
+			}
+			if err := s.checkDispatchReuse(ctx, sessionID, *task, origin.Request); err != nil {
+				return "", err
+			}
+		}
+	}
 	reused := map[string]bool{}
 	modes := map[string]string{} // each computer's Claude Code default mode, read once for this plan
 	for i := range a.Tasks {
@@ -412,7 +425,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			a.Tasks[i].RequestGate = s.planRequestGate(a.Tasks[i])
 		}
 	}
-	if err := s.planBriefs(ctx, machine, sessionID, a.Tasks, contracts...); err != nil {
+	if err := s.planBriefsFromOrigin(ctx, machine, sessionID, a.Tasks, origin, contracts...); err != nil {
 		return "", err
 	}
 	for i := range a.Tasks {

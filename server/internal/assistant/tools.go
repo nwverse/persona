@@ -802,6 +802,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			Machine           string             `json:"machine"`
 			Cwd               string             `json:"cwd"`
 			Prompt            string             `json:"prompt"`
+			DistinctFrom      []TaskDistinctFrom `json:"distinct_from"`
 			SkipProjectMemory bool               `json:"skip_project_memory"`
 			ModelAliases      proto.ModelAliases `json:"model_aliases"`
 			Launcher          string             `json:"launcher"`
@@ -835,6 +836,17 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		}
 		if a.Host = strings.TrimSpace(a.Host); checkStartHostName(a.Host) != nil {
 			return "", fmt.Errorf("%w; no agent was started", checkStartHostName(a.Host))
+		}
+		origin := s.callerOrigin(ctx, self)
+		intent := PlanTask{Prompt: a.Prompt, DistinctFrom: a.DistinctFrom}
+		if err := s.ensureTodosLoaded(ctx); err != nil {
+			return "", err
+		}
+		if err := s.checkPlanRepositoryDuplicates(ctx, []PlanTask{intent}); err != nil {
+			return "", err
+		}
+		if err := s.checkDispatchReuse(ctx, self, intent, origin.Request); err != nil {
+			return "", err
 		}
 		am, ok := s.machineByName(ctx, a.Machine)
 		if !ok {
@@ -1086,6 +1098,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if swapped != "" {
 			note = " Note: " + swapped + "." + note
 		}
+		if err := s.checkPlanRepositoryDuplicates(sctx, []PlanTask{intent}); err != nil {
+			return "", err
+		}
+		if err := s.checkDispatchReuse(sctx, self, intent, origin.Request); err != nil {
+			return "", err
+		}
 		if branch != "" { // the machine's engine makes the worktree (herdr's or Orca's own), the agent starts in it
 			wt, err := s.newWorktree(sctx, am.ID, a.Cwd, branch)
 			if err != nil {
@@ -1110,7 +1128,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		lcancel()
 		// The to-do predates the start. If the answer is lost, the node's creation_id still links the session back to
 		// this card instead of leaving untracked work or adopting an unrelated session (#5732).
-		task, told, tracked := s.prepareAgentTask(sctx, self, am, a.Cwd, a.Prompt, params["tab_name"])
+		task, told, tracked := s.prepareAgentTask(sctx, self, am, a.Cwd, a.Prompt, params["tab_name"], origin, intent.DistinctFrom)
 		if !tracked {
 			return "", fmt.Errorf("the task could not be recorded; no agent was started")
 		}

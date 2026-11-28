@@ -336,7 +336,7 @@ func (s *Service) dropQueuedNeeds(todoID string) bool {
 // stays its origin; a calling lead or live assistant side conversation supervises its own work, otherwise main does.
 // Quiet controls notification behavior, never whether the work is tracked. The supervisor also gets a card when it differs
 // from the origin.
-func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any) (Todo, string, bool) {
+func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any, origin briefRecord, distinct []TaskDistinctFrom) (Todo, string, bool) {
 	supervisor := s.settings(ctx).Main
 	source := ""
 	if s.isLeader(ctx, conversation) || s.liveSideSupervisor(ctx, conversation) {
@@ -361,7 +361,15 @@ func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m D
 			return Todo{}, "", false
 		}
 	}
-	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0)
+	if len(distinct) == 0 {
+		s.briefFor(ctx, origin, todo, nil, 0)
+	} else {
+		origin.DistinctFrom, origin.Goal = distinct, todo.Title
+		if _, err := s.putTaskBrief(ctx, origin, todo.ID); err != nil {
+			s.dropAdoption(ctx, todo.ID, err)
+			return Todo{}, "", false
+		}
+	}
 	if _, err := s.appendFeed(ctx, conversation, feedTask, todo.ID, nil); err != nil {
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}
