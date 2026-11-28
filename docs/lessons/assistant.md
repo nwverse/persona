@@ -605,6 +605,12 @@ For an Agent's permission without an open to-do (#16093), use the active relay q
 in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
 or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
 
+For an internal question that outlives its manager (#17823), restore the task and its worker link before publishing
+the question in the restart fixture. The real store already has that assignment. Capture the relay while its send is
+blocked and again after the queue removal is durable. A pending card gets a fresh wake in both cases. Check the queued
+wake against the current route before looking for an earlier send in the transcript, so the previous route's retry
+timer cannot delay the fresh wake.
+
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
 Every `{"type":"todos"}` makes every app read the whole `GET /api/v1/todos` (about 1 MB at ~500 to-dos), and one step of

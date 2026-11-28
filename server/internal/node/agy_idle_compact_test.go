@@ -840,7 +840,7 @@ func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(
 	hClosed.hello = runtimeHello{Runtime: "agy-closing", Agent: agyAgent}
 	hClosed.ready = true
 	hClosed.mu.Unlock()
-	n.runtimes.setSessionList(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}}, nil)
+	n.runtimes.setSessions(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}})
 	n.markAgyIdleAttempt(hClosed, s3, clock.get())
 	// Sweep while hClosed.peer is closed but reg.remove(hClosed) has not run yet (ownerOf(s3) == hClosed).
 	n.sweepAgyIdleCompactions(t.Context(), clock.get())

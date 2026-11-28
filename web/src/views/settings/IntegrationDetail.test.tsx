@@ -15,8 +15,9 @@ import { track, type ExtensionOperation } from "../../lib/extension-operations";
 import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 import { chooseManager, chosenManager, managerHeaderFor, pinManagerAt, resetManagerChoice } from "../../lib/manager-choice";
-import { setRoster } from "../../lib/managers";
+import { setRoster, type ManagerList } from "../../lib/managers";
 import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
+import type { ExtensionTrust } from "../../lib/tracks";
 import { FEATURES } from "./FeishuBot";
 import { Extensions } from "./Extensions";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
@@ -186,12 +187,15 @@ const FEISHU_CHANNEL: ChannelDetail = {
 let host: HTMLDivElement;
 let root: Root;
 let requests: RecordedRequest[];
+let projectionRead: ((request: RecordedRequest) => unknown | Promise<unknown>) | undefined;
 let currentExt: HubExtensionDetail;
 let currentChannels: Record<string, ChannelDetail>;
 let currentConnectors: HubConnector[];
 let currentMailAccounts: { id: string; email: string; provider: string; status: string }[];
 let currentFeishuBot: FeishuBotStatus;
 let currentRepositories: { id: string; provider?: string }[] | "error" | null;
+let servedRoster: ManagerList;
+let grants: Record<string, ExtensionTrust>;
 
 const flush = async () => {
   for (let i = 0; i < 14; i++) {
@@ -236,7 +240,9 @@ function setInputValue(input: HTMLInputElement | HTMLTextAreaElement, value: str
 
 beforeEach(() => {
   requests = [];
+  projectionRead = undefined;
   currentExt = structuredClone(COMPOSITE_EXTENSION);
+  grants = {};
   currentChannels = {
     larkx_chat: structuredClone(COMPOSITE_CHANNEL),
     feishu: structuredClone(FEISHU_CHANNEL),
@@ -262,7 +268,8 @@ beforeEach(() => {
 
   resetManagerChoice();
   setPairedToken("");
-  setRoster(ROSTER);
+  servedRoster = ROSTER;
+  setRoster(servedRoster);
   setStoreAssistant(true);
   connectModuleHub(getState, subscribe);
 
@@ -274,8 +281,23 @@ beforeEach(() => {
       try { body = JSON.parse(init.body); } catch { body = init.body; }
     }
     const manager = new Headers(init?.headers).get("X-Persona-Manager");
-    requests.push({ url, method, body, manager });
+    const request = { url, method, body, manager };
+    requests.push(request);
 
+    if (url.includes("/assistant/integrations") && projectionRead) {
+      const result = await projectionRead(request);
+      return result instanceof Response ? result : ok(result);
+    }
+    if (url.endsWith("/managers")) return ok(servedRoster);
+    if (url.endsWith("/assistant/extension-trust")) {
+      const grant = grants[manager ?? "assistant"];
+      return grant ? ok({ items: [grant] }) : notFound();
+    }
+    if (url.endsWith(`/assistant/extension-trust/${currentExt.id}`) && method === "PUT") {
+      const grant = { ...(body as ExtensionTrust), extension: currentExt.id };
+      grants[manager ?? "assistant"] = grant;
+      return ok(grant);
+    }
     if (url.includes("/mail/accounts")) {
       return ok({ accounts: currentMailAccounts });
     }
@@ -355,9 +377,6 @@ beforeEach(() => {
     if (url.includes("/lark/accounts")) {
       return ok({ accounts: [] });
     }
-    if (url.includes("/trust")) {
-      return notFound();
-    }
     return ok({});
   }));
 
@@ -434,6 +453,154 @@ describe("integrations_v2 gating & legacy isolation", () => {
 
     expect(host.innerHTML).toBe("");
     expect(requests).toHaveLength(0);
+  });
+});
+
+describe("Integrations server detail", () => {
+  const endpoint = "/api/v1/assistant/integrations";
+  const available = { state: "available" };
+  const readFailed = { state: "unavailable", reason: "read_failed" };
+  const extensionRef = (manager: string) => ({ manager, kind: "extension", id: "larkx" });
+  const row = (manager: string, name = "Server integration") => ({
+    ref: extensionRef(manager), name, capabilities: ["channels", "tools", "future_capability"],
+    origin: "installed_extension", availability: available,
+  });
+
+  async function open(sub: string, manager = "assistant") {
+    const route = decodeIntegrationsRoute("integrations", sub, new URLSearchParams({ manager }));
+    await act(async () => root.render(<Integrations route={route} onOpen={() => {}} onBack={() => {}} twoCol />));
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+  }
+
+  function announceProjection(work = true) {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((manager) => ({
+      ...manager, ...(manager.id === "assistant" || work ? { integrations_projection_v1: true } : {}),
+    })) };
+    setRoster(servedRoster);
+  }
+
+  function catalog(item: ReturnType<typeof row>) {
+    return { items: [item], counts: { all: 1, channels: 1, data: 0, tools: 1 }, availability: [] };
+  }
+
+  it("opens the server-owned channel while a failed configuration section can be retried", async () => {
+    announceProjection();
+    chooseManager("work");
+    currentChannels.projected_chat = { ...COMPOSITE_CHANNEL, id: "projected_chat" };
+    let failed = true;
+    projectionRead = ({ url }) => {
+      const item = row("assistant");
+      if (url === endpoint) return catalog(item);
+      return {
+        item, availability: [], sections: [
+          { kind: "conversation_and_push", ref: { manager: "assistant", kind: "channel", id: "projected_chat" }, availability: available, edit: "settings" },
+          { kind: "extension_configuration", ref: item.ref, configuration_groups: ["general"],
+            availability: failed ? readFailed : available, edit: failed ? "read_only" : "settings" },
+          { kind: "future_action", ref: { manager: "assistant", kind: "channel", id: "unknown_chat" }, availability: available, edit: "settings" },
+        ],
+      };
+    };
+
+    await open("ext:larkx");
+    expect(host.querySelector('[data-integration-detail] h1')?.textContent).toBe("Server integration");
+    expect(section("channel")?.querySelector("[data-channel-routing]")).not.toBeNull();
+    expect(section("extension-settings")?.textContent).not.toContain("Display Alias");
+    expect(requests.some((r) => r.url.endsWith("/channels/projected_chat") && r.manager === "assistant")).toBe(true);
+    expect(requests.some((r) => /channels\/(larkx_chat|unknown_chat)|\/api\/v1\/connectors(\?|$)/.test(r.url))).toBe(false);
+    expect(requests.filter((r) => r.url.startsWith(endpoint)).map((r) => r.manager)).toEqual(["assistant", "assistant"]);
+    const alert = host.querySelector('[data-integration-detail] [role="alert"]')!;
+    expect(alert.textContent).toBe(t("settings-integrations.projection_section_error"));
+
+    failed = false;
+    await act(async () => alert.parentElement?.querySelector("button")?.click());
+    await flush();
+    expect(host.querySelector('[data-integration-detail] [role="alert"]')).toBeNull();
+    expect(section("extension-settings")?.textContent).toContain("Display Alias");
+    expect(section("channel")?.querySelector("[data-channel-routing]")).not.toBeNull();
+  });
+
+  it("keeps a late response from an assistant with the same id out of the newly opened detail", async () => {
+    announceProjection();
+    let finish!: (answer: unknown) => void;
+    projectionRead = ({ url, manager }) => {
+      const item = row(manager!, manager === "work" ? "Work settings" : "Home settings");
+      if (url === endpoint) return catalog(item);
+      const answer = { item, sections: [], availability: [] };
+      return manager === "work" ? answer : new Promise<unknown>((resolve) => { finish = resolve; });
+    };
+    await open("ext:larkx");
+    expect(finish).toBeTypeOf("function");
+    await open("ext:larkx", "work");
+    expect(host.querySelector('[data-integration-detail] h1')?.textContent).toBe("Work settings");
+    await act(async () => finish({ item: row("assistant", "Late home settings"), sections: [], availability: [] }));
+    expect(host.querySelector('[data-integration-detail] h1')?.textContent).toBe("Work settings");
+    expect(host.textContent).not.toContain("Late home settings");
+    expect(requests.filter((r) => r.url.endsWith("/extension/larkx")).map((r) => r.manager)).toEqual(["assistant", "work"]);
+  });
+
+  it("uses legacy detail for the assistant that does not advertise projection", async () => {
+    announceProjection(false);
+    await open("ext:larkx", "work");
+    expect(host.querySelector('[data-integration-detail] h1')?.textContent).toBe(COMPOSITE_EXTENSION.name);
+    expect(requests.some((r) => r.url.startsWith(endpoint))).toBe(false);
+    expect(requests.some((r) => /\/(extensions|plugins)\/larkx\//.test(r.url) && r.manager === "work")).toBe(true);
+  });
+
+  it("shows the named assistant's confirmed information access as read only when the section says so", async () => {
+    announceProjection();
+    servedRoster = { ...servedRoster, managers: servedRoster.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    grants.work = { extension: currentExt.id, trust: "owner", categories: [] };
+    projectionRead = ({ url }) => {
+      const item = row("work");
+      return url === endpoint ? catalog(item) : {
+        item, availability: [], sections: [
+          { kind: "information_access", ref: item.ref, availability: { state: "read_only" }, edit: "read_only" },
+        ],
+      };
+    };
+    await open("ext:larkx", "work");
+    const grant = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(grant?.getAttribute("aria-checked")).toBe("true");
+    expect(grant.disabled).toBe(true);
+    expect(requests.filter((r) => r.url.endsWith("/assistant/extension-trust")).map((r) => r.manager)).toEqual(["work"]);
+  });
+
+  it("renders the server's module-off detail without calling the bot settings", async () => {
+    announceProjection();
+    const item = {
+      ref: { manager: "assistant", kind: "service", id: "feishu-bot" }, name: "Lark Bot",
+      capabilities: ["channels"], origin: "builtin_service", availability: { state: "module_off" },
+    };
+    const availability = [{ source: "service", ref: item.ref, module_feature: "module.lark", availability: item.availability }];
+    projectionRead = ({ url }) => url === endpoint
+      ? { items: [], counts: { all: 0, channels: 0, data: 0, tools: 0 }, availability }
+      : { item, sections: [], availability };
+    await open("builtin:feishu-bot");
+    expect(host.textContent).toContain(t("settings-integrations.feishu_module_off"));
+    expect(sectionIds()).toEqual([]);
+    expect(requests.some((r) => r.url.includes("/bots/feishu") || r.url.includes("/channels/feishu"))).toBe(false);
+  });
+
+  it("recovers from an advertised detail failure without opening the legacy editor", async () => {
+    announceProjection();
+    let failed = true;
+    projectionRead = ({ url }) => {
+      const item = row("assistant");
+      if (url === endpoint) return catalog(item);
+      return failed ? Response.json({ error: "Temporarily unavailable", code: "unavailable" }, { status: 503 })
+        : { item, sections: [], availability: [] };
+    };
+    await open("ext:larkx");
+    const alert = host.querySelector('[role="alert"]')!;
+    expect(alert?.textContent).toContain("Temporarily unavailable");
+    expect(requests.some((r) => /\/(extensions|plugins)\/larkx\//.test(r.url))).toBe(false);
+    failed = false;
+    await act(async () => alert.parentElement?.querySelector("button")?.click());
+    await flush();
+    expect(host.querySelector('[data-integration-detail] h1')?.textContent).toBe("Server integration");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 });
 
@@ -992,6 +1159,44 @@ describe("Older Hub and legacy extension graceful degradation", () => {
 });
 
 describe("manager-owned integration links", () => {
+  it.each([
+    ["work", null],
+    ["assistant", "work"],
+  ] as const)("reads and writes the named %s extension's grants in Labs Integrations", async (manager, sidebar) => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    chooseManager(sidebar);
+    grants = {
+      assistant: { extension: currentExt.id, trust: "owner", categories: [] },
+      work: { extension: currentExt.id, trust: "third_party", categories: ["finance"] },
+    };
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: currentExt.id, manager }} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe(String(manager === "assistant"));
+    await act(async () => owner.click());
+    const trustRequests = requests.filter(({ url }) => url.includes("/assistant/extension-trust"));
+    expect(trustRequests.map((r) => [r.method, r.manager])).toEqual([["GET", manager], ["PUT", manager], ["GET", manager]]);
+    expect(grants.assistant.trust).toBe(manager === "assistant" ? "third_party" : "owner");
+    expect(grants.work.trust).toBe(manager === "work" ? "owner" : "third_party");
+    expect(chosenManager()).toBe(sidebar);
+  });
+
+  it("shows the supported assistant's confirmed grants on a read-only integration", async () => {
+    servedRoster = { ...ROSTER, managers: ROSTER.managers.map((m) => ({ ...m, extension_info_access_scoped: true })) };
+    setRoster(servedRoster);
+    currentExt = { ...currentExt, read_only: true };
+    grants.work = { extension: currentExt.id, trust: "owner", categories: [] };
+
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "extension", id: currentExt.id, manager: "work" }} />));
+    const owner = host.querySelector<HTMLButtonElement>("[data-extension-info-access] [role=switch]")!;
+    expect(owner?.getAttribute("aria-checked")).toBe("true");
+    expect(owner.disabled).toBe(true);
+    await act(async () => owner.click());
+    expect(requests.filter(({ url }) => url.includes("/assistant/extension-trust")).map(({ method, manager }) => [method, manager]))
+      .toEqual([["GET", "work"]]);
+  });
+
   it.each([
     ["feishu-bot", "/bots/feishu"],
     ["lark", "/lark/status"],
