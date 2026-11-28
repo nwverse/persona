@@ -270,7 +270,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
       return (
         <div data-integration-detail={target.id} data-integration-kind="builtin">
           {back && (
-            <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2 mb-3">
+            <Button tone="quiet" icon="chevronLeft" onClick={back} className="touch-hit -ml-2 mb-3">
               {t("settings-integrations.back")}
             </Button>
           )}
