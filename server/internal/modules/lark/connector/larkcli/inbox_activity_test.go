@@ -299,7 +299,7 @@ func TestInboxIncomingIDsAreNotPromotedFromHistory(t *testing.T) {
 	c := followupConnector(t, nil, []adapter.Message{historyCopy, second})
 	group := &inboxGroup{key: messageKey(first), chatID: first.ChatID,
 		messages: []adapter.Message{first, second}, latest: second}
-	got := c.thingForGroup(context.Background(), group, "ou_example_user")
+	got := c.thingForGroup(context.Background(), group, adapter.AuthStatus{OpenID: "ou_example_user"})
 	if got.Last != second.MessageID || got.Preview != "Second request" {
 		t.Fatalf("a history copy superseded an incoming message: %+v", got)
 	}

@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"crypto/rand"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -306,12 +307,18 @@ func (b *inboxBook) escalate(since, now time.Time) []*inboxWrite {
 	return b.escalateWithPolicy(since, now, replyPolicySpec{})
 }
 
-func (b *inboxBook) escalateWithPolicy(since, now time.Time, policy replyPolicySpec) []*inboxWrite {
+func (b *inboxBook) escalateWithPolicy(since, now time.Time, policy replyPolicySpec, only ...inboxMove) []*inboxWrite {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var changed []*inboxWrite
 	for _, it := range b.items {
+		if len(only) > 0 && !slices.Contains(only, inboxMove{it.ID, it.Last}) {
+			continue
+		}
 		a := it.Agent
+		if it.Source == "larkcli" && it.Kind == "bot_handoff" {
+			continue // the owner's request belongs to the main conversation, never a second processing agent
+		}
 		if it.VisibilityExcluded || !it.open() || it.externallyRouted() || it.Context == "" ||
 			a != nil && (a.Of == it.Last && !a.InterruptedByDisable || a.savingRetry) {
 			continue

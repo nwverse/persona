@@ -1253,7 +1253,7 @@ func replyPolicyVisibilityFailSnapshot(policy replyPolicySpec, contentVersion st
 // gateReplyPolicyQueue classifies open items eligible for AI handling (and already-queued items without a session)
 // whose reply-policy snapshot is missing, errored, or stale for the current content version or policy revision.
 // Called before escalateWithPolicy and startInboxAgents in handPass.
-func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySpec, since time.Time) {
+func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySpec, since time.Time, only ...inboxMove) {
 	if !policy.enabled {
 		return
 	}
@@ -1265,6 +1265,9 @@ func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySp
 	b.mu.Lock()
 	var todo []queueItem
 	for _, it := range b.items {
+		if len(only) > 0 && !slices.Contains(only, inboxMove{it.ID, it.Last}) {
+			continue
+		}
 		if !b.needsReplyPolicyQueueCheckLocked(it, policy, since) {
 			continue
 		}

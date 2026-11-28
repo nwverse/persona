@@ -283,6 +283,8 @@ type InboxHandoff struct {
 
 func RenderInboxHandoff(h InboxHandoff) string { return render("inbox/handoff", h) }
 
+func RenderLarkBotHandoff(context string) string { return render("inbox/lark_bot_handoff", context) }
+
 // InboxHandoffNote wraps a handling note (Note) for a conversation the event was handed to (inbox/handoff_note).
 type InboxHandoffNote struct {
 	Language  string // Native language name; empty preserves the legacy Chinese output.

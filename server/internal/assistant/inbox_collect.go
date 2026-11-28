@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -72,6 +73,9 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.externalCapture = captureExternal
 	b.larkAccount = cfg.LarkAccount
 	b.batch = newInboxBatch()
+	if r.Replay {
+		b.batch.only = map[string]bool{}
+	}
 	b.mu.Unlock()
 	var changed []*InboxItem
 	// Mail (the hub's own), then the connectors in the order the hub has them.
@@ -87,12 +91,26 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 		changed = append(changed, s.collectSource(ctx, src)...)
 	}
 	b.mu.Lock()
-	readsChanged := b.recordReads(r)
+	readsChanged := false
+	if !r.Replay {
+		readsChanged = b.recordReads(r)
+	}
 	batch := b.batch
 	batch.registered = r.Names
+	if r.Replay {
+		for _, src := range r.Sources {
+			for _, thing := range src.Things {
+				for _, it := range b.items {
+					if it.open() && it.Source == src.ID && it.Connector != nil && it.Connector.Thread == thing.Thread && it.Last == thing.Last {
+						batch.only[it.ID] = true
+					}
+				}
+			}
+		}
+	}
 	// Done past inboxForget leaves memory; its row stays as history until purgeInboxHistory (below) deletes it.
 	for id, it := range b.items {
-		if it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
+		if !r.Replay && it.DoneAt != nil && time.Since(*it.DoneAt) > inboxForget {
 			b.drop(id)
 		}
 	}
@@ -102,8 +120,11 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	for _, it := range changed {
 		b.roundWrite(it)
 	}
-	changed = append(changed, b.roundMuted(b.applyMutes(now))...)
-	changed = b.followMerged(append(changed, b.releaseMembers()...), now)
+	changed = append(changed, b.roundMuted(b.applyMutes(now, batch.only))...)
+	if !r.Replay {
+		// Normal merge maintenance may change rows outside an explicit recovery's selection.
+		changed = b.followMerged(append(changed, b.releaseMembers()...), now)
+	}
 	b.mu.Unlock()
 	s.prepareExternalInbox(ctx, changed)
 	b.mu.Lock()
@@ -111,9 +132,29 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	b.applyRuledPolicies(changed)
 	b.settleRound()
 	ws := b.roundSaved(changed)
+	var replayIDs []string
+	var replayMoves []inboxMove
+	for id := range batch.only {
+		if it := b.items[id]; it != nil && it.open() { // the mute pass may have filed a selected item
+			replayIDs = append(replayIDs, id)
+			replayMoves = append(replayMoves, inboxMove{id, it.Last})
+		}
+	}
 	b.batch = nil
 	b.mu.Unlock()
-	s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	failed := s.saveInboxUndo(ctx, changed, s.undoWrites(ws, "what the round changed"))
+	if r.Replay && len(failed) > 0 {
+		return fmt.Errorf("Inbox replay could not save %d item(s); inspect retained items before retrying", len(failed))
+	}
+	if r.Replay {
+		if len(replayIDs) > 0 {
+			s.handoffLarkMentions(ctx, replayIDs...)
+			s.handleRecoveredInbox(ctx, replayMoves)
+		}
+		// Recovery must not wake or maintain any unrelated Inbox item.
+		return nil
+	}
+	s.handoffLarkMentions(ctx)
 	if st := s.inboxDB(); st != nil {
 		s.purgeInboxHistory(ctx, st, now)
 	}
@@ -128,6 +169,67 @@ func (s *Service) InboxCollected(ctx context.Context, r assistantwire.InboxRound
 	s.translateInbox(ctx)
 	s.admitInbox(ctx, batch, todo)
 	return nil
+}
+
+// inboxMove identifies one activity even if ordinary polling advances its row.
+type inboxMove struct{ id, last string }
+
+// An explicit recovery may name an older request than the twin's normal age
+// limit. Queue only the selected activities, retaining their actual source time
+// and the user's existing twin enablement, policy and concurrency limits.
+func (s *Service) handleRecoveredInbox(ctx context.Context, moves []inboxMove) {
+	if len(moves) == 0 {
+		return
+	}
+	go func() {
+		ctx := context.WithoutCancel(ctx)
+		b := &s.inbox
+		// Built-in recoveries are already admitted, but unruled messages still
+		// need normal triage before escalation. Do not run the global pass.
+		b.triaging.Lock()
+		var ready []inboxMove
+		for _, move := range moves {
+			b.mu.Lock()
+			it := b.items[move.id]
+			needsTriage := it != nil && it.Last == move.last && it.open() && !it.handled() &&
+				it.TriagedAt != it.Last && it.Context != ""
+			b.mu.Unlock()
+			if needsTriage {
+				if w := s.triage(ctx, it, move.last); w != nil {
+					s.saveWrites(ctx, []*inboxWrite{w}, "its recovered triage")
+				}
+			}
+			b.mu.Lock()
+			it = b.items[move.id]
+			// Legacy queued records also need a saved model or rule tier before the start pass can take them.
+			if it != nil && it.Last == move.last && it.open() && (it.handled() || it.tiered()) {
+				ready = append(ready, move)
+			}
+			b.mu.Unlock()
+		}
+		b.triaging.Unlock()
+		if len(ready) == 0 {
+			return // An empty selection would make the helpers below operate globally.
+		}
+		inboxCfg := s.inboxConfig(ctx)
+		cfg := inboxCfg.Agent
+		if !cfg.Enabled {
+			return
+		}
+		ctx, cancel := context.WithTimeout(ctx, inboxAgentStartWait)
+		defer cancel()
+		policy := compileReplyPolicy(inboxCfg.ReplyPolicy)
+		s.gateReplyPolicyQueue(ctx, policy, time.Time{}, ready...)
+		s.saveWrites(ctx, b.escalateWithPolicy(time.Time{}, time.Now(), policy, ready...), "the recovered items' escalation")
+		if !b.handing.TryLock() {
+			return // an ordinary pass, or the next round, can start the selected queued work
+		}
+		s.startInboxAgents(ctx, cfg, ready...)
+		b.handing.Unlock()
+		if b.handAgain.Load() {
+			s.handInbox(ctx) // a normal event arrived while the recovery held the start lock
+		}
+	}()
 }
 
 // recordReads keeps which of a round's sources could not be read, under b.mu: a source read now (or off) is cleared,

@@ -40,6 +40,7 @@ type inboxBook struct {
 	translating           sync.Mutex     // one translation pass at a time (inbox_translate.go)
 	replies               sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
 	handingOff            sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
+	botHandoff            sync.Mutex     // one pass forwarding explicit owner bot mentions to the main conversation
 	telling               sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
 	snapshots             inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
 	mutes                 []InboxMute
@@ -313,9 +314,10 @@ func (b *inboxBook) has(id string) bool {
 }
 
 // add keeps an item a collection starts (from: the source it came from), under b.mu. A plugin connector's, while a
-// round runs, goes to the round's batch and enters the list once triaged (admitInbox); any other straight in.
+// normal round runs, goes to the round's batch and enters the list once triaged (admitInbox).
+// Explicit recovery saves its selected items first so the scoped triage and handoff can find them.
 func (b *inboxBook) add(from string, it *InboxItem) {
-	if b.batch == nil || !b.fromExtension(from) {
+	if b.batch == nil || b.batch.only != nil || !b.fromExtension(from) {
 		b.items[it.ID] = it
 		return
 	}

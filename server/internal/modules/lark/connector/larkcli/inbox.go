@@ -70,6 +70,9 @@ type inboxGroup struct {
 	threadID  string
 	chatName  string
 	mentioned bool
+	addressed bool
+	handoff   bool
+	pinned    bool
 	messages  []adapter.Message
 	latest    adapter.Message
 	replied   bool
@@ -135,7 +138,7 @@ func (c *Connector) Poll(ctx context.Context) (bool, error) {
 // pollChat performs the bounded chat Inbox round. Source selection is handled
 // by Poll so the document poller and chat poller share one primary-source rule.
 func (c *Connector) pollChat(ctx context.Context) (bool, error) {
-	auth, err := c.runner.AuthStatus(ctx)
+	auth, err := c.inboxAuth(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -253,10 +256,10 @@ func (c *Connector) pollChat(ctx context.Context) (bool, error) {
 	})
 
 	newMessages := c.dedupMessages(found)
-	groups := c.groupMessages(newMessages, auth.OpenID, topicsBefore)
+	groups := c.groupMessages(newMessages, auth, topicsBefore)
 	changed := false
 	for _, group := range groups {
-		thing := c.thingForGroup(ctx, group, auth.OpenID)
+		thing := c.thingForGroup(ctx, group, auth)
 		if thing.Thread == "" {
 			continue
 		}
@@ -459,8 +462,8 @@ func (c *Connector) Reply(ctx context.Context, r connectorwire.InboxReply) error
 	if identity != "bot" && identity != "user" {
 		return errors.New("unsupported message sender identity")
 	}
-	if strings.TrimSpace(r.Last) != "" && strings.Contains(r.Thread, ":thread:") {
-		_, err = c.runner.ReplyTextAs(ctx, identity, r.Last, r.Text, r.ClientID, strings.Contains(r.Thread, ":thread:"))
+	if strings.TrimSpace(r.Last) != "" && (strings.Contains(r.Thread, ":thread:") || strings.Contains(r.Thread, ":handoff:")) {
+		_, err = c.runner.ReplyTextAs(ctx, identity, r.Last, r.Text, r.ClientID, true)
 	} else {
 		_, err = c.runner.SendTextAs(ctx, identity, chatID, r.Text, r.ClientID)
 	}
@@ -659,7 +662,8 @@ func (c *Connector) markSeen(messageID string) {
 	}
 }
 
-func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTopics map[string]struct{}) []*inboxGroup {
+func (c *Connector) groupMessages(messages []adapter.Message, auth adapter.AuthStatus, knownTopics map[string]struct{}) []*inboxGroup {
+	me := auth.OpenID
 	if len(messages) == 0 {
 		return nil
 	}
@@ -676,11 +680,20 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 	var out []*inboxGroup
 	byKey := map[string]*inboxGroup{}
 	for _, message := range messages {
+		// A selected card can explicitly assign the owner even if its sender is unavailable.
+		if message.Deleted || (!conversationMessage(message) && !cardAssignsOwner(message, auth)) {
+			continue
+		}
 		key := messageKey(message)
 		if key == "" {
 			continue
 		}
 		if message.Sender.ID == me {
+			if mentionsBot(message, auth) {
+				out = append(out, &inboxGroup{key: key, chatID: message.ChatID, threadID: topicID(message),
+					chatName: message.ChatName, messages: []adapter.Message{message}, latest: message, handoff: true})
+				continue
+			}
 			if prior := byKey[key]; prior != nil {
 				prior.replied = after(message, prior.latest)
 			}
@@ -690,7 +703,8 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 			continue
 		}
 		keep := false
-		mentioned := messageMentions(message, me)
+		addressed := mentionsBot(message, auth) || cardAddressesOwner(message, auth)
+		mentioned := messageMentions(message, me) || addressed
 		if mentioned {
 			if topic := topicID(message); topic != "" {
 				topics[topic] = struct{}{}
@@ -721,22 +735,33 @@ func (c *Connector) groupMessages(messages []adapter.Message, me string, knownTo
 		current.latest = message
 		current.replied = false
 		current.mentioned = current.mentioned || mentioned
+		current.addressed = current.addressed || addressed
 	}
 	return out
 }
 
-func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me string) connectorwire.InboxThing {
+func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, auth adapter.AuthStatus) connectorwire.InboxThing {
 	if group == nil || len(group.messages) == 0 || c.replyChatExcluded(group.chatID, group.latest.ChatType, group.latest.ChatMode) {
 		return connectorwire.InboxThing{}
 	}
+	me := auth.OpenID
 	latest := group.latest
 	contextMessages := append([]adapter.Message(nil), group.messages...)
+	var rootID string
+	if group.handoff && group.threadID != "" {
+		if root, err := c.runner.ThreadRoot(ctx, latest); err == nil && root.MessageID != "" {
+			rootID = root.MessageID
+			contextMessages = mergeMessages([]adapter.Message{root}, contextMessages)
+		}
+	}
 	if page, err := c.runner.ListMessages(ctx, group.chatID, group.threadID, "", 40); err == nil && len(page.Messages) > 0 {
-		contextMessages = mergeMessages(page.Messages, group.messages)
+		contextMessages = mergeMessages(page.Messages, contextMessages)
 	}
 	visible := contextMessages[:0]
 	for _, message := range contextMessages {
-		if conversationMessage(message) && messageKey(message) == group.key {
+		// A verified topic root can lack a thread ID in the CLI response.
+		isRoot := rootID != "" && message.MessageID == rootID && message.ChatID == group.chatID
+		if conversationMessage(message) && (messageKey(message) == group.key || isRoot) {
 			visible = append(visible, message)
 		}
 	}
@@ -752,6 +777,9 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 	_, allChat := c.inboxAllChats[group.chatID]
 	c.inboxMu.Unlock()
 	for _, message := range contextMessages {
+		if group.handoff || group.pinned {
+			break // explicit handoffs and recoveries keep the selected source activity
+		}
 		if _, incoming := currentIDs[message.MessageID]; incoming {
 			continue // History metadata cannot change an incoming message's identity or freshness.
 		}
@@ -778,13 +806,24 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		group.mentioned = group.mentioned || messageMentions(message, me)
 	}
 	for _, message := range contextMessages {
-		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me && after(message, latest) {
+		if group.handoff {
+			break
+		}
+		// Asking the connected bot for help is a handoff, not an answer to the source request.
+		if !message.Deleted && messageKey(message) == group.key && message.Sender.ID == me &&
+			!mentionsBot(message, auth) && after(message, latest) {
+			if auth.AppID != "" && auth.BotOpenID == "" && len(message.Mentions) > 0 {
+				continue // unresolved bot identity must not silently file a possible handoff
+			}
 			group.replied = true
 		}
 	}
 	thread := "larkcli:chat:" + group.chatID
 	if group.threadID != "" {
 		thread += ":thread:" + group.threadID
+	}
+	if group.handoff {
+		thread += ":handoff:" + latest.MessageID
 	}
 	kind := "group"
 	lang := i18n.From(ctx).Or(i18n.Default)
@@ -813,7 +852,15 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		name = p2pName(group, contextMessages, me)
 	}
 	tags := []connectorwire.Tag{{Key: connectorwire.TagChat, Value: latest.ChatID, Name: title}}
-	if senderTag, ok := latestSenderTag(contextMessages, me); ok {
+	tagMessages, excludedSender := contextMessages, me
+	if group.handoff || group.pinned {
+		// Context senders do not own an explicit handoff or a selected recovery.
+		tagMessages = []adapter.Message{latest}
+	}
+	if group.handoff {
+		excludedSender = "" // The owner is the sender of this explicit request.
+	}
+	if senderTag, ok := latestSenderTag(tagMessages, excludedSender); ok {
 		tags = append(tags, senderTag)
 	}
 	var history []adapter.Message
@@ -831,19 +878,29 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		return messageLess(currentMessages[i], currentMessages[j])
 	})
 	thing := connectorwire.InboxThing{
-		Thread:   thread,
-		Kind:     kind,
-		Label:    label,
-		Title:    title,
-		Sender:   latest.Sender.Name,
-		Preview:  firstLine(inboxMessageText(latest, lang)),
-		Context:  contextFor(currentMessages, history, me),
-		At:       messageTime(latest),
-		Last:     latest.MessageID,
-		ReplyTo:  replyTo(lang, name, group.threadID != ""),
-		CanReply: latest.MessageID != "",
-		Rules:    c.rules(),
-		Tags:     tags,
+		Thread:        thread,
+		Kind:          kind,
+		Label:         label,
+		Title:         title,
+		Sender:        latest.Sender.Name,
+		Preview:       firstLine(inboxMessageText(latest, lang)),
+		Context:       contextFor(currentMessages, history, me),
+		At:            messageTime(latest),
+		Last:          latest.MessageID,
+		ReplyTo:       replyTo(lang, name, group.threadID != "" || group.handoff),
+		CanReply:      latest.MessageID != "",
+		Rules:         c.rules(),
+		Tags:          tags,
+		OwnerAssigned: cardAssignsOwner(latest, auth),
+	}
+	if group.addressed || thing.OwnerAssigned {
+		thing.Tier = connectorwire.TierAction
+		thing.Why = i18n.T(lang, "hub-connectors.larkcli_addressed_rule")
+	}
+	if group.handoff {
+		thing.Kind = "bot_handoff"
+		thing.Tier = connectorwire.TierFYI
+		thing.Why = i18n.T(lang, "hub-connectors.larkcli_handoff_rule")
 	}
 	// Keep the CLI's link opaque: it includes the message position and, for a
 	// topic, the source thread. Do not guess a link from a sender or a thread id.
@@ -1054,6 +1111,7 @@ func chatIDFromThread(thread string) (string, bool) {
 	if !ok || rest == "" {
 		return "", false
 	}
+	rest, _, _ = strings.Cut(rest, ":handoff:")
 	if i := strings.Index(rest, ":thread:"); i >= 0 {
 		rest = rest[:i]
 	}
@@ -1106,27 +1164,34 @@ func mentionsAll(message adapter.Message) bool {
 }
 
 func messageTime(message adapter.Message) time.Time {
+	at, _ := parseMessageTime(message)
+	return at
+}
+
+// parseMessageTime also reports whether the CLI only identified the containing minute.
+func parseMessageTime(message adapter.Message) (time.Time, bool) {
 	value := strings.TrimSpace(message.CreateTime)
 	if value == "" {
-		return time.Time{}
+		return time.Time{}, false
 	}
 	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return t.UTC()
+		return t.UTC(), false
 	}
 	// lark-cli 1.0.99 prints message times as local wall-clock minutes ("2006-01-02 15:04") in the time zone of the
 	// machine running it, which is the hub's. Without this the Inbox cursor never moved past its first two minutes.
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04"} {
+	const wallMinute = "2006-01-02 15:04"
+	for _, layout := range []string{wallMinute + ":05", wallMinute} {
 		if t, err := time.ParseInLocation(layout, value, cliLocation()); err == nil {
-			return t.UTC()
+			return t.UTC(), layout == wallMinute
 		}
 	}
 	if n, err := strconv.ParseInt(value, 10, 64); err == nil && n > 0 {
 		if len(value) >= 13 {
-			return time.UnixMilli(n).UTC()
+			return time.UnixMilli(n).UTC(), false
 		}
-		return time.Unix(n, 0).UTC()
+		return time.Unix(n, 0).UTC(), false
 	}
-	return time.Time{}
+	return time.Time{}, false
 }
 
 func after(message, previous adapter.Message) bool {

@@ -36,7 +36,7 @@ func TestInboxMutedChain(t *testing.T) {
 					case "applyMutes":
 						b.mu.Lock()
 						b.items[it.ID] = it
-						writes := b.applyMutes(now)
+						writes := b.applyMutes(now, nil)
 						b.mu.Unlock()
 						if len(writes) != 1 {
 							t.Fatalf("mute writes = %d, want 1", len(writes))

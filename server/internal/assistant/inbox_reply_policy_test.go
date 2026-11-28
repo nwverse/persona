@@ -2790,3 +2790,28 @@ func TestInboxReplyPolicyDraftAndRetryGates(t *testing.T) {
 		}
 	})
 }
+
+func TestInboxReplyPolicyRecoveredQueueUsesSelectedActivity(t *testing.T) {
+	model, calls := replyPolicyClassifierModel(t, func(_ int, _, _ string, _ *http.Request) (int, string) {
+		return http.StatusOK, `{"category":"external_public","reason":"owner only"}`
+	})
+	cfg := assistantwire.InboxReplyPolicyConfig{Enabled: true}
+	h, _ := newReplyPolicyHub(t, cfg, model)
+	selected := replyPolicyTestItem("lark:recovered:1", "1", "Selected recovered request")
+	unrelated := replyPolicyTestItem("lark:unrelated:1", "2", "Unrelated request")
+	h.inbox.mu.Lock()
+	h.inbox.items[selected.ID] = selected
+	h.inbox.items[unrelated.ID] = unrelated
+	h.inbox.mu.Unlock()
+
+	policy := compileReplyPolicy(cfg)
+	only := []inboxMove{{selected.ID, selected.Last}, {unrelated.ID, "obsolete"}}
+	h.gateReplyPolicyQueue(context.Background(), policy, time.Time{}, only...)
+	writes := h.inbox.escalateWithPolicy(time.Time{}, time.Now(), policy, only...)
+	if calls() != 1 || selected.ReplyPolicy == nil || unrelated.ReplyPolicy != nil {
+		t.Fatalf("classification escaped the selected activity: calls=%d selected=%v unrelated=%v", calls(), selected.ReplyPolicy, unrelated.ReplyPolicy)
+	}
+	if len(writes) != 0 || selected.Agent != nil || unrelated.Agent != nil {
+		t.Fatal("policy-blocked recovery or unrelated activity was escalated")
+	}
+}

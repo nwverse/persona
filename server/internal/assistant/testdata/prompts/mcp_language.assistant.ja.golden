@@ -1457,6 +1457,47 @@
     "defer_loading": true
   },
   {
+    "name": "inbox_replay",
+    "description": "Only on explicit user request, recover 1-10 exact om_ message IDs from one oc_ chat in an RFC3339 window of at most one hour. Uses Inbox routing (including bot handoff to the main chat), never sends Lark messages or moves the global cursor. Use read_only=true after replay to read retained items by latest message ID without fetching or replaying history.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "chat_id",
+        "start",
+        "end",
+        "message_ids"
+      ],
+      "properties": {
+        "chat_id": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "message_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "read_only": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "defer_loading": true
+  },
+  {
     "name": "message_send",
     "description": "Send Lark text (default bot), not via CLI/ask_user. Use a revocable channel/chat/scenario/identity grant or owner approval. Repository grants do not apply. If bot cannot send, report it without changing identity. Reuse idempotency_key on retries. Check destination after uncertain delivery. Other approvals stay.\n\nタイトル、理由、完了条件、メッセージなど、新たに生成するユーザー向けの引数は、ユーザーが別の言語を求める場合や元の表現が必要な項目を除き、日本語で書いてください。引用した原文、識別子、ツール名と引数名、列挙値、コマンドの接頭辞はそのまま保持してください。言語によって承認要件や権限の範囲が変わることはありません。",
     "input_schema": {

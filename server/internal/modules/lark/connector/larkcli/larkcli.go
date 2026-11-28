@@ -57,6 +57,8 @@ type Connector struct {
 	inboxPoll         time.Duration
 	inboxPageLimit    int
 	inboxDirectOffset int
+	inboxBotAppID     string
+	inboxBotOpenID    string
 
 	// chatRecords are the chats' own records a conversation page read (threads.go conversationChat), by chat id.
 	recordsMu   sync.Mutex
@@ -113,7 +115,7 @@ func (c *Connector) Profile() string {
 }
 
 func (c *Connector) Manifest() connectorwire.Manifest {
-	return connectorwire.Manifest{Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapEvents, connectorwire.CapInbox, connectorwire.CapOptions, connectorwire.CapLogin, connectorwire.CapThreads, connectorwire.CapInboxVisibility}, Kinds: []string{"dm", "bot", "mention", "group", "doc"}}
+	return connectorwire.Manifest{Capabilities: []connectorwire.Capability{connectorwire.CapStatus, connectorwire.CapTools, connectorwire.CapEvents, connectorwire.CapInbox, connectorwire.CapOptions, connectorwire.CapLogin, connectorwire.CapThreads, connectorwire.CapInboxVisibility}, Kinds: []string{"dm", "bot", "mention", "group", "doc", "bot_handoff"}}
 }
 
 func (c *Connector) Tools() []proto.Tool {

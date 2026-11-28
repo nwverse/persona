@@ -39,6 +39,7 @@ inbox_draft
 inbox_folders
 inbox_move
 inbox_post
+inbox_replay
 message_send
 kb_search
 kb_list

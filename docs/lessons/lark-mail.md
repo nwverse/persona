@@ -68,6 +68,63 @@ When mainline hides the send button for an empty composer, attachment drafts sti
 
 ## Messages and documents
 
+- Lark CLI message-search results can mention an application by its `cli_` app ID, while `--at-chatter-ids` accepts
+  only `ou_` user IDs. Compare the bound app ID in unfiltered results; neither its name nor group membership proves
+  it was addressed. Responsibility cards may contain only labeled names, even in a raw message read, so structured
+  `at`/`person` checks alone do not cover them.
+- An owner's bot handoff is not a reply to the incoming source request. Check both grouping and the later
+  history-based settlement pass; otherwise an on-call card followed by a bot handoff silently becomes done.
+  Exact-ID recovery must leave the live cursor and deduplication state alone, and must not promote unselected
+  context into activity. Test the card and handoff together, including source positions used by topic replies.
+- Validate precise source times against the exact half-open replay bounds. A CLI wall-clock minute represents
+  the whole minute, so require that minute to overlap the requested search window.
+- A thread list can omit its root and identify bot mentions by open ID while search uses app ID. Do not assume a
+  synthetic thread fixture containing the root proves real handoff context. Resolve the bot's open ID from its
+  binding and the root's ID from the source reply, then read that root explicitly as the user.
+- Explicit recovery must propagate failed Inbox writes, not return success after the save layer rolls them back.
+  Log paired request begin/end records without private selectors; zero retained rows and a client timeout are not
+  a request-level terminal receipt. Keep an uncertain attempt locked until execution and deduplication evidence
+  justify a separately reviewed retry.
+- Recovery shares the normal collection lock: detach its admitted handoff from client cancellation with the same
+  five-minute bound, cancel it on return, and release the lock on failure. A selected replay cannot discharge an
+  owed full round or be retained for automatic retry with unrelated polling.
+- A failed persisted-state read must remain retryable in the shared loader. Test both replay and polling as the
+  next caller, including restored topics and seen IDs; changing how a caller unlocks is not a state-load fix.
+- A historical bot mention may have a later completion reply from the bot even when the owner never replied.
+  Inspect the full topic and the processing conclusion before calling its automatic completion a bug or treating
+  initial Needs You admission as proof that an unresolved request remains there.
+- Context is not source identity: an owner's explicit bot request must not inherit the alert sender's mute tag,
+  and exact-ID recovery must not inherit a newer, unselected context sender. Test source tags together with the
+  manager's existing mutes, not only the connector's tier. A muted card and an incorrectly muted owner request
+  need different diagnoses; do not clear mutes or reopen real handled rows to make acceptance pass.
+- A responsibility-card exception must be narrower than ordinary mentions. Carry the selected card's verified
+  assignment through the wire and retained connector block; bypass only sender mutes for that built-in source.
+  Test ordinary cards, unrelated card mentions, other assignees, context-only assignments and chat mutes as negatives.
+  Apply the same empty-label boundary to containers and sibling rows: a field already assigning somebody else
+  must not lend its role to an unrelated nested mention.
+  An explicit `at` can still be an ordinary mention without an assignment; an unrelated `person` must not inherit
+  another person's completed role field. Test the emitted assignment flag, not just the actionable tier.
+  Keep rendered-name fallback separate from structured identities: a peer's ID must not match the owner through
+  display text. Use labeled-name fallback only for identity-free projections, and never inherit a multiline
+  completed field as an empty role label.
+- A selected historical recovery must finish and persist normal triage before bypassing the twin's age limit.
+  Run triage only for the selected rows, even when twins are disabled; queue afterwards only when the normal verdict,
+  policies and current twin configuration allow it. Do not force every recovered request into Needs You.
+- Equal source timestamps do not order different message IDs. Keep an explicitly recovered equal-time move
+  separately instead of dropping it or overwriting an unselected row. Keep older/undated move and completed-thread
+  guards. Select only open rows for replay follow-up, checking again after mutes; `handled()` means active handling,
+  not completion, and must not exclude an open conversation from continuation.
+- Exact-ID recovery still needs the normal bound-app feedback filter: selecting our own bot's output must not
+  turn it into new work. Filter only a verified app sender matching the binding, not an owner's user ID carrying
+  app metadata or another bot. Do not update the seen ledger or cursor when excluding a selected bot message.
+- Structured card identities must use `user_id` or `open_id` with a nonempty `ou_` ID and no conflicting declared
+  ID type. A generic element `id` is not a user identity and must not grant admission or a sender-mute exception.
+- Check bot-info fixtures against the CLI's output, not just an HTTP response example: the CLI can flatten the bot
+  object into `data.open_id`. Accept that projection and a nested `bot.open_id`; when a bot object is present,
+  require its own valid identity rather than falling back to an unrelated outer ID. Test both shapes and missing
+  or invalid bot identities. Reject empty `ou_` suffixes and invalid characters before caching, so unresolved
+  identity remains retryable and cannot silently settle a possible handoff.
+
 - An all-account mail search must fail when any account fails, even if another supplies results; otherwise older HTTP, tool and subscription clients accept an incomplete page as complete. Keep cancellation distinct, and do not put upstream error details or credentials into the aggregate error (#4462). Verify the actual callers with two independent loopback IMAP servers, including retry after repair and a healthy empty result.
 
 - Lark message rendering copies the Lark gateway's web client (`docs/apple/ios.md` ("Lark message rendering")): the hub forwards `parts` unchanged and only rewrites media URLs to `/api/v1/lark/media/`;

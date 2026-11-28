@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/connector"
@@ -31,6 +32,10 @@ type InboxConnector struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 	// RuleTier is the connector's tier for triage without a model.
 	RuleTier string `json:"rule_tier,omitempty"`
+	// OwnerAssigned preserves a source-verified responsibility card's sender-mute exception.
+	OwnerAssigned bool `json:"owner_assigned,omitempty"`
+	// Replay identifies an exact recovered move until ordinary activity advances the row.
+	Replay bool `json:"replay,omitempty"`
 	// Tags are what the thread is about (its repository, chat, sender…): what it can be muted by.
 	Tags []connector.Tag `json:"tags,omitempty"`
 }
@@ -80,10 +85,12 @@ func (s *Service) settleConnector(ctx context.Context, id string) []*InboxItem {
 }
 
 // applyConnector turns a connector's things into items, under b.mu: one open item per thread gathers its later
-// moves until it is done; a move after that starts a new item; a thing that is over closes its open item.
+// moves until it is done; an exact-ID recovery retains its selected moves separately. A move after done starts
+// a new item; a thing that is over closes its open item.
 func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThing, now time.Time) []*InboxItem {
 	var changed, renamed []*InboxItem
-	if name != "" {
+	scoped := b.batch != nil && b.batch.only != nil
+	if name != "" && !scoped {
 		// A connector renamed (a new localized name, say) renames its items too, not only the ones that move next.
 		for _, it := range b.items {
 			if it.Source == id && it.Connector != nil && it.AccountName != name {
@@ -93,17 +100,75 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 			}
 		}
 	}
+	type move struct{ thread, last string }
+	selected := make(map[move]*InboxItem, len(things))
+	recoveredOpen := map[string]*InboxItem{}
+	for _, t := range things {
+		selected[move{t.Thread, t.Last}] = nil
+	}
+	b.each(func(it *InboxItem) {
+		if it.Source != id || it.Connector == nil || (!scoped && !it.Connector.Replay) {
+			return
+		}
+		thread := it.Connector.Thread
+		key := move{thread, it.Last}
+		if prior, ok := selected[key]; ok && (prior == nil || newerItem(it, prior)) {
+			selected[key] = it
+		}
+		if !scoped && it.DoneAt == nil {
+			if prior := recoveredOpen[thread]; prior == nil || newerItem(it, prior) {
+				recoveredOpen[thread] = it
+			}
+		}
+	})
 	index := b.threads(func(it *InboxItem) (string, bool) {
 		if it.Source != id || it.Connector == nil {
+			return "", false
+		}
+		if scoped {
+			if _, ok := selected[move{it.Connector.Thread, it.Last}]; ok {
+				return "", false // another selected move must not absorb this activity, even on a retry
+			}
+		}
+		if it.Connector.Replay && it.DoneAt == nil {
+			// An ordinary move must establish that it follows a recovered one before advancing it.
 			return "", false
 		}
 		return it.Connector.Thread, true
 	})
 	for _, t := range things {
 		open, done := index.openFor(t.Thread)
+		if exact := selected[move{t.Thread, t.Last}]; exact != nil {
+			if exact.Last != t.Last {
+				continue // ordinary activity already advanced this recovered row in the same batch
+			}
+			if exact.Connector.OwnerAssigned != t.OwnerAssigned || !slices.Equal(exact.Connector.Tags, t.Tags) ||
+				scoped && exact.DoneAt == nil && !exact.Connector.Replay {
+				b.roundWrite(exact)
+				exact.Connector.OwnerAssigned, exact.Connector.Tags = t.OwnerAssigned, t.Tags
+				if scoped && exact.DoneAt == nil {
+					exact.Connector.Replay = true
+				}
+				changed = append(changed, exact)
+			}
+			if exact.DoneAt != nil {
+				continue // recovery must not reopen an already handled selected activity
+			}
+			open, done = exact, nil
+		} else if scoped {
+			open = nil // only the exact selected message may be changed; keep the completed-thread guard
+		} else if recovered := recoveredOpen[t.Thread]; recovered != nil && recovered.DoneAt == nil &&
+			recovered.Connector.Replay && t.At.After(recovered.UpdatedAt) &&
+			(open == nil || newerItem(recovered, open)) &&
+			(done == nil || (t.Last != done.Last && t.At.After(done.UpdatedAt))) {
+			open = recovered
+		}
 		if t.Done != "" {
 			if open != nil && b.settleThing(open, t, now) {
-				changed = append(changed, open)
+				index.note(open)
+				if !containsItem(changed, open) {
+					changed = append(changed, open)
+				}
 			}
 			continue
 		}
@@ -117,6 +182,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				fillConnectorItem(open, t)
 				b.setConnectorExternalPath(open, t)
 				b.replaceContextKeepingMergedMembers(open, open.Context)
+				index.note(open)
 				b.noteReceived(open, prev, nil)
 				if t.Tier != "" {
 					b.noteTriaged(open)
@@ -129,7 +195,9 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 				b.roundWrite(open)
 				setRuleTier(open, t)
 				b.noteTriaged(open)
-				changed = append(changed, open)
+				if !containsItem(changed, open) {
+					changed = append(changed, open)
+				}
 			}
 			// The thread's picture is the conversation's now, not a move's: a new one (or a connector that began to send
 			// one) shows on the open item at once. An older thing says nothing of it, as of the rest.
@@ -165,6 +233,7 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		}
 		it := &InboxItem{ID: itemID, Source: id, Account: id, AccountName: name, StartedAt: t.At, Count: moveCount(t)}
 		fillConnectorItem(it, t)
+		it.Connector.Replay = scoped
 		b.setConnectorExternalPath(it, t)
 		b.noteReceived(it, inboxSeen{}, nil)
 		if t.Tier != "" {
@@ -174,6 +243,9 @@ func (b *inboxBook) applyConnector(id, name string, things []connector.InboxThin
 		b.add(id, it)
 		b.roundNew(it)
 		index.note(it)
+		if scoped {
+			selected[move{t.Thread, t.Last}] = it
+		}
 		changed = append(changed, it)
 	}
 	for _, it := range renamed {
@@ -235,7 +307,7 @@ func fillConnectorItem(it *InboxItem, t connector.InboxThing) {
 		rule = connector.Tier(t.Extra.RuleTier) // its fallback (capability fallback): the model still sorts it first
 	}
 	it.Connector = &InboxConnector{Thread: t.Thread, Label: t.Label, URL: t.URL, ThreadState: t.ThreadState, OpenURL: t.OpenURL, ReplyTo: t.ReplyTo, CanReply: t.CanReply,
-		Avatar: thingAvatar(t), RuleTier: string(rule), Tags: t.Tags}
+		Avatar: thingAvatar(t), RuleTier: string(rule), OwnerAssigned: t.OwnerAssigned, Tags: t.Tags}
 	if where := whereOf(t.Tags); where != "" {
 		it.Where = where
 	}
