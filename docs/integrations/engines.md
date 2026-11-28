@@ -317,7 +317,7 @@ switch's value but stops it applying.
 
 With it on, the manager (`server/internal/assistant/orca_chat_default.go`, in `agents.start_params`, the step every New Agent start an
 app makes goes through) sends a start to the computer's Orca chat launcher of the same provider (`orca-claude` / `orca-codex`,
-"Starting a chat" in `docs/plans/plan-orca-support.md`) when all of these hold:
+"Starting a chat" in `docs/integrations/orca.md`) when all of these hold:
 
 - the person kept New Agent's default: no launcher, preset or model picked, and no host but Orca;
 - that default runs the plain Claude Code or Codex CLI (`claude` / `codex`). A wrapper or a provider kept in Persona stays in a
