@@ -6,7 +6,7 @@
 //
 //   MOCK_ORCA_CHAT_LAUNCHERS=1 PORT=18741 python3 scripts/mock/mock_hub.py &
 //   (cd web && PERSONA_HUB_URL=http://127.0.0.1:18741 npx vite --port 5201 --strictPort &)
-//   node web/e2e/orca-chat-launchers.mjs http://127.0.0.1:5201 [--without] [--shots <dir>] [--channel chrome]
+//   node web/e2e/orca-chat-launchers.mjs http://127.0.0.1:5201 [--without] [--shots <dir>] [--channel chrome | --executable <browser>]
 //
 // Runs at 1280 wide, light and dark, in English; --shots saves web-orca-chat-<state>-<theme>[-without].png. Prints one
 // line per check and a verdict; exits 1 on a failure.
@@ -22,9 +22,10 @@ const flag = (name) => {
 const base = (args[0] ?? "").replace(/\/$/, "");
 const shots = flag("--shots");
 const channel = flag("--channel");
+const executablePath = flag("--executable"); // a browser of another Playwright build (a test host's)
 const without = args.includes("--without");
 if (!base) {
-  console.error("usage: node web/e2e/orca-chat-launchers.mjs <web URL> [--without] [--shots <dir>] [--channel chrome]");
+  console.error("usage: node web/e2e/orca-chat-launchers.mjs <web URL> [--without] [--shots <dir>] [--channel chrome | --executable <browser>]");
   process.exit(2);
 }
 if (shots) mkdirSync(shots, { recursive: true });
@@ -44,7 +45,7 @@ async function until(check, what, tries = 80) {
   fail(what);
 }
 
-const browser = await chromium.launch(channel ? { channel } : {});
+const browser = await chromium.launch(executablePath ? { executablePath } : channel ? { channel } : {});
 try {
   for (const theme of ["light", "dark"]) {
     const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, deviceScaleFactor: 2, colorScheme: theme, locale: "en-US" });
