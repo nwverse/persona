@@ -181,6 +181,9 @@ type StartParams struct {
 	// GuestHandoff: a proxy reply's guest (assistant/bot_handoff.go). The manager registers it before the node
 	// starts it; never over the bus.
 	GuestHandoff string `json:"-"`
+	// GuestGroup: a group guest's conversation key (chat and thread, assistant/bot_guest.go). The manager registers it
+	// before the node starts it; never over the bus.
+	GuestGroup string `json:"-"`
 	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
 	// that cannot picks its own. Never over the bus.
 	NewSessionID string `json:"-"`

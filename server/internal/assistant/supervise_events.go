@@ -198,7 +198,10 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 		detail += "：" + c.Reason
 	}
 	if c.Verdict == verdictUnsure { // no word on it either way: not "stopped short" (#3111)
-		g := superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail}
+		if len(c.unlinked) != 0 {
+			detail = c.Reason
+		}
+		g := superviseSignal{Todo: t.ID, Kind: sigUnjudged, Key: key, Detail: detail, Unlinked: c.unlinked}
 		s.signalOutageAware(ctx, t, g, nil, s.isOutageCausedUnjudged(ctx, t, c, nil))
 		return
 	}
