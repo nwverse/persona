@@ -132,11 +132,23 @@ func configSocket(path string) string {
 			continue
 		}
 		v = strings.TrimSpace(v)
-		if i := strings.Index(v, " #"); i >= 0 && !strings.HasPrefix(v, `"`) && !strings.HasPrefix(v, "'") {
-			v = strings.TrimSpace(v[:i])
+		if len(v) >= 2 && v[0] == '"' {
+			for i := 1; i < len(v); i++ {
+				if v[i] == '\\' {
+					i++
+					continue
+				}
+				if v[i] == '"' {
+					if s, err := strconv.Unquote(v[:i+1]); err == nil {
+						return s
+					}
+					return ""
+				}
+			}
+			return ""
 		}
-		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') {
-			if end := strings.IndexByte(v[1:], v[0]); end >= 0 {
+		if len(v) >= 2 && v[0] == '\'' {
+			if end := strings.IndexByte(v[1:], '\''); end >= 0 {
 				return v[1 : 1+end]
 			}
 		}
@@ -257,10 +269,16 @@ func (c *Client) Call(ctx context.Context, timeout time.Duration, method string,
 }
 
 func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method string, params, out any) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("herdr-core %s: %w", method, err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := c.dial(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+		}
 		return err
 	}
 	defer conn.Close()
@@ -270,21 +288,32 @@ func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method str
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
 	id := c.seq.Add(1)
+	idStr := strconv.FormatInt(id, 10)
 	if err := writeRequest(conn, id, method, params); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+		}
 		return fmt.Errorf("herdr-core %s: %w", method, err)
 	}
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
 		line, err := readLine(r, maxLine)
 		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("herdr-core %s: %w", method, ctx.Err())
+			}
 			return fmt.Errorf("herdr-core %s: %w", method, err)
 		}
 		var env response
 		if err := json.Unmarshal(line, &env); err != nil {
 			return fmt.Errorf("herdr-core %s: decode: %v", method, err)
 		}
-		if env.ID == nil || string(env.ID) != strconv.FormatInt(id, 10) {
-			continue // a notification
+		rawID := bytes.TrimSpace(env.ID)
+		if env.Error != nil && (len(rawID) == 0 || string(rawID) == "null") {
+			return env.decode(out)
+		}
+		if len(rawID) == 0 || string(rawID) != idStr {
+			continue // a notification or unrelated response
 		}
 		return env.decode(out)
 	}
