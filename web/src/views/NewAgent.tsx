@@ -69,7 +69,9 @@ import { NewAgentModel, useModelList } from "./NewAgentModel";
 import { ExecutionCheck } from "./execution/ExecutionCheck";
 import { ProjectDocumentContext, ProjectDocumentSource, projectDocumentText, type ProjectDocumentSnapshot } from "./NewAgentProjectDocument";
 
-const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern", "rex"]);
+// The terminal engines a document's start goes to as its first message, as any first message does: Orca's terminals too
+// (#17053), which open in the chosen folder since #17036. Paseo and the other runtimes are not terminals.
+const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "orca", "tern", "rex"]);
 
 // several forwarded at once (#3838): their bar, from the group's chunk, which Forward to has loaded by then
 const ForwardGroupBar = lazyPage(() => import("./chat/ForwardGroup").then((m) => m.ForwardGroupBar));

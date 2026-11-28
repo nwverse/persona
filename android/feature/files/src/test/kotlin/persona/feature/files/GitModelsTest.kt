@@ -288,15 +288,84 @@ class GitModelsTest {
         assertEquals("Tom & Jerry", FileMarkdownText.simplifyHtml("<b>Tom &amp; Jerry</b>"))
         // A line that is only a dropped tag disappears instead of leaving an empty paragraph mark.
         assertEquals("before\nafter", FileMarkdownText.simplifyHtml("before\n<div>\nafter"))
+        // CommonMark 4-backtick outer fence containing a 3-backtick HTML example must NOT close prematurely.
+        val nestedFence = "````markdown\n```html\n<div>keep</div>\n```\n````\n<p>after</p>"
+        assertEquals("````markdown\n```html\n<div>keep</div>\n```\n````\nafter", FileMarkdownText.simplifyHtml(nestedFence))
+        // CommonMark 0-3 space indentation opens/closes fences; 4 spaces or leading tab does NOT; CRLF fences work.
+        assertEquals("   ```\n<keep>\n   ```\nafter", FileMarkdownText.simplifyHtml("   ```\n<keep>\n   ```\n<p>after</p>"))
+        assertEquals("    ```\nplain\n    ```", FileMarkdownText.simplifyHtml("    ```\n<p>plain</p>\n    ```"))
+        assertEquals("\t```\nplain\n\t```", FileMarkdownText.simplifyHtml("\t```\n<p>plain</p>\n\t```"))
+        assertEquals("```\r\n<keep>\r\n```\r\nafter", FileMarkdownText.simplifyHtml("```\r\n<keep>\r\n```\r\n<p>after</p>"))
+        // Apostrophes inside double-quoted AND unquoted attributes, `>` inside quoted attrs, entities, and HTML5 whitespace end tags work.
+        assertEquals("![Don't panic](a.png)", FileMarkdownText.simplifyHtml("<img src=\"a.png\" alt=\"Don't panic\">"))
+        assertEquals("![don't](a.png)", FileMarkdownText.simplifyHtml("<img alt=don't src=\"a.png\">"))
+        assertEquals("[Go](https://a)", FileMarkdownText.simplifyHtml("<a title=\"x > y\" href=\"https://a\">Go</a>"))
+        assertEquals("Go", FileMarkdownText.simplifyHtml("<span title=\"x > y\">Go</span>"))
+        assertEquals("[Go](https://example.com)", FileMarkdownText.simplifyHtml("<a href=\"https://example.com\">Go</a \t>"))
+        assertEquals("keep &lt; & ' ' &#0; &#xD800;", FileMarkdownText.simplifyHtml("<a-tag>keep &amp;lt; &AMP; &#39; &#x27; &#0; &#xD800;</a-tag>"))
+        // Repeated unclosed HTML tags run in linear time without regex backtracking.
+        val unclosedAnchors = "<a href=\"x\">".repeat(20_000) + "ok"
+        assertEquals("ok", FileMarkdownText.simplifyHtml(unclosedAnchors))
+        val unclosedLt = "<".repeat(30_000) + "tail"
+        assertEquals(unclosedLt, FileMarkdownText.simplifyHtml(unclosedLt))
     }
 
     @Test fun bareLinksEndAtTheFirstNonAsciiCharacter() {
         assertEquals("详见 <https://example.com/a>。后面", FileMarkdownText.links("详见 https://example.com/a。后面"))
         assertEquals("(see <https://example.com/x_(y)>).", FileMarkdownText.links("(see https://example.com/x_(y))."))
-        // Links already written as Markdown, autolinks and code are left alone.
+        // Links already written as Markdown, autolinks, nested badges, escapes, balanced parens, and multi-backtick code are left alone.
         assertEquals("[a](https://example.com) <https://example.com> `https://example.com`",
             FileMarkdownText.links("[a](https://example.com) <https://example.com> `https://example.com`"))
+        assertEquals("``https://example.com``", FileMarkdownText.links("``https://example.com``"))
+        assertEquals(
+            "[![badge](https://img.example/a.svg)](https://example.com)",
+            FileMarkdownText.links("[![badge](https://img.example/a.svg)](https://example.com)"),
+        )
+        assertEquals(
+            """[a\]b](https://example.com/a\)b) [c](https://example.com/(b)c)""",
+            FileMarkdownText.links("""[a\]b](https://example.com/a\)b) [c](https://example.com/(b)c)"""),
+        )
         assertEquals("[api]: <https://example.com/api>", FileMarkdownText.links("[api]: https://example.com/api"))
+        // Bare URL directly before OR immediately after a protected span is handled without swallowing or skipping.
+        assertEquals("<https://a.example/>`code`<https://b.example>", FileMarkdownText.links("https://a.example/`code`https://b.example"))
+        assertEquals("[a](https://a.example)<https://b.example>", FileMarkdownText.links("[a](https://a.example)https://b.example"))
+        // Mid-line ``` inside a fenced code block does not close it; unclosed fence protects through EOF.
+        val midLineFence = "```\nmid ``` line\nhttps://inside.example\n```\nhttps://outside.example"
+        assertEquals("```\nmid ``` line\nhttps://inside.example\n```\n<https://outside.example>", FileMarkdownText.links(midLineFence))
+        val unclosedMultilineFence = "```\nhttps://inside.example"
+        assertEquals(unclosedMultilineFence, FileMarkdownText.links(unclosedMultilineFence))
+        // Unclosed `[` or `<https://` must not swallow bare URLs on following lines or paragraphs.
+        val unclosedBracketNextLine = "[unclosed\nhttps://example.com/mid\n[ok](https://b.example)"
+        assertEquals("[unclosed\n<https://example.com/mid>\n[ok](https://b.example)", FileMarkdownText.links(unclosedBracketNextLine))
+        val unclosedBracketBlankLine = "[unclosed\n\nhttps://example.com/p2\nfoo](https://b.example)"
+        assertEquals("[unclosed\n\n<https://example.com/p2>\nfoo](<https://b.example>)", FileMarkdownText.links(unclosedBracketBlankLine))
+        val unclosedAutolinkNextLine = "<https://unclosed.example\nhttps://example.com/next\nfoo>"
+        assertEquals("<<https://unclosed.example>\n<https://example.com/next>\nfoo>", FileMarkdownText.links(unclosedAutolinkNextLine))
+        // Adversarial inputs stay strictly O(N) without DoS or OOM.
+        val unclosedLinks = "[a](".repeat(20_000) + " https://example.com/end"
+        assertTrue(FileMarkdownText.links(unclosedLinks).endsWith(" <https://example.com/end>"))
+        val repeatedOpens = "[".repeat(30_000) + "]( https://example.com/o"
+        assertTrue(FileMarkdownText.links(repeatedOpens).endsWith(" <https://example.com/o>"))
+        val unclosedFences = "``` ".repeat(15_000) + "https://example.com/f"
+        assertTrue(FileMarkdownText.links(unclosedFences).endsWith("<https://example.com/f>"))
+        val hugeBacktickFence = "`".repeat(50_000) + "a".repeat(50_000) + " https://example.com"
+        assertEquals(hugeBacktickFence, FileMarkdownText.links(hugeBacktickFence))
+        val hugeInlineBackticks = "x " + "`".repeat(50_000) + "a".repeat(50_000) + " https://example.com"
+        assertTrue(FileMarkdownText.links(hugeInlineBackticks).endsWith(" <https://example.com>"))
+        val descendingInlineBackticks = "x " + (400 downTo 3).joinToString(" ") { "`".repeat(it) } + " https://example.com"
+        assertTrue(FileMarkdownText.links(descendingInlineBackticks).endsWith(" <https://example.com>"))
+        val descendingTildes = (400 downTo 3).joinToString("\n") { "~".repeat(it) } + "\nhttps://inside.example"
+        assertEquals(descendingTildes, FileMarkdownText.links(descendingTildes))
+        val manyTrailingParens = "https://example.com/" + ")".repeat(30_000)
+        assertEquals("<https://example.com/>" + ")".repeat(30_000), FileMarkdownText.links(manyTrailingParens))
+        val repeatedProtectedLinks = "[a](https://a.example)".repeat(30_000)
+        assertEquals(repeatedProtectedLinks, FileMarkdownText.links(repeatedProtectedLinks))
+        val repeatedSchemeLt = "https://<".repeat(50_000)
+        assertEquals(repeatedSchemeLt, FileMarkdownText.links(repeatedSchemeLt))
+        val repeatedBareAndCode = "https://a.example`x`".repeat(30_000)
+        assertEquals("<https://a.example>`x`".repeat(30_000), FileMarkdownText.links(repeatedBareAndCode))
+        val manySpans = "`x` ".repeat(3_000) + "https://example.com/1 ".repeat(1_000)
+        assertTrue(FileMarkdownText.links(manySpans).contains("<https://example.com/1>"))
     }
 
     @Test fun linksAndImagesInAMarkdownFileNameFilesNextToIt() {

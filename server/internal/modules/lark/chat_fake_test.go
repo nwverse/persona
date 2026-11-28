@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -54,6 +55,8 @@ type chatData struct {
 	decision    func(todoID, text, messageID string) string
 	openTodo    func(t assistantwire.ChatOpenTodo) (string, error)
 	acceptReply func(messageID, text string) bool
+
+	guest *guestFake
 }
 
 // startedRun is a run the chat asked the core to start for a message (Host.StartRun).
@@ -558,4 +561,53 @@ func (s *Service) WithdrawHandoffDecision(_ context.Context, id string) {
 	s.tmu.Lock()
 	defer s.tmu.Unlock()
 	d.withdrawn = append(d.withdrawn, id)
+}
+
+// guestFake records the group guest conversations the module started and the later questions it sent.
+type guestFake struct {
+	mu       sync.Mutex
+	starts   []guestStart
+	sends    []guestSend
+	startErr error
+	gone     bool
+}
+
+type guestStart struct {
+	key, text, launcher string
+	tools               []string
+}
+type guestSend struct{ machine, session, turn string }
+
+func (s *Service) guests() *guestFake {
+	d := s.ch()
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	if d.guest == nil {
+		d.guest = &guestFake{}
+	}
+	return d.guest
+}
+
+func (s *Service) StartGroupGuest(_ context.Context, group, text, launcher string, tools []string) (string, string, error) {
+	f := s.guests()
+	f.mu.Lock()
+	f.starts = append(f.starts, guestStart{group, text, launcher, append([]string(nil), tools...)})
+	err := f.startErr
+	f.mu.Unlock()
+	if err != nil {
+		return "", "", err
+	}
+	return "m1", "s1", nil
+}
+
+func (s *Service) SendGroupGuest(_ context.Context, machine, session, turn, _ string) error {
+	f := s.guests()
+	f.mu.Lock()
+	f.sends = append(f.sends, guestSend{machine, session, turn})
+	gone := f.gone
+	f.mu.Unlock()
+	if gone {
+		return errors.New(guestGone)
+	}
+	return nil
 }

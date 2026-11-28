@@ -278,8 +278,8 @@ runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but in
     the modes Orca takes for it (`capabilities.permission_modes`, its approval as `default`, from Orca's own table: Codex ask / auto / full-access, Antigravity
     and Hermes ask / accept-edits / full-access, most providers ask / full-access, pi, aug and a provider outside the table none; plus `plan` where its options
     report an interaction mode, as Codex's do) and the efforts its model has that Persona can send (`efforts`, from `agentSession.options`' models); a mode Orca
-    does not take for it is refused (`orca_mode_unsupported`) with nothing changed. A model change is offered on every open chat (`capabilities.model`); the
-    apps list the computer's launcher models for it until Orca's chats have launchers of their own (#17047).
+    does not take for it is refused (`orca_mode_unsupported`) with nothing changed. A model change is offered on every open chat (`capabilities.model`), from
+    the models of its provider's launcher (below) where it has one, else the computer's launcher models.
   - Rename is `agentSession.rename {sessionId, name}` (`agent-session.structured.rename.v1`; an Orca without it is refused as `orca_rename_unsupported`).
   - Rewind is `agentSession.rewind {envelope, itemId, expectedEpoch}` (`agent-session.rewind.v1`; a row says `capabilities.rewind` only while Orca has it and
     `agentSession.options` says the chat supports it). The bridge finds the user's message in Orca's journal (the newest 2,000 rows) by its text (white space
@@ -291,6 +291,27 @@ runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but in
   - Seen is `agentSession.acknowledgeAttention {sessionId, observedCursor}` up to the journal's end (`agent-session.attention-ack.v1`; nothing on an Orca
     without it), so a chat read in Persona is not unread in Orca.
   - A closed chat (above) takes none of these until a message opens it again.
+- **Starting a chat** (#17047, `orcabridge_start.go`; `caps.start`):
+  - Launchers: one per provider Orca runs as a chat (its structured agents) and found installed (`preflight.installedAgents`, read at most once a minute),
+    on an Orca whose `agent.launch` takes the chat surface (`agent.launch.surface.v1`): `orca-<provider>` (`orca-claude`, `orca-codex`…), display name
+    "Orca chat · <provider>", pushed with `runtime.launchers` as they change. A provider other than Claude Code lists the permission modes a start takes
+    (Orca's table, plan aside: the bridge promises no read-only start, `caps.readonly`, so the node refuses a plan start), and each lists the models its
+    provider's open chats name in `agentSession.options` (with the efforts among Persona's levels). None while Orca is not running or cannot start chats,
+    and none on a computer whose Orca host is off (the bridge does not run there). Every open chat's row names its provider's launcher (`launcher`), so the
+    apps' model picker offers Orca's models; a chat Persona started says `started_by_persona`.
+  - `start({cwd, prompt, client_msg_id, launcher, model, permission_mode, effort, session_id})`: the chat goes into the deepest local Orca worktree holding
+    `cwd`, else, for a folder in a Git repository Orca does not have (not the home folder, the root or a temporary folder), the repository added with
+    `repo.add` as a terminal start adds it; a folder no worktree holds is refused (`orca_start_folder`), never started in an unrelated workspace. The chat
+    starts at its worktree's root (Orca's chat surface takes no start directory). It is `agent.launch {agent, operationId, target: {kind: "existing",
+    worktree}, prompt: {text, delivery: "submit"}, chatOptions: {permissionMode, model, effort}, sessionId, surface: "chat", presentation: "background"}`,
+    as Orca's own New chat, so Orca's window keeps what it shows; an Orca whose launch has no chat surface gets `agentSession.create` (envelope with no
+    fence, `firstMessage`, `options`); one with neither is refused (`orca_start_unsupported`). Pictures reach it as for any runtime start: the node saves
+    them and names their files in the prompt.
+  - Never doubled: the Orca session id is `persona-<the id the hub named>` (the book maps it back, above). A start asked for again finds the chat it made
+    (the row it answered with stands until Orca lists the chat, at most a minute, else Orca's `agentSession.history` knows the id) and launches nothing.
+  - A later per-computer default ("New Agent starts Orca chats") would route New Agent's Claude Code and Codex starts on that computer to `orca-claude` /
+    `orca-codex` in the node; it is not built (an open product decision). The assistant's task Agents stay in terminals either way: an Orca chat carries
+    none of Persona's launcher, hooks or MCP config.
 - **Cards**: when blocked, read `agentSession.currentRequests`, mapping pending approvals to permission cards (if `detail` is tool-input JSON,
   show commands/files like hook cards), plan approvals to plan cards, and questions to question cards. Return answers with Orca option IDs and `expectedRevision`.
   Cards disappear from the phone if answered on the computer first. Every answer of a question goes: Orca 1.4.277 takes at most four in one reply and refuses more, which

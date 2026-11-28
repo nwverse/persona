@@ -150,13 +150,18 @@ type Write struct {
 // mutate sends a write: fields (hashed under hashMethod, Orca's name for it) next to the envelope. A refusal in the
 // result comes back as an *Error with Orca's refusal code.
 func (c *Client) mutate(ctx context.Context, method, hashMethod string, w Write, fields map[string]any, out any) error {
-	fp, err := Fingerprint(hashMethod, w.SessionID, fields)
-	if err != nil {
-		return err
-	}
 	fence := w.Fence
 	if fence <= 0 {
 		fence = 1 // hosts since 1.4.246 ignore it; a positive number passes the older ones' schema
+	}
+	return c.write(ctx, method, hashMethod, w, fence, fields, out)
+}
+
+// write is mutate with the envelope's expectedRuntimeFence as given (nil for a session not created yet).
+func (c *Client) write(ctx context.Context, method, hashMethod string, w Write, fence any, fields map[string]any, out any) error {
+	fp, err := Fingerprint(hashMethod, w.SessionID, fields)
+	if err != nil {
+		return err
 	}
 	params := map[string]any{"envelope": map[string]any{"sessionId": w.SessionID, "clientOperationId": w.OperationID,
 		"expectedRuntimeFence": fence, "payloadFingerprint": fp}}
@@ -331,13 +336,17 @@ func (c *Client) Prompts(ctx context.Context, sessionID string) ([]Prompt, error
 }
 
 // Options is the part of agentSession.options Persona shows: the session's permission mode, interaction mode ("plan"
-// or "default"; "" from hosts without one), effort and model, Orca's words; the efforts each model it lists takes
-// (by model id, weakest first; none when Orca does not know them), and whether the chat can be rewound.
+// or "default"; "" from hosts without one), effort and model, Orca's words; the models it lists (their ids in Orca's
+// order, their names, the one it runs when none is picked), the efforts each takes (by model id, weakest first; none
+// when Orca does not know them), and whether the chat can be rewound.
 type Options struct {
 	PermissionMode  string
 	InteractionMode string
 	Effort          string
 	Model           string
+	Models          []string
+	ModelNames      map[string]string
+	DefaultModel    string
 	Efforts         map[string][]string
 	Rewind          bool
 }
@@ -352,8 +361,10 @@ func (c *Client) Options(ctx context.Context, sessionID string) (*Options, error
 			Model           string `json:"model"`
 		} `json:"current"`
 		Models []struct {
-			ID      string            `json:"id"`
-			Efforts []json.RawMessage `json:"efforts"`
+			ID        string            `json:"id"`
+			Label     string            `json:"label"`
+			IsDefault bool              `json:"isDefault"`
+			Efforts   []json.RawMessage `json:"efforts"`
 		} `json:"models"`
 		Rewind *struct {
 			Supported bool `json:"supported"`
@@ -365,7 +376,20 @@ func (c *Client) Options(ctx context.Context, sessionID string) (*Options, error
 	o := &Options{PermissionMode: res.Current.PermissionMode, InteractionMode: res.Current.InteractionMode,
 		Effort: res.Current.Effort, Model: res.Current.Model, Rewind: res.Rewind != nil && res.Rewind.Supported}
 	for _, m := range res.Models {
-		if efforts := effortsOf(m.Efforts); m.ID != "" && len(efforts) > 0 {
+		if m.ID == "" { // Orca's stand-in for a model it was not told
+			continue
+		}
+		o.Models = append(o.Models, m.ID)
+		if m.Label != "" {
+			if o.ModelNames == nil {
+				o.ModelNames = map[string]string{}
+			}
+			o.ModelNames[m.ID] = m.Label
+		}
+		if m.IsDefault {
+			o.DefaultModel = m.ID
+		}
+		if efforts := effortsOf(m.Efforts); len(efforts) > 0 {
 			if o.Efforts == nil {
 				o.Efforts = map[string][]string{}
 			}

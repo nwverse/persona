@@ -612,7 +612,11 @@ Not tested on real herdr: these changes don't touch protocol.
 Computer-changing actions in terminal/sidebar-tree node menus (`docs/web/web.md`, "Node menu"). Hub routes are **`full`-device-only** (`nodeAction` in `hub/panes.go`: `answer` devices and extension tokens 403, `route_scopes.txt` `-`),
 with node methods `panes.close` / `panes.split` / `panes.agent` / `panes.git` / `tabs.close` / `tabs.rename` (`node/panes_actions.go`). Common rules: only host-listed panes/tabs/workspaces (refresh snapshot once if missing), directory comes from the pane, no request field for arbitrary directory or command.
 
-- **Host capability**: `host.SlotCloser` (whole tab), `host.Splitter` (split), implemented only by herdr. Orca, herdr-core, botmux return `unsupported`, and web hides actions. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
+- **Host capability**: `host.Organizer` (rename a workspace or tab, close a pane), `host.SlotCloser` (whole tab), `host.Splitter` (split). A host without one returns `unsupported`.
+  `panes.list` reports what each host does as `abilities` (#17053, `paneAbilities` in `node/panes.go`): `rename` and `close_pane` from `host.Organizer`, `split`, `close_tab`,
+  `git` for every host whose terminals the node drives (not botmux), and `run_here` for the default engine's host when it can name a pane's foreground programs.
+  The web's menus follow it (`web/src/lib/host-abilities.ts`), so a host that gains an interface gets its items with no client change; for an older node
+  that sends none they keep a table of what it did: herdr everything, Orca rename, close pane and Git, Tern and Rex rename. herdr uses `tab close` / `pane split` / `tab rename` / `pane close` (socket `pane.split` etc., CLI fallback `herdr pane split <pane> --direction right --no-focus --cwd …`).
 - **Close pane**: Agent pane through `session.close` (^C twice to request exit, then close); shell via host `Close`—close tab if last pane, otherwise only pane. **Close tab** directly closes entire tab.
 - **New pane**: `pane split <pane> --direction right|down`, no computer focus stealing, in source pane's directory; returns `pane:<id>`.
 - **Rename tab**: 1–80 characters, whitespace collapsed to single spaces. Agent tabs use existing `session.rename`; others `tabs.rename`.
