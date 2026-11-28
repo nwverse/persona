@@ -105,6 +105,7 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 		}
 		_, c.NewTab = h.(host.Launcher)
 		c.Worktree = canWorktree(h)
+		c.Abilities = n.paneAbilities(h)
 		caps[h.Kind()] = c
 	}
 	n.mu.Lock()
@@ -154,6 +155,33 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 		out.Hosts = append(out.Hosts, ph)
 	}
 	return out, nil
+}
+
+// paneAbilities is what the menu methods (panes_actions.go, rename.go) can do on h, from what h implements: the
+// clients gate their items on it, not on the host's name (#17053), so a host that gains Splitter or SlotCloser gets its
+// items without a client change.
+func (n *Node) paneAbilities(h host.Host) *proto.PaneAbilities {
+	_, organizes := h.(host.Organizer)
+	_, splits := h.(host.Splitter)
+	_, closesTabs := h.(host.SlotCloser)
+	return &proto.PaneAbilities{Rename: organizes, ClosePane: organizes, Split: splits, CloseTab: closesTabs,
+		Git: drivesScreen(h), RunHere: n.runsHere(h)}
+}
+
+// runsHere is what runAgentInPane asks of the host before it looks at the pane: a start goes through the default
+// engine's launcher, so only in that host's panes, and the host must name a pane's foreground programs to tell a shell
+// prompt.
+func (n *Node) runsHere(h host.Host) bool {
+	launch, err := n.launcherFor(n.defaultKind())
+	if err != nil {
+		return false
+	}
+	lh, ok := launch.(host.Host)
+	if !ok || lh.Kind() != h.Kind() {
+		return false
+	}
+	_, names := h.(host.ForegroundNamer)
+	return names
 }
 
 func (n *Node) hasLayout() bool {

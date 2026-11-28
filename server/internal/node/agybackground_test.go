@@ -115,7 +115,10 @@ func TestAgyBackgroundScheduleMessages(t *testing.T) {
 		{"cron expression", `{"CronExpression":"0 * * * *"}`, "Timer: 60s", id, "Check again", false},
 		{"cron description", `{"DurationSeconds":"60"}`, "Cron: 0 * * * *", id, "Check again", false},
 		{"cron iteration", `{"DurationSeconds":"60"}`, "Timer: 60s", id, "Check again (iteration 1)", false},
+		{"timer prompt containing still running", `{"DurationSeconds":"60"}`, "Timer: 60s", id, "Check build progress if still running", true},
 		{"heartbeat", `{"DurationSeconds":"60"}`, "Timer: 60s", id, "Task is still running", false},
+		{"heartbeat with notice prefix", `{"DurationSeconds":"60"}`, "Timer: 60s", id, "[Notice] Task is still running", false},
+		{"heartbeat with task id", `{"DurationSeconds":"60"}`, "Timer: 60s", id, `Task id "task-3" is still running`, false},
 		{"different sender", `{}`, "Timer: 60s", id + "0", "Check again", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

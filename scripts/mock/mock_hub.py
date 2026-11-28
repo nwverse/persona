@@ -11532,7 +11532,8 @@ WORKSPACE_LINEAGE = {}  # (machine, workspace) -> parent source id for Orca-crea
 
 
 def mock_panes(mid):
-    sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id")][:2]
+    # Orca's Agents are in its own host's list (mock_orca_panes), not herdr's
+    sessions = [s for s in SESSIONS if s.get("machine_id") == mid and s.get("pane_id") and s.get("space_kind") != "orca"][:2]
     if mid == "studio":
         return {"hosts": []}
     if os.environ.get("MOCK_PANES_NO_WORKSPACE") and not PANES_NEW.get(mid):
@@ -11574,7 +11575,33 @@ def mock_panes(mid):
             tabs.append({"id": f"w12:t{i}", "workspace_id": "w12", "label": f"agent-{i}", "number": i})
             panes.append({"pane": f"w12:p{i}", "terminal": f"pane:w12:p{i}", "tab_id": f"w12:t{i}", "workspace_id": "w12", "agent": agent,
                           "status": status, "title": title, "cwd": "/home/me/code/marks", "session_id": sid})
-    return {"hosts": [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]}
+    hosts = [{"kind": "herdr", "stream": True, "control": True, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes}]
+    if os.environ.get("MOCK_ORCA_CHILDREN") and mid == "macbook":
+        hosts.append(mock_orca_panes(mid))
+    return {"hosts": hosts}
+
+
+def mock_orca_panes(mid):
+    """MOCK_ORCA_CHILDREN=1 with MOCK_TERMINAL_PANES=1: the MacBook's Orca host (#17053), its worktrees as workspaces, each
+    Orca Agent's terminal tab and a plain shell beside the first. Its `abilities` are what a node reports for an Orca
+    without split and close tab."""
+    ws, tabs, panes = [], [], []
+    for s in SESSIONS:
+        if s.get("machine_id") != mid or s.get("space_kind") != "orca" or not s.get("pane_id"):
+            continue
+        if not any(w["id"] == s["space_id"] for w in ws):
+            ws.append({"id": s["space_id"], "label": s["space_name"], "number": s.get("space_index", 1), "cwd": s["cwd"],
+                       "branch": s["space_name"]})
+        tabs.append({"id": s["tab_id"], "workspace_id": s["space_id"], "label": s.get("slot_name") or "claude", "number": 1})
+        panes.append({"pane": s["pane_id"], "terminal": "pane:" + s["pane_id"], "tab_id": s["tab_id"], "workspace_id": s["space_id"],
+                      "agent": "claude", "status": s.get("status", "idle"), "title": s.get("title"), "cwd": s["cwd"], "session_id": s["session_id"]})
+    if ws:
+        first = ws[0]
+        tabs.append({"id": "tab-shell", "workspace_id": first["id"], "label": "zsh", "number": 2})
+        panes.append({"pane": "orca:tab-shell:leaf1", "terminal": "pane:orca:tab-shell:leaf1", "tab_id": "tab-shell",
+                      "workspace_id": first["id"], "title": "zsh", "cwd": first["cwd"], "foreground": "zsh"})
+    return {"kind": "orca", "stream": False, "control": False, "new_tab": True, "worktree": True, "workspaces": ws, "tabs": tabs, "panes": panes,
+            "abilities": {"rename": True, "close_pane": True, "split": False, "close_tab": False, "git": True, "run_here": False}}
 
 
 def mock_panes_file(mid):

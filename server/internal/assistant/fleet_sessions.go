@@ -431,8 +431,9 @@ func (s *Service) decoratedApart(machine string, mark uint64) ([]proto.Session, 
 		s.logf("load agent archives: %v", err)
 	}
 	shown, archived := a.apart()
-	// The archived rows are not listed in a fold (foldSessions): the visible ones fold as in the whole list.
-	s.foldInventory(machine, shown)
+	// The archived rows are not listed in a fold (foldSessions): the visible ones fold as in the whole list,
+	// while archived stays in the subagent negative-cache retention set.
+	s.foldInventoryWithRetained(machine, shown, archived)
 	s.foldSubset(machine, archived.rows)
 	return shown, archived
 }
