@@ -85,6 +85,9 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         self.assertIn("app.launchPinned()", source)
         self.assertIn("addButton.press(forDuration:", source)
         self.assertIn('NSPredicate(format: "enabled == true")', source)
+        self.assertIn("Synthetic core-edition fixture", source)
+        driver_source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
+        self.assertIn('"main_session": "fixture-machine/" + main_session', driver_source)
 
     def test_machine_fixture_never_starts_a_local_node(self):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()

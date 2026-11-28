@@ -638,8 +638,10 @@ def exercise_app(ctl, base, code, edition, shots, master):
 def run_composer_ui_test(parent, work, client_env, simulator, shots, proof, main_session, readings):
     """Run XCTest's real press-and-hold against the already-paired app and merge its run-bound proof."""
     fixture = work / "composer-fixture.json"
+    # The transcript and store use the bare UUID; -openAssistant's deep link needs machine/session (AttachMenuTests.persona).
     fixture.write_text(json.dumps({"schema": 1, "run_id": proof["run_id"], "edition": proof["edition"],
-                                  "base_url": proof["base_url"], "main_session": main_session, "confirmed_loopback": True}))
+                                  "base_url": proof["base_url"], "main_session": "fixture-machine/" + main_session,
+                                  "confirmed_loopback": True}))
     fixture.chmod(0o600)
     source = parent / "source"
     command = ["python3", "scripts/heavy_slot.py", "run", "--kind", "xcode", "--", "xcodebuild", "test",

@@ -46,6 +46,9 @@ final class CoreOnlyHubLiveUITests: XCTestCase {
     @MainActor private func check(app: XCUIApplication, edition: String, appearance: String, shots: String?) throws -> String {
         defer { app.terminate() }
         XCUIDevice.shared.appearance = appearance == "dark" ? .dark : .light
+        let mainMarker = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label CONTAINS %@", "Synthetic core-edition fixture")).firstMatch
+        XCTAssertTrue(mainMarker.waitForExistence(timeout: 20), "the route did not open the synthetic main conversation:\n\(app.debugDescription)")
         let addButton = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
         XCTAssertTrue(addButton.waitForExistence(timeout: 40), "no composer + button:\n\(app.debugDescription)")
         let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: addButton)
