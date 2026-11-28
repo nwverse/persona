@@ -12150,6 +12150,22 @@ if os.environ.get("MOCK_BOT") == "pairing":
     FEISHU_BOT.update(owner=None, agents=[], target="", pairing={"code": "482913", "expires_at": int(time.time()) + 540})
 elif os.environ.get("MOCK_BOT") == "off":
     FEISHU_BOT.update(enabled=False, app_id="", has_secret=False, connected=False, bot_name=None, owner=None, agents=[], target="")
+# Group access for the Lark bot (GET/PUT /api/v1/bots/feishu/group-access, #16848): the whole policy, written back at the
+# revision it was read at. MOCK_BOT_GROUP=allowlist preloads an allowlist with one recent request and one tool, =absent
+# answers 404 as a hub from before the route does.
+FEISHU_GROUP_ACCESS = {"revision": 3, "paired": FEISHU_BOT.get("owner") is not None,
+    "policy": {"mode": "owner_only", "allowed_users": [], "allowed_chats": [], "blocked_users": [], "blocked_chats": [],
+               "guest_tools": [], "per_chat_hourly": 20},
+    "available_tools": [], "recent_requests": [],
+    "limits": {"list_max": 200, "guest_tools_max": 8, "per_chat_hourly_min": 1, "per_chat_hourly_max": 120, "per_chat_hourly_default": 20}}
+if os.environ.get("MOCK_BOT_GROUP") == "allowlist":
+    FEISHU_GROUP_ACCESS["policy"] = {"mode": "allowlist",
+        "allowed_users": [{"open_id": "ou_example1", "name": "Teammate A"}],
+        "allowed_chats": [{"chat_id": "oc_example1", "name": "Project group"}],
+        "blocked_users": [], "blocked_chats": [], "guest_tools": ["wiki_search"], "per_chat_hourly": 20}
+    FEISHU_GROUP_ACCESS["available_tools"] = [{"name": "wiki_search", "connector": "Wiki"}]
+    FEISHU_GROUP_ACCESS["recent_requests"] = [{"open_id": "ou_example2", "name": "Teammate B", "chat_id": "oc_example1",
+                                               "chat_name": "Project group", "at": 1795000000}]
 # Phone tools (docs/apple/phone-tools.md): what each connected phone declared (register_phone) and the tool_result messages it
 # sent back. GET /mock/tool_call?name=phone_…&args=<JSON> sends a tool_call to the phones that declared the tool, as the
 # hub does when Claude calls it; GET /mock/phone shows the registrations and results.
@@ -27897,6 +27913,10 @@ class H(BaseHTTPRequestHandler):
             listed += [wechat_connector()] if WECHAT_MODE else []
             listed += [larkcli_connector()] if LARKCLI_MODE else []
             return self.send_json({"connectors": (LEGACY_CONNECTORS if q.get("all") == ["1"] else []) + listed})
+        if p == "/api/v1/bots/feishu/group-access":  # Settings › Lark bot › Group Access (#16848)
+            if os.environ.get("MOCK_BOT_GROUP") == "absent":
+                return self.send_json({"error": "not found"}, 404)
+            return self.send_json(FEISHU_GROUP_ACCESS)
         if p == "/api/v1/bots/feishu":  # Settings › Connectors › Lark bot
             st = dict(FEISHU_BOT, last_event_at=int(time.time()) - 40 if FEISHU_BOT["connected"] else None)
             if LARKCLI_MODE:
@@ -29925,6 +29945,18 @@ class H(BaseHTTPRequestHandler):
             FEISHU_BOT.update(owner=None, agents=[], target="", pairing=None)
             return self.send_json({k: v for k, v in FEISHU_BOT.items() if v is not None})
         if p == "/api/v1/bots/feishu/test": return self.send_json({"ok": True})
+        if p == "/api/v1/bots/feishu/group-access" and self.command == "PUT":  # the whole policy, at the revision read (#16848)
+            if os.environ.get("MOCK_BOT_GROUP") == "absent":
+                return self.send_json({"error": "not found"}, 404)
+            body = json.loads(self.last_body or b"{}")
+            if body.get("revision") != FEISHU_GROUP_ACCESS["revision"]:
+                return self.send_json({"code": "group_access_conflict", "error": "changed elsewhere"}, 409)
+            policy = body.get("policy") or {}
+            for key in ("allowed_users", "allowed_chats", "blocked_users", "blocked_chats", "guest_tools"):
+                policy.setdefault(key, [])
+            FEISHU_GROUP_ACCESS["policy"] = policy
+            FEISHU_GROUP_ACCESS["revision"] += 1
+            return self.send_json(FEISHU_GROUP_ACCESS)
         if p.startswith("/api/v1/interactions/") and p.endswith("/reanswer") and p.count("/") == 5:
             return self.send_json(*mock_reanswer(p.split("/")[4], json.loads(self.last_body or b"{}")))
         review_match = AGENT_REVIEW and re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/review", p)

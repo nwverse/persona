@@ -5206,6 +5206,14 @@ final class AppModel {
     /// The shell's Settings sheet is up. Here and not in the shell's state: picking a style in it rebuilds the whole tree
     /// (`look`), and the rebuilt shell puts the sheet back on the same page (`settingsPath`).
     var shellSettings = false
+    /// A shared template link waiting for Settings › Templates' native preview (#17129).
+    var pendingNativeTemplate: String?
+    /// A shared template link's own presentation, independent of the current conversation and shell (#17129).
+    var templateLink: String?
+    func openNativeTemplate(_ template: String) {
+        templateLink = template
+        pendingNativeTemplate = template
+    }
 
     /// Add Computer / Confirm Computer over the whole app (AddComputerView.swift): set it from anywhere without a sheet of its own
     /// (`openAddComputer()`, `openConfirmComputer(_:)`, the main conversation's readiness card); nil closes it.
@@ -5766,6 +5774,49 @@ final class AppModel {
             toast = Toast(String(localized: "Renamed to \(shown)"), style: .success)
         } catch { show(error) }
         await refresh()
+    }
+
+    @ObservationIgnored private var namingAgents: Set<SessionKey> = []
+
+    // Each row observes only its own pending request, including before its first rename.
+    private(set) subscript(naming key: SessionKey) -> Bool {
+        get {
+            access(keyPath: \.[naming: key])
+            return namingAgents.contains(key)
+        }
+        set {
+            withMutation(keyPath: \.[naming: key]) {
+                if newValue { namingAgents.insert(key) } else { namingAgents.remove(key) }
+            }
+        }
+    }
+
+    func pendingAgentTitle(_ key: SessionKey) -> String? {
+        self[naming: key] ? String(localized: "Renaming…") : nil
+    }
+
+    @discardableResult
+    func autoRenameAgent(_ session: Session, fromWorktreeSubmenu: Bool = false) -> Task<Void, Never>? {
+        let key = session.key
+        guard !session.assistant, features(key.group).contains(APIClient.agentAutonameFeature),
+              let api = api(key.group), !self[naming: key] else { return nil }
+        self[naming: key] = true
+        if fromWorktreeSubmenu {
+            // The selected Agent’s row can be hidden inside a collapsed worktree.
+            let progress = String(localized: "Renaming…")
+            toast = Toast(String(localized: "\(progress) · \(session.displayTitle)"))
+        }
+        return Task {
+            defer { self[naming: key] = false }
+            do {
+                try await api.autoRenameSession(key)
+                if fromWorktreeSubmenu { toast = Toast(String(localized: "Renamed"), style: .success) }
+            } catch {
+                // This action was requested explicitly, so even a timeout needs an explanation.
+                let reason = (error as? APIError)?.message ?? error.localizedDescription
+                toast = Toast(String(localized: "\(reason) · \(session.displayTitle)"), style: .error)
+            }
+        }
     }
 
     /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone); a session without a

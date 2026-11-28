@@ -1879,9 +1879,9 @@ export struct Conversation {
               .rotate({ angle: this.expanded.includes(entry.item.message!.id) ? 0 : -90 })
               .animation(Motion.state(this.environment.reduceMotion))
           }.constraintSize({ minHeight: 32, maxWidth: '100%' })
-        }.padding({ left: 10, right: 10 }).borderRadius(12)
+        }.padding({ left: 10, right: 10 }).borderRadius(Tokens.radiusCard)
           .backgroundColor(this.model.style==='beautiful' ? this.composerSurface() : Colors.control)
-          .outline({width:this.model.style==='beautiful' ? 1 : PhoneStyle.surfaceEdgeWidth(0.5),color:this.model.style==='beautiful' ? this.composerRim() : PhoneStyle.cardBorder(this.environment.dark),radius:12})
+          .outline({width:this.model.style==='beautiful' ? 1 : PhoneStyle.surfaceEdgeWidth(0.5),color:this.model.style==='beautiful' ? this.composerRim() : PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusCard})
           .accessibilityText(tr('work_summary') + ' · ' + tr(this.expanded.includes(entry.item.message!.id) ? 'agent_collapse' : 'agent_expand'))
           .onClick(() => {
             Haptics.tap();
@@ -2065,8 +2065,8 @@ export struct Conversation {
             .linearGradient({
               direction: GradientDirection.Bottom,
               colors: [
-                [this.environment.dark ? '#00000000' : '#00FFFFFF', 0],
-                [this.environment.dark ? '#E6000000' : '#E6FFFFFF', 1]
+                [Colors.canvasFogStart, 0],
+                [Colors.canvasFogEnd, 1]
               ]
             })
             .hitTestBehavior(HitTestMode.None)
@@ -2080,7 +2080,7 @@ export struct Conversation {
                 .fontWeight(FontWeight.Medium).fontColor([Colors.link])
                 .width(this.latestArrowSize).height(this.latestArrowSize)
             }.width(this.latestDiameter).height(this.latestDiameter).borderRadius(this.latestDiameter/2).clip(true)
-              .backgroundColor(Colors.styleID==='glass' ? (this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF') : Colors.surface)
+              .backgroundColor(Colors.styleID==='glass' ? Colors.elevatedGlass : Colors.surface)
               .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
               .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.environment.dark), radius: this.latestDiameter / 2 })
               .shadow(PhoneStyle.floatingElevation(this.environment.dark))
@@ -2124,7 +2124,7 @@ export struct Conversation {
             onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
           else if (entry.item.decision) this.questionCard(entry)
         }.padding({ left: entry.item.message ? 0 : Tokens.page, right: entry.item.message ? 0 : Tokens.page })
-          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(12)
+          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(Tokens.radiusCard)
           .id('chat.line.' + entry.item.id)
       }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
       if (this.active && this.model.sendFeedbackPhase()) ListItem() {
@@ -2198,7 +2198,7 @@ export struct Conversation {
   private composerSurface(): ResourceColor {
     if(this.model.style==='beautiful') return this.environment.dark ? '#232427' : '#FFFFFF';
     if(this.legacyInterface) return Colors.surface;
-    if(Colors.styleID==='glass') return this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF';
+    if(Colors.styleID==='glass') return Colors.elevatedGlass;
     return Colors.surface;
   }
   private composerRim(): ResourceColor {
@@ -2523,7 +2523,7 @@ export struct Conversation {
           onRemove: (id: string) => this.attachments.remove(id), onEdit: (id: string) => this.attachments.editPhoto(id), onPreview: (item: ChatAttachment) => this.preview(item) })
       ForEach(this.model.draftMessageQuotes(),(ref:Record<string,Object>) => {
         Row({space:Tokens.gap}) {
-          Rect().width(3).height(28).fill(Colors.ai).borderRadius(2)
+          Rect().width(3).height(28).fill(Colors.ai).borderRadius(Tokens.radiusCapsule)
           Column({space:2}) {
             Text(tr(Wire.text(ref,'part')==='selection' ? 'chat_lift_quote_part' : 'chat_lift_quote_whole').replace('{author}',Wire.text(ref,'title')))
               .fontSize(Tokens.caption).maxFontScale(Tokens.interfaceScaleFor(Tokens.caption)).fontColor(Colors.secondary).maxLines(1)
@@ -2659,7 +2659,7 @@ export struct Conversation {
         color:this.composerRim(),radius:25}).borderRadius(25).width('100%').id('chat.composer')
       .animation(Motion.layout(this.environment.reduceMotion))
       .shadow(this.model.style==='beautiful'
-        ? {radius:8,color:this.environment.dark ? '#40000000' : '#12000000',offsetY:5}
+        ? {radius:8,color:Colors.floatingShadow,offsetY:5}
         : PhoneStyle.floatingElevation(this.environment.dark))
   }
 
