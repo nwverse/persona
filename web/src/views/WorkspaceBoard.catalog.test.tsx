@@ -29,7 +29,10 @@ const response = (body: unknown, status = 200) => new Response(JSON.stringify(bo
 let root: Root, host: HTMLDivElement;
 let inventory: HostWorkspace[], board: BoardState;
 let reads: string[], acknowledge: (ok: boolean) => void;
-const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
+const flush = async () => {
+  for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); });
+  await act(async () => { await vi.dynamicImportSettled(); });
+};
 const button = (key: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t(key))!;
 const click = async (key: string) => { act(() => button(key).click()); await flush(); };
 const input = (key: string, value: string) => act(() => {
