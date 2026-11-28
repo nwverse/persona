@@ -159,6 +159,7 @@
      (a Lark group's mark is Lark's own) */
   --source-terminal: #6340b8;
   --source-desktop: #0a6b7d;
+  --engine-custom: #52525b;
   --tooltip-bg: #25272b;
   --tooltip-fg: #f6f7f8;
   --tooltip-muted: #a5a8ad;
@@ -218,6 +219,7 @@
   --ai-tint: #9c94ff24;
   --source-terminal: #bea3ff;
   --source-desktop: #64cad9;
+  --engine-custom: #63636e;
   --tooltip-bg: #111214;
   --tooltip-fg: #f2f3f4;
   --tooltip-muted: #a5a8ad;

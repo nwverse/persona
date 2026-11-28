@@ -143,10 +143,11 @@ describe("CodingAgentAvatar & HostingEngineBadge rendering", () => {
     );
     expect(customHtml).toContain('data-engine-badge="zephyr"');
     expect(customHtml).toContain('data-engine-kind="custom"');
+    expect(customHtml).toContain("background-color:var(--engine-custom)");
     expect(customHtml).toContain(">Z</span>");
   });
 
-  it("places live status at top-right and hosting engine badge at bottom-right with zero overlap", () => {
+  it("places live status at top-right outside role=img so screen readers announce both avatar and status", () => {
     const html = renderToStaticMarkup(
       <CodingAgentAvatar
         session={{ agent: "codex", model: "gpt-5.4", host: "herdr" }}
@@ -158,6 +159,18 @@ describe("CodingAgentAvatar & HostingEngineBadge rendering", () => {
     expect(html).toMatch(/data-avatar-status="needs_you"[^>]*class="[^"]*-top-0\.5 -right-0\.5/);
     expect(html).toMatch(/data-engine-badge="herdr"[^>]*class="[^"]*-right-0\.5 -bottom-0\.5/);
     expect(html).toContain("ring-canvas");
+    // The outer wrapper must NOT carry role="img", otherwise ARIA hides the nested StatusMark from screen readers.
+    expect(html).toContain('<span title="Codex · herdr" data-coding-agent-avatar="codex"');
+    expect(html).not.toMatch(/<span[^>]*role="img"[^>]*data-coding-agent-avatar/);
+    expect(html).not.toMatch(/<span[^>]*data-coding-agent-avatar[^>]*role="img"/);
+    // Both the avatar disc and the sibling StatusMark expose distinct role="img" accessible names.
+    const imgLabels = [...html.matchAll(/role="img"[^>]*aria-label="([^"]+)"/g)].map((m) => m[1]);
+    expect(imgLabels).toHaveLength(2);
+    expect(imgLabels[0]).toBe("Codex · herdr");
+    expect(imgLabels[1].length).toBeGreaterThan(0);
+    // Verify the avatar's role="img" span closes before data-avatar-status begins (sibling, not ancestor).
+    const avatarImgClose = html.indexOf("</span><span data-avatar-status=");
+    expect(avatarImgClose).toBeGreaterThan(0);
   });
 
   it("renders a clean single-letter fallback for unknown agents", () => {

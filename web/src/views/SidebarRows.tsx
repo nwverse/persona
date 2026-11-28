@@ -247,11 +247,11 @@ export const ShellRow = memo(function ShellRow({ k, reg, hover, active, to, go, 
         aria-hidden
         data-shell-mark
         className={cx(
-          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border border-line bg-inset",
+          "inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-line bg-inset",
           active ? "text-ink" : "text-ink-3",
         )}
       >
-        <Icon name="terminal" size={10} stroke={2} />
+        <Icon name="terminal" size={12} stroke={2} />
       </span>
       <span aria-hidden data-shell-status className="flex size-3.5 shrink-0 items-center justify-center">
         <span className="size-1.5 rounded-full bg-ink-3/50" />

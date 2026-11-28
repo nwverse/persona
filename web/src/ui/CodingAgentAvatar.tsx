@@ -83,17 +83,20 @@ export function CodingAgentAvatar({
   const badge = Math.max(11, Math.min(20, Math.round(size * 0.42)));
   const stBox = size >= 36 ? 14 : 12;
   const [ringCls, bgCls] = RING[ring];
-  const a11y = decorative ? { "aria-hidden": true as const } : { role: "img" as const, "aria-label": label, title: label };
+  const a11y = decorative ? { "aria-hidden": true as const } : { role: "img" as const, "aria-label": label };
 
   return (
     <span
-      {...a11y}
+      title={decorative ? undefined : label}
       data-coding-agent-avatar={avatar.mark ?? "letter"}
       data-hosting-engine={engine?.id}
       className={cx("relative inline-flex shrink-0 items-center justify-center select-none text-ink-3", className)}
       style={{ width: size, height: size }}
     >
-      <span className="flex size-full items-center justify-center overflow-hidden rounded-full bg-surface text-ink shadow-hairline ring-1 ring-line">
+      <span
+        {...a11y}
+        className="flex size-full items-center justify-center overflow-hidden rounded-full bg-surface text-ink shadow-hairline ring-1 ring-line"
+      >
         {avatar.mark ? (
           <AgentMark agent={avatar.mark} size={inner} decorative className="text-ink" />
         ) : (
@@ -115,7 +118,7 @@ export function CodingAgentAvatar({
 
       {remote && !status && <RemoteSignal size={size} />}
 
-      {engine && <HostingEngineBadge engine={engine} size={badge} ring={ring} decorative={decorative} className="absolute -right-0.5 -bottom-0.5 z-10" />}
+      {engine && <HostingEngineBadge engine={engine} size={badge} ring={ring} decorative className="absolute -right-0.5 -bottom-0.5 z-10" />}
     </span>
   );
 }
@@ -142,7 +145,7 @@ export function HostingEngineBadge({
       data-engine-badge={engine.id}
       data-engine-kind={engine.kind}
       className={cx("inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full text-white", size >= 15 ? "ring-2" : "ring-1", RING[ring][0], className)}
-      style={{ width: size, height: size, backgroundColor: src ? undefined : "#52525b" }}
+      style={{ width: size, height: size, backgroundColor: src ? undefined : "var(--engine-custom)" }}
     >
       {src ? (
         <img src={src} alt="" aria-hidden width={size} height={size} className="block size-full" />
