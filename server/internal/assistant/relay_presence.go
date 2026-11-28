@@ -235,18 +235,21 @@ func (b *relayBook) msgBackoffLocked(to string, msg relayMsg, now time.Time) tim
 // held for the owner, the one that queued first within it (lead: to is a direction's lead, rankIn). The message that
 // could not go in last time (b.stuck: its agent's computer unreachable, a delivery that failed) is passed over while
 // another may go, so it holds up nothing but itself. Messages still inside their relayRetryGap backoff are held so
-// multi-message queues do not alternate past the gap (#17592). None may go (-1): wait is how long until the first may.
+// multi-message queues do not alternate past the gap (#17592); a withdrawn one is not, since it is never sent again.
+// None may go (-1): wait is how long until the first may.
 // b.mu is held.
 func (b *relayBook) pickLocked(to string, lead bool, now time.Time) (i int, wait time.Duration) {
 	i = -1
 	stuck := -1
 	q := b.st.Queue[to]
 	for j, m := range q {
-		lookAfter := m.LookAfter.Sub(now)
+		lookAfter, backoff := m.LookAfter.Sub(now), b.msgBackoffLocked(to, m, now)
 		if m.Withdrawn {
-			lookAfter = 0 // no retry is sent: only check whether the original in-flight text landed
+			// No retry is sent: only check whether the original in-flight text landed. Neither its retry time nor its
+			// failure backoff holds it.
+			lookAfter, backoff = 0, 0
 		}
-		if h := max(b.holdLocked(to, m, now), lookAfter, b.msgBackoffLocked(to, m, now)); h > 0 {
+		if h := max(b.holdLocked(to, m, now), lookAfter, backoff); h > 0 {
 			if wait == 0 || h < wait {
 				wait = h
 			}

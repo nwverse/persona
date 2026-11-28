@@ -560,6 +560,7 @@ type taskReviewClose struct {
 	accepted  bool
 	untouched SessionRef
 	closed    bool
+	row       *db.TodoRow
 	after     func()
 }
 
@@ -662,7 +663,8 @@ func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id strin
 	}
 	if closing != nil && !t.isConcern() {
 		var err error
-		closing.closed, closing.after, err = s.reviewDoneTodoLocked(ctx, id, closing.reason, closing.accepted, v, false, closing.untouched)
+		closing.row, closing.after, err = s.reviewDoneTodoLocked(ctx, id, closing.reason, closing.accepted, v, false, closing.untouched)
+		closing.closed = closing.row != nil
 		if err != nil {
 			return Supervision{}, false, err
 		}

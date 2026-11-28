@@ -19,8 +19,10 @@ import (
 
 // seeTodo marks todo id seen now, or with seen false takes the mark off (Undo); db.ErrTodoNotFound when it is not there.
 func (s *Service) seeTodo(ctx context.Context, id string, seen bool) (Todo, error) {
+	s.todos.writing.Lock()
 	cur, ok := s.todoNow(id)
 	if !ok {
+		s.todos.writing.Unlock()
 		return Todo{}, db.ErrTodoNotFound
 	}
 	var at *time.Time
@@ -28,7 +30,6 @@ func (s *Service) seeTodo(ctx context.Context, id string, seen bool) (Todo, erro
 		now := time.Now().UTC()
 		at = &now
 	}
-	s.todos.writing.Lock()
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -53,40 +54,40 @@ func (s *Service) seeTodo(ctx context.Context, id string, seen bool) (Todo, erro
 	return out, nil
 }
 
-// autoSeeTodo marks todo id seen only if the owner has not previously called Undo (AutoSeenUndone == false).
-// Returns (true, nil) when seen_at was applied, (false, nil) when skipped due to Undo protection or missing to-do.
-func (s *Service) autoSeeTodo(ctx context.Context, id string) (bool, error) {
+// autoSeeTodo writes only the completion the caller observed. Keep the check, commit and cache update
+// in the same writer order as reopen and manual Undo.
+func (s *Service) autoSeeTodo(ctx context.Context, completed Todo) (bool, error) {
 	now := time.Now().UTC()
 	s.todos.writing.Lock()
+	cur, ok := s.todoNow(completed.ID)
+	if !ok || !sameTodoCompletion(cur, completed) || cur.AutoSeenUndone {
+		s.todos.writing.Unlock()
+		return false, nil
+	}
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
-		r, updated, err := st.AutoSeeTodo(ctx, id, now)
-		if err != nil {
+		r, updated, err := st.AutoSeeTodo(ctx, cur.ID, *completed.DoneAt, completed.ReopenedAt, now)
+		if err != nil || !updated {
 			s.todos.writing.Unlock()
 			return false, err
 		}
-		if !updated {
-			s.todos.writing.Unlock()
-			return false, nil
-		}
 		row = r
 	} else {
-		cur, ok := s.todoNow(id)
-		if !ok || cur.AutoSeenUndone {
-			s.todos.writing.Unlock()
-			return false, nil
-		}
 		r := todoRowOf(cur)
 		r.SeenAt = &now
 		row = &r
 	}
-	_, _, applied := s.setTodoRow(id, *row, func(t *Todo) bool { return !t.AutoSeenUndone })
+	_, _, applied := s.setTodoRow(cur.ID, *row, nil)
 	s.todos.writing.Unlock()
-	if !applied {
-		return false, nil
+	if applied {
+		s.todosChanged(ctx)
 	}
-	s.todosChanged(ctx)
-	return true, nil
+	return applied, nil
+}
+
+func sameTodoCompletion(current, completed Todo) bool {
+	return current.DoneAt != nil && sameTime(current.DoneAt, completed.DoneAt) &&
+		sameTime(current.ReopenedAt, completed.ReopenedAt)
 }
 
 // autoSeeAcceptedTodo settles an accepted autonomous to-do when todos_v2 is enabled (#14639, #16098):
@@ -94,8 +95,8 @@ func (s *Service) autoSeeTodo(ctx context.Context, id string) (bool, error) {
 // todos_v2_auto_seen ("off", "subtasks", or "all_autonomous").
 // Never applies when todos_v2 is off, mode is "off", mode is "subtasks" on a top-level to-do,
 // audience != autonomous, user_check is true, outcome != done,
-// or the owner previously called Undo (DELETE /api/v1/todos/{id}/seen -> AutoSeenUndone == true).
-func (s *Service) autoSeeAcceptedTodo(ctx context.Context, id, outcome string, userCheck bool) {
+// or the owner called Undo in this completion round (DELETE /api/v1/todos/{id}/seen -> AutoSeenUndone == true).
+func (s *Service) autoSeeAcceptedTodo(ctx context.Context, completed Todo, outcome string, userCheck bool) {
 	cfg := s.settings(ctx)
 	if userCheck || outcome != outcomeDone || !cfg.todosV2On() {
 		return
@@ -104,14 +105,15 @@ func (s *Service) autoSeeAcceptedTodo(ctx context.Context, id, outcome string, u
 	if mode == todosV2AutoSeenOff {
 		return
 	}
+	id := completed.ID
 	cur, ok := s.todoNow(id)
-	if !ok || cur.Audience != db.AudienceAutonomous || cur.AutoSeenUndone || cur.DoneAt == nil {
+	if !ok || cur.Audience != db.AudienceAutonomous || cur.AutoSeenUndone || !sameTodoCompletion(cur, completed) {
 		return
 	}
 	if mode == todosV2AutoSeenSubtasks && strings.TrimSpace(cur.PartOf) == "" {
 		return
 	}
-	applied, err := s.autoSeeTodo(ctx, id)
+	applied, err := s.autoSeeTodo(ctx, completed)
 	if err != nil {
 		s.logf("task %s: auto-seen: %v", id, err)
 		return
@@ -137,6 +139,10 @@ func (s *Service) autoSeeAcceptedTodo(ctx context.Context, id, outcome string, u
 				continue
 			}
 			if workerSessionFinishedForAutoSeen(c) {
+				// Session lookup can outlast a reopen or an Undo.
+				if live, ok := s.todoNow(id); !ok || !sameTodoCompletion(live, completed) || live.AutoSeenUndone {
+					return
+				}
 				s.markSessionRead(ctx, a.MachineID, a.SessionID)
 			}
 			break

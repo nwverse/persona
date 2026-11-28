@@ -821,7 +821,7 @@ func TestContinuationUsesAuthorizedScope(t *testing.T) {
 	fresh, _ := f.starts[0]["prompt"].(string)
 	f.mu.Unlock()
 	plan := &TaskPlan{ID: "waiting-continuation", Conversation: "conv1", State: planOpen, Tasks: []PlanTask{
-		{Title: "Continue task", Prompt: "Continue the earlier work", Machine: "box", Continues: todo.ID, ContinuesWhy: "The earlier Agent stopped"},
+		{Title: "Continue task", Prompt: "Continue the earlier work", Machine: "box", Cwd: "/code/app", Continues: todo.ID, ContinuesWhy: "The earlier Agent stopped"},
 	}}
 	ctx := context.Background()
 	if err := s.planBriefs(ctx, "", plan.Conversation, plan.Tasks); err != nil {

@@ -65,15 +65,15 @@ func (r *reading) place() placement {
 	case r.f.RepoGate != nil:
 		p.Reason = assistantwire.TodoReasonPrOpen
 		p.Line = line(assistantwire.TodoLineKeyPrOpen)
-		p.wait = buildRepoGateWait(r.f.RepoGate)
+		p.wait = copyWait(*r.f.RepoGate)
 	case len(r.f.ActiveBlockers) > 0:
 		b := r.f.ActiveBlockers[0]
 		p.Reason = assistantwire.TodoReasonParked
-		p.Line = line(assistantwire.TodoLineKeyParked, assistantwire.TodoLineArgReason, b.Target)
+		p.Line = line(assistantwire.TodoLineKeyParked, assistantwire.TodoLineArgReason, b.WaitingOn)
 		if remaining := len(r.f.ActiveBlockers) - 1; remaining > 0 {
 			p.Line = withArg(p.Line, "remaining", strconv.Itoa(remaining))
 		}
-		p.wait = &assistantwire.TodoWait{Kind: b.Kind, WaitingOn: b.Target, URL: b.URL}
+		p.wait = copyWait(b)
 	default:
 		return p
 	}

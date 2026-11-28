@@ -670,7 +670,7 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		if b.Kind == todoBlockerKindExternalPR {
 			kind = assistantwire.TodoWaitKindPrMerge
 		}
-		f.ActiveBlockers = append(f.ActiveBlockers, projection.ActiveBlocker{Kind: kind, Target: label, URL: u})
+		f.ActiveBlockers = append(f.ActiveBlockers, assistantwire.TodoWait{Kind: kind, WaitingOn: label, URL: u})
 	}
 	f.RestoredAt, f.SomedayUntil = t.RestoredAt, t.SomedayUntil // the owner's marks on the hub (todo_marks.go)
 	if t.Agents != nil {
