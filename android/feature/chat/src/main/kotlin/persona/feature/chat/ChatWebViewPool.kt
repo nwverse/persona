@@ -18,7 +18,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.webkit.*
-import java.net.URI
 import java.util.concurrent.Executors
 import org.json.JSONTokener
 import kotlinx.coroutines.CompletableDeferred
@@ -363,16 +362,9 @@ internal class ChatWebViewPool(
         return speculative.none { pages[it] === view }
     }
 
-    private fun isDirectMedia(url: String): Boolean = urlExtension(url) in directMediaExtensions
+    private fun isDirectMedia(url: String): Boolean = extractUrlExtension(url) in directMediaExtensions
 
-    private fun isDirectDownload(url: String): Boolean = urlExtension(url) in directDownloadExtensions
-
-    private fun urlExtension(url: String): String {
-        val path = runCatching { URI(url.trim()).path }.getOrNull()?.lowercase() ?: return ""
-        val segment = path.substringAfterLast('/', "")
-        val ext = segment.substringAfterLast('.', "")
-        return if (ext.isNotEmpty() && ext != segment) ext else ""
-    }
+    private fun isDirectDownload(url: String): Boolean = isDirectDownloadUrl(url)
 
     private fun mute(view: WebView, muted: Boolean) {
         if (features.supported(WebViewFeature.MUTE_AUDIO) && WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) {
@@ -417,10 +409,12 @@ private fun applyPlatformAlgorithmicDarkening(settings: WebSettings, allowed: Bo
 }
 
 /** Direct audio/video file extensions skipped by background preloading so they load only in an active, visible WebView. */
-private val directMediaExtensions = setOf("mp4", "m4v", "mov", "webm", "mkv", "ogv", "m3u8", "mpd", "mp3", "m4a", "ogg", "wav", "flac")
+private val directMediaExtensions = setOf("mp4", "m4v", "mov", "webm", "mkv", "3gp", "3gpp", "ogv", "m3u8", "mpd", "mp3", "m4a", "ogg", "wav", "flac")
 
 /** Direct file download extensions skipped by background preloading so downloads only begin on an explicit foreground open. */
 private val directDownloadExtensions = setOf("apk", "aab", "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "pdf", "dmg", "exe", "msi", "deb", "rpm", "pkg", "ipa", "iso", "bin")
+
+internal fun isDirectDownloadUrl(url: String): Boolean = extractUrlExtension(url) in directDownloadExtensions
 
 /**
  * Re-triggers `load()` on `<video>` elements that stalled at `readyState < 2` while a preloaded WebView was paused and

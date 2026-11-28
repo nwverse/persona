@@ -34,6 +34,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.currentStateAsState
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.feature.inbox.LarkDocumentLink
 import persona.feature.inbox.LarkDocumentPrefetch
@@ -83,6 +84,7 @@ fun ChatLinkHost(
     val resources = LocalResources.current
     val webFeatures = LocalChatWebFeatures.current
     val webDownloader = LocalChatWebDownloader.current
+    val directVideoProber = LocalChatDirectVideoProber.current
     val pool = remember(context, webFeatures) { ChatWebViewPool(context, webFeatures) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -219,8 +221,21 @@ fun ChatLinkHost(
                 // "Refresh", progress and crash row are the page's again.
                 var nativeWebpage by remember(target) { mutableStateOf(false) }
                 val nativeShown = native != null && !nativeWebpage
-                // The WebView is only taken (and loaded) once a page shows it: a native view reads without it.
-                val view = remember(pool, target, generation, nativeShown) { if (nativeShown) null else pool.acquire(target) }
+                val isDirectVideoByExt = remember(target, native) { native == null && isDirectVideoUrl(target) }
+                var probedVideoUrl by remember(target) { mutableStateOf<String?>(null) }
+                LaunchedEffect(target, native, isDirectVideoByExt, directVideoProber) {
+                    if (native == null && !isDirectVideoByExt && !isDirectDownloadUrl(target)) {
+                        probedVideoUrl = directVideoProber.probe(target)
+                    }
+                }
+                val directVideoUrl = if (isDirectVideoByExt) target else probedVideoUrl
+                val directVideoShown = directVideoUrl != null
+                val directVideoState = remember(directVideoUrl) { ChatDirectVideoState() }
+                var directVideoFullscreen by remember(target) { mutableStateOf(false) }
+                // The WebView is only taken (and loaded) once a page shows it: native readers and direct videos render without it.
+                val view = remember(pool, target, generation, nativeShown, directVideoShown) {
+                    if (nativeShown || directVideoShown) null else pool.acquire(target)
+                }
                 var editing by remember(target) { mutableStateOf<ChatLinkContext?>(null) }
                 var handing by remember(target) { mutableStateOf<ChatLinkContext?>(null) }
                 var menu by remember { mutableStateOf(false) }
@@ -285,12 +300,45 @@ fun ChatLinkHost(
                         }
                     }
                 }
+                val directVideoDownloadGuard = remember(target) { ChatWebDownloadGuard() }
+                val startDirectVideoDownload: (() -> Unit)? = directVideoUrl?.takeIf { forwarded == null }?.let { mediaUrl ->
+                    {
+                        val key = directVideoDownloadGuard.tryStart(mediaUrl)
+                        if (key != null) {
+                            scope.launch {
+                                var completed = false
+                                try {
+                                    val request = ChatWebDownloadRequest(
+                                        url = mediaUrl,
+                                        userAgent = "",
+                                        contentDisposition = "",
+                                        mimeType = "",
+                                        contentLength = -1L,
+                                    )
+                                    val _ = handleWebDownload(context, resources, currentDownloader, request, isForwarded = false) { notice, style ->
+                                        val _ = currentFeedback?.notice(notice, style)
+                                    }
+                                    completed = true
+                                } finally {
+                                    directVideoDownloadGuard.finish(key, applyCooldown = completed)
+                                }
+                            }
+                        }
+                    }
+                }
+                val openDirectVideoInBrowser: () -> Unit = {
+                    val mediaUrl = directVideoUrl ?: target
+                    val noBrowser = resources.getString(R.string.chat_link_no_browser)
+                    if (!openInSystemBrowser(context, mediaUrl)) currentFeedback?.notice(noBrowser)
+                }
                 fun close() {
+                    directVideoFullscreen = false
                     view?.exitCustomView()
                     scope.launch { drag.animateTo(LinkDetent.Hidden) }
                 }
                 fun back() {
                     when {
+                        directVideoFullscreen -> directVideoFullscreen = false
                         view != null && view.exitCustomView() -> Unit
                         view != null && !view.gone && view.canGoBack() -> view.goBack()
                         else -> close()
@@ -316,7 +364,12 @@ fun ChatLinkHost(
                         Row(Modifier.fillMaxWidth().padding(end = Tokens.Space.xs), verticalAlignment = Alignment.CenterVertically) {
                             JIconButton(PhIcons.CaretLeft, stringResource(R.string.chat_link_back), { back() })
                             Column(Modifier.weight(1f)) {
-                                Text((if (native != null && (nativeShown || view?.pageTitle.isNullOrBlank())) nativeTitle ?: nativeFallback else view?.pageTitle.orEmpty()).ifBlank { stringResource(R.string.chat_link_page) }, style = PersonaTheme.type.bodyStrong, color = palette.ink,
+                                val headerTitle = when {
+                                    directVideoShown -> directVideoTitle(directVideoUrl) ?: stringResource(R.string.chat_link_video)
+                                    native != null && (nativeShown || view?.pageTitle.isNullOrBlank()) -> nativeTitle ?: nativeFallback
+                                    else -> view?.pageTitle.orEmpty()
+                                }.ifBlank { stringResource(R.string.chat_link_page) }
+                                Text(headerTitle, style = PersonaTheme.type.bodyStrong, color = palette.ink,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(forwarded ?: view?.currentUrl.orEmpty().ifBlank { target }, style = PersonaTheme.type.micro, color = palette.ink3,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -342,8 +395,17 @@ fun ChatLinkHost(
                                     JAction(stringResource(R.string.chat_link_copy), PhIcons.LinkSimple) {
                                         copy(page(), copied)
                                     }.takeIf { forwarded == null },
-                                    JAction(stringResource(R.string.chat_link_reload), PhIcons.ArrowClockwise, enabled = nativeShown || view?.gone == false) {
-                                        if (nativeShown) nativeRefresh++ else view?.reload()
+                                    JAction(stringResource(R.string.chat_link_reload), PhIcons.ArrowClockwise, enabled = nativeShown || directVideoShown || view?.gone == false) {
+                                        when {
+                                            nativeShown -> nativeRefresh++
+                                            directVideoShown -> directVideoState.resetForReload()
+                                            else -> view?.reload()
+                                        }
+                                    },
+                                    startDirectVideoDownload?.let { download ->
+                                        JAction(stringResource(R.string.chat_link_download), PersonaIcons.down) {
+                                            download()
+                                        }
                                     },
                                     if (forwarded != null) null else JAction(stringResource(R.string.chat_link_open_browser), PhIcons.ArrowSquareOut) {
                                         val opened = runCatching {
@@ -387,6 +449,20 @@ fun ChatLinkHost(
                             else if (native is LarkNativeLink.MomentsPost)
                                 LarkMomentsLink(native.postId, target, Modifier.fillMaxWidth().weight(1f), nativePicks, nativeRefresh, read, page)
                         }
+                    } else if (directVideoUrl != null) {
+                        if (!directVideoFullscreen) {
+                            ChatDirectVideoPlayer(
+                                url = directVideoUrl,
+                                state = directVideoState,
+                                fullscreen = false,
+                                onFullscreenChange = { directVideoFullscreen = it },
+                                onOpenInBrowser = openDirectVideoInBrowser,
+                                onDownload = startDirectVideoDownload,
+                                modifier = Modifier.fillMaxWidth().weight(1f),
+                            )
+                        } else {
+                            Box(Modifier.fillMaxWidth().weight(1f).background(palette.mediaBackdrop))
+                        }
                     } else if (view != null && !view.gone) key(view) {
                         JPage(title = stringResource(R.string.chat_link_page), modifier = Modifier.fillMaxWidth().weight(1f), topBar = {}) { padding ->
                             ChatLinkWebSlot(view, Modifier.fillMaxSize().padding(padding).padding(horizontal = pagePadding))
@@ -406,6 +482,42 @@ fun ChatLinkHost(
                         onHandToPersona?.invoke(message)
                         handing = null
                         close()
+                    }
+                }
+                if (directVideoUrl != null && directVideoFullscreen) {
+                    JFullScreen(onDismiss = { directVideoFullscreen = false }) {
+                        val dialogView = LocalView.current
+                        SideEffect {
+                            (dialogView.parent as? DialogWindowProvider)?.window?.let { window ->
+                                WindowCompat.getInsetsController(window, dialogView).run {
+                                    isAppearanceLightStatusBars = false
+                                    isAppearanceLightNavigationBars = false
+                                }
+                            }
+                        }
+                        DisposableEffect(dialogView) {
+                            val controller = (dialogView.parent as? DialogWindowProvider)?.window?.let { window ->
+                                WindowCompat.getInsetsController(window, dialogView)
+                            }
+                            controller?.run {
+                                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                                hide(WindowInsetsCompat.Type.systemBars())
+                            }
+                            onDispose {
+                                controller?.show(WindowInsetsCompat.Type.systemBars())
+                            }
+                        }
+                        Box(Modifier.fillMaxSize().background(palette.mediaBackdrop).testTag("chat_direct_video_fullscreen")) {
+                            ChatDirectVideoPlayer(
+                                url = directVideoUrl,
+                                state = directVideoState,
+                                fullscreen = true,
+                                onFullscreenChange = { directVideoFullscreen = it },
+                                onOpenInBrowser = openDirectVideoInBrowser,
+                                onDownload = startDirectVideoDownload,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
                 val customView = view?.takeUnless { it.gone }?.customView

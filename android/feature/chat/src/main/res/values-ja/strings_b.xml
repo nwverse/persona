@@ -215,6 +215,15 @@
     <string name="chat_link_port_failed">ポート:%1$dを開けません</string>
     <string name="chat_link_back">戻る</string>
     <string name="chat_link_page">Webページ</string>
+    <string name="chat_link_video">動画</string>
+    <string name="chat_link_video_play">再生</string>
+    <string name="chat_link_video_pause">一時停止</string>
+    <string name="chat_link_video_mute">ミュート</string>
+    <string name="chat_link_video_unmute">ミュート解除</string>
+    <string name="chat_link_video_fullscreen">全画面</string>
+    <string name="chat_link_video_exit_fullscreen">全画面を終了</string>
+    <string name="chat_link_video_error">この動画を再生できませんでした</string>
+    <string name="chat_link_download">ダウンロード</string>
     <string name="chat_link_lark_doc">Larkドキュメント</string>
     <string name="chat_link_moments">Moments</string>
     <string name="chat_link_context_doc">このドキュメントをコンテキストに追加</string>
