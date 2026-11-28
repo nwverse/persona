@@ -311,7 +311,7 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 Who it serves: Agents users who prefer Orca's chat view to a terminal (#17650). A computer whose engine set includes Orca has a
 switch under its Engine, **Start new Agents as Orca chats**, off by default (web: the machine page's Engine section; Android: the
 computer's Engine page; iOS follows in #17056). The manager keeps it per computer in settings (`machine_orca_chat_starts`), answers
-`GET` / `PUT /api/v1/machines/{mid}/orca-chat-starts`, and sends it on the machine as `orca_chat_starts` only while Orca is in the set
+`GET` / `PUT /api/v1/machines/{mid}/orca-chat-starts`, and sends it on the machine as `orca_chat_starts` (`"on"` / `"off"`) only while Orca is in the set
 (`docs/protocol/protocol.md`, "Engines"); the clients show the switch exactly where it is sent. Taking Orca out of the set keeps the
 switch's value but stops it applying.
 

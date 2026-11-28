@@ -64,7 +64,7 @@ class OrcaChatStartsShotsTest {
 
     private val engines = listOf(DetectedEngine("herdr", "herdr", true, version = "0.9.3"), DetectedEngine("orca", "Orca", true, version = "1.4.277"))
     private val withOrca = Machine("m1", "Workstation", online = true, engine = "herdr", engineHosts = listOf("herdr", "orca"),
-        engineDefault = "herdr", engines = engines, orcaChatStarts = false)
+        engineDefault = "herdr", engines = engines, orcaChatStarts = "off")
     private val withoutOrca = withOrca.copy(engineHosts = listOf("herdr"), orcaChatStarts = null)
     private val machines = MutableStateFlow(listOf(withOrca))
     private val sessions = object : SessionsRepository {

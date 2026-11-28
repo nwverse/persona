@@ -3,11 +3,13 @@ package persona.feature.settings
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import persona.core.contracts.JsonCodec
 import persona.core.contracts.Machine
 
 /**
@@ -15,7 +17,7 @@ import persona.core.contracts.Machine
  * the old value back; a push moves the switch only while nothing is being saved; no switch where the hub sends none.
  */
 class OrcaChatStartsModelTest {
-    private val box = Machine("m1", "box", online = true, engineHosts = listOf("herdr", "orca"), orcaChatStarts = false)
+    private val box = Machine("m1", "box", online = true, engineHosts = listOf("herdr", "orca"), orcaChatStarts = "off")
 
     @Test fun showsAtOnceAndSettlesOnTheHubsAnswer() = runTest {
         val answer = CompletableDeferred<Boolean>()
@@ -30,8 +32,15 @@ class OrcaChatStartsModelTest {
         assertNull(change.await())
         assertEquals(listOf("m1" to true), sent)
         assertEquals(OrcaChatStartsModel.State(shown = true, saving = false), model.state.value)
-        model.synchronize(box.copy(orcaChatStarts = false)) // another device turns it off
+        model.synchronize(box.copy(orcaChatStarts = "off")) // another device turns it off
         assertEquals(false, model.state.value.shown)
+    }
+
+    @Test fun theMachineReadsTheClosedSet() {
+        assertEquals(true, JsonCodec.decodeFromString<Machine>("""{"id":"m1","orca_chat_starts":"on"}""").orcaChatSwitch)
+        assertEquals(false, JsonCodec.decodeFromString<Machine>("""{"id":"m1","orca_chat_starts":"off"}""").orcaChatSwitch)
+        assertNull(JsonCodec.decodeFromString<Machine>("""{"id":"m1"}""").orcaChatSwitch)
+        assertNull(JsonCodec.decodeFromString<Machine>("""{"id":"m1","orca_chat_starts":"later-state"}""").orcaChatSwitch)
     }
 
     @Test fun aFailedSavePutsTheOldValueBack() = runTest {
@@ -49,6 +58,10 @@ class OrcaChatStartsModelTest {
         model.synchronize(box)
         assertEquals(false, model.state.value.shown)
         model.synchronize(box.copy(orcaChatStarts = null)) // Orca left the computer's engine set
+        assertNull(model.state.value.shown)
+        model.synchronize(box.copy(orcaChatStarts = "on"))
+        assertEquals(true, model.state.value.shown)
+        model.synchronize(box.copy(orcaChatStarts = "later-state")) // a state a later hub may add: no switch, never on or off
         assertNull(model.state.value.shown)
         assertFalse(model.state.value.saving)
     }

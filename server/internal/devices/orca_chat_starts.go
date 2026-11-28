@@ -97,17 +97,16 @@ func (d *Devices) OrcaChatStarts(_ context.Context, id string) bool {
 	if m == nil {
 		return false
 	}
-	on := orcaChatStartsField(d.engineChoiceOf(m.cfg.ID), d.orcaChatStartsOn(m.cfg.ID))
-	return on != nil && *on
+	return orcaChatStartsField(d.engineChoiceOf(m.cfg.ID), d.orcaChatStartsOn(m.cfg.ID)) == proto.OrcaChatStartsOn
 }
 
-// orcaChatStartsField is proto.Machine.OrcaChatStarts: the switch while Orca is in the computer's engine set (where it
-// applies), nil otherwise.
-func orcaChatStartsField(choice proto.EngineChoice, on bool) *bool {
+// orcaChatStartsField is proto.Machine.OrcaChatStarts: the switch, on or off, while Orca is in the computer's engine
+// set (where it applies); absent ("") otherwise.
+func orcaChatStartsField(choice proto.EngineChoice, on bool) proto.OrcaChatStarts {
 	if !slices.Contains(choice.Hosts, proto.EngineOrca) {
-		return nil
+		return ""
 	}
-	return &on
+	return proto.OrcaChatStartsOf(on)
 }
 
 // orcaChatStartsState is what GET / PUT /api/v1/machines/{mid}/orca-chat-starts answer: the switch, and whether it
@@ -119,7 +118,7 @@ type orcaChatStartsState struct {
 
 func (d *Devices) orcaChatStartsState(m *Machine) orcaChatStartsState {
 	on := d.orcaChatStartsOn(m.cfg.ID)
-	return orcaChatStartsState{On: on, Applies: orcaChatStartsField(d.engineChoiceOf(m.cfg.ID), on) != nil}
+	return orcaChatStartsState{On: on, Applies: orcaChatStartsField(d.engineChoiceOf(m.cfg.ID), on) != ""}
 }
 
 // getOrcaChatStarts: GET /api/v1/machines/{mid}/orca-chat-starts → {on, applies}.

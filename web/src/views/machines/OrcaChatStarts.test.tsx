@@ -26,7 +26,7 @@ vi.mock("../../ui/atoms", async (importOriginal) => {
 
 import { EngineSection } from "./EngineSection";
 
-function machine(hosts: string[], orca?: boolean): Machine {
+function machine(hosts: string[], orca?: string): Machine {
   return {
     id: "box", name: "box", online: true, engine: hosts[0] ?? "herdr", engine_hosts: hosts, engine_default: hosts[0] ?? "",
     engines: [{ id: "herdr", name: "herdr", available: true }, { id: "orca", name: "Orca", available: true }],
@@ -62,7 +62,9 @@ describe("OrcaChatStarts", () => {
   it("shows only where the hub sends the switch", async () => {
     await render(machine(["herdr"]));
     expect(host.querySelector('[data-testid="orca-chat-starts"]')).toBeNull();
-    await render(machine(["herdr", "orca"], false));
+    await render(machine(["orca"], "later-state"));
+    expect(host.querySelector('[data-testid="orca-chat-starts"]')).toBeNull();
+    await render(machine(["herdr", "orca"], "off"));
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");
     expect(toggle()?.getAttribute("aria-label")).toBe(t("machines-orcachatstarts.title"));
     expect(host.textContent).toContain(t("machines-orcachatstarts.detail"));
@@ -71,24 +73,24 @@ describe("OrcaChatStarts", () => {
   it("flips at once, saves, and follows the hub's answer", async () => {
     let resolve!: (v: { on: boolean }) => void;
     mocks.api.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
-    await render(machine(["orca"], false));
+    await render(machine(["orca"], "off"));
     await act(async () => toggle()!.click());
     expect(toggle()?.getAttribute("aria-checked")).toBe("true"); // before the hub answers
     expect(mocks.api).toHaveBeenCalledWith("/machines/box/orca-chat-starts", { method: "PUT", json: { on: true } });
     await act(async () => resolve({ on: true }));
     await flush();
     expect(toggle()?.getAttribute("aria-checked")).toBe("true");
-    expect(mocks.applyMachine).toHaveBeenCalledWith({ id: "box", orca_chat_starts: true });
+    expect(mocks.applyMachine).toHaveBeenCalledWith({ id: "box", orca_chat_starts: "on" });
     // the machine's push says so too; later another device turns it off, and that push moves the switch
-    await render(machine(["orca"], true));
+    await render(machine(["orca"], "on"));
     expect(toggle()?.getAttribute("aria-checked")).toBe("true");
-    await render(machine(["orca"], false));
+    await render(machine(["orca"], "off"));
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");
   });
 
   it("goes back and says why when the save fails", async () => {
     mocks.api.mockRejectedValueOnce(new Error("offline"));
-    await render(machine(["orca"], false));
+    await render(machine(["orca"], "off"));
     await act(async () => toggle()!.click());
     await flush();
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");

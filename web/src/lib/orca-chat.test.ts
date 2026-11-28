@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { opensAsOrcaChat, type DefaultOpens, type StartPick } from "./orca-chat";
+import { opensAsOrcaChat, orcaChatSwitch, type DefaultOpens, type StartPick } from "./orca-chat";
 
 const opens: DefaultOpens = { launcher: "orca-claude", display_name: "Orca chat · Claude Code", permission_modes: ["default", "acceptEdits", "auto", "bypassPermissions"] };
 const keeps: StartPick = { launcher: "", tier: false, model: "", mode: "", ultracode: false };
@@ -33,5 +33,15 @@ describe("opensAsOrcaChat", () => {
     const codex: DefaultOpens = { launcher: "orca-codex", permission_modes: ["default", "auto", "bypassPermissions"] };
     expect(opensAsOrcaChat(codex, { ...keeps, mode: "acceptEdits" })).toBeNull();
     expect(opensAsOrcaChat(codex, { ...keeps, mode: "auto" })).toBe(codex);
+  });
+});
+
+describe("orcaChatSwitch", () => {
+  it("reads the closed set, and anything else as no switch", () => {
+    expect(orcaChatSwitch({ orca_chat_starts: "on" })).toBe(true);
+    expect(orcaChatSwitch({ orca_chat_starts: "off" })).toBe(false);
+    expect(orcaChatSwitch({})).toBeNull();
+    // a state a later hub may add is not shown as on or off
+    expect(orcaChatSwitch({ orca_chat_starts: "paused" as never })).toBeNull();
   });
 });

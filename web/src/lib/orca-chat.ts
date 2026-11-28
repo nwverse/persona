@@ -3,6 +3,15 @@
 // keeps the default Claude Code or Codex opens as the computer's Orca chat. It tells New Agent where a start that keeps the
 // default goes (`default_opens` on GET /machines/{mid}/launchers); the form only checks that this start still keeps it.
 
+import type { Machine } from "./types";
+
+/** The computer's switch as the Engine section shows it: on or off where the hub sends it, null (no switch) where it does
+ *  not, and for a value this client does not know. */
+export function orcaChatSwitch(machine: Pick<Machine, "orca_chat_starts">): boolean | null {
+  const v = machine.orca_chat_starts as string | undefined;
+  return v === "on" ? true : v === "off" ? false : null;
+}
+
 /** `default_opens`: the Orca chat launcher, its name, the permission modes with which a default start opens there, the model
  *  and effort that go with it, and `dropped` when the default's model or effort does not (Orca's own runs). */
 export interface DefaultOpens {

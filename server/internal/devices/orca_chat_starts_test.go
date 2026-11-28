@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // "Start new Agents as Orca chats" (#17650): off until the user turns it on, kept in settings under
@@ -40,7 +41,7 @@ func TestOrcaChatStartsSwitch(t *testing.T) {
 	if code, out := send("GET", "", ""); code != 200 || out["on"] != false || out["applies"] != false {
 		t.Fatalf("default: %d %v", code, out)
 	}
-	if m.snapshot().OrcaChatStarts != nil || h.OrcaChatStarts(ctx, "m1") {
+	if m.snapshot().OrcaChatStarts != "" || h.OrcaChatStarts(ctx, "m1") {
 		t.Fatalf("shown without Orca: %v", m.snapshot().OrcaChatStarts)
 	}
 	b, _ := json.Marshal(m.snapshot())
@@ -49,11 +50,11 @@ func TestOrcaChatStartsSwitch(t *testing.T) {
 	}
 
 	// Orca in the set: shown, off.
-	if code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"hosts":["herdr","orca"],"default":"herdr"}`); code != 200 || out["orca_chat_starts"] != false {
+	if code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"hosts":["herdr","orca"],"default":"herdr"}`); code != 200 || out["orca_chat_starts"] != "off" {
 		t.Fatalf("with Orca: %d %v", code, out)
 	}
-	if got := m.snapshot().OrcaChatStarts; got == nil || *got {
-		t.Fatalf("with Orca, never set: %v", got)
+	if got := m.snapshot().OrcaChatStarts; got != proto.OrcaChatStartsOff {
+		t.Fatalf("with Orca, never set: %q", got)
 	}
 
 	// Bad bodies and devices that may not change it.
@@ -75,8 +76,8 @@ func TestOrcaChatStartsSwitch(t *testing.T) {
 	if ok, err := st.Setting(ctx, orcaChatStartsKey, &stored); !ok || err != nil || !stored["m1"] {
 		t.Fatalf("stored %v %v %v", ok, err, stored)
 	}
-	if got := m.snapshot().OrcaChatStarts; got == nil || !*got || !h.OrcaChatStarts(ctx, "m1") {
-		t.Fatalf("after on: %v", got)
+	if got := m.snapshot().OrcaChatStarts; got != proto.OrcaChatStartsOn || !h.OrcaChatStarts(ctx, "m1") {
+		t.Fatalf("after on: %q", got)
 	}
 	// Another manager process on the same settings reads it back.
 	h2 := newTestDevices(t)
@@ -92,7 +93,7 @@ func TestOrcaChatStartsSwitch(t *testing.T) {
 	if code, out := send("GET", "", ""); code != 200 || out["on"] != true || out["applies"] != false || h.OrcaChatStarts(ctx, "m1") {
 		t.Fatalf("kept while Orca is off: %d %v", code, out)
 	}
-	if code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"hosts":["orca"]}`); code != 200 || out["orca_chat_starts"] != true {
+	if code, out := put(t, mux, "/api/v1/machines/m1/engine", `{"hosts":["orca"]}`); code != 200 || out["orca_chat_starts"] != "on" {
 		t.Fatalf("Orca back: %d %v", code, out)
 	}
 
@@ -104,8 +105,8 @@ func TestOrcaChatStartsSwitch(t *testing.T) {
 	if ok, _ := st.Setting(ctx, orcaChatStartsKey, &stored); !ok || stored["m1"] {
 		t.Fatalf("stored after off %v", stored)
 	}
-	if got := m.snapshot().OrcaChatStarts; got == nil || *got || h.OrcaChatStarts(ctx, "m1") {
-		t.Fatalf("after off: %v", got)
+	if got := m.snapshot().OrcaChatStarts; got != proto.OrcaChatStartsOff || h.OrcaChatStarts(ctx, "m1") {
+		t.Fatalf("after off: %q", got)
 	}
 	if h.OrcaChatStarts(ctx, "nope") {
 		t.Fatal("an unknown machine")

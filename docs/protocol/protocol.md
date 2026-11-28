@@ -4942,8 +4942,9 @@ trade-offs in `docs/integrations/herdr-core.md` ("herdr-core host")).
     `["herdr"]` when never chosen). `engine_suggested` (while online) is the set to preselect at pairing: the hosts the node reports available, herdr when none;
     a machine that already chose is never changed by it. `engine_sets_unsupported`: the node is online but too old for sets, and the chosen set is not one it can run
     as a single engine (herdr + Orca, say). It then runs `engine` alone, and clients say so until the node is updated.
-    `orca_chat_starts` (#17650): the computer's "Start new Agents as Orca chats" switch, sent only while Orca is in `engine_hosts` (where it applies);
-    absent elsewhere and from an older manager, so clients show the switch exactly where it is sent (`PUT …/orca-chat-starts`).
+    `orca_chat_starts` (#17650): the computer's "Start new Agents as Orca chats" switch, a closed set, `"on"` or `"off"` (`proto.OrcaChatStarts`), sent only
+    while Orca is in `engine_hosts` (where it applies); absent elsewhere and from an older manager, so clients show the switch exactly where it is sent
+    (`PUT …/orca-chat-starts`). A client reads a value it does not know as absent: no switch, never shown as on or off.
   - **Choosing the host for a new session**: `POST /api/v1/sessions` (`session.start`) may carry `host`, one of the enabled hosts; without it, the default host.
     A host that is not enabled, or one that cannot start sessions, is refused with `engine_missing` and nothing starts. When the node is
     too old (its `node.info` has no `engine_hosts`) the hub answers `node_outdated` and does not send it: an older node would ignore `host` and start in its engine.

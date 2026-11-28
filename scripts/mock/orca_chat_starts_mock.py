@@ -1,6 +1,6 @@
 """The server's "Start new Agents as Orca chats" switch (#17650, server/internal/devices/orca_chat_starts.go).
 
-MOCK_ORCA_CHAT_STARTS=1 puts Orca in the server's engine set, so its machine carries the switch (`orca_chat_starts`, off),
+MOCK_ORCA_CHAT_STARTS=1 puts Orca in the server's engine set, so its machine carries the switch (`orca_chat_starts`, "off"),
 and answers GET / PUT /api/v1/machines/server/orca-chat-starts as the manager does (the machine list is pushed after a
 change). While it is on, New Agent's launchers for the server (GET /api/v1/machines/server/launchers, no other ?host=)
 carry `default_opens`: the start that keeps the default opens as "Orca chat · Claude Code". MOCK_ORCA_CHAT_STARTS=on
@@ -41,7 +41,7 @@ def register(d):
         hosts.append("orca")
     machine["engine_hosts"] = hosts
     machine.setdefault("engine_default", hosts[0])
-    machine["orca_chat_starts"] = state["on"]
+    machine["orca_chat_starts"] = "on" if state["on"] else "off"
 
     def answer(h):
         h.send_json({"on": state["on"], "applies": True})
@@ -54,7 +54,7 @@ def register(d):
         if not isinstance(on, bool):
             return h.send_json({"error": "on is required.", "code": "bad_request"}, 400)
         state["on"] = on
-        machine["orca_chat_starts"] = on
+        machine["orca_chat_starts"] = "on" if on else "off"
         hub.broadcast({"type": "machines", "machines": hub.out_machines()})
         answer(h)
 
@@ -71,7 +71,7 @@ def register(d):
 
     def reset():
         state["on"] = MODE == "on"
-        machine["orca_chat_starts"] = state["on"]
+        machine["orca_chat_starts"] = "on" if state["on"] else "off"
 
     d.route("GET", r"/api/v1/machines/server/orca-chat-starts", lambda h, req: answer(h))
     d.route("PUT", r"/api/v1/machines/server/orca-chat-starts", put)

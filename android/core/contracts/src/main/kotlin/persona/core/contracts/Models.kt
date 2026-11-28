@@ -200,13 +200,29 @@ data class Machine(
     /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
     @SerialName("engine_default") val engineDefault: String? = null,
     /**
-     * "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's default"): the
-     * switch, sent only while Orca is in [engineHosts], where it applies; null elsewhere and from older hubs (no switch).
+     * "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's default") as the
+     * hub sends it ([OrcaChatStarts]'s wire values), only while Orca is in [engineHosts], where it applies; null elsewhere
+     * and from older hubs. Read through [orcaChatSwitch].
      */
-    @SerialName("orca_chat_starts") val orcaChatStarts: Boolean? = null,
+    @SerialName("orca_chat_starts") val orcaChatStarts: String? = null,
 ) {
+    /** The switch: on or off where the hub sends it; null (no switch) where it does not, and for a value this app does not know. */
+    val orcaChatSwitch: Boolean? get() = OrcaChatStarts.of(orcaChatStarts)?.on
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
+}
+
+/**
+ * `Machine.orca_chat_starts` (#17650, the hub's `proto.OrcaChatStarts`): a closed set. [of] is null for an absent value
+ * and for one this app does not know, so a later state is never shown as on or off.
+ */
+enum class OrcaChatStarts(val wire: String, val on: Boolean) {
+    On("on", true),
+    Off("off", false);
+
+    companion object {
+        fun of(wire: String?): OrcaChatStarts? = entries.firstOrNull { it.wire == wire }
+    }
 }
 
 /** `Machine.link_switch`: whether this computer can switch from SSH, or where that switch stands. */

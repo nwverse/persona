@@ -50,9 +50,10 @@ export interface Machine {
   engine_suggested?: { hosts: string[]; default: string };
   /** The node is too old for sets and runs `engine` alone until it is updated. */
   engine_sets_unsupported?: boolean;
-  /** "Start new Agents as Orca chats" (#17650): the switch, present only while Orca is in its engine set (where it applies);
-   *  absent elsewhere and from older hubs, which then offer no switch. Changed with PUT …/orca-chat-starts {"on"}. */
-  orca_chat_starts?: boolean;
+  /** "Start new Agents as Orca chats" (#17650): the switch, on or off, present only while Orca is in its engine set (where
+   *  it applies); absent elsewhere and from older hubs, which then offer no switch. A value this client does not know reads
+   *  as absent (lib/orca-chat.ts orcaChatSwitch). Changed with PUT …/orca-chat-starts {"on"}. */
+  orca_chat_starts?: OrcaChatStarts;
   kind?: string;
   arch?: string;
   home?: string;
@@ -79,6 +80,9 @@ export interface Machine {
    *  hour after a switch ended; absent from older hubs, which then offer nothing. */
   link_switch?: MachineLinkSwitch;
 }
+
+/** `Machine.orca_chat_starts` (#17650, `proto.OrcaChatStarts`): a closed set; a later value reads as absent. */
+export type OrcaChatStarts = "on" | "off";
 
 /** Where switching an ssh computer to Persona Link stands (`proto.MachineLinkSwitch`): `available`, a switch can start
  *  now, else `reason` says why not; `phase`, the current or last switch's ("" none), and a failed one's `error`, with

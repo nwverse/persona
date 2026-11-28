@@ -48,7 +48,7 @@ class NewAgentOrcaChatShotsTest {
 
     private fun out(): File = File(System.getProperty("persona.shots") ?: "build/orca-chat-shots").also { it.mkdirs() }
 
-    private val machines = listOf(Machine("box", "Workstation", online = true, engineHosts = listOf("herdr", "orca"), orcaChatStarts = true))
+    private val machines = listOf(Machine("box", "Workstation", online = true, engineHosts = listOf("herdr", "orca"), orcaChatStarts = "on"))
 
     private class MemoryDataStore : DataStore<Preferences> {
         override val data = MutableStateFlow<Preferences>(emptyPreferences())

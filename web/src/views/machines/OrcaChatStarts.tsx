@@ -4,13 +4,14 @@
 // a failed save goes back and says why. Where a start goes is the hub's to decide; New Agent says it (lib/orca-chat.ts).
 import { useId, useState } from "react";
 import { api, enc, errorText } from "../../lib/api";
+import { orcaChatSwitch } from "../../lib/orca-chat";
 import { applyMachine } from "../../lib/store";
 import type { Machine } from "../../lib/types";
 import { EASE, Spinner, Switch, toast } from "../../ui/atoms";
 import { t } from "../../i18n";
 
 export function OrcaChatStarts({ machine }: { machine: Machine }) {
-  const saved = machine.orca_chat_starts;
+  const saved = orcaChatSwitch(machine);
   const [on, setOn] = useState(saved ?? false);
   const [seen, setSeen] = useState(saved);
   const [saving, setSaving] = useState(false);
@@ -20,7 +21,7 @@ export function OrcaChatStarts({ machine }: { machine: Machine }) {
     setSeen(saved);
     setOn(saved ?? false);
   }
-  if (saved === undefined) return null;
+  if (saved === null) return null;
 
   const change = async (next: boolean) => {
     if (saving) return;
@@ -30,7 +31,7 @@ export function OrcaChatStarts({ machine }: { machine: Machine }) {
       const r = await api<{ on: boolean }>(`/machines/${enc(machine.id)}/orca-chat-starts`, { method: "PUT", json: { on: next } });
       setOn(r.on); // until the machine's push says so too
       // only this field: the rest of the machine stays as the latest push has it
-      applyMachine({ id: machine.id, orca_chat_starts: r.on } as Machine);
+      applyMachine({ id: machine.id, orca_chat_starts: r.on ? "on" : "off" } as Machine);
     } catch (e) {
       setOn(!next);
       toast(t("machines-orcachatstarts.save_failed", { error: errorText(e) }), "error");

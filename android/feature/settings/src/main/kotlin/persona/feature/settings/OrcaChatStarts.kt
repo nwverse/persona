@@ -20,7 +20,7 @@ import persona.core.designsystem.LocalAppFeedback
 
 /**
  * "Start new Agents as Orca chats" on a machine's Engine page (#17650, docs/integrations/engines.md "Orca chats as New
- * Agent's default"), as the web's Engine section has it. The hub sends the switch on the machine ([Machine.orcaChatStarts])
+ * Agent's default"), as the web's Engine section has it. The hub sends the switch on the machine ([Machine.orcaChatSwitch])
  * only while Orca is in its engine set, so it shows exactly there; where a start goes is the hub's to decide. A change
  * shows at once and settles on the hub's answer; a failed save puts the old value back. A push of the machine moves the
  * switch while nothing is being saved here.
@@ -34,7 +34,7 @@ class OrcaChatStartsModel(initial: Boolean?, private val put: suspend (machineId
 
     /** The machine as the hub pushed it. */
     fun synchronize(machine: Machine) {
-        if (!mutable.value.saving) mutable.update { it.copy(shown = machine.orcaChatStarts) }
+        if (!mutable.value.saving) mutable.update { it.copy(shown = machine.orcaChatSwitch) }
     }
 
     /** Saves [on] for [machineId]: null once saved, else what went wrong (the old value is back). */
