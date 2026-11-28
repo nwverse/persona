@@ -31,13 +31,17 @@ BASELINE = Path(__file__).with_name('android_compose_budget_baseline.json')
 # composables sit, and each of those was already near the ART limit or had crossed it.
 CAPS = {'lines': 400, 'remembers': 30, 'effects': 12}
 METRICS = tuple(CAPS)
-# A @Composable function declaration: the annotation, more annotations or modifiers, `fun`, type parameters, a receiver.
+# A @Composable function declaration (the annotation bare or as `@androidx.compose.runtime.Composable`), more
+# annotations or modifiers, `fun`, type parameters, a receiver.
 DECLARATION = re.compile(
-    r'@Composable\b(?:\s*@[\w.]+(?:\([^()]*\))?)*\s*'
+    r'@(?:androidx\.compose\.runtime\.)?Composable\b(?:\s*@[\w.]+(?:\([^()]*\))?)*\s*'
     r'(?:(?:private|internal|public|protected|inline|override|actual|expect|suspend|operator|infix|tailrec)\s+)*'
     r'fun\s+(?:<[^>]*>\s*)?(?:[\w.]+(?:<[^>]*>)?\.)?(\w+)\s*\(')
-REMEMBER = re.compile(r'(?<![\w.])remember\w*\s*(?:<[^\n]*?>)?\s*[({]')
-EFFECT = re.compile(r'(?<![\w.])(?:LaunchedEffect|DisposableEffect|SideEffect)\s*[({]')
+# Calls bare or qualified with the Compose runtime's package (`androidx.compose.runtime.saveable.rememberSaveable(...)`);
+# a method of another object (`state.remember(...)`) is not one.
+RUNTIME = r'(?<![\w.])(?:androidx\.compose\.runtime\.(?:\w+\.)*)?'
+REMEMBER = re.compile(RUNTIME + r'remember\w*\s*(?:<[^\n]*?>)?\s*[({]')
+EFFECT = re.compile(RUNTIME + r'(?:LaunchedEffect|DisposableEffect|SideEffect)\s*[({]')
 
 
 # Comments and string or character literals, in the order a lexer meets them, so `//` in a string or a quote in a
@@ -130,7 +134,7 @@ def scan(root):
     for path in source_files(root):
         seen = {}
         source = path.read_text(encoding='utf-8')
-        if '@Composable' not in source:
+        if 'Composable' not in source:  # bare or `@androidx.compose.runtime.Composable`
             continue
         for name, metrics in functions(source):
             seen[name] = seen.get(name, 0) + 1

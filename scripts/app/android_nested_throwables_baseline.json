@@ -1,9 +1,4 @@
 {
   "version": 1,
-  "uncovered": [
-    "persona.feature.files.DocumentText$CompareTooBigException",
-    "persona.feature.files.DocumentText$NotesSlideFoundException",
-    "persona.feature.files.Xlsx$SheetCappedException",
-    "persona.feature.files.Xlsx$SheetTooBigException"
-  ]
+  "uncovered": []
 }

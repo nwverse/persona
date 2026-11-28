@@ -57,6 +57,42 @@ class CountTest(unittest.TestCase):
         self.assertEqual(1, counts['rememberThing']['remembers'])
         self.assertEqual({'lines': 4, 'remembers': 1, 'effects': 0}, counts['Wrapped'])
 
+    def test_counts_the_runtime_package_qualified_annotation_and_calls_once_each(self):
+        source = '''
+            @androidx.compose.runtime.Composable
+            internal fun itemPins(): Pins {
+                var draft by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+                val onDone by androidx.compose.runtime.rememberUpdatedState(done)
+                val scope = androidx.compose.runtime.rememberCoroutineScope()
+                androidx.compose.runtime.LaunchedEffect(key) { }
+                androidx.compose.runtime.SideEffect { }
+                return remember { Pins() }
+            }
+            @androidx.compose.runtime.Composable private fun FormProbe() { DisposableEffect(Unit) { onDispose { } } }
+        '''
+        self.assertEqual([('itemPins', {'lines': 8, 'remembers': 4, 'effects': 2}),
+                          ('FormProbe', {'lines': 1, 'remembers': 0, 'effects': 1})], functions(source))
+
+    def test_another_objects_remember_or_effect_method_is_no_call(self):
+        source = '''
+            @Composable
+            fun Page(cache: Cache, state: Host) {
+                cache.remember(key) { 1 }
+                state.rememberScroll { }
+                state.LaunchedEffect(key) { }
+                other.androidx.compose.runtime.remember { 1 }
+                val text = remember { "androidx.compose.runtime.remember { }" }
+            }
+        '''
+        self.assertEqual({'lines': 7, 'remembers': 1, 'effects': 0}, dict(functions(source))['Page'])
+
+    def test_a_qualified_composable_type_is_no_function(self):
+        source = '''
+            typealias Slot = @androidx.compose.runtime.Composable () -> Unit
+            fun Host(trailing: (@androidx.compose.runtime.Composable (Modifier) -> Unit)? = null) { remember { 1 } }
+        '''
+        self.assertEqual([], functions(source))
+
     def test_a_composable_type_or_lambda_is_no_function(self):
         source = '''
             val slot: @Composable () -> Unit = { val a = remember { 1 } }
@@ -102,6 +138,10 @@ class RatchetTest(unittest.TestCase):
         root = self.tree({PAGE: big + big,
                           'android/feature/demo/src/test/kotlin/demo/PageTest.kt': composable('Test', lines=500)})
         self.assertEqual({f'{PAGE}::Big', f'{PAGE}::Big#2'}, set(scan(root)))
+
+    def test_scans_a_file_that_only_names_the_qualified_annotation(self):
+        root = self.tree({PAGE: composable('Probe', lines=3, head='@androidx.compose.runtime.Composable\nfun')})
+        self.assertEqual({f'{PAGE}::Probe': {'lines': 3, 'remembers': 0, 'effects': 0}}, scan(root))
 
     def test_only_counts_over_a_cap_need_an_entry_and_a_listed_one_may_only_fall(self):
         current = {'a::Big': {'lines': 500, 'remembers': 40, 'effects': 2}, 'a::Small': {'lines': 10, 'remembers': 1,

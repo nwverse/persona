@@ -6,9 +6,8 @@
       "remembers": 113
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/AgentsScreen.kt::AgentsScreen": {
-      "effects": 19,
-      "lines": 1095,
-      "remembers": 56
+      "lines": 836,
+      "remembers": 47
     },
     "android/feature/agents/src/main/kotlin/persona/feature/agents/TodoDetailScreen.kt::TodoDetailScreen": {
       "lines": 533
@@ -28,13 +27,12 @@
       "remembers": 37
     },
     "android/feature/chat/src/main/kotlin/persona/feature/chat/ChatScreen.kt::ChatPage": {
-      "effects": 20,
-      "lines": 1221,
-      "remembers": 108
+      "lines": 960,
+      "remembers": 71
     },
     "android/feature/inbox/src/main/kotlin/persona/feature/inbox/InboxScreen.kt::InboxScreen": {
       "lines": 676,
-      "remembers": 39
+      "remembers": 44
     },
     "android/feature/inbox/src/main/kotlin/persona/feature/inbox/LarkScreen.kt::LarkConversationScreen": {
       "remembers": 43
