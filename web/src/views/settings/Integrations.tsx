@@ -326,7 +326,8 @@ function IntegrationsForManager({
   const { view, filter } = route;
   const roster = useRoster();
   const scope = useScope();
-  const offline = useShownOffline({ shownManager: owner ?? current });
+  const shownOffline = useShownOffline();
+  const offline = shownOffline?.manager.id === (owner ?? current) ? shownOffline : null;
   const resourceOwner = owner ?? (scope.several ? current : undefined);
   const go = (view: IntegrationView, manager = resourceOwner, action?: "push" | "replace" | "root") =>
     onOpen({ scope: integrationScope(manager), view, filter }, action);

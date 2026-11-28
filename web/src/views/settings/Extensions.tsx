@@ -101,7 +101,7 @@ export function Extensions({ open, onOpen, onBack, onChannel, onConnector, heade
         </OwnedExtension>
       );
     case "catalog":
-      return <MarketCatalog manager={scope} onBack={headerBack ? undefined : onBack ?? (() => onOpen(null))} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
+      return <MarketCatalog manager={installTo} onBack={headerBack ? undefined : onBack ?? (() => onOpen(null))} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
     case "item":
       // another manager's upgrade goes back to that manager's extension: the catalog is the default's
       return (
@@ -115,7 +115,7 @@ export function Extensions({ open, onOpen, onBack, onChannel, onConnector, heade
         />
       );
     case "markets":
-      return <Markets manager={scope} onBack={headerBack ? undefined : onBack ?? (() => go({ kind: "catalog" }))} />;
+      return <Markets manager={installTo} onBack={headerBack ? undefined : onBack ?? (() => go({ kind: "catalog" }))} />;
     default:
       return <ExtensionList manager={scope} onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
   }
@@ -258,7 +258,8 @@ function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside,
   }, [manager, viewKey, own, markets]);
   const drafts = useUnsaved();
   // an offline current assistant: the hub has none of its extensions to merge in, which must not read as "none installed"
-  const offline = useShownOffline({ shownManager: manager });
+  const shownOffline = useShownOffline();
+  const offline = manager && shownOffline?.manager.id !== manager ? null : shownOffline;
 
   return (
     <>

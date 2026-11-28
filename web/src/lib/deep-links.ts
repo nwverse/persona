@@ -8,7 +8,6 @@
 import { decodeURIComponentSafe } from "./uri";
 import { machineLocation, machinePath, type MachineLocation } from "./machine-route";
 import { APP_SCHEMES, assistantPath } from "./compatibility";
-import { decodeSettingsPrefill } from "./settings-prefill";
 
 
 export type DeepPage =
@@ -117,7 +116,7 @@ function settingsPage(q: URLSearchParams, route?: ReturnType<typeof parseSetting
   const item = rawTab === "sent" ? SENT : route?.sub ?? (key ? q.get(key) ?? (tab === "extensions" ? q.get("plugin") : null) : null);
   if (tab === "integrations" || isLegacyIntegrationTab(tab)) {
     const set = q.getAll("set");
-    const prefill = set.length === 1 && decodeSettingsPrefill(set[0]) ? set[0] : undefined;
+    const prefill = set.length === 1 ? set[0] : undefined;
     const integration = tab === "integrations" ? undefined : q.get("integration") ?? undefined;
     return clean({ page: "settings", tab, item: item ?? undefined, manager, otherManager, filter: q.get("filter") ?? undefined, prefill, integration });
   }

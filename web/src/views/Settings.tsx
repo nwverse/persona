@@ -54,8 +54,8 @@ import { DevModeRows } from "./settings/DevModeSettings";
 import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
-import { extensionsRoute, routeSub } from "../lib/extension-market";
-import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../lib/manager-choice";
+import { routeSub } from "../lib/extension-market";
+import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
@@ -238,6 +238,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${namedManager ? `${namedManager}/` : ""}${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  const view = integration?.view;
+  const legacyChannel = view?.kind === "channel" || view?.kind === "builtin"
+    ? view.id === "feishu-bot" ? "feishu" : view.id
+    : undefined;
   // The host excludes both the Settings navigation and the app sidebar (including a resized sidebar).
   const [wideIntegrations, setWideIntegrations] = useState(false);
   useLayoutEffect(() => {
@@ -344,20 +348,19 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     setAddress(readSettingsLocation());
   };
-  const openLegacyIntegration = (k: "extensions" | "channels" | "connectors", id: string, action: "push" | "replace" = "push") => {
+  const openLegacyIntegration = (k: "extensions" | "channels" | "connectors", id: string, fromList = false) => {
     const next = decodeIntegrationsRoute(k, id);
     if (next.scope.kind === "current" && integration) next.scope = integration.scope;
     if (integration && new URLSearchParams(address.search).has("filter")) next.filter = integration.filter;
     // The old pages own their item spellings, including the legacy Feishu channel.
     let to = settingsHref(k, id, phone, integrationManager(next.scope));
     if (next.filter !== "all") to += `&filter=${next.filter}`;
-    return openIntegration(next, action, to);
+    const sibling = fromList && sub && isIntegrationDetailRoute(next.view);
+    return openIntegration(next, sibling ? "replace" : "push", to);
   };
   const openLegacyItem = (k: "extensions" | "channels" | "connectors", id: string | null) => {
     if (!id) return backIntegration();
-    const sibling = (k === "extensions" && extensionsRoute(id).kind === "extension")
-      || (k !== "extensions" && id !== SENT_SUB);
-    openLegacyIntegration(k, id, sub && sibling ? "replace" : "push");
+    openLegacyIntegration(k, id, true);
   };
   const toList = () => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
@@ -472,9 +475,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     if (target.anchor) setScrollAnchor(target.anchor);
   };
-  const onExtensionPage =
-    (tab === "extensions" && extensionsRoute(sub).kind === "page") ||
-    (tab === "integrations" && integration?.view.kind === "page");
+  const onExtensionPage = view?.kind === "page";
   const integrationsSplit =
     !listed &&
     !phone &&
@@ -597,13 +598,13 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   />
                 </Suspense>
               )}
-              {tab === "channels" && canShowIntegration && (sub ? (twoCol ? (
+              {tab === "channels" && canShowIntegration && (legacyChannel ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList manager={namedManager} openBeside={sub} onOpen={(id) => openLegacyItem("channels", id)} onMarketItem={(market, id) => openLegacyIntegration("extensions", routeSub({ kind: "item", market, id })!)} /></div>
-                  <div className="min-w-0 flex-1"><ChannelPage key={sub} id={parseOwnedSub(sub).id} manager={manager} onBack={backIntegration} onSettings={openSettingsUrl} /></div>
+                  <div className="min-w-0 flex-1"><ChannelPage key={sub} id={legacyChannel} manager={manager} onBack={backIntegration} onSettings={openSettingsUrl} /></div>
                 </div>
               ) : (
-                <ChannelPage key={sub} id={parseOwnedSub(sub).id} manager={manager} onBack={backIntegration} headerBack={phone} onSettings={openSettingsUrl} />
+                <ChannelPage key={sub} id={legacyChannel} manager={manager} onBack={backIntegration} headerBack={phone} onSettings={openSettingsUrl} />
               )) : (
                 <ChannelList manager={namedManager} onOpen={(id) => openLegacyItem("channels", id)} onMarketItem={(market, id) => openLegacyIntegration("extensions", routeSub({ kind: "item", market, id })!)} />
               ))}
@@ -615,7 +616,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               ) : (
                 <Connectors manager={namedManager} open={sub} headerBack={phone} onOpen={(id) => openLegacyItem("connectors", id)} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} />
               )}</Suspense>}
-              {tab === "extensions" && canShowIntegration && <Suspense fallback={<Loading />}>{extensionsRoute(sub).kind === "extension" && twoCol ? (
+              {tab === "extensions" && canShowIntegration && <Suspense fallback={<Loading />}>{view?.kind === "extension" && twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><Extensions manager={namedManager} open={null} openBeside={sub} onOpen={(id) => openLegacyItem("extensions", id)} onBack={backIntegration} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} onConnector={(id, owner) => openLegacyIntegration("connectors", ownedSub(id, owner))} prefill={extensionPrefill} /></div>
                   <div className="min-w-0 flex-1"><Extensions manager={namedManager} open={sub} onOpen={(id) => openLegacyItem("extensions", id)} onBack={backIntegration} onChannel={(id, owner) => openLegacyIntegration("channels", ownedSub(id, owner))} onConnector={(id, owner) => openLegacyIntegration("connectors", ownedSub(id, owner))} prefill={extensionPrefill} /></div>

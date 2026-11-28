@@ -81,7 +81,8 @@ export function ConnectorList({ onOpen, onLarkCli, openBeside, manager }: { onOp
     if (own) onLarkCli?.(own.find((c) => c.id === "larkcli") ?? null);
   }, [own, onLarkCli]);
   // an offline current assistant: the hub's merged list leaves it out, so an empty list says it is offline (as the inbox does)
-  const offline = useShownOffline({ shownManager: manager });
+  const shownOffline = useShownOffline();
+  const offline = manager && shownOffline?.manager.id !== manager ? null : shownOffline;
   if (list?.length === 0) {
     return offline ? (
       <Group title={t("settings-hubconnector.more_title")}>
