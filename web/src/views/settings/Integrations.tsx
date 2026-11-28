@@ -21,7 +21,8 @@ import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, 
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
-import { chooseManager, defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { managerOf, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useLarkOn, useStore } from "../../lib/store";
 import {
@@ -78,6 +79,10 @@ export interface IntegrationsProps {
   twoCol?: boolean;
   /** The page's top bar already provides Back (phone), so subviews omit their own Back button. */
   headerBack?: boolean;
+  /** Parent `?integration=` sub-route recorded when drilling down (for example upgrade or scoped push-source detail). */
+  parentSub?: string | null;
+  /** Step back to `parentSub` via browser history when mounted inside Settings. */
+  onBackParent?: () => void;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
   /** Report whether an open extension plugin_page needs the wide page container. */
@@ -175,6 +180,7 @@ function PushSourceDetailPane({
   item,
   manager,
   onBack,
+  backLabel,
   reloadKey,
   onReload,
 }: {
@@ -182,6 +188,7 @@ function PushSourceDetailPane({
   item: IntegrationItem | null;
   manager?: string;
   onBack?: () => void;
+  backLabel?: string;
   reloadKey: number;
   onReload: () => void;
 }) {
@@ -191,7 +198,7 @@ function PushSourceDetailPane({
       <div className="mb-3 flex items-center gap-2">
         {onBack && (
           <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-            {t("settings-integrations.back")}
+            {backLabel ?? t("settings-integrations.back")}
           </Button>
         )}
         <OwnerMark manager={manager} />
@@ -313,15 +320,34 @@ function IntegrationsForManager({
   onOpen,
   twoCol = false,
   headerBack = false,
+  parentSub = null,
+  onBackParent,
   onSettings,
   onPageWide,
 }: IntegrationsProps & { picked: string | null }) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
-  const go = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next));
-  const drillDown = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next), true);
+  const [drillOrigin, setDrillOrigin] = useState<{ child: string; parent: string } | null>(null);
+  const go = (next: IntegrationsRoute) => {
+    setDrillOrigin(null);
+    onOpen(formatIntegrationsSub(next));
+  };
+  const drillDown = (next: IntegrationsRoute) => {
+    const childSub = formatIntegrationsSub(next);
+    if (open && childSub && open !== childSub) {
+      setDrillOrigin({ child: childSub, parent: open });
+    }
+    onOpen(childSub, true);
+  };
+  const returnParent = parentSub ?? (drillOrigin && drillOrigin.child === open ? drillOrigin.parent : null);
+  const stepBackTo = (target: string) => {
+    setDrillOrigin(null);
+    if (onBackParent && parentSub === target) onBackParent();
+    else onOpen(target);
+  };
 
   const owner = otherManager(picked ?? undefined);
   const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
+  const roster = useRoster();
   const scope = useScope();
   const offline = useShownOffline();
 
@@ -498,8 +524,9 @@ function IntegrationsForManager({
 
   const filtered = useMemo(() => filterIntegrationItems(items, filter), [items, filter]);
   const builtins = useMemo(() => filtered.filter((it) => it.kind === "builtin"), [filtered]);
+  const builtinExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && it.builtinExtension), [filtered]);
   const pushSources = useMemo(() => filtered.filter((it) => it.kind === "source"), [filtered]);
-  const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension"), [filtered]);
+  const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && !it.builtinExtension), [filtered]);
 
   const isSourcesView = route.kind === "sources" && !route.state;
   const sourceDetailState = route.kind === "sources" && route.state ? route.state : null;
@@ -530,6 +557,7 @@ function IntegrationsForManager({
     );
   }
   if (route.kind === "item") {
+    const upgradeOrigin = returnParent && parseIntegrationsSub(returnParent).kind === "extension" ? returnParent : null;
     return (
       <Suspense fallback={<Loading />}>
         <MarketItem
@@ -540,7 +568,13 @@ function IntegrationsForManager({
           onBack={
             headerBack
               ? undefined
-              : () => go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" })
+              : () => {
+                  if (upgradeOrigin) {
+                    stepBackTo(upgradeOrigin);
+                    return;
+                  }
+                  go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" });
+                }
           }
           onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
         />
@@ -603,10 +637,14 @@ function IntegrationsForManager({
         type="button"
         data-integration-row={item.key}
         data-integration-kind={item.kind}
+        data-integration-source={item.extension?.source}
         data-integration-id={item.id}
         data-integration-sub-alert={item.subscriptionAlert?.state}
         aria-current={selected || undefined}
-        onClick={() => onOpen(item.sub)}
+        onClick={() => {
+          setDrillOrigin(null);
+          onOpen(item.sub);
+        }}
         className={cx(
           "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
           selected ? "bg-accent-tint" : "hover:bg-hover",
@@ -616,6 +654,9 @@ function IntegrationsForManager({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
             <span className="max-w-full truncate text-meta font-medium text-ink">{item.name}</span>
+            {!compactList && item.builtinExtension && (
+              <Pill>{t("settings-integrations.builtin_badge")}</Pill>
+            )}
             {!compactList &&
               item.capabilities.map((cap) => (
                 <Pill key={cap}>{t(CAP_LABEL_KEY[cap])}</Pill>
@@ -671,6 +712,9 @@ function IntegrationsForManager({
     </div>
   );
 
+  const crossAssistantSources = isSourcesView && !sameManager(effectiveManager, owner);
+  const targetAssistantName = (effectiveManager && managerOf(roster, effectiveManager)?.name) || effectiveManager || "";
+
   const viewSwitch = hasInboxSources ? (
     <div className={cx(compactList ? "mb-2" : "mb-3 flex")} data-integrations-view-switch>
       <Segmented
@@ -683,10 +727,7 @@ function IntegrationsForManager({
         ]}
         onChange={(v) => {
           if (v === "sources") go({ kind: "sources", manager: otherManager(effectiveManager) });
-          else {
-            chooseManager(effectiveManager ?? null);
-            go({ kind: "list" });
-          }
+          else go({ kind: "list" });
         }}
       />
     </div>
@@ -698,8 +739,38 @@ function IntegrationsForManager({
     return (
       <div data-integrations-sources-view>
         {listHeader}
-        {!headerBack && viewSwitch}
-        <SourcesFlowPane manager={effectiveManager} reloadKey={sourcesReload}
+        {!headerBack &&
+          (crossAssistantSources ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2" data-integrations-cross-assistant-nav>
+              <Button
+                tone="quiet"
+                icon="chevronLeft"
+                testId="integrations-cross-assistant-back"
+                onClick={() => go({ kind: "list" })}
+                className="-ml-2"
+              >
+                {t("settings-integrations.back")}
+              </Button>
+              {targetAssistantName && (
+                <Button
+                  tone="secondary"
+                  size="sm"
+                  testId="integrations-switch-assistant"
+                  onClick={() => {
+                    chooseManager(otherManager(effectiveManager) ?? null);
+                    go({ kind: "list" });
+                  }}
+                >
+                  {t("settings-integrations.switch_assistant_integrations", { name: targetAssistantName })}
+                </Button>
+              )}
+            </div>
+          ) : (
+            viewSwitch
+          ))}
+        <SourcesFlowPane
+          manager={effectiveManager}
+          reloadKey={sourcesReload}
           onOpenSource={headerBack ? (page) => drillDown({ kind: "sources", state: page, manager: effectiveManager }) : undefined}
         />
       </div>
@@ -808,6 +879,20 @@ function IntegrationsForManager({
         </Group>
       )}
 
+      {builtinExtensions.length > 0 && (
+        <Group
+          anchor={builtins.length === 0 ? "integrations" : "builtin-extensions"}
+          title={
+            <span className="flex items-center gap-2">
+              {t("settings-integrations.group_builtin_extensions")}
+              <span className="font-normal">{t("settings-integrations.count", { count: builtinExtensions.length })}</span>
+            </span>
+          }
+        >
+          {builtinExtensions.map((item) => renderRow(item))}
+        </Group>
+      )}
+
       {pushSources.length > 0 && (
         <Group
           anchor="push-sources"
@@ -824,7 +909,7 @@ function IntegrationsForManager({
 
       {installedExtensions.length > 0 && (
         <Group
-          anchor={builtins.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
+          anchor={builtins.length === 0 && builtinExtensions.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
           title={
             <span className="flex items-center gap-2">
               {t("settings-integrations.group_extensions")}
@@ -842,12 +927,27 @@ function IntegrationsForManager({
     </>
   );
 
+  const backFromDetail = () => {
+    if (returnParent) {
+      stepBackTo(returnParent);
+      return;
+    }
+    setDrillOrigin(null);
+    onOpen(null);
+  };
+  const pushSourceBackLabel = returnParent
+    ? (parseIntegrationsSub(returnParent).kind === "sources"
+      ? t("subscriptions.view_graph")
+      : t("settings-extensionview.back"))
+    : t("settings-integrations.back");
+
   const detailPane = sourceDetailState ? (
     <PushSourceDetailPane
       state={sourceDetailState}
       item={resolvedSourceItem}
       manager={effectiveManager}
-      onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+      onBack={headerBack || twoCol ? undefined : backFromDetail}
+      backLabel={pushSourceBackLabel}
       reloadKey={sourcesReload}
       onReload={() => setSourcesReload((n) => n + 1)}
     />
@@ -857,11 +957,11 @@ function IntegrationsForManager({
         target={{ ...resolvedTarget, manager: effectiveManager }}
         prefill={prefill}
         integrationsV2={true}
-        onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
-        onUnavailableBack={headerBack ? undefined : () => onOpen(null)}
+        onBack={headerBack || twoCol ? undefined : backFromDetail}
+        onUnavailableBack={headerBack ? undefined : backFromDetail}
         onUninstalled={() => onOpen(null)}
         onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
-        onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
+        onUpgrade={(market, extId, manager) => drillDown({ kind: "item", market, id: extId, manager })}
         onSettings={onSettings}
         onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
         onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
