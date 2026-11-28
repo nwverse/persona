@@ -447,11 +447,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			kept[i].OriginOnly = true // persist the route's lack of acceptance authority with the signal itself
 		}
 	}
-	willInterject := slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
-	c, listed := s.session(ctx, here.MachineID, to)
-	directBlocked := !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
-		!willInterject && (c.Status == proto.StatusWorking || s.relayWaits(to, relayMsg{Tool: superviseTool, Urgent: anyDecision(kept)}))
-	if directBlocked && slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
+	if slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) && s.digestDirectBlocked(ctx, here.MachineID, to, kept, now) {
 		var queueableEntries []prompts.SuperviseEntry
 		var queueable, reval []superviseSignal
 		for i, g := range kept {
@@ -574,7 +570,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	render := func(list []prompts.SuperviseEntry) string { return s.renderQueuedDigest(ctx, to, list) }
 	queued := s.queuedDigestSignals(to)
-	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
+	msg := digestRelayMsg(kept, now)
 	if len(queued) > 0 && !slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
 		// The last message may still wait in the queue: this one takes its place with both.
 		all := mergeSignals(queued, kept)
@@ -603,7 +599,6 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	}
 	msg.Text, msg.Urgent = render(entries), anyDecision(kept)
 	msg.Signals = encodeDigestSignals(kept)
-	msg.Interject = slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
 	if background {
 		s.logf("supervise: %d signal(s) to the background supervisor %s", len(entries), short(to))
 	} else if to != here.Main {
@@ -612,7 +607,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.logf("supervise: %d signal(s) to the main conversation", len(entries))
 	}
 	c, ok := s.session(ctx, here.MachineID, to)
-	if !ok || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) || !msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg)) {
+	if s.directRelayBlocked(c, ok, to, msg) {
 		if !s.queueDigest(to, msg, kept, now, prev) {
 			return false
 		}
@@ -664,6 +659,31 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 		b.queued = map[string][]superviseSignal{}
 	}
 	b.queued[to] = list
+}
+
+// digestRelayMsg is the relay a digest of kept made at now goes out as, before its text and signals are filled in.
+// The revalidation partition and the send both decide on it, so they hold it to the same owner-presence window.
+func digestRelayMsg(kept []superviseSignal, now time.Time) relayMsg {
+	return relayMsg{
+		From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC(), Urgent: anyDecision(kept),
+		Interject: slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply }),
+	}
+}
+
+// directRelayBlocked reports whether msg can't go into conversation to directly now and has to queue instead: c is
+// the node's session for to (listed: it has one).
+func (s *Service) directRelayBlocked(c proto.Session, listed bool, to string, msg relayMsg) bool {
+	return !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
+		!msg.Interject && (c.Status == proto.StatusWorking || s.relayWaits(to, msg))
+}
+
+// digestDirectBlocked: a digest of kept for conversation to could not go in directly at now (directRelayBlocked, the
+// check the send makes), so the signals that need revalidation stay pending while the rest queue. It asks the node
+// for the session, so deliverDigest calls it only when such a signal rides along; otherwise the direct send looks
+// the session up itself.
+func (s *Service) digestDirectBlocked(ctx context.Context, machine, to string, kept []superviseSignal, now time.Time) bool {
+	c, listed := s.session(ctx, machine, to)
+	return s.directRelayBlocked(c, listed, to, digestRelayMsg(kept, now))
 }
 
 // supervisionSignalNeedsRevalidation reports whether an untried signal must stay in pending for delivery-time
