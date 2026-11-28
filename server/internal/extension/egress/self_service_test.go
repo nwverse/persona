@@ -52,6 +52,14 @@ func TestDialOutRefusesSelfInterfaceAndMulticast(t *testing.T) {
 		{"198.51.100.5", ownPort},
 		{"127.0.0.1", "18660"},
 		{"127.0.0.1", ownPort},
+		{"127.0.0.2", "18660"},
+		{"::ffff:127.0.0.1", "18660"},
+		{"0.0.0.0", "18660"},
+		{"0.0.0.0", ownPort},
+		{"::", "18660"},
+		{"::", ownPort},
+		{"::ffff:0.0.0.0", "18660"},
+		{"::ffff:0.0.0.0", ownPort},
 	}
 	for _, tc := range refused {
 		if c, err := p.dialOut(ctx, tc.host, tc.port, Rule{}); !errors.Is(err, errInternal) {
@@ -121,6 +129,14 @@ func TestRuntimeDialRefusesSelfInterfaceAndLiteralSelfService(t *testing.T) {
 		{"198.51.100.5", ownPort},
 		{"127.0.0.1", "18660"},
 		{"127.0.0.1", ownPort},
+		{"127.0.0.2", "18660"},
+		{"::ffff:127.0.0.1", "18660"},
+		{"0.0.0.0", "18660"},
+		{"0.0.0.0", ownPort},
+		{"::", "18660"},
+		{"::", ownPort},
+		{"::ffff:0.0.0.0", "18660"},
+		{"::ffff:0.0.0.0", ownPort},
 	}
 	for _, tc := range refused {
 		if c, err := p.runtimeDial(ctx, tc.host, tc.port, false); !errors.Is(err, errInternal) {
@@ -177,12 +193,29 @@ func TestHandlerRefusesLiteralLoopbackAndSelfInterfaceToHubAndOwnPort(t *testing
 		t.Fatal(err)
 	}
 
-	purl := p.Register("ext", Rule{Hosts: []string{"127.0.0.1", "api.example.com"}})
-	if got := connectStatus(t, purl, "127.0.0.1:"+ownPort); got != http.StatusForbidden {
-		t.Fatalf("CONNECT 127.0.0.1:%s = %d, want 403", ownPort, got)
-	}
-	if got := connectStatus(t, purl, "127.0.0.1:18660"); got != http.StatusForbidden {
-		t.Fatalf("CONNECT 127.0.0.1:18660 = %d, want 403", got)
+	purl := p.Register("ext", Rule{Hosts: []string{
+		"127.0.0.1",
+		"127.0.0.2",
+		"::ffff:127.0.0.1",
+		"0.0.0.0",
+		"::",
+		"::ffff:0.0.0.0",
+		"api.example.com",
+	}})
+	for _, host := range []string{
+		"127.0.0.1",
+		"127.0.0.2",
+		"::ffff:127.0.0.1",
+		"0.0.0.0",
+		"::",
+		"::ffff:0.0.0.0",
+	} {
+		for _, port := range []string{ownPort, "18660"} {
+			target := net.JoinHostPort(host, port)
+			if got := connectStatus(t, purl, target); got != http.StatusForbidden {
+				t.Fatalf("CONNECT %s = %d, want 403", target, got)
+			}
+		}
 	}
 	if got := connectStatus(t, purl, "api.example.com:18660"); got != http.StatusBadGateway {
 		t.Fatalf("CONNECT api.example.com:18660 = %d, want 502", got)

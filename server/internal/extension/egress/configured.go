@@ -70,12 +70,13 @@ func Unreachable(ip net.IP) bool {
 }
 
 // isSelfService reports whether ip:port targets this machine's own hub or
-// egress-proxy listener.
+// egress-proxy listener. Unspecified addresses (0.0.0.0, ::, ::ffff:0.0.0.0)
+// are included because dialing them connects to loopback on Linux.
 func (p *Proxy) isSelfService(ip net.IP, port string) bool {
 	if !p.hubPort(port) && !p.ownPort(port) {
 		return false
 	}
-	if ip.IsLoopback() {
+	if ip.IsLoopback() || ip.IsUnspecified() {
 		return true
 	}
 	local := p.LocalAddrs

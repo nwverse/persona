@@ -84,7 +84,7 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 		default:
 			allowed = Matches(host, rule.Hosts)
-			if allowed && IsLoopbackHost(host) && (p.ownPort(port) || p.hubPort(port)) {
+			if allowed && isSelfHostLiteral(host) && (p.ownPort(port) || p.hubPort(port)) {
 				allowed = false
 			}
 			if !allowed && rule.target(host, port, connect) {
@@ -150,6 +150,19 @@ func (p *Proxy) handler(fixed string) http.Handler {
 		}
 		p.forward(w, r, ext, dial)
 	})
+}
+
+// isSelfHostLiteral reports whether host is a loopback host name or a literal
+// loopback or unspecified IP address (covering 127.0.0.0/8, ::1, IPv4-mapped
+// loopback, 0.0.0.0, ::, and ::ffff:0.0.0.0).
+func isSelfHostLiteral(host string) bool {
+	if IsLoopbackHost(host) {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsUnspecified()
+	}
+	return false
 }
 
 // farHost is the Host header a request for hostport goes on with: the hub's address for HubHost, the loopback (with
