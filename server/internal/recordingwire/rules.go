@@ -443,6 +443,9 @@ func MeetingParts(before, after Meeting) []string {
 	if !same(transcriptionShown(before.Transcription), transcriptionShown(after.Transcription)) {
 		out = append(out, PartTranscription)
 	}
+	if !same(before.Speakers, after.Speakers) {
+		out = append(out, PartSpeakers)
+	}
 	return out
 }
 
