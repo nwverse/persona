@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -531,6 +532,168 @@ func TestTTSClientCancelMidStreamDisconnectsServer(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not observe client disconnect on cancel")
 	}
+}
+
+func TestTTSClientDefaultTransportAndTimeoutDefaults(t *testing.T) {
+	cli := newTTSClient(ttsClientConfig{
+		speechURL: "https://tts.example.com/v1/audio/speech",
+	})
+	defer cli.closeIdle()
+
+	if cli.httpClient == nil {
+		t.Fatal("expected default httpClient")
+	}
+	if cli.httpClient.Timeout != 0 {
+		t.Fatalf("httpClient.Timeout = %v, want 0 (no whole-stream timeout)", cli.httpClient.Timeout)
+	}
+	tr, ok := cli.httpClient.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		t.Fatalf("Transport = %T, want *http.Transport", cli.httpClient.Transport)
+	}
+	if tr.Proxy == nil {
+		t.Fatal("expected Transport.Proxy (http.ProxyFromEnvironment)")
+	}
+	if tr.DialContext == nil {
+		t.Fatal("expected Transport.DialContext with dial timeout")
+	}
+	if tr.DialTLSContext == nil {
+		t.Fatal("expected Transport.DialTLSContext (dialTLS)")
+	}
+	if tr.IdleConnTimeout != 90*time.Second {
+		t.Fatalf("IdleConnTimeout = %v, want 90s", tr.IdleConnTimeout)
+	}
+	if cli.headerTimeout != ttsDefaultHeaderTimeout {
+		t.Fatalf("headerTimeout = %v, want %v", cli.headerTimeout, ttsDefaultHeaderTimeout)
+	}
+	if cli.idleTimeout != ttsDefaultIdleTimeout {
+		t.Fatalf("idleTimeout = %v, want %v", cli.idleTimeout, ttsDefaultIdleTimeout)
+	}
+}
+
+func TestTTSClientHeaderAndIdleTimeouts(t *testing.T) {
+	t.Run("header timeout closes connection without cancelling parent ctx", func(t *testing.T) {
+		serverDisconnected := make(chan struct{}, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Drain the POST JSON body (as a real TTS endpoint does) so net/http watches
+			// for client disconnect, then never write response headers.
+			_, _ = io.Copy(io.Discard, r.Body)
+			<-r.Context().Done()
+			serverDisconnected <- struct{}{}
+		}))
+		defer srv.Close()
+		defer srv.CloseClientConnections()
+
+		cli := newTTSClient(ttsClientConfig{
+			speechURL:     srv.URL + "/v1/audio/speech",
+			headerTimeout: 80 * time.Millisecond,
+			idleTimeout:   2 * time.Second,
+			httpClient:    srv.Client(),
+		})
+		parentCtx := context.Background()
+		err := cli.streamPCM(parentCtx, "Never responds.", "voice-a", nil)
+		if err == nil {
+			t.Fatal("expected header timeout error")
+		}
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("header timeout should not surface as context.Canceled: %v", err)
+		}
+		if !strings.Contains(err.Error(), "header timeout") {
+			t.Fatalf("err = %v, want header timeout", err)
+		}
+		select {
+		case <-serverDisconnected:
+		case <-time.After(2 * time.Second):
+			t.Fatal("server did not observe disconnect after header timeout")
+		}
+	})
+
+	t.Run("idle timeout closes stalled stream after initial chunks", func(t *testing.T) {
+		serverDisconnected := make(chan struct{}, 1)
+		wantPrefix := buildTestPCM(160, 7)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "audio/pcm")
+			w.Header().Set("X-Audio-Sample-Rate", "16000")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(wantPrefix)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			serverDisconnected <- struct{}{}
+		}))
+		defer srv.Close()
+		defer srv.CloseClientConnections()
+
+		cli := newTTSClient(ttsClientConfig{
+			speechURL:     srv.URL + "/v1/audio/speech",
+			headerTimeout: 2 * time.Second,
+			idleTimeout:   80 * time.Millisecond,
+			httpClient:    srv.Client(),
+		})
+		var got []byte
+		err := cli.streamPCM(context.Background(), "Stalls mid-stream.", "voice-a", func(pcm []byte, _ int) error {
+			got = append(got, pcm...)
+			return nil
+		})
+		if err == nil {
+			t.Fatal("expected idle timeout error")
+		}
+		if errors.Is(err, context.Canceled) {
+			t.Fatalf("idle timeout should not surface as context.Canceled: %v", err)
+		}
+		if !strings.Contains(err.Error(), "idle timeout") {
+			t.Fatalf("err = %v, want idle timeout", err)
+		}
+		if !bytes.Equal(got, wantPrefix) {
+			t.Fatalf("prefix bytes before stall = %d, want %d", len(got), len(wantPrefix))
+		}
+		select {
+		case <-serverDisconnected:
+		case <-time.After(2 * time.Second):
+			t.Fatal("server did not observe disconnect after idle timeout")
+		}
+	})
+
+	t.Run("long steady stream outlives both header and idle timeouts", func(t *testing.T) {
+		// 5 chunks spaced 30ms apart = ~150ms total (> 80ms headerTimeout and > 80ms idleTimeout).
+		chunk := buildTestPCM(80, 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "audio/pcm")
+			w.Header().Set("X-Audio-Sample-Rate", "16000")
+			w.WriteHeader(http.StatusOK)
+			fl := w.(http.Flusher)
+			tk := time.NewTicker(30 * time.Millisecond)
+			defer tk.Stop()
+			for i := range 5 {
+				if i > 0 {
+					select {
+					case <-tk.C:
+					case <-r.Context().Done():
+						return
+					}
+				}
+				_, _ = w.Write(chunk)
+				fl.Flush()
+			}
+		}))
+		defer srv.Close()
+
+		cli := newTTSClient(ttsClientConfig{
+			speechURL:     srv.URL + "/v1/audio/speech",
+			headerTimeout: 80 * time.Millisecond,
+			idleTimeout:   80 * time.Millisecond,
+			httpClient:    srv.Client(),
+		})
+		var got int
+		if err := cli.streamPCM(context.Background(), "Long steady stream.", "voice-a", func(pcm []byte, _ int) error {
+			got += len(pcm)
+			return nil
+		}); err != nil {
+			t.Fatalf("steady stream should not time out: %v", err)
+		}
+		if got != len(chunk)*5 {
+			t.Fatalf("got %d bytes, want %d", got, len(chunk)*5)
+		}
+	})
 }
 
 func TestTTSResamplerLengthAndContinuity(t *testing.T) {

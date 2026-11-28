@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,14 +21,16 @@ import (
 // (POST <speechURL> with JSON {model, input, voice, response_format:"pcm"}, issue #17843).
 
 const (
-	ttsDefaultRate       = 24000
-	ttsMinRate           = 8000
-	ttsMaxRate           = 48000
-	ttsFrameDurationMs   = 20
-	ttsReadChunkBytes    = 4096
-	ttsMaxWAVHeaderBytes = 64 * 1024
-	ttsMaxErrBodyBytes   = 4096
-	ttsErrClipRunes      = 200
+	ttsDefaultRate          = 24000
+	ttsMinRate              = 8000
+	ttsMaxRate              = 48000
+	ttsFrameDurationMs      = 20
+	ttsReadChunkBytes       = 4096
+	ttsMaxWAVHeaderBytes    = 64 * 1024
+	ttsMaxErrBodyBytes      = 4096
+	ttsErrClipRunes         = 200
+	ttsDefaultHeaderTimeout = 10 * time.Second
+	ttsDefaultIdleTimeout   = 10 * time.Second
 )
 
 type ttsSpeechRequest struct {
@@ -38,25 +42,29 @@ type ttsSpeechRequest struct {
 }
 
 type ttsClientConfig struct {
-	speechURL   string       // already-resolved POST .../v1/audio/speech URL
-	apiKey      string       // optional Bearer token; never logged or included in errors
-	model       string       // sent as "model"; empty sends "default"
-	voice       string       // default voice when a turn does not specify one
-	speed       float64      // optional; omitted when <= 0
-	defaultRate int          // fallback sample rate when no header/WAV rate is present (default 24000)
-	httpClient  *http.Client // optional; nil creates a pooled client without a whole-stream timeout
+	speechURL     string        // already-resolved POST .../v1/audio/speech URL
+	apiKey        string        // optional Bearer token; never logged or included in errors
+	model         string        // sent as "model"; empty sends "default"
+	voice         string        // default voice when a turn does not specify one
+	speed         float64       // optional; omitted when <= 0
+	defaultRate   int           // fallback sample rate when no header/WAV rate is present (default 24000)
+	headerTimeout time.Duration // max wait for response headers before failing the piece (0 -> 10s)
+	idleTimeout   time.Duration // max wait without a byte once streaming before failing the piece (0 -> 10s)
+	httpClient    *http.Client  // optional; nil creates a pool matching dial.go's directClient
 }
 
 // ttsClient streams headerless PCM16 mono audio from an OpenAI-compatible speech endpoint.
 type ttsClient struct {
-	speechURL   string
-	apiKey      string
-	model       string
-	voice       string
-	speed       float64
-	defaultRate int
-	httpClient  *http.Client
-	ownedHTTP   bool
+	speechURL     string
+	apiKey        string
+	model         string
+	voice         string
+	speed         float64
+	defaultRate   int
+	headerTimeout time.Duration
+	idleTimeout   time.Duration
+	httpClient    *http.Client
+	ownedHTTP     bool
 }
 
 func newTTSClient(cfg ttsClientConfig) *ttsClient {
@@ -68,27 +76,45 @@ func newTTSClient(cfg ttsClientConfig) *ttsClient {
 	if model == "" {
 		model = "default"
 	}
+	headerTimeout := cfg.headerTimeout
+	if headerTimeout <= 0 {
+		headerTimeout = ttsDefaultHeaderTimeout
+	}
+	idleTimeout := cfg.idleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = ttsDefaultIdleTimeout
+	}
 	hc := cfg.httpClient
 	owned := false
 	if hc == nil {
+		// Mirror dial.go's directClient conventions (ProxyFromEnvironment, 30 s dial/keepalive,
+		// dialTLS, 90 s idle timeout) in a dedicated pool so ttsBridge.Close can close idle
+		// connections without affecting shared realtime sockets. No whole-stream Client.Timeout:
+		// long sentences keep streaming as long as bytes arrive within idleTimeout.
 		hc = &http.Client{
 			Transport: &http.Transport{
-				MaxIdleConns:        16,
-				MaxIdleConnsPerHost: 16,
-				IdleConnTimeout:     90 * time.Second,
+				Proxy:                 http.ProxyFromEnvironment,
+				DialContext:           (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+				DialTLSContext:        dialTLS,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   16,
+				IdleConnTimeout:       90 * time.Second,
+				ExpectContinueTimeout: time.Second,
 			},
 		}
 		owned = true
 	}
 	return &ttsClient{
-		speechURL:   strings.TrimSpace(cfg.speechURL),
-		apiKey:      cfg.apiKey,
-		model:       model,
-		voice:       strings.TrimSpace(cfg.voice),
-		speed:       cfg.speed,
-		defaultRate: rate,
-		httpClient:  hc,
-		ownedHTTP:   owned,
+		speechURL:     strings.TrimSpace(cfg.speechURL),
+		apiKey:        cfg.apiKey,
+		model:         model,
+		voice:         strings.TrimSpace(cfg.voice),
+		speed:         cfg.speed,
+		defaultRate:   rate,
+		headerTimeout: headerTimeout,
+		idleTimeout:   idleTimeout,
+		httpClient:    hc,
+		ownedHTTP:     owned,
 	}
 }
 
@@ -136,7 +162,13 @@ func (c *ttsClient) streamPCM(ctx context.Context, text, voice string, onChunk f
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.speechURL, bytes.NewReader(body))
+	// Derive a per-piece cancellable context (with no whole-stream deadline) so headerTimeout
+	// and idleTimeout abort only this piece's request and close its connection without
+	// cancelling the turn's parent context.
+	reqCtx, reqCancel := context.WithCancel(ctx)
+	defer reqCancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.speechURL, bytes.NewReader(body))
 	if err != nil {
 		return scrubTTSKey(err, c.apiKey)
 	}
@@ -146,26 +178,52 @@ func (c *ttsClient) streamPCM(ctx context.Context, text, voice string, onChunk f
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
+	var headerTimedOut atomic.Bool
+	headerTimer := time.AfterFunc(c.headerTimeout, func() {
+		headerTimedOut.Store(true)
+		reqCancel()
+	})
 	resp, err := c.httpClient.Do(req)
+	stoppedHeader := headerTimer.Stop()
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if headerTimedOut.Load() {
+			return fmt.Errorf("tts: response header timeout after %s", c.headerTimeout)
 		}
 		return scrubTTSKey(err, c.apiKey)
 	}
 	defer resp.Body.Close()
 
-	// Force-close the response body immediately on context cancellation so a stalled stream
-	// unblocks Read and the server observes the client disconnect at once.
-	stopClose := context.AfterFunc(ctx, func() {
+	// Force-close the response body immediately if either the parent context or a piece
+	// timeout cancels reqCtx so a stalled Read unblocks and the server sees the disconnect.
+	stopClose := context.AfterFunc(reqCtx, func() {
 		_ = resp.Body.Close()
 	})
 	defer stopClose()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, ttsMaxErrBodyBytes))
+	if !stoppedHeader && headerTimedOut.Load() {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		return fmt.Errorf("tts: response header timeout after %s", c.headerTimeout)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var errBodyTimedOut atomic.Bool
+		errTimer := time.AfterFunc(c.idleTimeout, func() {
+			errBodyTimedOut.Store(true)
+			reqCancel()
+			_ = resp.Body.Close()
+		})
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, ttsMaxErrBodyBytes))
+		errTimer.Stop()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errBodyTimedOut.Load() && len(raw) == 0 {
+			return &ttsStatusError{status: resp.StatusCode}
 		}
 		msg := extractTTSErrorMessage(raw, c.apiKey)
 		return &ttsStatusError{status: resp.StatusCode, message: msg}
@@ -202,8 +260,29 @@ func (c *ttsClient) streamPCM(ctx context.Context, text, voice string, onChunk f
 		return onChunk(aligned, rate)
 	}
 
+	// Arm idleTimeout strictly around resp.Body.Read (stopped before onChunk runs) so a
+	// stalled upstream fails the piece while slow downstream playback/prefetch backpressure
+	// never triggers a false timeout.
+	var idleTimedOut atomic.Bool
+	idleTimer := time.AfterFunc(c.idleTimeout, func() {
+		idleTimedOut.Store(true)
+		reqCancel()
+		_ = resp.Body.Close()
+	})
+	idleTimer.Stop()
+	defer idleTimer.Stop()
+	idleArmed := false
+
 	for {
+		if !idleArmed {
+			idleTimer.Reset(c.idleTimeout)
+			idleArmed = true
+		}
 		n, rerr := resp.Body.Read(buf)
+		if n > 0 || rerr != nil {
+			idleTimer.Stop()
+			idleArmed = false
+		}
 		if n > 0 {
 			pcm, wavRate, serr := sniffer.feed(buf[:n])
 			if serr != nil {
@@ -228,7 +307,16 @@ func (c *ttsClient) streamPCM(ctx context.Context, text, voice string, onChunk f
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if idleTimedOut.Load() {
+				return fmt.Errorf("tts: stream idle timeout after %s", c.idleTimeout)
+			}
 			return scrubTTSKey(rerr, c.apiKey)
+		}
+		if idleTimedOut.Load() {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("tts: stream idle timeout after %s", c.idleTimeout)
 		}
 	}
 }

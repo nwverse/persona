@@ -711,6 +711,214 @@ func TestTTSBridgeCloseLeavesNoGoroutines(t *testing.T) {
 	}
 }
 
+func TestTTSBridgeHeaderTimeoutSkipsPieceAndPlaysNext(t *testing.T) {
+	p1Disconnected := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ttsSpeechRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if strings.Contains(req.Input, "Never") {
+			// Accept connection and request body, never write headers.
+			<-r.Context().Done()
+			p1Disconnected <- struct{}{}
+			return
+		}
+		w.Header().Set("Content-Type", "audio/pcm")
+		w.Header().Set("X-Audio-Sample-Rate", "16000")
+		frame := make([]byte, 640)
+		for i := range 320 {
+			binary.LittleEndian.PutUint16(frame[i*2:], uint16(2222))
+		}
+		_, _ = w.Write(frame)
+	}))
+	defer srv.Close()
+
+	baseline := runtime.NumGoroutine()
+	var mu sync.Mutex
+	var frames [][]byte
+	var pieceErrs []error
+	doneCh := make(chan ttsDoneEvent, 2)
+
+	b := newTTSBridge(ttsBridgeConfig{
+		client: newTTSClient(ttsClientConfig{
+			speechURL:     srv.URL + "/v1/audio/speech",
+			headerTimeout: 80 * time.Millisecond,
+			idleTimeout:   2 * time.Second,
+			httpClient:    srv.Client(),
+		}),
+		outputRate: 16000,
+		onFrame: func(_ uint64, pcm []byte) {
+			mu.Lock()
+			frames = append(frames, pcm)
+			mu.Unlock()
+		},
+		onError: func(_ uint64, err error) {
+			mu.Lock()
+			pieceErrs = append(pieceErrs, err)
+			mu.Unlock()
+		},
+		onDone: func(gen uint64, cancelled bool, err error) {
+			doneCh <- ttsDoneEvent{gen: gen, cancelled: cancelled, err: err}
+		},
+	})
+
+	gen := b.StartTurn("voice-a")
+	b.Feed(gen, "Never answers headers. Second sentence plays cleanly.")
+	b.EndText(gen)
+
+	done := waitDone(t, doneCh, 3*time.Second)
+	if done.gen != gen || done.cancelled {
+		t.Fatalf("expected non-cancelled turn completion, got %+v", done)
+	}
+	if done.err == nil || !strings.Contains(done.err.Error(), "header timeout") {
+		t.Fatalf("done.err = %v, want header timeout", done.err)
+	}
+
+	select {
+	case <-p1Disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed-out piece 1 connection was not closed")
+	}
+
+	mu.Lock()
+	gotErrs := slices.Clone(pieceErrs)
+	gotFrames := slices.Clone(frames)
+	mu.Unlock()
+
+	if len(gotErrs) != 1 || !strings.Contains(gotErrs[0].Error(), "header timeout") {
+		t.Fatalf("pieceErrs = %v, want 1 header timeout error", gotErrs)
+	}
+	if len(gotFrames) != 1 || len(gotFrames[0]) != 640 {
+		t.Fatalf("got %d frames (want 1 frame of 640 B from piece 2)", len(gotFrames))
+	}
+	if gotTag := int16(binary.LittleEndian.Uint16(gotFrames[0][:2])); gotTag != 2222 {
+		t.Fatalf("frame sample = %d, want 2222 from piece 2", gotTag)
+	}
+
+	b.Close()
+	srv.CloseClientConnections()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		runtime.Gosched()
+		if runtime.NumGoroutine() <= baseline+1 {
+			return
+		}
+	}
+	if after := runtime.NumGoroutine(); after > baseline+1 {
+		t.Fatalf("goroutine leak after header timeout + Close: baseline=%d after=%d", baseline, after)
+	}
+}
+
+func TestTTSBridgeIdleTimeoutKeepsFramesAndPlaysNext(t *testing.T) {
+	p1Disconnected := make(chan struct{}, 1)
+	makeTaggedFrame := func(tag int16) []byte {
+		f := make([]byte, 640) // 20 ms at 16 kHz
+		for i := range 320 {
+			binary.LittleEndian.PutUint16(f[i*2:], uint16(tag))
+		}
+		return f
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req ttsSpeechRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "audio/pcm")
+		w.Header().Set("X-Audio-Sample-Rate", "16000")
+		w.WriteHeader(http.StatusOK)
+		fl := w.(http.Flusher)
+
+		if strings.Contains(req.Input, "Stalls") {
+			// Emit 2 full frames then stall until client closes on idle timeout.
+			_, _ = w.Write(makeTaggedFrame(1111))
+			_, _ = w.Write(makeTaggedFrame(1111))
+			fl.Flush()
+			<-r.Context().Done()
+			p1Disconnected <- struct{}{}
+			return
+		}
+		_, _ = w.Write(makeTaggedFrame(2222))
+		fl.Flush()
+	}))
+	defer srv.Close()
+
+	baseline := runtime.NumGoroutine()
+	var mu sync.Mutex
+	var tags []int16
+	var pieceErrs []error
+	doneCh := make(chan ttsDoneEvent, 2)
+
+	b := newTTSBridge(ttsBridgeConfig{
+		client: newTTSClient(ttsClientConfig{
+			speechURL:     srv.URL + "/v1/audio/speech",
+			headerTimeout: 2 * time.Second,
+			idleTimeout:   80 * time.Millisecond,
+			httpClient:    srv.Client(),
+		}),
+		outputRate: 16000,
+		onFrame: func(_ uint64, pcm []byte) {
+			if len(pcm) != 640 {
+				t.Errorf("frame len = %d, want 640", len(pcm))
+			}
+			mu.Lock()
+			tags = append(tags, int16(binary.LittleEndian.Uint16(pcm[:2])))
+			mu.Unlock()
+		},
+		onError: func(_ uint64, err error) {
+			mu.Lock()
+			pieceErrs = append(pieceErrs, err)
+			mu.Unlock()
+		},
+		onDone: func(gen uint64, cancelled bool, err error) {
+			doneCh <- ttsDoneEvent{gen: gen, cancelled: cancelled, err: err}
+		},
+	})
+
+	gen := b.StartTurn("voice-a")
+	b.Feed(gen, "Stalls halfway through streaming. Second sentence still plays.")
+	b.EndText(gen)
+
+	done := waitDone(t, doneCh, 3*time.Second)
+	if done.gen != gen || done.cancelled {
+		t.Fatalf("expected non-cancelled turn completion, got %+v", done)
+	}
+	if done.err == nil || !strings.Contains(done.err.Error(), "idle timeout") {
+		t.Fatalf("done.err = %v, want idle timeout", done.err)
+	}
+
+	select {
+	case <-p1Disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stalled piece 1 connection was not closed")
+	}
+
+	mu.Lock()
+	gotErrs := slices.Clone(pieceErrs)
+	gotTags := slices.Clone(tags)
+	mu.Unlock()
+
+	if len(gotErrs) != 1 || !strings.Contains(gotErrs[0].Error(), "idle timeout") {
+		t.Fatalf("pieceErrs = %v, want 1 idle timeout error", gotErrs)
+	}
+	wantTags := []int16{1111, 1111, 2222}
+	if !slices.Equal(gotTags, wantTags) {
+		t.Fatalf("frame tags = %v, want %v (frames before stall kept, next piece played)", gotTags, wantTags)
+	}
+
+	b.Close()
+	srv.CloseClientConnections()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		runtime.Gosched()
+		if runtime.NumGoroutine() <= baseline+1 {
+			return
+		}
+	}
+	if after := runtime.NumGoroutine(); after > baseline+1 {
+		t.Fatalf("goroutine leak after idle timeout + Close: baseline=%d after=%d", baseline, after)
+	}
+}
+
 func TestTTSBridgeLogsErrorsWhenOnErrorUnset(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
