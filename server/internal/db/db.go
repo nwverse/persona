@@ -542,32 +542,38 @@ func renumberMigration(ctx context.Context, conn *pgxpool.Conn, from, to string)
 
 // TruncateForTest clears business tables in a test database and preserves its migration ledger.
 func (d *DB) TruncateForTest(ctx context.Context) error {
-	tables, err := d.tablesToTruncateForTest(ctx)
+	tables, err := d.tablesToTruncateForTest(ctx, false)
 	if err != nil {
 		return fmt.Errorf("discover test tables: %w", err)
 	}
 	return d.truncateNonEmpty(ctx, tables)
 }
 
-// tablesToTruncateForTest returns SQL identifiers qualified independently of the search path.
-// The pg_ schemas include the system catalogs and session-local temporary tables.
-func (d *DB) tablesToTruncateForTest(ctx context.Context) ([]string, error) {
+// tablesToTruncateForTest finds business tables independently of the search path.
+// A heap with no descendants and zero main-fork bytes has no rows to probe. Tables with
+// allocated pages, inheritance, partitioning, or a different access method still need EXISTS.
+// includeEmpty bypasses the physical check when testing migration coverage.
+func (d *DB) tablesToTruncateForTest(ctx context.Context, includeEmpty bool) ([]string, error) {
 	var tables []string
 	err := d.pool.QueryRow(ctx, `SELECT ARRAY(
-		SELECT pg_catalog.quote_ident(schemaname) || '.' || pg_catalog.quote_ident(tablename)
-		FROM pg_catalog.pg_tables
-		WHERE left(schemaname, 3) <> 'pg_' AND schemaname <> 'information_schema'
-			AND tablename <> 'schema_migrations'
-		ORDER BY schemaname, tablename)`).Scan(&tables)
+		SELECT pg_catalog.quote_ident(t.schemaname) || '.' || pg_catalog.quote_ident(t.tablename)
+		FROM pg_catalog.pg_tables t
+		JOIN pg_catalog.pg_namespace n ON n.nspname = t.schemaname
+		JOIN pg_catalog.pg_class c ON c.relnamespace = n.oid AND c.relname = t.tablename
+		WHERE left(t.schemaname, 3) <> 'pg_' AND t.schemaname <> 'information_schema'
+			AND t.tablename <> 'schema_migrations'
+			AND ($1 OR CASE WHEN c.relkind = 'r' AND NOT c.relhassubclass
+				AND c.relam = (SELECT oid FROM pg_catalog.pg_am WHERE amname = 'heap')
+				THEN pg_catalog.pg_relation_size(c.oid) > 0 ELSE true END)
+		ORDER BY t.schemaname, t.tablename)`, includeEmpty).Scan(&tables)
 	return tables, err
 }
 
 // truncateNonEmpty uses one TRUNCATE ... CASCADE for tables with rows and their foreign-key dependents.
 // Skipping unrelated empty tables saves their exclusive locks and file rewrites.
 //
-// The probe and the TRUNCATE are two statements: a row not yet committed when the probe looks, or written to a table it
-// found empty after it, stays, where one TRUNCATE of every table would wait for the writer's lock and clear it. So it is
-// for the start of a test, before anything it starts writes there.
+// Discovery and the row probe run before TRUNCATE. Call the reset at the start of a test,
+// before its writers start: a row committed after a probe observes an empty table can remain.
 func (d *DB) truncateNonEmpty(ctx context.Context, tables []string) error {
 	if len(tables) == 0 {
 		return nil

@@ -22,7 +22,7 @@ func TestTruncateForTestDiscoversMigrationTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := d.tablesToTruncateForTest(ctx)
+	got, err := d.tablesToTruncateForTest(ctx, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,21 +96,27 @@ func TestTruncateForTestClearsIndependentTables(t *testing.T) {
 func TestTruncateForTestSkipsUnrelatedEmptyTables(t *testing.T) {
 	ctx, d := t.Context(), open(t)
 	if _, err := d.pool.Exec(ctx, `INSERT INTO todos (id, title) VALUES ('t1', 'x');
-		INSERT INTO todo_decisions (id, todo_id, question, choice, created_at) VALUES ('d1', 't1', 'q', 'c', now())`); err != nil {
+		INSERT INTO todo_decisions (id, todo_id, question, choice, created_at) VALUES ('d1', 't1', 'q', 'c', now());
+		INSERT INTO task_plans (id, conversation, tasks) VALUES ('removed', 'conversation', '[]');
+		DELETE FROM task_plans WHERE id = 'removed'`); err != nil {
 		t.Fatal(err)
+	}
+	var hasPages bool
+	if err := d.pool.QueryRow(ctx, `SELECT pg_relation_size('task_plans') > 0`).Scan(&hasPages); err != nil || !hasPages {
+		t.Fatalf("empty task_plans must have pages so the row probe runs: %v", err)
 	}
 	lock, err := d.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Rollback(ctx)
-	if _, err := lock.Exec(ctx, `LOCK TABLE devices IN ROW EXCLUSIVE MODE`); err != nil {
+	if _, err := lock.Exec(ctx, `LOCK TABLE task_plans IN ROW EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
 	resetCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := d.TruncateForTest(resetCtx); err != nil {
-		t.Fatalf("reset with a writer lock on empty devices: %v", err)
+		t.Fatalf("reset with a writer lock on empty task_plans: %v", err)
 	}
 	var rows int
 	if err := d.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM todos) + (SELECT count(*) FROM todo_decisions)`).Scan(&rows); err != nil || rows != 0 {
