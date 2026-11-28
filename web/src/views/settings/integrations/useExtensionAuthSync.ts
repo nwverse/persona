@@ -3,10 +3,8 @@
 // and non-resumed reconnects while triggering stale-safe refreshes of dependent snapshots
 // (such as associated hub connectors) under the same owning assistant scope.
 import { useCallback, useEffect, useRef } from "react";
-import { enc, invalidateInFlightGets } from "../../../lib/api";
-import { extRoot } from "../../../lib/extension-api";
 import { getAuth, onAuthChange, type ExtensionAuth } from "../../../lib/extension-auth";
-import { sameManager } from "../../../lib/manager-choice";
+import type { ScopedAssistantClient } from "../../../lib/scoped-assistant-api";
 import { isResumed } from "../../../lib/reconnect";
 import { onHubEvent } from "../../../lib/store";
 
@@ -24,8 +22,7 @@ function sameAuthSnapshot(a?: ExtensionAuth, b?: ExtensionAuth): boolean {
 export interface UseExtensionAuthSyncOptions {
   /** Extension ID owned by this detail view. */
   id: string;
-  /** Owning assistant manager ID (undefined = default assistant). */
-  manager?: string;
+  client: ScopedAssistantClient;
   /** Current auth snapshot from detail (used for reconnect subscription and pushed-change detection). */
   auth?: ExtensionAuth;
   /** Apply an authoritative auth snapshot to the detail state. */
@@ -36,7 +33,7 @@ export interface UseExtensionAuthSyncOptions {
 
 export function useExtensionAuthSync({
   id,
-  manager,
+  client,
   auth,
   onAuth,
   onSync,
@@ -59,7 +56,7 @@ export function useExtensionAuthSync({
       alive.current = false;
       sequence.current++;
     };
-  }, [id, manager]);
+  }, [id, client]);
 
   const authChanged = useCallback((next?: ExtensionAuth) => {
     const seq = ++sequence.current;
@@ -69,9 +66,8 @@ export function useExtensionAuthSync({
       onSyncRef.current?.();
       return;
     }
-    invalidateInFlightGets(`${extRoot()}/${enc(id)}/-/auth`);
     onSyncRef.current?.();
-    void getAuth(id).then(
+    void getAuth(id, client).then(
       (fresh) => {
         if (!alive.current || sequence.current !== seq) return;
         latestAuth.current = fresh;
@@ -79,18 +75,18 @@ export function useExtensionAuthSync({
       },
       () => {},
     );
-  }, [id]);
+  }, [id, client]);
 
   useEffect(() => {
     return onAuthChange((extId, next, from) => {
-      if (extId !== id || !sameManager(from, manager)) return;
+      if (extId !== id || from !== client.managerId) return;
       const changed = !sameAuthSnapshot(latestAuth.current, next);
       sequence.current++;
       latestAuth.current = next;
       onAuthRef.current(next);
       if (changed) onSyncRef.current?.();
     });
-  }, [id, manager]);
+  }, [id, client]);
 
   const signsIn = !!auth;
   useEffect(
@@ -98,15 +94,5 @@ export function useExtensionAuthSync({
     [signsIn, authChanged],
   );
 
-  const authVersion = useCallback(() => sequence.current, []);
-
-  const reconcileDetail = useCallback(<T extends { auth?: ExtensionAuth }>(detail: T, authAtStart: number): T => {
-    if (sequence.current > authAtStart && latestAuth.current) {
-      return { ...detail, auth: latestAuth.current };
-    }
-    latestAuth.current = detail.auth;
-    return detail;
-  }, []);
-
-  return { authChanged, authVersion, reconcileDetail };
+  return authChanged;
 }
