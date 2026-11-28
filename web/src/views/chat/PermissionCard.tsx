@@ -1,6 +1,6 @@
 // Tool approval is not part of the chat's first screen: load the complete card with the first permission interaction,
 // as CommandScreenCard does. Its optional question editor is a further chunk loaded only when that action opens.
-import { Suspense, useRef, useState } from "react";
+import { Suspense, useRef, useState, type MouseEvent } from "react";
 import { t } from "../../i18n";
 import { alwaysScope, offersAlways } from "../../lib/always-scope";
 import { lazyPage } from "../../lib/lazy-page";
@@ -21,11 +21,15 @@ const ApprovalQuestion = lazyPage(() => import("./ApprovalQuestion").then((m) =>
 
 /** A permission card: a command waiting for a line (#14527) has a card of its own, in this chunk so the chat's first
  *  screen carries none of it; any other is a tool approval. */
-export function PermissionCard({ ix }: { ix: Interaction }) {
-  return isCommandInput(ix) ? <CommandInputCard ix={ix} /> : <ToolPermissionCard ix={ix} />;
+export function PermissionCard({ ix, sourceLabel, sourceHref, onOpenSource }: { ix: Interaction } & SourceLink) {
+  return isCommandInput(ix) ? <CommandInputCard ix={ix} /> : <ToolPermissionCard ix={ix} sourceLabel={sourceLabel} sourceHref={sourceHref} onOpenSource={onOpenSource} />;
 }
 
-function ToolPermissionCard({ ix }: { ix: Interaction }) {
+/** Where the "which subagent asks" line leads: with `sourceHref` it is a link; `onOpenSource` takes a plain click or
+ *  Enter in the page instead of a navigation. Without `sourceHref` the line stays plain text. */
+type SourceLink = { sourceLabel?: string; sourceHref?: string; onOpenSource?: () => void };
+
+function ToolPermissionCard({ ix, sourceLabel, sourceHref, onOpenSource }: { ix: Interaction } & SourceLink) {
   const [busy, setBusy] = useState(false);
   const [replyBusy, setReplyBusy] = useState(false);
   const [questionOpen, setQuestionOpen] = useState(false);
@@ -96,7 +100,7 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
         </>
       }
     >
-      <PermissionBody ix={ix} />
+      <PermissionBody ix={ix} sourceLabel={sourceLabel} sourceHref={sourceHref} onOpenSource={onOpenSource} />
       {editable.editor}
       {questionOpen && <Suspense fallback={null}><ApprovalQuestion ix={ix} busy={busy} onClose={() => setQuestionOpen(false)} /></Suspense>}
       {alwaysScope(ix) && <p className="mt-2 text-label leading-relaxed text-ink-3">{alwaysScope(ix)}</p>}
@@ -107,7 +111,7 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
 /** What the tool will do, field by field (Android PermissionRequestSummary): the agent's sentence, then the command,
  *  file or address under a small label, an edit's changes; a tool it does not know shows the hub's summary. The raw
  *  input stays one click away, open from the start only when nothing else says what the tool does. */
-export function PermissionBody({ ix }: { ix: Interaction }) {
+export function PermissionBody({ ix, sourceLabel, sourceHref, onOpenSource }: { ix: Interaction } & SourceLink) {
   const input = ix.tool_input ?? {};
   const hasInput = Object.keys(input).length > 0;
   const detail = permissionDetail(ix.tool_name, input);
@@ -119,10 +123,30 @@ export function PermissionBody({ ix }: { ix: Interaction }) {
   const [showInput, setShowInput] = useState(!detail && !lead);
   // a subagent's call (Claude Code sends its parent's session with agent_id and agent_type): say which one asks
   // (#4376); the main session's own cards (agent_type alone, as `claude --agent x` sets it, or "main") say nothing
-  const from = permissionFrom(ix);
+  const from = sourceLabel ?? permissionFrom(ix);
+  // a plain left click or a keyboard Enter goes to onOpenSource; modifier and middle clicks, and a link with no
+  // callback, keep the browser's own navigation (new tab, new window, copy link)
+  const openSource = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (!onOpenSource || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    onOpenSource();
+  };
   return (
     <div className="flex flex-col gap-2">
-      {from && <p data-permission-from title={from} className="truncate text-[12px] leading-snug text-ink-3">{from}</p>}
+      {from &&
+        (sourceHref ? (
+          <p data-permission-from title={from} className="flex min-w-0 text-[12px] leading-snug text-ink-3">
+            <a
+              href={sourceHref}
+              onClick={openSource}
+              className="relative -my-4 flex w-full min-w-0 items-center rounded-sm py-4 underline underline-offset-2 transition-colors hover:text-ink focus-visible:text-ink focus-visible:outline-2 focus-visible:outline-offset-2"
+            >
+              <span className="truncate">{from}</span>
+            </a>
+          </p>
+        ) : (
+          <p data-permission-from title={from} className="truncate text-[12px] leading-snug text-ink-3">{from}</p>
+        ))}
       {reason && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink-2">{reason}</p>}
       {detail?.note && <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-ink">{detail.note}</p>}
       {detail?.fields.map((f) => (

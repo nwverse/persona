@@ -1,4 +1,5 @@
 {
+  "bash_source": "送信元：{origin} · {session}",
   "decision_view_source": "チャットで表示",
   "decision_skip_label": "スキップ",
   "decision_collapse": "折りたたむ",

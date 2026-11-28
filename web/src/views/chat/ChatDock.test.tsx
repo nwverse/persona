@@ -259,21 +259,54 @@ describe("PendingCards", () => {
   });
 
   it("says which subagent asks for a permission", () => {
-    const html = cards({ narrow: false, interactions: [ix("p", "permission", { agent_id: "a1", agent_type: "code-reviewer", tool_input: { command: "npm test" } })] });
+    const html = cards({ narrow: false, interactions: [ix("p", "permission", { tool_name: "Read", agent_id: "a1", agent_type: "code-reviewer", tool_input: { file_path: "notes.md" } })] });
     expect(html).toContain("data-permission-from");
     expect(html).toContain("来自子 Agent · code-reviewer");
-    expect(cards({ narrow: false, interactions: [ix("p", "permission")] })).not.toContain("data-permission-from");
+    expect(cards({ narrow: false, interactions: [ix("p", "permission", { tool_name: "Read" })] })).not.toContain("data-permission-from");
     // the main session's own card: `claude --agent reviewer` sets agent_type with no agent_id
-    expect(cards({ narrow: false, interactions: [ix("p", "permission", { agent_type: "reviewer" })] })).not.toContain("data-permission-from");
-    expect(cards({ narrow: false, interactions: [ix("p", "permission", { agent_id: "a1", agent_type: "main" })] })).not.toContain("data-permission-from");
+    expect(cards({ narrow: false, interactions: [ix("p", "permission", { tool_name: "Read", agent_type: "reviewer" })] })).not.toContain("data-permission-from");
+    expect(cards({ narrow: false, interactions: [ix("p", "permission", { tool_name: "Read", agent_id: "a1", agent_type: "main" })] })).not.toContain("data-permission-from");
   });
 
   it("keeps the subagent's type to one short line", () => {
     expect(permissionFrom({ agent_id: "a1", agent_type: "  code\n  reviewer  " })).toBe("来自子 Agent · code reviewer");
     const long = permissionFrom({ agent_id: "a1", agent_type: "x".repeat(80) });
     expect(long).toBe(`来自子 Agent · ${"x".repeat(47)}…`);
-    const html = cards({ narrow: false, interactions: [ix("p", "permission", { agent_id: "a1", agent_type: "code-reviewer" })] });
+    const html = cards({ narrow: false, interactions: [ix("p", "permission", { tool_name: "Read", agent_id: "a1", agent_type: "code-reviewer" })] });
     expect(html).toMatch(/data-permission-from="true" title="来自子 Agent · code-reviewer" class="truncate/);
+  });
+
+  it("identifies old Bash cards without a title and keeps unavailable sources as text", () => {
+    const source = (extra: Partial<Interaction>) => cards({ narrow: true, interactions: [ix("p", "permission", extra)] });
+    const old = source({});
+    expect(old).toContain(t("lib-format.untitled_session"));
+    expect(old).toContain('href="/s/m/s?view=chat"');
+    const missing = source({ session_id: "", session_title: "Archived review" });
+    expect(missing).toContain("Archived review");
+    expect(missing).not.toMatch(/data-permission-from[^>]*>\s*<a/);
+    const sessions = getState().sessions;
+    try {
+      const longTitle = "Release review ".repeat(12).trim();
+      getState().sessions = { m: [{ ...session, title: longTitle, agent_name: "Reviewer" }] };
+      const fromRow = source({});
+      expect(fromRow).toContain(longTitle);
+      expect(fromRow).toContain("Reviewer");
+      getState().sessions = { m: [{ ...session, deleted: true }] };
+      const deleted = source({ session_title: "Archived review" });
+      expect(deleted).toContain("Archived review");
+      expect(deleted).not.toMatch(/data-permission-from[^>]*>\s*<a/);
+    } finally {
+      getState().sessions = sessions;
+    }
+  });
+
+  it("opens folded Bash requests where they are answered and preserves their attribution", () => {
+    const child = { folded_under: "lead", folded_under_machine_id: "desk", session_title: "Check packaging" };
+    const source = (extra: Partial<Interaction>) => cards({ narrow: false, interactions: [ix("p", "permission", { ...child, ...extra })] });
+    expect(source({})).toContain('href="/s/desk/lead?view=chat"');
+    expect(source({})).toContain(permissionFrom(child));
+    expect(source({ folded_as: "worker" })).toContain('href="/s/m/s?view=chat"');
+    expect(source({ folded_as: "worker" })).toContain(permissionFrom({ ...child, folded_as: "worker" }));
   });
 
   it("names a child session's card by the child's title, on its parent's page (#5120)", () => {

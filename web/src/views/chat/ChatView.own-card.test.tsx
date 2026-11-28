@@ -339,6 +339,22 @@ describe("cards the chat's own turn waits on", () => {
   const above = () => host.querySelector("[data-decision-pager]");
   const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
+  it("opens the selected Bash card in the assistant decision pager", async () => {
+    const second = { ...bash, id: "second-bash", tool_input: { command: "npm run build" } };
+    const previous = history.state;
+    try {
+      history.replaceState({ card: second.id }, "");
+      Object.assign(getState(), { interactions: [bash, second] });
+      act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));
+      await flush();
+      expect(above()?.contains(card(second.id))).toBe(true);
+      expect(card(bash.id)).toBeNull();
+      expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith("/resolve"))).toHaveLength(0);
+    } finally {
+      history.replaceState(previous, "");
+    }
+  });
+
   it("opens above the capsules and pages between requests without opening Needs you", async () => {
     Object.assign(getState(), { interactions: [bash, question], answered: {} });
     act(() => root.render(<ChatView mid="hub" sid="c1" assistant onToggleSidebar={() => {}} />));

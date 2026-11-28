@@ -34,8 +34,10 @@ import { ANSWERED_LIST_MAX, cardFold, cardLine, nextWaiting, PLAN_MAX, showsAnsw
 import { useCardCut } from "./card-cut";
 import { answeredShown, answeredTally, keptAnswers, latestAnswer, nextRun, runPosition, tallyDetail, answeredHideAt } from "./card-stack";
 import { ScrollFold } from "./fold-scroll";
-import { cardState } from "../../lib/card-focus";
-import { href, onLinkClick, type Route } from "../../lib/router";
+import { agentName, sessionAgent } from "../../lib/agent-kind";
+import { conversationRoute } from "../../lib/conversation-page";
+import { cardState, requestRoute } from "../../lib/card-focus";
+import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { StatusMark } from "../../ui/StatusMark";
 import { InteractionMarks, ModuleCard, useCardRenderer } from "../../core/ChatSlots";
@@ -697,7 +699,7 @@ export class PermissionCardFrame extends Component<{ ix: Interaction; children?:
         </Card>
       );
     }
-    return <Suspense fallback={<PermissionCardLoading ix={ix} />}>{children ?? <PermissionCard ix={ix} />}</Suspense>;
+    return <Suspense fallback={<PermissionCardLoading ix={ix} />}>{children ?? (ix.tool_name === "Bash" ? <BashPermissionCard ix={ix} /> : <PermissionCard ix={ix} />)}</Suspense>;
   }
 }
 
@@ -746,6 +748,41 @@ export function permissionFrom(ix: Pick<Interaction, "agent_id" | "agent_type" |
   const agent = name.length > FROM_MAX ? `${name.slice(0, FROM_MAX - 1)}…` : name;
   if (ix.folded_under && isSide(ix)) return t("lib-elicitation.from_side", { agent });
   return ix.folded_under && ix.folded_as === "worker" ? t("lib-elicitation.from_worker", { agent }) : t("lib-elicitation.from_subagent", { agent });
+}
+
+/** Link the request to the chat that displays it, including a folded child's card on its parent's page. */
+function BashPermissionCard({ ix: card }: { ix: Interaction }) {
+  // A main-chat display copy belongs to this card for answering, but its source is the original request.
+  const original = useStore((s) => card.mirror_of
+    ? s.interactions.find((other) => other.id === card.mirror_of && (other.manager ?? "") === (card.manager ?? ""))
+    : card);
+  const ix = original ?? card;
+  const child = useChildRow(ix.machine_id, ix.session_id);
+  const session = useStore(() => getSession(ix.machine_id, ix.session_id)) ?? child;
+  const machine = useStore((s) => s.machines.find((m) => m.id === ix.machine_id)?.name);
+  const home = requestRoute(ix);
+  const to = useStore((s) => {
+    if (!original || !ix.machine_id || !ix.session_id || session?.deleted || home.name !== "session") return undefined;
+    const row = home.mid === ix.machine_id && home.sid === ix.session_id ? session : getSession(home.mid, home.sid);
+    if (row?.deleted) return undefined;
+    const route = conversationRoute(home.mid, home.sid, s.sessions, s.assistant, row);
+    if (route.name === "session") return { ...route, view: "chat" } as const;
+    return route.name === "persona" && s.assistant?.machine_id !== home.mid ? { ...route, mid: home.mid } : route;
+  });
+  const reported = session && sessionAgent(session);
+  const engine = ix.agent?.trim() || reported?.agent;
+  const label = ix.agent_label?.trim() || reported?.label;
+  const agent = session?.agent_name?.trim() || (engine ? agentName(engine, label) : label);
+  const origin = [agent, machine].filter(Boolean).join(" · ") || ix.machine_id;
+  const title = ix.session_title?.trim() || (session ? sessionTitle(session) : t("lib-format.untitled_session"));
+  const childLabel = permissionFrom(ix.folded_under ? { ...ix, session_title: ix.session_title?.trim() || session?.title } : ix);
+  const sessionLabel = ix.folded_under ? childLabel : [title, childLabel].filter(Boolean).join(" · ");
+  const sourceLabel = origin ? t("chat-interactions.bash_source", { origin, session: sessionLabel }) : sessionLabel;
+  const sourceHref = to && href(to);
+  return <PermissionCard ix={card} sourceLabel={original ? sourceLabel : card.session_title} sourceHref={sourceHref} onOpenSource={to && (() => {
+    const samePage = sourceHref === location.pathname + location.search;
+    navigate(to, samePage, { ...(samePage ? history.state : null), ...cardState(ix.id) });
+  })} />;
 }
 
 /**

@@ -1,4 +1,5 @@
 {
+  "bash_source": "来自 {origin} · {session}",
   "decision_view_source": "在对话中查看",
   "decision_skip_label": "跳过",
   "decision_collapse": "折叠",

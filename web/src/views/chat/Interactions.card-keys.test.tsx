@@ -79,6 +79,79 @@ afterEach(() => {
 });
 
 describe("a card answering from the keyboard", () => {
+  it.each(["pointer", "Enter"])("opens only the selected Bash request's source with %s", async (activation) => {
+    const title = "Release review";
+    const first = { ...permission, session_title: title, agent: "codex" };
+    const second = { ...permission, id: "p_2", machine_id: "studio", session_title: title, tool_input: { command: "npm run build" } };
+    const state = getState();
+    state.sessions.studio = [{ ...state.sessions.m[0], machine_id: "studio" }];
+    const machines = state.machines;
+    state.machines = [{ id: "studio", name: "Studio" } as (typeof machines)[number]];
+    const originalURL = location.href;
+    const originalState = history.state;
+    try {
+      act(() => root.render(<><InteractionCard ix={first} /><InteractionCard ix={second} /></>));
+      const links = [...host.querySelectorAll<HTMLAnchorElement>("[data-permission-from] a")];
+      expect(links).toHaveLength(2);
+      expect(links[0].textContent).toContain("Codex");
+      expect(links[0].getAttribute("href")).toContain("/s/m/s");
+      expect(links[1].textContent).toContain(title);
+      expect(links[1].textContent).toContain("Studio");
+      // Enter also works when already on the destination with a different card selected.
+      if (activation === "Enter") {
+        history.replaceState({ card: first.id }, "", links[1].href);
+        act(() => links[1].focus());
+        const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+        expect(links[1].dispatchEvent(enter)).toBe(true);
+      }
+      // jsdom does not generate the browser's click after a link's unhandled Enter.
+      act(() => links[1].dispatchEvent(new MouseEvent("click", { button: 0, detail: activation === "pointer" ? 1 : 0, bubbles: true, cancelable: true })));
+      await flush();
+      expect(location.pathname).toBe("/s/studio/s");
+      expect(history.state.card).toBe(second.id);
+      expect(calls).toEqual([]);
+    } finally {
+      state.machines = machines;
+      history.replaceState(originalState, "", originalURL);
+    }
+  });
+
+  it("keeps the Bash source visibly linked with an expanded hit area outside the truncated text", () => {
+    const title = "Release review ".repeat(12).trim();
+    act(() => root.render(<InteractionCard ix={{ ...permission, session_title: title }} />));
+    const link = host.querySelector<HTMLAnchorElement>("[data-permission-from] a")!;
+    // Matching vertical padding and negative margins grow the hit area without moving the command or answers.
+    expect([...link.classList]).toEqual(expect.arrayContaining(["underline", "py-4", "-my-4"]));
+    expect(link.classList).not.toContain("truncate");
+    const text = link.querySelector("span.truncate");
+    expect(text?.textContent).toContain(title);
+    expect(link.closest("[title]")?.getAttribute("title")).toBe(text?.textContent);
+  });
+
+  it("opens the original card from a main-chat copy and leaves an orphaned copy unlinked", async () => {
+    const original = { ...permission, session_title: "Source chat", agent: "codex" };
+    const copy = { ...original, id: "copy", mirror_of: original.id, machine_id: "main-computer", session_id: "main" };
+    const state = getState();
+    state.sessions[copy.machine_id] = [{ ...state.sessions.m[0], machine_id: copy.machine_id, session_id: copy.session_id }];
+    state.interactions = [{ ...original, manager: "other", session_id: "unrelated" }, original, copy];
+    const previous = { state: history.state, href: location.href };
+    try {
+      act(() => root.render(<InteractionCard ix={copy} />));
+      const link = host.querySelector<HTMLAnchorElement>("[data-permission-from] a")!;
+      expect(link.textContent).toContain("Source chat");
+      act(() => link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+      expect(location.pathname).toBe("/s/m/s");
+      expect(history.state.card).toBe(original.id);
+      expect(calls).toEqual([]);
+      state.interactions = [copy];
+      act(() => root.render(<InteractionCard ix={{ ...copy }} />));
+      expect(host.querySelector("[data-permission-from] a")).toBeNull();
+      expect(host.querySelector("[data-permission-from]")?.textContent).toBe("Source chat");
+    } finally {
+      history.replaceState(previous.state, "", previous.href);
+    }
+  });
+
   it("Enter allows a permission: the main action, never a deny", async () => {
     act(() => root.render(<InteractionCard ix={permission} />));
     act(() => cardRoot().focus());

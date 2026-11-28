@@ -1,4 +1,5 @@
 {
+  "bash_source": "From {origin} · {session}",
   "decision_view_source": "View in Chat",
   "decision_skip_label": "Skip",
   "decision_collapse": "Collapse",

@@ -2985,7 +2985,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         {assistant && (
           <>
             <AssistantActionBar key={sid} conversation={sid} ownAsks={actionBarAsks} turnAsks={turnSplit.turn} taskDecisions={taskDecisions}
-              focusDecision={commandReveal?.pending ? commandReveal.id : undefined}
+              focusDecision={commandReveal?.pending ? commandReveal.id : focusedCard()}
               inCall={takeover} turnItems={turnSplit.turn.length ? tr.items : undefined} openDecisionSource={openDecisionSource} sourceOpen={decisionDrill !== null} />
             {!takeover && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
