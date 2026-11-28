@@ -621,7 +621,10 @@ func (h *runtimeConn) agyWorking() bool {
 // subagents and background tasks have been stopped due to server restart"): a command, workflow or subagent
 // (Background of kind shell / workflow / agent), or a running entry in Subagents or Workflows. A schedule (kind
 // monitor: agy's `schedule`, a cron job or a one-shot timer, which the row does not tell apart) is left out: a cron job
-// never ends, so a restart that waited on it would never come.
+// never ends, so a restart that waited on it would never come. So is a cron schedule that arrives as kind shell: the
+// companion (integrations/antigravity/lib/background.js extractBackground) calls a task shell when it cannot match the
+// task's start notice to its tool call (none, or two calls claiming the step), and only the notice's description, agy's
+// "Cron: <expression> <prompt>", still says what it is (agyStandingSchedule).
 // The rows are the companion's runtime.sessions: Background lists only tasks running in a session its `agy acp` has
 // loaded (a terminal's tasks come separately, in agyPaneBackground, and a restart does not stop them), and the
 // hub-derived BackgroundWorking / BackgroundWaiting are not read, as they count a monitor too. Unlike
@@ -633,7 +636,7 @@ func (h *runtimeConn) agyWorking() bool {
 // the companion-side follow-up).
 func agyFiniteBackground(s proto.Session) bool {
 	for _, task := range s.Background {
-		if task.Kind != "monitor" {
+		if task.Kind != "monitor" && !agyStandingSchedule(task) {
 			return true
 		}
 	}
@@ -648,4 +651,11 @@ func agyFiniteBackground(s proto.Session) bool {
 		}
 	}
 	return false
+}
+
+// agyStandingSchedule: task is an agy cron schedule the companion could not tell from a command: kind shell, no command
+// line (a matched run_command has one) and the description agy gives a cron `schedule` (the prefix agyOneShotSchedule
+// reads too). A one-shot timer ("Timer: …") is not matched: it ends by itself, so at worst it holds a restart until then.
+func agyStandingSchedule(task proto.BackgroundTask) bool {
+	return task.Kind == "shell" && task.Command == "" && strings.HasPrefix(task.Description, "Cron:")
 }

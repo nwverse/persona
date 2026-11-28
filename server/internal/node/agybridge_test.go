@@ -794,6 +794,15 @@ func TestAgyWorkingCountsFiniteBackgroundWork(t *testing.T) {
 		{"only monitor schedules", []proto.Session{idle(func(s *proto.Session) {
 			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "monitor"}}
 		})}, false},
+		{"cron schedule reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: */5 * * * * Poll"}}
+		})}, false},
+		{"command described as cron", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Cron: rotate logs", Command: "./rotate.sh"}}
+		})}, true},
+		{"timer reported as a shell", []proto.Session{idle(func(s *proto.Session) {
+			s.Background = []proto.BackgroundTask{{ID: "s1/task-1", Kind: "shell", Description: "Timer: 60s"}}
+		})}, true},
 		{"monitor beside a command", []proto.Session{idle(func(s *proto.Session) {
 			s.Background = []proto.BackgroundTask{task("monitor"), {ID: "s1/task-2", Kind: "shell"}}
 		})}, true},
@@ -825,12 +834,8 @@ func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
 	h := reg.add(nil)
 	h.ready, h.hello.Runtime = true, agyRuntimeID
 	id := agyAgent + "-" + agyTestID
-	push := func(status string, kinds ...string) bool {
+	pushTasks := func(status string, tasks ...string) bool {
 		t.Helper()
-		var tasks []string
-		for i, kind := range kinds {
-			tasks = append(tasks, fmt.Sprintf(`{"id":"%s/task-%d","kind":%q,"started_at":"2026-11-28T09:00:00Z"}`, agyTestID, i+1, kind))
-		}
 		raw := fmt.Sprintf(`{"sessions":[{"session_id":%q,"status":%q,"background":[%s]}]}`, id, status, strings.Join(tasks, ","))
 		var p struct {
 			Sessions []proto.Session `json:"sessions"`
@@ -840,6 +845,14 @@ func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
 		}
 		reg.setSessions(h, normalizeRuntimeSessions(h, p.Sessions))
 		return h.agyWorking()
+	}
+	push := func(status string, kinds ...string) bool {
+		t.Helper()
+		var tasks []string
+		for i, kind := range kinds {
+			tasks = append(tasks, fmt.Sprintf(`{"id":"%s/task-%d","kind":%q,"started_at":"2026-11-28T09:00:00Z"}`, agyTestID, i+1, kind))
+		}
+		return pushTasks(status, tasks...)
 	}
 	if !push(proto.StatusIdle, "monitor", "shell") {
 		t.Error("an idle session with a background command does not hold the drain")
@@ -855,6 +868,17 @@ func TestAgyWorkingReadsTheCompanionsList(t *testing.T) {
 	}
 	if push(proto.StatusIdle) {
 		t.Error("an idle session with nothing running holds the drain")
+	}
+	// A cron schedule whose start notice the companion could not match to its call arrives as a shell (background.js
+	// extractBackground's default); its description still says it is one.
+	unmatchedCron := `{"id":"` + agyTestID + `/task-1","kind":"shell","description":"Cron: */30 * * * * Check status","started_at":"2026-11-28T09:00:00Z"}`
+	if pushTasks(proto.StatusIdle, unmatchedCron) {
+		t.Error("a cron schedule reported as a shell holds the drain")
+	}
+	command := `{"id":"` + agyTestID + `/task-2","kind":"shell","description":"Run the tests","command":"make test","started_at":"2026-11-28T09:00:00Z"}`
+	unmatchedCommand := `{"id":"` + agyTestID + `/task-3","kind":"shell","description":"Wait for ready","started_at":"2026-11-28T09:00:00Z"}`
+	if !pushTasks(proto.StatusIdle, unmatchedCron, command) || !pushTasks(proto.StatusIdle, unmatchedCommand) {
+		t.Error("a background command beside a cron schedule, or one without its command line, does not hold the drain")
 	}
 }
 

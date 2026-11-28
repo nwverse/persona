@@ -755,7 +755,8 @@ looks again every 30 seconds while it runs (#14533): when the path or the file t
 installed elsewhere, removed) and two looks in a row agree, it restarts the companion on the `agy` found now, waiting
 while one of its sessions is working or a call to it is pending (the old file keeps running until then). A session whose
 turn ended still counts as working while finite background work it started runs in the companion's `agy acp` (a
-command, workflow or subagent, #17200); an agy `schedule` (kind `monitor`) does not, as a cron job never ends. That wait has
+command, workflow or subagent, #17200); an agy `schedule` (kind `monitor`, or a `shell` with no command whose description starts `Cron:`, as the companion
+reports one it could not match to its call) does not, as a cron job never ends. That wait has
 no deadline, so a background command that never exits holds the restart until it is stopped; the handoff to an external
 `agy` runtime waits for the same work at most 5 seconds, as for a working turn, then stops the companion. The node sees
 only the sessions the companion lists (its recent ones) and at most 50 running tasks each, so work outside those limits
