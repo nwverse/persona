@@ -42,8 +42,8 @@ func PluginDir() string {
 }
 
 // validPluginSkillName restricts a plugin skill directory name to a single safe path segment
-// that cannot traverse directories, target the root ("/"), collide with dotfiles, or inject
-// delimiters into .persona-extension-skills.
+// that cannot traverse directories, target the root ("/"), collide with dotfiles, contain
+// whitespace/controls, or inject delimiters into .persona-extension-skills.
 func validPluginSkillName(name string) bool {
 	if name == "" || len(name) > 255 || !utf8.ValidString(name) || strings.HasPrefix(name, ".") {
 		return false
@@ -51,16 +51,19 @@ func validPluginSkillName(name string) bool {
 	if name == "." || name == ".." || filepath.Base(name) != name || strings.TrimRight(name, ". ") != name || windowsReserved(name) {
 		return false
 	}
-	if strings.ContainsAny(name, `/\:,=<>|"?*`) || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+	if strings.ContainsAny(name, `/\:,=<>|"?*`) || strings.IndexFunc(name, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.IsSpace(r)
+	}) >= 0 {
 		return false
 	}
 	return true
 }
 
 // validStampField ensures plugin and digest tokens written into .persona-plugin and
-// .persona-extension-skills cannot inject delimiters (comma, equals, whitespace, or controls).
+// .persona-extension-skills are non-empty and cannot inject delimiters (comma, equals,
+// whitespace, or controls).
 func validStampField(s string) bool {
-	if len(s) > 256 || !utf8.ValidString(s) {
+	if s == "" || len(s) > 256 || !utf8.ValidString(s) {
 		return false
 	}
 	for _, r := range s {
@@ -89,6 +92,66 @@ func validPluginRelPath(rel string) (string, error) {
 
 func foldPathKey(p string) string {
 	return cases.Fold().String(norm.NFC.String(p))
+}
+
+func containsFolded(names []string, target string) bool {
+	key := foldPathKey(target)
+	for _, name := range names {
+		if foldPathKey(name) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// isPluginCopy reports whether p is a real directory (not a symlink) containing a regular
+// pluginStamp file (not a symlink).
+func isPluginCopy(p string) bool {
+	if !isCopy(p) {
+		return false
+	}
+	st, err := os.Lstat(filepath.Join(p, pluginStamp))
+	return err == nil && st.Mode().IsRegular()
+}
+
+func readPluginStamp(skillDir string) (string, bool) {
+	if !isPluginCopy(skillDir) {
+		return "", false
+	}
+	b, err := os.ReadFile(filepath.Join(skillDir, pluginStamp))
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(b)), true
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".stamp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			_ = f.Close()
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	ok = true
+	return nil
 }
 
 func validatePluginSkillFiles(s PluginSkill) (map[string][]byte, error) {
@@ -125,9 +188,8 @@ func validatePluginSkillFiles(s PluginSkill) (map[string][]byte, error) {
 
 func stagePluginSkill(dir string, s PluginSkill, files map[string][]byte) error {
 	at := filepath.Join(dir, s.Name)
-	tmp := filepath.Join(dir, "."+s.Name+".new")
-	_ = os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
+	tmp, err := os.MkdirTemp(dir, ".stage-*")
+	if err != nil {
 		return err
 	}
 	renamed := false
@@ -136,6 +198,9 @@ func stagePluginSkill(dir string, s PluginSkill, files map[string][]byte) error 
 			_ = os.RemoveAll(tmp)
 		}
 	}()
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
+	}
 	for name, b := range files {
 		out := filepath.Join(tmp, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
@@ -164,11 +229,8 @@ func stagePluginSkill(dir string, s PluginSkill, files map[string][]byte) error 
 // when their digest is the one here, and any other is removed. need are those listed without files that this machine
 // does not have (the hub sends them again).
 func ApplyPlugins(dir string, skills []PluginSkill) (need []string, err error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	// Validate every skill and file path before mutating PluginDir so invalid input cannot
-	// partially modify or destroy existing plugin skills.
+	// Validate every skill and file path before creating or mutating PluginDir so invalid input
+	// has zero side effects and cannot partially modify or destroy existing plugin skills.
 	seenNames := make(map[string]bool, len(skills))
 	validatedFiles := make([]map[string][]byte, len(skills))
 	for idx, s := range skills {
@@ -191,12 +253,13 @@ func ApplyPlugins(dir string, skills []PluginSkill) (need []string, err error) {
 			validatedFiles[idx] = files
 		}
 	}
-	var names []string
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
 	for idx, s := range skills {
-		names = append(names, s.Name)
 		at := filepath.Join(dir, s.Name)
 		if s.Files == nil {
-			if stamp, _ := os.ReadFile(filepath.Join(at, pluginStamp)); strings.TrimSpace(string(stamp)) != s.Plugin+" "+s.Digest {
+			if stamp, ok := readPluginStamp(at); !ok || stamp != s.Plugin+" "+s.Digest {
 				need = append(need, s.Name)
 			}
 			continue
@@ -207,7 +270,7 @@ func ApplyPlugins(dir string, skills []PluginSkill) (need []string, err error) {
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !slices.Contains(names, e.Name()) {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !seenNames[foldPathKey(e.Name())] {
 			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
 		}
 	}
@@ -232,7 +295,9 @@ const pluginsCopied = ".persona-extension-skills" // in the assistant's skills: 
 
 func safeStampValue(raw string) string {
 	s := strings.TrimSpace(raw)
-	if strings.ContainsAny(s, ",=\r\n") || strings.IndexFunc(s, unicode.IsControl) >= 0 {
+	if len(s) > 512 || !utf8.ValidString(s) || strings.ContainsAny(s, ",=") || strings.IndexFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || (unicode.IsSpace(r) && r != ' ')
+	}) >= 0 {
 		sum := sha256.Sum256([]byte(s))
 		return "sha256:" + hex.EncodeToString(sum[:8])
 	}
@@ -243,35 +308,47 @@ func safeStampValue(raw string) string {
 // before and no longer there is removed. The stamp (pluginsCopied) lists only skills that really are copies in dir:
 // one a user's link holds is left out, so it is copied once the user's goes (#1635).
 func installPlugins(dir, plugins string, mine []string) error {
+	builtins := builtinNames()
+	viewsGuideKey := foldPathKey(viewsGuideName)
 	var want []string
+	wantKeys := make(map[string]bool)
 	for _, n := range pluginNames(plugins) {
-		if slices.Contains(mine, n) || (n != workGuideName && slices.Contains(builtinNames(), n)) {
+		key := foldPathKey(n)
+		if containsFolded(mine, n) || (n != workGuideName && containsFolded(builtins, n)) {
 			continue
 		}
-		stamp, _ := os.ReadFile(filepath.Join(plugins, n, pluginStamp))
-		want = append(want, n+"="+safeStampValue(string(stamp)))
+		if wantKeys[key] {
+			continue
+		}
+		wantKeys[key] = true
+		stamp, _ := readPluginStamp(filepath.Join(plugins, n))
+		want = append(want, n+"="+safeStampValue(stamp))
 	}
 	line := strings.Join(want, ",")
 	stampFile := filepath.Join(dir, pluginsCopied)
-	old, _ := os.ReadFile(stampFile)
-	if strings.TrimSpace(string(old)) == line && slices.IndexFunc(want, func(w string) bool {
+	var old []byte
+	stampStat, stampErr := os.Lstat(stampFile)
+	if stampErr == nil && stampStat.Mode().IsRegular() {
+		old, _ = os.ReadFile(stampFile)
+	}
+	if (stampErr != nil || stampStat.Mode().IsRegular()) && strings.TrimSpace(string(old)) == line && slices.IndexFunc(want, func(w string) bool {
 		n, _, _ := strings.Cut(w, "=")
 		return !isCopy(filepath.Join(dir, n))
 	}) < 0 {
 		return nil
 	}
 	for _, entry := range strings.Split(strings.TrimSpace(string(old)), ",") {
-		n, _, _ := strings.Cut(entry, "=")
-		if !validPluginSkillName(n) || slices.ContainsFunc(want, func(w string) bool { return strings.HasPrefix(w, n+"=") }) {
+		n, _, ok := strings.Cut(entry, "=")
+		if !ok || !validPluginSkillName(n) {
 			continue
 		}
-		if n == viewsGuideName {
-			// This name is now a built-in. Its old extension stamp cannot prove that a directory the owner later
-			// substituted is still Persona's copy; leave it for the managed-guide ownership check and full fallback.
+		key := foldPathKey(n)
+		if wantKeys[key] || key == viewsGuideKey || (n != workGuideName && containsFolded(builtins, n)) {
 			continue
 		}
-		if isCopy(filepath.Join(dir, n)) {
-			_ = os.RemoveAll(filepath.Join(dir, n))
+		at := filepath.Join(dir, n)
+		if isPluginCopy(at) {
+			_ = os.RemoveAll(at)
 		}
 	}
 	var copied []string
@@ -284,7 +361,7 @@ func installPlugins(dir, plugins string, mine []string) error {
 			copied = append(copied, w)
 		}
 	}
-	return os.WriteFile(stampFile, []byte(strings.Join(copied, ",")+"\n"), 0o644)
+	return writeFileAtomic(stampFile, []byte(strings.Join(copied, ",")+"\n"), 0o644)
 }
 
 // isCopy: p is a directory of its own, not a link.
@@ -295,15 +372,20 @@ func isCopy(p string) bool {
 
 // copyDir replaces to with a copy of from.
 func copyDir(from, to string) error {
-	tmp := filepath.Join(filepath.Dir(to), "."+filepath.Base(to)+".new")
-	_ = os.RemoveAll(tmp)
+	tmp, err := os.MkdirTemp(filepath.Dir(to), ".stage-*")
+	if err != nil {
+		return err
+	}
 	renamed := false
 	defer func() {
 		if !renamed {
 			_ = os.RemoveAll(tmp)
 		}
 	}()
-	err := filepath.WalkDir(from, func(p string, d os.DirEntry, err error) error {
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		return err
+	}
+	err = filepath.WalkDir(from, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

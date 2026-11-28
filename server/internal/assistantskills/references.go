@@ -43,9 +43,96 @@ func Bind(scope string, entries []Entry) []Entry {
 
 var leadingReference = lazyre.New(`(?s)^\s*<` + compat.ContextPattern() + `\b([^>]*)>.*?</` + compat.ContextPattern() + `>`)
 
-var malformedSkillKind = lazyre.New(`(?i)(?:^|\s)kind\s*=\s*(?:"skill"|'skill'|skill(?:\s|$|/))`)
-
 var ErrReference = errors.New("selected skill is unavailable or its execution environment changed; remove it and select it again")
+
+func isTagSpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f'
+}
+
+func isAttrNameDelim(b byte) bool {
+	return isTagSpace(b) || b == '=' || b == '/' || b == '"' || b == '\''
+}
+
+// hasMalformedSkillKind scans an XML attribute list that failed xml.Decoder in O(|tag|) time
+// and reports whether it contains a kind attribute whose value is "skill" (quoted, unquoted,
+// or inside an unclosed quote), without matching "kind=skill" inside another attribute's value.
+func hasMalformedSkillKind(tag string) bool {
+	i, n := 0, len(tag)
+	for i < n {
+		for i < n && (isTagSpace(tag[i]) || tag[i] == '/') {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		if tag[i] == '=' || tag[i] == '"' || tag[i] == '\'' {
+			i++
+			continue
+		}
+		nameStart := i
+		for i < n && !isAttrNameDelim(tag[i]) {
+			i++
+		}
+		name := tag[nameStart:i]
+		if _, local, ok := strings.Cut(name, ":"); ok {
+			name = local
+		}
+		j := i
+		for j < n && isTagSpace(tag[j]) {
+			j++
+		}
+		if j >= n || tag[j] != '=' {
+			i = j
+			continue
+		}
+		i = j + 1
+		for i < n && isTagSpace(tag[i]) {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		var val string
+		quoted := false
+		unclosed := false
+		if tag[i] == '"' || tag[i] == '\'' {
+			quoted = true
+			q := tag[i]
+			i++
+			valStart := i
+			for i < n && tag[i] != q {
+				i++
+			}
+			val = tag[valStart:i]
+			if i < n {
+				i++
+			} else {
+				unclosed = true
+			}
+		} else {
+			valStart := i
+			for i < n && !isTagSpace(tag[i]) && tag[i] != '/' && tag[i] != '"' && tag[i] != '\'' {
+				i++
+			}
+			val = tag[valStart:i]
+		}
+		if strings.EqualFold(name, "kind") {
+			if strings.EqualFold(val, "skill") {
+				return true
+			}
+			if unclosed || (quoted && (strings.Contains(val, "=") || (i < n && !isTagSpace(tag[i]) && tag[i] != '/'))) {
+				tok := val
+				if k := strings.IndexAny(tok, " \t\n\r\f/'\""); k >= 0 {
+					tok = tok[:k]
+				}
+				if strings.EqualFold(tok, "skill") {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
 
 // References reads only explicit leading context selections, never @name, paths, quoted tags or later prose.
 func References(text string) ([]string, error) {
@@ -60,7 +147,7 @@ func References(text string) ([]string, error) {
 		decoder := xml.NewDecoder(strings.NewReader("<context" + tag + "/>"))
 		token, err := decoder.Token()
 		if err != nil {
-			if malformedSkillKind.MatchString(tag) {
+			if hasMalformedSkillKind(tag) {
 				return nil, ErrReference
 			}
 			continue
@@ -71,7 +158,7 @@ func References(text string) ([]string, error) {
 		}
 		skill := false
 		for _, a := range start.Attr {
-			skill = skill || a.Name.Local == "kind" && a.Value == "skill"
+			skill = skill || strings.EqualFold(a.Name.Local, "kind") && strings.EqualFold(a.Value, "skill")
 		}
 		if !skill {
 			continue
@@ -89,7 +176,7 @@ func References(text string) ([]string, error) {
 			}
 			attrs[key] = a.Value
 		}
-		if attrs["ref"] == "" || len(attrs["ref"]) > 128 || len(refs) >= 16 {
+		if attrs["kind"] != "skill" || attrs["ref"] == "" || len(attrs["ref"]) > 128 || len(refs) >= 16 {
 			return nil, ErrReference
 		}
 		refs = append(refs, attrs["ref"])
