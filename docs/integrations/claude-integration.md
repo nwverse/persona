@@ -825,8 +825,8 @@ installs and updates it.
 - **Managed settings can keep the classic hooks away**: on a computer whose device management installs a Claude Code
   `managed-settings.json`, the built-in `cc-plugin-sec-default@builtin` guard can seat itself in the `prepend` tier and
   pass every `classic.*` event over user-tier plugins to the `append` tier. Persona cannot and does not work around that
-  organization policy. After a main-loop turn uses tools but no `classic.PreToolUse` reaches the plugin, the plugin adds
-  `classic_passed_over: true` to `/poll`; the node stops authorizing plugin permissions for that session, refuses a
+  organization policy. After two consecutive main-loop turns use hook-eligible tools without a `classic.PreToolUse`,
+  the plugin adds `classic_passed_over: true` to `/poll`. The node stops authorizing plugin permissions, refuses a
   direct `/permission` call with `passthrough`, withdraws any active plugin permission card, and does not set
   `capabilities.approve` from the plugin alone. A blocked row says the request must be approved on the computer or the
   session started from Persona in a terminal engine (herdr, Orca, and the rest) to approve from the phone, in `en`,

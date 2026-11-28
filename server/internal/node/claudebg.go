@@ -194,8 +194,13 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			Model: n.shownModel(id, m.model), LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, st), Rev: st.Size(), AgentSurface: m.surface,
 		}
 		s.Capabilities, s.ReadOnlyReason = outsideCapabilities(c)
-		if s.Capabilities != nil && s.Capabilities.Send && n.ccPluginInput(id, c.pid) {
+		if n.ccPluginInput(id, c.pid) {
+			if s.Capabilities == nil {
+				s.Capabilities = &proto.SessionCapabilities{Read: true}
+			}
+			s.Capabilities.Send = true
 			s.Capabilities.PluginInput = true // the owner's messages go in as their input (ccplugin.go)
+			s.ReadOnlyReason = ""
 			if n.ccPluginSettingsCapable(id, c.pid) {
 				s.Capabilities.Model = proto.Bool(true)
 				s.Efforts = slices.Clone(proto.EffortLevels)
@@ -257,7 +262,7 @@ func (n *Node) claudeSessions(procs []claudeProc, seen map[string]bool, livePane
 			} else {
 				s.AttentionReason = proto.AttentionClaudeComputer // no dialog read from a pane (yet)
 			}
-			if s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && (hasPublishedAsk || n.askingOutside(c)) {
+			if !pluginPerms && s.Capabilities != nil && s.Capabilities.Send && s.PaneID == "" && (hasPublishedAsk || n.askingOutside(c)) {
 				s.AttentionReason = proto.AttentionClaudeAnswer // a message answers it (sendOutside)
 				// Its question is a card the apps answer (claudeoutside_ask.go): the answer goes as that message.
 				s.Capabilities.Approve = true
@@ -364,9 +369,9 @@ func (n *Node) outsideClaude(id string) (claudeProc, bool) {
 	return claudeProc{}, false
 }
 
-// sendOutside sends text to a session a claude outside Persona's panes has open, through its peer inbox. A verified
+// sendOutside sends text to a session a claude outside Persona's panes has open, through its plugin or peer inbox. A verified
 // owner's ordinary message to a claude in tmux is left for send's usual pane path instead; anyone else's message there
-// still needs the inbox and is refused without one, never typed. With no pane and no inbox, handled is false and the
+// still needs the inbox and is refused without one, never typed. With no plugin delivery, pane or inbox, handled is false and the
 // caller refuses the session as open elsewhere (openElsewhereRefusal). Nothing starts a second claude --resume on the
 // same transcript. A send counts once the session wrote that it took the message (peerTaken); one it did not take in
 // time — held for the person at the computer, dropped as a duplicate — is reported as not confirmed (delivered
@@ -389,13 +394,6 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 	}
 	if forced == "" && pane != "" && ownerDeliveryOf(ctx) != nil {
 		return false, nil // the owner's own words go through send's ordinary tmux-pane checks and confirmation (#5965)
-	}
-	p, has := peerOf(c)
-	if !has {
-		if pane != "" {
-			return true, refusal(peerUnsupported, peerNoInboxMsg, nil) // nobody else's words may be typed into the pane
-		}
-		return false, nil
 	}
 	if strings.HasPrefix(strings.TrimSpace(text), "/") {
 		// The inbox runs no commands (Claude Code takes a peer's message with skipSlashCommands): /exit, /model or
@@ -446,6 +444,13 @@ func (n *Node) sendOutsidePriority(ctx context.Context, id, text string, images 
 		} else {
 			owner.as, owner.reason = deliveredRelayed, why
 		}
+	}
+	p, has := peerOf(c)
+	if !has {
+		if pane != "" {
+			return true, refusal(peerUnsupported, peerNoInboxMsg, nil) // nobody else's words may be typed into the pane
+		}
+		return false, nil
 	}
 	p.fromMode = n.peerAttest(ctx, c, id)
 	_, p.source = ctx.Value(sourceDeliveryKey{}).(string)

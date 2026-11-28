@@ -37,8 +37,35 @@ func pluginSocket(t *testing.T, n *Node) *http.Client {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go acceptloop.Run(ctx, ln, t.Logf, func(c net.Conn) { go n.serveSock(ctx, c) })
-	t.Cleanup(func() { cancel(); _ = ln.Close(); _ = os.RemoveAll(dir) })
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	conns := map[net.Conn]struct{}{}
+	go acceptloop.Run(ctx, ln, t.Logf, func(c net.Conn) {
+		mu.Lock()
+		conns[c] = struct{}{}
+		mu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer func() {
+				mu.Lock()
+				delete(conns, c)
+				mu.Unlock()
+				wg.Done()
+			}()
+			n.serveSock(ctx, c)
+		}()
+	})
+	t.Cleanup(func() {
+		cancel()
+		_ = ln.Close()
+		mu.Lock()
+		for c := range conns {
+			_ = c.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+		_ = os.RemoveAll(dir)
+	})
 	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
@@ -283,7 +310,7 @@ func TestCCPluginFallsBackToTheInbox(t *testing.T) {
 }
 
 // The node hands a session's messages only to the claude that has it open: a poll naming another session is refused,
-// and a claude the node does not deliver to this way (one an SDK runs) is told to come back much later.
+// and an interactive claude without Persona hooks can poll regardless of its entrypoint.
 func TestCCPluginPollsAreTheSessionsOwn(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
@@ -309,7 +336,7 @@ func TestCCPluginPollsAreTheSessionsOwn(t *testing.T) {
 
 	writeOutsideClaude(t, home, sidA, "sdk-ts", "idle", nil, nil)
 	status, out = pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 100})
-	if status != http.StatusOK || out["retry_ms"] != float64(ccPluginOtherRetry.Milliseconds()) {
+	if status != http.StatusOK || out["retry_ms"] != nil {
 		t.Errorf("an SDK's claude: %d %v", status, out)
 	}
 }

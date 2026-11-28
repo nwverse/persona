@@ -459,9 +459,18 @@ func (r *ccPluginRegistry) handOver(ctx context.Context, id string, pid int, d c
 	}
 }
 
-// ccPluginServes: the node hands the owner's messages to the plugin in claude c, a claude outside Persona's terminals
+// ccPluginServes: the node hands the owner's messages to outside claudes and manual claudes without Persona hooks
 // (a variable so the live test can serve the stream-json claude it starts, which an SDK's entrypoint names).
-var ccPluginServes = func(n *Node, c claudeProc) bool { return n.outsideSource(c) != "" }
+var ccPluginServes = func(n *Node, c claudeProc) bool {
+	if c.Spare || c.ParkedJobID != "" || !validID(c.SessionID) ||
+		(c.Kind != "" && c.Kind != "interactive" && c.Kind != "bg") {
+		return false
+	}
+	if n.outsideSource(c) != "" {
+		return true
+	}
+	return !n.hasPersonaHooks(c) && !n.isAssistantSession(c.SessionID)
+}
 
 // ccPluginStatus is one session in claude-plugin.status.
 type ccPluginStatus struct {

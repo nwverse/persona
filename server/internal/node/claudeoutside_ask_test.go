@@ -37,6 +37,51 @@ func toolResult(id, toolUse, text string) string {
 		`"content":[{"type":"tool_result","tool_use_id":"` + toolUse + `","content":"` + text + `"}]}}`
 }
 
+func TestOutsideAskPluginPermissionsOwnQuestionUntilInactive(t *testing.T) {
+	for _, entrypoint := range []string{"cli", "claude-desktop-3p"} {
+		t.Run(entrypoint, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			noPaneEnv(t)
+			p := bgTranscript(t, home, home, sidA, "pick")
+			appendLines(t, p, askCall(sidA, "toolu_plugin", multiAsk))
+			writeOutsideClaude(t, home, sidA, entrypoint, "waiting", newFakeInbox(t, p), nil)
+			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+			assertFallback := func(want bool) {
+				t.Helper()
+				c, ok := n.outsideClaude(sidA)
+				if !ok {
+					t.Fatal("outside Claude missing")
+				}
+				if ix, ok := n.outsideAskCard(c); ok != want || (ok && !strings.HasPrefix(ix.ID, outsideAskPrefix)) {
+					t.Fatalf("outsideAskCard = %+v, %v; want fallback %v", ix, ok, want)
+				}
+				cards := n.outsideAskCards()
+				if (len(cards) == 1) != want || len(cards) > 1 {
+					t.Fatalf("outsideAskCards = %+v; want fallback %v", cards, want)
+				}
+				s := byID(listSessions(t, n))[sidA]
+				if s.Status != proto.StatusBlocked || s.Capabilities == nil || !s.Capabilities.Approve ||
+					(s.AttentionReason == proto.AttentionClaudeAnswer) != want {
+					t.Fatalf("question session = %+v, caps %+v; want fallback %v", s, s.Capabilities, want)
+				}
+			}
+			assertFallback(true)
+			n.syncCodexCards(context.Background()) // exercise an already-published clq_ during plugin authorization
+			status, out := pluginPost(t, pluginSocket(t, n), "poll", map[string]any{
+				"session_id": sidA, "plugin_version": "0.3.0", "capabilities": []string{"permissions"}, "wait_ms": 50,
+			})
+			if status != 200 || out["permissions"] != true || !n.ccPluginPermissionsCapable(sidA, os.Getpid()) {
+				t.Fatalf("plugin permission authorization: %d %v", status, out)
+			}
+			assertFallback(false) // native ix_ owns the ask even before its permission request arrives
+			n.ccPlugins.mu.Lock()
+			n.ccPlugins.sessions[sidA].seen = time.Now().Add(-ccPluginStale - time.Second)
+			n.ccPlugins.mu.Unlock()
+			assertFallback(true)
+		})
+	}
+}
+
 // A Claude session in the desktop app (no hook of Persona's runs there) that asks several questions at once: before,
 // the apps got only the row's "reply to answer" line and never saw the questions or their options. Now its question is
 // a card listed with the Codex cards, every question with its options and multi-select, the row says the apps may

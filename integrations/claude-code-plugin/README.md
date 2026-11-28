@@ -4,9 +4,16 @@ In Claude Desktop, background sessions and terminals outside Persona's engines, 
 messages as typed input. The peer inbox identifies them as coming from another session. See
 `docs/integrations/claude-integration.md`, "Owner input through the Persona plugin".
 
+In Claude Desktop, background sessions and terminals outside Persona's engines, this plugin delivers the owner's
+messages as typed input. The peer inbox identifies them as coming from another session. See
+`docs/integrations/claude-integration.md`, "Owner input through the Persona plugin".
+
 The plugin polls the local node for messages, Stop, session model and effort choices, and authorized permission,
 plan and question cards. It reports the main loop's effort for Desktop sessions. It reads only its manifest and
 stays quiet when the node is unavailable.
+
+On a computer with managed settings, Claude Code's `cc-plugin-sec-default` guard can pass every `classic.*` event over
+the user-tier plugin. While bridging is paused, Persona directs the user to approve on the computer.
 
 ## Packaging
 
@@ -64,10 +71,9 @@ another session, gets `403`.
   named level. An applied `auto` choice remains automatic. A timestamped `reset: true` clears the observation on reload
   or session change. Subagent steps do not update it. The node uses the observation while the same session and process are
   live, and compares it with transcript evidence and newer session choices. A machine default is never a readback.
-- `classic_passed_over: true` is sent after a main-loop turn used tools but no `classic.PreToolUse` arrived.
-  Claude Code's managed-settings guard can do that to every `classic.*` hook in a user-tier plugin. The node then
-  returns no `permissions: true` for that session, refuses direct `/permission` calls with `passthrough`, withdraws any
-  active plugin card and leaves `clq_` question cards alone. Approve on the computer or start a session in a Persona terminal. The field is omitted while classic hooks reach the plugin.
+- `classic_passed_over: true` reports two consecutive turns missing hooks for tools that emit them. The next
+  `classic.PreToolUse` triggers a poll without the flag. While the flag is set, the node withdraws active plugin
+  cards and returns `passthrough` for `/permission`. Transcript question cards (`clq_`) remain available.
 - `403 {"error": "not_this_session"}`: the caller is not the claude that has this session open. `404`, or an answer
   that is not HTTP: a node without this protocol. The plugin backs off (up to a minute) and tries again.
 
@@ -78,7 +84,8 @@ another session, gets `403`.
 ```
 
 - Only called after `/poll` authorizes `permissions: true`, the plugin has not reported `classic_passed_over`, and after
-  giving fast local command hooks (`next(e)`) a 500 ms grace window. Pairs `tool_use_id` from `classic.PreToolUse`.
+  giving fast local command hooks (`next(e)`) a 1 s grace window. Pairs `tool_use_id` from `classic.PreToolUse`.
+  During a poll outage, new requests can retry with the last authorization for up to 2 minutes.
 - `200`: `{"action": "renew"}` (keep renewing with the same `req_id` under the 30 s fetch cap),
   `{"action": "decide", "decision": {"behavior": "allow" | "deny", ...}}`, or `{"action": "passthrough"}` (fall back
   to the computer UI).

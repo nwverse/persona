@@ -266,10 +266,9 @@ func (r *ccPluginRegistry) coversAsk(sessionID, toolUseID string) bool {
 }
 
 // ccPluginServesPermissions reports whether claude c should bridge interactive permissions through the
-// Persona plugin: it must be an outside session served by the plugin, not in an external tmux pane
-// (which uses screen cards), not an assistant session, and not managed by persona-hooks.
+// Persona plugin: it must be served by the plugin, not an assistant session, and not managed by persona-hooks.
 func (n *Node) ccPluginServesPermissions(c claudeProc) bool {
-	if !ccPluginServes(n, c) || outsidePane(c) != "" {
+	if !ccPluginServes(n, c) {
 		return false
 	}
 	if n.isAssistantSession(c.SessionID) || n.hasPersonaHooks(c) {

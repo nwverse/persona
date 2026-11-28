@@ -16,14 +16,14 @@ export const POLL_WAIT_MS = 25_000
 export const PERMISSION_WAIT_MS = 25_000
 
 /** Short grace window giving fast local command hooks (such as bypass-allow) a chance to decide before opening a card. */
-export const PERMISSION_GRACE_MS = 500
+export const PERMISSION_GRACE_MS = 1_000
+export const AUTH_GRACE_MS = 2 * 60 * 1_000
 
 /** Maximum total time one permission request keeps renewing before falling back to passthrough. */
 export const PERMISSION_MAX_WAIT_MS = 24 * 60 * 60 * 1_000
 
-/** Retry spacing on transient /permission errors; initial errors fail fast, while already-registered cards reconnect up to 2 minutes (matching nodeclient.ResumeWait). */
+/** Retry spacing and reconnect limit on transient /permission errors (matching nodeclient.ResumeWait). */
 export const PERMISSION_RETRY_MS = 1_000
-export const PERMISSION_MAX_ERRORS = 3
 export const PERMISSION_RECONNECT_MS = 2 * 60 * 1_000
 
 /** Maximum serialized permission request body sent to the node (matches node's 4 MiB /permission cap). */
@@ -38,6 +38,7 @@ export const TEXT_MOST = 200_000
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/
 const MODEL = /^[A-Za-z0-9._:/[\]-]{1,200}$/
+const BUILTIN_HOOKLESS_TOOLS = new Set(['View', 'GlobTool', 'GrepTool', 'ToolSearch'])
 const PRE_TOOL_META = new Set([
   'tool',
   'tool_name',
@@ -103,16 +104,17 @@ export type ActiveTurn = { session: string; turnId: string }
 
 /**
  * Whether a main-loop turn's tool calls reach the `classic.PreToolUse` hook. Claude Code's managed-settings guard can
- * pass every `classic.*` event over a user-tier plugin; once that is seen, it stays true for the session.
+ * pass every `classic.*` event over a user-tier plugin. Two consecutive missed turns suspend bridging until a hook arrives.
  */
 export type ClassicHookObservation = {
   toolUses: number
   preToolUses: number
+  consecutivePassedOver: number
   passedOver: boolean
 }
 
 export function createClassicHookObservation(): ClassicHookObservation {
-  return { toolUses: 0, preToolUses: 0, passedOver: false }
+  return { toolUses: 0, preToolUses: 0, consecutivePassedOver: 0, passedOver: false }
 }
 
 /** Counts main-loop tools from a completed `turn.step`; subagent steps do not prove the main-loop hook path. */
@@ -124,25 +126,25 @@ export function noteTurnStepToolUses(
   if (agentId !== undefined || typeof step !== 'object' || step === null) return observation
   const uses = (step as { toolUses?: unknown }).toolUses
   if (!Array.isArray(uses)) return observation
-  return { ...observation, toolUses: observation.toolUses + uses.length }
+  const hooked = uses.filter(use => !isRecord(use) || typeof use.tool !== 'string' || !BUILTIN_HOOKLESS_TOOLS.has(use.tool))
+  return { ...observation, toolUses: observation.toolUses + hooked.length }
 }
 
-/** Counts a `classic.PreToolUse` event that reached the plugin for the main agent. */
+/** Any `classic.PreToolUse` event proves the plugin can receive classic hooks. */
 export function noteClassicPreToolUse(observation: ClassicHookObservation, raw: unknown): ClassicHookObservation {
-  if (!isRecord(raw)) return observation
-  if (typeof raw.agent_id === 'string' && raw.agent_id !== '') return observation
-  return { ...observation, preToolUses: observation.preToolUses + 1 }
+  const mainAgent = isRecord(raw) && (typeof raw.agent_id !== 'string' || raw.agent_id === '')
+  const preToolUses = observation.preToolUses + (mainAgent ? 1 : 0)
+  return { ...observation, preToolUses, consecutivePassedOver: 0, passedOver: false }
 }
 
-/**
- * Finishes one main-loop turn. A turn with tool calls and no `classic.PreToolUse` means Claude Code passed the classic
- * hook chain over this plugin, so later polls report it and the node stops authorizing permission bridging.
- */
 export function finishClassicTurn(observation: ClassicHookObservation): ClassicHookObservation {
+  if (observation.preToolUses > 0) return createClassicHookObservation()
+  const consecutivePassedOver = observation.toolUses > 0 ? observation.consecutivePassedOver + 1 : 0
   return {
     toolUses: 0,
     preToolUses: 0,
-    passedOver: observation.passedOver || (observation.toolUses > 0 && observation.preToolUses === 0),
+    consecutivePassedOver,
+    passedOver: observation.passedOver || consecutivePassedOver >= 2,
   }
 }
 

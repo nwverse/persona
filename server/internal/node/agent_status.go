@@ -146,6 +146,38 @@ func codexSpinnerTitle(title string) bool {
 // claudeFresh: how recently a Claude transcript with an open turn must have been written to count as at work.
 const claudeFresh = 45 * time.Second
 
+// claudeBlockedStaleGrace allows a real blocked request time to appear before transcript activity overrides it.
+const claudeBlockedStaleGrace = 10 * time.Second
+
+// claudeFreshWorking bounds the age of transcript activity that can heal a stale blocked status.
+const claudeFreshWorking = 45 * time.Second
+
+// claudeTranscriptWorkingOverBlocked heals a stale host status only while the transcript advances without a request.
+func (n *Node) claudeTranscriptWorkingOverBlocked(ctx context.Context, id, pane, path string, m quickMeta, blockedSince, now time.Time) bool {
+	if blockedSince.IsZero() || !m.turnOpen || m.turnClosed {
+		return false
+	}
+	latest := m.turnActivityAt
+	if latest.IsZero() {
+		latest = m.lastTextAt
+	}
+	if latest.IsZero() || !latest.After(blockedSince.Add(claudeBlockedStaleGrace)) || now.Sub(latest) >= claudeFreshWorking {
+		return false
+	}
+	if n.activeAsks.active(id) || n.ccPlugins.hasActivePermission(id) || n.allowDialog(id) != "" {
+		return false
+	}
+	if pane != "" && n.hosts != nil {
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		text, err := n.dialogScreen(rctx, pane)
+		if err != nil || screen.ParseDialog(text) != nil || screen.Choosing(text) || n.dialogOn(id, pane) != "" {
+			return false
+		}
+	}
+	return true
+}
+
 // claudeStatus is a Claude's status with its own signs of work over its host's (#2069: herdr 0.9.3 said done through a
 // whole turn started from the phone, so the app showed it as finished while it searched code). When the host says
 // done, idle or does not know:
@@ -252,7 +284,7 @@ func restingClaude(a host.Agent, status string) bool {
 	if a.Agent != "claude" || a.PaneID == "" {
 		return false
 	}
-	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.Tern && k != host.Rex && k != host.Orca {
+	if k := host.ParsePane(a.PaneID).Kind; k != host.Herdr && k != host.HerdrCore && k != host.Tern && k != host.Rex && k != host.Orca {
 		return false
 	}
 	return status == proto.StatusDone || status == proto.StatusIdle || status == proto.StatusUnknown

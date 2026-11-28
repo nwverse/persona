@@ -1,10 +1,10 @@
 import type { EngineInterface, Register } from 'claude-code'
 import {
+  AUTH_GRACE_MS,
   BASE,
   CAPABILITIES,
   PERMISSION_BODY_MOST,
   PERMISSION_GRACE_MS,
-  PERMISSION_MAX_ERRORS,
   PERMISSION_MAX_WAIT_MS,
   PERMISSION_RECONNECT_MS,
   PERMISSION_RETRY_MS,
@@ -48,7 +48,7 @@ type Engine = EngineInterface
 
 type StepEffort = { at_ms: number; level?: string; reset?: boolean }
 
-type PermissionAuth = { sock: string; session: string }
+type PermissionAuth = { sock: string; session: string; authorizedAt: number }
 
 /** Time a main-loop tool call gets to reach classic.PreToolUse before the session counts as passed over. */
 const CLASSIC_HOOK_GRACE_MS = 2_000
@@ -77,7 +77,7 @@ export const register: Register = on => {
   let permissionAuth: PermissionAuth | undefined
   let classicHooks = createClassicHookObservation()
   let classicTurn = 0
-  let wakePoll: (() => void) | undefined
+  let wakePoll: (() => Promise<void>) | undefined
   const preToolCache = createPreToolCache()
   const activePerms = new Map<string, ActivePerm>()
   let permSeq = 0
@@ -99,9 +99,9 @@ export const register: Register = on => {
       classicTurn++
       const wasPassedOver = classicHooks.passedOver
       classicHooks = finishClassicTurn(classicHooks)
-      if (classicHooks.passedOver) {
+      if (!wasPassedOver && classicHooks.passedOver) {
         permissionAuth = undefined
-        if (!wasPassedOver) wakePoll?.()
+        void wakePoll?.()
       }
     }
     try {
@@ -132,36 +132,19 @@ export const register: Register = on => {
     }
     const output = yield* next(step)
     try {
-      classicHooks = noteTurnStepToolUses(classicHooks, e.agentId, output)
-      if (e.agentId === undefined && !classicHooks.passedOver && classicHooks.toolUses > 0) {
-        void sleep($, CLASSIC_HOOK_GRACE_MS)
-          .then(() => {
-            if (
-              observingTurn !== classicTurn ||
-              classicHooks.passedOver ||
-              classicHooks.toolUses === 0 ||
-              classicHooks.preToolUses > 0
-            ) {
-              return
-            }
-            classicHooks = { ...classicHooks, passedOver: true }
-            permissionAuth = undefined
-            wakePoll?.()
-          })
-          .catch(() => {
-            // A missing clock only delays the turn.complete fallback.
-          })
-      }
+      if (observingTurn === classicTurn) classicHooks = noteTurnStepToolUses(classicHooks, e.agentId, output)
     } catch {
       // Observation never changes the step.
     }
     return output
   })
 
-  on('classic.PreToolUse', (_$, e, next) => {
+  on('classic.PreToolUse', async (_$, e, next) => {
     try {
+      const wasPassedOver = classicHooks.passedOver
       classicHooks = noteClassicPreToolUse(classicHooks, e)
       recordPreTool(preToolCache, e)
+      if (wasPassedOver) await wakePoll?.()
       return next(e)
     } catch {
       return next(e)
@@ -195,6 +178,8 @@ export const register: Register = on => {
       if (auth === undefined || sessionId === '' || auth.session !== sessionId) {
         return next(e)
       }
+      const now = await $.clock.now().catch(() => undefined)
+      if (now === undefined || now - auth.authorizedAt >= AUTH_GRACE_MS) return next(e)
       const toolName = typeof rec?.tool_name === 'string' ? rec.tool_name : ''
       if (toolName === '') return next(e)
       const agentId = typeof rec?.agent_id === 'string' ? rec.agent_id : ''
@@ -219,7 +204,6 @@ export const register: Register = on => {
       if (isToolCompleted(preToolCache, toolUseId)) {
         return next(e)
       }
-      const now = await $.clock.now().catch(() => 0)
       const reqId = `p_${now}_${++permSeq}`
       let resolveCancel!: () => void
       const cancelPromise = new Promise<'cancelled'>(resolve => {
@@ -290,11 +274,12 @@ export const register: Register = on => {
         }
 
         const startedAt = await $.clock.now().catch(() => now)
-        let errors = 0
         let connected = false
         let disconnectStartedAt: number | undefined
         while (!entry.cancelled) {
           const currentNow = await $.clock.now().catch(() => startedAt)
+          if (!connected && (permissionAuth?.session !== sessionId ||
+            currentNow - permissionAuth.authorizedAt >= AUTH_GRACE_MS)) return passthrough()
           if (currentNow - startedAt >= PERMISSION_MAX_WAIT_MS) {
             void notifyPermissionDone($, entry.sock, {
               session_id: sessionId,
@@ -332,23 +317,11 @@ export const register: Register = on => {
           if (ans.action === 'renew') {
             connected = true
             disconnectStartedAt = undefined
-            errors = 0
             continue
           }
-          // Transient error (e.g. node restarting): an initial connection fails fast; a request that already reached
-          // the node keeps retrying across the 2-minute hub reclaim window (matching nodeclient.ResumeWait).
-          if (!connected) {
-            errors++
-            if (errors >= PERMISSION_MAX_ERRORS) {
-              return passthrough()
-            }
-          } else {
-            const failNow = await $.clock.now().catch(() => currentNow)
-            if (disconnectStartedAt === undefined) disconnectStartedAt = failNow
-            if (failNow - disconnectStartedAt >= PERMISSION_RECONNECT_MS) {
-              return passthrough()
-            }
-          }
+          const failNow = await $.clock.now().catch(() => currentNow)
+          disconnectStartedAt ??= failNow
+          if (failNow - disconnectStartedAt >= PERMISSION_RECONNECT_MS) return passthrough()
           const retryWinner = await Promise.race([
             sleep($, PERMISSION_RETRY_MS).then(() => 'retry' as const),
             coreDecisionPromise,
@@ -398,8 +371,14 @@ export const register: Register = on => {
         const sessionModel = update.model !== undefined ? await $.session.model().catch(() => undefined) : undefined
         override = mergeOverride(override, session, update, sessionModel)
       },
-      auth => {
-        permissionAuth = auth
+      (sock, session, answer, now) => {
+        if (classicHooks.passedOver) return
+        if (answer.kind === 'messages' && answer.permissions) {
+          if (now !== undefined) permissionAuth = { sock, session, authorizedAt: now }
+        } else if (answer.kind !== 'unavailable' || permissionAuth?.session !== session ||
+          (now !== undefined && now - permissionAuth.authorizedAt >= AUTH_GRACE_MS)) {
+          permissionAuth = undefined
+        }
       },
     )
     return started
@@ -502,9 +481,9 @@ async function run(
   clearActiveTurn: (turnId: string) => void,
   observedEffort: (session: string) => StepEffort | undefined,
   classicPassedOver: () => boolean,
-  setWakePoll: (wake: (() => void) | undefined) => void,
+  setWakePoll: (wake: () => Promise<void>) => void,
   onSettings: (session: string, update: SettingsUpdate) => Promise<void>,
-  setPermissionAuth: (auth: PermissionAuth | undefined) => void,
+  updatePermissionAuth: (sock: string, session: string, answer: PollAnswer, now: number | undefined) => void,
 ): Promise<void> {
   const home = homeDir(await $.env.get('USERPROFILE'), await $.env.get('HOME'))
   const sock = socketPath(home, await $.env.get('PERSONA_HOME'))
@@ -516,29 +495,17 @@ async function run(
     .catch(() => '')
   let backoff = 0
   let reachable: boolean | undefined
+  let wakeRevision = 0
   let previousSession: string | undefined
   let reset: StepEffort | undefined
-  while (current()) {
+  const poll = async (waitMs: number): Promise<void> => {
     const session = await $.session.id()
     if (previousSession !== session) {
       previousSession = session
       const at = await $.clock.now().catch(() => 0)
       reset = at > 0 ? { at_ms: at, reset: true } : undefined
     }
-    setWakePoll(() => {
-      void $.http
-        .fetch(`${BASE}/poll`, post(sock, {
-          session_id: session,
-          plugin_version: pluginVersion,
-          engine_version: engineVersion,
-          capabilities: CAPABILITIES,
-          classic_passed_over: true,
-          wait_ms: 0,
-        }))
-        .catch(() => {
-          // The regular poll loop reconnects.
-        })
-    })
+    const revision = wakeRevision
     let answer: PollAnswer
     try {
       const res = await $.http.fetch(`${BASE}/poll`, post(sock, {
@@ -548,33 +515,39 @@ async function run(
         capabilities: CAPABILITIES,
         observed_effort: observedEffort(session) ?? reset,
         ...(classicPassedOver() ? { classic_passed_over: true } : {}),
-        wait_ms: POLL_WAIT_MS,
+        wait_ms: waitMs,
       }))
       answer = readPoll(res.status, res.text)
     } catch {
       answer = { kind: 'unavailable' }
     }
+    const receivedAt = await $.clock.now().catch(() => undefined)
     if (!current()) return
+    if (revision === wakeRevision) updatePermissionAuth(sock, session, answer, receivedAt)
     const now = answer.kind === 'messages'
     if (now !== reachable) {
       reachable = now
       $.ui.log(now ? 'Persona node reached' : `Persona node not reachable (${answer.kind})`, { to: 'debug' })
     }
     if (answer.kind !== 'messages') {
-      setPermissionAuth(undefined)
       backoff = answer.kind === 'refused' ? answer.retryMs : nextBackoff(backoff)
-      await sleep($, backoff)
-      continue
+      if (waitMs === POLL_WAIT_MS) await sleep($, backoff)
+      return
     }
     backoff = 0
-    setPermissionAuth(answer.permissions ? { sock, session } : undefined)
     if (answer.interrupt !== undefined) {
       await applyInterrupt($, sock, session, answer.interrupt, getActiveTurn, clearActiveTurn)
     }
     if (answer.settings !== undefined) await applySettings($, sock, session, answer.settings, onSettings)
     for (const m of answer.messages) await deliver($, sock, session, m)
-    if (answer.retryMs > 0) await sleep($, answer.retryMs)
+    if (waitMs === POLL_WAIT_MS && answer.retryMs > 0) await sleep($, answer.retryMs)
   }
+  setWakePoll(() => {
+    // A response from the previous hook state can still carry messages, but its authorization is stale.
+    wakeRevision++
+    return poll(1).catch(() => {})
+  })
+  while (current()) await poll(POLL_WAIT_MS)
 }
 
 async function fetchPermission($: Engine, sock: string, body: string): Promise<PermissionAnswer> {
