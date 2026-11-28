@@ -84,7 +84,7 @@ func (p *Proxy) runtimeFetch(w http.ResponseWriter, r *http.Request, ext string,
 		return
 	}
 	u, err := url.Parse(in.URL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || in.Method == "CONNECT" {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Hostname() == "" || u.User != nil || in.Method == "CONNECT" {
 		http.Error(w, "invalid fetch target", http.StatusBadRequest)
 		return
 	}

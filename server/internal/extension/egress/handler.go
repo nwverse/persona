@@ -61,14 +61,15 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 			hostport = r.URL.Host
 		}
-		host, port, err := net.SplitHostPort(hostport)
-		if err != nil {
-			host, port = hostport, "80"
-			if r.Method == http.MethodConnect || r.URL.Scheme == "https" {
-				port = "443"
-			}
+		defaultPort := "80"
+		if r.Method == http.MethodConnect || r.URL.Scheme == "https" {
+			defaultPort = "443"
 		}
-		host = strings.ToLower(strings.Trim(host, "[]"))
+		host, port, ok := parseRequestHostPort(hostport, defaultPort)
+		if !ok {
+			http.Error(w, "persona: invalid host or port", http.StatusBadRequest)
+			return
+		}
 		hub, local := host == HubHost, host == LocalHost
 		connect := r.Method == http.MethodConnect || r.URL.Scheme == "https"
 		var allowed, configured bool
@@ -84,10 +85,15 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 		default:
 			allowed = Matches(host, rule.Hosts)
-			if allowed && isSelfHostLiteral(host) && (p.ownPort(port) || p.hubPort(port)) {
-				allowed = false
+			selfBlocked := false
+			if allowed && (IsLoopbackHost(host) || isSelfIP(host)) {
+				if p.ownPort(port) {
+					allowed, local, selfBlocked = false, true, true
+				} else if p.hubPort(port) {
+					allowed, selfBlocked = false, true
+				}
 			}
-			if !allowed && rule.target(host, port, connect) {
+			if !allowed && !selfBlocked && rule.target(host, port, connect) {
 				if IsLoopbackHost(host) {
 					if !p.ownPort(port) && !p.hubPort(port) {
 						allowed, local = true, true
@@ -101,13 +107,13 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 			// A host the owner allowed is reached the way a settings address is (dialConfigured): never this machine
 			// by name, and each answer of its name checked (#5697).
-			if !allowed && rule.owned(host, port) && !IsLoopbackHost(host) {
+			if !allowed && !selfBlocked && rule.owned(host, port) && !IsLoopbackHost(host) {
 				allowed, configured = true, true
 			}
 		}
 		p.count(ext, host, allowed)
 		if !allowed {
-			if local && rule.Loopback() {
+			if local && (rule.Loopback() || isSelfIP(host)) {
 				p.logf("extension %s: refused %s:%s (the proxy itself)", ext, host, port)
 				http.Error(w, fmt.Sprintf("persona: %s:%s is this proxy", host, port), http.StatusForbidden)
 				return
@@ -152,19 +158,6 @@ func (p *Proxy) handler(fixed string) http.Handler {
 	})
 }
 
-// isSelfHostLiteral reports whether host is a loopback host name or a literal
-// loopback or unspecified IP address (covering 127.0.0.0/8, ::1, IPv4-mapped
-// loopback, 0.0.0.0, ::, and ::ffff:0.0.0.0).
-func isSelfHostLiteral(host string) bool {
-	if IsLoopbackHost(host) {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback() || ip.IsUnspecified()
-	}
-	return false
-}
-
 // farHost is the Host header a request for hostport goes on with: the hub's address for HubHost, the loopback (with
 // the port as written) for LocalHost, else def.
 func (p *Proxy) farHost(hostport, def string) string {
@@ -172,7 +165,7 @@ func (p *Proxy) farHost(hostport, def string) string {
 	if err != nil {
 		host, port = hostport, ""
 	}
-	switch strings.ToLower(host) {
+	switch strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), ".")) {
 	case HubHost:
 		return p.HubAddr
 	case LocalHost:
@@ -182,6 +175,57 @@ func (p *Proxy) farHost(hostport, def string) string {
 		return net.JoinHostPort("127.0.0.1", port)
 	}
 	return def
+}
+
+// parseRequestHostPort strictly parses and canonicalizes a proxy target host[:port].
+// It accepts at most one enclosing IPv6 bracket pair, at most one trailing dot, and
+// canonical decimal ports in 1..65535 (no leading zero, sign, or service name).
+func parseRequestHostPort(hostport, defaultPort string) (host, port string, ok bool) {
+	if hostport == "" {
+		return "", "", false
+	}
+	if h, p, err := net.SplitHostPort(hostport); err == nil {
+		if _, valid := parseStrictPort(p); !valid {
+			return "", "", false
+		}
+		host, port = h, p
+	} else {
+		if strings.HasPrefix(hostport, "[") && strings.HasSuffix(hostport, "]") {
+			inner := hostport[1 : len(hostport)-1]
+			if inner == "" || strings.ContainsAny(inner, "[]%") || net.ParseIP(inner) == nil {
+				return "", "", false
+			}
+			host, port = inner, defaultPort
+		} else if !strings.ContainsAny(hostport, ":[]") {
+			host, port = hostport, defaultPort
+		} else {
+			return "", "", false
+		}
+	}
+	if host == "" || strings.ContainsAny(host, "[]% \t\r\n") || strings.HasSuffix(host, "..") {
+		return "", "", false
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return "", "", false
+	}
+	return host, port, true
+}
+
+// isSelfIP reports whether host is a literal loopback or unspecified/0.0.0.0/8 IP address
+// that can route back to this machine's loopback listener.
+func isSelfIP(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() {
+		return true
+	}
+	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 0 {
+		return true
+	}
+	return false
 }
 
 func isUpgrade(r *http.Request) bool {

@@ -519,6 +519,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
             source.workspaceCatalog(names.rawMachine(machineId)).let { catalog ->
                 catalog.copy(workspaces = catalog.workspaces.map { it.copy(machineId = names.machineId(it.machineId)) })
             }
+        // Worktree actions name the hub's own machine id; their answers carry none.
+        override val worktrees = source.worktrees?.let { actions -> routedWorktreeManagement { machine -> actions to names.rawMachine(machine) } }
     }
 }
 

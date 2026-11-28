@@ -426,6 +426,8 @@ type Node struct {
 
 	// claudeV is claude's version as last asked (agentplugin.go).
 	claudeV claudeVersionCache
+	// engRep: the engines node.info said last, Orca's row as told since (orcaengine.go).
+	engRep engineReport
 	// resumeSignIn: launchers' sign-in per profile as last asked for a resume (assistant_resume_signin.go).
 	resumeSignIn resumeSignInCache
 
@@ -622,8 +624,28 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify(methodFsChanged, c) })
 	defer n.fsw.close()
+	// Bind n.runtimes and n.runtimeHost before starting any background goroutine or adopting
+	// assistants so unlocked reads of n.runtimes / n.runtimeHost never race with attach(), and
+	// listen before exposing a standalone RuntimeHost so Listen failure leaves n.runtimeHost nil.
+	var ownRuntimeHost *RuntimeHost
+	if n.runtimeHost != nil {
+		n.runtimes = n.runtimeHost.reg
+	} else {
+		if n.runtimes == nil {
+			n.runtimes = newRuntimeRegistry()
+		}
+		rh := n.newRuntimeHost()
+		if err := rh.Listen(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
+			n.logger.Printf("runtime socket: %v", err)
+		} else {
+			ownRuntimeHost = rh
+			n.runtimeHost = rh
+			defer rh.setAgyBridge(false)
+		}
+	}
 	n.cdirs.report = func(dirs []string) { _ = n.peer.Notify("claude.dirs", map[string]any{"dirs": dirs}) }
 	go n.watchClaudePlugin(ctx) // claudeplugin.go
+	go n.watchOrcaEngine(ctx)   // orcaengine.go
 	n.codices.report = func(cfg proto.CodexConfig) { _ = n.peer.Notify("codex.inventory", cfg) }
 	go n.runCodex(ctx)
 	var adopted []*assistantProc
@@ -631,17 +653,14 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
-	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach uses (clicall.go mcpAssistantOf).
+	if ownRuntimeHost != nil {
+		ownRuntimeHost.attach(n)
+		defer ownRuntimeHost.detach(n)
+	} else if n.runtimeHost != nil { // a resident node's: runtimes stay connected across hub connections
+		rh := n.runtimeHost
 		rh.attach(n)
 		defer rh.detach(n)
-	} else if rh, err := n.listenRuntimeSocket(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
-		n.logger.Printf("runtime socket: %v", err)
-	} else {
-		defer func() {
-			rh.setAgyBridge(false)
-			rh.detach(n)
-		}()
 	}
 	ln, err := n.listenHookSocket(ctx)
 	if err != nil {
@@ -2432,11 +2451,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 		over := n.turnOver(p.SessionID) // before the key: the Escape itself may end a turn
+		var qPath string
+		var qStat os.FileInfo
+		if !over {
+			if qPath = n.transcriptPath(p.SessionID); qPath != "" {
+				qStat, _ = os.Stat(qPath)
+			}
+		}
 		err := n.keys(ctx, p.SessionID, []string{"esc"}, "")
 		if err == nil && over && n.backgroundRuns(p.SessionID) {
 			// The Escape went to an idle prompt and the background work goes on: said, not claimed as an interruption
 			// (#10828). The key is pressed whatever this finds, so a turn that does run is never left running.
 			err = refusal(proto.CodeTurnOverBackground, i18n.T(i18n.From(ctx), "rpc-errors."+proto.CodeTurnOverBackground), nil)
+		} else if err == nil && !over && qPath != "" {
+			n.forgetMeta(qPath)
+			n.notifySessionsSoon()
+			if qStat != nil {
+				n.watchQueueSettle(qPath, qStat.Size(), qStat.ModTime())
+			}
 		}
 		return ok(err)
 	case "session.screen.before":
@@ -2724,11 +2756,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			limit = 80
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
-			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
+			page, more, span := f.RangeSpan(p.FromSeq, p.ThroughSeq, 1000)
 			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, false, f)
 			n.ttft.annotate(p.SessionID, page, false)
-			return map[string]any{"items": items(page), "more": more}, nil
+			return withSpan(map[string]any{"items": items(page), "more": more}, span, true), nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
@@ -3362,7 +3394,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		Version:            n.Version,
 		System:             n.system(ctx),
 		Engine:             n.engine(),
-		Engines:            n.engines(ctx, hv),
+		Engines:            n.engRep.said(n.engines(ctx, hv)),
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramsInfo(),

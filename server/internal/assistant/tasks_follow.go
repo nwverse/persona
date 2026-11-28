@@ -812,9 +812,11 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		s.taskInboxTurnEnded(cctx, t, last, items, false)
 	}
 	// The whole last reply, as Markdown: the session list's last_text is one line cut at 200 characters.
-	text := strings.TrimSpace(last.LastText)
 	_, answer := turnExchange(items)
-	text = cmp.Or(answer, text)
+	text := answer
+	if text == "" && !isUnlinkedAgyPane(last, items) {
+		text = strings.TrimSpace(last.LastText)
+	}
 	// A paged reply may have lost its tail (the file lines and the closeout are there): read the whole item.
 	text = s.taskAnswer(cctx, last.MachineID, last.SessionID, items, text)
 	if current, ok := s.todoNow(t.ID); !ok || current.Cancelled() || current.AgentAborted(machine, sid) {

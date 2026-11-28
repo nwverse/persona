@@ -34,9 +34,13 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 	ip := net.ParseIP(host)
 	if ip != nil {
 		if p.isSelfService(ip, port) {
-			return nil, fmt.Errorf("%s %w", host, errInternal)
+			return nil, fmt.Errorf("%s:%s %w", host, port, errInternal)
 		}
-		if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
+		up, err := upstream(&url.URL{Scheme: "https", Host: target})
+		if err != nil {
+			return nil, err
+		}
+		if up != nil {
 			return p.connectVia(ctx, up, target)
 		}
 		return p.dial(ctx, "tcp", target) // named as it is in its permissions (Matches)
@@ -68,7 +72,11 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 	if len(ok) == 0 {
 		return nil, last
 	}
-	if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
+	up, err := upstream(&url.URL{Scheme: "https", Host: target})
+	if err != nil {
+		return nil, err
+	}
+	if up != nil {
 		// Only a checked answer reaches the upstream, and only as a numeric address: the proxy never sees
 		// the name and cannot resolve it again to somewhere forbidden (#4353).
 		return dialRace(ctx, ok, port, func(ctx context.Context, target string) (net.Conn, error) {

@@ -61,6 +61,9 @@ type orcaHost struct {
 	made      map[string]orcart.Terminal
 	rekeyed   map[string]string
 	agentTabs map[string]orcaStartTerminal
+	// missing are the methods the runtime missingIn (its id) answered method_not_found to (hostorca_panes.go).
+	missing   map[string]bool
+	missingIn string
 }
 
 // track remembers a terminal this host created (h.mu held), to find it by handle if Orca re-keys it.
@@ -203,9 +206,13 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	if fresh && l.Truncated {
 		return nil, nil, orcart.ErrPartial // a terminal left out could be an agent's
 	}
+	var named []orcart.Tab
+	if layouts {
+		named = h.namedTabs(ctx, l.Tabs) // the names renames gave them (hostorca_panes.go)
+	}
 	h.mu.Lock()
 	if layouts {
-		h.tabs, h.tabsAt, h.topology = l.Tabs, time.Now(), orcaTopology(l)
+		h.tabs, h.tabsAt, h.topology = named, time.Now(), orcaTopology(l)
 	}
 	tabs := h.tabs
 	h.mu.Unlock()
@@ -377,9 +384,13 @@ func (v *orcaView) layout() *host.Layout {
 		l.Spaces = append(l.Spaces, host.Space{ID: id, Label: orcaSpaceLabel(branch, path), Number: len(l.Spaces) + 1,
 			Cwd: path, Branch: strings.TrimPrefix(branch, "refs/heads/"), ParentID: orcaParent(id, parent)})
 	}
-	// Orca's sidebar order (worktree.ps), then any worktree only the terminals name.
+	// Orca's sidebar order (worktree.ps), then any worktree only the terminals name. A worktree on an SSH target is not
+	// this computer's (its terminals are left out too): every action here needs a local one, and that computer's node
+	// lists it (#17050).
 	for _, w := range v.trees {
-		addSpace(w.WorktreeID, w.Path, w.Branch, w.ParentWorktreeID)
+		if localComposerWorkspace(w) {
+			addSpace(w.WorktreeID, w.Path, w.Branch, w.ParentWorktreeID)
+		}
 	}
 	for _, t := range v.terms {
 		addSpace(t.WorktreeID, t.WorktreePath, t.Branch, "")
@@ -435,7 +446,7 @@ func (h *orcaHost) Spaces(ctx context.Context) ([]host.Space, error) {
 		}
 	}
 	for _, w := range trees {
-		if w.WorktreeID != "" {
+		if w.WorktreeID != "" && localComposerWorkspace(w) { // an SSH target's is that computer's (#17050)
 			out = append(out, host.Space{ID: w.WorktreeID, Label: orcaSpaceLabel(w.Branch, w.Path),
 				Number: len(out) + 1, Cwd: w.Path, Branch: strings.TrimPrefix(w.Branch, "refs/heads/"), ParentID: orcaParent(w.WorktreeID, w.ParentWorktreeID), DisplayName: w.DisplayName,
 				ProjectID: orcaProjectID(w), ProjectName: w.Repo, ProjectPath: projectPaths[orcaProjectID(w)], IsMain: w.IsMain,

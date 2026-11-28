@@ -327,7 +327,7 @@ describe("useChannelController", () => {
     expect(latest.loading).toBe(false);
   });
 
-  it("shares the write lock with routing and discards a routing reply after reload", async () => {
+  it("shares the write lock with routing and acknowledges the write when a reload races it", async () => {
     await act(async () => root.render(<Harness channelId="alpha" />));
     const plugin = makeDetail("alpha", { source: "plugin", thread_mode: "channel_default" });
     await act(async () => hub.asked.shift()!.answer(plugin));
@@ -344,15 +344,17 @@ describe("useChannelController", () => {
     act(() => { void latest.load(); });
     const fresh = { ...plugin, thread_idle_hours: 72 };
     await act(async () => hub.asked.shift()!.answer(fresh));
+    const committed = { ...plugin, thread_mode: "per_topic" } satisfies ChannelDetail;
     await act(async () => {
-      put.answer({ ...plugin, thread_mode: "per_topic" });
-      expect(await routing).toBeNull();
+      put.answer(committed);
+      expect(await routing).toEqual(committed);
     });
-    expect(latest.detail).toEqual(fresh);
     expect(latest.busy).toBe("");
     const reconcile = hub.asked.shift()!;
     expect(reconcile.kind).toBe("get");
+    expect(latest.detail).toEqual(committed);
     await act(async () => reconcile.answer(fresh));
+    expect(latest.detail).toEqual(fresh);
     expect(await save({ thread_mode: "per_topic" })).toBeNull();
     expect(hub.asked).toHaveLength(0);
 
