@@ -74,6 +74,7 @@ afterEach(async () => {
   seed(before);
   localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("To-dos grouped by 常驻", () => {
@@ -560,10 +561,16 @@ describe("To-dos grouped by 常驻", () => {
     expect(allGroups[2].textContent).toContain(t("todos.direction_uncategorized"));
     expect(allGroups[2].textContent).toContain("Loose Done");
 
-    // Clicking Uncategorized header jump filters cleanly to "__uncategorized__".
+    // The Uncategorized jump still filters and scrolls straight there when motion is reduced.
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      addEventListener() {},
+      removeEventListener() {},
+    }));
     const uncatJumpAfter = sections().find((s) => s.dataset.group === "direction:secretary")!.querySelector<HTMLButtonElement>("[data-testid=todo-direction-review-done]")!;
     await act(async () => uncatJumpAfter.click());
     await flush();
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: "auto", block: "nearest" });
     expect(chips().find((c) => c.dataset.directionId === "__uncategorized__")?.getAttribute("aria-pressed")).toBe("true");
     const uncatGroups = [...host.querySelectorAll<HTMLElement>("[data-testid=todos-done-direction-group]")];
     expect(uncatGroups).toHaveLength(1);

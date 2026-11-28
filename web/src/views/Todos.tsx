@@ -89,6 +89,7 @@ import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { FoldAllButton } from "../ui/FoldAllButton";
 import { SESSION_LIST_STYLE } from "../ui/list-metrics";
+import { scrollBehavior } from "../ui/stream/motion";
 import { formatDate, t } from "../i18n";
 import { groupTodosByProject, treeStateLabel, type TodoProjectGroup, type TreeState } from "../lib/todo-tree";
 import { cancellationReason, formatAgentSource, formatTodoContext } from "../lib/todo-details";
@@ -935,7 +936,7 @@ function TodoListView({
 
   useEffect(() => {
     if (doneScrollSeq === 0) return;
-    doneFoldRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+    doneFoldRef.current?.scrollIntoView?.({ behavior: scrollBehavior(), block: "nearest" });
   }, [doneScrollSeq]);
 
   // open to-dos no 常驻 section lists: the hub nests a worker's to-do under its leader's Agent instead of listing it

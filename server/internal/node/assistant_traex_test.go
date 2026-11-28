@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -147,7 +148,7 @@ func TestTraexInboxFullAccessKeepsPersonaToolGates(t *testing.T) {
 		yes := true
 		return proto.Resolution{Allow: &yes}
 	}
-	for i, server := range []string{"external", "jarvis", "persona"} {
+	for i, server := range []string{"external", compat.MCPServer, "persona"} {
 		reply := f.request(i+1, "mcpServer/elicitation/request", map[string]any{
 			"serverName": server, "_meta": map[string]any{"codex_approval_kind": "mcp_tool_call"},
 		})
