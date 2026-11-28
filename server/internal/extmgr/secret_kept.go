@@ -346,16 +346,18 @@ func (ps *extensions) retainExtensionSecrets(ctx context.Context, id string, ref
 		return
 	}
 	ps.h.loadKept(ctx)
-	if ps.kept.forget(func(key keptKey, _ keptSecret) bool {
+	// Not revoking: every start of every extension comes here, and one that drops nothing must not turn away a value
+	// resolved meanwhile (a launcher's, another extension's).
+	if ps.kept.editGen(false, func(key keptKey, _ *keptSecret) bool {
 		if key.kind != "extension" || key.id != id {
-			return false
+			return true
 		}
 		for _, ref := range references {
 			if ref == key.reference {
-				return false
+				return true
 			}
 		}
-		return true
+		return false
 	}) {
 		ps.h.saveKept(ctx)
 	}
