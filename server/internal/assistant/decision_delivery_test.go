@@ -17,10 +17,11 @@ import (
 )
 
 // Drive the real ask-answer route: the card must describe the relay result, not guess it from the answer's spelling.
-func TestCheckDecisionWordsCardDelivery(t *testing.T) {
+func TestDecisionTextCardDelivery(t *testing.T) {
 	needsLarkLayer(t)
 	for _, tc := range []struct {
 		name, kind, supervisor string
+		check                  bool
 		stop                   func(*fakeHub)
 		status                 int
 	}{
@@ -35,23 +36,29 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 		}, status: http.StatusOK},
 		{name: "retryable refusal", stop: func(f *fakeHub) { f.mu.Lock(); f.failSend = errors.New("temporary network break"); f.mu.Unlock() }, status: http.StatusBadGateway},
 		{name: "words equal an option", kind: "label", status: http.StatusOK},
-		{name: "recommended option", kind: "recommended", status: http.StatusOK},
-		{name: "other option", kind: "option", status: http.StatusOK},
+		{name: "check words", check: true, status: http.StatusOK},
+		{name: "recommended option", kind: "recommended", check: true, status: http.StatusOK},
+		{name: "other option", kind: "option", check: true, status: http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := todoTestDB(t)
 			s, f, todo, _, _ := conclusionServiceOn(t, database, false)
 			ctx := context.Background()
-			s.todoAskAfter = time.Nanosecond
 			s.superviseTimes.gather = time.Hour
-			task := todoProgressTask(todo.ID)
-			setTasks(s, task)
-			assessTodoBaseline(t, s, task.ID)
-			assessTodoRun(t, s, task.ID, nil)
-			assessTodoRun(t, s, task.ID, nil)
+			if tc.check {
+				s.todoAskAfter = time.Nanosecond
+				task := todoProgressTask(todo.ID)
+				setTasks(s, task)
+				assessTodoBaseline(t, s, task.ID)
+				assessTodoRun(t, s, task.ID, nil)
+				assessTodoRun(t, s, task.ID, nil)
+			} else {
+				waitsForReview(t, s, f, todo.ID, "The owner needs to choose.")
+				reviewTask(t, s, todo.ID, rolloutDecision())
+			}
 			a := askOf(s, todo.ID)
-			if a == nil || a.Check != task.ID {
-				t.Fatalf("check ask: %+v", a)
+			if a == nil || (a.Check != "") != tc.check {
+				t.Fatalf("ask: %+v, want check = %v", a, tc.check)
 			}
 			agentAtWork(f, todo)
 			if tc.supervisor != "" {
@@ -71,6 +78,9 @@ func TestCheckDecisionWordsCardDelivery(t *testing.T) {
 			words := "Run only the unit tests first, then look again"
 			input := map[string]string{"text": words}
 			wantKey, delivered, sends := "assistant-reports.decision_chosen_noted", "", 1
+			if tc.check {
+				wantKey, sends = "assistant-reports.decision_chosen_for_supervisor", 0
+			}
 			switch tc.kind {
 			case "label":
 				words = a.Options[1].Label

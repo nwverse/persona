@@ -826,7 +826,7 @@ export async function sendRouted(conversation: string, text: string): Promise<bo
   const askedAt = typeof route === "object" ? route.askedAt : undefined;
   const res = await api<{ item: FeedItem }>(`/assistant/conversations/${enc(conversation)}/route`, { method: "POST", json: { todo_id: todoId, text, ...(askedAt ? { asked_at: askedAt } : {}) } });
   if (st.routes[conversation] === route) setRoute(conversation, null);
-  if (res.item) received([res.item]);
+  if (res.item?.id) received([res.item]);
   if (askedAt) void refreshTodos();
   return true;
 }

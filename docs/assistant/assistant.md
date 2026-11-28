@@ -1563,12 +1563,13 @@ says the choice went to the supervisor) and an exact option the owner names in t
 hears only what the supervisor then sends it, and the card says the choice went to the supervisor. An answer already
 in the Agent's chat (named there, or `task_decided` with `told_agent`) tells the supervisor the Agent has it rather
 than "not told", and its card names the option without saying the Agent did not get it. An answer in the owner's own
-words still goes the ordinary way, to the Agent with no `check` signal, and its card says so. Choosing another
+words also goes to the supervisor as a `check` signal after it is recorded. The conversation route returns an empty
+feed item, and the card shows the answer as recorded for supervisor follow-up. Choosing another
 approach asks the supervisor for a proposal within existing permissions, not permission to spend, send or widen
 scope. The decision's 24-hour deadline only revisits it; the hub never applies the proposed strategy change by
 default. Existing notification preferences still apply.
 For a worker supervised by a task-leader Agent, the conversation above that leader reviews the decision through
-its existing authority and receives the owner's option; the worker stays supervised by its leader.
+its existing authority and receives the owner's answer. The worker stays supervised by its leader.
 Another pending owner decision is never overwritten; a failed escalation is retried on a later assessment.
 The first escalation attempt's run identity is saved with the assessment before creating its review. If the
 review succeeded but the final escalation-marker write failed, later assessments or restart replays recognize

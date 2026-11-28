@@ -176,33 +176,19 @@ func TestDecisionChatCheckedRoutingKeepsDismissal(t *testing.T) {
 	}
 	before := s.reviewDismissals.byTodo[todo.ID]
 	asked := askOf(s, todo.ID).AskedAt
-	h := &conclusionLookupHub{fakeHub: f, entered: make(chan struct{}), release: make(chan struct{})}
-	setHub(s, h)
-	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), conclusionLookupKey{}, true), 5*time.Second)
+	f.mu.Lock()
+	f.afterList = map[string]func(){todo.Agents[0].MachineID: func() {
+		at := asked.Add(time.Second)
+		s.todos.mu.Lock()
+		s.todos.todos[todo.ID].ReopenedAt = &at
+		s.todos.mu.Unlock()
+	}}
+	f.mu.Unlock()
+	ctx, cancel := context.WithTimeout(listHooked(t.Context()), 5*time.Second)
 	defer cancel()
-	done := make(chan error, 1)
 	sent := len(sentToAgent(f))
-	go func() {
-		_, err := s.routeDecisionAnswer(ctx, "conv1", todo.ID, asked.Format(timeKeyLayout), "Use the alternative.")
-		done <- err
-	}()
-	select {
-	case <-h.entered:
-	case <-ctx.Done():
-		t.Fatal("answer did not reach session lookup")
-	}
-	s.todos.mu.Lock()
-	at := asked.Add(time.Second)
-	s.todos.todos[todo.ID].ReopenedAt = &at
-	s.todos.mu.Unlock()
-	close(h.release)
-	select {
-	case err := <-done:
-		if !errors.Is(err, db.ErrTodoCompleted) {
-			t.Fatalf("checked routing: %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatal("answer did not return after session lookup")
+	if _, err := s.routeDecisionAnswer(ctx, "conv1", todo.ID, asked.Format(timeKeyLayout), "Use the alternative."); !errors.Is(err, db.ErrTodoCompleted) {
+		t.Fatalf("checked routing: %v", err)
 	}
 	assertAnswerDismissal(t, s, database, todo.ID, before)
 	if len(sentToAgent(f)) != sent {

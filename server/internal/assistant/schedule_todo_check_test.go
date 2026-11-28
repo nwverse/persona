@@ -3,10 +3,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -452,40 +456,75 @@ func TestScheduledTodoCheckDecisionAnsweredOffTheCard(t *testing.T) {
 	}
 }
 
-// The owner's own words answering the check's decision go to its Agent, as any decision's do, and its supervisor gets
-// no check signal for them: the card says they went to the Agent, not to the supervisor (#11705 review).
-func TestScheduledTodoCheckDecisionInWordsGoesToItsAgent(t *testing.T) {
-	database := todoTestDB(t)
-	s, f, todo := newSupervisedServiceOn(t, database)
-	ctx := context.Background()
-	s.todoAskAfter = time.Nanosecond
-	s.superviseTimes.gather = time.Hour
-	task := todoProgressTask(todo.ID)
-	setTasks(s, task)
-	assessTodoBaseline(t, s, task.ID)
-	assessTodoRun(t, s, task.ID, nil)
-	assessTodoRun(t, s, task.ID, nil)
-	if a := askOf(s, todo.ID); a == nil || a.Check != task.ID {
-		t.Fatalf("the check's decision is not marked as the check's: %+v", a)
-	}
-	agentAtWork(f, todo)
-	sent := len(sentToAgent(f))
-	words := "Run only the unit tests first, then look again"
-	if result, err := s.answerDecisionText(ctx, todo.ID, "", words); err != nil || !result.taken || result.undelivered != nil {
-		t.Fatalf("the owner's words were not taken: %+v %v", result, err)
-	}
-	if got := sentToAgent(f)[sent:]; len(got) != 1 || !strings.Contains(got[0], words) {
-		t.Fatalf("the owner's words did not reach the Agent: %q", got)
-	}
-	for _, g := range pendingFor(s, todo.ID) {
-		if g.Kind == sigCheck && g.Report == checkDecidedReport {
-			t.Fatalf("the supervisor was handed the words as the check's decision: %+v", g)
-		}
-	}
-	lang := s.botLang(ctx)
-	want := i18n.T(lang, "assistant-reports.decision_chosen_noted", i18n.Args{"option": words})
-	if note := acceptedNote(lang, askOf(s, todo.ID)); note != want {
-		t.Fatalf("the card says %q, want %q", note, want)
+func TestScheduledTodoCheckDecisionTextGoesToSupervisor(t *testing.T) {
+	for _, route := range []string{"asks", "conversation", "feishu"} {
+		t.Run(route, func(t *testing.T) {
+			if route == "feishu" {
+				needsLarkLayer(t)
+			}
+			database := todoTestDB(t)
+			s, f, todo, _, _ := conclusionServiceOn(t, database, false)
+			ctx := t.Context()
+			s.todoAskAfter = time.Nanosecond
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			task := todoProgressTask(todo.ID)
+			setTasks(s, task)
+			assessTodoBaseline(t, s, task.ID)
+			assessTodoRun(t, s, task.ID, nil)
+			assessTodoRun(t, s, task.ID, nil)
+			a := askOf(s, todo.ID)
+			if a == nil || a.Check != task.ID {
+				t.Fatalf("the check's decision is not marked as the check's: %+v", a)
+			}
+			agentAtWork(f, todo)
+			sent := len(sentToAgent(f))
+			const words = "Run only the unit tests first, then look again"
+			asked := a.AskedAt.Format(timeKeyLayout)
+			switch route {
+			case "asks":
+				if result, err := s.answerDecisionText(ctx, todo.ID, asked, words); err != nil || !result.taken || result.undelivered != nil {
+					t.Fatalf("the owner's words were not taken: %+v %v", result, err)
+				}
+			case "conversation":
+				raw, _ := json.Marshal(map[string]string{"todo_id": todo.ID, "text": words, "asked_at": asked})
+				w := httptest.NewRecorder()
+				s.ServeHTTP(w, httptest.NewRequestWithContext(ctx, "POST", "/api/v1/assistant/conversations/"+todo.Origin+"/route", strings.NewReader(string(raw))))
+				if w.Code != http.StatusOK {
+					t.Fatalf("conversation answer: %d %s", w.Code, w.Body)
+				}
+				var response struct{ Item *FeedItem }
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || response.Item == nil || response.Item.ID != "" {
+					t.Errorf("an answer for the supervisor should have no routed feed item: %s (%v)", w.Body, err)
+				}
+			case "feishu":
+				if a.MessageID == "" {
+					t.Fatal("the check did not post a Feishu card")
+				}
+				var ev botcard.MessageEvent
+				ev.Message.ChatType, ev.Message.ParentID, ev.Message.MessageType = "p2p", a.MessageID, "text"
+				ev.Message.MessageID = "om_check_answer"
+				raw, _ := json.Marshal(map[string]string{"text": words})
+				ev.Message.Content = string(raw)
+				feishuSay(t, s, f, nil, ev, "")
+			}
+			if got := sentToAgent(f)[sent:]; len(got) != 0 {
+				t.Errorf("the owner's answer went to the Agent at work: %q", got)
+			}
+			rows, err := database.ListTodoDecisions(ctx, todo.ID, false)
+			if err != nil || len(rows) != 1 || rows[0].Source != db.DecisionManual ||
+				rows[0].Question != a.Reason || rows[0].Choice != words || rows[0].SourceMessage != "" {
+				t.Errorf("manual decision: %+v, %v", rows, err)
+			}
+			s.supervise.mu.Lock()
+			g, ok := s.supervise.pending[todo.ID+"|"+sigCheck+":"+checkDecidedReport]
+			s.supervise.mu.Unlock()
+			if !ok || g.Detail != words || g.Told || g.Decision == nil {
+				t.Errorf("the supervisor was not handed the owner's words: %+v", g)
+			}
+			if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() || got.Chosen != words || got.TextDelivery != decisionTextRecorded {
+				t.Errorf("the answer was not closed as recorded for the supervisor: %+v", got)
+			}
+		})
 	}
 }
 

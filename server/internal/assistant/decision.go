@@ -464,7 +464,7 @@ func (s *Service) chooseOptionLocked(ctx context.Context, id, asked, label strin
 }
 
 // routeDecisionAnswer is an explicitly addressed chat answer, not an inference from arbitrary conversation text.
-// The original round fences stale tabs; only a delivered, recorded answer ends the pending decision.
+// The original round fences stale tabs. A recurring check's answer is recorded for the supervisor and returns no routed item.
 func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, asked, text string) (FeedItem, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
@@ -487,9 +487,9 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 }
 
 // answerDecisionText is the owner's own words answering task id's decision (asked: its round) from the asks route
-// (todo_asks_routes.go), which names no conversation: the words go where the hub's other relays to the task go, and
-// words no Agent can receive are still the owner's answer, recorded and handed to the supervisor as a chosen option
-// is (result.undelivered). A zero result means the round is over.
+// (todo_asks_routes.go), which names no conversation. A recurring check's answer goes to the supervisor. Other words
+// go where the hub's relays to the task go. If no Agent can receive them, the answer is recorded and handed to the
+// supervisor (result.undelivered). A zero result means the round is over.
 func (s *Service) answerDecisionText(ctx context.Context, id, asked, text string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
@@ -513,10 +513,10 @@ func (s *Service) answerDecisionText(ctx context.Context, id, asked, text string
 	return result, err
 }
 
-// answerDecisionTextLocked answers task t's decision with text, its caller holding t's action lock: relayed to its
-// Agent in its origin conversation (none for a to-do no conversation opened, as chooseOption relays), recorded as a
-// manual decision whose source is the routed item, the round ended. undeliverable: words no Agent can take are
-// recorded and handed to the supervisor instead of failing. A zero result means the round is over.
+// answerDecisionTextLocked records the owner's text and ends the round under t's action lock. For a recurring check
+// it signals the supervisor. For an ordinary decision it relays to the Agent, using the routed item as the record's
+// source. If undeliverable is true, words no Agent can take are recorded for the supervisor. A zero result means
+// the round is over.
 func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t Todo, asked, text string, undeliverable bool) (FeedItem, acceptResult, error) {
 	id := t.ID
 	a, err := s.askRound(id, asked)
@@ -532,21 +532,25 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 		return FeedItem{}, acceptResult{}, err
 	}
 	s.deadlineAnswered(ctx, id, a.AskedAt)
-	item, sendErr := s.routeToTaskChecked(ctx, t.Origin, id, text, func(cur Todo) bool {
-		return cur.DoneAt == nil && !acceptAskStale(a, cur)
-	})
-	if sendErr != nil {
-		if !undeliverable || !noAgentCanTake(sendErr) {
-			return FeedItem{}, acceptResult{}, sendErr
+	var item FeedItem
+	var sendErr error
+	if a.Check == "" {
+		item, sendErr = s.routeToTaskChecked(ctx, t.Origin, id, text, func(cur Todo) bool {
+			return cur.DoneAt == nil && !acceptAskStale(a, cur)
+		})
+		if sendErr != nil {
+			if !undeliverable || !noAgentCanTake(sendErr) {
+				return FeedItem{}, acceptResult{}, sendErr
+			}
+			s.logf("task %s: decision in words to agent: %v", id, sendErr)
 		}
-		s.logf("task %s: decision in words to agent: %v", id, sendErr)
 	}
 	at := decisionNow()
 	row := db.TodoDecisionRow{ID: "dec_" + randomHex(8), TodoID: id,
 		Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")),
 		Choice:   decisionText(text), Source: db.DecisionManual, SourceMessage: item.ID, CreatedAt: at}
 	if _, err := s.insertDecision(ctx, st, row); err != nil {
-		if sendErr == nil { // its Agent has the words: say so, never "nothing was taken" (the to-do may be gone by now)
+		if a.Check == "" && sendErr == nil { // The Agent already has the words.
 			err = wordsSent{err}
 		}
 		return FeedItem{}, acceptResult{}, err
@@ -555,10 +559,14 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	s.decisionsChanged(ctx, id, at)
 	result := acceptSucceeded()
 	delivery := decisionTextAgent
-	if sendErr != nil {
+	switch {
+	case a.Check != "":
+		delivery = decisionTextRecorded
+		s.checkDecided(ctx, t, a, row.Choice, false)
+	case sendErr != nil:
 		delivery = decisionTextRecorded
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
-	} else {
+	default:
 		s.userDecided(ctx, id)
 	}
 	s.endAskWithTextDelivery(ctx, id, a.AskedAt, "", row.Choice, delivery)

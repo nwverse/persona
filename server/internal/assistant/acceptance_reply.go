@@ -22,9 +22,9 @@ import (
 // negations ("not passed", "can't pass", "no good") never match because the regex anchors on the approval word.
 var passWords = lazyre.New(`(?i)^\s*(验收)?(通过|没问题|可以|好的?|ok|okay|lgtm|pass(ed)?|approved?|👍)(?:[了啦呀咯喽呗哒啊]{1,2})?\s*[。.!！]?\s*$`)
 
-// conclusionQuestion handles free text on a conclusion before acceptance can take it as an answer. A displayed
-// option or bare confirmation continues through the existing reply path. Other text is a conversation with the
-// supervisor, so the card, its deadline and the task's decisions are untouched.
+// conclusionQuestion handles discussion on a conclusion. A displayed option or bare confirmation continues through
+// the reply path, as do answers in the owner's own words to a recurring check. Discussion goes to the supervisor
+// and leaves the card, its deadline and the task's decisions untouched.
 func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEvent, content *botcard.Content, features FeishuFeatures) bool {
 	msg := ev.Message
 	id, earlier := s.acceptFor(msg.ParentID, msg.RootID)
@@ -43,6 +43,9 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 		if decideAsk(&ask) {
 			if option := exactDecisionOption(text, ask.Options); option != "" {
 				content.Text = option
+				return false
+			}
+			if ask.Check != "" {
 				return false
 			}
 		}
@@ -77,8 +80,8 @@ func (s *Service) conclusionQuestion(ctx context.Context, ev *botcard.MessageEve
 
 // acceptReply answers a reply to a "Please verify" card or a conclusion's (true: it was one): "Pass" marks it verified (a
 // decision: takes the option recommended), anything else is the user's change (a decision: their choice), written into the
-// todo's decisions and sent to its agent. media: the reply also carried pictures or files; only the words go on, and the
-// answer says the rest did not (#5107).
+// todo's decisions. A recurring check's answer goes to the supervisor. Other replies go to the task's Agent.
+// When the reply also carried pictures or files, only the words go on and the note says so (#5107).
 func (s *Service) acceptReply(ctx context.Context, messageID, text string, media bool, ids ...string) bool {
 	id, earlier := s.acceptFor(ids...)
 	if id == "" {
@@ -136,8 +139,8 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 		}
 		return true
 	}
-	// Outside decision replies take the task's action lock in answerDecisionText.
-	if decideAsk(&ask) && ask.OutsideID != "" {
+	// The shared text path locks the task and records replies that need no Agent relay.
+	if decideAsk(&ask) && (ask.OutsideID != "" || ask.Check != "") {
 		result, err := s.answerDecisionText(ctx, id, ask.AskedAt.UTC().Format(timeKeyLayout), text)
 		switch {
 		case errors.Is(err, errAcceptStore):
@@ -146,8 +149,11 @@ func (s *Service) acceptReply(ctx context.Context, messageID, text string, media
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.accept_not_taken", i18n.Args{"error": clip(oneLine(i18n.Localize(err, l)), 120)}))
 		case !result.taken:
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-feishu_cards.already_handled"))
-		default:
+		case ask.OutsideID != "":
 			s.chat().Note(ctx, larkhost.Target{}, messageID, i18n.T(l, "assistant-reports.outside_answered"))
+		default:
+			note := i18n.T(l, "assistant-reports.decision_chosen_for_supervisor", i18n.Args{"option": decisionText(text)})
+			s.chat().Note(ctx, larkhost.Target{}, messageID, withMediaDropped(l, note, media))
 		}
 		return true
 	}
