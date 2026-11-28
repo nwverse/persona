@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
@@ -1154,6 +1155,10 @@ func (t *PlanTask) planStartTimeout() time.Duration {
 	}
 	if t.containerWorkspace() {
 		repositories = max(repositories, len(t.Workspace.Container.SelectedRepoIDs))
+	}
+	if repositories == 0 && t.WorkspaceResolved == nil && t.backendOperationID() != "" {
+		// Admission loads an unresolved operation's frozen repository set after the start deadline is set.
+		repositories = repositorywire.MaxTaskRepositories
 	}
 	if repositories == 0 {
 		return taskStartTimeout

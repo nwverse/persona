@@ -648,6 +648,54 @@ func TestTaskPlanContainerUsesOnDemandRepoMirror(t *testing.T) {
 }
 
 func TestTaskPlanColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
+	testTaskColdMirrorTimeoutFallsBackAndLaunches(t, 2, func(t *testing.T, h *containerTestHarness) string {
+		ctx := t.Context()
+		args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repositories","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web","repo_api"]}}}]}`
+		if _, err := h.s.toolTaskPlan(ctx, "mirror-chat", json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+		p := readonlyFeedPlan(t, h.s, "mirror-chat")
+		if _, err := h.s.startPlan(ctx, p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		return p.Tasks[0].ReservedTodoID
+	})
+}
+
+func TestSavedBackendTaskColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
+	testTaskColdMirrorTimeoutFallsBackAndLaunches(t, 1, func(t *testing.T, h *containerTestHarness) string {
+		ctx := t.Context()
+		const planID, operationID, conversation = "plan_backend", "op_saved_backend", "mirror-chat"
+		repos := []string{"repo_web"}
+		todo, err := h.s.createTaskTodoWithRepositories(ctx, "todo_backend", "Prepare workspace", "Update the example repository", conversation, planID, "", "", repos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.ensureBackendWorkspacePlan(ctx, todo.ID, namingRequest{
+			OperationID: operationID, MachineID: "box", Layout: repository.LayoutRoot, SelectedRepoIDs: repos,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// The saved operation can be admitted even if the task plan has no workspace preview.
+		task := PlanTask{TodoID: todo.ID, Machine: "box", Title: todo.Title, Prompt: todo.Notes, Role: "worker",
+			Workspace: &TaskWorkspace{Mode: workspaceBackend, Backend: &BackendWorkspaceSelection{OperationID: operationID}}}
+		now := time.Now().UTC()
+		plan := &TaskPlan{ID: planID, Conversation: conversation, Tasks: []PlanTask{task}, State: planStarted, CreatedAt: now, UpdatedAt: now}
+		if err := h.s.savePlan(ctx, plan); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.s.failTodo(ctx, todo.ID, "Previous start was interrupted."); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.s.retryTask(ctx, todo.ID); err != nil {
+			t.Fatal(err)
+		}
+		return todo.ID
+	})
+}
+
+func testTaskColdMirrorTimeoutFallsBackAndLaunches(t *testing.T, mirrors int, start func(*testing.T, *containerTestHarness) string) {
+	t.Helper()
 	// Keep the harness's local model listener outside the virtual clock.
 	h := newWorkspaceTestHarness(t, newMemRepoMirrorStore())
 	// Disable the Agent's background tab naming so it cannot open a real network connection in the bubble.
@@ -682,22 +730,14 @@ func TestTaskPlanColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
 			return out, err
 		}})
 
-		ctx := t.Context()
-		args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repositories","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web","repo_api"]}}}]}`
-		if _, err := h.s.toolTaskPlan(ctx, "mirror-chat", json.RawMessage(args)); err != nil {
-			t.Fatal(err)
-		}
-		p := readonlyFeedPlan(t, h.s, "mirror-chat")
-		if _, err := h.s.startPlan(ctx, p.ID, nil, false); err != nil {
-			t.Fatal(err)
-		}
+		todoID := start(t, h)
 		select {
 		case <-launched:
 		case <-time.After(45 * time.Minute):
 			t.Errorf("agent did not launch after a direct workspace prepare")
 		}
 		synctest.Wait()
-		if want := []time.Duration{11 * time.Minute, 11 * time.Minute}; !slices.Equal(mirrorWaits, want) {
+		if want := slices.Repeat([]time.Duration{11 * time.Minute}, mirrors); !slices.Equal(mirrorWaits, want) {
 			t.Errorf("mirror attempts waited %v, want %v", mirrorWaits, want)
 		}
 		h.mu.Lock()
@@ -705,7 +745,7 @@ func TestTaskPlanColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
 		if h.prepareCalls != 1 || len(h.lastPrepare.MirrorRepos) != 0 {
 			t.Errorf("workspace prepare calls = %d, supplied mirrors = %v, want one direct prepare", h.prepareCalls, h.lastPrepare.MirrorRepos)
 		}
-		if todo, ok := h.s.todoNow(p.Tasks[0].ReservedTodoID); !ok || len(todo.Agents) != 1 {
+		if todo, ok := h.s.todoNow(todoID); !ok || len(todo.Agents) != 1 {
 			t.Errorf("expected one agent linked to the task, found %d (%s)", len(todo.Agents), todo.StartError)
 		}
 	})

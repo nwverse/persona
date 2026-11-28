@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 )
 
 func TestPlanStartTimeout(t *testing.T) {
@@ -29,6 +30,18 @@ func TestPlanStartTimeout(t *testing.T) {
 		if got := task.planStartTimeout(); got <= minimum {
 			t.Errorf("%s workspace timeout = %v, want more than %v for two mirrors, workspace RPCs and the agent start", name, got, minimum)
 		}
+	}
+	saved := PlanTask{Workspace: &TaskWorkspace{
+		Mode:    workspaceBackend,
+		Backend: &BackendWorkspaceSelection{OperationID: "op_saved"},
+	}}
+	minimum = repositorywire.MaxTaskRepositories*repoMirrorCallTimeout + 3*5*time.Minute + taskStartTimeout
+	if got := saved.planStartTimeout(); got <= minimum {
+		t.Errorf("unresolved saved workspace timeout = %v, want more than %v for the full repository limit", got, minimum)
+	}
+	saved.WorkspaceResolved = &TaskWorkspaceResolved{OperationID: "op_saved"}
+	if got := saved.planStartTimeout(); got != taskStartTimeout {
+		t.Errorf("resolved empty workspace timeout = %v, want %v", got, taskStartTimeout)
 	}
 }
 
