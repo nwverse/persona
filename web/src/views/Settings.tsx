@@ -86,7 +86,7 @@ import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { lazyDialog, lazyOverlay, useOpened } from "./LazyOverlay";
 import { lazyPage } from "../lib/lazy-page";
 import { formatList, t } from "../i18n";
-import { decodeSettingsPrefill } from "../lib/settings-prefill";
+import { settingsPrefill } from "../lib/settings-prefill";
 
 // ── types (docs/integrations/launchers.md) ───────────────────────────
 
@@ -251,7 +251,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     observer.observe(host);
     return () => observer.disconnect();
   }, [tab, phone]);
-  const extensionPrefill = decodeSettingsPrefill(integration?.view.prefill);
+  const extensionPrefill = tab === "extensions" || tab === "integrations" ? settingsPrefill(canonical.search) : undefined;
   useLayoutEffect(() => (
     ASSISTANT_TABS.has(tab) && canShowIntegration ? pinManagerAt(ASSISTANT_PREFIXES, manager) : undefined
   ), [tab, manager, canShowIntegration]);
