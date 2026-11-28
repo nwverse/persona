@@ -43,6 +43,8 @@ export interface Manager {
   inbox_needs_you?: number;
   /** The hub and this connected assistant support their own extension information-access settings. */
   extension_info_access_scoped?: boolean;
+  /** The connected assistant advertises the read-only Integrations settings projection. */
+  integrations_projection_v1?: boolean;
 }
 
 export interface ManagerList {

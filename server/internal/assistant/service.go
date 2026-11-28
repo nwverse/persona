@@ -104,6 +104,7 @@ type Service struct {
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
 	agyNodePush     agyNodeConfigPush
+	botmuxOwnerPush botmuxOwnerPush // the BotMux Owner Union ID's pushes to the nodes (agents_botmux_owner.go)
 	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
 	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
@@ -1399,6 +1400,7 @@ func (s *Service) SessionsChanged(ctx context.Context, d DeviceSessions) {
 	if f := s.sessionsSeen; f != nil {
 		f(d)
 	}
+	s.todos.observeResumedSessions(d)
 	s.noteNodeOnline(d.MachineID, time.Now())
 	s.toolLoopsChanged(d)
 	s.progressSessions(d, time.Now()) // what the working agents do, for no_progress (supervise_progress.go)

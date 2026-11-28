@@ -4911,6 +4911,8 @@ People connecting a service can find its account, delivery and sync settings und
 the selected assistant’s Integrations experiment on, each service appears once. The capability chips
 (All, Chat channels, Data sources, Tools & appearance) filter those rows. A service can match more
 than one chip. Each chip exposes its selection with `aria-pressed` and shows its matching count.
+When the assistant supplies the Integrations projection, the chips show its counts. A failed
+catalog or section read uses a `SettingsHint` alert and Retry in a `Group`. Sections that loaded remain usable.
 
 Opening a detail uses a single column on phones and narrow Settings hosts. On desktop the split
 starts at **740 CSS pixels of Settings content width**, measured after both sidebars. The
