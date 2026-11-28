@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExtern
 import { t } from "../../../i18n";
 import { errorText, isAbort } from "../../../lib/api";
 import { ConfigurationError } from "../../../lib/configuration/contract";
-import { onAuthChange, type ExtensionAuth } from "../../../lib/extension-auth";
+import { getAuth, onAuthChange, type ExtensionAuth } from "../../../lib/extension-auth";
 import { opOf, operations, operationsListed, watchOperations } from "../../../lib/extension-operations";
 import {
   changed, checkError, clearedSecrets, compact, configError, draftEdits, extensionDetail, isDirty, isEntryList,
@@ -145,18 +145,8 @@ function prepareWrite(resource: ExtensionResource, remote: HubExtensionDetail, s
 export function useExtensionConfiguration(id: string, binding: ExtensionBinding, prefill: JsonObject | undefined, onRemoved?: () => void) {
   const { client, routing } = binding;
   const resource = useMemo(() => resources.get(id, client), [id, client]);
-  const state = useResourceConfiguration(resource, routing);
-  const detail = state.remote;
-  const draft = state.draft?.draft ?? (detail ? configOf(detail) : NO_CONFIG);
-  const typed = state.draft?.typed ?? NO_TYPED;
-  const dirty = state.draft?.dirty ?? false;
-  const problems = useMemo(() => numberProblems(typed), [typed]);
-  const editable = !!detail && canEdit(detail);
-  const error = state.saveError?.label === "config" ? state.saveError.error : null;
-  const refused = configError(error);
-  const fieldErrors = refused ? { [refused.field]: refused.message } : {};
-  const checkFailed = state.unconfirmed ? t("settings-configuration.error_unconfirmed") : error && !refused ? errorText(error) : "";
   const active = useRef(false);
+  const authSeq = useRef(0);
   const removed = useRef(onRemoved);
   removed.current = onRemoved;
   useLayoutEffect(() => {
@@ -170,9 +160,35 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
     return pinManagerAt([`/extensions${endpoint}`, `/plugins${endpoint}`], client.managerId);
   }, [id, client]);
   const authChanged = useCallback((auth?: ExtensionAuth) => {
-    if (auth) resource.patchRemote((remote) => ({ ...remote, auth }));
-    else void resource.refresh();
-  }, [resource]);
+    const seq = ++authSeq.current;
+    if (auth) {
+      resource.patchRemote((remote) => ({ ...remote, auth }));
+      return;
+    }
+    const baseline = resource.snapshot().remote;
+    if (!baseline?.auth) return;
+    void getAuth(id, client).then((answer) => {
+      if (active.current && seq === authSeq.current && baseline === resource.snapshot().remote) {
+        resource.patchRemote((remote) => ({ ...remote, auth: answer }));
+      }
+    }, () => {});
+  }, [id, client, resource]);
+  const reconnect = useCallback(() => {
+    const state = resource.snapshot();
+    if (!state.remote || state.readError || state.unconfirmed) void resource.refresh();
+    else authChanged();
+  }, [resource, authChanged]);
+  const state = useResourceConfiguration(resource, routing, reconnect);
+  const detail = state.remote;
+  const draft = state.draft?.draft ?? (detail ? configOf(detail) : NO_CONFIG);
+  const typed = state.draft?.typed ?? NO_TYPED;
+  const dirty = state.draft?.dirty ?? false;
+  const problems = useMemo(() => numberProblems(typed), [typed]);
+  const editable = !!detail && canEdit(detail);
+  const error = state.saveError?.label === "config" ? state.saveError.error : null;
+  const refused = configError(error);
+  const fieldErrors = refused ? { [refused.field]: refused.message } : {};
+  const checkFailed = state.unconfirmed ? t("settings-configuration.error_unconfirmed") : error && !refused ? errorText(error) : "";
   useEffect(() => onAuthChange((extension, auth, manager) => {
     if (extension === id && manager === client.managerId) authChanged(auth);
   }), [id, client, authChanged]);

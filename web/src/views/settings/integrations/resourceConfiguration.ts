@@ -258,7 +258,7 @@ export function resourceConfigurations<Resource extends { retire: () => void }>(
     entries.delete(key);
     entry?.retire();
   };
-  subscribeCredentialOwner(() => entries.forEach((_, key) => remove(key)));
+  if (typeof window !== "undefined") subscribeCredentialOwner(() => entries.forEach((_, key) => remove(key)));
   return {
     remove,
     get(id: string, client: ScopedAssistantClient): Resource {

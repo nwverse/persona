@@ -8,7 +8,7 @@ const empty = () => emptyConfiguration;
 
 /** Refresh the same resource on an open, a route becoming reachable, or a reconnect with missed updates. */
 export function useResourceConfiguration<Remote extends { id: string }, Draft>(
-  resource: ResourceConfiguration<Remote, Draft> | undefined, routing: string,
+  resource: ResourceConfiguration<Remote, Draft> | undefined, routing: string, reconnect?: () => void,
 ) {
   const state = useSyncExternalStore(resource?.subscribe ?? idle, resource?.snapshot ?? empty);
   useEffect(() => {
@@ -18,9 +18,9 @@ export function useResourceConfiguration<Remote extends { id: string }, Draft>(
       if (!resource.snapshot().saving) void resource.refresh();
     });
     const stopHello = onHubEvent("hello", (message) => {
-      if (!isResumed(message)) void resource.refresh();
+      if (!isResumed(message)) void (reconnect ?? resource.refresh)();
     });
     return () => { stopChanges(); stopHello(); };
-  }, [resource, routing]);
+  }, [resource, routing, reconnect]);
   return state;
 }
