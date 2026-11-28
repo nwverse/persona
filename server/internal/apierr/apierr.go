@@ -310,6 +310,8 @@ func LocalizeErrorJSON(l i18n.Lang, body []byte) []byte {
 			}
 		case "dialog_open":
 			key = "rpc-errors.dialog_open"
+		case "engine_missing":
+			key, args = engineMissingWords(m)
 		case "delivery_unknown":
 			key = "rpc-errors.in_doubt"
 			if reason, _ := m["reason"].(string); reason == "guide_retry_refused" {
@@ -493,13 +495,18 @@ var notFoundKeys = map[string]string{
 
 // bridgeReasonKeys word the refusals of the node's Orca chat bridge by their reason (node/orcabridge.go): Orca is not
 // running, turned the request down, may or may not have done it, or no longer has the chat; a chat it closed takes no
-// mode change.
+// mode change; a permission mode the chat's provider does not take; an Orca that cannot rename chats.
 var bridgeReasonKeys = map[string]string{
-	"orca_away":         "rpc-errors.orca_away",
-	"orca_refused":      "rpc-errors.orca_refused",
-	"orca_unknown":      "rpc-errors.orca_unknown",
-	"orca_session_gone": "rpc-errors.orca_session_gone",
-	"orca_closed":       "rpc-errors.orca_closed",
+	"orca_away":               "rpc-errors.orca_away",
+	"orca_refused":            "rpc-errors.orca_refused",
+	"orca_unknown":            "rpc-errors.orca_unknown",
+	"orca_session_gone":       "rpc-errors.orca_session_gone",
+	"orca_closed":             "rpc-errors.orca_closed",
+	"orca_mode_unsupported":   "rpc-errors.orca_mode_unsupported",
+	"orca_rename_unsupported": "rpc-errors.orca_rename_unsupported",
+	"orca_start_unsupported":  "rpc-errors.orca_start_unsupported",
+	"orca_start_folder":       "rpc-errors.orca_start_folder",
+	"orca_start_launcher":     "rpc-errors.orca_start_launcher",
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
@@ -510,6 +517,27 @@ var openElsewhereKeys = map[string]string{
 	"program":     "rpc-errors.open_elsewhere_program",
 	"other":       "rpc-errors.open_elsewhere_other",
 	"agents_list": "rpc-errors.open_elsewhere_agents_list",
+}
+
+// engineMissingKeys word the node's engine_missing refusal by why its engine could not take the start (data reason,
+// node/orcaengine.go orcaMissing, #17037), naming the engine (data engine). One without both (an older node, a
+// refusal about the machine's whole engine set) keeps its words.
+var engineMissingKeys = map[string]string{
+	"not_running":   "rpc-errors.engine_not_running",
+	"not_installed": "rpc-errors.engine_not_installed",
+	"incompatible":  "rpc-errors.engine_incompatible",
+}
+
+// engineMissingWords is the key and arguments of an engine_missing refusal whose data says which engine and why
+// (engineMissingKeys); "" for one that does not.
+func engineMissingWords(data map[string]any) (string, i18n.Args) {
+	engine, _ := data["engine"].(string)
+	reason, _ := data["reason"].(string)
+	name := proto.EngineNames[engine]
+	if name == "" || engineMissingKeys[reason] == "" {
+		return "", nil
+	}
+	return engineMissingKeys[reason], i18n.Args{"engine": name}
 }
 
 // notDeliveredKeys word the node's generic not_delivered refusal by reason (node/sendsafe.go deliveryRefusal);
@@ -575,6 +603,11 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	if code == "open_elsewhere" {
 		where, _ := body["where"].(string)
 		key = openElsewhereKeys[where]
+	}
+	if code == "engine_missing" {
+		if k, a := engineMissingWords(body); k != "" {
+			key, args["engine"] = k, a["engine"]
+		}
 	}
 	if code == "not_running" {
 		// Only the node's refusal that names the engine (node/sendsafe.go notRunningRefusal, #17044): not_running's other

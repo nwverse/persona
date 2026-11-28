@@ -36,6 +36,9 @@ import java.util.UUID
 /** The catalog source and engine `host` of a Paseo workspace (#7259), and the `kind` its worktrees are made by (#8856). */
 private const val PaseoHost = "paseo"
 
+/** The same for an Orca workspace: Orca makes a new Agent's worktree as a child of the one picked (#17050). */
+private const val OrcaHost = "orca"
+
 /** The same host a fresh start uses: the explicit workspace host, or the selected computer's default. */
 private fun Machine.supportsOmpStartModel(host: String?): Boolean {
     val enabled = engineHosts
@@ -183,12 +186,15 @@ internal data class NewAgentState(
     }
     /**
      * The folder is in a Git repository and this is not a tab in an existing space: the worktree switch shows (#4532).
-     * A workspace picked (#7259, the start goes into it) offers it only when Paseo's (#8856): Paseo makes the worktree
-     * as a workspace of its own; an Orca one's worktrees go through Orca's own New Worktree.
+     * A workspace picked (#7259, the start goes into it) offers it only when its engine makes the worktree
+     * ([worktreeEngine]): Paseo as a workspace of its own (#8856), Orca as a child of the one picked (#17050).
      */
-    val worktreeOffered: Boolean get() = space == null && (workspace == null || paseoWorkspace) && repo?.path?.isNotEmpty() == true
-    /** The workspace picked is Paseo's, whose worktrees Paseo makes (`kind` "paseo" for `worktree/status` and `add`). */
-    val paseoWorkspace: Boolean get() = workspace?.source == PaseoHost
+    val worktreeOffered: Boolean get() = space == null && (workspace == null || worktreeEngine != null) && repo?.path?.isNotEmpty() == true
+    /**
+     * The engine of the workspace picked when it makes that workspace's worktrees itself (Paseo, Orca): the `kind` for
+     * `worktree/status` and `add`; null for none picked, or another engine's.
+     */
+    val worktreeEngine: String? get() = workspace?.source?.takeIf { it == PaseoHost || it == OrcaHost }
     val follow: ModelPurposeDetail? get() = (modelConfig as? NewAgentModelConfig.Follow)?.detail
     /** An empty launcher follows the model configuration, when the hub has one. */
     val following: Boolean get() = follow != null && selection.launcher.isEmpty()
@@ -343,8 +349,8 @@ internal class NewAgentViewModel(
         // Whether the folder is in a Git repository, a moment after it stops changing (iOS `loadRepo`): New Agent's
         // worktree switch shows only then, and never for a tab in an existing space.
         viewModelScope.launch {
-            // A Paseo workspace picked asks Paseo, which says where its worktree goes (#8856).
-            mutable.map { RepoQuery(it.machineId, it.selection.cwd, it.space, if (it.paseoWorkspace) PaseoHost else null) }
+            // A Paseo or Orca workspace picked asks its engine, which says where its worktree goes (#8856, #17050).
+            mutable.map { RepoQuery(it.machineId, it.selection.cwd, it.space, it.worktreeEngine) }
                 .distinctUntilChanged().collectLatest { (machine, cwd, space, kind) ->
                 mutable.update { it.copy(repo = null) }
                 if (space != null || cwd.isBlank() || machines.value.none { it.id == machine && it.online }) return@collectLatest
@@ -743,11 +749,12 @@ internal class NewAgentViewModel(
         viewModelScope.launch {
             try {
                 // In a worktree of its own (#4532): made first; a failure says why, and nothing starts.
-                // From a Paseo workspace picked (#8856), Paseo makes it from the workspace's folder, as a workspace of its own.
+                // From a Paseo or Orca workspace picked (#8856, #17050), its engine makes it from the workspace's folder:
+                // Paseo as a workspace of its own, Orca as a child of the one picked.
                 val worktree = if (previous == null && current.worktreeOffered && current.inWorktree) try {
                     service.addWorktree(current.machineId, current.selection.cwd,
                         AgentWorktree.nameHint(current.prompt, current.selection.cwd), current.worktreeBranch,
-                        PaseoHost.takeIf { current.paseoWorkspace })
+                        current.worktreeEngine)
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
                     // A refusal says why in the node's words (git's, for worktree_failed), as iOS does; anything else as usual.

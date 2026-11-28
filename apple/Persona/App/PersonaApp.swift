@@ -35,6 +35,10 @@ struct PersonaApp: App {
                     return .handled
                 })
                 .rootHubLinkSheet($model.linkSheet)
+                .sheet(isPresented: Binding(get: { model.templateLink != nil }, set: { if !$0 { model.templateLink = nil } })) {
+                    NavigationStack { NativeTemplatesView() }
+                        .environment(model) // the sheet has its own environment; NativeTemplatesView reads AppModel
+                }
                 // A pairing link from outside the app asks before it pairs (#9929).
                 .pairConfirmation($model.pairToConfirm) { model.pairFromLink($0.config) }
                 #if os(iOS)
@@ -51,6 +55,10 @@ struct PersonaApp: App {
                 #endif
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
+                    if let template = NativeTemplateLink.parameter(url) {
+                        model.openNativeTemplate(template)
+                        return
+                    }
                     #if os(iOS)
                     if ShortcutCallbacks.shared.handle(url) { return } // a shortcut Persona ran came back (#2283)
                     #endif

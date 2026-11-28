@@ -70,6 +70,9 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string,
 		return nil, host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
 	}
 	trees, _, _, err := h.c.Worktrees(ctx, "")
+	if err != nil && orcaUnreachable(err) {
+		return nil, host.Mark(orcaMissing(err), host.ErrNotDelivered) // Orca's words for a start (orcaengine.go)
+	}
 	if err != nil {
 		return nil, orcaErr(err)
 	}
@@ -252,7 +255,11 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 	)
 }
 
-func (h *orcaHost) canAutoRegister(path string) bool {
+func (h *orcaHost) canAutoRegister(path string) bool { return orcaCanAutoRegister(path) }
+
+// orcaCanAutoRegister: a start in path may add the Git repository holding it to Orca (repo.add): not the root, the
+// home folder or a temporary folder.
+func orcaCanAutoRegister(path string) bool {
 	clean := filepath.Clean(path)
 	if clean == "/" {
 		return false
@@ -384,6 +391,7 @@ func (h *orcaHost) NameAgent(ctx context.Context, pane host.PaneRef, name string
 	if err != nil {
 		return orcaErr(err)
 	}
+	defer h.renamedTab() // the next listing reads the tab's new name (namedTabs)
 	return orcaErr(h.onTerminal(ctx, t, true, func(target orcart.Target) error {
 		return h.c.RenameTerminal(ctx, target, name)
 	}))

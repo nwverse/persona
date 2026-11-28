@@ -561,7 +561,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		if a.Task != nil {
 			words = strings.Join(append([]string{a.Task.Title, a.Text}, a.Task.DoneWhen...), "\n\n")
 		}
-		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, args); err != nil {
+		// Bind approval to the resolved address, even when the caller used a prefix or machine alias.
+		var proposal map[string]json.RawMessage
+		if err := json.Unmarshal(args, &proposal); err != nil {
+			return "", err
+		}
+		proposal["machine"], _ = json.Marshal(am.ID)
+		proposal["session_id"], _ = json.Marshal(c.SessionID)
+		approvalInput, err := json.Marshal(proposal)
+		if err != nil {
+			return "", err
+		}
+		if ok, outcome, err := s.confirmOutbound(ctx, machine, self, name, words, summary, approvalInput); err != nil {
 			if resumeTodo != "" {
 				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 			}
@@ -571,6 +582,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.rollbackResumeTodo(context.WithoutCancel(ctx), resumeTodo, am.ID, c.SessionID)
 			}
 			return outboundNotDone(outcome, "The user declined on the phone: nothing was sent to that agent.", "nothing was sent to that agent"), nil
+		}
+		// Approval may have waited while the target moved to another privacy space or runtime.
+		am, c, err = s.findAgentInSpace(ctx, am.ID, c.SessionID, &space)
+		if err != nil {
+			return "", err
+		}
+		if c.Assistant || c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Send) && !stoppedAgent(c) {
+			return "", errors.New("the Agent changed while permission was pending; nothing was sent")
 		}
 		if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
 			return "", err
@@ -1459,10 +1478,19 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			Options     []proto.QuestionOption `json:"options"`
 		} `json:"questions"`
 		// Wait false: the card goes up and the tool returns at once (ask_later.go). Unset is true.
-		Wait *bool `json:"wait"`
+		Wait          *bool  `json:"wait"`
+		DecisionScope string `json:"decision_scope"`
+		WhyOwner      string `json:"why_owner"`
+		OwnerAction   string `json:"owner_action"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil || len(a.Questions) == 0 {
 		return "", fmt.Errorf("questions are required")
+	}
+	if a.WhyOwner != "" && !slices.Contains(whyOwners, a.WhyOwner) {
+		return "", fmt.Errorf("why_owner is one of %s", strings.Join(whyOwners, ", "))
+	}
+	if a.OwnerAction != "" && !slices.Contains([]string{"personal_unlock", "login", "second_factor", "experience_check", "spending"}, a.OwnerAction) {
+		return "", errors.New("owner_action must name a personal unlock, login, second factor, experience check or spending")
 	}
 	var da askDeadlineArgs
 	if err := json.Unmarshal(args, &da); err != nil {
@@ -1472,6 +1500,15 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 	deadline, err := readAskDeadline(da, now)
 	if err != nil {
 		return "", err
+	}
+	if a.DecisionScope != "" && a.DecisionScope != "internal" && a.DecisionScope != "owner" {
+		return "", errors.New("decision_scope must be internal or owner")
+	}
+	if a.WhyOwner == "" && a.OwnerAction == "" && a.DecisionScope != "internal" {
+		return "", errors.New("say decision_scope=internal for execution questions, or supply why_owner/owner_action for an owner decision; personal unlocks must use owner_action=personal_unlock, never provide a private key")
+	}
+	if a.DecisionScope == "internal" && (a.WhyOwner != "" || a.OwnerAction != "") {
+		return "", errors.New("an owner reason or personal action cannot be labelled internal")
 	}
 	expires := now.Add(askUserWait)
 	if !deadline.At.IsZero() {
@@ -1504,13 +1541,18 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 			Recommend: askRecommend(da, i, q.Options)})
 	}
 	keepAskDecision(&ix, da, deadline)
+	if !deadline.At.IsZero() && deadline.Reversible && (a.OwnerAction != "" || a.WhyOwner == whyVisible || a.WhyOwner == whyIrreversible) {
+		return "", errors.New("personal actions, outward writes, spending and irreversible decisions cannot take a default")
+	}
 	markRecommended(s.lang(ctx), s.location(ctx), ix.Questions, deadline)
 	// Answers come back keyed by question text: two questions with the same text would lose one answer.
 	if proto.HasDuplicateQuestionText(ix.Questions) {
 		return "", i18n.Err("hub-hub.duplicate_question")
 	}
-	if err := s.promoteSupervision(sessionID); err != nil {
-		return "", err
+	if questionOwnerSource(ix) != "" {
+		if err := s.promoteSupervision(sessionID); err != nil {
+			return "", err
+		}
 	}
 	if a.Wait != nil && !*a.Wait {
 		return s.askLaterStart(ctx, ix)
@@ -1530,7 +1572,13 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		return "", err
 	}
 	if r.Cancel {
+		if questionOwnerSource(ix) == "" {
+			return "The internal question was cancelled. Nothing was authorized.", nil
+		}
 		return prompts.RenderQuestionCancelled(), nil
+	}
+	if s.askExpiredResolution(ix, r) && questionOwnerSource(ix) == "" {
+		return "The internal question expired without a supervisor answer. Nothing was authorized; ask again if still needed.", nil
 	}
 	if s.askExpiredResolution(ix, r) { // nobody answered in time: it waits as a to-do (ask_todo.go)
 		t, err := s.askExpired(context.WithoutCancel(ctx), ix)
@@ -1540,10 +1588,17 @@ func (s *Service) toolAskUser(ctx context.Context, machine, sessionID string, ar
 		s.logf("ask_user %s: expired, and no to-do could be made: %v", ix.ID, err)
 	}
 	if r.Dismiss || len(r.Answers) == 0 {
+		if questionOwnerSource(ix) == "" {
+			return "The internal question ended without a supervisor answer. Nothing was authorized; ask again if still needed.", nil
+		}
 		return "The user did not answer (dismissed or timed out). Don't go ahead with what you asked about; say what is waiting for them.", nil
 	}
 	var b strings.Builder
-	b.WriteString("The user answered:\n")
+	if r.AnsweredBy == proto.AnsweredByAssistant {
+		b.WriteString("The designated supervisor answered as the assistant:\n")
+	} else {
+		b.WriteString("The user answered:\n")
+	}
 	for _, q := range a.Questions {
 		if ans, ok := r.Answers[q.Question]; ok {
 			fmt.Fprintf(&b, "- %s → %s\n", q.Question, ans)

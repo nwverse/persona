@@ -16,6 +16,7 @@ import { formatChord, jumpHint, useBindings } from "../lib/shortcuts";
 import { takeFocusHandoff, toggleSidebarColumn } from "../lib/layout";
 import { CURRENT_ROW, DOT_CLASS, morePagesMenu, pageLabel, type NavPage, pageIconStyle, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { requestDirectWaiting } from "../lib/direct-waiting";
+import { needsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { useMainWaiting } from "./assistant/use-main-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
@@ -120,7 +121,7 @@ export function SidebarRail({ route, onSearch, onNewAgent, hideCollapse = false 
             : st === "working" || st === "needs_you" || st === "unread" ? <span aria-hidden className="absolute top-0.5 right-0.5 flex rounded-full ring-2 ring-canvas"><StatusMark state={st} /></span> : null,
           bindings.persona ? `${t("sidebar.persona_main")} (${formatChord(bindings.persona)})` : t("sidebar.persona_main"),
           undefined,
-          () => { if (main && pending > 0) requestDirectWaiting(main.session_id); },
+          () => { if (main && pending > 0 && needsYouAutoOpen()) requestDirectWaiting(main.session_id); },
         )}
         {pages.map((p) => link(
           p.k,

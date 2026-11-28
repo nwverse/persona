@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -161,6 +162,16 @@ type orcaBridge struct {
 	tabsAt  time.Time            // when they were read; zero: read them next refresh
 	noTabs  bool                 // the host has no session.tabs.listAll (an older Orca)
 	book    *orcaBook
+	st      *orcart.Status // the runtime's status.get last read (orcabridge_controls.go status), and when
+	stAt    time.Time
+	// Starting chats (orcabridge_start.go): the agents Orca found installed and when, the launchers last pushed, the
+	// chats Persona started that Orca does not list yet (by Orca session id), and whether the rows go to the node
+	// again on the next refresh even if unchanged (a start's answer stood in for one).
+	agents   []string
+	agentsAt time.Time
+	launches string
+	starts   map[string]orcaStarted
+	repush   bool
 }
 
 // orcaHead is what the bridge knows of one Orca session beyond its worktree.ps row.
@@ -203,7 +214,8 @@ func (b *orcaBridge) run(ctx context.Context, version string) error {
 	go func() { served <- b.peer.Serve(ctx, b.conn) }()
 	hello := map[string]any{"runtime": orcaRuntimeID, "name": proto.EngineNames[proto.EngineOrca], "agent": "claude",
 		"version": version, "instance": b.instance,
-		"caps": map[string]any{"send": true, "interrupt": true, "close": true, "modes": true}}
+		"caps": map[string]any{"send": true, "interrupt": true, "close": true, "modes": true, "model": true, "rename": true,
+			"rewind": true, "seen": true, "start": true}}
 	if err := b.peer.Call(ctx, "runtime.hello", hello, nil); err != nil {
 		return fmt.Errorf("hello: %w", err)
 	}
@@ -245,12 +257,20 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 	trees = b.trees
 	b.mu.Unlock()
 	tabs := b.chatTabs(ctx, running)
+	var st *orcart.Status
+	var agents []string // the agents Orca found installed: the providers it starts chats of (orcabridge_start.go)
+	if running {
+		st = b.status(ctx)
+		agents = b.installed(ctx)
+	}
+	launches := st.Has(orcart.CapChatLaunch)
 
 	now := time.Now()
 	rows := []map[string]any{}
 	orcaOf := map[string]string{}
-	waiting := map[string]string{} // Orca session id → Persona session id, sessions with a prompt pending
-	open := map[string]bool{}      // Orca session ids of the chats open in Orca
+	waiting := map[string]string{}         // Orca session id → Persona session id, sessions with a prompt pending
+	open := map[string]bool{}              // Orca session ids of the chats open in Orca
+	opts := map[string][]*orcart.Options{} // the open chats' options, by provider: their launchers' models
 	for _, c := range orcaOpenChats(trees, tabs) {
 		open[c.orca] = true
 		h := b.head(ctx, c.orca, c.rev)
@@ -262,12 +282,26 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 			continue // two chats on one conversation (Orca opened it again): the first listed
 		}
 		row := orcaRow(c, e, h)
+		orcaControls(row, c.agent, h.opts, st)
+		if launches && slices.Contains(agents, c.agent) && slices.Contains(orcaChatProviders, c.agent) {
+			row["launcher"] = orcaLauncherPrefix + c.agent // its model picker lists Orca's models (orcaLaunchers)
+		}
+		if strings.HasPrefix(c.orca, orcaStartPrefix) {
+			row["started_by_persona"] = true
+		}
 		rows = append(rows, row)
 		orcaOf[e.Persona] = c.orca
+		opts[c.agent] = append(opts[c.agent], h.opts)
 		if row["status"] == proto.StatusBlocked {
 			waiting[c.orca] = e.Persona
 		}
 	}
+	started, startedOrca := b.startedRows(orcaOf, now)
+	for i, row := range started {
+		rows = append(rows, row)
+		orcaOf[row["session_id"].(string)] = startedOrca[i]
+	}
+	b.pushLaunchers(orcaLaunchers(agents, st, opts))
 	closed := map[string]bool{}
 	for _, e := range b.book.closed(open, orcaOf, now) {
 		rows = append(rows, orcaClosedRow(e))
@@ -277,6 +311,9 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 	b.book.flush(now, false)
 	b.mu.Lock()
 	b.orcaOf, b.closed = orcaOf, closed
+	if b.repush {
+		b.pushed, b.repush = "", false
+	}
 	b.mu.Unlock()
 	if raw, err := json.Marshal(rows); err == nil && string(raw) != b.pushed {
 		// unlisted_transcripts: none. The bridge lists the chats Orca closed itself (orcaClosedRow), so none of their
@@ -367,9 +404,10 @@ func orcaEntryOf(c orcaChat, h *orcaHead) orcaBookEntry {
 	return e
 }
 
-// head is a session's provider session and fence (read from its history, again while it has no provider session and
-// the row changed, or orcaHeadRetry passed) and options (read again after the row changed); nil while its history
-// cannot be read.
+// head is a session's provider session and fence (read from its history; again while it has no provider session and
+// the row changed or orcaHeadRetry passed, and at most every orcaHeadRetry while the row changes, as a rewind or a
+// cleared context moves a Claude chat to another Claude session) and options (read again after the row changed); nil
+// while its history cannot be read.
 func (b *orcaBridge) head(ctx context.Context, orca string, rev int64) *orcaHead {
 	var h orcaHead // a copy: the stored one is replaced, never changed
 	known := false
@@ -378,7 +416,8 @@ func (b *orcaBridge) head(ctx context.Context, orca string, rev int64) *orcaHead
 		h, known = *old, !old.readAt.IsZero()
 	}
 	b.mu.Unlock()
-	read := !known || h.provider == "" && (h.readRev != rev || time.Since(h.readAt) >= orcaHeadRetry)
+	changed, due := h.readRev != rev, time.Since(h.readAt) >= orcaHeadRetry
+	read := !known || h.provider == "" && (changed || due) || changed && due
 	if read && !known && !h.failedAt.IsZero() && time.Since(h.failedAt) < orcaHeadRetry {
 		return nil
 	}
@@ -410,7 +449,8 @@ func (b *orcaBridge) head(ctx context.Context, orca string, rev int64) *orcaHead
 	return &h
 }
 
-// orcaModes are Persona's permission modes in Orca's words (Claude Code's); Orca has no plan mode.
+// orcaModes are Persona's permission modes in Orca's words (Claude Code's). Plan is not a permission mode in Orca but
+// its interaction mode (orcaRowMode, setModes in orcabridge_controls.go).
 var orcaModes = map[string]string{"default": "ask", "acceptEdits": "accept-edits", "auto": "auto",
 	proto.ModeBypass: "full-access"}
 
@@ -462,10 +502,8 @@ func orcaRow(c orcaChat, e orcaBookEntry, h *orcaHead) map[string]any {
 		row["last_text"] = bridgePreview(c.row.LastAssistantMessage)
 	}
 	if o := h.opts; o != nil {
-		for mode, theirs := range orcaModes {
-			if theirs == o.PermissionMode {
-				row["permission_mode"] = mode
-			}
+		if mode := orcaRowMode(o); mode != "" {
+			row["permission_mode"] = mode
 		}
 		if o.Effort != "" {
 			row["effort"] = o.Effort
@@ -483,7 +521,8 @@ func orcaClosedRow(e orcaBookEntry) map[string]any {
 	updated := time.UnixMilli(max(e.Updated, e.Seen)).UTC()
 	row := map[string]any{"session_id": e.Persona, "title": firstOf(e.Title, filepath.Base(e.Cwd)), "cwd": e.Cwd,
 		"status": proto.StatusOffline, "updated_at": updated, "rev": max(e.Updated, e.Seen), "space_id": e.Space,
-		"space_name": orcaSpaceLabel(e.Branch, e.Cwd), "capabilities": map[string]any{"modes": false, "model": false}}
+		"space_name":   orcaSpaceLabel(e.Branch, e.Cwd),
+		"capabilities": map[string]any{"modes": false, "model": false, "rewind": false}}
 	orcaAgentFields(row, e.Agent, e.Provider)
 	if e.Parent != "" {
 		row["parent_space_id"] = e.Parent
@@ -601,12 +640,8 @@ func (b *orcaBridge) ask(ctx context.Context, key, orca, persona string, p orcar
 		}
 		from := ""
 		b.mu.Lock()
-		if head := b.heads[orca]; head != nil && head.opts != nil {
-			for mode, theirs := range orcaModes {
-				if theirs == head.opts.PermissionMode {
-					from = mode
-				}
-			}
+		if head := b.heads[orca]; head != nil {
+			from = orcaRowMode(head.opts)
 		}
 		b.mu.Unlock()
 		if err := b.answer(ctx, orca, p, res); err != nil {
@@ -855,12 +890,15 @@ func (b *orcaBridge) request(ctx context.Context, method string, params json.Raw
 		PermissionMode string        `json:"permission_mode"`
 		Effort         string        `json:"effort"`
 		orcaItemsParams
+		orcaControlParams
 	}
 	_ = json.Unmarshal(params, &p)
 	ok := map[string]any{"ok": true}
 	switch method {
 	case "session.watch", "session.unwatch":
 		return ok, nil // a transcript is the node's to follow; a journal's rows come with the row's rev
+	case "session.start": // a new chat: no Orca session yet (orcabridge_start.go)
+		return b.start(ctx, params)
 	}
 	b.mu.Lock()
 	orca, closed := b.orcaOf[p.SessionID], b.closed[p.SessionID]
@@ -904,23 +942,26 @@ func (b *orcaBridge) request(ctx context.Context, method string, params json.Raw
 		if closed {
 			return nil, orcaChatErr("unsupported", "orca_closed", nil, "")
 		}
-		if p.PermissionMode != "" {
-			mode := orcaModes[p.PermissionMode]
-			if mode == "" {
-				return nil, &rpc.Error{Code: "unsupported", Message: "unsupported: Orca 没有这个权限模式（" + p.PermissionMode + "）"}
-			}
-			err = b.c.SetOption(ctx, b.write(orca, ""), "permissionMode", mode)
+		agent := "claude"
+		if e, ok := b.book.entry(orca); ok {
+			agent = e.Agent
 		}
-		if err == nil && p.Effort != "" {
-			err = b.c.SetOption(ctx, b.write(orca, ""), "effort", p.Effort)
+		err = b.setModes(ctx, orca, agent, p.PermissionMode, p.Effort, p.Model)
+	case "session.rename":
+		if strings.TrimSpace(p.Title) == "" {
+			return ok, nil
 		}
-		b.mu.Lock()
-		if h := b.heads[orca]; h != nil {
-			c := *h
-			c.opts = nil // read again on the next refresh
-			b.heads[orca] = &c
+		err = b.rename(ctx, orca, strings.TrimSpace(p.Title))
+	case "session.rewind":
+		if closed {
+			return nil, rewindError(rewindBusy, "Send this chat a message to open it in Orca again before rewinding it.")
 		}
-		b.mu.Unlock()
+		return b.rewind(ctx, orca, p.Prompt, p.Occurrence, p.PromptsAfter, p.Restore)
+	case "session.seen":
+		if closed {
+			return ok, nil
+		}
+		err = b.seen(ctx, orca)
 	default:
 		return nil, &rpc.Error{Code: "unsupported", Message: "unsupported: " + method}
 	}

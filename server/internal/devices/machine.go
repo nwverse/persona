@@ -374,7 +374,7 @@ func (m *Machine) command(ctx context.Context) *exec.Cmd {
 	// abroad at ~15 KB/s, 2026-10-31) an 87 KB page took 5.6 s and a 500-item page passed the hub's 30 s deadline;
 	// on a LAN it costs next to nothing.
 	return exec.CommandContext(ctx, "ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "Compression=yes",
-		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", host, bin+" node --stdio")
+		"-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", host, bin+" node --stdio")
 }
 
 // localNode is the program the node of the hub's computer runs as (docs/server/server.md "Programs"): persona-node
@@ -455,6 +455,15 @@ func (m *Machine) open(ctx context.Context, via string) (*nodePipe, error) {
 		ac := &activityConn{Conn: c, now: m.timings.now}
 		ac.touch()
 		return &nodePipe{r: ac, w: ac, lastErr: func() string { return "" }, close: func() { _ = c.Close() }, activity: ac}, nil
+	}
+	if via == "ssh" && m.nodeCmd == nil {
+		host := m.cfg.SSHHost
+		if host == "" {
+			host = m.cfg.ID
+		}
+		if err := validateSSHHost(host); err != nil {
+			return nil, err
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	cmd := m.command(ctx)
@@ -1086,6 +1095,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
+	case proto.EventEnginesChanged: // what the node found of its engines changed since node.info (node/orcaengine.go)
+		m.onEnginesChanged(params)
+		return
 	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
 		var st proto.ClaudePlugin
 		if json.Unmarshal(params, &st) == nil && st.State != "" {

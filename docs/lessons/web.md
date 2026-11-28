@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## Channel refreshes keep the routing draft (#17664)
+
+A channel read updates the current configuration document under one resource key. A refresh counter in that key or a
+different component tree at the split-pane breakpoint discards unsaved input. A committed PUT acknowledges the edit even
+when a GET overlaps it. Read again after the PUT to reconcile the displayed state and ignore the overlapping reply once
+that follow-up starts.
+
 ## A TypeError is not a network failure (#16182)
 
 fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.

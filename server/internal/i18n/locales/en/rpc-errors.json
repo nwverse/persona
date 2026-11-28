@@ -142,9 +142,17 @@
   "effort_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the effort wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
   "speed_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the speed wasn’t changed and nothing was typed. Clear it on the computer and try again.",
   "speed_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the speed wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
+  "engine_not_running": "{engine} isn’t running on this computer, so nothing was started. Open {engine} on it and try again.",
+  "engine_not_installed": "{engine} isn’t installed on this computer, so nothing was started. Install and open {engine} on it and try again, or choose another engine in Settings › Machines › Engine.",
+  "engine_incompatible": "The version of {engine} on this computer doesn’t work with Persona, so nothing was started. Update {engine} and Persona to the latest version and try again.",
   "orca_away": "Orca isn’t running on that computer, so nothing was sent. Open Orca there and try again.",
   "orca_refused": "Orca turned this down, and nothing was changed: {detail}",
   "orca_unknown": "It’s not clear whether Orca did this. Check the chat in Orca on that computer before you try again.",
   "orca_session_gone": "This chat is no longer in Orca.",
-  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings."
+  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings.",
+  "orca_mode_unsupported": "Orca’s chats of this kind don’t take that permission mode ({detail}), so nothing was changed.",
+  "orca_rename_unsupported": "This version of Orca can’t rename chats from Persona. Rename it in Orca, or update Orca.",
+  "orca_start_unsupported": "This version of Orca can’t start chats from Persona, so nothing was started. Start the chat in Orca, or update Orca.",
+  "orca_start_folder": "No project in Orca holds this folder, so nothing was started. Open the folder in Orca, then start the chat again.",
+  "orca_start_launcher": "Orca on that computer can’t start this kind of chat ({detail}), so nothing was started. Pick another launcher."
 }

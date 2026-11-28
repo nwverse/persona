@@ -23,6 +23,7 @@ import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { FontRows, PhoneNavRow, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
+import { setNeedsYouAutoOpen, useNeedsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -237,7 +238,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return () => observer.disconnect();
   }, [tab, phone]);
   const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
-  const extensionPrefill = tab === "extensions" ? settingsPrefill(location.search) : undefined;
+  const extensionPrefill = tab === "extensions" || tab === "integrations" ? settingsPrefill(location.search) : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
@@ -284,10 +285,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const k = resolved.tab;
     const id = resolved.sub;
     const state: unknown = history.state;
+    const hasIntegrationParent = typeof (state as Record<string, unknown> | null)?.integrationParent === "string";
     // Out of an item's page opened on its category's page: back to that page's entry, as Back does, so neither a copy of
     // it nor the item is left to go back to. A sheet open over the item has an entry of its own on top: off with both,
     // its marker taken first so its close does not go back once more.
-    if (k === tab && sub && !id && openedFromSub(state)) {
+    if (k === tab && sub && !id && openedFromSub(state) && !hasIntegrationParent) {
       setAt({ tab: k, sub: null, section: section ?? null });
       if (!takeOverlayEntry()) return history.back();
       history.replaceState(null, "", location.href);
@@ -304,14 +306,22 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
     // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else if (phone && options?.drillDown && sub && id && sub !== id) {
+    else if (k === tab && options?.drillDown && sub && id && sub !== id) {
       const child = { ...itemState(state), integrationParent: sub };
       if (takeOverlayEntry()) history.replaceState(child, "", BASE + to);
       else history.pushState(child, "", BASE + to);
     } else if (k === tab && !sub && id && itemIsPage(k)) {
       if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
       else history.pushState(itemState(state), "", BASE + to);
-    } else history.replaceState(k === tab && sub && id && openedFromSub(state) ? state : categoryState(state), "", BASE + to);
+    } else {
+      let nextState: unknown = categoryState(state);
+      if (k === tab && sub && id && openedFromSub(state)) {
+        const kept = { ...(state as Record<string, unknown>) };
+        delete kept.integrationParent;
+        nextState = kept;
+      }
+      history.replaceState(nextState, "", BASE + to);
+    }
   };
   const toList = () => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
@@ -325,7 +335,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // or the market's, that page; from a category it goes to the list. The Lark bot's settings are a dialog over the
   // Connectors list, not a page, so its address leaves the top bar going to the list.
   const itemOpen = phone && !!sub && itemIsPage(tab) && !(tab === "connectors" && sub === "feishu-bot");
-  const parent = tab === "integrations" ? history.state?.integrationParent : null;
+  const parent = tab === "integrations" && typeof history.state?.integrationParent === "string"
+    ? history.state.integrationParent
+    : null;
   const up = itemOpen && sub ? itemParent(tab, sub, parent) : null;
   const goBack = () => {
     if (!up) toList();
@@ -507,8 +519,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
                     open={sub}
+                    prefill={extensionPrefill}
                     twoCol={integrationsSplit}
                     headerBack={phone}
+                    parentSub={parent}
+                    onBackParent={parent ? () => history.back() : undefined}
                     onOpen={(id, drillDown) => pick("integrations", id, undefined, { drillDown })}
                     onPageWide={setExtensionPageWide}
                     onSettings={openSettingsUrl}
@@ -783,6 +798,7 @@ function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
   const starred = useStarredSetting();
+  const autoOpenNeedsYou = useNeedsYouAutoOpen();
   const features = moduleFeaturesSource();
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
@@ -821,6 +837,9 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
         <SidebarUsageRow />
+        <Row label={t("settings.needs_you_auto_open")} hint={t("settings.needs_you_auto_open_hint")} wrapHint stackOnNarrow anchor="needs-you-auto-open">
+          <Switch on={autoOpenNeedsYou} onChange={setNeedsYouAutoOpen} label={t("settings.needs_you_auto_open")} />
+        </Row>
       </Group>
 
       <DesktopSettings />

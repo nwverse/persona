@@ -61,7 +61,7 @@ func (s *Service) acceptGuardEvidence(ctx context.Context, t Todo, note, reason 
 		b.WriteString(c.Evidence)
 		b.WriteByte('\n')
 	}
-	if replies, sideBlocked := s.taskReplies(ctx, t); !sideBlocked {
+	if replies, sideBlocked, _ := s.taskReplies(ctx, t); !sideBlocked {
 		for _, r := range replies {
 			b.WriteString(r.Text)
 			b.WriteByte('\n')
