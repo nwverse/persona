@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
@@ -131,7 +132,8 @@ func (e *workspaceExecutor) claimDir(path string) error {
 }
 
 // Each command is bounded, noninteractive, and stores no raw stderr or URL in an
-// error. The inherited locks outlive a crashed Node while Git is still running.
+// error; bounded, credential-scrubbed stderr is written only to the Node log on
+// failure. The inherited locks outlive a crashed Node while Git is still running.
 func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string) (string, error) {
 	e.journal.InFlight = true
 	if err := e.save(); err != nil {
@@ -147,9 +149,13 @@ func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string)
 	cmd.WaitDelay = time.Second
 	workspaceInheritLocks(cmd, e.locks)
 	var out workspaceOutput
+	stderr := workspaceStderr{limit: workspaceStderrCaptureLimit}
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	err := cmd.Run()
+	if err != nil && e.n != nil {
+		e.n.logGitFailure("task workspace", args, e.journal.WorkspaceID, e.journal.OperationID, ctx.Err(), err, stderr.String())
+	}
 	e.journal.InFlight = false
 	if saveErr := e.save(); saveErr != nil {
 		return "", saveErr
@@ -158,6 +164,111 @@ func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string)
 		return "", errors.New("output limit")
 	}
 	return strings.TrimSpace(out.String()), err
+}
+
+const (
+	workspaceStderrCaptureLimit = 4 << 10
+	workspaceStderrLogLimit     = 512
+)
+
+type workspaceStderr struct {
+	buf   []byte
+	limit int
+}
+
+func (b *workspaceStderr) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.limit <= 0 {
+		return n, nil
+	}
+	if len(p) >= b.limit {
+		b.buf = append(b.buf[:0], p[len(p)-b.limit:]...)
+		return n, nil
+	}
+	if overflow := len(b.buf) + len(p) - b.limit; overflow > 0 {
+		copy(b.buf, b.buf[overflow:])
+		b.buf = b.buf[:len(b.buf)-overflow]
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *workspaceStderr) String() string {
+	return string(b.buf)
+}
+
+func workspaceGitSubcommand(args []string) string {
+	sub := gitSubcommand(args)
+	if sub == "" {
+		return "command"
+	}
+	if sub == "worktree" && len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+		return "worktree " + args[1]
+	}
+	return sub
+}
+
+func scrubGitStderrURLUserinfo(s string) string {
+	var out strings.Builder
+	for {
+		idx := strings.Index(s, "://")
+		if idx < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		out.WriteString(s[:idx+3])
+		s = s[idx+3:]
+		end := strings.IndexAny(s, "/?# \t\r\n'\"()[]<>")
+		if end < 0 {
+			end = len(s)
+		}
+		authority := s[:end]
+		if at := strings.LastIndexByte(authority, '@'); at >= 0 {
+			out.WriteString("<redacted>@")
+			out.WriteString(authority[at+1:])
+		} else {
+			out.WriteString(authority)
+		}
+		s = s[end:]
+	}
+}
+
+func sanitizeGitStderr(raw string) string {
+	scrubbed := scrubGitStderrURLUserinfo(raw)
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, scrubbed)
+	collapsed := strings.Join(strings.Fields(cleaned), " ")
+	runes := []rune(collapsed)
+	if len(runes) > workspaceStderrLogLimit {
+		return "..." + string(runes[len(runes)-(workspaceStderrLogLimit-3):])
+	}
+	return collapsed
+}
+
+func (n *Node) logGitFailure(scope string, args []string, workspaceID, opID string, ctxErr, err error, rawStderr string) {
+	cause := err
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
+		cause = ctxErr
+	}
+	subcmd := workspaceGitSubcommand(args)
+	detail := sanitizeGitStderr(rawStderr)
+	if workspaceID != "" || opID != "" {
+		if detail != "" {
+			n.logf("%s: git %s failed (workspace=%s op=%s): %v: %s", scope, subcmd, workspaceID, opID, cause, detail)
+		} else {
+			n.logf("%s: git %s failed (workspace=%s op=%s): %v", scope, subcmd, workspaceID, opID, cause)
+		}
+		return
+	}
+	if detail != "" {
+		n.logf("%s: git %s failed: %v: %s", scope, subcmd, cause, detail)
+	} else {
+		n.logf("%s: git %s failed: %v", scope, subcmd, cause)
+	}
 }
 
 type workspaceOutput struct {

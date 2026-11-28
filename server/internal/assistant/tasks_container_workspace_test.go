@@ -234,20 +234,25 @@ func (m *containerWorkspaceMemStore) SaveWorkspaceNamingPlan(ctx context.Context
 	if m.rules[id].Revision != revision {
 		return nil, repository.Problem("revision_conflict")
 	}
-	ids := make([]string, 0, len(plan.Source.Repositories.Repositories))
-	for _, r := range plan.Source.Repositories.Repositories {
-		ids = append(ids, r.RepoID)
-	}
-	snapshot, err := repository.Snapshot(plan.Source.Manager, id, set.Revision, set.Repositories, ids)
-	if err != nil {
-		return nil, err
-	}
-	if snapshot.Digest != plan.Source.Repositories.Digest {
+	if !matchesMemWorkspaceSnapshot(plan, set) {
 		return nil, repository.Problem("revision_conflict")
 	}
 	m.naming[operation] = plan
 	cp := plan
 	return &cp, nil
+}
+
+func matchesMemWorkspaceSnapshot(plan workspacenaming.Plan, set repository.TaskSet) bool {
+	repos := plan.Source.Repositories.Repositories
+	if len(repos) == 1 && repos[0].Local != nil {
+		return true
+	}
+	ids := make([]string, 0, len(repos))
+	for _, r := range repos {
+		ids = append(ids, r.RepoID)
+	}
+	snapshot, err := repository.Snapshot(plan.Source.Manager, plan.Source.TodoID, set.Revision, set.Repositories, ids)
+	return err == nil && snapshot.Digest == plan.Source.Repositories.Digest
 }
 
 func cloneWorkspaceRecord(r *taskworkspace.Record) *taskworkspace.Record {
@@ -299,15 +304,7 @@ func (m *containerWorkspaceMemStore) BeginTaskWorkspace(ctx context.Context, tod
 	if plan.Source.Manager != manager {
 		return nil, taskworkspace.Failure("invalid_input", "manager", op, "", "")
 	}
-	ids := make([]string, 0, len(plan.Source.Repositories.Repositories))
-	for _, r := range plan.Source.Repositories.Repositories {
-		ids = append(ids, r.RepoID)
-	}
-	snapshot, err := repository.Snapshot(manager, todo, set.Revision, set.Repositories, ids)
-	if err != nil {
-		return nil, err
-	}
-	if snapshot.Digest != plan.Source.Repositories.Digest {
+	if !matchesMemWorkspaceSnapshot(plan, set) {
 		return nil, taskworkspace.Failure("snapshot_stale", "manager", op, "", "")
 	}
 	if head := m.heads[todo]; head != "" {

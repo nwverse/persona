@@ -221,3 +221,142 @@ func TestTaskDispatchRecoversNamingPlanSavedBeforeTaskUpdate(t *testing.T) {
 		t.Fatalf("lost the frozen operation during node rollback: workspace=%+v calls=%v err=%v", task.WorkspaceResolved, h.f.worktrees, err)
 	}
 }
+
+func TestTaskDispatchUnlistedLinkedRepoUsesLocalCheckout(t *testing.T) {
+	commit := strings.Repeat("b", 40)
+	t.Run("unlisted linked repo uses local checkout", func(t *testing.T) {
+		ctx := t.Context()
+		st := newContainerWorkspaceMemStore()
+		h := newWorkspaceTestHarness(t, st)
+		h.f.nodes["task.workspace.capabilities"] = func(string, json.RawMessage) (any, error) {
+			return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, LocalGit: true, EmptyRepositories: true}, nil
+		}
+		h.f.nodes["worktree.status"] = func(string, json.RawMessage) (any, error) {
+			return proto.WorktreeStatus{Path: "/code/app", Branch: "main"}, nil
+		}
+		localLookups := 0
+		h.f.nodes[taskworkspace.LocalSourceMethod] = func(_ string, raw json.RawMessage) (any, error) {
+			localLookups++
+			var in taskworkspace.LocalSourceRequest
+			if err := json.Unmarshal(raw, &in); err != nil {
+				return nil, err
+			}
+			return taskworkspace.LocalSource{Repository: &repositorywire.PreparationRepository{
+				RepoID: "local", DirectoryAlias: "app", RequestedRef: repository.RequestedRef{Kind: "branch", Value: "main"},
+				Local: &repositorywire.LocalCheckout{CommonDir: "/code/app/.git", Commit: commit},
+			}}, nil
+		}
+		todo, err := h.s.createTodo(ctx, "Task with PR link", "", "dispatch-chat", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := st.catalog(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := repository.MergeTaskLinkDetails(nil, []repository.LinkInput{{URL: "https://github.com/example/unlisted/pull/42"}}, catalog)
+		if err != nil || len(rows) != 1 || !strings.HasPrefix(rows[0].RepoID, "linked_") {
+			t.Fatalf("expected unlisted linked repo row, got %+v (%v)", rows, err)
+		}
+		st.memRepoStore.mu.Lock()
+		st.memRepoStore.sets[todo.ID] = repository.TaskSet{SchemaVersion: 1, TodoID: todo.ID, Revision: 1, Repositories: rows}
+		st.memRepoStore.mu.Unlock()
+
+		raw, err := json.Marshal(map[string]any{"tasks": []map[string]any{{
+			"todo_id": todo.ID, "title": todo.Title, "prompt": "Continue work", "machine": "box",
+			"cwd": "/code/app", "workspace": "new", "permission": "bypassPermissions",
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.s.toolTaskPlan(ctx, "dispatch-chat", raw); err != nil {
+			t.Fatal(err)
+		}
+		plan := readonlyFeedPlan(t, h.s, "dispatch-chat")
+		if _, err := h.s.startPlan(ctx, plan.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "unlisted link dispatch uses local checkout", func() bool {
+			got, ok := h.s.todoNow(todo.ID)
+			return ok && (len(got.Agents) == 1 || got.StartError != "")
+		})
+		gotTodo, _ := h.s.todoNow(todo.ID)
+		if gotTodo.StartError != "" || len(gotTodo.Agents) != 1 {
+			t.Fatalf("dispatch failed: err=%q agents=%+v", gotTodo.StartError, gotTodo.Agents)
+		}
+		h.mu.Lock()
+		prepared := h.lastPrepare
+		h.mu.Unlock()
+		if localLookups == 0 {
+			t.Fatalf("expected local checkout lookup, but remote plan was prepared: %+v", prepared.Plan.Source.Repositories.Repositories)
+		}
+		repos := prepared.Plan.Source.Repositories.Repositories
+		if len(repos) != 1 || repos[0].Local == nil || repos[0].Local.Commit != commit {
+			t.Fatalf("expected local source preparation, got %+v", repos)
+		}
+	})
+
+	t.Run("bound catalog repo ignores sibling unlisted link", func(t *testing.T) {
+		ctx := t.Context()
+		st := newContainerWorkspaceMemStore()
+		h := newWorkspaceTestHarness(t, st)
+		h.f.nodes["task.workspace.capabilities"] = func(string, json.RawMessage) (any, error) {
+			return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, LocalGit: true, EmptyRepositories: true}, nil
+		}
+		h.f.nodes[taskworkspace.LocalSourceMethod] = func(string, json.RawMessage) (any, error) {
+			return nil, errors.New("unexpected local source lookup for catalog-bound repo")
+		}
+		todo, err := h.s.createTodo(ctx, "Catalog task with external issue link", "", "dispatch-chat", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.s.setTodoRepositories(ctx, todo.ID, repository.SetInput{
+			ExpectedRevision:        new(int64(0)),
+			ExpectedCatalogRevision: new(int64(1)),
+			Repositories:            []repository.TaskInput{{RepoID: "repo_web", RequestedRef: repository.RequestedRef{Kind: "branch", Value: "main"}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		catalog, err := st.catalog(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cur, err := st.TodoRepositories(ctx, todo.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		merged, err := repository.MergeTaskLinkDetails(cur.Repositories, []repository.LinkInput{{URL: "https://github.com/other/ref/issues/7", Role: repository.LinkRoleReference}}, catalog)
+		if err != nil || len(merged) != 2 {
+			t.Fatalf("expected catalog + unlisted row, got %+v (%v)", merged, err)
+		}
+		st.memRepoStore.mu.Lock()
+		st.memRepoStore.sets[todo.ID] = repository.TaskSet{SchemaVersion: 1, TodoID: todo.ID, Revision: cur.Revision + 1, Repositories: merged}
+		st.memRepoStore.mu.Unlock()
+
+		raw, err := json.Marshal(map[string]any{"tasks": []map[string]any{{
+			"todo_id": todo.ID, "title": todo.Title, "prompt": "Work on web", "machine": "box",
+			"cwd": "/code/app", "workspace": "new", "permission": "bypassPermissions",
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.s.toolTaskPlan(ctx, "dispatch-chat", raw); err != nil {
+			t.Fatal(err)
+		}
+		plan := readonlyFeedPlan(t, h.s, "dispatch-chat")
+		if _, err := h.s.startPlan(ctx, plan.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, "catalog repo with sibling unlisted link", func() bool {
+			got, ok := h.s.todoNow(todo.ID)
+			return ok && (len(got.Agents) == 1 || got.StartError != "")
+		})
+		h.mu.Lock()
+		prepared := h.lastPrepare
+		h.mu.Unlock()
+		repos := prepared.Plan.Source.Repositories.Repositories
+		if prepared.Plan.Source.Layout != repository.LayoutRoot || len(repos) != 1 || repos[0].RepoID != "repo_web" {
+			t.Fatalf("expected only catalog repo_web in root layout, got layout=%q repos=%+v", prepared.Plan.Source.Layout, repos)
+		}
+	})
+}
