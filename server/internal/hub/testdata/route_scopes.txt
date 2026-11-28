@@ -512,8 +512,8 @@ agents.control       POST /api/v1/agents/sessions/{id}/read
 assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact
--                    POST /api/v1/assistant/conversations/{id}/model/restore
 -                    POST /api/v1/assistant/conversations/{id}/inputs/resolve
+-                    POST /api/v1/assistant/conversations/{id}/model/restore
 -                    POST /api/v1/assistant/conversations/{id}/route
 assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/switch
