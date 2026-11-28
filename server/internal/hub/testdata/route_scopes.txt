@@ -227,6 +227,7 @@ assistant.start_defaults GET /api/v1/assistant/worker-presets
 -                    GET /api/v1/auth/readonly-sessions
 -                    GET /api/v1/auth/tokens
 -                    GET /api/v1/bots/feishu
+-                    GET /api/v1/bots/feishu/group-access
 bots.feishu.identity GET /api/v1/bots/feishu/identity
 -                    GET /api/v1/channels
 -                    GET /api/v1/channels/{id}
@@ -878,6 +879,7 @@ spaces               PUT /api/v1/assistant/tracks/{slug}
 spaces               PUT /api/v1/assistant/tracks/{slug}/space-md
 -                    PUT /api/v1/assistant/urgent-call
 -                    PUT /api/v1/bots/feishu
+-                    PUT /api/v1/bots/feishu/group-access
 -                    PUT /api/v1/channels/{id}
 -                    PUT /api/v1/connectors/github/auth
 -                    PUT /api/v1/connectors/{id}/settings

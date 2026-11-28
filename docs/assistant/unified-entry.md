@@ -1130,6 +1130,15 @@ apps (`docs/apple/ios.md` "Suggested standing rule and held decisions") and the 
 
 #### Asks go to the supervisor first (#3589)
 
+Internal execution questions from `ask_user` declare `decision_scope: "internal"`. An owner decision instead carries
+`why_owner` (the existing decision reasons) or `owner_action` (`personal_unlock`, `login`, `second_factor`,
+`experience_check`, or `spending`). An unclassified call is rejected before publishing a card. A personal unlock stays
+in the owner's own app: question cards never collect passwords or private keys. These rights are kept in the original
+tool input, including `wait: false`, so restart does not change who may answer. Internal expiry authorizes nothing,
+takes no recommended default and creates no owner decision. Internal held-card reminders emit only the work event and
+supervisor signal; they never construct an owner notification. Ordinary owned-Agent sensitive delegation uses the same
+reviewer gate; isolated-track boundaries still require the owner and external connector writes keep their own gates.
+
 With leaders configured (`assistant.leaders` not empty), a supervised task's questions, permissions and plans go to its
 supervisor first. Without leaders, a supervised task's parsed terminal dialogs (#11195) and non-six-class agent
 permissions and questions go to its supervising conversation (the main conversation) through the same active `ask` route
@@ -1144,11 +1153,20 @@ permissions and questions go to its supervising conversation (the main conversat
   question, or `allow` for Yes/No), kept as the assistant's answer and the task's decision; a dialog that trusts a
   folder, accepts Bypass Permissions, may delete files (`Risk: delete`) or acts in the owner's name is the owner's
   (`userScreen`), and only an explicit `ask_escalate` rings the owner about it. Unparsed screens and password or private
-  input keep their existing owner route. The conversations' own cards stay the user's: a card of the main
-  conversation, the background supervisor or a leader (`supervisorConversation`) goes up no ladder, and the route that
-  hands other cards of none of the owner's six kinds to a supervisor or the main conversation (`handNonOwnerCard`,
-  `card_nonowner_route.go`) leaves it alone too. Handed on, such a card waited where no turn was started for it, no
-  timeout moved it and `ask_escalate`, which takes a task, could not hand it up (#15360). The card is shown on the apps
+  input keep their existing owner route. Internal cards raised by a direction lead now go to the main conversation. The main
+  conversation's own internal cards use an independent background reviewer; if none is registered, the manager starts
+  that reviewer through the existing audited conversation lifecycle. Failure to obtain a reviewer closes the request
+  unanswered. This does not grant a new task supervisor or authorize the source to answer its own card.
+  An extension source label is not maintenance authority: routing and execution use the same explicit operation
+  predicate. Unknown operations retain their owner gate. Before Assistant setup, manual node questions keep their
+  existing interaction; manager-owned internal questions never use that fallback.
+  `handNonOwnerCard` uses the active durable relay queue for internal questions, permissions and maintenance approvals:
+  a busy or offline recipient is retried, delivery and failure are work events, and `interaction_answer` attributes the
+  decision to the assistant. Sensitive delegation approvals are bound to the exact proposal, track and decision
+  authority. Source membership is checked again after approval, and the target is looked up again before sending;
+  a changed or unavailable boundary cannot reuse an internal approval. The interaction's expiry is never extended.
+  Restart rebuilds its route and wake-up;
+  stale relay generations cannot act on the rebuilt route. The card is shown on the apps
   marked `delegating` and rings nothing: no push, no bot card, no Persona Link notification. A card the supervisor
   holds (any kind but a question) is not the owner's: the apps count no session that waits only on such cards in Needs
   you (the hub's `supervisor_held` count) and offer no buttons to answer it (2026-11-23, D11 of
@@ -1196,9 +1214,9 @@ permissions and questions go to its supervising conversation (the main conversat
   decision; the last rung needing the user does not hand it to them. No timeout hands a card to the user, with the
   hub's push tiering on or off: past its last rung a card goes back to the task's supervisor and stays there
   (parked), the entry saying it came back; the supervisor is reminded each `askHoldFor`, at most `askRemindMax` (3)
-  times, the card stays on the apps marked `delegating`, and only `ask_escalate` hands it to the user. With the push
-  grading switch on (`docs/server/server.md`) the first reminder also leaves the owner a held P1 notice for the Needs
-  you list and the briefing; with it off nothing goes to the owner (a P1 would push).
+  times, the card stays on the apps marked `delegating`, and only `ask_escalate` hands it to the user. A reminder
+  records its work event and wakes the supervisor only. It constructs no owner notice, regardless of push grading
+  or attention settings.
   `ask_escalate` takes `why_owner` and `p0`: with the switch on only `irreversible`, `visible_to_others`,
   `only_owner_knows` or `p0` push, the rest go to the Needs you list and the briefing without a push, bot card or
   channel message.

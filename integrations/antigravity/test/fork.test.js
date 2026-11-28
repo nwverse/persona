@@ -833,3 +833,153 @@ test('fork creates brain/ safely in a fresh agyDir to persist .persona-permissio
     assert.equal(existsSync(join(target, branch)), false, 'must never create directories or files through symlinked brain')
   })
 })
+
+test('fork and rewind enforce custom channel isolation before and after runtime restart', async (t) => {
+  const { node, home, cwd, config, calls, restart } = await fixture(t, { delayForkExport: true })
+  const customChannel = {
+    id: 'gw-fork-iso',
+    auth_mode: 'gemini-api-key',
+    rev: 'r1',
+    env: {
+      GOOGLE_GEMINI_BASE_URL: 'https://gw.example.com',
+      GEMINI_API_KEY: 'secret-fork-key',
+      PERSONA_AGY_MODEL_PROVIDER: 'gemini',
+    },
+  }
+
+  // Persist source session on the custom channel by starting it via session.start.
+  await node.peer.call('session.start', { cwd, channel: customChannel })
+  const startCall = calls().find((c) => c.method === 'session/new')
+  assert.ok(startCall?.worker, 'custom channel ACP should spawn a dedicated worker')
+  const customWorkerPid = startCall.worker
+
+  // Forking with the custom channel routes ForkConversation to the custom channel worker and persists channel identity.
+  const forked = await node.peer.call('session.fork', { session_id: sessionId, channel: customChannel })
+  assert.equal(forked.session_id, branched)
+  const forkCall = calls().find((c) => c.method === 'ForkConversation')
+  assert.equal(forkCall?.worker, customWorkerPid, 'ForkConversation must run on the custom channel ACP')
+
+  const savedBranch = JSON.parse(readFileSync(join(config, 'brain', branch, '.persona-session.json'), 'utf8'))
+  assert.deepEqual(savedBranch.channel, { id: 'gw-fork-iso', auth_mode: 'gemini-api-key', rev: 'r1' })
+
+  // Next send on the forked session (even without repeating channel) stays pinned to the custom channel worker.
+  await node.peer.call('session.send', { session_id: branched, text: 'follow-up on fork' })
+  await until('fork prompt sent', () => calls().some((c) => c.method === 'session/prompt' && c.params?.sessionId === branch))
+  const promptCall = calls().find((c) => c.method === 'session/prompt' && c.params?.sessionId === branch)
+  assert.equal(promptCall?.worker, customWorkerPid, 'subsequent turn on fork must stay on the custom channel worker')
+
+  // Populate native userInput + metadata so rewind can match prompts in GetCascadeTrajectory.
+  const trajPath = join(home, 'trajectory.json')
+  const traj = JSON.parse(readFileSync(trajPath, 'utf8'))
+  traj.trajectory.steps = records.map((step) => ({
+    type: `CORTEX_STEP_TYPE_${step.type}`,
+    metadata: { source: step.type === 'USER_INPUT' ? 'CORTEX_STEP_SOURCE_USER_EXPLICIT' : 'MODEL', createdAt: step.created_at },
+    ...(step.type === 'USER_INPUT' ? { userInput: { items: [{ text: step.content }] } } : {}),
+    ...(step.type === 'PLANNER_RESPONSE' ? { plannerResponse: { response: step.content } } : {}),
+  }))
+  writeFileSync(trajPath, JSON.stringify(traj))
+
+  // After runtime restart, both fork and rewind must reject channel_required when channel is omitted
+  // and route to the custom channel worker when channel is supplied.
+  await restart()
+
+  await assert.rejects(
+    node.peer.call('session.send', { session_id: branched, text: 'missing channel' }),
+    (err) => err?.code === 'channel_required',
+    'restarted forked custom-channel session must require channel on send',
+  )
+  await assert.rejects(
+    node.peer.call('session.fork', { session_id: sessionId }),
+    (err) => err?.code === 'channel_required',
+    'restarted custom-channel session must require channel on fork',
+  )
+  await assert.rejects(
+    node.peer.call('session.rewind', { session_id: sessionId, restore: 'conversation', prompt: 'Second question', occurrence: 1, prompts_after: 0 }),
+    (err) => err?.code === 'channel_required',
+    'restarted custom-channel session must require channel on rewind',
+  )
+
+  await node.peer.call('session.rewind', {
+    session_id: sessionId,
+    restore: 'conversation',
+    prompt: 'Second question',
+    occurrence: 1,
+    prompts_after: 0,
+    channel: customChannel,
+  })
+  const rewindCall = calls().findLast((c) => c.method === 'RevertToCascadeStep')
+  assert.ok(rewindCall, 'rewind with channel should invoke RevertToCascadeStep')
+  assert.notEqual(rewindCall.worker, customWorkerPid, 'post-restart rewind should run on the fresh custom-channel worker')
+  const postRestartWorkers = new Set(calls().filter((c) => c.worker !== customWorkerPid).map((c) => c.worker))
+  assert.equal(postRestartWorkers.size, 1, 'restarted rewind must use only the custom-channel worker (never defaultAcp)')
+})
+
+test('concurrent cross-channel rewind on a running turn fails rewind_busy without hijacking routing, and fork rolls back on persistence failure', async (t) => {
+  await t.test('concurrent cross-channel rewind rejects rewind_busy before mutating channel binding', async (t) => {
+    const { node, home, cwd, calls, snapshot, runtime } = await fixture(t, { delayForkExport: true })
+    const chA = {
+      id: 'gw-chan-a',
+      auth_mode: 'gemini-api-key',
+      rev: 'r1',
+      env: { GOOGLE_GEMINI_BASE_URL: 'https://a.example.com', GEMINI_API_KEY: 'secret-a', PERSONA_AGY_MODEL_PROVIDER: 'gemini' },
+    }
+    const chB = {
+      id: 'gw-chan-b',
+      auth_mode: 'gemini-api-key',
+      rev: 'r1',
+      env: { GOOGLE_GEMINI_BASE_URL: 'https://b.example.com', GEMINI_API_KEY: 'secret-b', PERSONA_AGY_MODEL_PROVIDER: 'gemini' },
+    }
+    await node.peer.call('session.start', { cwd, channel: chA })
+    const workerA = calls().find((c) => c.method === 'session/new')?.worker
+    assert.ok(workerA)
+
+    // Hold the active turn so session.rewind collides with a live turn.
+    snapshot({ promptPlan: [{ holdForCancel: true, reply: 'done' }] })
+    await node.peer.call('session.send', { session_id: sessionId, text: 'in-flight on A', channel: chA })
+    await until('prompt reached workerA', () => calls().some((c) => c.method === 'session/prompt' && c.worker === workerA))
+
+    // Concurrent rewind with chB MUST reject rewind_busy BEFORE calling acpFor (no chB worker spawned, no rebind).
+    await assert.rejects(
+      node.peer.call('session.rewind', {
+        session_id: sessionId,
+        restore: 'conversation',
+        prompt: 'Second question',
+        occurrence: 1,
+        prompts_after: 0,
+        channel: chB,
+      }),
+      (err) => err?.code === 'rewind_busy',
+    )
+
+    // Interrupt must still cancel on workerA (not hijacked to chB) and no second worker should have been spawned.
+    await node.peer.call('session.interrupt', { session_id: sessionId })
+    await until('runtime idle after cancel', () => runtime.idle())
+    const workers = new Set(calls().map((c) => c.worker))
+    assert.deepEqual([...workers], [workerA], 'rejected cross-channel rewind must not spawn chB or rebind session')
+    assert.ok(calls().some((c) => c.method === 'session/cancel' && c.worker === workerA))
+  })
+
+  await t.test('fork rolls back in-memory state, pool binding, and listed row when rememberPersonaSession fails', async (t) => {
+    const { node, home, cwd, config, rowOf } = await fixture(t, { delayForkExport: true })
+    const customChannel = {
+      id: 'gw-rollback',
+      auth_mode: 'gemini-api-key',
+      rev: 'r1',
+      env: { GOOGLE_GEMINI_BASE_URL: 'https://rb.example.com', GEMINI_API_KEY: 'secret-rb', PERSONA_AGY_MODEL_PROVIDER: 'gemini' },
+    }
+    await node.peer.call('session.start', { cwd, channel: customChannel })
+
+    // Place a symlink at brain/<branch> so personaSessionStore.write fails closed.
+    const outside = join(home, 'outside-branch-target')
+    mkdirSync(outside, { recursive: true })
+    symlinkSync(outside, join(config, 'brain', branch))
+
+    await assert.rejects(
+      node.peer.call('session.fork', { session_id: sessionId, channel: customChannel }),
+      /Invalid Persona session directory/,
+    )
+    assert.equal(existsSync(join(outside, '.persona-session.json')), false, 'must never write through symlinked branch dir')
+    await delay(50)
+    assert.equal(rowOf(branched), undefined, 'rolled-back fork must not remain listed in runtime.sessions')
+  })
+})
