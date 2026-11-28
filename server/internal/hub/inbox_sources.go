@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -22,13 +23,27 @@ func inboxStoredSourceMerge(key string, answers []listAnswer) map[string]json.Ra
 			complete = false
 			continue
 		}
-		var top map[string]json.RawMessage
-		if json.Unmarshal(a.body, &top) != nil {
+		// Cache the same top-level scan the merge writes from. Decoding each whole response into a map here doubled
+		// the ordinary Inbox merge's allocations (TestMergedListAllocation).
+		s, use := scanAnswer(a.body, key)
+		a.scanned = &scannedAnswer{s: s, use: use}
+		if use == scanDecode {
+			found = found || bytes.Contains(a.body, []byte(`"stored_sources"`))
+			complete = false // only the decoded path can read this unusual response; stay conservative
+			continue
+		}
+		if use == scanSkip {
 			complete = false
 			continue
 		}
-		raw, ok := top["stored_sources"]
-		if !ok {
+		var raw json.RawMessage
+		for _, member := range s.members {
+			if bytes.Equal(member.key, []byte("stored_sources")) {
+				raw = member.val
+				break
+			}
+		}
+		if raw == nil {
 			complete = false
 			continue
 		}
