@@ -208,7 +208,7 @@ sealed interface ChatLine {
      */
     data class Viewed(override val id: String, val images: List<ViewedImage>) : ChatLine
     /**
-     * What an exchange's work sent to Lark ([botmuxReplies]), before its answer: a BotMux chat shows each reply as the
+     * What an exchange's work sent to Lark ([botmuxReplies]), after its answer: a BotMux chat shows each reply as the
      * agent's message while it decodes (web `BotmuxReplies`). Only exchanges with such replies have one.
      */
     data class BotmuxReplies(override val id: String, val replies: List<BotmuxReply>) : ChatLine

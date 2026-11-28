@@ -67,10 +67,19 @@ internal class BotmuxModeStore private constructor(private val prefs: SharedPref
     companion object {
         private const val NAME = "persona.botmux"
         private const val KEY = "mode"
+        @Volatile private var sharedApp: Context? = null
         @Volatile private var shared: BotmuxModeStore? = null
 
-        fun of(context: Context): BotmuxModeStore = shared ?: synchronized(this) {
-            shared ?: BotmuxModeStore(context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)).also { shared = it }
+        fun of(context: Context): BotmuxModeStore {
+            val app = context.applicationContext
+            shared?.takeIf { sharedApp === app }?.let { return it }
+            return synchronized(this) {
+                shared?.takeIf { sharedApp === app }
+                    ?: BotmuxModeStore(app.getSharedPreferences(NAME, Context.MODE_PRIVATE)).also {
+                        sharedApp = app
+                        shared = it
+                    }
+            }
         }
 
         /** What was stored, read back: anything but the raw mode (nothing yet, an unknown value) decodes. */
@@ -155,8 +164,8 @@ private fun BotmuxOriginal(item: Item) {
 
 /**
  * What an exchange sent to Lark, each reply as the agent's message under its tags: Markdown as Lark shows it (a single
- * line break stays one). A reply whose words were not recorded (an older card reply) says so rather than vanishing.
- * Nothing while the chat is raw: the calls are in the work above.
+ * line break stays one). A reply with no words and no attachments (an older card reply) says so rather than vanishing;
+ * an attachment-only reply keeps its tags alone. Nothing while the chat is raw: the calls are in the work above.
  */
 @Composable
 internal fun BotmuxRepliesLine(line: ChatLine.BotmuxReplies) {
@@ -165,9 +174,11 @@ internal fun BotmuxRepliesLine(line: ChatLine.BotmuxReplies) {
         line.replies.forEach { (id, reply) ->
             Column(Modifier.fillMaxWidth().testTag("botmux-reply-$id"), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
                 BotmuxTags(reply, end = false)
-                if (reply.text.isBlank()) ChatSystemLine(stringResource(R.string.chat_botmux_card_reply))
-                else AssistantAnswerFrame(boxed = true) {
-                    ReplyMarkdown(keepLineBreaks(reply.text), "botmux/$id", ownReply = false, selectable = true)
+                when {
+                    reply.text.isNotBlank() -> AssistantAnswerFrame(boxed = true) {
+                        ReplyMarkdown(keepLineBreaks(reply.text), "botmux/$id", ownReply = false, selectable = true)
+                    }
+                    reply.attachments == 0 -> ChatSystemLine(stringResource(R.string.chat_botmux_card_reply))
                 }
             }
         }

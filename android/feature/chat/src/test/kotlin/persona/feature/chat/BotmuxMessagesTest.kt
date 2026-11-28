@@ -162,6 +162,31 @@ class BotmuxMessagesTest {
         waitFor("BOTMUX_NOTHING_TO_SEND")
     }
 
+    /** An attachment-only reply (`text=""`, `attachments > 0`) keeps its tags alone without the Lark-card note. */
+    @Test fun attachmentOnlyReplyOmitsCardNote() {
+        val mediaOnly = listOf(
+            item(1, "text", "user", wrapped, botmux = Botmux("message", "Send the screenshot", "Sam Lee", "user")),
+            item(2, "tool_use", id = "a", text = "botmux send --image shot.png", botmux = Botmux("reply", "", attachments = 1)),
+            item(3, "tool_result", "user", "sent", id = "a"),
+        )
+        show(lines = chatLines(mediaOnly).lines)
+        waitFor("1 attachment")
+        assertTrue("missing reply header tag", shown("Sent to Lark"))
+        assertTrue("attachment-only reply should not show card note", !shown("Replied with a Lark card"))
+    }
+
+    /** A blank reply with no attachments (`text=""`, `attachments == 0`) shows the Lark-card placeholder note. */
+    @Test fun blankReplyWithoutAttachmentsShowsCardNote() {
+        val cardOnly = listOf(
+            item(1, "text", "user", wrapped, botmux = Botmux("message", "Send the card", "Sam Lee", "user")),
+            item(2, "tool_use", id = "a", text = "botmux send --response-kind final", botmux = Botmux("reply", "", final = true, attachments = 0)),
+            item(3, "tool_result", "user", "sent", id = "a"),
+        )
+        show(lines = chatLines(cardOnly).lines)
+        waitFor("Replied with a Lark card. Its words weren't recorded.")
+        assertTrue("missing final reply header tag", shown("Final reply in Lark"))
+    }
+
     @Test fun sessionInfoSwitch() {
         rule.setContent { PersonaTheme(reduceMotion = true) { BotmuxModeRow() } }
         rule.onNodeWithText("Show as in Lark").performClick()

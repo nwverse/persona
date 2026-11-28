@@ -10,8 +10,8 @@ import persona.core.contracts.Item
 
 /**
  * What an exchange of a BotMux session sent to Lark (docs/protocol/protocol.md "BotMux messages", web `botmuxReplies`):
- * its successful `botmux send` calls and the replies its folded work lists, as one line after its work and before its
- * last words; and BotMux's "nothing to send" answer.
+ * its successful `botmux send` calls and the replies its folded work lists, as one line after its work and its last
+ * words (matching web `SegmentView`); and BotMux's "nothing to send" answer.
  */
 class BotmuxLinesTest {
     private fun item(seq: Int, kind: String, role: String = "assistant", text: String? = null, id: String? = null,
@@ -37,7 +37,7 @@ class BotmuxLinesTest {
         item(13, "text", text = "BOTMUX_NOTHING_TO_SEND"),
     )
 
-    @Test fun repliesFollowTheWorkBeforeTheLastWords() {
+    @Test fun repliesFollowTheLastWords() {
         val lines = chatLines(exchange).lines
         val kinds = lines.map { line ->
             when (line) {
@@ -47,7 +47,7 @@ class BotmuxLinesTest {
                 else -> "other"
             }
         }
-        assertEquals(listOf("user", "work", "botmux", "reply"), kinds)
+        assertEquals(listOf("user", "work", "reply", "botmux"), kinds)
         val replies = lines.filterIsInstance<ChatLine.BotmuxReplies>().single()
         assertEquals("bm-1#0", replies.id)
         assertEquals(listOf("2#0", "9#0:0", "9#0:2"), replies.replies.map { it.id })
@@ -55,11 +55,13 @@ class BotmuxLinesTest {
         assertTrue(replies.replies.last().reply.final)
     }
 
-    /** Open work keeps the line after its steps: what the work sent reads under it. */
-    @Test fun openWorkKeepsTheRepliesAfterItsSteps() {
+    /** Open work keeps the line after its steps and the turn's last words. */
+    @Test fun openWorkKeepsTheRepliesAfterItsStepsAndLastWords() {
         val lines = chatLines(exchange, LineOptions(openWork = setOf("w-1#0"))).lines
         val at = lines.indexOfFirst { it is ChatLine.BotmuxReplies }
+        val answerAt = lines.indexOfFirst { it is ChatLine.Row && it.row.type == "reply" }
         assertTrue(lines.subList(0, at).any { it is ChatLine.End })
+        assertTrue(answerAt in 0 until at)
     }
 
     @Test fun anExchangeWithoutRepliesHasNoLine() {
