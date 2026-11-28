@@ -3,6 +3,7 @@
 package node
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,6 +67,9 @@ func TestBackendWorkspaceFetchFailureCodes(t *testing.T) {
 				len(got.Repositories) != 1 || got.Repositories[0].Error == nil || got.Repositories[0].Error.Code != tc.code {
 				t.Fatalf("prepare error = %v; want %s", got.Error, tc.code)
 			}
+			if _, err := os.Lstat(got.Repositories[0].CommonDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed fetch left the incomplete bare directory: %v", err)
+			}
 		})
 	}
 }
@@ -115,5 +119,8 @@ func TestBackendWorkspaceColdCommitFetchDeadline(t *testing.T) {
 	if got.State != "failed" || got.Error == nil || got.Error.Code != "source_fetch_timeout" ||
 		len(got.Repositories) != 1 || got.Repositories[0].Error == nil || got.Repositories[0].Error.Code != "source_fetch_timeout" {
 		t.Fatalf("prepare error = %v; want source_fetch_timeout", got.Error)
+	}
+	if _, err := os.Lstat(got.Repositories[0].CommonDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("timed-out fetch left the incomplete bare directory: %v", err)
 	}
 }

@@ -522,6 +522,10 @@ func (e *workspaceExecutor) adopt(ctx context.Context, req taskworkspace.Request
 	return e.save()
 }
 
+func (e *workspaceExecutor) privateCommonDir(repoID string) string {
+	return filepath.Join(filepath.Dir(e.path), "git", taskworkspace.Hash(repoID)+".git")
+}
+
 func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 	j := &e.journal
 	j.State = "preparing"
@@ -538,7 +542,7 @@ func (e *workspaceExecutor) prepare(ctx context.Context) taskworkspace.Record {
 		i := slices.IndexFunc(j.Repositories, func(r taskworkspace.Instance) bool { return r.RepoID == p.RepoID })
 		if i < 0 {
 			input := j.Plan.Source.Repositories.Repositories[index]
-			common := filepath.Join(filepath.Dir(e.path), "git", taskworkspace.Hash(p.RepoID)+".git")
+			common := e.privateCommonDir(p.RepoID)
 			if input.Local != nil {
 				common = input.Local.CommonDir
 			}

@@ -7307,7 +7307,10 @@ fetches, local mirror copies and ordinary Git operations keep their two-minute l
 prepare deadline accounts for sequential repositories in the plan. A fetch that exceeds its deadline
 returns the retryable problem code `source_fetch_timeout` in the existing error object.
 The Node keeps a bounded summary of recognized Git stderr phrases in its local `receipt.json`.
-The receipt field stays local and Git output is excluded from the RPC response.
+The stderr summary stays in the receipt when the Node replies.
+If source preparation fails, the Node removes incomplete private bare repositories created by that
+attempt and keeps the receipt for inspection. A pre-existing repository or one that reached
+`source_ready` is retained.
 A cancel or cleanup can reach the Node before prepare. Under the workspace and root locks, the
 Node records a durable cancelled or removed receipt only when both the root and private storage
 show that it owns no resources. A late prepare for that operation returns its recorded state.
