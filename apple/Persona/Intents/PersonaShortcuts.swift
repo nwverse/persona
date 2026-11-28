@@ -65,6 +65,22 @@ struct PersonaShortcuts: AppShortcutsProvider {
             shortTitle: "Agent Unread",
             systemImageName: "tray.full" // icon: App Shortcuts take only a literal
         )
+        #if os(iOS)
+        // Message Persona (#17789): the main chat with the keyboard up, so the Action button lists it with nothing to set
+        // up. It takes Ask Claude's place on the phone (ten at most): Ask Claude, an Agents-side action, stays an action
+        // in the Shortcuts app there.
+        AppShortcut(
+            intent: OpenPersonaTypingIntent(),
+            phrases: [
+                "Type to \(.applicationName)",
+                "Write to \(.applicationName)",
+                "Open my \(.applicationName) chat",
+                "Open the keyboard in \(.applicationName)",
+            ],
+            shortTitle: "Message Persona",
+            systemImageName: "keyboard" // icon: App Shortcuts take only a literal (Theme.Icon.keyboard)
+        )
+        #else
         AppShortcut(
             intent: AskClaudeIntent(),
             phrases: [
@@ -76,6 +92,7 @@ struct PersonaShortcuts: AppShortcutsProvider {
             shortTitle: "Ask Claude [Ask Claude Intent 946979]",
             systemImageName: "bubble.left.and.text.bubble.right" // icon: App Shortcuts take only a literal
         )
+        #endif
         AppShortcut(
             intent: PersonaStatusIntent(),
             phrases: [
