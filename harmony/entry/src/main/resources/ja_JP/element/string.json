@@ -9671,6 +9671,1406 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "ナレッジページ"
+    },
+    {
+      "name": "computer_screen_show_keys",
+      "value": "Mac のキーボードを開く"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "Mac のキーボードを閉じる"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "横向きで表示"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "縦向きで表示"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "全画面表示"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "全画面表示を終了"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "画面に合わせる"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "操作"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "停止"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "メインディスプレイ"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "ディスプレイ"
+    },
+    {
+      "name": "computer_screen_mac_sign_in",
+      "value": "この Mac のアカウントでログイン"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "操作中"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "この Mac のアカウント名"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "このアカウントのパスワード"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "この端末に保存"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "次回この Mac の画面を開くと自動接続します。"
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "ログイン情報を削除"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "保存したログイン情報が拒否されました。現在のアカウントとパスワードを入力してください。"
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "保存したログイン情報を読み込めません。手動でログインできます。"
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "接続しました。ログイン情報を端末に保存できませんでした。"
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "ログイン情報を削除できませんでした。もう一度お試しください。"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "Mac のアカウントを確認中…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "最初の画面を待っています…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "Mac のログイン確認がタイムアウトしました。もう一度接続してください。"
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "画面を表示できませんでした。もう一度接続してください。"
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "Mac から画面が届きませんでした。もう一度接続してください。"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac のショートカットキー"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc、操作を取り消すか閉じる"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab、次の入力欄に移動"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "左矢印、左に移動"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "上矢印、上に移動"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "下矢印、下に移動"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "右矢印、右に移動"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "Return、確定または改行"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "キーボードを開けませんでした。キーボードボタンをもう一度タップしてください。"
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "一部の入力が Mac に届きませんでした。Mac の入力欄を確認してから再入力してください。"
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "許可すると、このブラウザから Hub のすべての機能を利用できます。ご自身が開始したサインインか確認してください。"
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "このブラウザのサインインを許可しますか？"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "サインインを取り消す"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "サインインのリクエストを確認中…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "サインインを拒否しました"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "完了"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "リクエストは終了しました"
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "この数字をブラウザに入力"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "QR コードの有効期限が切れました"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "サインインを確認できませんでした"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "インターネット"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "ログインコードを読み取れません"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "ローカルネットワーク"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "このブラウザのアクセス権は「デバイス」でいつでも個別に取り消せます。"
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "この数字は他の人に伝えないでください。入力できるのは一度だけで、間違えるとサインインは取り消されます。"
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "別の Hub のログインコードです"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "ブラウザで QR コードを更新して、もう一度スキャンしてください。"
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "インターネット経由のリクエストです。Hub へのフルアクセスは、ご自身が開始したサインインにのみ許可してください。"
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "ブラウザのログインコードをスキャン"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "ブラウザで Persona のサインインページを開き、表示された QR コードをスキャンしてください。"
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "ブラウザにログインしました"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "ブラウザで開いている Hub に切り替えて、もう一度スキャンしてください。"
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "ブラウザへのサインイン"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "不明なネットワーク"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "数字が一致せず、サインインは取り消されました"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "ブラウザでの入力を待っています…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "ブラウザ"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "コンピュータ接続"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "その他のデバイス"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "スマートフォン"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "ウォッチ"
+    },
+    {
+      "name": "devices",
+      "value": "デバイス"
+    },
+    {
+      "name": "devices_added",
+      "value": "追加日時"
+    },
+    {
+      "name": "devices_demo",
+      "value": "Hub とペアリングすると、ログイン中のデバイスを確認できます。"
+    },
+    {
+      "name": "devices_empty",
+      "value": "ログイン中のデバイスはありません。"
+    },
+    {
+      "name": "devices_last_used",
+      "value": "最終利用"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "デバイスを読み込めませんでした。更新して再試行してください。"
+    },
+    {
+      "name": "devices_no_history",
+      "value": "取り消したデバイスはありません。"
+    },
+    {
+      "name": "devices_no_match",
+      "value": "一致するデバイスがありません。"
+    },
+    {
+      "name": "devices_revoke",
+      "value": "アクセスを取り消す"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "このデバイスは引き続きアクセスできます。更新して再試行してください。"
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "このデバイスは Hub にアクセスできなくなります。再接続にはペアリングが必要です。"
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "この端末は Hub から切断されます。再接続にはペアリングが必要です。"
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "取り消してペアリングを解除"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "取り消し済み"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "取り消し日時"
+    },
+    {
+      "name": "devices_search",
+      "value": "名前または種類で検索"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "ログイン中"
+    },
+    {
+      "name": "devices_this",
+      "value": "このデバイス"
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "Hub に接続できません。Hub が起動していて、このスマートフォンからアドレスにアクセスできるか確認してください。"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona の紹介動画"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "動画を再生"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "一時停止"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "デモを操作する"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "約12秒の無音動画で、マシン、エージェント、接続の承認を紹介します。"
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "動画を再生できませんでした。操作デモは利用できます。"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "この端末での表示名。空欄で Hub の名前に戻ります。"
+    },
+    {
+      "name": "machine_rename",
+      "value": "コンピュータ名を変更"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "この Hub の全端末に表示されます。空欄でコンピュータ ID に戻ります。"
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "制御文字を含まない40文字以内の名前を入力してください。"
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "この端末にはコンピュータの名前を変更する権限がありません。"
+    },
+    {
+      "name": "workspace_disconnected",
+      "value": "未接続"
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "再ペアリングが必要"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "再ペアリング"
+    },
+    {
+      "name": "agent_no_online_machine",
+      "value": "オンラインのコンピュータなし"
+    },
+    {
+      "name": "agent_refresh_models",
+      "value": "モデル一覧を更新"
+    },
+    {
+      "name": "agent_custom_model",
+      "value": "モデル ID を入力…"
+    },
+    {
+      "name": "agent_codex_desktop_model",
+      "value": "Codex App で選択"
+    },
+    {
+      "name": "agent_model_id_invalid",
+      "value": "有効なモデル ID を 256 文字以内で入力してください。"
+    },
+    {
+      "name": "agent_default_model",
+      "value": "Agent の既定モデル"
+    },
+    {
+      "name": "agent_locked_model",
+      "value": "ランチャーの指定"
+    },
+    {
+      "name": "agent_models_unavailable",
+      "value": "モデル一覧を取得できません。既定のモデルで開始できます。"
+    },
+    {
+      "name": "agent_default_folder",
+      "value": "コンピュータの既定フォルダ"
+    },
+    {
+      "name": "agent_first_message",
+      "value": "最初のメッセージ"
+    },
+    {
+      "name": "agent_message_optional",
+      "value": "今入力するか、開始後に送信"
+    },
+    {
+      "name": "agent_resume_session",
+      "value": "セッションを引き継ぐ"
+    },
+    {
+      "name": "agent_continue_session",
+      "value": "新規セッションで続ける"
+    },
+    {
+      "name": "agent_confirm_resume",
+      "value": "引き継ぐと、コンピュータで実行中のターンが停止します。"
+    },
+    {
+      "name": "agent_confirm_continue",
+      "value": "Codex が提供するコンテキストを使い、このコンピュータで新規セッションを開始しますか？"
+    },
+    {
+      "name": "agent_new_session",
+      "value": "新しいセッション"
+    },
+    {
+      "name": "agent_machine_default",
+      "value": "コンピュータのデフォルト"
+    },
+    {
+      "name": "agent_launchers_unavailable",
+      "value": "ランチャーを取得できませんでした。再試行するか、名前を入力してください。"
+    },
+    {
+      "name": "turn_process",
+      "value": "実行過程"
+    },
+    {
+      "name": "turn_elapsed_hours",
+      "value": "所要時間 {h}時間{m}分"
+    },
+    {
+      "name": "turn_elapsed_minutes",
+      "value": "所要時間 {m}分{s}秒"
+    },
+    {
+      "name": "turn_elapsed_seconds",
+      "value": "所要時間 {s}秒"
+    },
+    {
+      "name": "turn_elapsed_short",
+      "value": "所要時間 1秒未満"
+    },
+    {
+      "name": "ev_action_mcp",
+      "value": "拡張ツール"
+    },
+    {
+      "name": "ev_action_skill",
+      "value": "スキル実行"
+    },
+    {
+      "name": "ev_action_monitor",
+      "value": "コマンド監視"
+    },
+    {
+      "name": "ev_action_task",
+      "value": "タスク操作"
+    },
+    {
+      "name": "ev_sleep",
+      "value": "一時停止"
+    },
+    {
+      "name": "ev_wait_agent",
+      "value": "サブエージェントを待機"
+    },
+    {
+      "name": "ev_child_started",
+      "value": "サブエージェント開始"
+    },
+    {
+      "name": "ev_child_contacted",
+      "value": "サブエージェントと連絡"
+    },
+    {
+      "name": "ev_child_ended",
+      "value": "サブエージェントの実行終了"
+    },
+    {
+      "name": "ev_child_failed",
+      "value": "サブエージェント失敗"
+    },
+    {
+      "name": "ev_child_stopped",
+      "value": "サブエージェント停止"
+    },
+    {
+      "name": "ev_child_waiting",
+      "value": "サブエージェントが承認待ち"
+    },
+    {
+      "name": "ev_children",
+      "value": "サブエージェント {n} 件"
+    },
+    {
+      "name": "ev_children_ended",
+      "value": "実行終了 {n} 件"
+    },
+    {
+      "name": "ev_copy_code",
+      "value": "コードをコピー"
+    },
+    {
+      "name": "ev_code_copied",
+      "value": "コードをコピーしました"
+    },
+    {
+      "name": "ev_code_copy_failed",
+      "value": "コードをコピーできませんでした"
+    },
+    {
+      "name": "ev_wrap",
+      "value": "折り返す"
+    },
+    {
+      "name": "ev_no_wrap",
+      "value": "折り返し解除"
+    },
+    {
+      "name": "ev_action_shell",
+      "value": "コマンド実行"
+    },
+    {
+      "name": "ev_action_read",
+      "value": "ファイルを読む"
+    },
+    {
+      "name": "ev_action_edit",
+      "value": "ファイルを編集"
+    },
+    {
+      "name": "ev_action_search",
+      "value": "検索"
+    },
+    {
+      "name": "ev_action_fetch",
+      "value": "ウェブページを取得"
+    },
+    {
+      "name": "ev_action_agent",
+      "value": "サブエージェントの活動"
+    },
+    {
+      "name": "ev_action_wait",
+      "value": "待機"
+    },
+    {
+      "name": "ev_action_plan",
+      "value": "計画を更新"
+    },
+    {
+      "name": "ev_action_question",
+      "value": "質問"
+    },
+    {
+      "name": "ev_peer",
+      "value": "別の会話から"
+    },
+    {
+      "name": "ev_patrol",
+      "value": "定期チェック"
+    },
+    {
+      "name": "ev_followup",
+      "value": "フォローアップ"
+    },
+    {
+      "name": "ev_supervision",
+      "value": "監督記録"
+    },
+    {
+      "name": "ev_scheduled",
+      "value": "スケジュールタスク"
+    },
+    {
+      "name": "ev_meeting",
+      "value": "会議から"
+    },
+    {
+      "name": "ev_external",
+      "value": "外部からの入力"
+    },
+    {
+      "name": "ev_system",
+      "value": "システムメッセージ"
+    },
+    {
+      "name": "ev_queued",
+      "value": "このターン中にキューに追加"
+    },
+    {
+      "name": "ev_agent",
+      "value": "サブエージェント"
+    },
+    {
+      "name": "ev_task",
+      "value": "バックグラウンドタスク"
+    },
+    {
+      "name": "ev_background_command",
+      "value": "バックグラウンドコマンド"
+    },
+    {
+      "name": "ev_monitor",
+      "value": "モニター"
+    },
+    {
+      "name": "ev_workflow",
+      "value": "ワークフロー"
+    },
+    {
+      "name": "ev_stopped",
+      "value": "停止"
+    },
+    {
+      "name": "ev_awaiting",
+      "value": "承認待ち"
+    },
+    {
+      "name": "ev_update",
+      "value": "更新"
+    },
+    {
+      "name": "ev_ended",
+      "value": "終了"
+    },
+    {
+      "name": "ev_started",
+      "value": "開始"
+    },
+    {
+      "name": "ev_contacted",
+      "value": "やり取りを記録"
+    },
+    {
+      "name": "ev_pending",
+      "value": "保留"
+    },
+    {
+      "name": "ev_recap",
+      "value": "会話の振り返り"
+    },
+    {
+      "name": "ev_elapsed",
+      "value": "ターンの所要時間"
+    },
+    {
+      "name": "ev_visualization",
+      "value": "可視化の添付ファイル"
+    },
+    {
+      "name": "ev_model_fallback",
+      "value": "モデルの切り替え"
+    },
+    {
+      "name": "ev_model_refusal",
+      "value": "モデルがリクエストを拒否"
+    },
+    {
+      "name": "ev_compaction",
+      "value": "コンテキストを圧縮しました"
+    },
+    {
+      "name": "ev_compaction_auto",
+      "value": "コンテキストを自動で圧縮しました"
+    },
+    {
+      "name": "ev_compaction_manual",
+      "value": "コンテキストを手動で圧縮しました"
+    },
+    {
+      "name": "ev_compaction_idle",
+      "value": "待機中にコンテキストを圧縮しました"
+    },
+    {
+      "name": "ev_tokens_before",
+      "value": "圧縮前 {n} トークン"
+    },
+    {
+      "name": "ev_exit",
+      "value": "終了コード {n}"
+    },
+    {
+      "name": "ev_wake",
+      "value": "バックグラウンドから再開"
+    },
+    {
+      "name": "ev_action_required",
+      "value": "対応が必要"
+    },
+    {
+      "name": "ev_session_closed",
+      "value": "会話を続行できません"
+    },
+    {
+      "name": "ev_no_output",
+      "value": "出力なしでターン終了"
+    },
+    {
+      "name": "ev_turn_error",
+      "value": "ターンがエラーで終了"
+    },
+    {
+      "name": "ev_service_error",
+      "value": "モデルサービスのエラー"
+    },
+    {
+      "name": "ev_limit",
+      "value": "使用上限に到達"
+    },
+    {
+      "name": "ev_reset",
+      "value": "リセット予定 {time}"
+    },
+    {
+      "name": "ev_will_resume",
+      "value": "再開予定"
+    },
+    {
+      "name": "ev_unchanged",
+      "value": "前回の読み取りから変更なし"
+    },
+    {
+      "name": "ev_line_range",
+      "value": "{first}–{last} 行"
+    },
+    {
+      "name": "ev_result_n",
+      "value": "結果 {n}"
+    },
+    {
+      "name": "ev_command",
+      "value": "コマンド"
+    },
+    {
+      "name": "ev_files",
+      "value": "ファイル"
+    },
+    {
+      "name": "ev_proposed_content",
+      "value": "書き込み要求の内容"
+    },
+    {
+      "name": "ev_proposed_diff",
+      "value": "要求された差分"
+    },
+    {
+      "name": "ev_replace_before",
+      "value": "置換前のテキスト"
+    },
+    {
+      "name": "ev_replace_after",
+      "value": "置換後のテキスト"
+    },
+    {
+      "name": "ev_patch",
+      "value": "差分"
+    },
+    {
+      "name": "ev_patch_cut",
+      "value": "差分の抜粋"
+    },
+    {
+      "name": "ev_patch_excerpt",
+      "value": "会話には差分の一部が記録されています。"
+    },
+    {
+      "name": "ev_query",
+      "value": "クエリ"
+    },
+    {
+      "name": "ev_address",
+      "value": "アドレス"
+    },
+    {
+      "name": "ev_git",
+      "value": "Git の結果"
+    },
+    {
+      "name": "ev_answers",
+      "value": "記録された回答"
+    },
+    {
+      "name": "ev_output_excerpt",
+      "value": "出力の抜粋"
+    },
+    {
+      "name": "ev_output_excerpt_note",
+      "value": "ノードから返された出力は抜粋です。"
+    },
+    {
+      "name": "ev_output_tail",
+      "value": "出力の末尾"
+    },
+    {
+      "name": "ev_output_file",
+      "value": "保存済みの出力"
+    },
+    {
+      "name": "ev_less",
+      "value": "折りたたむ"
+    },
+    {
+      "name": "ev_more",
+      "value": "残りを表示"
+    },
+    {
+      "name": "work_progress_calls",
+      "value": "{n}/{total} 件の結果"
+    },
+    {
+      "name": "next_step_commit",
+      "value": "変更をコミット"
+    },
+    {
+      "name": "next_step_create_pr",
+      "value": "プルリクエストを作成"
+    },
+    {
+      "name": "next_step_merge",
+      "value": "変更をマージ"
+    },
+    {
+      "name": "next_step_fix_ci",
+      "value": "CI を修正"
+    },
+    {
+      "name": "next_step_address_comments",
+      "value": "コメントに対応"
+    },
+    {
+      "name": "next_step_resolve_conflicts",
+      "value": "競合を解決"
+    },
+    {
+      "name": "next_step_verify",
+      "value": "変更を検証"
+    },
+    {
+      "name": "next_step_archive",
+      "value": "チャットをアーカイブ"
+    },
+    {
+      "name": "chat_model_change",
+      "value": "モデルを {from} から {to} に変更しました"
+    },
+    {
+      "name": "next_step_context",
+      "value": "提案の理由"
+    },
+    {
+      "name": "next_step_send",
+      "value": "この返信を送信"
+    },
+    {
+      "name": "chat_execution_plan",
+      "value": "実行計画"
+    },
+    {
+      "name": "plan_done_count",
+      "value": "{n}/{total} 完了"
+    },
+    {
+      "name": "plan_step_pending",
+      "value": "未着手"
+    },
+    {
+      "name": "plan_step_cancelled",
+      "value": "キャンセル済み"
+    },
+    {
+      "name": "plan_step_skipped",
+      "value": "スキップ済み"
+    },
+    {
+      "name": "plan_step_unknown",
+      "value": "状態未報告"
+    },
+    {
+      "name": "plan_all_done",
+      "value": "計画が完了しました"
+    },
+    {
+      "name": "plan_not_started",
+      "value": "開始待ち"
+    },
+    {
+      "name": "plan_no_active_step",
+      "value": "進行中のステップはありません"
+    },
+    {
+      "name": "plan_view_steps",
+      "value": "ステップを表示"
+    },
+    {
+      "name": "plan_loading_steps",
+      "value": "計画のステップを読み込み中…"
+    },
+    {
+      "name": "plan_steps_unavailable",
+      "value": "この履歴では計画の全ステップを取得できませんでした。"
+    },
+    {
+      "name": "work_progress_running",
+      "value": "実行中"
+    },
+    {
+      "name": "activity_running_shell",
+      "value": "コマンド実行中"
+    },
+    {
+      "name": "activity_running_script",
+      "value": "スクリプト実行中"
+    },
+    {
+      "name": "activity_failed_count",
+      "value": "%d 件失敗"
+    },
+    {
+      "name": "activity_ran_command",
+      "value": "{command} を実行"
+    },
+    {
+      "name": "activity_detail_read",
+      "value": "読み取り済み"
+    },
+    {
+      "name": "activity_detail_image",
+      "value": "表示済み"
+    },
+    {
+      "name": "activity_search_in",
+      "value": "{path} 内で検索"
+    },
+    {
+      "name": "activity_separator",
+      "value": "、"
+    },
+    {
+      "name": "activity_shell_one",
+      "value": "コマンドを1件実行"
+    },
+    {
+      "name": "activity_shell_many",
+      "value": "コマンドを{n}件実行"
+    },
+    {
+      "name": "activity_read_one",
+      "value": "ファイルを1件読み取り"
+    },
+    {
+      "name": "activity_read_many",
+      "value": "ファイルを{n}件読み取り"
+    },
+    {
+      "name": "activity_edit_one",
+      "value": "ファイルを1件編集"
+    },
+    {
+      "name": "activity_edit_many",
+      "value": "ファイルを{n}件編集"
+    },
+    {
+      "name": "activity_search_one",
+      "value": "1回検索"
+    },
+    {
+      "name": "activity_search_many",
+      "value": "{n}回検索"
+    },
+    {
+      "name": "activity_image_one",
+      "value": "画像を1枚表示"
+    },
+    {
+      "name": "activity_image_many",
+      "value": "画像を{n}枚表示"
+    },
+    {
+      "name": "activity_fetch_one",
+      "value": "ページを1件取得"
+    },
+    {
+      "name": "activity_fetch_many",
+      "value": "ページを{n}件取得"
+    },
+    {
+      "name": "activity_other_one",
+      "value": "操作を1件実行"
+    },
+    {
+      "name": "activity_other_many",
+      "value": "操作を{n}件実行"
+    },
+    {
+      "name": "user_passage_more",
+      "value": "もっと見る"
+    },
+    {
+      "name": "user_passage_less",
+      "value": "折りたたむ"
+    },
+    {
+      "name": "activity_total_calls",
+      "value": "ツール呼び出し {n} 件"
+    },
+    {
+      "name": "work_update_summary",
+      "value": "進捗の要約を更新"
+    },
+    {
+      "name": "work_failure_count",
+      "value": "{n} 件の呼び出しが失敗"
+    },
+    {
+      "name": "ev_browser",
+      "value": "ブラウザ"
+    },
+    {
+      "name": "work_tool_failed",
+      "value": "失敗"
+    },
+    {
+      "name": "work_arguments",
+      "value": "入力"
+    },
+    {
+      "name": "tool_inspect_result",
+      "value": "結果"
+    },
+    {
+      "name": "tool_inspect_output",
+      "value": "出力"
+    },
+    {
+      "name": "tool_inspect_changes",
+      "value": "変更"
+    },
+    {
+      "name": "tool_inspect_input",
+      "value": "入力"
+    },
+    {
+      "name": "tool_inspect_returned",
+      "value": "応答済み"
+    },
+    {
+      "name": "tool_inspect_empty",
+      "value": "この呼び出しのテキスト出力は記録されていません。"
+    },
+    {
+      "name": "tool_inspect_more",
+      "value": "さらに表示"
+    },
+    {
+      "name": "tool_inspect_copy",
+      "value": "{part}をコピー"
+    },
+    {
+      "name": "tool_inspect_error",
+      "value": "エラー出力"
+    },
+    {
+      "name": "work_output",
+      "value": "出力"
+    },
+    {
+      "name": "work_notice",
+      "value": "通知"
+    },
+    {
+      "name": "work_expanded",
+      "value": "展開中"
+    },
+    {
+      "name": "work_collapsed",
+      "value": "折りたたみ中"
+    },
+    {
+      "name": "work_load_steps",
+      "value": "ステップを読み込む"
+    },
+    {
+      "name": "work_no_result",
+      "value": "結果の記録なし"
+    },
+    {
+      "name": "work_timed_out",
+      "value": "タイムアウト"
+    },
+    {
+      "name": "work_denied",
+      "value": "拒否"
+    },
+    {
+      "name": "work_blocked",
+      "value": "ブロック済み"
+    },
+    {
+      "name": "work_interrupted",
+      "value": "中断"
+    },
+    {
+      "name": "work_no_match",
+      "value": "一致なし"
+    },
+    {
+      "name": "work_background",
+      "value": "バックグラウンドで実行中"
+    },
+    {
+      "name": "claude_start_needs_input",
+      "value": "Claude が新しいセッションの開始を求めています"
+    },
+    {
+      "name": "claude_desktop_needs_input",
+      "value": "Claude が入力を待っています"
+    },
+    {
+      "name": "claude_desktop_view_request",
+      "value": "PC 画面を表示"
+    },
+    {
+      "name": "claude_desktop_worktree_branch",
+      "value": "ワークツリーのブランチ · {branch}"
+    },
+    {
+      "name": "claude_desktop_handle_on_computer",
+      "value": "このコンピュータの Claude でリクエストを確認してください。"
+    },
+    {
+      "name": "work_live_active",
+      "value": "処理中"
+    },
+    {
+      "name": "work_live_reconnecting",
+      "value": "再接続中"
+    },
+    {
+      "name": "work_live_compacting",
+      "value": "コンテキストを圧縮中"
+    },
+    {
+      "name": "composer_speed",
+      "value": "速度"
+    },
+    {
+      "name": "chat_show_sent_time",
+      "value": "送信時刻を表示"
+    },
+    {
+      "name": "chat_hide_sent_time",
+      "value": "送信時刻を隠す"
+    },
+    {
+      "name": "chat_context_used",
+      "value": "コンテキスト {percent}%"
+    },
+    {
+      "name": "chat_jump_to_latest",
+      "value": "最新のメッセージに移動"
+    },
+    {
+      "name": "chat_new_messages",
+      "value": "新着メッセージ"
+    },
+    {
+      "name": "chat_photo_previous",
+      "value": "前の画像"
+    },
+    {
+      "name": "chat_photo_next",
+      "value": "次の画像"
+    },
+    {
+      "name": "chat_photo_offline",
+      "value": "接続後に画像を読み込み"
+    },
+    {
+      "name": "chat_context_tokens",
+      "value": "{used} / {window} トークン使用、残り {left}%"
+    },
+    {
+      "name": "hub_sync_too_large",
+      "value": "Hub から一度に届いたデータが大きすぎるため、同期できません。一覧が変わったら再試行してください。"
+    },
+    {
+      "name": "workspace_pair_hint",
+      "value": "ワークスペースでこの Hub を再ペアリングすると、コンピュータを表示できます。"
+    },
+    {
+      "name": "agent_subagents_running",
+      "value": "サブエージェント {count} 件が実行中"
+    },
+    {
+      "name": "agent_preview_first_message",
+      "value": "最初のメッセージ待ち"
+    },
+    {
+      "name": "agent_preview_blocked_on",
+      "value": "ブロック中：{waiting}"
+    },
+    {
+      "name": "agent_preview_blocked",
+      "value": "ブロック中"
+    },
+    {
+      "name": "agent_preview_not_done_missing",
+      "value": "未完了：{missing}"
+    },
+    {
+      "name": "agent_preview_not_done",
+      "value": "未完了"
+    },
+    {
+      "name": "agent_preview_reported_done",
+      "value": "完了と報告"
+    },
+    {
+      "name": "agent_preview_merged_checked",
+      "value": "マージ済み ✓"
+    },
+    {
+      "name": "agent_preview_deployed_checked",
+      "value": "デプロイ済み ✓"
+    },
+    {
+      "name": "agent_preview_not_merged",
+      "value": "未マージ"
+    },
+    {
+      "name": "agent_preview_not_deployed",
+      "value": "未デプロイ"
+    },
+    {
+      "name": "agent_preview_merged",
+      "value": "マージ済み"
+    },
+    {
+      "name": "agent_preview_deployed",
+      "value": "デプロイ済み"
+    },
+    {
+      "name": "agent_preview_claim_merged_false",
+      "value": "✗ マージ済みと報告、実際は未マージ"
+    },
+    {
+      "name": "agent_preview_claim_deployed_false",
+      "value": "✗ デプロイ済みと報告、実際は未デプロイ"
+    },
+    {
+      "name": "agent_preview_retrying_now",
+      "value": "すぐに再試行"
+    },
+    {
+      "name": "agent_preview_waking_now",
+      "value": "すぐに起こします"
+    },
+    {
+      "name": "agent_preview_retrying_in",
+      "value": "{time}後に再試行"
+    },
+    {
+      "name": "agent_preview_waking_in",
+      "value": "{time}後に起こします"
+    },
+    {
+      "name": "agent_preview_minutes",
+      "value": "{minutes}分"
+    },
+    {
+      "name": "agent_preview_hours",
+      "value": "{hours}時間"
+    },
+    {
+      "name": "agent_preview_hours_minutes",
+      "value": "{hours}時間{minutes}分"
+    },
+    {
+      "name": "agent_preview_line_when",
+      "value": "{line}（{when}）"
+    },
+    {
+      "name": "relation_transcript_notice",
+      "value": "読み取り専用のサブタスク記録 · メインチャットが管理"
+    },
+    {
+      "name": "relation_side",
+      "value": "サイドチャット"
+    },
+    {
+      "name": "relation_task",
+      "value": "サブタスク"
+    },
+    {
+      "name": "relation_root",
+      "value": "元のチャット"
+    },
+    {
+      "name": "relation_chats",
+      "value": "関連チャット"
+    },
+    {
+      "name": "relation_side_count",
+      "value": "サイドチャット {n} 件"
+    },
+    {
+      "name": "relation_task_count",
+      "value": "サブタスク {n} 件"
+    },
+    {
+      "name": "relation_needs_count",
+      "value": "{n} 件が入力待ち"
+    },
+    {
+      "name": "relation_running_count",
+      "value": "{n} 件が実行中"
+    },
+    {
+      "name": "agent_interrupt",
+      "value": "中断"
+    },
+    {
+      "name": "agent_collapse_all",
+      "value": "すべて折りたたむ"
+    },
+    {
+      "name": "agent_expand_all",
+      "value": "すべて展開"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "最新のメッセージより前の計画"
+    },
+    {
+      "name": "chat_history_failed",
+      "value": "読み込めませんでした。タップして再試行"
+    },
+    {
+      "name": "agent_default_effort",
+      "value": "Agent の既定"
+    },
+    {
+      "name": "minimal",
+      "value": "最小"
     }
   ]
 }

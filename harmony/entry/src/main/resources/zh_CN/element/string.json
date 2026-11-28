@@ -530,7 +530,7 @@
     },
     {
       "name": "machines",
-      "value": "电脑与设备"
+      "value": "电脑"
     },
     {
       "name": "add_computer",
@@ -9671,6 +9671,1406 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "知识库页面"
+    },
+    {
+      "name": "computer_screen_show_keys",
+      "value": "打开 Mac 键盘"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "收起 Mac 键盘"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "横屏查看"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "竖屏查看"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "全屏查看"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "退出全屏"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "还原至适应屏幕"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "操控"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "停止"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "主显示器"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "显示器"
+    },
+    {
+      "name": "computer_screen_mac_sign_in",
+      "value": "使用这台 Mac 的账号登录"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "正在操控"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "这台 Mac 上的账户名"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "该账户的登录密码"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "在这台手机上记住"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "下次查看这台 Mac 时自动连接。"
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "忘记登录信息"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "这台 Mac 未接受已保存的登录信息，请重新输入。"
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "暂时无法读取已保存的登录信息，仍可手动登录。"
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "已连接，本次登录信息未能保存到手机。"
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "未能清除登录信息，请重试。"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "正在验证 Mac 账号…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "正在等待电脑传来画面…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "Mac 登录验证超时，请重新连接。"
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "无法显示电脑画面，请重新连接。"
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "Mac 未及时传来画面，请重新连接。"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac 快捷键"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc，取消操作或关闭弹窗"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab，移到下一个输入项"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "左方向键，向左移动"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "上方向键，向上移动"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "下方向键，向下移动"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "右方向键，向右移动"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "回车，确认或换行"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "键盘未能打开，请再点一次键盘按钮。"
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "部分输入未送达 Mac，请核对电脑上的内容再补输。"
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "允许后，这个浏览器可以完整访问你的 Hub。请确认是你本人发起的登录。"
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "允许这个浏览器登录吗？"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "取消登录"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "正在核对登录请求…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "已拒绝本次登录"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "完成"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "请求已结束"
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "在浏览器中输入这两位数"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "二维码已过期"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "无法核对本次登录"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "互联网"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "无法识别这个登录码"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "局域网"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "你可以随时在「设备」中单独撤销这个浏览器的访问权限。"
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "请勿把数字告诉他人。只有一次输入机会，输错会取消本次登录。"
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "这是另一个 Hub 的登录码"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "请在浏览器刷新二维码，再重新扫描。"
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "此请求来自互联网。请确认是你本人发起的登录，再允许浏览器完整访问你的 Hub。"
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "扫描网页登录码"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "请打开浏览器中的 Persona 登录页，扫描页面上的二维码。"
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "浏览器已登录"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "请先切换到浏览器正在登录的 Hub，再重新扫码。"
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "网页登录"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "未知网络"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "数字不匹配，登录已取消"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "等待浏览器输入…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "浏览器"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "电脑连接"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "其他设备"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "手机"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "手表"
+    },
+    {
+      "name": "devices",
+      "value": "设备"
+    },
+    {
+      "name": "devices_added",
+      "value": "添加时间"
+    },
+    {
+      "name": "devices_demo",
+      "value": "连接真实 Hub 后即可查看已登录设备。"
+    },
+    {
+      "name": "devices_empty",
+      "value": "暂无已登录设备。"
+    },
+    {
+      "name": "devices_last_used",
+      "value": "最近使用"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "未能加载设备列表，请刷新重试。"
+    },
+    {
+      "name": "devices_no_history",
+      "value": "暂无已撤销设备。"
+    },
+    {
+      "name": "devices_no_match",
+      "value": "没有匹配的设备。"
+    },
+    {
+      "name": "devices_revoke",
+      "value": "撤销"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "该设备仍有访问权限，请刷新后重试。"
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "这台设备将失去访问当前 Hub 的权限。重新配对后才能再次连接。"
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "本机将与当前 Hub 断开连接，需要重新配对。"
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "撤销并取消配对"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "已撤销"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "撤销时间"
+    },
+    {
+      "name": "devices_search",
+      "value": "搜索设备名称或类型"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "已登录"
+    },
+    {
+      "name": "devices_this",
+      "value": "本机"
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "未能连接 Hub。请确认 Hub 正在运行，且手机可以访问该地址。"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona 演示短片"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "播放短片"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "暂停播放"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "进入互动演示"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "12 秒无声短片，演示机器总览、Agent 详情和新电脑确认。"
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "短片暂时无法播放，可以直接进入互动演示。"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "名称仅在这台手机上显示，留空可恢复 Hub 名称。"
+    },
+    {
+      "name": "machine_rename",
+      "value": "修改电脑名称"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "此 Hub 的所有设备都能看到新名称。留空可恢复电脑 ID。"
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "名称最多 40 个字符，不能包含控制字符。"
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "当前设备没有修改电脑名称的权限。"
+    },
+    {
+      "name": "workspace_disconnected",
+      "value": "未连接"
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "需要重新配对"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "重新配对"
+    },
+    {
+      "name": "agent_no_online_machine",
+      "value": "没有在线电脑"
+    },
+    {
+      "name": "agent_refresh_models",
+      "value": "刷新模型列表"
+    },
+    {
+      "name": "agent_custom_model",
+      "value": "输入模型 ID…"
+    },
+    {
+      "name": "agent_codex_desktop_model",
+      "value": "在 Codex 桌面端选择"
+    },
+    {
+      "name": "agent_model_id_invalid",
+      "value": "请输入有效的模型 ID，最多 256 个字符。"
+    },
+    {
+      "name": "agent_default_model",
+      "value": "Agent 默认模型"
+    },
+    {
+      "name": "agent_locked_model",
+      "value": "由启动器指定"
+    },
+    {
+      "name": "agent_models_unavailable",
+      "value": "暂时无法读取模型列表，可使用默认模型。"
+    },
+    {
+      "name": "agent_default_folder",
+      "value": "使用电脑默认目录"
+    },
+    {
+      "name": "agent_first_message",
+      "value": "首条消息"
+    },
+    {
+      "name": "agent_message_optional",
+      "value": "可以现在输入，也可以创建后发送"
+    },
+    {
+      "name": "agent_resume_session",
+      "value": "接管会话"
+    },
+    {
+      "name": "agent_continue_session",
+      "value": "在新会话中继续"
+    },
+    {
+      "name": "agent_confirm_resume",
+      "value": "接管后，电脑上当前运行的这轮任务会停止。"
+    },
+    {
+      "name": "agent_confirm_continue",
+      "value": "使用 Codex 提供的上下文，在这台电脑上另开会话继续？"
+    },
+    {
+      "name": "agent_new_session",
+      "value": "新建会话"
+    },
+    {
+      "name": "agent_machine_default",
+      "value": "使用电脑默认启动器"
+    },
+    {
+      "name": "agent_launchers_unavailable",
+      "value": "暂时无法读取启动器，可重试或输入启动器名称。"
+    },
+    {
+      "name": "turn_process",
+      "value": "执行过程"
+    },
+    {
+      "name": "turn_elapsed_hours",
+      "value": "用时 {h}小时 {m}分"
+    },
+    {
+      "name": "turn_elapsed_minutes",
+      "value": "用时 {m}分 {s}秒"
+    },
+    {
+      "name": "turn_elapsed_seconds",
+      "value": "用时 {s}秒"
+    },
+    {
+      "name": "turn_elapsed_short",
+      "value": "用时不足 1 秒"
+    },
+    {
+      "name": "ev_action_mcp",
+      "value": "扩展工具"
+    },
+    {
+      "name": "ev_action_skill",
+      "value": "调用技能"
+    },
+    {
+      "name": "ev_action_monitor",
+      "value": "监控命令"
+    },
+    {
+      "name": "ev_action_task",
+      "value": "管理任务"
+    },
+    {
+      "name": "ev_sleep",
+      "value": "暂停"
+    },
+    {
+      "name": "ev_wait_agent",
+      "value": "等待子 Agent"
+    },
+    {
+      "name": "ev_child_started",
+      "value": "启动子 Agent"
+    },
+    {
+      "name": "ev_child_contacted",
+      "value": "与子 Agent 交互"
+    },
+    {
+      "name": "ev_child_ended",
+      "value": "子 Agent 运行结束"
+    },
+    {
+      "name": "ev_child_failed",
+      "value": "子 Agent 执行失败"
+    },
+    {
+      "name": "ev_child_stopped",
+      "value": "子 Agent 已停止"
+    },
+    {
+      "name": "ev_child_waiting",
+      "value": "子 Agent 等待批准"
+    },
+    {
+      "name": "ev_children",
+      "value": "{n} 个子 Agent"
+    },
+    {
+      "name": "ev_children_ended",
+      "value": "{n} 个已结束运行"
+    },
+    {
+      "name": "ev_copy_code",
+      "value": "复制代码"
+    },
+    {
+      "name": "ev_code_copied",
+      "value": "代码已复制"
+    },
+    {
+      "name": "ev_code_copy_failed",
+      "value": "代码复制失败"
+    },
+    {
+      "name": "ev_wrap",
+      "value": "自动换行"
+    },
+    {
+      "name": "ev_no_wrap",
+      "value": "取消换行"
+    },
+    {
+      "name": "ev_action_shell",
+      "value": "运行命令"
+    },
+    {
+      "name": "ev_action_read",
+      "value": "读取文件"
+    },
+    {
+      "name": "ev_action_edit",
+      "value": "修改文件"
+    },
+    {
+      "name": "ev_action_search",
+      "value": "搜索"
+    },
+    {
+      "name": "ev_action_fetch",
+      "value": "读取网页"
+    },
+    {
+      "name": "ev_action_agent",
+      "value": "子 Agent 活动"
+    },
+    {
+      "name": "ev_action_wait",
+      "value": "等待"
+    },
+    {
+      "name": "ev_action_plan",
+      "value": "更新计划"
+    },
+    {
+      "name": "ev_action_question",
+      "value": "提问"
+    },
+    {
+      "name": "ev_peer",
+      "value": "来自其他会话"
+    },
+    {
+      "name": "ev_patrol",
+      "value": "定期检查"
+    },
+    {
+      "name": "ev_followup",
+      "value": "跟进"
+    },
+    {
+      "name": "ev_supervision",
+      "value": "监督记录"
+    },
+    {
+      "name": "ev_scheduled",
+      "value": "定时任务"
+    },
+    {
+      "name": "ev_meeting",
+      "value": "来自会议"
+    },
+    {
+      "name": "ev_external",
+      "value": "外部输入"
+    },
+    {
+      "name": "ev_system",
+      "value": "系统消息"
+    },
+    {
+      "name": "ev_queued",
+      "value": "本轮排队补充"
+    },
+    {
+      "name": "ev_agent",
+      "value": "子 Agent"
+    },
+    {
+      "name": "ev_task",
+      "value": "后台任务"
+    },
+    {
+      "name": "ev_background_command",
+      "value": "后台命令"
+    },
+    {
+      "name": "ev_monitor",
+      "value": "监控任务"
+    },
+    {
+      "name": "ev_workflow",
+      "value": "工作流"
+    },
+    {
+      "name": "ev_stopped",
+      "value": "已停止"
+    },
+    {
+      "name": "ev_awaiting",
+      "value": "等待批准"
+    },
+    {
+      "name": "ev_update",
+      "value": "新进展"
+    },
+    {
+      "name": "ev_ended",
+      "value": "已结束"
+    },
+    {
+      "name": "ev_started",
+      "value": "已启动"
+    },
+    {
+      "name": "ev_contacted",
+      "value": "已记录交互"
+    },
+    {
+      "name": "ev_pending",
+      "value": "待处理"
+    },
+    {
+      "name": "ev_recap",
+      "value": "会话回顾"
+    },
+    {
+      "name": "ev_elapsed",
+      "value": "本轮耗时"
+    },
+    {
+      "name": "ev_visualization",
+      "value": "可视化附件"
+    },
+    {
+      "name": "ev_model_fallback",
+      "value": "模型切换"
+    },
+    {
+      "name": "ev_model_refusal",
+      "value": "模型拒绝了请求"
+    },
+    {
+      "name": "ev_compaction",
+      "value": "上下文已压缩"
+    },
+    {
+      "name": "ev_compaction_auto",
+      "value": "上下文已自动压缩"
+    },
+    {
+      "name": "ev_compaction_manual",
+      "value": "上下文已手动压缩"
+    },
+    {
+      "name": "ev_compaction_idle",
+      "value": "空闲时已压缩上下文"
+    },
+    {
+      "name": "ev_tokens_before",
+      "value": "压缩前 {n} tokens"
+    },
+    {
+      "name": "ev_exit",
+      "value": "退出码 {n}"
+    },
+    {
+      "name": "ev_wake",
+      "value": "后台唤醒"
+    },
+    {
+      "name": "ev_action_required",
+      "value": "需要你处理"
+    },
+    {
+      "name": "ev_session_closed",
+      "value": "会话无法继续"
+    },
+    {
+      "name": "ev_no_output",
+      "value": "本轮结束时没有输出"
+    },
+    {
+      "name": "ev_turn_error",
+      "value": "本轮执行出错"
+    },
+    {
+      "name": "ev_service_error",
+      "value": "模型服务出错"
+    },
+    {
+      "name": "ev_limit",
+      "value": "已达用量上限"
+    },
+    {
+      "name": "ev_reset",
+      "value": "重置时间 {time}"
+    },
+    {
+      "name": "ev_will_resume",
+      "value": "已安排恢复"
+    },
+    {
+      "name": "ev_unchanged",
+      "value": "与上次读取相同"
+    },
+    {
+      "name": "ev_line_range",
+      "value": "第 {first}–{last} 行"
+    },
+    {
+      "name": "ev_result_n",
+      "value": "第 {n} 次结果"
+    },
+    {
+      "name": "ev_command",
+      "value": "命令"
+    },
+    {
+      "name": "ev_files",
+      "value": "文件"
+    },
+    {
+      "name": "ev_proposed_content",
+      "value": "请求写入的内容"
+    },
+    {
+      "name": "ev_proposed_diff",
+      "value": "请求的差异"
+    },
+    {
+      "name": "ev_replace_before",
+      "value": "待替换的原文"
+    },
+    {
+      "name": "ev_replace_after",
+      "value": "请求替换为"
+    },
+    {
+      "name": "ev_patch",
+      "value": "差异"
+    },
+    {
+      "name": "ev_patch_cut",
+      "value": "差异节选"
+    },
+    {
+      "name": "ev_patch_excerpt",
+      "value": "会话只记录了部分差异。"
+    },
+    {
+      "name": "ev_query",
+      "value": "查询"
+    },
+    {
+      "name": "ev_address",
+      "value": "地址"
+    },
+    {
+      "name": "ev_git",
+      "value": "Git 结果"
+    },
+    {
+      "name": "ev_answers",
+      "value": "已记录的回答"
+    },
+    {
+      "name": "ev_output_excerpt",
+      "value": "日志节选"
+    },
+    {
+      "name": "ev_output_excerpt_note",
+      "value": "节点返回的是这次输出的节选。"
+    },
+    {
+      "name": "ev_output_tail",
+      "value": "输出末尾"
+    },
+    {
+      "name": "ev_output_file",
+      "value": "输出文件"
+    },
+    {
+      "name": "ev_less",
+      "value": "收起详情"
+    },
+    {
+      "name": "ev_more",
+      "value": "展开剩余内容"
+    },
+    {
+      "name": "work_progress_calls",
+      "value": "{n}/{total} 已返回"
+    },
+    {
+      "name": "next_step_commit",
+      "value": "提交更改"
+    },
+    {
+      "name": "next_step_create_pr",
+      "value": "创建拉取请求"
+    },
+    {
+      "name": "next_step_merge",
+      "value": "合并更改"
+    },
+    {
+      "name": "next_step_fix_ci",
+      "value": "修复 CI"
+    },
+    {
+      "name": "next_step_address_comments",
+      "value": "处理评审意见"
+    },
+    {
+      "name": "next_step_resolve_conflicts",
+      "value": "解决冲突"
+    },
+    {
+      "name": "next_step_verify",
+      "value": "验证更改"
+    },
+    {
+      "name": "next_step_archive",
+      "value": "归档会话"
+    },
+    {
+      "name": "chat_model_change",
+      "value": "模型已从 {from} 切换至 {to}"
+    },
+    {
+      "name": "next_step_context",
+      "value": "建议依据"
+    },
+    {
+      "name": "next_step_send",
+      "value": "发送这条回复"
+    },
+    {
+      "name": "chat_execution_plan",
+      "value": "执行计划"
+    },
+    {
+      "name": "plan_done_count",
+      "value": "已完成 {n}/{total}"
+    },
+    {
+      "name": "plan_step_pending",
+      "value": "待执行"
+    },
+    {
+      "name": "plan_step_cancelled",
+      "value": "已取消"
+    },
+    {
+      "name": "plan_step_skipped",
+      "value": "已跳过"
+    },
+    {
+      "name": "plan_step_unknown",
+      "value": "状态未报告"
+    },
+    {
+      "name": "plan_all_done",
+      "value": "计划已完成"
+    },
+    {
+      "name": "plan_not_started",
+      "value": "等待开始"
+    },
+    {
+      "name": "plan_no_active_step",
+      "value": "当前没有进行中的步骤"
+    },
+    {
+      "name": "plan_view_steps",
+      "value": "查看计划步骤"
+    },
+    {
+      "name": "plan_loading_steps",
+      "value": "正在读取计划步骤…"
+    },
+    {
+      "name": "plan_steps_unavailable",
+      "value": "当前记录未能提供完整的计划步骤。"
+    },
+    {
+      "name": "work_progress_running",
+      "value": "执行中"
+    },
+    {
+      "name": "activity_running_shell",
+      "value": "正在运行命令"
+    },
+    {
+      "name": "activity_running_script",
+      "value": "正在执行脚本"
+    },
+    {
+      "name": "activity_failed_count",
+      "value": "%d 次失败"
+    },
+    {
+      "name": "activity_ran_command",
+      "value": "运行了 {command}"
+    },
+    {
+      "name": "activity_detail_read",
+      "value": "已读取"
+    },
+    {
+      "name": "activity_detail_image",
+      "value": "已查看"
+    },
+    {
+      "name": "activity_search_in",
+      "value": "已在 {path} 中搜索"
+    },
+    {
+      "name": "activity_separator",
+      "value": "、"
+    },
+    {
+      "name": "activity_shell_one",
+      "value": "运行了 1 条命令"
+    },
+    {
+      "name": "activity_shell_many",
+      "value": "运行了 {n} 条命令"
+    },
+    {
+      "name": "activity_read_one",
+      "value": "读取了 1 个文件"
+    },
+    {
+      "name": "activity_read_many",
+      "value": "读取了 {n} 个文件"
+    },
+    {
+      "name": "activity_edit_one",
+      "value": "修改了 1 个文件"
+    },
+    {
+      "name": "activity_edit_many",
+      "value": "修改了 {n} 个文件"
+    },
+    {
+      "name": "activity_search_one",
+      "value": "搜索了 1 次"
+    },
+    {
+      "name": "activity_search_many",
+      "value": "搜索了 {n} 次"
+    },
+    {
+      "name": "activity_image_one",
+      "value": "查看了 1 张图像"
+    },
+    {
+      "name": "activity_image_many",
+      "value": "查看了 {n} 张图像"
+    },
+    {
+      "name": "activity_fetch_one",
+      "value": "读取了 1 个网页"
+    },
+    {
+      "name": "activity_fetch_many",
+      "value": "读取了 {n} 个网页"
+    },
+    {
+      "name": "activity_other_one",
+      "value": "执行了 1 项操作"
+    },
+    {
+      "name": "activity_other_many",
+      "value": "执行了 {n} 项操作"
+    },
+    {
+      "name": "user_passage_more",
+      "value": "显示更多"
+    },
+    {
+      "name": "user_passage_less",
+      "value": "收起"
+    },
+    {
+      "name": "activity_total_calls",
+      "value": "{n} 次工具调用"
+    },
+    {
+      "name": "work_update_summary",
+      "value": "更新执行摘要"
+    },
+    {
+      "name": "work_failure_count",
+      "value": "{n} 次调用失败"
+    },
+    {
+      "name": "ev_browser",
+      "value": "浏览器"
+    },
+    {
+      "name": "work_tool_failed",
+      "value": "执行失败"
+    },
+    {
+      "name": "work_arguments",
+      "value": "输入参数"
+    },
+    {
+      "name": "tool_inspect_result",
+      "value": "结果"
+    },
+    {
+      "name": "tool_inspect_output",
+      "value": "输出"
+    },
+    {
+      "name": "tool_inspect_changes",
+      "value": "变更"
+    },
+    {
+      "name": "tool_inspect_input",
+      "value": "参数"
+    },
+    {
+      "name": "tool_inspect_returned",
+      "value": "已返回"
+    },
+    {
+      "name": "tool_inspect_empty",
+      "value": "此次调用没有记录文本输出。"
+    },
+    {
+      "name": "tool_inspect_more",
+      "value": "显示更多"
+    },
+    {
+      "name": "tool_inspect_copy",
+      "value": "复制{part}"
+    },
+    {
+      "name": "tool_inspect_error",
+      "value": "错误输出"
+    },
+    {
+      "name": "work_output",
+      "value": "输出结果"
+    },
+    {
+      "name": "work_notice",
+      "value": "提示"
+    },
+    {
+      "name": "work_expanded",
+      "value": "已展开"
+    },
+    {
+      "name": "work_collapsed",
+      "value": "已收起"
+    },
+    {
+      "name": "work_load_steps",
+      "value": "加载执行步骤"
+    },
+    {
+      "name": "work_no_result",
+      "value": "未收到结果"
+    },
+    {
+      "name": "work_timed_out",
+      "value": "已超时"
+    },
+    {
+      "name": "work_denied",
+      "value": "已拒绝"
+    },
+    {
+      "name": "work_blocked",
+      "value": "已阻止"
+    },
+    {
+      "name": "work_interrupted",
+      "value": "已中断"
+    },
+    {
+      "name": "work_no_match",
+      "value": "无匹配结果"
+    },
+    {
+      "name": "work_background",
+      "value": "在后台运行"
+    },
+    {
+      "name": "claude_start_needs_input",
+      "value": "Claude 请求开启新会话"
+    },
+    {
+      "name": "claude_desktop_needs_input",
+      "value": "Claude 正在等你处理"
+    },
+    {
+      "name": "claude_desktop_view_request",
+      "value": "查看电脑屏幕"
+    },
+    {
+      "name": "claude_desktop_worktree_branch",
+      "value": "工作树分支 · {branch}"
+    },
+    {
+      "name": "claude_desktop_handle_on_computer",
+      "value": "请在这台电脑的 Claude 窗口处理请求。"
+    },
+    {
+      "name": "work_live_active",
+      "value": "正在处理"
+    },
+    {
+      "name": "work_live_reconnecting",
+      "value": "正在重新连接"
+    },
+    {
+      "name": "work_live_compacting",
+      "value": "正在压缩上下文"
+    },
+    {
+      "name": "composer_speed",
+      "value": "速度"
+    },
+    {
+      "name": "chat_show_sent_time",
+      "value": "查看发送时间"
+    },
+    {
+      "name": "chat_hide_sent_time",
+      "value": "收起发送时间"
+    },
+    {
+      "name": "chat_context_used",
+      "value": "上下文 {percent}%"
+    },
+    {
+      "name": "chat_jump_to_latest",
+      "value": "回到最新消息"
+    },
+    {
+      "name": "chat_new_messages",
+      "value": "有新消息"
+    },
+    {
+      "name": "chat_photo_previous",
+      "value": "上一张"
+    },
+    {
+      "name": "chat_photo_next",
+      "value": "下一张"
+    },
+    {
+      "name": "chat_photo_offline",
+      "value": "连接后加载图片"
+    },
+    {
+      "name": "chat_context_tokens",
+      "value": "已用 {used} / {window} tokens，剩余 {left}%"
+    },
+    {
+      "name": "hub_sync_too_large",
+      "value": "Hub 单次返回的数据过大，暂时无法同步。列表变化后可重试。"
+    },
+    {
+      "name": "workspace_pair_hint",
+      "value": "请在工作空间中重新配对此 Hub，配对后即可查看电脑。"
+    },
+    {
+      "name": "agent_subagents_running",
+      "value": "子 Agent {count} 个在跑"
+    },
+    {
+      "name": "agent_preview_first_message",
+      "value": "等第一条消息"
+    },
+    {
+      "name": "agent_preview_blocked_on",
+      "value": "卡在：{waiting}"
+    },
+    {
+      "name": "agent_preview_blocked",
+      "value": "卡住了"
+    },
+    {
+      "name": "agent_preview_not_done_missing",
+      "value": "没做完：{missing}"
+    },
+    {
+      "name": "agent_preview_not_done",
+      "value": "没做完"
+    },
+    {
+      "name": "agent_preview_reported_done",
+      "value": "自述已完成"
+    },
+    {
+      "name": "agent_preview_merged_checked",
+      "value": "已合并 ✓"
+    },
+    {
+      "name": "agent_preview_deployed_checked",
+      "value": "已部署 ✓"
+    },
+    {
+      "name": "agent_preview_not_merged",
+      "value": "未合并"
+    },
+    {
+      "name": "agent_preview_not_deployed",
+      "value": "未部署"
+    },
+    {
+      "name": "agent_preview_merged",
+      "value": "已合并"
+    },
+    {
+      "name": "agent_preview_deployed",
+      "value": "已部署"
+    },
+    {
+      "name": "agent_preview_claim_merged_false",
+      "value": "✗ 说已合并，实际没有"
+    },
+    {
+      "name": "agent_preview_claim_deployed_false",
+      "value": "✗ 说已部署，实际没有"
+    },
+    {
+      "name": "agent_preview_retrying_now",
+      "value": "马上重试"
+    },
+    {
+      "name": "agent_preview_waking_now",
+      "value": "马上叫醒"
+    },
+    {
+      "name": "agent_preview_retrying_in",
+      "value": "{time}后重试"
+    },
+    {
+      "name": "agent_preview_waking_in",
+      "value": "{time}后叫醒"
+    },
+    {
+      "name": "agent_preview_minutes",
+      "value": "{minutes} 分钟"
+    },
+    {
+      "name": "agent_preview_hours",
+      "value": "{hours} 小时"
+    },
+    {
+      "name": "agent_preview_hours_minutes",
+      "value": "{hours} 小时 {minutes} 分"
+    },
+    {
+      "name": "agent_preview_line_when",
+      "value": "{line}（{when}）"
+    },
+    {
+      "name": "relation_transcript_notice",
+      "value": "只读子任务记录 · 由主会话调度"
+    },
+    {
+      "name": "relation_side",
+      "value": "旁聊"
+    },
+    {
+      "name": "relation_task",
+      "value": "子任务"
+    },
+    {
+      "name": "relation_root",
+      "value": "主会话"
+    },
+    {
+      "name": "relation_chats",
+      "value": "关联会话"
+    },
+    {
+      "name": "relation_side_count",
+      "value": "{n} 个旁聊"
+    },
+    {
+      "name": "relation_task_count",
+      "value": "{n} 个子任务"
+    },
+    {
+      "name": "relation_needs_count",
+      "value": "{n} 项待处理"
+    },
+    {
+      "name": "relation_running_count",
+      "value": "{n} 个运行中"
+    },
+    {
+      "name": "agent_interrupt",
+      "value": "中断"
+    },
+    {
+      "name": "agent_collapse_all",
+      "value": "全部折叠"
+    },
+    {
+      "name": "agent_expand_all",
+      "value": "全部展开"
+    },
+    {
+      "name": "plan_before_last_message",
+      "value": "你最新消息之前的计划"
+    },
+    {
+      "name": "chat_history_failed",
+      "value": "加载失败，点按重试"
+    },
+    {
+      "name": "agent_default_effort",
+      "value": "Agent 默认"
+    },
+    {
+      "name": "minimal",
+      "value": "最低"
     }
   ]
 }

@@ -12,6 +12,7 @@ const platform = new Map([
  ['../design/Strings','export function tr(k){return ({chat_forward_me:"Me",chat_forward_from:"Forwarded from {1}",chat_forward_cut:"CUT",chat_forward_file:"File {1}",chat_forward_computer_file:"File on {1}: {2}"})[k]||k}']
 ]);
 registerHooks({resolve(spec,ctx,next){
+ if(ctx.parentURL?.endsWith('/SessionSnapshot.ts') && spec==='./TranscriptCache')return {url:new URL('./TranscriptCache.ts',ctx.parentURL).href,shortCircuit:true};
  if(ctx.parentURL?.endsWith('.ets')){
   if(platform.has(spec))return {url:'forward-test:'+spec,shortCircuit:true};
   if(spec.startsWith('.')){const path=new URL(spec,ctx.parentURL);return {url:path.href+(existsSync(new URL(path.href+'.ts'))?'.ts':'.ets'),shortCircuit:true};}
@@ -117,4 +118,16 @@ test('named and numbered Hub tabs survive in source attribution and an absent ta
   model.selected.raw=JSON.stringify({space_name:'weather',...props});state.startForward(model,messages[2]);
   assert.equal(state.previews(model)[0].project,expected);
  }
+});
+
+test('the transcript renderer keeps the phone selection and forwarding routes around enriched Agent messages', () => {
+  const view = readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const message = view.slice(view.indexOf('  @Builder message(entry:'), view.indexOf('  @Builder actionsMenu('));
+  assert.ok(message.includes('this.forwardState.toggle(this.model,entry.item.message!)'));
+  assert.ok(message.includes('this.workBody(entry)'));
+  assert.ok(message.includes('this.canLiftMessage(entry.item.message!)'));
+  assert.ok(message.includes("'chat.lift.source.'+entry.item.id"));
+  assert.ok(message.includes('PhoneForwardSentCard(') && message.includes('this.onForwardOrigin(row,item)'));
+  assert.ok(route.includes('this.selectedComputer()?.key() === row.key()) this.openComputer(row)'));
 });

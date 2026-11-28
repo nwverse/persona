@@ -34,7 +34,7 @@ registerHooks({
       export const messageDisplay = text => text;
       export const nativeNotifications = {async clear(){},features(){return ['elicitation'];}};
     `};
-    if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,'').replace(/TranscriptItem, TranscriptBatch, TranscriptAction, TranscriptSnapshot/, '').replace(/, TranscriptBatch, TranscriptSnapshot/, ''))};
+    if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
     return next(url, context);
   },
 });
@@ -206,6 +206,202 @@ test('an in-flight latest page matching the replacement push can finish the open
   assert.deepEqual(snapshots.at(-1).items, replacement.items);
 });
 
+test('live reply frames replace in place, stay out of saved history and hand off to the durable reply', () => {
+  const seen=[], stored=[];
+  const model=new TranscriptModel({ machine:'phone',session:'one',kind:'session' }, { transport:{ send() {} } },
+    { async put(_key,value) { stored.push(JSON.parse(value)); } }, 'scope', ()=>{}, err=>{ throw err; }, text=>seen.push(text));
+  const target={machine_id:'phone',session_id:'one'};
+  const delta=text=>model.receive({...target,type:'delta',text});
+  const push=(seq,item)=>model.receive({...target,type:'items',history:'h',from_seq:seq-1,to_seq:seq,items:[{id:String(seq)+'#0',seq,...item}]});
+  push(1,{role:'user',kind:'text',text:'Please check'});
+  model.receive({...target,type:'delta',session_id:'wrong',text:'foreign'}); delta('first'); delta('first'); delta('first line');
+  assert.deepEqual(seen,['first','first line']); assert.equal(stored.length,1);
+  delta(''); assert.equal(seen.at(-1),'first line');
+  push(2,{role:'assistant',kind:'text',text:'first line'}); assert.equal(seen.at(-1),'');
+  const originalItems = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(model.reducer),'items').get;
+  Object.defineProperty(model.reducer,'items',{configurable:true,get(){throw new Error('copied raw history on a text-only delta');}});
+  try { delta('first line'); assert.equal(seen.at(-1),''); }
+  finally { Object.defineProperty(model.reducer,'items',{configurable:true,get:originalItems}); }
+  assert.deepEqual(stored.at(-1).items.map(i=>i.text),['Please check','first line']);
+  delta('second reply'); push(3,{kind:'turn_duration',role:'system'}); assert.equal(seen.at(-1),'');
+  delta('first line'); assert.equal(seen.at(-1),'');
+  delta('next'); model.close(); assert.equal(seen.at(-1),'');
+  delta('too late'); assert.equal(seen.at(-1),'');
+});
+
+const planHeadline = {done:1, total:2, current:'Checking', sourceId:'', complete:false, steps:[]};
+const planCall = {id:'plan-use',seq:1,kind:'tool_use',tool_name:'TodoWrite',tool_use_id:'p',tool_input:{todos:[
+  {content:'Read logs',status:'completed'},{content:'Check output',activeForm:'Checking',status:'in_progress'},
+]}};
+const planReceipt = {id:'plan-result',seq:2,kind:'tool_result',tool_use_id:'p',text:'accepted'};
+
+test('expanding a summary recovers calls and results across pages without moving chat history or opening its folds', async () => {
+  const requests = [], current = historyPage('history', [9], true);
+  current.items = [{id:'fold:9',seq:9,kind:'fold',fold:{through_seq:10,tools:2}}];
+  const {model, visible, snapshots} = historyFixture(async path => {
+    requests.push(path);
+    if (path.includes('after_seq=0')) return {history:'history',items:[planCall],from_seq:0,to_seq:1,more_after:true};
+    if (path.includes('after_seq=1')) return {history:'history',items:[planReceipt],from_seq:1,to_seq:9};
+    return current;
+  });
+  await model.open();
+  const before = model.reducer.snapshot(), updates = visible.length, cached = snapshots.length;
+  const plan = await model.readPlanDetails(planHeadline, () => true);
+  assert.deepEqual(plan.steps.map(s => s.status), ['completed','in_progress']);
+  assert.equal(plan.current, 'Checking');
+  assert.deepEqual(model.reducer.snapshot(), before);
+  assert.equal(visible.length, updates);
+  assert.equal(snapshots.length, cached);
+  assert.equal(requests.filter(p => p.includes('after_seq=')).length, 2);
+  assert.ok(requests.slice(-2).every(p => p.includes('lazy_images=1') && !p.includes('fold_work')));
+  assert.equal(await model.readPlanDetails({...planHeadline,current:'A newer step'}, () => true), undefined);
+});
+
+test('a collapsed, superseded or incomplete plan read cannot present stale steps', async () => {
+  for (const ending of ['collapsed','rewritten','stalled','scope closed']) {
+    let release, open = true, reads = 0;
+    const pending = new Promise(resolve => { release = resolve; });
+    const {model} = historyFixture(async path => {
+      if (!path.includes('after_seq=')) return historyPage('history', [9], true);
+      reads++;
+      return pending;
+    });
+    await model.open();
+    const reading = model.readPlanDetails(planHeadline, () => open);
+    assert.equal(reads, 1);
+    if (ending === 'collapsed') open = false;
+    if (ending === 'scope closed') model.close();
+    release({history:ending === 'rewritten' ? 'replacement' : 'history',items:[planCall,planReceipt],
+      from_seq:0,to_seq:ending === 'stalled' ? 0 : 2,more_after:ending === 'stalled'});
+    assert.equal(await reading, undefined, ending);
+    assert.equal(reads, 1);
+  }
+});
+
+test('native history reads bounded pages with public progress paragraphs intact and keeps images lazy', async () => {
+  const requests = [], messages = [], initial = historyPage('history',[3,4],true);
+  const model = new TranscriptModel({machine:'m',session:'s'},
+    {async call(path){requests.push(new URL(path,'http://local').searchParams);return path.includes('before_seq')?historyPage('history',[1,2]):initial;},
+      transport:{send(text){messages.push(JSON.parse(text));}}},
+    {async get(){return '';},async put(){}},'history',()=>{},e=>{throw e;});
+  await model.open(); await model.older();
+  assert.equal(requests.length,2);
+  assert.equal(requests[0].get('limit'),'80');assert.equal(requests[0].has('fold_work'),false);
+  assert.equal(requests[1].get('turns'),'3');assert.equal(requests[1].get('fold_work'),'1');
+  for (const page of requests) assert.equal(page.get('lazy_images'),'1');
+  assert.ok(messages.some(m=>m.type==='subscribe'&&!m.fold_work));
+});
+
+test('live tools are scoped snapshots, independent of streamed prose, cursors and offline cache', () => {
+  const changes = [], cache = [], previews = [];
+  const model = new TranscriptModel({machine:'m',session:'s'}, {transport:{send(){}}},
+    {async put(_key,value){cache.push(JSON.parse(value));}}, 'test', () => {}, assert.fail,
+    text => previews.push(text), () => changes.push(model.liveTools.map(tool => tool.name)));
+  const push = (tools, extra={}) => model.receive({type:'live_tools',machine_id:'m',session_id:'s',tools,...extra});
+  const one = {id:'c1', name:'functions.exec'};
+  push([one], {machine_id:'other'}); push([one], {session_id:'other'}); push(null);
+  assert.deepEqual(changes, []);
+  push([one,one,{name:'malformed'}]); push([one]);
+  assert.deepEqual(changes, [['functions.exec']]);
+  model.receive({type:'delta',machine_id:'m',session_id:'s',text:'Streaming'});
+  model.receive({type:'delta',machine_id:'m',session_id:'s',text:''});
+  push([{id:'c2',name:'Read'},one]); push([]);
+  assert.deepEqual(previews,['Streaming']);
+  assert.deepEqual(changes,[['functions.exec'],['Read','functions.exec'],[]]);
+  assert.equal(cache.length,0);
+  push([one]); model.receive({type:'items',machine_id:'m',session_id:'s',items:[],from_seq:0,to_seq:0,history:'first'});
+  assert.deepEqual(cache.at(-1).items, []);
+  assert.equal(model.liveTools.length,1);
+  model.receive({type:'items_replace',machine_id:'m',session_id:'s',items:[],from_seq:0,to_seq:0,history:'replacement'});
+  assert.deepEqual(model.liveTools, []);
+  push([one]);model.clearLive();assert.deepEqual(model.liveTools,[]);
+  push([one]);model.close();push([one]);assert.deepEqual(model.liveTools,[]);
+});
+
+test('public live summaries, provider thinking and active-only frames clear on the owning turn or disconnect', () => {
+  const updates = [], writes = [];
+  const model = new TranscriptModel({machine:'m',session:'s'}, {transport:{send(){}}}, {async put(k,v){writes.push(v);}},
+    'key', () => {}, assert.fail, () => {}, () => updates.push([model.liveSummary,model.liveThinking,model.liveActive]));
+  const send = (type,data) => model.receive({type,machine_id:'m',session_id:'s',...data});
+  send('items',{items:[{id:'u#0',seq:1,kind:'text',role:'user',text:'check'}],history:'h',from_seq:0,to_seq:1});
+  send('live_tools',{tools:[],summary:'Checking tests',active:true});
+  send('live_tools',{tools:[],summary:'Checking tests',active:true});
+  assert.deepEqual(updates,[['Checking tests',false,true]]);
+  send('live',{live:{verb:'private token',thinking:true,tokens_down:900}});
+  assert.deepEqual(updates.at(-1),['Checking tests',true,true]);
+  send('live',{live:null});assert.deepEqual(updates.at(-1),['Checking tests',false,true]);
+  send('live_tools',{tools:[],thinking:true,active:true});
+  assert.deepEqual(updates.at(-1),['',true,true]);
+  send('items',{items:[{id:'e',seq:2,kind:'turn_duration',turn_duration:{user_item_id:'u#0',duration_ms:2}}],history:'h',from_seq:1,to_seq:2});
+  assert.deepEqual(updates.at(-1),['',false,false]);
+  assert.ok(writes.every(snapshot => !snapshot.includes('Checking tests') && !snapshot.includes('private token')));
+  send('live',{live:{thinking:true}});assert.deepEqual(updates.at(-1),['',true,false]);
+  send('live_tools',{tools:[]});assert.deepEqual(updates.at(-1),['',false,false]);
+});
+
+test('provider retry progress only reads a valid current attempt and resets on recovery, without mutating transport status', () => {
+  const observed = [];
+  const model = new TranscriptModel({machine:'m',session:'s'}, {transport:{send(){}}},
+    {async put(){}}, 'key', () => {}, assert.fail, () => {}, () => observed.push(model.liveRetryCount));
+  const frame = extra => model.receive({type:'live_tools',machine_id:'m',session_id:'s',tools:[],active:true,...extra});
+  frame({retry_attempt:2,retry_max:5});
+  assert.equal(model.liveRetryCount,'2/5');
+  model.receive({type:'live',machine_id:'m',session_id:'s',live:{thinking:false}});
+  assert.equal(model.liveRetryCount,'2/5');
+  frame({retry_attempt:3,retry_max:5});assert.equal(model.liveRetryCount,'3/5');
+  frame({summary:'Checking results'});assert.equal(model.liveRetryCount,'');assert.equal(model.liveSummary,'Checking results');
+  for (const pair of [[2,undefined],[6,5],[-1,5],[2.5,5],['2',5]]) {
+    frame({retry_attempt:pair[0],retry_max:pair[1]});assert.equal(model.liveRetryCount,'');
+  }
+  frame({compacting:true});assert.equal(model.liveCompacting,true);
+  model.clearLive();assert.equal(model.liveCompacting,false);
+  model.receive({type:'live',machine_id:'m',session_id:'s',live:{verb:'Compacting'}});
+  assert.equal(model.liveCompacting,true);
+  model.receive({type:'live',machine_id:'m',session_id:'s',live:null});assert.equal(model.liveCompacting,false);
+});
+
+test('a warmed previous page stays invisible and is shared by simultaneous reads',async()=>{
+  let release;const queries=[];const {model,visible}=historyFixture(async path=>{
+    if(!path.includes('before_seq='))return historyPage('abc',[40,41],true);
+    queries.push(path);return new Promise(r=>{release=r});
+  });
+  await model.open();const count=visible.length;
+  model.prefetchOlder(40);model.prefetchOlder(40);assert.equal(queries.length,1);
+  assert.match(queries[0],/turns=3/);assert.match(queries[0],/fold_work=1/);
+  assert.equal(visible.length,count);
+  const a=model.older(), b=model.older();assert.equal(queries.length,1);
+  release(historyPage('abc',[10,11]));await Promise.all([a,b]);
+  assert.deepEqual(visible.at(-1).items.map(i=>i.seq),[10,11,40,41]);
+});
+test('failed speculative history is retried on demand without displaying an error before a tap',async()=>{
+  let calls=0;const {model,errors}=historyFixture(async path=>{
+    if(!path.includes('before_seq='))return historyPage('h',[3],true);
+    if(++calls===1)throw Error('temporary');
+    return historyPage('h',[1,2]);
+  });
+  await model.open();model.prefetchOlder(3);await new Promise(r=>setImmediate(r));
+  model.prefetchOlder(3);assert.equal(calls,1);assert.deepEqual(errors,[]);
+  await model.older();assert.equal(calls,2);assert.equal(model.reducer.firstSeq,1);
+});
+
+test('a history scroll records pushes immediately and publishes one fresh snapshot on release', async()=>{
+ const {model,visible,snapshots}=historyFixture(async()=>historyPage('history',[1]));
+ await model.open();const n=visible.length,k=snapshots.length;
+ const release=model.holdHistoryRendering(),end=model.holdHistoryRendering();
+ for(const seq of [2,3,4]) model.receive({type:'items',machine_id:'machine-one',session_id:'session-one',
+   ...historyPage('history',[seq]),from_seq:seq-1,to_seq:seq});
+ assert.equal(model.reducer.covered,4);assert.equal(visible.length,n);release();release();assert.equal(visible.length,n);
+ end();assert.equal(visible.length,n+1);assert.equal(snapshots.length,k+1);assert.equal(visible.at(-1).items.at(-1).seq,4);
+});
+
+test('unchanged latest pages reuse published records, same-id corrections update both view and disk', async()=>{
+ let page=historyPage('history',[1,2]);const {model,visible,snapshots}=historyFixture(async()=>page);
+ await model.open();const prior=visible.at(-1).items,count=snapshots.length;
+ await model.latest();assert.equal(visible.at(-1).items,prior);assert.equal(snapshots.length,count);
+ page=historyPage('history',[1,2]);page.items[1].text='corrected';
+ await model.latest();assert.notEqual(visible.at(-1).items,prior);assert.equal(snapshots.at(-1).items[1].text,'corrected');
+});
+
 test('the activity reader loads history without publishing seen, replacing a chat subscription or writing its cache', async () => {
   const requests = [], sent = [], writes = [], snapshots = [];
   const latest = historyPage('quiet-history',[8,9],true);
@@ -214,7 +410,7 @@ test('the activity reader loads history without publishing seen, replacing a cha
     {async call(path) { requests.push(path); return path.includes('before_seq=') ? older : latest; },
       transport:{send(payload) { sent.push(payload); }}},
     {async get(){return '';},async put(key){writes.push(key);}}, 'same-as-visible-chat',
-    (items,more)=>snapshots.push({ids:items.map(item=>item.id),more}),error=>assert.fail(error), false);
+    (items,more)=>snapshots.push({ids:items.map(item=>item.id),more}),error=>assert.fail(error), undefined, undefined, false);
   await model.open();
   await model.older();
   model.close();

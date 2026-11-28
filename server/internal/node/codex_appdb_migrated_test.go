@@ -161,3 +161,18 @@ func TestCodexAppChatWithoutRolloutIsNoSubagent(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexDesktopSideLinksKeepIndependentSessions(t *testing.T) {
+	n := remoteTestNode(t)
+	home, cwd, now := n.codexHome(), t.TempDir(), time.Now()
+	writeMigratedCodexApp(t, home, codexAppSchema+
+		codexAppRow(appChat, "", cwd, "Parent", now, 0)+codexAppRow(appMigrated, "", cwd, "Side", now, 0)+
+		codexAppRow(appOld, "", cwd, "Independent fork", now, 0)+
+		"ALTER TABLE threads ADD COLUMN attached_thread_parent_id TEXT;"+
+		fmt.Sprintf("UPDATE threads SET attached_thread_parent_id='%s' WHERE id='%s';", appChat, appMigrated))
+	list := rowsByThread(n.codexSessions(map[string]bool{}))
+	parent, child, fork := list[appChat], list[appMigrated], list[appOld]
+	if child.ParentAgentID() != parent.SessionID || parent.SessionID == "" || child.IsSubagent || fork.ParentAgentID() != "" {
+		t.Fatalf("bad attachment: parent %q side %q subagent %t fork %q", parent.SessionID, child.ParentAgentID(), child.IsSubagent, fork.ParentAgentID())
+	}
+}

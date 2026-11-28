@@ -301,7 +301,7 @@ test('64vp icon rail, 3-dot header, 3-tab Live Workbench, relay wiring, and bord
 
   // Rebuilt AgentListPage rail mode: 40x40 avatars with status marks & bindTips, zero repo outline in rail mode.
   assert.match(agents, /@Builder railAvatar\(binding: BoundAgentRow\)[\s\S]*\.width\(40\)[\s\S]*\.height\(40\)[\s\S]*\.bindTips\(/);
-  const resultList = agents.slice(agents.indexOf('  @Builder resultList()'), agents.indexOf('  build()'));
+  const resultList = agents.slice(agents.indexOf('  @Builder resultList()'), agents.indexOf('  build()', agents.indexOf('  @Builder resultList()')));
   assert.match(resultList, /if \(this\.rail\) \{[\s\S]*this\.railAvatar\(rowBinding\)[\s\S]*id\('agents\.rail\.list'\)[\s\S]*\} else \{[\s\S]*AgentRepositoryRows\(/);
   // Wide split agentRow uses live motion marks & PhoneStyle.cardBorder.
   const wideRow = agents.slice(agents.indexOf('  @Builder agentRow('), agents.indexOf('  @Builder rowContext('));

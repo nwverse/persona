@@ -116,3 +116,38 @@ frame cap turned it into a `frame_too_large` reconnect loop with an empty Agents
 the largest message it legitimately carries (Hub events 64 MiB, port relays 1 MiB), check frames and fragments
 against that, and feed each TLS read into the buffer in pieces: one read can hold the tail of one frame and several
 whole ones. Keep the failure reason on the state callback so tests can tell a size limit from a broken socket.
+
+## The core's counts are not the chips' counts
+
+The shared core's `counts` keep a muted unread or working row in the total, matching the iOS shadow comparison
+(`sort/mod.rs` `counts`). The Unread and Working filters themselves leave muted rows out, as iOS's `filterCounts` does.
+Showing the core's number on a chip then promises rows its filter never lists, and Mark all as read cannot empty it.
+Read the core's `filter_counts` for these chips. The core already applies the active search, machine and mute predicates in the same projection. Test each chip against the rows its filter shows.
+
+## Keep the reader's row yourself in a Repeat list
+
+`List.maintainVisibleContentPosition(true)` did not hold the visible content when rows were inserted above it through
+`Repeat` with `virtualScroll` (API 26, on a phone): the list kept its first visible index, so a page of earlier turns
+replaced the rows under the reader, and a session that opened at its latest rows could show an earlier window. Record
+the first visible row and its offset before changing the rows and put it back with `scrollToIndex` in the same pass when
+its index moved. Keep leading rows (notices, Load more) in the list even when empty, so their coming and going never
+shifts indices, and hold a change that arrives during a gesture until the gesture settles. On a device, check the row
+ID and its offset before and after an insert, not only that the list still scrolls.
+
+## Rebuild a segment button when its segments change
+
+`CapsuleSegmentButtonV2` (API 26, on a phone) throws `Cannot read property position of undefined` in
+`getBackplatePosition` when its items change in the same update as a selection it has not laid out yet, and the app
+exits at launch. The Agents list's quick filters list only states that have sessions, so a count reaching or leaving zero
+changes the set while the chosen filter keeps its key at a new position. Give the button a key made of its segments
+(a one-element `ForEach` keyed by the joined filter keys) so a different set builds a new button. Fixed segment lists
+need nothing. Reproduce it by launching with a filter selected while another state's count changes, not only by tapping.
+
+## Bound every value the relational store must read back
+
+The relational store writes a value it cannot read back: past about 2 MB the insert succeeds and the read fails. The
+launch snapshot (`snapshot:<scope>`) stored whole session rows, and a Hub with hundreds of sessions whose titles held pasted
+prompts produced a value cut at 8 MiB. Every launch failed to restore it, so the
+Agents list started empty until the Hub answered, with no visible cause. Bound anything that grows with Hub data before
+writing it (`core/SessionSnapshot.ts`: short display text, then a byte budget), and treat an unreadable value as absent
+so the next write replaces it. Measure on the device: `hdc file recv -b <bundle>` copies a debug build's database.

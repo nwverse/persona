@@ -667,6 +667,81 @@ test('an extension without sign-in omits auth state without reporting a detail f
  }
 });
 
+test('complete session pages and deltas publish atomically and retain manager filtering', async () => {
+ const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ const pages=[],calls=[],a={machine_id:'m',session_id:'a',manager:'user'},b={machine_id:'m',session_id:'b',manager:'user'},other={machine_id:'x',session_id:'a',manager:'other'};
+ const repo=new HubRepository({managerId:'user'},undefined,()=>{},'user',{request:async path=>{
+   calls.push(path);const page=pages.shift();if (page instanceof Error) throw page;return JSON.stringify(page);
+ }});
+ pages.push({sessions:[a,other],has_more:true,next_cursor:'after/one',revision:'r1',total:3},{sessions:[b],has_more:false,revision:'r1',total:3});
+ assert.deepEqual((await repo.sessions(true)).map(r=>r.id),['a','b']);
+ assert.ok(calls[1].includes('cursor=after%2Fone'));assert.ok(repo.hasSessionRevision('r1'));
+ pages.push({sessions:[],remove:[JSON.stringify(['m','a'])],has_more:true,next_cursor:'later',revision:'r2',total:2},new Error('offline'));
+ await assert.rejects(repo.sessions(true));assert.ok(repo.hasSessionRevision('r1'));
+ pages.push({sessions:[{...b,title:'Renamed'}],remove:[JSON.stringify(['m','a'])],has_more:false,revision:'r2',total:2});
+ assert.deepEqual((await repo.sessions(true)).map(r=>[r.id,r.title]),[['b','Renamed']]);
+ assert.ok(calls.at(-1).includes('since=r1'));assert.ok(repo.hasSessionRevision('r2'));
+});
+
+test('an expired Hub revision restarts with a complete snapshot and discards partial deltas', async () => {
+ const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ const {HttpFailure}=await import('persona-test:transport');
+ const oldRow={machine_id:'sample',session_id:'before',manager:'work'};
+ const newRow={machine_id:'sample',session_id:'after',manager:'work'};
+ const replies=[
+   {sessions:[oldRow],has_more:false,revision:'v1',total:1},
+   new HttpFailure(409,'revision_expired'),
+   {sessions:[newRow],has_more:false,revision:'v2',total:1}
+ ];
+ const paths=[];
+ const repo=new HubRepository({managerId:'work'},undefined,()=>{},'work',{request:async path=>{
+   paths.push(path);
+   const reply=replies.shift();
+   if(reply instanceof Error) throw reply;
+   return JSON.stringify(reply);
+ }});
+ await repo.sessions(true);
+ const rows=await repo.sessions(true);
+ assert.deepEqual(rows.map(row=>row.id),['after']);
+ assert.ok(paths[1].includes('since=v1'));
+ assert.ok(!paths[2].includes('since='));
+ assert.equal(repo.hasSessionRevision('v2'),true);
+});
+
+test('local edits to a returned session never change the cached server revision', async () => {
+ const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+ const row={machine_id:'desk',session_id:'one',manager:'m',title:'Server title',undelivered:[{id:'held'}]};
+ const replies=[{sessions:[row],revision:'one',total:1},{sessions:[],revision:'one',total:1}];
+ const repo=new HubRepository({managerId:'m'},undefined,()=>{},'m',{request:async()=>JSON.stringify(replies.shift())});
+ const [first]=await repo.sessions(true);
+ first.raw='{}';first.title='Local title';first.group='temporary';
+ const [next]=await repo.sessions(true);
+ assert.equal(next.title,'Server title');assert.equal(next.group,'');assert.equal(next.data().undelivered[0].id,'held');
+});
+
+test('renaming a computer requires its own Hub capability and current detail, and accepts an empty reset', async () => {
+  const writes = [];
+  const model = managementClient(async (path, method, body) => {
+    if (method === 'PUT') { writes.push({ path, body }); return { ok: true, name: 'box' }; }
+    return { machines: [{ id: 'box', name: 'Office', trust: 'confirmed' }] };
+  });
+  model.connected = true;
+  model.refresh = async () => {};
+  const page = new ManagementModel();
+  await page.load('machines', model);
+  const row = page.rows[0];
+  assert.equal(await page.renameMachine(model, row, 'Other'), false);
+  model.features = ['machine_rename'];
+  assert.equal(await page.renameMachine(model, row, 'a'.repeat(41)), false);
+  row.raw.kind = 'hub';
+  assert.equal(await page.renameMachine(model, row, 'Other'), false);
+  row.raw.kind = 'link';
+  assert.equal(await page.renameMachine(model, row, '   '), true);
+  model.profile.manager = 'another-manager';
+  assert.equal(await page.renameMachine(model, row, 'Other'), false);
+  assert.deepEqual(writes, [{ path: '/api/v1/machines/box/name', body: { name: '' } }]);
+});
+
 test('new Agent uses the selected host worktree and keeps a directory-only start compatible', async () => {
   const {ResourceRow} = await import('../entry/src/main/ets/models/Wire.ets');
   const machine = ResourceRow.from({id: 'mac', manager: 'work', online: true}, 'machine');

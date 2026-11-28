@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerHooks,stripTypeScriptTypes} from 'node:module';
 import {readFileSync} from 'node:fs';
-registerHooks({resolve(s,c,n){if(c.parentURL?.endsWith('/ChatDraftStore.ets')&&s==='./Wire')return{url:new URL('./Wire.ets',c.parentURL).href,shortCircuit:true};return n(s,c);},load(u,c,n){if(u.endsWith('.ets'))return{format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(u),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};return n(u,c);}});
+registerHooks({resolve(s,c,n){if(s==='../core/SessionSnapshot'||c.parentURL?.endsWith('/SessionSnapshot.ts')&&s==='./TranscriptCache')return{url:new URL(s+'.ts',c.parentURL).href,shortCircuit:true};if(c.parentURL?.endsWith('/ChatDraftStore.ets')&&s==='./Wire')return{url:new URL('./Wire.ets',c.parentURL).href,shortCircuit:true};return n(s,c);},load(u,c,n){if(u.endsWith('.ets'))return{format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(u),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};return n(u,c);}});
 const {ChatDraftStore,ChatDraft,ChatOutboxEntry}=await import('../entry/src/main/ets/models/ChatDraftStore.ets');
 function fixture(){const data=new Map();return{data,local:{revision(){return 0;},accepts(){return true;},async get(k){return data.get(k)||'';},async put(k,v){data.set(k,v);},async remove(k){data.delete(k);}}};}
 function draft(text,revision){const d=new ChatDraft();d.text=text;d.revision=revision;return d;}

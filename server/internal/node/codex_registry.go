@@ -872,7 +872,9 @@ func (n *Node) lastCodexRow(id string) (proto.Session, bool) {
 }
 
 func (n *Node) codexSessions(seen map[string]bool) []proto.Session {
-	return n.codexSessionsIn(seen, newCodexListPass())
+	out := n.codexSessionsIn(seen, newCodexListPass())
+	n.linkCodexSides(out)
+	return out
 }
 
 // codexSessionsIn lists the Codex threads as offline rows, looking up through pass (nil: each time).

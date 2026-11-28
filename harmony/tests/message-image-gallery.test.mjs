@@ -72,7 +72,7 @@ globalThis.galleryBoundary = {
   }
 };
 
-const { conversationImageEntries, conversationImageKey, messageImageGalleryWindow } = await import('../entry/src/main/ets/core/MessageImageGallery.ts');
+const { attachmentFileName, fittedThumbnail, messageAttachmentImages, conversationImageEntries, conversationImageKey, messageImageGalleryWindow } = await import('../entry/src/main/ets/core/MessageImageGallery.ts');
 const { loadMessageImageGallery } = await import('../entry/src/main/ets/models/MessageImageGallery.ets');
 const { previewMessageImageGallery, clearImagePreviews } = await import('../entry/src/main/ets/platform/NativePreview.ets');
 
@@ -235,4 +235,25 @@ test('a presented gallery closes and removes its cache when the owner changes', 
   assert.equal(opened.length, 2);
   assert.equal(opened[1].closed, true);
   assert.equal(files.size, 0);
+});
+
+test('compact attachment photos keep the original aspect ratio and fit both limits', () => {
+  for (const ratio of [0.08, 0.75, 1, 16/9, 19]) {
+    for (const [maximumWidth, maximumHeight] of [[168,128],[112,80],[50,80]]) {
+      const [w,h]=fittedThumbnail(ratio,maximumWidth,maximumHeight);
+      assert.ok(w>0 && w<=maximumWidth && h>0 && h<=maximumHeight+1e-9);
+      assert.ok(Math.abs(w/h-ratio)<1e-9);
+    }
+  }
+  assert.deepEqual(fittedThumbnail(NaN,112,80), [80,80]);
+  assert.equal(attachmentFileName('/Users/demo/guide.pdf'),'guide.pdf');
+  assert.equal(attachmentFileName(String.raw`C:\demo\guide.pdf`),'guide.pdf');
+});
+test('grouped user image references keep separate gallery keys and original authenticated item IDs', () => {
+  const m={id:'photo#2',ownerTarget:'s',imagePaths:['/a.png'],imageId:'',imageIds:['photo#0','photo#1']};
+  const entries=messageAttachmentImages(m,'s');
+  assert.deepEqual(entries.map(e=>e.itemId || e.remotePath),['/a.png','photo#0','photo#1']);
+  assert.deepEqual(conversationImageEntries([m],'s'),entries);
+  assert.deepEqual(messageAttachmentImages(m,'someone-else'),[]);
+  assert.equal(messageImageGalleryWindow(entries,2).entries[2].itemId,'photo#1');
 });

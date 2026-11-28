@@ -16,7 +16,8 @@ export class Symbols {
   static readonly gear: Resource = $r('sys.symbol.gearshape');
   static readonly health: Resource = $r('sys.symbol.gauge_with_dots_needle_33percent');
   static readonly apps: Resource = $r('sys.symbol.square_grid_2x2');
-  static readonly device: Resource = $r('sys.symbol.computer');
+  static readonly machine: Resource = $r('sys.symbol.computer');
+  static readonly device: Resource = $r('sys.symbol.pad_and_iphone');
   static readonly appearance: Resource = $r('sys.symbol.paintpalette');
   static readonly send: Resource = $r('sys.symbol.arrow_up');
   static readonly stop: Resource = $r('sys.symbol.square_fill');
@@ -25,5 +26,7 @@ export class Symbols {
   static readonly up: Resource = $r('sys.symbol.chevron_up');
   static readonly down: Resource = $r('sys.symbol.chevron_down');
   static readonly check: Resource = $r('sys.symbol.checkmark');
+  static readonly waiting: Resource = $r('sys.symbol.clock');
+  static readonly muted: Resource = $r('sys.symbol.bell_slash');
   static readonly search: Resource = $r('sys.symbol.magnifyingglass');
 }

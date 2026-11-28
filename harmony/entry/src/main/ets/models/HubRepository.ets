@@ -1,7 +1,7 @@
 import { interactionResolution } from './InteractionDecision';
 import { util } from '@kit.ArkTS';
 import { HubTransport, EndpointConfig, HttpFailure } from '../platform/HubTransport';
-import { ResourceRow, Wire, ChatMessage, Decision, DecisionField } from './Wire';
+import { ResourceRow, Wire, ChatMessage, Decision, DecisionField, SessionLauncher, SessionModelCatalog } from './Wire';
 
 import { LocalStore } from '../platform/LocalStore';
 import { MutationStore, MutationRecord } from './MutationStore';
@@ -20,6 +20,9 @@ export class HubRepository {
   private defaultOwner: string;
   readonly mutations: MutationStore | undefined;
   private changed: () => void;
+  private sessionRevision: string = '';
+  private sessionSnapshot = new Map<string, ResourceRow>();
+  private pagedRead?: Promise<ResourceRow[]>;
   constructor(config: EndpointConfig, local?: LocalStore, changed: () => void = () => {}, defaultOwner: string = config.managerId,
     transport?: HubTransport) {
     this.transport = transport || new HubTransport(config); this.owner = config.managerId; this.changed = changed; this.defaultOwner = defaultOwner;
@@ -29,9 +32,13 @@ export class HubRepository {
     acknowledged?: (result: Record<string, Object>) => boolean, emptyRequest: boolean = false,
     messageRequestBytes?: number): Promise<Record<string, Object>> {
     const payload=method==='GET' || emptyRequest && !Object.keys(body).length ? '' : JSON.stringify(body);
+    const catalogRead = method === 'GET' && /^\/api\/v1\/machines\/[^/]+\/launchers\/[^/]+\/models(?:\?|$)/.test(path);
+    // An earlier transcript page can make the Hub read a long file from the computer; it is prefetched, so waiting is unseen.
+    const historyRead = method === 'GET' && /^\/api\/v1\/sessions\/[^?]+\/items\?(?:[^#]*&)?before_seq=/.test(path);
+    const timeout = catalogRead ? 75000 : historyRead ? 30000 : method === 'POST' && (path === '/api/v1/sessions' || path.endsWith('/takeover')) ? 110000 : undefined;
     if (method === 'GET' || !this.mutations) {
       if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false);
-      const result = Wire.parse(await this.transport.request(path, method, payload, op, messageRequestBytes));
+      const result = Wire.parse(await this.transport.request(path, method, payload, op, messageRequestBytes, timeout));
       if (acknowledged && !acknowledged(result)) throw new HttpFailure(0, 'result_unknown', true);
       return result;
     }
@@ -39,7 +46,7 @@ export class HubRepository {
     let pendingReceipt = false;
     try {
       if (admit && !admit()) { await this.mutations.finish(record, 'failed'); throw new HttpFailure(0, 'request_updated', false); }
-      const result = Wire.parse(await this.transport.request(path, method, payload, record.id, messageRequestBytes));
+      const result = Wire.parse(await this.transport.request(path, method, payload, record.id, messageRequestBytes, timeout));
       const state = Wire.text(result, 'state');
       if (state === 'pending' || state === 'unknown' || Wire.text(result, 'delivered') === 'unknown') {
         pendingReceipt = state === 'pending'; await this.mutations.finish(record, pendingReceipt ? 'pending' : 'unknown'); throw new HttpFailure(202, 'result_unknown', true, pendingReceipt);
@@ -75,9 +82,77 @@ export class HubRepository {
     if (path === '/api/v1/sessions' && (!Array.isArray(result[envelope]) || Wire.bool(result, 'has_more') ||
       !rows.every(completeSessionRow))) throw new Error('incomplete_sessions');
     if (observe) observe(result);
-    return rows.map((item: Record<string, Object>) => { const row = ResourceRow.from(item, kind); if (!Wire.has(item, 'manager')) row.manager = merged ? this.defaultOwner : this.owner; return row; }).filter((row: ResourceRow) => !merged || row.manager === this.owner);
+    return this.resourceRows(rows, kind, merged);
   }
-  async sessions(): Promise<ResourceRow[]> { return this.list('/api/v1/sessions', 'sessions', 'session', true); }
+
+  private resourceRows(rows: Record<string, Object>[], kind: string, merged: boolean): ResourceRow[] {
+    return rows.map((item: Record<string, Object>) => this.resourceRow(item, kind, merged))
+      .filter((row: ResourceRow) => !merged || row.manager === this.owner);
+  }
+
+  private resourceRow(item: Record<string, Object>, kind: string, merged: boolean): ResourceRow {
+    const row = ResourceRow.from(item, kind);
+    if (!Wire.has(item, 'manager')) row.manager = merged ? this.defaultOwner : this.owner;
+    return row;
+  }
+
+  get sessionListRevision(): string { return this.sessionRevision; }
+
+  hasSessionRevision(revision: string): boolean { return !!revision && this.sessionRevision === revision; }
+
+  async sessions(paged: boolean = false): Promise<ResourceRow[]> {
+    if (!paged) return this.list('/api/v1/sessions', 'sessions', 'session', true);
+    if (this.pagedRead) return this.pagedRead;
+    const read = this.readSessionPages(this.sessionRevision).catch((error: Error): Promise<ResourceRow[]> => {
+      if (error instanceof HttpFailure && error.status === 409 && ['cursor_expired', 'revision_expired'].includes(error.code))
+        return this.readSessionPages('');
+      throw error;
+    });
+    this.pagedRead = read;
+    try { return await read; } finally { if (this.pagedRead === read) this.pagedRead = undefined; }
+  }
+
+  private async readSessionPages(since: string): Promise<ResourceRow[]> {
+    // The desktop and held-message views need complete rows, including agents hidden from the list UI.
+    // Keep the previous revision intact until every page of this revision has arrived.
+    let snapshot = since ? this.sessionSnapshot : new Map<string, ResourceRow>();
+    const query = '/api/v1/sessions?summary=0&include_hidden=1&limit=50' + (since ? '&since=' + segment(since) : '');
+    const cursors = new Set<string>();
+    let cursor = '', revision = '', total = 0;
+    do {
+      const page = await this.call(query + (cursor ? '&cursor=' + segment(cursor) : ''));
+      const nextRevision = Wire.text(page, 'revision');
+      const rows = Wire.rows(page, 'sessions');
+      const pageTotal = Wire.number(page, 'total', -1);
+      if (!nextRevision || !Number.isSafeInteger(pageTotal) || pageTotal < 0 ||
+        (revision && (revision !== nextRevision || total !== pageTotal)) || !Array.isArray(page['sessions']) ||
+        !rows.every(completeSessionRow)) throw new Error('incomplete_sessions');
+      revision = nextRevision;
+      total = pageTotal;
+      const removed = Wire.strings(page, 'remove');
+      if (snapshot === this.sessionSnapshot && (rows.length || removed.length)) snapshot = new Map(snapshot);
+      for (const key of removed) {
+        const pair = JSON.parse(key) as string[];
+        if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== 'string' || typeof pair[1] !== 'string')
+          throw new Error('incomplete_sessions');
+        snapshot.delete(JSON.stringify(pair));
+      }
+      for (const row of rows) {
+        const machine = Wire.text(row, 'machine_id'), id = Wire.text(row, 'session_id', Wire.text(row, 'id'));
+        if (!machine || !id) throw new Error('incomplete_sessions');
+        snapshot.set(JSON.stringify([machine, id]), this.resourceRow(row, 'session', true));
+      }
+      if (!Wire.bool(page, 'has_more')) break;
+      cursor = Wire.text(page, 'next_cursor');
+      if (!cursor || cursors.has(cursor)) throw new Error('incomplete_sessions');
+      cursors.add(cursor);
+    } while (cursor);
+    if (snapshot.size !== total) throw new Error('incomplete_sessions');
+    this.sessionSnapshot = snapshot;
+    this.sessionRevision = revision;
+    // Callers may overlay local held messages. The cached server rows stay authoritative.
+    return Array.from(snapshot.values()).filter((row: ResourceRow) => row.manager === this.owner).map((row: ResourceRow) => row.copy());
+  }
   async machines(): Promise<ResourceRow[]> { return this.list('/api/v1/machines', 'machines', 'machine', true); }
   isDefaultManager(): boolean { return !this.defaultOwner || this.owner === this.defaultOwner; }
   async todos(): Promise<ResourceRow[]> { return this.list('/api/v1/todos', 'todos', 'todo'); }
@@ -128,6 +203,7 @@ export class HubRepository {
     const body = Wire.payload(['text', 'client_msg_id'], [text, op]); if (images.length) body['images'] = images;
     return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true, undefined, false, messageRequestBytes);
   }
+
   async stop(row: ResourceRow, admit?: () => boolean): Promise<void> { await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/interrupt', 'POST', {}, '', admit); }
   async decisions(): Promise<Record<string, Object>[]> {
     const result = await this.call('/api/v1/interactions'); return Wire.rows(result, 'interactions');
@@ -156,17 +232,29 @@ export class HubRepository {
     const result = await this.call('/api/v1/inbox/' + segment(row.id) + '/done?manager=' + segment(row.manager), 'POST', Wire.payload(['done'], [!row.isDone()]));
     const item = Wire.object(result, 'item'); const next = ResourceRow.from(Object.keys(item).length ? item : result, 'inbox'); next.manager = row.manager; return next;
   }
-  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = ''): Promise<ResourceRow> {
+  async sessionLaunchers(machine: string): Promise<SessionLauncher[]> {
+    const result = await this.call('/api/v1/machines/' + segment(machine) + '/launchers');
+    return SessionLauncher.choices(Wire.rows(result, 'launchers'));
+  }
+  async sessionModels(machine: string, launcher: string, refresh: boolean): Promise<SessionModelCatalog> {
+    const path = '/api/v1/machines/' + segment(machine) + '/launchers/' + segment(launcher) + '/models';
+    return new SessionModelCatalog(await this.call(path + (refresh ? '?refresh=1' : '')));
+  }
+  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = '', agent: string = ''): Promise<ResourceRow> {
     if (!machine.id || machine.manager && machine.manager !== this.owner || Wire.text(machine.data(), 'trust') === 'pending' ||
       !Wire.bool(machine.data(), 'online', true) || Wire.bool(machine.data(), 'pending_confirm') || Wire.bool(machine.data(), 'pending')) throw new Error('permission_denied');
     const body = Wire.payload(['machine_id', 'cwd', 'launcher', 'prompt'], [machine.id, cwd, launcher, prompt]);
+    if (launcher && agent) body['agent_type'] = agent;
     if (model) body['model'] = model;
     if (effort) body['effort'] = effort;
     const name = tabName.trim();
     if (name) body['tab_name'] = name;
     if (workspaceId && host) { body['workspace_id'] = workspaceId; body['host'] = host; }
     if (todoId) body['todo_id'] = todoId;
-    const result = await this.call('/api/v1/sessions', 'POST', body, op, admit);
+    const result = await this.call('/api/v1/sessions', 'POST', body, op, admit, false, (reply: Record<string,Object>): boolean => {
+      const session = Wire.object(reply,'session');
+      return !!Wire.text(session,'session_id',Wire.text(session,'id')) && Wire.text(session,'machine_id',machine.id) === machine.id;
+    });
     const row = ResourceRow.from(Wire.object(result, 'session'), 'session'); row.manager = this.owner; row.machine = row.machine || machine.id; row.session = row.session || row.id; return row;
   }
   close(): void { this.transport.close(); }

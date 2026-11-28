@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The Codex App keeps its threads in <CODEX_HOME>/state_<n>.sqlite (table threads). Since it moved their history into
@@ -34,13 +36,14 @@ const codexAppDBRefresh = 5 * time.Second
 const codexAppSidebarMax = 2000
 
 type codexAppThread struct {
-	ID          string `json:"id"`
-	RolloutPath string `json:"rolloutPath"`
-	Title       string `json:"title"`
-	Cwd         string `json:"cwd"`
-	Source      string `json:"source"`
-	UpdatedAtMs int64  `json:"updatedAtMs"`
-	Paginated   bool   `json:"-"`
+	ID             string `json:"id"`
+	RolloutPath    string `json:"rolloutPath"`
+	Title          string `json:"title"`
+	Cwd            string `json:"cwd"`
+	Source         string `json:"source"`
+	UpdatedAtMs    int64  `json:"updatedAtMs"`
+	AttachedParent string `json:"attachedParent"`
+	Paginated      bool   `json:"-"`
 	// Model and Effort are what the App runs the chat with (its model and reasoning_effort columns, #6501): its
 	// history in the App's database says neither. Empty in a schema without them.
 	Model  string `json:"model"`
@@ -225,13 +228,21 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 			`COALESCE(NULLIF(updated_at_ms, 0), updated_at * 1000) AS updatedAtMs` + settings + ` FROM threads WHERE ` + where
 	}
 	target := codexDBTarget(db)
-	query := func(settings string) ([]byte, error) {
-		cmd := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", target, q(settings))
+	const settings = ", COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort"
+	const attached = ", attached_thread_parent_id AS attachedParent"
+	query := func(columns string) ([]byte, error) {
+		cmd := exec.CommandContext(cctx, sqlite, "-readonly", "-bail", "-json", "-cmd", ".timeout 2000", target, q(columns))
 		hideCodexSQLiteWindow(cmd)
 		return cmd.Output()
 	}
-	out, err := query(`, COALESCE(model, '') AS model, COALESCE(reasoning_effort, '') AS effort`)
-	if err != nil { // a schema without those columns: the rest as before
+	out, err := query(settings + attached)
+	if err != nil && cctx.Err() == nil { // a schema from before desktop side chats: model and effort without the attachment
+		out, err = query(settings)
+	}
+	if err != nil && cctx.Err() == nil {
+		out, err = query(attached)
+	}
+	if err != nil && cctx.Err() == nil { // a schema without those columns: the rest as before
 		out, err = query("")
 	}
 	if err != nil {
@@ -249,6 +260,27 @@ func readCodexThreads(ctx context.Context, db, where string) (map[string]codexAp
 		byID[r.ID] = r
 	}
 	return byID, nil
+}
+
+// linkCodexSides maps the App's explicit attachment edge into the same public session namespace as subagents.
+func (n *Node) linkCodexSides(list []proto.Session) {
+	if n.codices == nil || len(list) == 0 {
+		return
+	}
+	cfg := n.codexInventory()
+	var parents map[string]string
+	for _, home := range cfg.Homes {
+		for id, row := range codexAppThreads(home) {
+			if !validID(row.AttachedParent) || row.AttachedParent == id {
+				continue
+			}
+			if parents == nil {
+				parents = make(map[string]string)
+			}
+			parents[codexSourceID(home, id, cfg.LegacyHome)] = codexSourceID(home, row.AttachedParent, cfg.LegacyHome)
+		}
+	}
+	linkSideSessions(list, parents)
 }
 
 // readCodexAppProjects reads the migrated App's projects and their roots from its state database (#6388): the

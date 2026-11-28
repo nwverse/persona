@@ -24,6 +24,9 @@ export struct PhoneSettingsDevicePages {
   @Local dataBytes:number=-1;
   @Local storageError:boolean=false;
   @Local licenses:boolean=false;
+  @Local renamingHub:string='';
+  @Local hubDraft:string='';
+  @Local hubSaving:boolean=false;
   @Local screenScroll:ScreenScrollPreference=screenScrollPreference;
   private active:boolean=false;
   private healthRevision:number=0;
@@ -72,6 +75,29 @@ export struct PhoneSettingsDevicePages {
       .width('100%').constraintSize({minHeight:48}).fontColor(Colors.link).onClick(tap).id(id)
   }
   @Builder notices() { LicenseNotices() }
+  @Builder hubMenu(profile:HubProfile) {
+    Menu() {
+      MenuItem({content:tr('rename')}).onClick(()=>{ this.hubDraft=this.model.workspaceName(profile); this.renamingHub=profile.id; }).id('settings.hub.rename')
+    }
+  }
+  private async saveHubName(profile:HubProfile):Promise<void> {
+    if (this.hubSaving || this.renamingHub!==profile.id) return;
+    this.hubSaving=true;
+    try { await this.model.renameWorkspace(profile,this.hubDraft); if (this.renamingHub===profile.id) this.renamingHub=''; }
+    catch (_) { if (this.active) this.getUIContext().getPromptAction().showToast({message:tr('cache_unavailable')}); }
+    finally { this.hubSaving=false; }
+  }
+  @Builder hubRename(profile:HubProfile) {
+    Column({space:8}) {
+      TextInput({text:this.hubDraft,placeholder:profile.name || profile.hubId}).onChange((name:string)=>this.hubDraft=name)
+        .accessibilityText(tr('workspace_local_name')).onSubmit(()=>this.saveHubName(profile)).enabled(!this.hubSaving).id('settings.hub.rename.input')
+      Text(tr('workspace_local_name')).fontSize(13).fontColor(Colors.secondary)
+      Row({space:8}) {
+        Button(tr('cancel'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontColor(Colors.link).enabled(!this.hubSaving).onClick(()=>this.renamingHub='')
+        Button(tr('save'),{buttonStyle:ButtonStyleMode.TEXTUAL}).fontColor(Colors.link).enabled(!this.hubSaving).onClick(()=>this.saveHubName(profile)).id('settings.hub.rename.save')
+      }
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:4,bottom:8})
+  }
   build() {
     List() {
       ListItem() { Column() {
@@ -110,9 +136,12 @@ export struct PhoneSettingsDevicePages {
         } else if (this.page==='phone_hubs') {
           ForEach(this.model.profiles,(profile:HubProfile)=>{
             Button({type:ButtonType.Normal}) {
-              this.info(profile.name || profile.hubId,profile.id===this.model.profile.id ? tr(this.model.connected ? 'online':'offline') : '')
+              this.info(this.model.workspaceName(profile),tr(this.model.workspaceStatus(profile)))
             }.padding(0).width('100%').backgroundColor(Color.Transparent).accessibilitySelected(profile.id===this.model.profile.id)
               .onClick(()=>{ if (profile.id!==this.model.profile.id) this.model.selectProfile(profile).catch((err:Error)=>this.model.reportError(err)); })
+              .bindContextMenu(this.hubMenu(profile),ResponseType.LongPress).id('settings.hub.'+profile.id)
+            if (this.model.workspaceStatus(profile)==='workspace_pair_again') this.action(tr('workspace_pair_action'),'settings.hub.repair.'+profile.id,()=>this.onPair())
+            if (this.renamingHub===profile.id) this.hubRename(profile)
           },(profile:HubProfile)=>profile.id)
           this.action(tr('ssh_settings'),'settings.hub.ssh',()=>this.onOpen('ssh'))
           this.action(tr('diagnostics'),'settings.hub.diagnostics',()=>this.onOpen('diagnostics'))
@@ -120,6 +149,7 @@ export struct PhoneSettingsDevicePages {
         } else if (this.page==='phone_pairing') {
           this.action(tr('connect'),'settings.pairing.connect',()=>this.onPair())
           this.action(tr('phone_machines'),'settings.pairing.machines',()=>this.onOpen('machines'))
+          this.action(tr('devices'),'settings.pairing.devices',()=>this.onOpen('devices'))
         }
       }.width('100%').backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.cardRadius).clip(true) }
     }.width('100%').height('100%').padding({left:16,right:16,top:28,bottom:24}).backgroundColor(Colors.listGroup(this.elevated))

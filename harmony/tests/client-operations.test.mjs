@@ -12,8 +12,10 @@ registerHooks({
     if (context.parentURL?.endsWith('/ClientModel.ets') && specifier === '../core/Markdown')
       return {url:new URL('../core/Markdown.ts',context.parentURL).href,shortCircuit:true};
     if (specifier === '@kit.ArkTS') return {url:'client-boundary:'+specifier,shortCircuit:true};
+    if (specifier === '../core/SessionSnapshot' || context.parentURL?.endsWith('/SessionSnapshot.ts') && specifier === './TranscriptCache') return {url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true};
+    if (specifier === '@kit.ArkTS') return {url:'client-boundary:'+specifier,shortCircuit:true};
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './Wire', './AgentAttention', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/Domain', '../core/HubModules', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/TranscriptCache', '../core/XiaoYiActions'].includes(specifier)) {
+      if (['./Wire', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/MessageImageGallery', '../core/TranscriptCache', '../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './AgentAttention', './SessionArchive', './SessionRelations', '../core/WorkPresentation', '../core/HubModules', '../core/XiaoYiActions'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return {url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true};
       }
@@ -33,13 +35,14 @@ registerHooks({
       if (specifier === '@kit.ArkTS' || specifier === '../platform/HubTransport') return {url:'client-boundary:'+specifier,shortCircuit:true};
       if (specifier.startsWith('.')) return {url:new URL(specifier.endsWith('.ets') || specifier.endsWith('.ts') ? specifier : specifier + '.ets',context.parentURL).href,shortCircuit:true};
     }
-    if((context.parentURL?.endsWith('/NavigationContext.ets')||context.parentURL?.endsWith('/ChatDraftStore.ets')||context.parentURL?.endsWith('/Compatibility.ets'))&&specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
+    if((context.parentURL?.endsWith('/SessionArchive.ets') || context.parentURL?.endsWith('/SessionRelations.ets')||context.parentURL?.endsWith('/NavigationContext.ets')||context.parentURL?.endsWith('/ChatDraftStore.ets')||context.parentURL?.endsWith('/Compatibility.ets'))&&specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
     if(context.parentURL?.endsWith('/QuestionWorkspace.ets') && specifier==='./Wire')return {url:new URL('./Wire.ets',context.parentURL).href,shortCircuit:true};
     if(context.parentURL?.endsWith('/AgentAttention.ets') || context.parentURL?.endsWith('/InteractionDecision.ets')&&specifier.startsWith('.'))return {url:new URL(specifier+'.ets',context.parentURL).href,shortCircuit:true};
     return next(specifier, context);
   },
   load(url, context, next) {
     if (url.startsWith('client-boundary:')) return {format: 'module', shortCircuit: true, source: `
+      export const hilog={info(){}};
       export class HttpFailure extends Error { constructor(status=0,codeOrUnknown=false,unknownOrPending=false,pending=false) { super('synthetic failure'); this.status=status; this.resultUnknown=typeof codeOrUnknown==='string'?unknownOrPending:codeOrUnknown; this.resultPending=typeof codeOrUnknown==='string'?pending:unknownOrPending; } }
       export class HubTransport {async request(...args){return globalThis.clientTestRequest(...args);} close(){} } export class EndpointConfig {constructor(baseUrl='',hubId='',token='',pin='',managerId='',alternateUrls=[]){Object.assign(this,{baseUrl,hubId,token,pin,managerId,alternateUrls});}} export class CredentialVault {}
       export class LocalStore { data=new Map(); revision(){return 0;} accepts(){return true;} async put(k,v) {this.data.set(k,v);} async get(k) { return this.data.get(k)||''; } async remove(k){this.data.delete(k);} allowHub() {} async purgeHub(hub) {for(const key of this.data.keys())if(globalThis.clientIsHubStateKey(key,hub))this.data.delete(key);} }
@@ -157,6 +160,65 @@ test('only an identity-matched hello on the current live scope and connection ge
 });
 function decision(model,id='request-one') { const value=new Decision(); value.id=id; value.kind='permission'; value.raw=JSON.stringify({id}); model.decision=value; return value; }
 function deferred() { let resolve,reject; const promise=new Promise((yes,no)=>{resolve=yes;reject=no;}); return {promise,resolve,reject}; }
+
+test('a recommendation sends only its reply and preserves saved drafts, context and later edits', async () => {
+  for (const edits of [false,true]) {
+    const {model} = fixture(), submitted = deferred(), finish = deferred();
+    await model.persistDraft();
+    const target = model.target(), revision = model.draftRevision;
+    const before = await model.local.get('draft:'+target);
+    model.repository.send = async (row,text,id,context,images,admit) => {
+      assert.equal(row,model.selected); assert.equal(text,'继续'); assert.equal(context,''); assert.deepEqual(images,[]);
+      submitted.resolve(); await finish.promise; assert.ok(admit()); return {state:'done'};
+    };
+    const pending = model.send(() => true,'继续');
+    await submitted.promise;
+    assert.equal(await model.send(() => true,'继续'),false);
+    if (edits) { model.updateDraft('刚编辑的草稿'); await model.persistDraft(); }
+    const expected = edits ? await model.local.get('draft:'+target) : before;
+    finish.resolve(); assert.equal(await pending,true);
+    assert.equal(model.draft,edits ? '刚编辑的草稿' : 'exact draft ');
+    assert.equal(model.sourceContext,contextReference);
+    if (!edits) assert.equal(model.draftRevision,revision);
+    assert.equal(await model.local.get('draft:'+target),expected);
+    await model.restoreLocalDelivery();
+    assert.equal(await model.local.get('draft:'+target),expected);
+  }
+});
+
+test('a history read waiting for decisions cannot reopen a hidden conversation', async () => {
+  const { model } = fixture(), gate = deferred(), started = deferred();
+  delete model.loadChat;
+  model.repository.decisions = () => { started.resolve(); return gate.promise; };
+  model.persistDraft = async () => {};
+  model.showConversation(model.selected);
+  await started.promise;
+  assert.equal(model.chatHistoryLoading, true);
+  model.hideConversation();
+  gate.resolve([]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(model.transcript, undefined);
+  assert.equal(model.chatHistoryLoading, false);
+  assert.equal(model.error, '');
+});
+
+test('a cached transcript preview publishes only into the selection that requested it', async () => {
+  const { model } = fixture(), read = deferred();
+  const first = model.selected, seen = [];
+  const key = 'transcript:' + model.target(first);
+  model.local.get = requested => { assert.equal(requested, key); return read.promise; };
+  model.publishTranscript = items => seen.push(items.map(item => item.text));
+  const old = model.restoreCachedTranscript(first);
+  model.selected = new ResourceRow('someone-else', 'Other', 'session');
+  model.selectionGeneration++;
+  read.resolve(JSON.stringify({ history: 'example', covered: 1, hasMore: false, loadedOnce: true,
+    items: [{ id: '1#0', seq: 1, role: 'assistant', kind: 'text', text: 'Local preview' }] }));
+  await old;
+  assert.deepEqual(seen, []);
+  model.selected = first;
+  await model.restoreCachedTranscript(first);
+  assert.deepEqual(seen, [['Local preview']]);
+});
 
 test('send feedback belongs to the current input and distinguishes acceptance, transcript echo and actual reply', async () => {
   const {model} = fixture(), received = deferred(), response = deferred();
@@ -1572,6 +1634,25 @@ test('knowledge contexts retain their entry kind when IDs collide across categor
 });
 
 
+test('a row working only on background work has ended its turn: its next-step box shows and Stop is not offered',()=>{
+ const {model}=fixture();
+ model.selected.raw=JSON.stringify({agent:'claude',state:'working',background_working:true});model.selected.state='working';
+ model.transcript={liveTools:[],liveActive:false,liveThinking:false,liveSummary:'',liveRetryCount:'',liveCompacting:false};
+ const items=[{id:'q',seq:1,kind:'text',role:'user',text:'Check section 4'},
+  {id:'w',seq:2,kind:'tool_use',role:'assistant',tool_use_id:'w',tool_name:'mcp__ccd_turn__wrap_up',
+   tool_input:{recap:'Both findings hold; tests still run.',ask:'Fix both findings now?',actions:[{label:'Fix both'},{label:'Not now'}]}},
+  {id:'r',seq:3,kind:'tool_result',tool_use_id:'w',text:'Shown in the next-step box. Write your closing answer.'},
+  {id:'a',seq:4,kind:'text',role:'assistant',text:'Both findings hold.'}];
+ assert.equal(model.turnWorking(),false);assert.equal(model.canStop(),false);
+ model.publishTranscript(items,model.turnWorking());
+ assert.equal(model.messages.at(-1).role,'next_step');
+ assert.deepEqual(model.messages.at(-1).nextStep.choices.map(c=>c.label),['Fix both','Not now']);
+ model.selected.raw=JSON.stringify({agent:'claude',state:'working'});
+ assert.equal(model.turnWorking(),true);
+ model.publishTranscript(items,model.turnWorking());
+ assert.ok(!model.messages.some(m=>m.role==='next_step'));
+});
+
 test('interrupt is active-turn only and its pending admission retires with the route',async()=>{
  const {model}=fixture();let posts=0;model.repository.stop=async()=>posts++;
  assert.equal(model.canStop(),false);await model.stop();assert.equal(posts,0);
@@ -1579,6 +1660,46 @@ test('interrupt is active-turn only and its pending admission retires with the r
  model.repository.stop=async(row,admit)=>{entered.resolve();await gate.promise;if(admit())posts++;};
  const stopping=model.stop(()=>visible);await entered.promise;assert.equal(model.stopPending(),true);assert.equal(model.canStop(),false);
  visible=false;gate.resolve();await stopping;assert.equal(posts,0);assert.equal(model.stopPending(),false);
+});
+
+test('desktop permission waits and newly active turns can be stopped only on the owning interruptible session', async()=>{
+  const {model}=fixture(), row=model.selected;
+  row.raw=JSON.stringify({source_kind:'claude_desktop',status:'blocked',capabilities:{read:true,interrupt:true}});
+  delete model.canInterrupt;
+  let stops=0;model.queueRefresh=()=>{};
+  model.repository.stop=async(target,admit)=>{assert.equal(target,row);assert.ok(admit());stops++;};
+  await model.stop();assert.equal(stops,1);
+  row.raw=JSON.stringify({source_kind:'codex_app_server',status:'idle',capabilities:{read:true,interrupt:true}});
+  model.transcript={liveActive:true};model.transcriptKey='another session';
+  assert.equal(model.canStop(),false);
+  model.transcriptKey=model.target();assert.equal(model.canStop(),true);
+  row.raw=JSON.stringify({source_kind:'codex_history',status:'working',capabilities:{read:true}});
+  await model.stop();assert.equal(stops,1);
+});
+
+test('launcher choices preserve the selected machine, actual launcher ID and agent family in the start request',async()=>{
+  const {HubRepository}=await import('../entry/src/main/ets/models/HubRepository.ets');
+  const machine=ResourceRow.from({id:'a/b',manager:'personal',online:true},'machine'), calls=[];
+  const transport={async request(path,method,body,op,_messageLimit,timeout){
+    calls.push({path,method,body,op,timeout});
+    return method==='GET' ? JSON.stringify({launchers:[{name:'claude'},{name:'team-codex',agent_type:'codex',display_name:'Team'}]})
+      : JSON.stringify({session:{session_id:'created'}});
+  }};
+  const repo=new HubRepository({managerId:'personal'},undefined,()=>{},'personal',transport);
+  const choices=await repo.sessionLaunchers(machine.id);
+  assert.equal(calls[0].path,'/api/v1/machines/a%2Fb/launchers');
+  assert.deepEqual(choices.map(value=>value.label),['Claude Code','Codex · Team']);
+  for(const choice of choices){
+    const session=await repo.createAgent('First message',machine,'/tmp',choice.name,'op','',undefined,'','','chosen-model','','',choice.agent);
+    assert.deepEqual([session.session,session.machine],['created',machine.id]);
+    const sent=calls.at(-1);
+    assert.equal(sent.path,'/api/v1/sessions');assert.ok(sent.timeout>=100_000);
+    assert.deepEqual(JSON.parse(sent.body),{machine_id:'a/b',cwd:'/tmp',prompt:'First message',launcher:choice.name,agent_type:choice.agent,model:'chosen-model'});
+  }
+  await repo.createAgent('First message',machine,'/tmp','claude','op','',undefined,'','','opus','high','','claude');
+  assert.equal(JSON.parse(calls.at(-1).body).effort,'high');
+  await repo.createAgent('First message',machine,'','','op','',undefined,'','','high');
+  assert.equal('effort' in JSON.parse(calls.at(-1).body),false,'without a launcher the machine default runs with Agents\' own effort');
 });
 
 test('question resolution rechecks journal-delayed scope, request, capability and active-sheet admission',async()=>{
@@ -1603,6 +1724,437 @@ test('question resolution rechecks journal-delayed scope, request, capability an
    if(retirement==='uncertain-refresh')assert.equal(request.status,'unknown','a newer authoritative uncertainty must not reopen after admission fails');
   }finally{gate.resolve();globalThis.clientTestRequest=previous;}
  }
+});
+
+test('opening a clipped user reply fetches the full question for the same session and discards a stale response', async () => {
+  const {model} = fixture();
+  const item = {id:'reply#0', seq:2, role:'user', kind:'text', text:'Proceed', ts:'2026-11-01T12:00:00Z',
+    question_replies:[{question:'Abbreviated…'}], question_replies_cut:true};
+  model.transcript = {};
+  model.revisionItems = [item];
+  const [message] = model.projectMessages([item], false);
+  assert.equal(message.userTextClipped, true);
+  let path;
+  const full = {...item, question_replies:[{question:'Original question in full?'}], question_replies_cut:false};
+  model.repository.call = async requested => { path=requested; return full; };
+  assert.equal(await model.readFullUserText(message), '> Original question in full?\n\nProceed');
+  assert.equal(path, '/api/v1/sessions/machine-one/chat-one/items/reply%230/full');
+  let finish;
+  model.repository.call = () => new Promise(resolve => { finish=resolve; });
+  const pending = model.readFullUserText(message);
+  model.selected = new ResourceRow('another-chat','Another','session');
+  finish(full);
+  await assert.rejects(pending, /request_updated/);
+});
+
+test('the live public summary stays at the end, and tool groups win over generic thinking or working text', () => {
+  const {model} = fixture();
+  const use = {id:'call-one',name:'functions.exec'};
+  const stream = {liveTools:[],liveSummary:'',liveThinking:false,liveActive:false};
+  model.transcript = stream;
+  const show = () => model.publishTranscript([{id:'u',role:'user',kind:'text',seq:1,text:'run tests'}],false);
+  stream.liveActive = true; show();
+  assert.equal(model.messages.at(-1).role,'live_activity');
+  stream.liveThinking = true; show();assert.deepEqual(model.messages.map(m=>m.role),['user']);
+  stream.liveTools = [use];show();assert.equal(model.messages.at(-1).role,'work');
+  stream.liveSummary = '检查会话渲染';show();
+  assert.deepEqual(model.messages.map(m => m.role), ['user','work']);
+  const group = model.messages.at(-1);
+  assert.equal(group.liveSummary,'检查会话渲染');
+  assert.equal(group.work.inspectionSteps[0].use.tool_name,'functions.exec');
+  assert.equal(group.work.inspectionSteps[0].use.tool_use_id,'call-one');
+  assert.equal(model.renderedMessages.at(-1).liveSummary,'');
+  // Streamed assistant prose is a later row. It splits the summary from the preceding tool group.
+  model.liveTranscriptText = '新的进展'; model.publishMessages();
+  assert.deepEqual(model.messages.map(m => m.role), ['user','work','assistant','live_activity']);
+  assert.equal(model.messages.at(-1).text,'检查会话渲染');
+  assert.equal(model.messages[1].liveSummary,'');
+  model.liveTranscriptText = ''; stream.liveSummary = '复核剩余步骤'; show();
+  assert.equal(model.messages.at(-1).id,group.id);
+  assert.equal(model.messages.at(-1).liveSummary,'复核剩余步骤');
+  // A pending frame may arrive before its clear. A returned tool is not the owner of a live title.
+  model.publishTranscript([{id:'u',role:'user',kind:'text',seq:1,text:'run tests'},
+    {id:'use',role:'assistant',kind:'tool_use',seq:2,tool_use_id:'call-one',tool_name:'Bash'},
+    {id:'result',role:'user',kind:'tool_result',seq:3,tool_use_id:'call-one',text:'ok'}],false);
+  assert.equal(model.messages.at(-1).role,'live_activity');
+  assert.equal(model.messages.at(-2).liveSummary,'');
+  stream.liveSummary = '';stream.liveTools = [];stream.liveThinking = false;stream.liveActive = false;show();
+  assert.equal(model.messages.at(-1).role,'user');
+});
+
+test('Codex hides thinking while preserving prose, tools, compaction and provider retries', () => {
+  const {model}=fixture();
+  model.selected.raw=JSON.stringify({agent:'codex'});
+  const stream={liveTools:[],liveActive:true,liveThinking:false,liveSummary:'',liveRetryCount:'',liveCompacting:false};
+  model.transcript=stream;
+  const show=()=>model.publishTranscript([{id:'u',role:'user',kind:'text',seq:1,text:'check'}],false);
+  show();assert.equal(model.messages.at(-1).role,'user');
+  stream.liveThinking=true;show();assert.equal(model.messages.at(-1).role,'user');
+  stream.liveThinking=false;
+  assert.equal(model.revisionItems.length,1);
+  stream.liveCompacting=true;show();assert.equal(model.messages.at(-1).text,'work_live_compacting');stream.liveCompacting=false;
+  model.liveTranscriptText='Actual response';show();assert.equal(model.messages.at(-1).role,'assistant');model.liveTranscriptText='';
+  model.selected.state='needs_you';show();assert.equal(model.messages.at(-1).role,'user');model.selected.state='';
+  model.pendingDecisions=[{status:'open'}];show();assert.equal(model.messages.at(-1).role,'user');model.pendingDecisions=[];
+  stream.liveRetryCount='2/5';stream.liveSummary='Running tests';show();
+  assert.equal(model.messages.at(-1).text,'work_live_reconnecting 2/5');assert.equal(model.messages.at(-1).providerRetry,true);assert.equal(model.connected,true);
+  stream.liveTools=[{id:'c',name:'Read'}];show();assert.equal(model.messages.at(-1).liveSummary,'work_live_reconnecting 2/5');
+  assert.equal(model.messages.at(-1).providerRetry,true);
+  stream.liveRetryCount='';show();assert.equal(model.messages.at(-1).liveSummary,'Running tests');assert.equal(model.messages.at(-1).providerRetry,false);
+  stream.liveSummary='';stream.liveTools=[];model.selected.raw=JSON.stringify({agent:'claude'});
+  show();assert.equal(model.messages.at(-1).text,'work_live_active');
+});
+
+test('Claude keeps the labelled command row alone while waiting for its public reply', () => {
+  const {model}=fixture();
+  model.selected.raw=JSON.stringify({agent:'claude'});
+  model.transcript={liveTools:[],liveActive:true,liveThinking:false,liveSummary:''};
+  const items=[{id:'q',seq:1,role:'user',kind:'text',text:'Which model?'},
+    {id:'a',seq:2,role:'assistant',kind:'tool_use',tool_name:'Bash',tool_use_id:'a',tool_input:{description:'Identify the model'}},
+    {id:'r',seq:3,role:'user',kind:'tool_result',tool_use_id:'a',text:'ok'}];
+  for (const liveThinking of [false,true]) {
+    model.transcript.liveThinking=liveThinking;
+    model.publishTranscript(items,true);
+    assert.deepEqual(model.messages.map(m=>m.role),['user','work']);
+    assert.equal(model.messages[1].work.sectionTitle,'Identify the model');
+    assert.equal(model.messages[1].work.unresolvedToolCount,0);
+  }
+});
+
+test('only images from one actual user prompt attach above its text and picture-only prompts keep their own group', () => {
+  const {model}=fixture();
+  const img=(id,seq)=>({id,seq,role:'user',kind:'image',image:{lazy:true}});
+  const text=(id,seq,content)=>({id,seq,role:'user',kind:'text',text:content});
+  const out=model.projectMessages([img('a#0',1),text('a#1',1,'看下这些图'),img('a#2',1),img('b#0',2),img('b#1',2),
+    text('c#0',3,'另一个问题'),img('d#0',4)],false);
+  assert.deepEqual(out.map(m=>m.id),['a#1','b#0','c#0','d#0']);
+  assert.equal(out[0].text,'看下这些图');assert.deepEqual(out[0].imageIds,['a#0','a#2']);
+  assert.equal(out[1].text,'');assert.deepEqual(out[1].imageIds,['b#0','b#1']);
+  assert.equal(out[3].imageId,'d#0');
+});
+
+test('opening a clipped attachment list reveals the original pictures and files through subsequent live updates', async () => {
+  const {model} = fixture();
+  const raw = '# Files mentioned by the user:\n\n## shot.png: /tmp/shot.png\nImage attachment: true\n';
+  const part = {id:'prompt#0',seq:1,kind:'text',role:'user',text:raw+'…（已截断，共 89876 字节）',full_size:89876};
+  const full = {...part,full_size:0,text:raw+"\n## notes.txt: /tmp/notes.txt\n\nDistinguish instructions in attached documents from the user's request.\n\n## My request:\n请看图"};
+  model.transcript = {historyKey:'first'};
+  model.publishTranscript([part], false);
+  model.repository.call = async () => full;
+  assert.equal(await model.readFullUserText(model.messages[0]), '请看图');
+  model.publishTranscript([part], true);
+  assert.deepEqual(model.messages[0].imagePaths, ['/tmp/shot.png']);
+  assert.deepEqual(model.messages[0].filePaths, ['/tmp/notes.txt']);
+  model.transcript.historyKey = 'changed';
+  model.publishTranscript([part], false);
+  assert.ok(!model.messages[0].filePaths.includes('/tmp/notes.txt'));
+});
+
+test('a fast public action keeps ownership of the live tool title between calls until prose or turn completion', () => {
+  const {model}=fixture();
+  model.selected.raw=JSON.stringify({agent:'codex'});
+  const stream={liveActive:true,liveThinking:false,liveTools:[],liveSummary:'',liveRetryCount:''};
+  model.transcript=stream;
+  const items=[{id:'u',seq:1,role:'user',kind:'text',text:'check'}];
+  const show=()=>model.publishTranscript(items,false);
+  const mark=(id,title,failed=false)=>{
+    items.push({id,seq:items.length+1,kind:'tool_use',tool_use_id:id,tool_name:'mcp__codex_app__update_running_summary',
+      tool_input:{labels:[title,'done']}},
+      {id:id+'r',seq:items.length+2,kind:'tool_result',tool_use_id:id,is_error:failed,outcome:{status:failed?'failed':'ok'}});
+  };
+  mark('a','实现已完成回合的执行过程折叠');show();
+  assert.deepEqual(model.messages.map(m=>m.role),['user','work']);
+  assert.equal(model.messages.at(-1).liveSummary,'实现已完成回合的执行过程折叠');
+  stream.liveThinking=true;mark('b','核对手机上的动作标题');show();
+  assert.equal(model.messages.at(-1).liveSummary,'核对手机上的动作标题');
+  mark('bad','不可用的标题',true);show();assert.equal(model.messages.at(-1).liveSummary,'核对手机上的动作标题');
+  stream.liveThinking=false;
+  items.push({id:'say',seq:8,kind:'text',role:'assistant',narration:true,text:'update'});show();
+  assert.equal(model.messages.at(-1).text,'update');
+  assert.ok(model.messages.every(m=>!m.liveSummary));
+  mark('c','检查最后一步');show();assert.equal(model.messages.at(-1).liveSummary,'检查最后一步');
+  items.push({id:'f',seq:11,kind:'text',role:'assistant',text:'result'},
+    {id:'end',seq:12,kind:'turn_duration',turn_duration:{duration_ms:399000}});
+  stream.liveActive=false;show();assert.ok(model.messages.every(m=>!m.liveSummary));
+  assert.equal(model.messages.at(-1).turnMilliseconds,399000);
+  assert.ok(model.messages.at(-1).processIds.includes('say'));
+});
+
+test('opening a partially loaded turn reads only as far back as its prompt, then unfolds its own work', async () => {
+  const {model}=fixture();
+  const target=model.target();model.transcript={};model.connected=true;model.hasMoreMessages=true;
+  const reply={ownerTarget:target,itemId:'answer',processIds:['work'],partialProcess:true};
+  const work={id:'work',work:{inspectionSteps:[{kind:'fold',id:'fold'}]}};
+  let reads=0;const requested=[];
+  model.revisionItems=[{id:'tail'}];model.renderedMessages=[work,reply];
+  model.loadOlder=async()=>{reads++;model.revisionItems.unshift({id:'prompt'});model.renderedMessages=[work,{...reply,partialProcess:false}];return true;};
+  model.expandWork=async m=>requested.push(m.id);
+  await model.expandTurnProcess(reply,()=>true);
+  assert.equal(reads,1);assert.deepEqual(requested,['work']);
+  await model.expandTurnProcess(reply,()=>false);assert.equal(reads,1);
+});
+
+test('reasoning updates never replace the current live tool or its recorded action summary', () => {
+  const {model}=fixture();model.selected.raw=JSON.stringify({agent:'codex'});
+  model.transcript={liveActive:true,liveThinking:false,liveTools:[{id:'c',name:'exec'}],liveSummary:'',liveRetryCount:''};
+  const items=[{id:'u',seq:1,kind:'text',role:'user',text:'test'},
+    {id:'t',seq:2,kind:'thinking',role:'assistant',text:'**Checking GIF frame mismatch**'}];
+  model.publishTranscript(items,true);
+  assert.equal(model.messages.at(-1).liveSummary,'');
+  assert.equal(model.messages.at(-1).work.inspectionSteps.length,1);
+  items.push({id:'t2',seq:3,kind:'thinking',role:'assistant',text:'**复核真机截图**'});
+  model.publishTranscript(items,true);
+  assert.equal(model.messages.at(-1).liveSummary,'');
+  model.transcript.liveSummary='检查本地日志';model.publishMessages();
+  assert.equal(model.messages.at(-1).liveSummary,'检查本地日志');
+  assert.ok(model.messages.every(m=>m.role!=='live_activity'));
+});
+
+test('a rejected initial snapshot keeps its reason and waits for an explicit reconnect', () => {
+  const {model}=fixture();
+  model.connected=false;
+  model.connectionFailure(new Error('frame_too_large'));
+  model.scheduleReconnect();
+  assert.equal(model.reconnectTimer,-1);
+  assert.equal(model.error,'hub_sync_too_large');
+  model.reportError(new HttpFailure(0,'connection_closed'));
+  assert.equal(model.error,'hub_sync_too_large');
+});
+
+test('successive transient connection failures retain their retry backoff', t => {
+  const {model}=fixture();
+  t.mock.timers.enable({apis:['setTimeout']});
+  let attempts=0;
+  model.connected=false;
+  model.selectProfile=async () => { attempts++; };
+  model.connectionFailure(new Error('server_closed'));
+  t.mock.timers.tick(1000);
+  assert.equal(attempts,1);
+  model.connectionFailure(new Error('server_closed'));
+  t.mock.timers.tick(1000);
+  assert.equal(attempts,1);
+  t.mock.timers.tick(1000);
+  assert.equal(attempts,2);
+  model.stopReconnect();
+});
+
+test('unchanged directory publications retain rows, while a changed payload or owner status invalidates its projection', () => {
+  const {model} = fixture();
+  model.profiles = [model.profile];
+  const row = ResourceRow.from({session_id:'sample',machine_id:'desk',state:'working',title:'Initial'},'session');
+  model.sessions = [row];
+  model.publishDirectory();
+  const first = model.directorySessions;
+  model.publishDirectory();
+  assert.equal(model.directorySessions,first);
+  assert.notEqual(first[0],row);
+  row.title='Updated';
+  model.publishDirectory();
+  assert.equal(model.directorySessions[0].title,'Updated');
+  assert.equal(first[0].title,'Initial');
+  model.connected=false;
+  model.publishDirectory();
+  assert.equal(model.directorySessions[0].state,'offline');
+  assert.equal(row.state,'working');
+  row.raw=JSON.stringify({assistant:true});
+  model.publishDirectory();
+  assert.equal(model.directorySessions.length,0);
+});
+
+test('unchanged paged sessions avoid snapshot rewrites while changed chats and failed saves still persist', async () => {
+  const {model}=fixture();
+  model.profiles=[model.profile];model.selected=new ResourceRow();model.features=['sessions_list'];
+  const session=ResourceRow.from({session_id:'one',machine_id:'desk',manager:'personal',state:'working'},'session');
+  let title='First', writes=0, failNext=false;
+  const put=model.local.put.bind(model.local);
+  model.local.put=async (key,value,...args)=>{
+    if(key==='snapshot:'+model.scope()){
+      writes++;
+      if(failNext){failNext=false;throw new Error('storage temporarily unavailable');}
+    }
+    return put(key,value,...args);
+  };
+  model.repository={
+    sessionListRevision:'r1',
+    sessions:async()=>[session.copy()],machines:async()=>[],
+    call:async()=>({conversations:[{id:'main',title,machine_id:'desk'}]})
+  };
+  await model.refresh();await model.refresh();
+  assert.equal(writes,1);
+  title='Renamed';await model.refresh();
+  assert.equal(writes,2);
+  model.repository.sessionListRevision='r2';failNext=true;await model.refresh();
+  assert.equal(writes,3);
+  await model.refresh();
+  assert.equal(writes,4);
+  assert.ok(JSON.parse(await model.local.get('snapshot:'+model.scope())).conversations.some(r=>r.title==='Renamed'));
+});
+
+test('a local workspace name survives saving without changing the paired Hub name or another profile', async () => {
+  const model = new ClientModel();
+  const first = new HubProfile('one', 'Original'), second = new HubProfile('two', 'Original');
+  model.profiles = [first, second]; model.profile = second;
+  await model.renameWorkspace(first, 'Lab');
+  const saved = JSON.parse(await model.local.get('profiles'));
+  assert.equal(saved.active, 'two');
+  assert.equal(saved.profiles[0].label, 'Lab');
+  assert.equal(saved.profiles[0].name, 'Original');
+  assert.equal(model.workspaceName(first), 'Lab');
+  assert.equal(model.workspaceName(second), 'Original');
+  await model.renameWorkspace(first, '');
+  assert.equal(model.workspaceName(first), 'Original');
+  await assert.rejects(model.renameWorkspace(new HubProfile('one'), 'Stale'));
+});
+
+test('a rejected credential asks to pair again and stops reconnecting until the Hub is selected again', () => {
+  const {model} = fixture();
+  model.foreground = true; model.connected = false;
+  model.reportError(new HttpFailure(401));
+  assert.equal(model.workspaceStatus(model.profile), 'workspace_pair_again');
+  model.scheduleReconnect();
+  assert.equal(model.reconnectTimer, -1);
+});
+
+test('opening a visible unread session acknowledges once; a later result keeps its own unread mark', async () => {
+  const {model} = fixture(), row = model.selected;
+  row.state = 'unread'; row.manager = 'personal'; model.sessions = [row];
+  const gate = deferred(), sent = [];
+  model.repository.call = async (path, method, body, op, admit) => {
+    assert.ok(admit()); sent.push([path, method]); await gate.promise; return {};
+  };
+  model.transcriptHistoryReady = true;
+  await model.acknowledgeVisibleSession(row);
+  assert.deepEqual(sent, []);
+  model.chatVisible = true;
+  const pending = model.acknowledgeVisibleSession(row);
+  await model.acknowledgeVisibleSession(row);
+  assert.deepEqual(sent, [['/api/v1/sessions/machine-one/chat-one/seen', 'POST']]);
+  const next = row.copy(); next.raw = JSON.stringify({updated_at:'later'});
+  model.sessions = [next]; model.selected = next;
+  gate.resolve(); await pending;
+  assert.equal(model.sessions[0].state, 'unread');
+  await model.acknowledgeVisibleSession(next);
+  assert.equal(model.sessions[0].state, 'idle'); assert.equal(model.selected.state, 'idle');
+  await model.acknowledgeVisibleSession(model.selected); assert.equal(sent.length, 2);
+});
+
+test('Codex takeover uses a fresh plan, confirms an active turn, and never sends a stale decision', async () => {
+  for (const action of ['accept','decline','changed','continue']) {
+    const {model} = fixture(), row = model.selected;
+    row.raw = JSON.stringify({agent:'codex',source_kind:'codex_history',capabilities:{read:true,takeover:{can_resume:true}}});
+    row.manager = 'personal'; const machine = ResourceRow.from({id:row.machine,manager:'personal',online:true},'machine');
+    model.machines = [machine]; model.refresh = async () => {};
+    const posts = [], prompts = [];
+    model.repository.call = async (path, method='GET', body, op, admit) => {
+      assert.equal(path, '/api/v1/machines/machine-one/codex/chat-one/takeover');
+      if (method === 'GET') return {running:true,can_resume:action!=='continue',token:'fresh-token',cwd:'/tmp',continuation_prompt:'carry this context'};
+      assert.ok(admit()); posts.push(body); return {session:{session_id:'resumed',machine_id:row.machine}};
+    };
+    model.createAgent = async (prompt,computer,dir,launcher) => { prompts.push([prompt,computer.id,dir,launcher]); return new ResourceRow('new','New','session'); };
+    let visible = true;
+    const result = await model.takeOverSession(false, async fresh => {
+      assert.equal(fresh, action === 'continue'); if (action === 'changed') visible=false; return action !== 'decline';
+    }, () => visible);
+    assert.deepEqual(posts, action === 'accept' ? [{token:'fresh-token', confirm_stop:true}] : []);
+    assert.deepEqual(prompts, action === 'continue' ? [['carry this context','machine-one','/tmp','codex']] : []);
+    assert.equal(result?.id, action==='accept' ? 'resumed' : action==='continue' ? 'new' : undefined);
+  }
+});
+
+test('the Codex start catalog exposes a named default and forwards the exact chosen ID', async () => {
+  const {HubRepository} = await import('../entry/src/main/ets/models/HubRepository.ets');
+  const {SessionModelCatalog} = await import('../entry/src/main/ets/models/Wire.ets');
+  const calls = [];
+  const transport = {async request(path,method,body,op,_messageLimit,timeout) {
+    calls.push({path,timeout,method,body});
+    if (method === 'POST') return JSON.stringify({session:{session_id:'new',machine_id:'mac/mini'}});
+    return JSON.stringify({models:[{id:'gpt-6.2-sol',name:'GPT-6.2-Sol',default:true},
+      {id:'gpt-6.2-astra',name:'GPT-6.2-Astra'}, {id:'gpt-6.2-sol'}, {id:''}]});
+  }};
+  const repo = new HubRepository({managerId:'personal'},undefined,()=>{},'personal',transport);
+  const catalog = await repo.sessionModels('mac/mini','codex',true);
+  assert.deepEqual(catalog.models.map(m=>m.id),['gpt-6.2-sol','gpt-6.2-astra']);
+  assert.equal(calls[0].path,'/api/v1/machines/mac%2Fmini/launchers/codex/models?refresh=1');
+  assert.ok(calls[0].timeout >= 70000);
+  const machine = ResourceRow.from({id:'mac/mini',manager:'personal',online:true},'machine');
+  for (const id of ['',catalog.models[0].id,catalog.models[1].id,'custom-new-model']) {
+    await repo.createAgent('Start',machine,'','codex','op','',undefined,'','',id,'','','codex');
+    assert.equal(JSON.parse(calls.at(-1).body).model,id || undefined);
+  }
+  for (const id of ['gpt-6.2-astra','~provider/model-v2','opus[1m]']) assert.ok(SessionModelCatalog.validTypedId(id));
+  for (const id of ['-m','a b','a\nb','a'.repeat(257),'']) assert.equal(SessionModelCatalog.validTypedId(id),false);
+  assert.equal(new SessionModelCatalog({locked:'owned by desktop',models:[]}).locked,true);
+});
+
+test('a cold archived deep link restores its own family, including after the active directory refreshes', async () => {
+  const {model}=fixture();
+  delete model.loadChat;
+  const child={session_id:'child',machine_id:'m',parent_session_id:'root',manager:'personal',archived:true,status:'offline',capabilities:{read:true}};
+  const root={...child,session_id:'root',parent_session_id:''};
+  model.selected=ResourceRow.from(child,'session'); model.selected.group=model.profile.id;
+  model.features=['agent_session_archives'];
+  model.transcript={latest:async()=>{}}; model.transcriptKey=model.target();
+  const reads=[];
+  model.repository={
+    decisions:async()=>[], sessions:async()=>[],machines:async()=>[],
+    call:async path=>{
+      if (path==='/api/v1/assistant') return {conversations:[]};
+      if (!path.startsWith('/api/v1/sessions/archived?')) return {};
+      reads.push(path);
+      return {sessions:[root,child]};
+    }
+  };
+  await model.loadChat(model.selected);
+  assert.deepEqual(reads,['/api/v1/sessions/archived?machine_id=m&manager=personal']);
+  await model.refresh();
+  const graph=model.sessionFamily(model.selected);
+  assert.equal(model.selected.data().archived,true);
+  const parent=graph.root(model.selected);
+  assert.equal(parent.id,'root');
+  assert.deepEqual(graph.children(parent).map(row=>row.key()),[model.selected.key()]);
+  await model.loadChat(model.selected);
+  assert.equal(reads.length,1);
+});
+
+test('an offline search result can open the cached transcript of its own paired manager', async () => {
+  const {model}=fixture();
+  const owner=new ClientModel();
+  owner.profile=new HubProfile(model.profile.id); owner.profile.manager='other'; owner.connected=false;
+  model.views.set(JSON.stringify([owner.profile.id,'other']),owner);
+  const row=ResourceRow.from({session_id:'old',machine_id:'desk',manager:'other',state:'offline'},'session');
+  row.group=owner.profile.id;
+  model.connectView=async()=>{throw new Error('connection unavailable');};
+  assert.equal(await model.viewFor(row,true),owner);
+  await assert.rejects(model.viewFor(row),/connection unavailable/);
+  owner.retired=true;
+  await assert.rejects(model.viewFor(row,true),/connection unavailable/);
+});
+
+test('a Hub whose session titles hold whole pasted prompts still restores its list at the next launch', async () => {
+  const {model} = heldFixture(), prompt = '把这份很长的文档整理成要点。'.repeat(8000);
+  const rows = Array.from({length: 40}, (_, i) => ResourceRow.from({machine_id: 'my laptop', session_id: 'chat/' + i, manager: 'personal',
+    title: prompt, last_text: prompt, updated_at: new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString()}, 'session'));
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => rows;
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok: true});
+  await model.refresh();
+  const stored = await model.local.get('snapshot:' + model.scope());
+  assert.ok(Buffer.byteLength(stored) < 1024 * 1024, 'the stored value stays readable');
+  const reopened = heldFixture().model; reopened.local = model.local; reopened.connected = false; reopened.sessions = []; reopened.sessionsReady = false;
+  await reopened.restoreSnapshot(reopened.connectionGeneration(), reopened.scope());
+  assert.equal(reopened.sessionsReady, true);
+  assert.deepEqual(reopened.sessions.map(row => row.id), rows.map(row => row.id));
+  assert.ok(reopened.sessions[0].title.length < 400 && reopened.sessions[0].title.startsWith('把这份'));
+  assert.equal(reopened.error, '');
+});
+
+test('a snapshot cut off before it was bounded restores as no list, without an error', async () => {
+  const {model} = heldFixture();
+  await model.local.put('snapshot:' + model.scope(), '{"sessions":[{"id":"chat/one","title":"cut', 0);
+  model.sessions = []; model.sessionsReady = false; model.error = '';
+  await model.restoreSnapshot(model.connectionGeneration(), model.scope());
+  assert.deepEqual(model.sessions, []); assert.equal(model.sessionsReady, false); assert.equal(model.error, '');
 });
 
 test('assistant selection rechecks the source scope and installed, visible roster at the time of the tap', async () => {

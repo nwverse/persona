@@ -767,6 +767,35 @@ export class ManagementModel {
     return !!machine && this.neverConnected(machine.raw) && Number.isFinite(expires) && expires <= Date.now();
   }
 
+  canRenameMachine(model: ClientModel, row: ManagementRow): boolean {
+    return model.connected && !model.demo && model.features.includes('machine_rename') &&
+      this.detailOwner(model, this.generation, this.scope, model.profile.manager, 'machines', row.id) &&
+      this.rows.includes(row) && Wire.text(row.raw, 'kind') !== 'hub' && Wire.text(row.raw, 'trust') !== 'pending';
+  }
+
+  async renameMachine(model: ClientModel, row: ManagementRow, name: string): Promise<boolean> {
+    if (this.saving || !this.canRenameMachine(model, row)) return false;
+    const clean = name.trim();
+    if (Array.from(clean).length > 40 || /[\x00-\x1f\x7f]/.test(clean)) { this.error = 'machine_name_invalid'; return false; }
+    const generation = this.generation, scope = this.scope, owner = model.profile.manager;
+    const current = (): boolean => this.detailOwner(model, generation, scope, owner, 'machines', row.id);
+    this.saving = true; this.error = '';
+    try {
+      const reply = await this.call(model, '/api/v1/machines/' + segment(row.id) + '/name', 'PUT',
+        Wire.payload(['name'], [clean]), '', current);
+      if (!current()) return false;
+      if (!Wire.bool(reply, 'ok')) { this.error = 'result_unknown'; return false; }
+      await model.refresh();
+      return current();
+    } catch (error) {
+      if (current()) {
+        if (error instanceof HttpFailure && error.status === 403) this.error = 'machine_rename_forbidden';
+        else this.fail(error as Error);
+      }
+      return false;
+    } finally { if (current()) this.saving = false; }
+  }
+
   async trustMachine(model: ClientModel, row: ManagementRow, trust: boolean): Promise<boolean> {
     if (!this.active(model, this.generation, this.scope)) return false;
     const generation = this.generation, scope = this.scope, owner = model.profile.manager, id = row.id;

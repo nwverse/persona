@@ -162,6 +162,8 @@ export interface TranscriptFold extends JsonObject {
   readonly items?: number;
   readonly tools?: number;
   readonly thoughts?: number;
+  readonly errors?: number;
+  readonly tool_names?: readonly string[];
   readonly supervision_user?: boolean;
 }
 
@@ -270,6 +272,7 @@ function hasSupervisionEvidence(item: TranscriptItem): boolean {
 }
 
 function markSupervisionVisible(item: TranscriptItem): TranscriptItem {
+  if (item.supervision_user === true && (!item.fold || item.fold.supervision_user === true)) return item;
   if (item.fold === undefined) return { ...item, supervision_user: true };
   return { ...item, supervision_user: true, fold: { ...item.fold, supervision_user: true } };
 }
@@ -335,6 +338,8 @@ export class TranscriptReducer {
   private _covered = 0;
   private _hasMore: boolean | null = null;
   private _loadedOnce = false;
+  private _contentVersion = 0;
+  get contentVersion(): number { return this._contentVersion; }
 
   get history(): string | null { return this._history; }
   get covered(): number { return this._covered; }
@@ -362,7 +367,7 @@ export class TranscriptReducer {
   }
 
   restore(state: TranscriptInitialState): void {
-    this.byId.clear();
+    this.byId.clear(); this._contentVersion++;
     this.openedFoldRanges.clear();
     this.cachedPromotionIds.clear();
     for (const item of state.items) {
@@ -426,7 +431,7 @@ export class TranscriptReducer {
       for (const item of this.byId.values()) if (item.seq > toSeq) keep.push(item);
     }
     this.openedFoldRanges.clear();
-    this.byId.clear();
+    this.byId.clear(); this._contentVersion++;
     this._hasMore = hasMore;
     if (history !== null) this._history = history;
     this.merge(items);
@@ -446,26 +451,28 @@ export class TranscriptReducer {
   unfold(fold: TranscriptItem, work: readonly TranscriptItem[]): void {
     const retained = this.byId.get(fold.id);
     if (retained === undefined) return;
-    this.byId.delete(fold.id);
+    this.byId.delete(fold.id); this._contentVersion++;
     this.openedFoldRanges.set(fold.id, cloneItem(retained));
     this.merge(work.filter((item) => item.kind !== "fold"));
   }
 
   private merge(items: readonly TranscriptItem[], backlog = false, hasMore: boolean | null = null): void {
-    const previous = [...this.byId.values()];
-    const cached = new Map<string, TranscriptItem>();
-    for (const item of previous) cached.set(item.id, item);
-    const evidence = [...previous, ...this.openedFoldRanges.values(), ...items].filter(hasSupervisionEvidence);
+    const evidence: TranscriptItem[] = [];
+    for (const item of this.byId.values()) if (hasSupervisionEvidence(item)) evidence.push(item);
+    for (const item of this.openedFoldRanges.values()) if (hasSupervisionEvidence(item)) evidence.push(item);
+    for (const item of items) if (hasSupervisionEvidence(item)) evidence.push(item);
     const promotedIds = new Set([...evidence.filter((item) => item.supervision_user === true).map((item) => item.id), ...this.cachedPromotionIds]);
     this.cachedPromotionIds.clear();
     const promotedFolds = evidence.filter((item) => item.fold !== undefined);
     const promotedWork = evidence.filter(isWorkItem);
-    this.byId.clear();
-    for (const [id, existing] of cached) {
-      const promoted = retainSupervisionEvidence(existing, promotedIds, promotedFolds, promotedWork);
-      this.byId.set(id, cloneItem(promoted));
+    const promote = promotedIds.size > 0 || promotedFolds.length > 0 || promotedWork.length > 0;
+    if (promote) {
+      for (const [id, existing] of this.byId) {
+        const promoted = retainSupervisionEvidence(existing, promotedIds, promotedFolds, promotedWork);
+        if (promoted !== existing) { this.byId.set(id, promoted); this._contentVersion++; }
+      }
     }
-    const promotedItems = items.map((item) => retainSupervisionEvidence(item, promotedIds, promotedFolds, promotedWork));
+    const promotedItems = promote ? items.map(item => retainSupervisionEvidence(item, promotedIds, promotedFolds, promotedWork)) : items;
     const batchWork = promotedItems.filter((item) => item.kind !== "fold" && isWorkItem(item));
     const freshItems = promotedItems.filter((item) => {
       if (item.kind !== "fold") return true;
@@ -482,24 +489,21 @@ export class TranscriptReducer {
 
     if (newFolds.length > 0) {
       for (const [id, existing] of this.byId) {
-        if (isWorkItem(existing) && newFolds.some((fold) => foldContains(fold, existing))) this.byId.delete(id);
+        if (isWorkItem(existing) && newFolds.some((fold) => foldContains(fold, existing))) { this.byId.delete(id); this._contentVersion++; }
       }
     }
 
     if (batchWork.length > 0) {
       for (const [id, existing] of this.byId) {
-        if (existing.kind === "fold" && batchWork.some((work) => foldContains(existing, work))) this.byId.delete(id);
+        if (existing.kind === "fold" && batchWork.some((work) => foldContains(existing, work))) { this.byId.delete(id); this._contentVersion++; }
       }
     }
 
-    let existingFirst = this.firstSeq;
-    if (newFolds.length > 0) existingFirst = this.firstSeq;
+    const existingFirst = this.firstSeq;
     for (const item of freshItems) {
       const old = this.byId.get(item.id);
-      if (old === undefined) {
-        this.byId.set(item.id, cloneItem(item));
-      } else if (!jsonEqual(old, item)) {
-        this.byId.set(item.id, cloneItem(item));
+      if (!old || !jsonEqual(old, item)) {
+        this.byId.set(item.id, cloneItem(item)); this._contentVersion++;
       }
     }
 
@@ -649,8 +653,10 @@ export interface ToolInspectionStep {
   readonly results: readonly TranscriptItem[];
   readonly result: TranscriptItem | null;
   readonly images: readonly TranscriptItem[];
+  readonly reports: readonly TranscriptItem[];
   readonly running: boolean;
   readonly failed: boolean;
+  readonly recovered?: boolean;
 }
 
 export interface FoldInspectionStep {
@@ -667,14 +673,19 @@ export interface ToolTurnProjection {
   readonly turnId: string;
   readonly workKey: string;
   readonly running: boolean;
+  readonly latestExchange?: boolean;
+  readonly agent?: string;
+  readonly phaseTitle?: string;
+  readonly sectionTitle?: string;
   readonly summaryVisible: boolean;
   readonly collapsedByDefault: true;
   readonly expanded: boolean;
   readonly userMessages: readonly TranscriptItem[];
   readonly userImages: readonly TranscriptItem[];
+  readonly events: readonly TranscriptItem[];
   readonly visibleAssistantText: TranscriptItem | null;
   readonly visibleTextKind: "interim" | "final" | null;
-  /** Full intermediate narration and calls; the UI shows these only when `expanded` is true. */
+  /** Ordered steps with their original call/result ownership. */
   readonly inspectionSteps: readonly WorkInspectionStep[];
   readonly toolCount: number;
   readonly thoughtCount: number;
@@ -685,6 +696,236 @@ interface MutableToolInspection {
   readonly item: TranscriptItem;
   readonly results: TranscriptItem[];
   readonly images: TranscriptItem[];
+  readonly reports: TranscriptItem[];
+}
+
+export function transcriptRecord(value: JsonValue | undefined): JsonObject | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined;
+}
+
+// Match against full recorded arguments, never the shortened title shown on a phone.
+function retryTarget(use: TranscriptItem): string {
+  const input = use.tool_input ?? use.input;
+  const args = transcriptRecord(input);
+  const command = args?.command ?? args?.cmd;
+  if (typeof command === 'string') return JSON.stringify(['command', command]);
+  const name = String(use.tool_name ?? use.tool ?? use.name ?? '').toLowerCase().replace(/^functions\./, '');
+  if (['read', 'read_file', 'readfile', 'view_image', 'imageview'].includes(name)) {
+    const file = args?.file_path ?? args?.path;
+    if (typeof file === 'string') return JSON.stringify(['file', file]);
+  }
+  return JSON.stringify(input ?? null);
+}
+
+function receiptStatus(step: ToolInspectionStep): string {
+  if (!step.result) return '';
+  const status = transcriptRecord(step.result.outcome)?.status;
+  return typeof status === 'string' && status ? status : step.result.is_error ? 'failed' : 'ok';
+}
+
+function retryResource(args: JsonObject | undefined): JsonValue | undefined {
+  return args?.file_path ?? args?.path ?? args?.url ?? args?.target ?? args?.id ?? args?.task_id ?? args?.session_id;
+}
+
+function commandFamily(args: JsonObject | undefined): string {
+  const words = String(args?.command ?? args?.cmd ?? '').trim().split(/\s+/, 2);
+  // Treat distinct subcommands of common command-line tools as distinct operations.
+  return ['git','npm','cargo','go','kubectl'].includes(words[0]) ? words.join(' ') : words[0];
+}
+
+function rejectedArguments(step: ToolInspectionStep): boolean {
+  const text = (step.result?.text || '').slice(0, 1600);
+  return /(?:InputValidationError|(?:invalid|bad)[_ ](?:params|parameters|arguments|tool input)|(?:unknown|unrecognized|invalid|missing|unexpected|required) (?:option|flag|argument|parameter)|failed to parse (?:function |tool )?arguments|missing required (?:field|property))/i.test(text);
+}
+
+/** Reconcile retries within one exchange before narration splits it into visible groups. */
+function markRecoveredAttempts(steps: WorkInspectionStep[]): void {
+  const firstFailure = steps.findIndex(step => step.kind === 'tool' && ['failed','timed_out','blocked'].includes(receiptStatus(step)));
+  if (firstFailure < 0) return;
+  const latestSuccess = new Map<string, TranscriptItem>();
+  const nextAttempt = new Map<string, ToolInspectionStep>();
+  for (let i = steps.length - 1; i >= firstFailure; i--) {
+    const step = steps[i];
+    if (step.kind !== 'tool') continue;
+    const use = step.use, receipt = step.result;
+    const tool = String(use.tool_name ?? use.tool ?? use.name ?? '').replace(/^functions\./, '');
+    if (!tool) continue;
+    const args = transcriptRecord(use.tool_input ?? use.input);
+    const scope = JSON.stringify([tool, args?.workdir ?? args?.cwd ?? '']);
+    const key = JSON.stringify([scope, retryTarget(use)]);
+    const status = receiptStatus(step);
+    if (receipt && status === 'ok') {
+      if (!latestSuccess.has(key)) latestSuccess.set(key, use);
+    } else if (receipt && (status === 'failed' || status === 'timed_out' || status === 'blocked')) {
+      let success = latestSuccess.get(key);
+      const next = nextAttempt.get(scope);
+      if ((!success || compareItems(receipt, success) >= 0) && next?.result && (next.recovered || receiptStatus(next) === 'ok')) {
+        const nextArgs = transcriptRecord(next.use.tool_input ?? next.use.input);
+        const resource = retryResource(args), command = commandFamily(args);
+        const sameTask = !!command && typeof args?.description === 'string' && !!args.description.trim() &&
+          args.description === nextArgs?.description;
+        const sameBlockedResource = status === 'blocked' && !!resource && resource === retryResource(nextArgs);
+        // Claude can reject a shell invocation before it starts. The corrected script for the
+        // same described task may use a different launcher (for example, cd instead of VAR=…).
+        const refusedShellRetry = sameTask && tool.toLowerCase() === 'bash' &&
+          /^Claude Code did not run this command:/im.test((receipt.text || '').slice(0, 1600));
+        if ((sameTask || sameBlockedResource || rejectedArguments(step)) && (!resource || resource === retryResource(nextArgs)) &&
+          (!command || command === commandFamily(nextArgs) || refusedShellRetry)) {
+          success = next.use;
+        }
+      }
+      if (success && compareItems(receipt, success) < 0) {
+        const recovered: ToolInspectionStep = { ...step, recovered:true };
+        steps[i] = recovered;
+        nextAttempt.set(scope, recovered);
+        continue;
+      }
+    }
+    nextAttempt.set(scope, step);
+  }
+}
+
+function inputBlock(item: TranscriptItem): boolean {
+  return item.role === 'user' && (item.kind === 'text' || (item.kind === 'image' && !itemToolUseId(item)));
+}
+
+function entryId(id: string): string { return id.split('#', 1)[0]; }
+
+function codexOpening(item: TranscriptItem | undefined): string {
+  const receipt = transcriptRecord(item?.turn_duration);
+  return receipt?.source === 'codex_task_complete' && typeof receipt.user_item_id === 'string' ? entryId(receipt.user_item_id) : '';
+}
+
+/** Codex steers can be ordinary user items. Only join them when its end receipt names the opening prompt. */
+function completedCodexSteers(items: readonly TranscriptItem[]): Set<string> {
+  const steers = new Set<string>(), prompts = new Map<string, number>();
+  let boundary = 0;
+  items.forEach((item, index) => {
+    const id = entryId(item.id);
+    if (inputBlock(item) && !prompts.has(id)) prompts.set(id, index);
+    if (item.kind !== 'turn_duration') return;
+    const opening = codexOpening(item);
+    const start = prompts.get(opening);
+    if (opening && (start !== undefined || boundary === 0)) {
+      let answered = false;
+      for (let i = start ?? 0; i < index; i++) {
+        const part = items[i];
+        if (part.wake || part.kind === 'recap' || part.supervision_user ||
+          (part.kind === 'notice' && ['Interrupted','已中断','中断されました'].includes(part.text || ''))) break;
+        if (part.kind === 'turn_duration' && (prompts.get(codexOpening(part)) ?? i) >= (start ?? 0)) break;
+        if (part.role === 'assistant' && part.kind === 'text' && !part.narration && !isEmptyText(part)) answered = true;
+        if (inputBlock(part)) {
+          if (answered) break; // A late duration cannot swallow the next independent question.
+          if (entryId(part.id) !== opening) steers.add(entryId(part.id));
+        }
+      }
+    }
+    boundary = index + 1;
+  });
+  return steers;
+}
+
+/** Keep the provider's turn boundaries and route late results to the call that produced them. */
+export function transcriptExchanges(items: readonly TranscriptItem[]): TranscriptItem[][] {
+  const groups: TranscriptItem[][] = [];
+  const steers = completedCodexSteers(items);
+  const calls = new Map<string, TranscriptItem[]>();
+  const entries = new Map<string, { tail: TranscriptItem[] }>();
+  let group: TranscriptItem[] = [];
+  let exchange = { tail: group };
+  let ended = false;
+  let previousInput = '';
+  for (const item of items) {
+    const call = itemToolUseId(item);
+    if (call && (item.kind === 'tool_result' || item.kind === 'image')) {
+      const owner = calls.get(call);
+      if (owner) { owner.push(item); continue; }
+    }
+    if (item.kind === 'turn_duration') {
+      const duration = transcriptRecord(item.turn_duration);
+      const reference = duration?.user_item_id || duration?.parent_uuid;
+      const owner = typeof reference === 'string' ? entries.get(entryId(reference))?.tail : undefined;
+      if (owner && owner !== group) { owner.push(item); continue; }
+    }
+    const input = inputBlock(item), entry = entryId(item.id);
+    const newInput = input && entry !== previousInput && !steers.has(entry);
+    if (group.length && (ended || newInput || item.wake === true || item.kind === 'recap')) {
+      group = [];
+      // A queued addition starts a display segment. Its duration can still name the original prompt.
+      if (newInput && item.queued === true && !ended && item.supervision_user !== true) exchange.tail = group;
+      else exchange = { tail: group };
+    }
+    if (!group.length) groups.push(group);
+    group.push(item);
+    entries.set(entry, exchange);
+    if (call && item.kind === 'tool_use') calls.set(call, group);
+    previousInput = input ? entry : '';
+    ended = item.kind === 'recap' || item.kind === 'turn_duration';
+  }
+  return groups;
+}
+
+/** Only recorded questions become quotes. Old nodes may have retained just the user's answer. */
+export function displayQuestionReply(item: TranscriptItem): TranscriptItem {
+  const value = item.question_replies;
+  if (!item.text || !Array.isArray(value) || !value.length) return item;
+  const answers: string[] = [], formatted: string[] = [];
+  for (const pair of value) {
+    const record = transcriptRecord(pair);
+    if (!record || typeof record.question !== 'string' || !record.question.trim()) return item;
+    const question = record.question.trim();
+    const quote = question.split(/\r?\n/).map(line => '> ' + line).join('\n');
+    if (value.length === 1) return { ...item, text:quote + '\n\n' + item.text };
+    if (record.answer !== undefined && typeof record.answer !== 'string') return item;
+    const answer = typeof record.answer === 'string' ? record.answer : '';
+    answers.push(question + '：' + answer);
+    formatted.push(quote + '\n\n' + answer);
+  }
+  const plain = answers.join('\n').trim();
+  if (!item.text.startsWith(plain)) return item;
+  return { ...item, text:formatted.join('\n\n') + item.text.slice(plain.length) };
+}
+
+function displayTranscriptItem(item: TranscriptItem): TranscriptItem {
+  if (item.role === 'user' && item.kind === 'text') return displayQuestionReply(item);
+  if (item.role !== 'assistant' || item.kind !== 'text' || !item.text) return item;
+  const text = item.text.trim();
+  const completed = /^::browser-complete\{title=("(?:[^"\\]|\\.)*")\}$/.exec(text);
+  if (completed) {
+    try {
+      const title = JSON.parse(completed[1]);
+      if (typeof title === 'string' && title.trim()) return { ...item, kind:'browser_complete', text:title };
+    } catch (_) { /* A malformed or quoted example stays literal. */ }
+  }
+  if (/^API Error:\s*(?:Request rejected\s*\(\d{3}\)|[45]\d\d\b)/i.test(text)) return { ...item, kind:'provider_error' };
+  return item;
+}
+
+/** Older nodes identify a compaction by its canonical system notice. Claude can then emit
+ * a continuation notice for the same boundary, including across two pages of history. */
+function displayTranscriptItems(items: readonly TranscriptItem[]): TranscriptItem[] {
+  const display: TranscriptItem[] = [];
+  for (const item of items) {
+    if (item.kind === 'notice' && item.role === 'system' && !item.task && !item.wake && !item.compact &&
+      (item.text === '上下文已压缩' || item.text === '已从压缩的上下文继续')) {
+      if (item.text === '已从压缩的上下文继续' && display[display.length - 1]?.compact) continue;
+      display.push({ ...item, compact: {} });
+    } else {
+      display.push(displayTranscriptItem(item));
+    }
+  }
+  return display;
+}
+
+function isSeparateEvent(item: TranscriptItem): boolean {
+  if (item.kind === 'model_change' || item.kind === 'recap' || item.kind === 'visualization' || item.kind === 'browser_complete' || item.kind === 'provider_error') return true;
+  if (item.kind === 'turn_duration') {
+    const ms = transcriptRecord(item.turn_duration)?.duration_ms;
+    return typeof ms === 'number' && Number.isFinite(ms) && ms >= 0;
+  }
+  if (item.kind === 'image') return item.role !== 'user' && !itemToolUseId(item);
+  return item.kind === 'notice' && (item.wake === true || !!item.model_refusal || !!item.task ||
+    ['已中断', 'Interrupted', '中断されました'].includes(item.text || ''));
 }
 
 function itemToolUseId(item: TranscriptItem): string | null {
@@ -694,18 +935,6 @@ function itemToolUseId(item: TranscriptItem): string | null {
 
 function isEmptyText(item: TranscriptItem): boolean {
   return typeof item.text !== "string" || item.text.trim().length === 0;
-}
-
-function emptyThinkingBetweenCalls(items: readonly TranscriptItem[], index: number): boolean {
-  let before = false;
-  let after = false;
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    if (items[cursor].kind === "tool_use") { before = true; break; }
-  }
-  for (let cursor = index + 1; cursor < items.length; cursor += 1) {
-    if (items[cursor].kind === "tool_use") { after = true; break; }
-  }
-  return before && after;
 }
 
 /**
@@ -719,25 +948,35 @@ export function projectToolTurn(
   running: boolean,
   expanded = false,
 ): ToolTurnProjection {
-  const items = inputItems.map(cloneItem).sort(compareItems);
+  const items = [...inputItems].sort(compareItems);
   let visibleAssistantText: TranscriptItem | null = null;
+  let latestNarration: TranscriptItem | null = null;
   const userMessages: TranscriptItem[] = [];
   const userImages: TranscriptItem[] = [];
+  const events: TranscriptItem[] = [];
   for (const item of items) {
-    if (item.kind === "text" && item.role === "assistant") visibleAssistantText = item;
-    if (item.role !== "user" || item.kind === "tool_result" || item.kind === "fold") continue;
+    if (item.kind === 'text' && item.role === 'assistant' && !isEmptyText(item)) {
+      if (item.narration === true) latestNarration = item;
+      else visibleAssistantText = item;
+    }
+    if (!inputBlock(item)) continue;
     if (item.kind === "image") {
       if (itemToolUseId(item) === null) userImages.push(item);
       continue;
     }
     userMessages.push(item);
   }
+  if (running && !visibleAssistantText) visibleAssistantText = latestNarration;
 
   const byToolUseId = new Map<string, MutableToolInspection>();
   const byItemId = new Map<string, MutableToolInspection>();
-  for (const item of items) {
+  let firstCall = -1, lastCall = -1;
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
     if (item.kind !== "tool_use") continue;
-    const record: MutableToolInspection = { item, results: [], images: [] };
+    if (firstCall < 0) firstCall = index;
+    lastCall = index;
+    const record: MutableToolInspection = { item, results: [], images: [], reports: [] };
     byItemId.set(item.id, record);
     const useId = itemToolUseId(item);
     if (useId !== null) byToolUseId.set(useId, record);
@@ -758,6 +997,14 @@ export function projectToolTurn(
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index];
     if (visibleAssistantText !== null && item.id === visibleAssistantText.id) continue;
+    if (isSeparateEvent(item)) {
+      const task = transcriptRecord(item.task);
+      const origin = typeof task?.tool_use_id === 'string' ? byToolUseId.get(task.tool_use_id) : undefined;
+      if (item.kind === 'notice' && origin && item.wake !== true &&
+        ['running', 'completed', 'event', 'ended'].includes(String(task?.status))) origin.reports.push(item);
+      else events.push(item);
+      continue;
+    }
     if (item.kind === "tool_use") {
       const record = byItemId.get(item.id);
       if (record === undefined) continue;
@@ -771,6 +1018,7 @@ export function projectToolTurn(
         results,
         result,
         images,
+        reports: record.reports,
         running: result === null,
         failed: result?.is_error === true,
       });
@@ -781,7 +1029,7 @@ export function projectToolTurn(
     if (item.kind === "tool_result") continue;
     if (item.kind === "image" && itemToolUseId(item) !== null) continue;
     if (item.kind === "thinking") {
-      if (isEmptyText(item) && !emptyThinkingBetweenCalls(items, index)) continue;
+      if (isEmptyText(item) && !(firstCall >= 0 && firstCall < index && index < lastCall)) continue;
       inspectionSteps.push({ kind: "narration", id: item.id, role: "thinking", item });
       thoughtCount += 1;
       continue;
@@ -804,6 +1052,7 @@ export function projectToolTurn(
     }
   }
 
+  markRecoveredAttempts(inspectionSteps);
   return {
     turnId,
     workKey: `w-${turnId}`,
@@ -813,6 +1062,7 @@ export function projectToolTurn(
     expanded,
     userMessages,
     userImages,
+    events,
     visibleAssistantText,
     visibleTextKind: visibleAssistantText === null ? null : running ? "interim" : "final",
     inspectionSteps,
@@ -820,6 +1070,269 @@ export function projectToolTurn(
     thoughtCount,
     unresolvedToolCount,
   };
+}
+
+export interface NextStepChoice { label: string; action?: string; }
+export interface NextStepProposal { recap: string; ask: string; choices: NextStepChoice[]; selected?: string; }
+
+const desktopActions: Record<string,string> = {
+  commit:'Commit changes', create_pr:'Create pull request', merge:'Merge changes', fix_ci:'Fix CI',
+  address_comments:'Address comments', resolve_conflicts:'Resolve conflicts', verify:'Verify changes', archive:'Archive chat'
+};
+
+function nextStepProposal(step: ToolInspectionStep): NextStepProposal | undefined {
+  if (step.result?.is_error || receiptStatus(step) !== 'ok' || !step.result?.text?.startsWith('Shown in the next-step box.')) return undefined;
+  const input = transcriptRecord(step.use.tool_input);
+  const recap = input?.recap ?? input?.outcome, ask = input?.ask ?? input?.next_ask ?? input?.next_brief;
+  const actions = input?.actions ?? input?.next_actions;
+  if (typeof recap !== 'string' || !recap.trim() || typeof ask !== 'string' || !ask.trim() || !Array.isArray(actions)) return undefined;
+  const choices: NextStepChoice[] = [];
+  for (const raw of actions.slice(0,3)) {
+    const entry = transcriptRecord(raw);
+    if (typeof entry?.action === 'string') {
+      if (Object.prototype.hasOwnProperty.call(desktopActions,entry.action)) choices.push({action:entry.action,label:desktopActions[entry.action]});
+    } else if (typeof entry?.label === 'string') {
+      const label = entry.label.trim();
+      if (label && label.length <= 100 && !/^[!/]|[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufe00-\ufe0f\ufeff]/.test(label)) choices.push({label});
+    }
+  }
+  return choices.length ? {recap:recap.trim(),ask:ask.trim(),choices} : undefined;
+}
+
+export type TranscriptDisplayRow =
+  | { kind: 'work'; id: string; work: ToolTurnProjection }
+  | { kind: 'input' | 'narration' | 'reply' | 'image' | 'event' | 'next_step'; id: string; item: TranscriptItem; proposal?: NextStepProposal; duration?: TranscriptItem; processIds?: string[]; leadIds?: string[]; partialProcess?: boolean };
+
+/** A viewed image forms its own disclosure when it interrupts a run of file or command activity. */
+export function isImageInspection(step: ToolInspectionStep): boolean {
+  const name = String(step.use.tool_name ?? step.use.tool ?? step.use.name ?? '').toLowerCase().replace(/^functions\./, '');
+  return name === 'view_image' || name === 'imageview' || ((name === 'read' || name === 'read_file') && step.images.length > 0);
+}
+
+export interface LiveToolCall { readonly id: string; readonly name: string }
+
+/** Overlay the current call inventory for rendering. Cursors, caches and edit history use only durable items. */
+function withLiveTools(input: readonly TranscriptItem[], liveTools: readonly LiveToolCall[]): readonly TranscriptItem[] {
+  if (!liveTools.length) return input;
+  const pending = new Map(liveTools.map(tool => [tool.id, tool] as const));
+  const returned = new Set(input.filter(item => item.kind === 'tool_result').map(itemToolUseId));
+  let seq = 0;
+  const displayed = input.map(item => {
+    seq = Math.max(seq, item.seq);
+    const call = itemToolUseId(item);
+    if (item.kind === 'tool_use' && call && pending.delete(call) && !returned.has(call)) {
+      return { ...item, live_tool:true };
+    }
+    return item;
+  });
+  for (const [id, tool] of pending) {
+    if (!returned.has(id)) displayed.push({ id:id + '#0', seq:++seq, kind:'tool_use', role:'assistant',
+      tool_use_id:id, tool_name:tool.name, live_tool:true, live_tool_preview:true });
+  }
+  return displayed;
+}
+
+/** A change in a Codex summary can separate historical batches without displaying its text. */
+function thoughtCaption(value: JsonValue | undefined): string {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const lines = value.trim().split(/\r?\n/);
+  let title = '';
+  for (const raw of lines) {
+    const line = raw.trim();
+    const heading = /^(?:#{1,6}\s+(.+)|\*\*(.+?)\*\*|__(.+?)__)$/.exec(line);
+    if (heading) title = heading[1] || heading[2] || heading[3];
+  }
+  if (!title) title = lines.find(line => line.trim())?.trim() || '';
+  return title.replace(/`([^`]+)`/g, '$1').slice(0, 160).trim();
+}
+
+/** Only the summary tool's successful public labels can name a phase between calls. */
+function recordedPhase(step: ToolInspectionStep): string {
+  if (step.use.tool_name !== 'mcp__codex_app__update_running_summary' || receiptStatus(step) !== 'ok') return '';
+  const labels = transcriptRecord(step.use.tool_input)?.labels;
+  if (!Array.isArray(labels) || typeof labels[0] !== 'string') return '';
+  let title = labels[0].trim();
+  if (labels.length === 3 && typeof labels[1] === 'string' && typeof labels[2] === 'string') {
+    if (/^\S+ing$/i.test(title) && /^\S+ed$/i.test(labels[1])) title += ' ' + labels[2];
+    else if (labels[1] === '已' + title.replace(/^正在/, '')) title += labels[2];
+  }
+  return title && title.length <= 160 && !/[\x00-\x1f\x7f]/.test(title) ? title : '';
+}
+
+function stepCaption(step: WorkInspectionStep, claude: boolean): string {
+  if (step.kind === 'tool') return recordedPhase(step);
+  if (claude) return ''; // Claude already sends public progress as separate narration.
+  if (step.kind === 'fold') return thoughtCaption(transcriptRecord(step.item.fold?.latest_thinking)?.text);
+  return step.role === 'thinking' ? thoughtCaption(step.item.text) : '';
+}
+
+/** Claude's public Bash description names the batch even between the receipt and the next assistant event. */
+function commandCaption(value: JsonValue | undefined): string {
+  if (typeof value !== 'string') return '';
+  const line = value.trim().split(/[\r\n]/, 1)[0].trim();
+  if (/^(?:bash|(?:functions\.)?exec(?:_command)?)$/i.test(line)) return '';
+  const chars = Array.from(line);
+  return chars.length > 160 ? chars.slice(0,159).join('') + '…' : line;
+}
+
+/** A new public caption starts a new batch with its next operation. Captions alone do not multiply groups. */
+function completedWorkSections(steps: WorkInspectionStep[], claude: boolean): WorkInspectionStep[][] {
+  const batches: WorkInspectionStep[][] = [];
+  let start = 0, next = -1, caption = '', hasCall = false;
+  steps.forEach((step, i) => {
+    const title = stepCaption(step, claude);
+    if (title) {
+      if (hasCall && title !== caption && next < 0) next = i;
+      caption = title;
+    }
+    if ((step.kind === 'tool' && !recordedPhase(step)) || (step.kind === 'fold' && step.toolCount > 0)) {
+      if (next > start) { batches.push(steps.slice(start, next)); start = next; next = -1; }
+      hasCall = true;
+    }
+  });
+  batches.push(steps.slice(start));
+  return batches;
+}
+
+/** Put each public update at its original position and keep receipts, images and reports attached to their call. */
+export function projectTranscriptRows(input: readonly TranscriptItem[], live: boolean, liveTools: readonly LiveToolCall[] = [], agent: string = '', actionLabel?: (action: string) => string): TranscriptDisplayRow[] {
+  const rows: TranscriptDisplayRow[] = [];
+  const groups = transcriptExchanges(displayTranscriptItems(withLiveTools(input, liveTools)));
+  groups.forEach((items, index) => {
+    const start = rows.length;
+    const first = items[0], latestExchange = index === groups.length - 1;
+    const running = live && latestExchange && first.kind !== 'recap' && !items.some(item => item.kind === 'turn_duration');
+    const work = projectToolTurn(first.id, items, running);
+    const steps = new Map(work.inspectionSteps.map(step => [step.id, step]));
+    const events = new Set(work.events.map(item => item.id));
+    const claude = agent === 'claude' || (!agent && items.some(item => typeof item.model === 'string' && item.model.startsWith('claude-')));
+    const final = (running && claude) || work.visibleAssistantText?.narration === true ? undefined : work.visibleAssistantText?.id;
+    let reply: Extract<TranscriptDisplayRow, { item: TranscriptItem }> | undefined;
+    let wrap: ToolInspectionStep | undefined;
+    let proposal: NextStepProposal | undefined;
+    if (!running) {
+      for (const step of work.inspectionSteps) {
+        if (step.kind === 'tool' && step.use.tool_name === 'mcp__ccd_turn__wrap_up') wrap = step;
+      }
+      if (wrap) {
+        const closed = !!final && !!work.visibleAssistantText && compareItems(work.visibleAssistantText,wrap.use) > 0;
+        if (closed || wrap.result?.text?.includes('box ends your turn')) proposal = nextStepProposal(wrap);
+        if (proposal && !latestExchange) {
+          const next = groups[index + 1][0];
+          const response = next.kind === 'text' && next.role === 'user' && !next.wake && !next.supervision_user ? next.text?.trim() : '';
+          if (response && proposal.choices.some(choice => choice.label === response || (choice.action && actionLabel?.(choice.action) === response))) {
+            proposal.selected = response;
+          } else proposal = undefined;
+        }
+      }
+    }
+    let section: WorkInspectionStep[] = [], sections = 0;
+    let family = '', phaseTitle = '';
+    const emit = (steps: WorkInspectionStep[]): void => {
+      const batch = steps.filter(step => {
+        if (step.kind === 'narration') return step.role !== 'thinking';
+        if (step.kind !== 'fold') return true;
+        // Old pages can also fold public prose. Suppress a fold only when every item is a thought.
+        return !(step.toolCount === 0 && step.thoughtCount > 0 && step.item.fold?.items === step.thoughtCount);
+      });
+      if (!batch.length) return;
+      const firstId = batch[0].id.replace(/^fold:/, '');
+      const workKey = sections++ === 0 ? work.workKey : work.workKey + ':' + firstId;
+      let toolCount = 0, thoughtCount = 0, unresolved = 0;
+      let sectionTitle = '';
+      let lastCall: ToolInspectionStep | FoldInspectionStep | undefined;
+      let lastPending: ToolInspectionStep | undefined;
+      for (const step of batch) {
+        if (step.kind === 'tool') {
+          sectionTitle = recordedPhase(step) || sectionTitle;
+          lastCall = step;
+          toolCount++;
+          if (!step.result) { unresolved++; lastPending = step; }
+        }
+        else if (step.kind === 'fold') {
+          if (step.toolCount) lastCall = step;
+          toolCount += step.toolCount; thoughtCount += step.thoughtCount;
+        }
+      }
+      phaseTitle = sectionTitle || phaseTitle;
+      const currentCall = running && lastPending ? lastPending : lastCall;
+      if (claude && !sectionTitle && currentCall) {
+        if (currentCall.kind === 'fold') sectionTitle = commandCaption(currentCall.item.text);
+        else if (currentCall.use.tool_name === 'Bash') {
+          sectionTitle = commandCaption(transcriptRecord(currentCall.use.tool_input ?? currentCall.use.input)?.description);
+        }
+      }
+      rows.push({ kind: 'work', id: workKey, work: { ...work, workKey, latestExchange, agent: claude ? 'claude' : agent, phaseTitle, sectionTitle,
+        inspectionSteps: batch, toolCount, thoughtCount, unresolvedToolCount: unresolved } });
+    };
+    const flush = (): void => {
+      if (!section.length) return;
+      if (running) emit(section);
+      else for (const batch of completedWorkSections(section, claude)) emit(batch);
+      section = []; family = '';
+    };
+    for (const item of items) {
+      const step = steps.get(item.id);
+      if (item.kind === 'text' && item.role === 'assistant' && !isEmptyText(item)) {
+        flush();
+        phaseTitle = '';
+        if (item.id === final) {
+          reply = { kind:'reply', id:'visible-' + first.id, item }; rows.push(reply);
+        } else rows.push({ kind:'narration', id:item.id, item });
+      } else if (inputBlock(item)) {
+        flush(); phaseTitle = ''; rows.push({ kind:item.kind === 'image' ? 'image' : 'input', id:item.id, item });
+      } else if (events.has(item.id) || (step?.kind === 'narration' && !!item.compact)) {
+        flush();
+        if (item.kind === 'turn_duration' && reply && !reply.duration) reply.duration = item;
+        else rows.push({ kind:item.kind === 'image' ? 'image' : 'event', id:item.id, item });
+      } else if (step) {
+        if (proposal && step === wrap) continue;
+        if (step.kind === 'tool') {
+          const name = String(step.use.tool_name ?? step.use.tool ?? step.use.name ?? '').toLowerCase().replace(/^functions\./, '');
+          const next = ['todowrite', 'update_plan', 'mcp__ccd_turn__update_plan', 'taskcreate', 'taskupdate', 'tasklist'].includes(name) ? 'plan' :
+            isImageInspection(step) ? 'image' : 'activity';
+          if (family && family !== next) flush();
+          family = next;
+        }
+        section.push(step);
+      }
+    }
+    flush();
+    if (reply && !running) {
+      const replyAt = rows.lastIndexOf(reply);
+      // Without a duration, older providers can leave interim prose followed by more work.
+      const finished = !!reply.duration || (!work.unresolvedToolCount && (!latestExchange || !liveTools.length) &&
+        !rows.slice(replyAt + 1).some(row => row.kind === 'work' || row.kind === 'event'));
+      if (finished) {
+        const process = rows.slice(start, replyAt).filter(row => row.kind === 'work' || row.kind === 'narration' ||
+          (row.kind === 'event' && (row.item.kind === 'browser_complete' || !!row.item.compact ||
+            (!!row.item.task && !row.item.wake && transcriptRecord(row.item.task)?.status === 'completed'))));
+        const opening = codexOpening(reply.duration);
+        const missingOpening = !!opening && !items.some(item => inputBlock(item) && entryId(item.id) === opening);
+        if (process.length || (index === 0 && missingOpening)) {
+          const leads = new Set<string>();
+          if (opening) {
+            let publicLead = '';
+            for (const row of rows.slice(start, replyAt)) {
+              if (row.kind === 'input') {
+                if (publicLead) leads.add(publicLead);
+                publicLead = '';
+              } else if (row.kind === 'narration' && !publicLead) publicLead = row.id;
+            }
+          }
+          if (leads.size) reply.leadIds = Array.from(leads);
+          reply.processIds = process.filter(row => !leads.has(row.id)).map(row => row.id);
+          reply.partialProcess = index === 0 && (!inputBlock(first) || missingOpening) && !first.wake && first.kind !== 'recap';
+        }
+      }
+    }
+    if (proposal && wrap) rows.push({kind:'next_step',id:'next-step:' + wrap.id,item:wrap.use,proposal});
+    if (!sections && running && !items.some(item => item.kind === 'thinking' || item.kind === 'fold')) {
+      const position = reply ? rows.indexOf(reply) : rows.length;
+      rows.splice(position, 0, {kind:'work', id:work.workKey, work:{...work,latestExchange,inspectionSteps:[]}});
+    }
+  });
+  return rows;
 }
 
 export type OperationReceiptState = "pending" | "done" | "failed" | "unknown";

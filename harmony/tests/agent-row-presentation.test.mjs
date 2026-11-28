@@ -8,6 +8,7 @@ const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListP
 const rowBindingSource = readFileSync(new URL('../entry/src/main/ets/models/RowBinding.ets', import.meta.url), 'utf8');
 const rowBindingCode = stripTypeScriptTypes(rowBindingSource.replace(/@ObservedV2\s*/g, '').replace(/@Trace\s*/g, '').replace(/\bexport\s+/g, ''));
 const { reconcileBoundRows } = new Function(rowBindingCode + '\nreturn { reconcileBoundRows };')();
+const { agentRowPreview, agentRowTone, runningSubagents } = await import('../entry/src/main/ets/core/AgentRowPreview.ts');
 
 function block(start, name) {
   const body = source.indexOf('{', start);
@@ -44,11 +45,18 @@ const BoundAgentRow = new Function('AgentRowPresentation', 'return ' + stripType
 const BoundAgentGroup = new Function('return ' + stripTypeScriptTypes(classCode('BoundAgentGroup')) + ';')();
 
 function pageClass(wire, translate) {
-  return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows', 'herdrTabName',
-    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowTitle', 'rowPlace']
+  return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows',
+    'agentRowPreview', 'agentRowTone', 'runningSubagents', 'herdrTabName',
+    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowPlace','rowSpoken','subagentLine','rowTitle']
       .map(methodCode).join('\n') + '\n}\n') + '\nreturn Page;')(
         BoundAgentRow, AgentRowPresentation, BoundAgentGroup, wire, translate,
-        { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows, herdrTabName);
+        { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows,
+        agentRowPreview, agentRowTone, runningSubagents, herdrTabName);
+}
+
+function methodsClass(names, globals) {
+  const keys = Object.keys(globals);
+  return new Function(...keys, stripTypeScriptTypes('class Methods {\n' + names.map(methodCode).join('\n') + '\n}') + '\nreturn Methods;')(...keys.map((key) => globals[key]));
 }
 
 function row(raw, fields = {}) {
@@ -57,6 +65,10 @@ function row(raw, fields = {}) {
   return value;
 }
 
+const family = {
+  relations: {root:()=>undefined,children:()=>[]},
+  foldFamilies:()=>true, foldedChildren:()=>[], isPinned:()=>false, familyExpanded:()=>false, displayRows:group=>group.rows, familyState:row=>row.state
+};
 function fixture() {
   let parseCount = 0;
   const translations = { language: 'en', en: { just: 'just now', minute: 'm', hour: 'h', day: 'd' }, zh: { just: '现在', minute: '分', hour: '时', day: '天' } };
@@ -70,6 +82,8 @@ function fixture() {
       key === 'agent_time_hour_suffix' ? words.hour : key === 'agent_time_day_suffix' ? words.day : key;
   };
   const page = new (pageClass(wire, translate))();
+  page.workspace = { ...family, isMuted: () => false };
+  page.mixedHubs = false;
   page.model = {
     directoryOwnerFor: () => ({ machineName: id => 'Computer ' + id }),
     groupName: () => 'Hub',
@@ -84,7 +98,7 @@ test('identity changes refresh selection without decoding an unchanged payload',
   const bound = { identity: 'retained-binding', key: 'retained-key', value };
   const bindings = page.bindAgentRows([], [bound], true), binding = bindings[0];
   page.selectionVisible = true;
-  page.workspace = { selectedKey: binding.presentation.selectionKey };
+  page.workspace = { ...family, isMuted: () => false, selectedKey: binding.presentation.selectionKey };
   assert.equal(page.isRowSelected(binding), true);
   for (const [field, replacement] of [['group', 'other-hub'], ['kind', 'conversation'],
     ['manager', 'other-manager'], ['machine', 'other-machine'], ['session', 'other-session']]) {
@@ -109,7 +123,7 @@ test('same-key session changes move the native highlight through iOS group recon
  for(const groupingMode of ['state','machine','space']){
   const context=fixture(),{page}=context;
   const value=row({machine_id:'m1',session_id:'s1',last_text:'Same payload'},{machine:'m1',session:'s1'});
-  const group={id:'machines',rows:[value]},workspace={groupingMode,selectedKey:JSON.stringify(['hub','session','work','m1','s1']),
+  const group={id:'machines',rows:[value]},workspace={...family,isMuted:()=>false,groupingMode,selectedKey:JSON.stringify(['hub','session','work','m1','s1']),
    groups:[group],visibleRows(){return this.groups.flatMap(item=>item.rows);}};
   Object.assign(page,{workspace,selectionVisible:true,groupBindings:[],rowBindingOwner:undefined,rowBindingScope:'',groupBindingSequence:0});
   page.model.profile={id:'hub',manager:'work'};page.model.scope=()=> 'hub/work';
@@ -138,7 +152,8 @@ test('projection decodes once, keeps BoundRow identity, and refreshes display fi
   assert.equal(projection.recentContent, 'First');
   assert.equal(projection.status, 'working');
   assert.equal(projection.spaceName, 'space');
-  assert.deepEqual(projection.metadata, ['Hub · work', 'Computer m1', 'work/persona', 'working', 'First']);
+  assert.deepEqual(projection.metadata, ['Hub', 'Computer m1', 'work/persona', 'working', 'First']);
+  assert.equal(projection.place, 'Computer m1', 'one Hub: the place line names only the computer');
 
   bound.value = row({ machine_id: 'm1', repo_root: '/other/project', status: 'needs_you', last_text: 'Changed',
     updated_at: new Date(Date.now() - 60_000).toISOString(), space_name: 'new-space' });
@@ -152,7 +167,7 @@ test('projection decodes once, keeps BoundRow identity, and refreshes display fi
   assert.equal(projection.recentContent, 'Changed');
   assert.equal(projection.status, 'needs_you');
   assert.equal(projection.spaceName, 'new-space');
-  assert.deepEqual(projection.metadata, ['Hub · work', 'Computer m1', 'other/project', 'needs_you', 'Changed']);
+  assert.deepEqual(projection.metadata, ['Hub', 'Computer m1', 'other/project', 'needs_you', 'Changed']);
   assert.equal(page.rowStatus(projection), 'needs_you');
   assert.equal(page.rowStatusColor(projection), 'needs');
 });
@@ -173,8 +188,8 @@ test('full row binding decodes missing machine and session once and updates acro
   const context = fixture(), { page } = context;
   const initialRow = row({ machine_id: 'm1', session_id: 's1', status: 'working', last_text: 'Current' });
   const group = { id: 'machines', rows: [initialRow] };
-  const workspace = {
-    groupingMode: 'state', selectedKey: JSON.stringify(['hub', 'session', 'work', 'm1', 's1']),
+  const workspace = { ...family,
+    isMuted: () => false, groupingMode: 'state', selectedKey: JSON.stringify(['hub', 'session', 'work', 'm1', 's1']),
     groups: [group], visibleRows() { return this.groups.flatMap(item => item.rows); }
   };
   page.model = {
@@ -223,7 +238,8 @@ test('row rendering reads the projection instead of parsing ResourceRow data or 
   assert.ok(start >= 0 && end > start);
   const render = source.slice(start, end);
 
-  assert.match(render, /binding\.presentation\.metadata/);
+  assert.match(render, /binding\.presentation\.place/);
+  assert.match(render, /this\.rowSpoken\(binding\)/);
   assert.match(render, /binding\.presentation\.recentContent/);
   assert.match(render, /this\.rowTime\(binding\.presentation\)/);
   assert.match(render, /this\.isRowSelected\(binding\)/);
@@ -257,7 +273,8 @@ test('state group headers replace repeated status words, while muted and machine
  assert.equal(page.rowPlace(display),'Claude · MacBook · login-form');
  page.workspace.groupingMode='machine';assert.equal(page.rowPlace(display),'Claude · login-form');
  const row=source.slice(source.indexOf('  @Builder agentRow('),source.indexOf('  @Builder rowContext('));
- assert.match(row,/\.accessibilityText\(\[this\.rowTitle\(binding\)[\s\S]*this\.rowStatus\(binding\.presentation\)/);
+ assert.match(row,/\.accessibilityText\(this\.rowSpoken\(binding\)\)/);
+  assert.match(methodCode('rowSpoken'), /this.rowTitle\(binding\)/);
 });
 
 test('phone search starts folded, reveals only from a downward top pull, and a saved query survives leaving',()=>{
@@ -309,6 +326,200 @@ test('choosing an Agents group keeps the resting header, active query, and list 
 
 test('visible selection can clear on Home without changing the cached selected Agent',()=>{
  const Page=pageClass({},key=>key),page=new Page(),binding={presentation:{selectionKey:'agent'}};page.workspace={selectedKey:'agent'};page.selectionVisible=true;assert.equal(page.isRowSelected(binding),true);page.selectionVisible=false;assert.equal(page.isRowSelected(binding),false);assert.equal(page.workspace.selectedKey,'agent');page.selectionVisible=true;assert.equal(page.isRowSelected(binding),true);
+});
+
+test('rows name the Hub and computer, never the manager ID, on screen and when spoken', () => {
+  const context = fixture(), { page } = context;
+  page.mixedHubs = true;
+  const binding = page.bindAgentRows([], [{ identity: 's1', key: 'k', value: row({ machine_id: 'm1', status: 'idle' }, { manager: 'mgr-raw-id' }) }], true)[0];
+  assert.equal(binding.presentation.place, 'Hub · Computer m1');
+  assert.ok(!binding.presentation.metadata.slice(0, 2).join(' ').includes('mgr-raw-id'));
+  const render = source.slice(source.indexOf('  @Builder agentRow('), source.indexOf('  @Builder searchControl()'));
+  assert.doesNotMatch(render, /\.manager\)? ?[,\]].*join/);
+  assert.match(methodCode('rowSpoken'), /metadata\.slice\(0, 2\)/);
+  assert.doesNotMatch(methodCode('updateAgentRowPresentation'), /\[this\.model\.groupName\(row\), row\.manager\]/);
+  assert.doesNotMatch(methodCode('machineSelectOptions'), /row\.manager/);
+});
+
+test('row times read the page clock and a row newer than the last tick reads just now', () => {
+  const context = fixture(), { page } = context;
+  const binding = page.bindAgentRows([], [{ identity: 's1', key: 'k', value: row({ status: 'idle', updated_at: new Date(Date.now() - 90 * 60_000).toISOString() }) }], true)[0];
+  page.clock = Date.now();
+  assert.equal(page.rowTime(binding.presentation), '1h');
+  page.clock = Date.now() + 3 * 3600_000;
+  assert.equal(page.rowTime(binding.presentation), '4h', 'the 30 s tick moves the time without new row data');
+  const fresh = page.bindAgentRows([], [{ identity: 's2', key: 'k2', value: row({ status: 'idle', updated_at: new Date(Date.now() + 20_000).toISOString() }) }], true)[0];
+  page.clock = Date.now();
+  assert.equal(page.rowTime(fresh.presentation), 'just now');
+  assert.equal(context.parseCount, 2);
+  assert.match(source, /setInterval\(\(\) => \{ this\.clock = Date\.now\(\); \}, ROW_TIME_REFRESH_MS\)/);
+  assert.match(source, /const ROW_TIME_REFRESH_MS: number = 30000;/);
+  assert.match(methodCode('stopClock'), /clearInterval/);
+});
+
+test('a muted row keeps Needs you but drops other marks and the bold unread title', () => {
+  const context = fixture(), { page } = context;
+  let muted = false;
+  page.workspace = { ...family, isMuted: () => muted };
+  const bound = { identity: 's1', key: 'k', value: row({ status: 'unread', last_text: 'Done.' }, { state: 'unread' }) };
+  const binding = page.bindAgentRows([], [bound], true)[0];
+  assert.equal(binding.presentation.tone, 'unread');
+  assert.equal(binding.presentation.muted, false);
+  muted = true;
+  page.bindAgentRows([binding], [bound], true);
+  assert.equal(binding.presentation.tone, '', 'a mute change applies without new row data');
+  assert.equal(binding.presentation.muted, true);
+  bound.value = row({ status: 'needs_you', attention_reason: 'Approve the plan' }, { state: 'needs_you' });
+  page.bindAgentRows([binding], [bound], true);
+  assert.equal(binding.presentation.tone, 'needs_you');
+  assert.equal(binding.presentation.recentContent, 'Approve the plan');
+  const render = source.slice(source.indexOf('  @Builder agentRow('), source.indexOf('  @Builder searchControl()'));
+  assert.match(render, /status === 'unread' && !binding\.presentation\.muted \? FontWeight\.Bold : FontWeight\.Medium/);
+  assert.match(render, /Symbols\.muted/);
+  assert.match(render, /opacity\(binding\.presentation\.muted \? Tokens\.mutedOpacity : 1\)/);
+  assert.match(render, /binding\.presentation\.tone === 'needs_you' && this\.active && !this\.environment\.reduceMotion[\s\S]*NeedsYouPulseDot\(/);
+});
+
+test('background waiting shows its own word instead of the working capsule', () => {
+  const context = fixture(), { page } = context;
+  const binding = page.bindAgentRows([], [{ identity: 's1', key: 'k', value: row({ status: 'working', background_waiting: true }, { state: 'working' }) }], true)[0];
+  assert.equal(binding.presentation.tone, 'background');
+  assert.equal(page.rowStatus(binding.presentation), 'agent_group_background');
+  assert.equal(page.rowStatusColor(binding.presentation), 'working');
+});
+
+test('parent rows count their running subagents', () => {
+  const context = fixture(), { page } = context;
+  const binding = page.bindAgentRows([], [{ identity: 's1', key: 'k', value: row({ status: 'working', session_id: 'p',
+    subagents: [{ id: 'a', running: true }, { id: 'b', running: false }, { id: 'c', session_id: 'p@c', running: true }] }, { state: 'working' }) }], true)[0];
+  assert.equal(binding.presentation.subagents, 2);
+  assert.match(methodCode('subagentLine'), /agent_subagents_running/);
+});
+
+test('the horizontal filter retains the selection as live counts disappear and reappear', () => {
+  const getter = block(source.indexOf('  @Computed get shownQuickFilters'), 'shownQuickFilters').replace('@Computed ', '');
+  const keys = ['all','needsYou','unread','working','backgroundWaiting','feishu','terminal'];
+  const View = new Function('QUICK_FILTERS','Wire','return '+stripTypeScriptTypes('class Filters {'+getter+'}'))(keys,
+    {number:(counts,key) => counts[key] || 0});
+  const page = new View();
+  page.workspace = {quickFilter:'working', quickCountsKnown:()=>false, filterCounts:{}};
+  assert.deepEqual(page.shownQuickFilters,keys);
+  page.workspace.quickCountsKnown=()=>true;
+  page.workspace.filterCounts={working:2, unread:1};
+  assert.deepEqual(page.shownQuickFilters,['all','unread','working']);
+  page.workspace.filterCounts={terminal:1};
+  assert.deepEqual(page.shownQuickFilters,['all','working','terminal']);
+});
+
+
+test('group headers count what folds hide, in the Needs color, and Needs you never folds', () => {
+  const Header = methodsClass(['groupTitle', 'groupTotal', 'groupNeeds', 'groupCounts'], { STATE_LABELS: { needs: 'needs_you', 'state/working': 'working' },
+    STATE_TOTAL_GROUPS: ['pinned', 'needs'], Wire: { number: (value, key) => typeof value[key] === 'number' ? value[key] : 0 }, tr: (key) => key });
+  const page = new Header();
+  const machine = { id: 'machine/m1', machineName: 'Studio', folded: true, stateCounts: { needs_you: 2, working: 1 }, totalRowCount: 3, rows: [] };
+  assert.equal(page.groupNeeds(machine), '2 needs_you');
+  assert.equal(page.groupCounts(machine), '1 working');
+  assert.equal(page.groupTotal(machine), '');
+  assert.equal(page.groupTotal({ id: 'state/working', totalRowCount: 4 }), '4');
+  assert.equal(page.groupTotal({ id: 'needs', totalRowCount: 2 }), '2');
+  const header = block(source.indexOf('  @Builder groupHeader('),'groupHeader');
+  assert.match(header,/binding\.value\.totalRowCount/);
+  assert.match(header,/this\.toggleGroup\(binding\.value\.id\)/);
+});
+
+test('a parent row shows its family state and running count once, and a child says whose it is', () => {
+  const context = fixture(), { page } = context;
+  const parent = row({ status: 'idle', session_id: 'p', subagents: [{ id: 'a', running: true }] }, { state: 'idle', id: 'p' });
+  const kids = [row({ status: 'working' }, { state: 'working', id: 'k1' }), row({ status: 'needs_you' }, { state: 'needs_you', id: 'k2' })];
+  page.workspace = { ...family, isMuted: () => false, foldedChildren: (r) => r === parent ? kids : [],
+    relations: { root: (r) => kids.includes(r) ? parent : undefined, children: () => kids, kind: (r) => r === kids[1] ? 'side' : 'subtask' },
+    familyState: (r) => r === parent ? 'needs_you' : r.state };
+  const binding = page.bindAgentRows([], [{ identity: 'p', key: 'p', value: parent }], true)[0];
+  assert.equal(binding.presentation.status, 'needs_you');
+  assert.equal(binding.presentation.tone, 'needs_you');
+  assert.equal(binding.presentation.familySummary, 'relation_side_count · relation_task_count · relation_needs_count · relation_running_count');
+  assert.equal(page.subagentLine(binding.presentation), '', 'the family line already counts what runs');
+  assert.match(page.rowSpoken(binding), /relation_running_count/);
+  const child = page.bindAgentRows([], [{ identity: 'k2', key: 'k2', value: kids[1] }], true)[0];
+  assert.match(page.rowSpoken(child), /relation_side · relation_root/);
+});
+
+test('list actions tap on folds and filters, Interrupt taps once it is sent, and Mark all as read succeeds once', async () => {
+  const feedback = [];
+  const Actions = methodsClass(['toggleGroup', 'toggleFamilyRow', 'toggleIdle', 'foldAll', 'interruptRow', 'confirmMarkAllSeen'],
+    { Haptics: { tap: () => feedback.push('tap'), success: () => feedback.push('success') }, tr: (key) => key, toastCenter: {success: () => {}}, nativeLiveView: {syncFromModel: async () => {}} });
+  const page = new Actions(), calls = [];
+  let dialog;
+  page.getUIContext = () => ({showAlertDialog: value => { dialog = value; }});
+  let interruptResult = true, markResult = 2, canFold = true;
+  const authorized = new Set(['a', 'b']);
+  page.filterSheetOpen = true;
+  page.workspace = {
+    quickFilter: 'all', unread: ['a', 'b'],
+    toggleFold: (id) => calls.push('fold ' + id), toggleFamily: (row) => calls.push('family ' + row.id), toggleIdleRows: (id) => calls.push('idle ' + id),
+    canFoldAll: () => canFold, foldAll: (fold) => calls.push('all ' + fold),
+    interrupt: async (row) => { calls.push('interrupt ' + row.id); return interruptResult; },
+    unreadToMark() { return this.quickFilter === 'unread' ? this.unread : []; },
+    actionTicket: row => () => authorized.has(row),
+    markAllSeen: async rows => { calls.push(rows.join(',')); return Math.min(markResult, rows.length); }
+  };
+  page.toggleGroup('state/working'); page.toggleFamilyRow({ id: 'main' }); page.toggleIdle('state/idle'); page.toggleIdle('machine/m1');
+  assert.deepEqual(calls.splice(0), ['fold state/working', 'family main', 'fold state/idle', 'idle machine/m1']);
+  assert.deepEqual(feedback.splice(0), ['tap', 'tap', 'tap', 'tap']);
+
+  canFold = false; page.foldAll(true);
+  assert.deepEqual([calls.length, feedback.length, page.filterSheetOpen], [0, 0, true], 'nothing to fold: no tap and the sheet stays');
+  canFold = true; page.foldAll(false);
+  assert.deepEqual([calls.splice(0), feedback.splice(0), page.filterSheetOpen], [['all false'], ['tap'], false]);
+
+  page.interruptRow({ id: 'run' }); await new Promise((resolve) => setTimeout(resolve));
+  interruptResult = false; page.interruptRow({ id: 'gone' }); await new Promise((resolve) => setTimeout(resolve));
+  assert.deepEqual([calls.splice(0), feedback.splice(0)], [['interrupt run', 'interrupt gone'], ['tap']]);
+
+  page.confirmMarkAllSeen();
+  assert.equal(dialog, undefined, 'only the unread filter offers the confirmation');
+  page.workspace.quickFilter = 'unread';
+  page.confirmMarkAllSeen();
+  dialog.primaryButton.action();
+  assert.deepEqual(calls, [], 'cancel sends no requests');
+  page.confirmMarkAllSeen();
+  authorized.delete('b');
+  dialog.secondaryButton.action();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.splice(0), ['a'], 'only rows from the confirmed owner are admitted');
+  assert.deepEqual(feedback.splice(0), ['tap', 'tap', 'success']);
+  markResult = 0;
+  page.confirmMarkAllSeen();
+  dialog.secondaryButton.action();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(feedback, ['tap'], 'a failed batch has no success feedback');
+});
+
+test('Interrupt, Mark all as read and Collapse / Expand all sit where iOS puts them, and haptics are touch vibration', () => {
+  const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
+  const menu = source.slice(source.indexOf('  @Builder sessionMenu('), source.indexOf('  @Builder groupHeader('));
+  assert.ok(menu.indexOf("tr('agent_interrupt')") > menu.indexOf("'agent_unpin' : 'agent_pin'"), 'after Pin, as iOS');
+  assert.match(menu,/if \(this\.workspace\.canInterrupt\(row\)\) \{\s*MenuItem\(\{ content: tr\('agent_interrupt'\)/);
+  const list = source.slice(source.indexOf('  build() {'));
+  assert.ok(list.indexOf('this.markAllSeenRow()') < list.indexOf('ForEach(this.groupBindings'), 'Mark all as read heads the list');
+  assert.equal((source.match(/\.id\('agents\.unread\.mark_all_seen'\)/g) || []).length, 1);
+  const sheet = source.slice(source.indexOf('  @Builder filterSheet('), source.indexOf('  private isRowSelected('));
+  assert.ok(sheet.includes('this.foldAllButton(true, false); this.foldAllButton(false, false)'));
+  assert.ok(sheet.includes('this.environment.fontScale >= 1.5'), 'stacked with large text');
+  assert.ok(source.includes('.enabled(this.workspace.canFoldAll(fold))'));
+  const haptics = readFileSync(new URL('../entry/src/main/ets/platform/Haptics.ets', import.meta.url), 'utf8');
+  assert.ok(haptics.includes("EFFECT_SOFT, 'touch'"), 'the phone touch-vibration setting governs it');
+  assert.ok(haptics.includes('EFFECT_NOTICE_SUCCESS'));
+  const module = readFileSync(new URL('../entry/src/main/module.json5', import.meta.url), 'utf8');
+  assert.ok(module.includes('"ohos.permission.VIBRATE"'));
+});
+
+test('Agents keeps its horizontal filter buttons keyed by status during a cold start', () => {
+  const render = block(source.indexOf('  @Builder filters('), 'filters');
+  assert.match(render, /ForEach\(this.shownQuickFilters/);
+  assert.match(render, /\(key: string\) => key/);
+  assert.match(render, /scrollable\(ScrollDirection.Horizontal\)/);
+  assert.doesNotMatch(render, /CapsuleSegmentButtonV2|\bSelect\(/);
 });
 
 

@@ -16,7 +16,7 @@ export const phoneSettingsSearchCatalog:string[] = [
   'models','assistant','channels','connectors','phone_inbox_sources','extensions','phone_agent_options','appearance',
   'phone_language_options','notifications','translation','storage','about','phone_hubs','hub_update','managers','phone_look_avatar','phone_pairing',
   'triage','phone_agent_followup','phone_claude_config','phone_codex_config','phone_agy_config','phone_look_color','phone_look_style','phone_look_scheme',
-  'phone_knowledge_selection','phone_meeting_options','phone_live_screen','phone_agent_layout','phone_health_reports','phone_xiaoyi','phone','phone_native_alarms','machines'
+  'phone_knowledge_selection','phone_meeting_options','phone_live_screen','phone_agent_layout','phone_health_reports','phone_xiaoyi','phone','phone_native_alarms','machines','devices'
 ];
 
 export function phoneSettingsRows(advanced:boolean,group:string,features:string[],paired:boolean,hasLiveScreen:boolean=false,hasAlarms:boolean=false):string[] {

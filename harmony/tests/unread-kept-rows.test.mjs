@@ -33,7 +33,7 @@ registerHooks({
     }
     if (context.parentURL?.includes('/entry/src/main/ets/')) {
       const resolved = new URL(specifier, context.parentURL);
-      if (['/Wire', '/AgentActivityGroups', '/AgentRepositoryPlace', '/MachineDashboard', '/InteractionDecision'].some((n) => resolved.pathname.endsWith(n))) {
+      if (['/Wire', '/AgentActivityGroups', '/SessionRelations', '/AgentRepositoryPlace', '/MachineDashboard', '/InteractionDecision'].some((n) => resolved.pathname.endsWith(n))) {
         resolved.pathname += '.ets';
       } else if (!/\.[a-z]+$/i.test(resolved.pathname)) {
         resolved.pathname += '.ts';
