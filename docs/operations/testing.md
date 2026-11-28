@@ -12,6 +12,7 @@ cd apple/Packages/PersonaKit && swift test                             # Persona
 cd apple/Packages/PersonaWire && swift test -Xswiftc -warnings-as-errors # PersonaWire unit tests, warnings as errors as CI runs them
 cd apple/Packages/PersonaModuleAPI && swift test -Xswiftc -warnings-as-errors # module contract and registry (#13432, docs/apple/ios.md "Modules")
 python3 -B scripts/test/test_sim_boot.py                               # sim-boot.sh (fake xcrun / simslim, no simulator)
+(cd web && npm run build && npm run test:e2e)                          # P0 Playwright UI suite against local vite preview
 n=0 failed=""; for f in $(find scripts -name 'test_*.py' -not -path '*/node_modules/*' | sort); do grep -q unittest "$f" || continue; n=$((n + 1)); (cd "$(dirname "$f")" && python3 -B -m unittest -q "$(basename "$f" .py)") || failed="$failed $f"; done; echo "$n suites, failed:${failed:- none}"; [ -z "$failed" ]   # all Python suites in scripts/, like CI (it skips files that never mention unittest); any failure exits nonzero
 ```
 
@@ -35,6 +36,7 @@ gh workflow run ci.yml --ref main -f full=true                       # full suit
 gh workflow run ci.yml --ref main -f lanes=all -f full=false         # equivalent explicit lane choice
 gh workflow run ci.yml --ref <branch> -f full=false -f lanes=server,web
 gh workflow run ci.yml --ref <branch> -f full=false -f lanes=auto -f base=<commit>
+gh workflow run web-ui-e2e.yml --ref <branch>                        # P0 Playwright Web UI suite (manual only, never runs on PRs)
 gh workflow run apple-test.yml --ref main -f lane=ios                # iOS and embedded Watch
 gh workflow run apple-test.yml --ref main -f lane=macos
 gh workflow run pr-needs-issue.yml --ref main -f pr_number=<number>  # metadata enforcement
