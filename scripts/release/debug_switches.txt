@@ -86,6 +86,7 @@ openIPhoneSetup
 openImagesFresh
 openInboxAsk
 openInboxFirst
+openInboxFolders
 openInboxItem
 openInboxRule
 openInboxSources
