@@ -116,7 +116,7 @@
   },
   {
     "name": "ask_user_withdraw",
-    "description": "Withdraw a pending ask_user question card created by this conversation when it is no longer needed. Only cancels this conversation's own ask_user question; another conversation's card and user-owned approvals, plans or screen dialogs are rejected. Repeated calls on an already-ended card of this conversation are idempotent.",
+    "description": "Withdraw a pending `ask_user` card of this conversation. Other chats' cards and user-owned approvals/plans/dialogs are rejected; already-ended own cards are idempotent.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -124,12 +124,10 @@
       ],
       "properties": {
         "interaction_id": {
-          "type": "string",
-          "description": "the pending ask_user interaction ID (ix_…)"
+          "type": "string"
         },
         "reason": {
-          "type": "string",
-          "description": "optional short reason why the question is no longer needed"
+          "type": "string"
         }
       }
     },
@@ -698,6 +696,53 @@
         }
       }
     }
+  },
+  {
+    "name": "agent_modes",
+    "description": "Change a running coding Agent's model, effort, or permission mode via `session.modes` (use `agent_switch` to change launcher). Give `model`, `effort`, and/or `permission_mode`. Permission-mode changes need owner phone approval; read-only tasks, pending approvals, assistant chats, stopped, or unsupported sessions are refused.",
+    "input_schema": {
+      "type": "object",
+      "required": [
+        "machine",
+        "session_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "machine": {
+          "type": "string"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        },
+        "permission_mode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "auto",
+            "bypassPermissions"
+          ]
+        }
+      }
+    },
+    "defer_loading": true
   },
   {
     "name": "agent_switch",
@@ -2399,7 +2444,7 @@
   },
   {
     "name": "conversations_switch",
-    "description": "Switch Assistant conversations to another launcher/model; preview first unless confirmed. Busy items queue until turn end without interruption or synthetic messages. Execution saves original settings and returns a batch ID. `restore_batch_id` restores completed items exactly; `batch_id` reads status. Independent changes are refused.",
+    "description": "Switch Assistant chats to another launcher/model; preview first unless confirmed. Busy chats queue at turn end without interruption. Execution saves originals and returns a batch ID; `restore_batch_id` restores completed items; `batch_id` reads status.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -2410,40 +2455,31 @@
           },
           "minItems": 1,
           "maxItems": 50,
-          "uniqueItems": true,
-          "description": "IDs from conversations_list"
+          "uniqueItems": true
         },
         "machine_id": {
-          "type": "string",
-          "description": "Assistant machine; defaults to current"
+          "type": "string"
         },
         "launcher": {
-          "type": "string",
-          "description": "target launcher"
+          "type": "string"
         },
         "model": {
-          "type": "string",
-          "description": "target model; empty uses launcher default"
+          "type": "string"
         },
         "effort": {
-          "type": "string",
-          "description": "target effort; empty uses launcher default"
+          "type": "string"
         },
         "permission_mode": {
-          "type": "string",
-          "description": "target mode; empty preserves each conversation's mode"
+          "type": "string"
         },
         "preview": {
-          "type": "boolean",
-          "description": "read-only; no batch, queue, or confirmation"
+          "type": "boolean"
         },
         "restore_batch_id": {
-          "type": "string",
-          "description": "batch to restore; excludes forward fields"
+          "type": "string"
         },
         "batch_id": {
-          "type": "string",
-          "description": "batch status; use alone"
+          "type": "string"
         }
       }
     },
