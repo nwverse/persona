@@ -18,6 +18,7 @@ import { chooseManager, chosenManager, managerHeaderFor, pinManagerAt, resetMana
 import { setRoster } from "../../lib/managers";
 import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
 import { FEATURES } from "./FeishuBot";
+import { Extensions } from "./Extensions";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
 import { Integrations } from "./Integrations";
 import { decodeIntegrationsRoute } from "./integrations-route";
@@ -1039,6 +1040,170 @@ describe("integration detail parity", () => {
   const refresh = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!.click();
   const unloadWarns = () => !window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   const input = (name: string) => host.querySelector<HTMLInputElement>(`#extension-field-${name}`)!;
+
+  it("keeps a draft after settings_moved and retries on the refreshed configuration", async () => {
+    const fetchNow = fetch;
+    let fail!: (answer: ReturnType<typeof ok>) => void;
+    let first = true;
+    const writes: unknown[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && url.includes("/-/config")) {
+        writes.push(JSON.parse(String(init.body)));
+        if (first) {
+          first = false;
+          return new Promise((resolve) => { fail = resolve; });
+        }
+      }
+      return fetchNow(url, init);
+    });
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    act(() => setInputValue(input("endpoint"), "https://edited.example.com"));
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => { save.click(); save.click(); });
+    expect(writes).toHaveLength(1);
+    act(() => setInputValue(input("endpoint"), "https://newer.example.com"));
+    currentExt = { ...currentExt, config: { ...currentExt.config, display_alias: "Changed elsewhere" } };
+    await act(async () => fail({
+      ...ok({ code: "settings_moved", error: "Settings moved. Try again." }), ok: false, status: 409,
+    }));
+    expect(host.textContent).toContain("Settings moved. Try again.");
+    expect(input("endpoint").value).toBe("https://newer.example.com");
+    expect(input("display_alias").value).toBe("Changed elsewhere");
+    await act(async () => save.click());
+    expect(writes).toHaveLength(2);
+    expect(currentExt.config).toMatchObject({ endpoint: "https://newer.example.com", display_alias: "Changed elsewhere" });
+    expect(unloadWarns()).toBe(false);
+  });
+
+  it("keeps both resource drafts across the measured 740 px Settings breakpoint", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+    const { Settings } = await import("../Settings");
+    let width = 740;
+    let resize!: () => void;
+    const measure = vi.spyOn(Element.prototype, "clientWidth", "get").mockImplementation(() => width);
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private notify: () => void) {}
+      observe(element: Element) { if (element.matches('[role="region"]')) resize = this.notify; }
+      disconnect() {}
+    });
+    const original = location.href;
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    try {
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      await act(async () => vi.dynamicImportSettled());
+      const hours = () => host.querySelector<HTMLInputElement>('[data-configuration-field="thread_idle_hours"] input')!;
+      await act(async () => {
+        setInputValue(input("endpoint"), "https://edited.example.com");
+        setInputValue(hours(), "48");
+      });
+      for (width of [739, 740, 739, 740]) {
+        await act(async () => resize());
+        expect(!!host.querySelector("[data-integrations-split]")).toBe(width >= 740);
+        expect(hours().value).toBe("48");
+        expect(input("endpoint").value).toBe("https://edited.example.com");
+      }
+      expect(requests.filter(({ method }) => method === "PUT")).toEqual([]);
+    } finally {
+      measure.mockRestore();
+      history.replaceState(null, "", original);
+    }
+  }, 30000);
+
+  it("shares an extension draft with the legacy page and clears it on re-pairing", async () => {
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    await act(async () => setInputValue(input("endpoint"), "https://edited.example.com"));
+    await act(async () => root.render(<Extensions open="larkx" onOpen={() => {}} />));
+    expect(input("endpoint").value).toBe("https://edited.example.com");
+    expect(unloadWarns()).toBe(true);
+    await act(async () => {
+      setPairedToken("");
+      setRoster(structuredClone(ROSTER));
+    });
+    expect(input("endpoint").value).toBe(currentExt.config?.endpoint);
+    expect(unloadWarns()).toBe(false);
+  });
+
+  it("acknowledges a lost configuration reply only after reading the edited resource", async () => {
+    const fetchNow = fetch;
+    const calls: { method: string; manager: string | null }[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (!url.includes("/larkx/-/")) return fetchNow(url, init);
+      const method = init?.method ?? "GET";
+      if (!url.includes("entry_lists=1")) return fetchNow(url, init);
+      calls.push({ method, manager: new Headers(init?.headers).get("X-Persona-Manager") });
+      if (method !== "PUT") return fetchNow(url, init);
+      currentExt = { ...currentExt, config: JSON.parse(String(init?.body)).config };
+      return Promise.reject(new TypeError("Failed to fetch"));
+    });
+    await act(async () => root.render(<IntegrationDetail target={{ ...extension, manager: "assistant" }} integrationsV2 />));
+    await act(async () => setInputValue(input("endpoint"), "https://saved.example.com"));
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(calls).toEqual(["GET", "GET", "PUT", "GET"].map((method) => ({ method, manager: "assistant" })));
+    expect(input("endpoint").value).toBe("https://saved.example.com");
+    expect(unloadWarns()).toBe(false);
+  });
+
+  it.each([false, true])("loads a fresh full-config baseline before saving (overlap=%s)", async (overlap) => {
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    await act(async () => setInputValue(input("endpoint"), "https://edited.example.com"));
+    currentExt = {
+      ...currentExt,
+      config: {
+        ...currentExt.config, display_alias: "Updated elsewhere",
+        ...(overlap && { endpoint: "https://remote.example.com" }),
+      },
+    };
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(input("display_alias").value).toBe("Updated elsewhere");
+    expect(input("endpoint").value).toBe("https://edited.example.com");
+    expect(requests.filter(({ url, method }) => url.includes("/-/config") && method === "PUT")).toHaveLength(overlap ? 0 : 1);
+    expect(unloadWarns()).toBe(overlap);
+    if (overlap) expect(host.textContent).toContain(t("settings-configuration.error_configuration_conflict"));
+    else expect(currentExt.config).toMatchObject({ endpoint: "https://edited.example.com", display_alias: "Updated elsewhere" });
+  });
+
+  it("keeps a late PUT on its original assistant while editing another copy", async () => {
+    const fetchNow = fetch;
+    const copies = { assistant: structuredClone(currentExt), work: structuredClone(currentExt) };
+    copies.work.config = { ...copies.work.config, endpoint: "https://work.example.com" };
+    const writes: (string | null)[] = [];
+    let finish!: () => void;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (!url.includes("/larkx/-/") || !url.includes("entry_lists=1")) return fetchNow(url, init);
+      const owner = new Headers(init?.headers).get("X-Persona-Manager");
+      const copy = owner === "work" ? copies.work : copies.assistant;
+      if (init?.method !== "PUT") return Promise.resolve(ok(copy));
+      writes.push(owner);
+      return new Promise((resolve) => {
+        finish = () => {
+          copy.config = JSON.parse(String(init.body)).config;
+          resolve(ok(copy));
+        };
+      });
+    });
+    const draw = (manager: string) =>
+      act(async () => root.render(<IntegrationDetail target={{ ...extension, manager }} integrationsV2 />));
+    await act(async () => chooseManager("work"));
+    await draw("assistant");
+    await act(async () => setInputValue(input("endpoint"), "https://home-edit.example.com"));
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(writes).toEqual(["assistant"]);
+    await draw("work");
+    expect(input("endpoint").value).toBe("https://work.example.com");
+    await act(async () => setInputValue(input("endpoint"), "https://work-edit.example.com"));
+    await act(async () => finish());
+    expect(input("endpoint").value).toBe("https://work-edit.example.com");
+    await draw("assistant");
+    expect(input("endpoint").value).toBe("https://home-edit.example.com");
+    expect(writes).toEqual(["assistant"]);
+  });
 
   it("puts link-prefilled values in an editable draft once and saves only recognized fields on request", async () => {
     const page = <IntegrationDetail target={extension} prefill={{ display_alias: "From a link", unknown_key: "ignored", app_secret: "ignored" }} />;

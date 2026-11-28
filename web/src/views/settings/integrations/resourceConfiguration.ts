@@ -65,7 +65,8 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
 
   constructor(readonly id: string, readonly client: ScopedAssistantClient, private adapter: {
     read: () => Promise<Remote>;
-    rebase?: (draft: Draft, remote: Remote) => Draft | undefined;
+    rebase?: (draft: Draft, remote: Remote) => { draft: Draft | undefined; conflict?: ConfigurationError };
+    isDirty?: (draft: Draft) => boolean;
     draftChanged?: (unsaved: boolean) => void;
   }) {}
 
@@ -86,11 +87,15 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   };
 
   private set(next: Partial<ResourceSnapshot<Remote, Draft>>) {
-    const wasDirty = this.state.draft !== undefined;
+    const wasDirty = this.dirty();
     this.state = { ...this.state, ...next };
-    const dirty = this.state.draft !== undefined;
+    const dirty = this.dirty();
     if (wasDirty !== dirty) this.adapter.draftChanged?.(dirty);
     this.listeners.forEach((listener) => listener());
+  }
+
+  private dirty() {
+    return this.state.draft !== undefined && (this.adapter.isDirty?.(this.state.draft) ?? true);
   }
 
   private current(seq: number) {
@@ -115,12 +120,12 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
 
   private accept(remote: Remote, save?: PreparedSave<Remote, Draft>) {
     const draft = this.state.draft;
+    const reconciled = draft !== undefined && !save?.acknowledge ? this.adapter.rebase?.(draft, remote) : undefined;
     this.set({
       remote,
-      draft: draft === undefined ? undefined
-        : save?.acknowledge ? save.acknowledge(draft, remote)
-          : this.adapter.rebase ? this.adapter.rebase(draft, remote) : draft,
+      draft: reconciled ? reconciled.draft : draft !== undefined && save?.acknowledge ? save.acknowledge(draft, remote) : draft,
       readError: null,
+      ...(reconciled?.conflict && { saveError: { label: "config", error: reconciled.conflict } }),
     });
   }
 
@@ -158,9 +163,8 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
 
   save(save: ResourceSave<Remote, Draft>): Promise<Remote | undefined> {
     if (this.retired) return Promise.reject(abortedConfiguration());
-    const repeated = save.key === undefined ? undefined : this.queue.find((job) =>
-      job.save.label === save.label && job.save.key === save.key);
-    if (repeated) return repeated.promise;
+    const last = this.queue.at(-1);
+    if (save.key !== undefined && last?.save.label === save.label && last.save.key === save.key) return last.promise;
     let accept!: Job<Remote, Draft>["accept"];
     let reject!: Job<Remote, Draft>["reject"];
     const promise = new Promise<Remote | undefined>((resolve, refuse) => {
@@ -196,8 +200,8 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
         if (!this.current(seq)) return;
         this.set({ saveError: { label, error } });
         job.reject(error);
-        // A failed comparison leaves the outcome open. Keep the draft for an explicit retry after a fresh read.
-        if (this.comparison) {
+        // A conflict or an unknown outcome calls for a fresh decision from the user.
+        if (this.comparison || conflict(error) || uncertain(error)) {
           this.queue.splice(1).forEach((waiting) => waiting.reject(error));
         }
       }

@@ -152,7 +152,9 @@ describe("another manager's extension page", () => {
     expect(calls.some((c) => c.url.includes("/assistant/external-source-policies") && c.header === null)).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/assistant/leaders") && c.header === null)).toBe(true);
     expect(calls.filter((c) => c.url.endsWith("/assistant/extension-trust")).map((c) => c.header)).toEqual(["assistant"]);
-    expect(calls.filter((c) => !c.url.endsWith("/managers") && !c.url.endsWith("/assistant/extension-trust")).every((c) => !c.header)).toBe(true);
+    const detail = calls.find((c) => /example-wechat\/-\/\?entry_lists=1$/.test(c.url));
+    expect(detail?.header).toBe("assistant");
+    expect(calls.filter((c) => c !== detail && !c.url.endsWith("/managers") && !c.url.endsWith("/assistant/extension-trust")).every((c) => !c.header)).toBe(true);
   });
 
   it("pins the default assistant on external-source reads even when another assistant is chosen", async () => {
