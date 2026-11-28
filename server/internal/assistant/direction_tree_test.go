@@ -1212,4 +1212,17 @@ func TestDirectionTreeEffectiveDirectionsTodosV2(t *testing.T) {
 			t.Errorf("todos_v2=true task %s (%s): group = %q, want %q", id, e.s.todos.todos[id].Title, got, want)
 		}
 	}
+
+	boardResp := doTodoHTTP(e.s, http.MethodGet, "/api/v1/todos", "")
+	var list todosList
+	if boardResp.Code != http.StatusOK || json.Unmarshal(boardResp.Body.Bytes(), &list) != nil || list.Board == nil {
+		t.Fatalf("GET /api/v1/todos: %d %s", boardResp.Code, boardResp.Body.String())
+	}
+	for _, row := range list.Todos {
+		if row.ID == orphanWorker || row.ID == workerUmbrella {
+			if row.EffectiveDirectionID != v2[row.ID] {
+				t.Errorf("board row %s has direction %q, tree has %q", row.ID, row.EffectiveDirectionID, v2[row.ID])
+			}
+		}
+	}
 }
