@@ -1,12 +1,13 @@
-// Shared channel detail controller: pins manager scope, sequences reads, serializes writes, and fences channel switches.
+// Shared channel detail controller: binds the assistant, sequences reads, serializes writes, and fences channel switches.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { t } from "../../i18n";
-import { errorText } from "../../lib/api";
+import { errorText, isAbort } from "../../lib/api";
 import {
-  channelDetail, forgetChannels, testChannel, unbindChannel, updateChannel,
+  bindChannel, channelDetail, forgetChannels, testChannel, unbindChannel, updateChannel,
   type ChannelDetail, type ChannelUpdateBody,
 } from "../../lib/channels";
 import { pinManager } from "../../lib/manager-choice";
+import type { ScopedAssistantClient } from "../../lib/scoped-assistant-api";
 import { toast } from "../../ui/atoms";
 
 export interface ChannelController {
@@ -17,6 +18,7 @@ export interface ChannelController {
   reloadKey: number;
   testFeedback: { tone: "ok" | "error"; text: string } | null;
   load: () => Promise<void>;
+  bind: (step: string, values: Record<string, string>) => ReturnType<typeof bindChannel>;
   change: (what: string, body: ChannelUpdateBody) => Promise<void>;
   unbind: () => Promise<boolean>;
   runTest: () => Promise<void>;
@@ -28,17 +30,21 @@ function notifyError(error: unknown) {
 }
 
 /** Loads and mutates one channel with request sequencing, exclusive writes, and channel-switch fencing. */
-export function useChannelController(channelId: string | null, manager?: string): ChannelController {
-  const scope = useMemo(() => ({}), [channelId, manager]);
+export function useChannelController(channelId: string | null, target?: string | { client: ScopedAssistantClient; routing: string }): ChannelController {
+  const legacyManager = typeof target === "string" ? target : undefined;
+  const binding = typeof target === "object" ? target : undefined;
+  const client = binding?.client;
+  const routing = binding?.routing;
+  const scope = useMemo(() => ({}), [channelId, legacyManager, client]);
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
-
   useLayoutEffect(() => {
-    if (!channelId) return undefined;
-    return pinManager(`/channels/${encodeURIComponent(channelId)}`, manager);
-  }, [channelId, manager]);
+    if (!channelId || client) return;
+    return pinManager(`/channels/${encodeURIComponent(channelId)}`, legacyManager);
+  }, [channelId, legacyManager, client]);
 
-  const [detail, setDetail] = useState<ChannelDetail | null>(null);
+  const [snapshot, setSnapshot] = useState<{ scope: object; detail: ChannelDetail } | null>(null);
+  const detail = snapshot?.scope === scope ? snapshot.detail : null;
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState("");
@@ -59,21 +65,21 @@ export function useChannelController(channelId: string | null, manager?: string)
     const n = ++seq.current;
     const r = ++loadSeq.current;
     if (!channelId) {
-      setDetail(null);
+      setSnapshot(null);
       setError("");
       setLoading(false);
       return;
     }
     setLoading(true);
     try {
-      const next = await channelDetail(channelId);
+      const next = await channelDetail(channelId, client);
       if (!mounted.current || epoch !== epochRef.current || scope !== scopeRef.current || n !== seq.current) return;
-      setDetail(next);
+      setSnapshot({ scope, detail: next });
       setError("");
       loadedGeneration.current++;
       setReloadKey(loadedGeneration.current);
     } catch (e) {
-      if (mounted.current && epoch === epochRef.current && scope === scopeRef.current && n === seq.current) {
+      if (!isAbort(e) && mounted.current && epoch === epochRef.current && scope === scopeRef.current && n === seq.current) {
         setError(errorText(e));
       }
     } finally {
@@ -81,25 +87,29 @@ export function useChannelController(channelId: string | null, manager?: string)
         setLoading(false);
       }
     }
-  }, [channelId, scope]);
+  }, [channelId, client, scope]);
 
   useEffect(() => {
     mounted.current = true;
     epochRef.current++;
     activeWrite.current = 0;
-    setDetail(null);
+    setSnapshot(null);
     setError("");
     setBusy("");
     setTestFeedback(null);
     void load();
+    const stop = client?.subscribe(() => {
+      if (activeWrite.current === 0) void load();
+    });
     return () => {
+      stop?.();
       mounted.current = false;
       epochRef.current++;
       seq.current++;
       loadSeq.current++;
       activeWrite.current = 0;
     };
-  }, [load]);
+  }, [client, load, routing]);
 
   const exclusive = useCallback(async <T extends ChannelDetail | void>(what: string, save: () => Promise<T>) => {
     const epoch = epochRef.current;
@@ -115,7 +125,7 @@ export function useChannelController(channelId: string | null, manager?: string)
       if (next) {
         const overlapped = n !== seq.current;
         // The routing form needs the accepted revision immediately. A fresh read reconciles any overlap.
-        if (!overlapped || what === "routing") setDetail(next);
+        if (!overlapped || what === "routing") setSnapshot({ scope, detail: next });
         if (overlapped) void load();
       }
       return { snapshot: next };
@@ -130,20 +140,25 @@ export function useChannelController(channelId: string | null, manager?: string)
 
   const updateRouting = useCallback<ChannelController["updateRouting"]>(async (body) => {
     if (!channelId || reloadKey !== loadedGeneration.current) return null;
-    const result = await exclusive("routing", () => updateChannel(channelId, body));
+    const result = await exclusive("routing", () => updateChannel(channelId, body, client));
     return result?.snapshot ?? null;
-  }, [channelId, reloadKey, exclusive]);
+  }, [channelId, reloadKey, exclusive, client]);
 
   const change = useCallback(async (what: string, body: ChannelUpdateBody) => {
     if (!channelId) return;
-    await exclusive(what, () => updateChannel(channelId, body)).catch(notifyError);
-  }, [channelId, exclusive]);
+    await exclusive(what, () => updateChannel(channelId, body, client)).catch(notifyError);
+  }, [channelId, exclusive, client]);
 
   const unbind = useCallback(async () => {
     if (!channelId) return false;
-    const result = await exclusive("unbind", () => unbindChannel(channelId)).catch(notifyError);
+    const result = await exclusive("unbind", () => unbindChannel(channelId, client)).catch(notifyError);
     return !!result;
-  }, [channelId, exclusive]);
+  }, [channelId, exclusive, client]);
+
+  const bind = useCallback<ChannelController["bind"]>((step, values) => {
+    if (!channelId) return Promise.reject(new DOMException("aborted", "AbortError"));
+    return bindChannel(channelId, step, values, client);
+  }, [channelId, client]);
 
   const runTest = useCallback(async () => {
     const current = detailRef.current;
@@ -153,7 +168,7 @@ export function useChannelController(channelId: string | null, manager?: string)
     await exclusive("test", async () => {
       if (mounted.current && epoch === epochRef.current) setTestFeedback(null);
       try {
-        const res = await testChannel(channelId);
+        const res = await testChannel(channelId, client);
         const text = replyOnly || res?.reply_only
           ? (res?.note || t("settings-channels.connection_ok", { name: current.name }))
           : (res?.note || t("settings-channels.test_sent", { name: current.name }));
@@ -168,7 +183,7 @@ export function useChannelController(channelId: string | null, manager?: string)
         throw e;
       }
     }).catch(notifyError);
-  }, [channelId, exclusive]);
+  }, [channelId, exclusive, client]);
 
-  return { detail, error, loading, busy, reloadKey, testFeedback, load, change, unbind, runTest, updateRouting };
+  return { detail, error, loading, busy, reloadKey, testFeedback, load, bind, change, unbind, runTest, updateRouting };
 }

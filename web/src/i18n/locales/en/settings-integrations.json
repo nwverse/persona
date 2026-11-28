@@ -78,6 +78,7 @@
   "routing_hub_unsupported": "Update this assistant to configure group/topic routing and idle timeout.",
   "routing_saved": "Saved. New incoming messages will follow this routing immediately.",
   "connector_status_title": "Connection status",
+  "link_conflict": "This link names two different assistants. Go back to choose an integration.",
   "channel_unavailable": "Couldn't load channel settings: {error}",
   "connector_unavailable": "Couldn't load connector status: {error}",
   "mail_description": "Connect email accounts so Persona can read, search, and bring important mail into your Inbox.",

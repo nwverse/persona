@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -241,6 +242,9 @@ func codexSocketPath(path string) (string, error) {
 	want := filepath.Join(tmp, "codex-daemon-"+strconv.Itoa(os.Geteuid()), hex.EncodeToString(sum[:]))
 	if target, err := os.Readlink(path); err != nil || target != want {
 		return "", errors.New("Unix 入口是指向别处的符号链接")
+	}
+	if _, err := os.Stat(want); err != nil {
+		return "", fmt.Errorf("Codex control socket symlink target: %w", err)
 	}
 	return want, nil
 }
@@ -528,7 +532,7 @@ func (c *codexRemote) backgroundJoinWorker() {
 		c.joinMu.Unlock()
 
 		owner, t, err := c.n.codexOwner(id)
-		if err != nil || owner != c || t.joined || t.parent != "" || !c.n.cx.startJoin(id) {
+		if err != nil || owner != c || t.joined || !c.n.cx.startJoin(id) {
 			continue
 		}
 		jctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
@@ -545,6 +549,21 @@ func (c *codexRemote) backgroundJoinWorker() {
 	}
 }
 
+type remoteThreadStatus struct {
+	Type        string   `json:"type"`
+	ActiveFlags []string `json:"activeFlags"`
+}
+
+func (s remoteThreadStatus) sessionStatus() string {
+	if slices.Contains(s.ActiveFlags, "waitingOnApproval") || slices.Contains(s.ActiveFlags, "waitingOnUserInput") {
+		return proto.StatusBlocked
+	}
+	if s.Type == "active" {
+		return proto.StatusWorking
+	}
+	return proto.StatusDone
+}
+
 type remoteThreadData struct {
 	ID             string          `json:"id"`
 	Name           string          `json:"name"`
@@ -557,14 +576,11 @@ type remoteThreadData struct {
 	ParentThreadID string          `json:"parentThreadId"`
 	Ephemeral      bool            `json:"ephemeral"`
 	Source         json.RawMessage `json:"source"`
-	Status         struct {
-		Type        string   `json:"type"`
-		ActiveFlags []string `json:"activeFlags"`
-	} `json:"status"`
-	Turns []struct {
+	Turns          []struct {
 		ID     string `json:"id"`
 		Status string `json:"status"`
 	} `json:"turns"`
+	Status remoteThreadStatus `json:"status"`
 }
 
 func (c *codexRemote) refresh() error {
@@ -727,16 +743,11 @@ dispatch:
 		if t.files == nil {
 			t.files = map[string][]string{}
 		}
-		t.status = proto.StatusDone
-		if d.Status.Type == "active" {
-			t.status = proto.StatusWorking
-		} else {
+		t.status = d.Status.sessionStatus()
+		if d.Status.Type != "active" {
 			t.turn = ""
 			t.partial = ""
 			t.buffer = nil
-		}
-		if slices.Contains(d.Status.ActiveFlags, "waitingOnApproval") || slices.Contains(d.Status.ActiveFlags, "waitingOnUserInput") {
-			t.status = proto.StatusBlocked
 		}
 		for _, turn := range d.Turns {
 			if turn.Status == "inProgress" && turn.ID != t.ended {
@@ -790,10 +801,13 @@ dispatch:
 				t.failure, t.failureKind, t.ended = old.failure, old.failureKind, old.ended
 				t.serviceTier, t.serviceTierRevision = old.serviceTier, old.serviceTierRevision
 				t.model, t.effort = old.model, old.effort // an effort just set (codex_effort.go) over a read from before it
-				t.path = old.path
+				t.path, t.title = old.path, old.title
 				t.provisional, t.pinnedSeq, t.ready = old.provisional, old.pinnedSeq, old.ready
-				next[raw] = t
 			}
+			if old.status == proto.StatusBlocked && t.turn != "" && t.turn == old.turn {
+				t.status = proto.StatusBlocked
+			}
+			next[raw] = t
 		} else if t.provisional || t.joined || t.ready != nil {
 			// A provisional pre-registration rolled back while this refresh was in flight: keep only the
 			// server-confirmed loaded thread as non-provisional and unjoined.
@@ -813,7 +827,10 @@ dispatch:
 		}
 	}
 	for _, a := range c.asks {
-		if _, ok := next[a.thread]; !ok {
+		if t, ok := next[a.thread]; ok {
+			t.status = proto.StatusBlocked
+			next[a.thread] = t
+		} else {
 			a.cancel()
 		}
 	}
@@ -1103,7 +1120,7 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	if err != nil || owner != c {
 		return refusal("codex_read_only", "无法确定原 app-server，未接入", nil)
 	}
-	if t.parent != "" {
+	if t.parent != "" && remember {
 		return refusal("codex_read_only", "这个子 Agent 由父 Agent 驱动", nil)
 	}
 	if t.joined {
@@ -1113,7 +1130,7 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	if err != nil || !loadedSet[t.id] {
 		return refusal("codex_read_only", "会话已不在原 app-server 中运行，未恢复或新建会话", nil)
 	}
-	// This is an explicit user-requested join, not a discovery or global subscription. Do not override runtime config.
+	// Subscribe to the loaded thread with its existing runtime configuration.
 	var reply struct {
 		Thread      remoteThreadData `json:"thread"`
 		Model       string           `json:"model"`
@@ -1242,6 +1259,30 @@ func (n *Node) sendCodex(ctx context.Context, id, text string, images []proto.Im
 	if t.status == proto.StatusWorking || t.status == proto.StatusBlocked {
 		if _, a2a := ctx.Value(a2aIdleKey{}).(bool); a2a {
 			return a2aBusy()
+		}
+		clientID, _ := ctx.Value(sendTraceKey{}).(string)
+		if clientID == "" {
+			clientID = newUUID()
+		}
+		queueParams := map[string]any{"threadId": t.id, "input": input, "clientUserMessageId": clientID}
+		var ack struct {
+			QueuedSubmission struct {
+				ID string `json:"id"`
+			} `json:"queuedSubmission"`
+		}
+		queueErr := c.wire.call(ctx, "thread/queue/add", queueParams, &ack)
+		if queueErr == nil && ack.QueuedSubmission.ID != "" {
+			markSendQueued(ctx)
+			n.notifyCodex()
+			return nil
+		}
+		var rejected *codexError
+		if !errors.As(queueErr, &rejected) {
+			// Without an explicit rejection, steering could deliver the same message twice.
+			if queueErr == nil {
+				queueErr = errors.New("Codex returned no queued message receipt")
+			}
+			return uncertain(queueErr)
 		}
 		if t.turn == "" {
 			t.turn = c.activeTurn(ctx, t.id) // a turn already running when Persona joined (codex_daemon.go)
@@ -1378,7 +1419,7 @@ func (n *Node) interruptCodexActiveTurn(ctx context.Context, id string) bool {
 	}
 	for deadline := time.Now().Add(500 * time.Millisecond); time.Now().Before(deadline) && ctx.Err() == nil; {
 		c.mu.Lock()
-		idle := t.turn == ""
+		idle := c.threads[tid].turn == ""
 		c.mu.Unlock()
 		if idle {
 			break
@@ -1417,6 +1458,9 @@ func (c *codexRemote) message(m codexMessage) {
 			Effort      string          `json:"effort"`
 			ServiceTier json.RawMessage `json:"serviceTier"`
 		} `json:"threadSettings"`
+		Status     remoteThreadStatus              `json:"status"`
+		ThreadName *string                         `json:"threadName"`
+		Plan       []struct{ Step, Status string } `json:"plan"`
 	}
 	if json.Unmarshal(m.Params, &ev) != nil {
 		return
@@ -1447,6 +1491,20 @@ func (c *codexRemote) message(m codexMessage) {
 	emit := false
 	refresh := false
 	switch m.Method {
+	case "thread/status/changed":
+		t.status = ev.Status.sessionStatus()
+		refresh = true
+	case "thread/closed":
+		t.ended = firstNonEmpty(t.turn, t.ended)
+		t.status, t.turn, t.partial, t.buffer = proto.StatusDone, "", "", nil
+		emit, refresh = true, true
+	case "thread/name/updated":
+		if ev.ThreadName != nil && *ev.ThreadName != "" {
+			t.title = *ev.ThreadName
+		}
+		refresh = true
+	case "thread/queue/changed", "turn/plan/updated":
+		refresh = true
 	case "thread/reverted":
 		invalidateCodexPaginated(c.spec.Home)
 		t.partial, t.failure, t.failureKind = "", "", ""
@@ -1485,13 +1543,13 @@ func (c *codexRemote) message(m codexMessage) {
 			}
 			t.files[ev.Item.ID] = paths
 		}
-		if ev.Item.Type == "agentMessage" {
+		if ev.Item.Type == "agentMessage" || ev.Item.Type == "plan" {
 			t.partial = ""
 			t.buffer = nil
 			emit = true
 			refresh = true
 		}
-	case "item/agentMessage/delta":
+	case "item/agentMessage/delta", "item/plan/delta":
 		if t.buffer == nil {
 			t.buffer = &strings.Builder{}
 		}
@@ -1511,7 +1569,7 @@ func (c *codexRemote) message(m codexMessage) {
 	case "item/completed":
 		delete(t.files, ev.Item.ID)
 		refresh = true
-		if ev.Item.Type == "agentMessage" {
+		if ev.Item.Type == "agentMessage" || ev.Item.Type == "plan" {
 			t.partial = ev.Item.Text
 			t.buffer = nil
 			delta = t.partial
@@ -1534,7 +1592,9 @@ func (c *codexRemote) message(m codexMessage) {
 	if emit {
 		c.n.emitDelta(t.publicID, delta)
 	}
-	if m.Method == "turn/started" || m.Method == "turn/completed" || m.Method == "thread/settings/updated" || m.Method == "thread/reverted" {
+	switch m.Method {
+	case "turn/started", "turn/completed", "thread/settings/updated", "thread/reverted",
+		"thread/status/changed", "thread/closed", "thread/name/updated", "thread/queue/changed", "item/plan/delta", "turn/plan/updated":
 		c.n.notifyCodex()
 	}
 }
