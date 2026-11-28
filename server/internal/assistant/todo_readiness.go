@@ -68,7 +68,11 @@ func (s *Service) checkTodoStartReadiness(ctx context.Context, task PlanTask) er
 
 func (s *Service) readinessPlan(ctx context.Context, todo Todo) (PlanTask, error) {
 	if todo.PlanID == "" {
-		return PlanTask{}, nil
+		waiting, err := s.queuedTodoTasks(ctx)
+		if task := waiting[todo.ID]; task != nil {
+			return *task, nil
+		}
+		return PlanTask{}, err
 	}
 	plan, index, err := s.currentPlanAssignment(ctx, todo)
 	if errors.Is(err, errTaskNotInPlan) {

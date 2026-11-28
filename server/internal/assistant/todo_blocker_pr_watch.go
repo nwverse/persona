@@ -160,22 +160,20 @@ func (s *Service) refreshTodoBlockers(ctx context.Context, now time.Time) error 
 
 // approvedExternalPRWaits keeps work already approved under Labs recoverable when Labs is disabled.
 func (s *Service) approvedExternalPRWaits(ctx context.Context, rows []db.TodoBlockerRow) []db.TodoBlockerRow {
+	if !slices.ContainsFunc(rows, func(row db.TodoBlockerRow) bool { return row.Kind == todoBlockerKindExternalPR }) {
+		return nil
+	}
+	approved, err := s.queuedTodoTasks(ctx)
+	if err != nil {
+		s.logf("todo blockers: read approved PR waits: %v", err)
+		return nil
+	}
 	var waiting []db.TodoBlockerRow
-	approved := make(map[string]bool)
 	for _, row := range rows {
-		if row.Kind != todoBlockerKindExternalPR {
+		if row.Kind != todoBlockerKindExternalPR || approved[row.TodoID] == nil {
 			continue
 		}
-		if _, checked := approved[row.TodoID]; !checked {
-			todo, ok := s.todoNow(row.TodoID)
-			if ok && todo.DoneAt == nil && !todo.Cancelled() {
-				task, err := s.readinessPlan(ctx, todo)
-				approved[row.TodoID] = err == nil && task.Queue != nil
-			} else {
-				approved[row.TodoID] = false
-			}
-		}
-		if approved[row.TodoID] {
+		if todo, ok := s.todoNow(row.TodoID); ok && todo.DoneAt == nil && !todo.Cancelled() {
 			waiting = append(waiting, row)
 		}
 	}

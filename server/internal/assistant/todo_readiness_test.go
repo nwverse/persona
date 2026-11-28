@@ -62,6 +62,10 @@ func TestTodoReadinessPostgresProtectsApprovedPRWaitAfterLabsRollback(t *testing
 		t.Fatal(err)
 	}
 	waitWorkspaceStarts(t, s, f, 1)
+	rows, err = database.ListTodoBlockersByTodo(ctx, task.TodoID)
+	if err != nil || len(rows) != 1 || rows[0].State != db.TodoBlockerStateResolved {
+		t.Fatalf("PR observation did not resolve the durable blocker: rows=%+v err=%v", rows, err)
+	}
 }
 
 type unreadableTodoBlockers struct{ *db.DB }

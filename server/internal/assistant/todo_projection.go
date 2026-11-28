@@ -89,11 +89,14 @@ func (s *Service) populateTodoReadiness(ctx context.Context, list []listedTodo, 
 	}
 	type candidateRead struct {
 		index int
-		task  PlanTask
+		task  *PlanTask
 		err   error
 	}
 	var ids []string
 	plans := make(map[string]planRead)
+	var queued map[string]*PlanTask
+	var queuedErr error
+	loadedQueued := false
 	var candidates []candidateRead
 	for i := range list {
 		row := &list[i]
@@ -102,26 +105,34 @@ func (s *Service) populateTodoReadiness(ctx context.Context, list []listedTodo, 
 			continue
 		}
 		candidate := candidateRead{index: i}
-		if row.PlanID != "" && !todoHasActiveAgent(row.Todo) {
-			r, cached := plans[row.PlanID]
-			if !cached {
-				r.plan, r.err = s.loadPlan(ctx, row.PlanID)
-				plans[row.PlanID] = r
+		if !todoHasActiveAgent(row.Todo) {
+			if !loadedQueued {
+				queued, queuedErr = s.queuedTodoTasks(ctx)
+				loadedQueued = true
 			}
-			switch {
-			case r.err != nil && !errors.Is(r.err, errPlanNotFound):
-				candidate.err = r.err
-			case r.plan != nil && r.plan.State == planStarted:
-				for _, task := range r.plan.Tasks {
-					if task.TodoID == row.ID {
-						candidate.task = task
-						break
+			candidate.task, candidate.err = queued[row.ID], queuedErr
+			if v2 && candidate.task == nil && candidate.err == nil && row.PlanID != "" {
+				r, cached := plans[row.PlanID]
+				if !cached {
+					r.plan, r.err = s.loadPlan(ctx, row.PlanID)
+					plans[row.PlanID] = r
+				}
+				switch {
+				case r.err != nil && !errors.Is(r.err, errPlanNotFound):
+					candidate.err = r.err
+				case r.plan != nil && r.plan.State == planStarted:
+					for index := range r.plan.Tasks {
+						task := &r.plan.Tasks[index]
+						if task.TodoID == row.ID {
+							candidate.task = task
+							break
+						}
 					}
 				}
 			}
 		}
 		task := candidate.task
-		if !v2 && (task.Queue == nil || len(task.BlockedByPR) == 0 && task.Queue.Key != blockerWaitQueueKey) {
+		if !v2 && (task == nil || task.Queue == nil || len(task.BlockedByPR) == 0 && task.Queue.Key != blockerWaitQueueKey) {
 			continue
 		}
 		ids = append(ids, row.ID)
@@ -147,7 +158,11 @@ func (s *Service) populateTodoReadiness(ctx context.Context, list []listedTodo, 
 		err := errors.Join(candidate.err, readErr)
 		var readiness todoReadiness
 		if err == nil {
-			readiness, err = s.evaluateTodoReadiness(ctx, row.Todo, candidate.task, byTodo[row.ID], v2)
+			var task PlanTask
+			if candidate.task != nil {
+				task = *candidate.task
+			}
+			readiness, err = s.evaluateTodoReadiness(ctx, row.Todo, task, byTodo[row.ID], v2)
 		}
 		if err != nil {
 			row.readinessWaits = []assistantwire.TodoWait{{Kind: assistantwire.TodoWaitKindExternalEvent,

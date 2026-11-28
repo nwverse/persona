@@ -282,6 +282,14 @@ var _ taskQueueStore = (*db.DB)(nil)
 // queueCandidatePlans returns recently updated or durably queued started plans, from the database or the in-memory
 // store, without returning unrelated historical plans. Queue writes refresh updated_at; created_at may be older.
 func (s *Service) queueCandidatePlans(ctx context.Context) []*TaskPlan {
+	plans, err := s.readQueueCandidatePlans(ctx)
+	if err != nil {
+		s.logf("admission queue: list plans: %v", err)
+	}
+	return plans
+}
+
+func (s *Service) readQueueCandidatePlans(ctx context.Context) ([]*TaskPlan, error) {
 	st := s.store()
 	if st == nil {
 		s.tasks.mu.Lock()
@@ -292,20 +300,46 @@ func (s *Service) queueCandidatePlans(ctx context.Context) []*TaskPlan {
 			out = append(out, &cp)
 		}
 		s.tasks.mu.Unlock()
-		return out
+		return out, nil
 	}
 	ev, ok := st.(taskQueueStore)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	rows, err := ev.TaskPlansQueued(ctx, time.Now().Add(-admissionQueueLookback))
 	if err != nil {
-		s.logf("admission queue: list plans: %v", err)
-		return nil
+		return nil, err
 	}
 	plans := make([]*TaskPlan, 0, len(rows))
 	for _, row := range rows {
 		plans = append(plans, planFromRow(row))
 	}
-	return plans
+	return plans, nil
+}
+
+// queuedTodoTasks uses the execution binding, including reused to-dos whose PlanID is empty
+// or historical. A to-do with ambiguous bindings has no unique queued assignment.
+func (s *Service) queuedTodoTasks(ctx context.Context) (map[string]*PlanTask, error) {
+	plans, err := s.readQueueCandidatePlans(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make(map[string]*PlanTask)
+	for _, plan := range plans {
+		if plan.State != planStarted {
+			continue
+		}
+		for i := range plan.Tasks {
+			task := &plan.Tasks[i]
+			if task.TodoID == "" || task.Queue == nil {
+				continue
+			}
+			if _, found := tasks[task.TodoID]; found {
+				tasks[task.TodoID] = nil
+			} else {
+				tasks[task.TodoID] = task
+			}
+		}
+	}
+	return tasks, nil
 }
