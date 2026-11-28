@@ -980,7 +980,7 @@ describe("manager-owned integration links", () => {
     expect(requests).toContainEqual(expect.objectContaining({ url: `/api/v1${path}`, method: "GET", manager: null }));
     if (id === "feishu-bot") {
       const toggle = host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)!;
-      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/channels/feishu", method: "GET", manager: null }));
+      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/channels/feishu", method: "GET", manager: "assistant" }));
       await act(async () => toggle.click());
       expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/bots/feishu", method: "PUT", manager: null }));
     }
