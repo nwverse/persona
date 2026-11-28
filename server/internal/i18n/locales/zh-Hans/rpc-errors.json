@@ -146,5 +146,7 @@
   "orca_refused": "Orca 没有接受，什么都没有改：{detail}",
   "orca_unknown": "不确定 Orca 是否已经执行。请先在那台电脑的 Orca 里看一下这个对话，再决定是否重试。",
   "orca_session_gone": "这个对话已经不在 Orca 里了。",
-  "orca_closed": "这个对话在 Orca 里已经关闭。先给它发一条消息重新打开，再改它的设置。"
+  "orca_closed": "这个对话在 Orca 里已经关闭。先给它发一条消息重新打开，再改它的设置。",
+  "orca_mode_unsupported": "Orca 里这类对话不支持这个权限模式（{detail}），什么都没有改。",
+  "orca_rename_unsupported": "这个版本的 Orca 不能从 Persona 给对话改名。请在 Orca 里改名，或者更新 Orca。"
 }

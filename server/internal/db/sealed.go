@@ -57,6 +57,8 @@ var sealedSettings = []SealedSetting{
 	{Key: "execution.channels", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
 	{Key: "execution.channels.ledger", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
 	{Key: "execution.channels.ledger_launchers", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},
+	// internal/extmgr storedKeptSecret: the launcher keys a provider extension gave, kept sealed (secret_kept.go).
+	{Key: "secrets.launcher_kept", List: true, Fields: []string{"value_sealed"}},
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).
