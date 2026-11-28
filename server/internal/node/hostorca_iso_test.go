@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -141,21 +142,41 @@ func startOrcaIso(t *testing.T) *orcaIso {
 	return o
 }
 
-// guard refuses to go on unless the client talks to the temporary runtime: its metadata is under the temporary root
-// and not under the real home, every local transport it lists (the socket the client dials) is under the temporary
-// root, a process it names is the server this test started or has the temporary HOME, and the runtime that answers is
-// the one it names.
+// guard refuses to go on unless the client talks to the temporary runtime (checkMeta), and the runtime that answers is
+// the one the metadata names.
 func (o *orcaIso) guard(t *testing.T) {
 	t.Helper()
-	if !strings.HasPrefix(o.meta, o.root+string(filepath.Separator)) {
-		t.Fatalf("refusing: the metadata %s is not under the temporary root", o.meta)
+	runtimeID, err := o.checkMeta()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if real, err := os.UserHomeDir(); err == nil && real != "" && real != "/" && strings.HasPrefix(o.meta, real+string(filepath.Separator)) {
-		t.Fatalf("refusing: the metadata %s is under the real home", o.meta)
+	st, err := o.c.Probe(isoCtx(t))
+	if err != nil {
+		t.Fatalf("status.get: %v", err)
+	}
+	if id := o.c.RuntimeID(); runtimeID != "" && id != "" && id != runtimeID {
+		t.Fatalf("refusing: runtime %s answered, the metadata names %s", id, runtimeID)
+	}
+	t.Logf("isolated Orca %s, runtime protocol %d", st.AppVersion, st.RuntimeProtocolVersion)
+}
+
+// checkMeta is why the metadata the client is pinned to is not the temporary runtime's, nil when it is: it must be
+// under the temporary root and not under the real home, every local socket it lists (what the client dials) must be
+// under the temporary root, and a process it names must be the server this test started or have the temporary HOME.
+// It returns the runtime id the metadata names.
+func (o *orcaIso) checkMeta() (string, error) {
+	under := func(path, dir string) bool {
+		return strings.HasPrefix(filepath.Clean(path), dir+string(filepath.Separator))
+	}
+	if !under(o.meta, o.root) {
+		return "", fmt.Errorf("refusing: the metadata %s is not under the temporary root", o.meta)
+	}
+	if real, err := os.UserHomeDir(); err == nil && real != "" && real != "/" && under(o.meta, real) {
+		return "", fmt.Errorf("refusing: the metadata %s is under the real home", o.meta)
 	}
 	b, err := os.ReadFile(o.meta)
 	if err != nil {
-		t.Fatal(err)
+		return "", fmt.Errorf("refusing: %w", err)
 	}
 	var m struct {
 		PID        int    `json:"pid"`
@@ -166,7 +187,7 @@ func (o *orcaIso) guard(t *testing.T) {
 		} `json:"transports"`
 	}
 	if err := json.Unmarshal(b, &m); err != nil {
-		t.Fatalf("refusing: the metadata does not read: %v", err)
+		return "", fmt.Errorf("refusing: the metadata does not read: %w", err)
 	}
 	local := 0
 	for _, tr := range m.Transports {
@@ -174,24 +195,17 @@ func (o *orcaIso) guard(t *testing.T) {
 			continue
 		}
 		local++
-		if !strings.HasPrefix(filepath.Clean(tr.Endpoint), o.root+string(filepath.Separator)) {
-			t.Fatalf("refusing: the metadata's socket %s is not under the temporary root", tr.Endpoint)
+		if !under(tr.Endpoint, o.root) {
+			return "", fmt.Errorf("refusing: the metadata's socket %s is not under the temporary root", tr.Endpoint)
 		}
 	}
 	if local == 0 {
-		t.Fatalf("refusing: the metadata lists no local socket")
+		return "", errors.New("refusing: the metadata lists no local socket")
 	}
-	if m.PID != 0 && m.PID != o.cmd.Process.Pid && !o.ours(m.PID) {
-		t.Fatalf("refusing: the metadata names pid %d, not a process of the temporary HOME", m.PID)
+	if m.PID != 0 && (o.cmd == nil || m.PID != o.cmd.Process.Pid) && !o.ours(m.PID) {
+		return "", fmt.Errorf("refusing: the metadata names pid %d, not a process of the temporary HOME", m.PID)
 	}
-	st, err := o.c.Probe(isoCtx(t))
-	if err != nil {
-		t.Fatalf("status.get: %v", err)
-	}
-	if id := o.c.RuntimeID(); m.RuntimeID != "" && id != "" && id != m.RuntimeID {
-		t.Fatalf("refusing: runtime %s answered, the metadata names %s", id, m.RuntimeID)
-	}
-	t.Logf("isolated Orca %s, runtime protocol %d", st.AppVersion, st.RuntimeProtocolVersion)
+	return m.RuntimeID, nil
 }
 
 // ours: process pid runs with the temporary HOME (its /proc/<pid>/environ holds exactly HOME=<home>).
@@ -447,5 +461,50 @@ func TestOrcaIsolatedWorktreeCreateRemove(t *testing.T) {
 	}
 	if out := o.git(t, o.repo, "branch", "--list", "iso-wt"); !strings.Contains(out, "iso-wt") {
 		t.Fatalf("the branch was not kept: %q", out)
+	}
+}
+
+// The tests refuse to write to any Orca but the temporary one: metadata outside the temporary root (a user's profile),
+// a socket outside it, none at all, or a process that is not of the temporary HOME. No server is needed for this one.
+func TestOrcaIsolatedRefusesAnotherProfile(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the isolation checks read /proc")
+	}
+	root, profile := t.TempDir(), t.TempDir()
+	o := &orcaIso{root: root, home: filepath.Join(root, "home")}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unix := func(socket string) string {
+		return `{"runtimeId":"r1","transports":[{"kind":"unix","endpoint":"` + socket + `"}]}`
+	}
+	elsewhere := filepath.Join(profile, ".config", "orca", "orca-runtime.json") // a profile that is not the test's
+	write(elsewhere, unix(filepath.Join(profile, "o.sock")))
+	inside := filepath.Join(o.home, ".local", "share", "Orca", "orca-runtime.json")
+	for _, tc := range []struct{ name, meta, body string }{
+		{"metadata of another profile", elsewhere, ""},
+		{"a socket outside the temporary root", inside, unix(filepath.Join(profile, "o.sock"))},
+		{"no local socket", inside, `{"runtimeId":"r1","transports":[{"kind":"websocket","endpoint":"ws://127.0.0.1:1"}]}`},
+		{"a process of another HOME", inside, `{"pid":` + strconv.Itoa(os.Getpid()) + `,"transports":[{"kind":"unix","endpoint":"` +
+			filepath.Join(root, "o.sock") + `"}]}`},
+	} {
+		if tc.body != "" {
+			write(tc.meta, tc.body)
+		}
+		o.meta = tc.meta
+		if _, err := o.checkMeta(); err == nil || !strings.HasPrefix(err.Error(), "refusing") {
+			t.Errorf("%s: checkMeta = %v, want a refusal", tc.name, err)
+		}
+	}
+	write(inside, unix(filepath.Join(root, "o.sock")))
+	o.meta = inside
+	if id, err := o.checkMeta(); err != nil || id != "r1" {
+		t.Errorf("the temporary runtime's metadata: %q, %v", id, err)
 	}
 }
