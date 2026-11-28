@@ -28,6 +28,7 @@
   "launcher_swapped": "{launcher} isn’t on {machine}, so this runs on {to} with its default model",
   "launcher_desktop_default": "{launcher} opens only the New Agent starts you make, so this runs on {to} with its default model",
   "launcher_desktop_default_model": "{launcher} opens only the New Agent starts you make, so this runs on {to} with the model you chose, {model}",
+  "orca_chat_option_dropped": "This opens as {to}, which doesn't offer {option}, so it uses Orca's own setting",
   "launcher_swapped_model": "{launcher} isn’t on {machine}, so this runs on {to} with the model you chose, {model}",
   "speed_type": "speed must be a string: standard, fast or ultrafast",
   "speed_invalid": "invalid Agent speed {speed}: use standard, fast or ultrafast",

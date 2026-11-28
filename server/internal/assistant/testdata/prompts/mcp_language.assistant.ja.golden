@@ -614,7 +614,7 @@
         },
         "inbox_item": {
           "type": "string",
-          "description": "Inbox ID; for this conversation's eligible handoffs, omit for one, specify for several."
+          "description": "Inbox ID to link to the task. Omit to skip linking."
         },
         "resume": {
           "type": "boolean",
@@ -3089,7 +3089,7 @@
               },
               "inbox_item": {
                 "type": "string",
-                "description": "Inbox ID or 'none' to skip; omit to link sole eligible handoff (multiple need ID; none stays unlinked). Never files/replies."
+                "description": "Inbox ID or 'none' to skip. Omit for strong-match inference outside continuations. Never files or replies."
               },
               "tier": {
                 "type": "string",
@@ -3530,7 +3530,7 @@
         },
         "inbox_item": {
           "type": "string",
-          "description": "Inbox source; omit for the conversation's sole eligible open handoff. Several require an id. Links the existing task and its Agents."
+          "description": "Inbox ID to link to the existing task and its Agents. Omit to skip linking."
         },
         "change": {
           "type": "string",

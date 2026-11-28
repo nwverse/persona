@@ -92,6 +92,7 @@ import { CollapseButton, PagesTally } from "./SidebarRail";
 import type { PageSection } from "../lib/sidebar-pages";
 import { WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { useTodoBoard } from "../lib/todo-owner-needs";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
 import { usePendingWorkSessions } from "./sidebar-pending-sessions";
@@ -1243,7 +1244,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     );
     return () => { active = false; };
   }, [wantsV2Tree, v2Sidebar]);
-  const serverBoard = useStore((s) => wantsV2Tree ? s.todoBoard : null);
+  const serverBoard = useTodoBoard(scope, wantsV2Tree);
   const olderClosed = useStore((s) => wantsV2Tree ? s.olderClosedTodos : undefined);
   const availableGroupings = useGroupings();
   // the title row's ⋯ (#2812): the archived Agents
