@@ -2,14 +2,21 @@
 import { useLayoutEffect, useRef } from "react";
 import { t } from "../../../i18n";
 import { settingsTarget, type ChannelDetail } from "../../../lib/channels";
+import { currentAssistant, ownedAssistant } from "../../../lib/scoped-assistant-api";
 import { Loading } from "../../../ui/atoms";
 import { ChannelBindingBlock, ChannelDeliveryControls, ChannelTargetControls, ChannelStateInline } from "../Channels";
 import { ConfigurationForm } from "../configuration/ConfigurationForm";
 import { Group, Row, SettingsHint } from "../SettingsParts";
-import { useChannelController, type ChannelController } from "../useChannelController";
+import { useChannelController as useSharedChannel, type ChannelController } from "../useChannelController";
 import { channelRoutingSource, type IntegrationTarget } from "./model";
+import { useScopedAssistant } from "./useScopedAssistant";
 
-export { ChannelBindingBlock, ChannelStateInline, useChannelController, type ChannelController };
+export { ChannelBindingBlock, ChannelStateInline, type ChannelController };
+
+export function useChannelController(id: string | null, manager?: string): ChannelController {
+  const binding = useScopedAssistant(manager === undefined ? currentAssistant : ownedAssistant(manager), "channel", id ?? "");
+  return useSharedChannel(id, binding);
+}
 
 function ChannelRoutingForm({ detail, updateRouting }: { detail: ChannelDetail; updateRouting: ChannelController["updateRouting"] }) {
   const current = useRef({ detail, updateRouting });

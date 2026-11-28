@@ -71,6 +71,7 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 // ── the catalog ─────────────────────────────────────────
 
 const askKey = (q: string, market: string) => `${market}\n${q}`;
+const MARKET_SETTINGS = ["/extensions/-/markets", "/plugins/-/markets", "/extensions/-/upgrades", "/plugins/-/upgrades"];
 
 export function MarketCatalog({
   manager,
@@ -90,6 +91,7 @@ export function MarketCatalog({
   /** Optional callback to open the Markets management page from the catalog header's top-right action. */
   onManageMarkets?: () => void;
 }) {
+  useLayoutEffect(() => pinManagerAt(MARKET_SETTINGS, manager), [manager]);
   const manageMarkets = onManageMarkets ?? onMarkets;
   const [q, setQ] = useState("");
   const [market, setMarket] = useState("");
@@ -809,7 +811,8 @@ function RemovalNote({ count }: { count: number | null }) {
   );
 }
 
-export function Markets({ onBack }: { onBack?: () => void }) {
+export function Markets({ onBack, manager }: { onBack?: () => void; manager?: string }) {
+  useLayoutEffect(() => pinManagerAt(MARKET_SETTINGS, manager), [manager]);
   const [list, setList] = useState<Market[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -826,8 +829,7 @@ export function Markets({ onBack }: { onBack?: () => void }) {
     setConfirm(m.id);
     setAffected(null);
     const settle = (count: number | null) => asking.current === m.id && setAffected({ market: m.id, count });
-    // the markets here are the default manager's (no manager header), so are the extensions counted
-    listExtensions().then((l) => settle(upgradingFrom(m.id, l, defaultManager())), () => settle(null));
+    listExtensions().then((l) => settle(upgradingFrom(m.id, l, manager ?? defaultManager())), () => settle(null));
   };
   const stopAsking = () => ((asking.current = ""), setConfirm(""));
   const affectedBy = (id: string) => (affected?.market === id ? affected.count : null);

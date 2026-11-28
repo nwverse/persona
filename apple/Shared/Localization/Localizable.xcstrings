@@ -115289,6 +115289,28 @@
         }
       }
     },
+    "New emails show up here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New emails show up here."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新的邮件会出现在这里。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しいメールがここに表示されます。"
+          }
+        }
+      }
+    },
     "New Lark messages and emails show up here.": {
       "localizations": {
         "en": {
@@ -115312,6 +115334,28 @@
       },
       "extractionState": "manual"
     },
+    "New Lark messages show up here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Lark messages show up here."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新的飞书消息会出现在这里。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しいLarkのメッセージがここに表示されます。"
+          }
+        }
+      }
+    },
     "New Link": {
       "localizations": {
         "en": {
@@ -115334,6 +115378,28 @@
         }
       },
       "extractionState": "manual"
+    },
+    "New messages show up here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New messages show up here."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新消息会出现在这里。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しいメッセージがここに表示されます。"
+          }
+        }
+      }
     },
     "New Main Chat": {
       "localizations": {

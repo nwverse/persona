@@ -25,7 +25,7 @@ import {
   setExtensionEnabled, setupSecret, stateLine, valueAt,
   type ExtensionField, type ExtensionSecret, type HubExtensionDetail, type Json, type JsonObject,
 } from "../../lib/extensions";
-import { chooseManager, defaultManager, ownerHeaders, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
+import { defaultManager, ownerHeaders, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { navigate } from "../../lib/router";
@@ -82,7 +82,7 @@ export interface IntegrationDetailProps {
   /** Open the marketplace upgrade confirmation flow for an extension. */
   onUpgrade?: (market: string, id: string, manager?: string) => void;
   /** Navigate to a legacy settings URL when linked by a channel override hint. */
-  onSettings?: (url: string) => void;
+  onSettings?: (url: string, manager?: string) => void;
   /** Open a related connector integration (for example larkcli from Feishu Bot). */
   onOpenConnector?: (id: string, manager?: string) => void;
   /** Open scoped source subscriptions inside unified Integrations instead of leaving Settings. */
@@ -143,22 +143,22 @@ function IntegrationSubscriptions({ counts, scope, onOpen }: {
   );
 }
 
-function openSettingsTarget(url: string, manager: string | undefined, onSettings?: (url: string) => void) {
-  chooseManager(manager ?? null);
+function openSettingsTarget(url: string, manager: string | undefined, onSettings?: (url: string, manager?: string) => void) {
   if (onSettings) {
-    onSettings(url);
+    if (manager) onSettings(url, manager);
+    else onSettings(url);
     return;
   }
   const parsed = settingsTarget(url);
   if (!parsed) return;
-  navigate(settingsHref(parsed.tab, parsed.sub, false));
+  navigate(settingsHref(parsed.tab, parsed.sub, false, manager) + (parsed.anchor ? `#${parsed.anchor}` : ""));
 }
 
 function isGitHubIntegration(id: string, connectorIds: readonly string[] = [], repoProviders?: readonly string[]): boolean {
   return id === "github" || connectorIds.includes("github") || (repoProviders?.includes("github") ?? false);
 }
 
-function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string) => void }) {
+function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string, manager?: string) => void }) {
   const [count, setCount] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
@@ -194,7 +194,7 @@ function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; 
   );
 }
 
-function KnowledgeScopeShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string) => void }) {
+function KnowledgeScopeShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string, manager?: string) => void }) {
   return (
     <Group anchor="integration-knowledge-scope">
       <Row
@@ -372,7 +372,7 @@ function FeishuBotBuiltinDetail({
   target: Extract<IntegrationTarget, { kind: "builtin" }>;
   manager?: string;
   onBack?: () => void;
-  onSettings?: (url: string) => void;
+  onSettings?: (url: string, manager?: string) => void;
   onOpenConnector?: (id: string, manager?: string) => void;
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
@@ -484,7 +484,7 @@ function BuiltinIntegrationDetail({
   target: Extract<IntegrationTarget, { kind: "builtin" }>;
   manager?: string;
   onBack?: () => void;
-  onSettings?: (url: string) => void;
+  onSettings?: (url: string, manager?: string) => void;
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const isMail = target.id === "mail";
@@ -668,7 +668,7 @@ function ExtensionIntegrationDetail({
   onUninstalled?: () => void;
   onPage?: (extensionId: string, uiId: string, manager?: string) => void;
   onUpgrade?: (market: string, id: string, manager?: string) => void;
-  onSettings?: (url: string) => void;
+  onSettings?: (url: string, manager?: string) => void;
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const id = target.id;
