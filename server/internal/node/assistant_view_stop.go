@@ -6,6 +6,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 )
 
 func (n *Node) assistantViewStop(parent context.Context, req sockRequest, in hookInput) any {
@@ -14,9 +15,9 @@ func (n *Node) assistantViewStop(parent context.Context, req sockRequest, in hoo
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	var result assistantwire.ViewCheckResponse
 	input := assistantwire.ViewCheckRequest{SessionID: in.SessionID, Message: in.LastAssistantMessage}
-	if err := n.peer.Call(ctx, assistantwire.MethodViewCheck, input, &result); err != nil || result.Reason == "" {
+	result, err := buswire.Call(ctx, n.peer, assistantwire.ViewCheckMethod, input)
+	if err != nil || result.Reason == "" {
 		return nil
 	}
 	return map[string]any{"decision": "block", "reason": result.Reason}

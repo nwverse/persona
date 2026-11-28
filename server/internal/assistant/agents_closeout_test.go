@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -93,6 +94,31 @@ func TestCloseoutCheck(t *testing.T) {
 	}
 	if r := ask(""); r != "" {
 		t.Fatalf("held without a session: %q", r)
+	}
+}
+
+func TestCloseoutNodeRequestDecode(t *testing.T) {
+	ft := newFleetTest(t)
+	ft.d.setSessions("mac", []proto.Session{stopped("s1", "x")})
+	s := ft.s
+	closeoutOn(t, s)
+
+	ctx := t.Context()
+	params := json.RawMessage(`{"session_id":"s1","cwd":"/code/app","future_field":true}`)
+	out, handled, err := s.NodeRequest(ctx, "mac", assistantwire.MethodCloseoutBrief, params)
+	if brief, ok := out.(assistantwire.CloseoutBriefResponse); !handled || err != nil || !ok || brief.Context == "" {
+		t.Fatalf("closeout brief: reply %#v, handled %v, err %v", out, handled, err)
+	}
+	out, handled, err = s.NodeRequest(ctx, "mac", assistantwire.MethodCloseoutCheck, params)
+	if check, ok := out.(assistantwire.CloseoutCheckResponse); !handled || err != nil || !ok || check.Reason == "" {
+		t.Fatalf("closeout check: reply %#v, handled %v, err %v", out, handled, err)
+	}
+
+	for _, method := range []string{assistantwire.MethodCloseoutBrief, assistantwire.MethodCloseoutCheck} {
+		out, handled, err := s.NodeRequest(ctx, "mac", method, json.RawMessage(`{"session_id":42}`))
+		if _, ok := err.(*json.UnmarshalTypeError); !handled || !ok || out != nil {
+			t.Errorf("%s: reply %#v, handled %v, want the JSON type error, got %v", method, out, handled, err)
+		}
 	}
 }
 

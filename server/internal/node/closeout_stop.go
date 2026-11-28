@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/closeout"
 )
 
@@ -30,8 +31,8 @@ func (n *Node) closeoutStop(parent context.Context, req sockRequest, in hookInpu
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
-	var result assistantwire.CloseoutCheckResponse
-	if err := n.peer.Call(ctx, assistantwire.MethodCloseoutCheck, assistantwire.CloseoutCheckRequest{SessionID: in.SessionID}, &result); err != nil || result.Reason == "" {
+	result, err := buswire.Call(ctx, n.peer, assistantwire.CloseoutCheckMethod, assistantwire.CloseoutCheckRequest{SessionID: in.SessionID})
+	if err != nil || result.Reason == "" {
 		return nil
 	}
 	return map[string]any{"decision": "block", "reason": result.Reason}
