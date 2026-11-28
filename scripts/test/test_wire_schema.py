@@ -156,9 +156,15 @@ def integrations_projections():
                 yield name, f"{where}.expected.{key}", c["expected"][key]
 
 
+def plan_starts():
+    """(definition, sample) of every open-plan start presentation plan-start expects (#17853)."""
+    for where, c in domain_cases("plan-start"):
+        yield "PlanStartView", f"{where}.expected.start", c["expected"]["start"]
+
+
 SAMPLES = {"agent-view.schema.json": agent_views, "counts.schema.json": counts_views, "ids.schema.json": wire_ids,
            "inbox-sources.schema.json": inbox_sources, "integrations-projection.schema.json": integrations_projections,
-           "recents.schema.json": recent_setups,
+           "plan-start.schema.json": plan_starts, "recents.schema.json": recent_setups,
            "todo-view.schema.json": todo_views, "todo-wait.schema.json": todo_waits}
 
 

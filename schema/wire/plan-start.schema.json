@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plan-start.schema.json",
+  "title": "Open-plan start presentation",
+  "description": "How an open TaskPlan waits for the owner and which tasks have a useful Start These Directly rule to remember. Computed once by the server on every open-plan read or event; never stored and absent from older hubs (#17853).",
+  "x-out": {
+    "go": "server/internal/assistantwire/plan_start_gen.go",
+    "swift": "apple/Packages/PersonaWire/Sources/PersonaWire/PlanStartWire.swift",
+    "ts": "web/src/lib/plan-start-wire.ts"
+  },
+  "$defs": {
+    "PlanStartReason": {
+      "description": "Why an open plan still waits for Start: outbound_confirmation, private content or the track's outbound policy; owner_step, money, an outward action or an irreversible step; request_gate, request prerequisites; continuation, a continuation gate an authorized supervisor cannot release; start_authorization, ordinary start authority is missing. Closed: a newer value decodes as unknown and offers no trust rule.",
+      "type": "string",
+      "x-enum": "closed",
+      "x-unknown": "count",
+      "enum": [
+        "outbound_confirmation",
+        "owner_step",
+        "request_gate",
+        "continuation",
+        "start_authorization"
+      ]
+    },
+    "PlanStartView": {
+      "description": "Server-computed presentation of an open TaskPlan, carried as its optional start field. remember contains zero-based indexes of writable tasks not covered by tasks.trust, and is present only when reason is start_authorization. An empty or omitted remember offers no checkbox. Absence of the whole start field is the legacy-hub compatibility path.",
+      "type": "object",
+      "required": ["reason"],
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/PlanStartReason",
+          "description": "Why this open plan waits for the owner."
+        },
+        "remember": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "uniqueItems": true,
+          "description": "Zero-based task indexes for which Start These Directly can usefully remember a tasks.trust kind; omitted or empty when there are none."
+        }
+      }
+    }
+  }
+}

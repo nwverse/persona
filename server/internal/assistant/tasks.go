@@ -310,6 +310,9 @@ type TaskPlan struct {
 	// Suggestion: the owner started this kind of task three times; the open plan's card offers to start it directly
 	// from now on (rule_suggest.go, #4929). Filled in where the apps read the plan, never kept with it.
 	Suggestion *proto.RuleSuggestion `json:"suggestion,omitempty"`
+	// Start: why an open plan waits and which tasks have a useful trust rule to remember. Computed where the apps read
+	// the plan, never stored; nil on a started or dismissed plan and on a client projection from before #17853.
+	Start *assistantwire.PlanStartView `json:"start,omitempty"`
 }
 
 const (

@@ -12,6 +12,7 @@ import type { AssistantView, ViewAction } from "./extension-wire";
 import { isResumed } from "./reconnect";
 import type { TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
+import type { PlanStartView } from "./plan-start-wire";
 import { deleteTodo, type Todo, type TodoAsk } from "./todos";
 import { getInbox, itemPath } from "./inbox";
 import { closePanel, getPanel } from "./panel";
@@ -98,6 +99,8 @@ export interface TaskPlan {
   /** On an open plan: the rule the hub suggests once the owner started this kind of task three times (#4929,
    *  lib/rule-suggestion.ts). Filled in where the plan is read, never stored with it; absent from an older hub. */
   suggestion?: RuleSuggestion;
+  /** Why an open plan waits and which tasks have a useful trust rule to remember (#17853); absent from an older hub. */
+  start?: PlanStartView;
 }
 
 export type FeedKind = "plan" | "task" | "answered" | "receipt" | "routed" | "today" | "message" | "view" | "review" | "report" | "notice" | "brief" | "inbox_suggestion" | "urgent_call";

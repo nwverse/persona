@@ -1,0 +1,53 @@
+{
+  "cases": [
+    {
+      "name": "ordinary plan with two uncovered writable tasks",
+      "expected": {
+        "start": {
+          "reason": "start_authorization",
+          "remember": [0, 2]
+        }
+      }
+    },
+    {
+      "name": "ordinary plan whose writable tasks are already covered",
+      "expected": {
+        "start": {
+          "reason": "start_authorization"
+        }
+      }
+    },
+    {
+      "name": "outbound confirmation",
+      "expected": {
+        "start": {
+          "reason": "outbound_confirmation"
+        }
+      }
+    },
+    {
+      "name": "owner step",
+      "expected": {
+        "start": {
+          "reason": "owner_step"
+        }
+      }
+    },
+    {
+      "name": "request prerequisites",
+      "expected": {
+        "start": {
+          "reason": "request_gate"
+        }
+      }
+    },
+    {
+      "name": "continuation gate",
+      "expected": {
+        "start": {
+          "reason": "continuation"
+        }
+      }
+    }
+  ]
+}

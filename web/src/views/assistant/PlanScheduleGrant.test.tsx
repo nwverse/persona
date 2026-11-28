@@ -23,7 +23,7 @@ let root: Root;
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
 const before = { ...getState() };
 const task = (o: Partial<PlanTask> = {}): PlanTask => ({ title: "整理周报", prompt: "整理", machine: "m1", cwd: "/home/me/notes", ...o });
-const plan = (tasks: PlanTask[]): TaskPlan => ({ id: "p1", conversation: "c1", state: "open", tasks });
+const plan = (tasks: PlanTask[], start?: TaskPlan["start"]): TaskPlan => ({ id: "p1", conversation: "c1", state: "open", tasks, ...(start ? { start } : {}) });
 const scheduled = (o: Partial<PlanTask> = {}) => task({ schedule: "t1", schedule_title: "每周周报", ...o });
 const flush = async () => {
   for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve(); });
@@ -103,5 +103,16 @@ describe("the plan card's schedule grant", () => {
     await act(async () => checkboxes()[0].click());
     await start();
     expect(body()).toEqual({ tasks: undefined, remember: true, schedule_grant: true });
+  });
+
+  it("does not submit a remembered choice withdrawn by a refreshed plan", async () => {
+    await render(plan([task()], { reason: "start_authorization", remember: [0] }));
+    await act(async () => checkboxes()[0].click());
+    expect(checkboxes()[0].checked).toBe(true);
+
+    await render(plan([task()], { reason: "owner_step" }));
+    expect(checkboxes()).toHaveLength(0);
+    await start();
+    expect(body()).toEqual({ tasks: undefined, remember: false });
   });
 });
