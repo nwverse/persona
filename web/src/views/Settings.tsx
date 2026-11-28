@@ -26,6 +26,7 @@ import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setNeedsYouAutoOpen, useNeedsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
+import { setConfirmationEnabled, useApprovalConfirmation } from "../lib/approval-confirmation";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
 import { HubList } from "./Hubs";
 import { useDisconnect } from "./DisconnectBrowser";
@@ -875,15 +876,23 @@ function General({ onModel }: { onModel: () => void }) {
  *  language and behavior rows. These are the same components reading the same browser storage as before, so an
  *  existing choice and the untouched default look are unchanged. */
 function Advanced() {
+  const confirm = useApprovalConfirmation();
   return (
-    <Group title={t("settings.appearance")} anchor="appearance">
-      <SurfaceStyleRow />
-      <ThemeColorPicker />
-      <ExtensionThemePicker />
-      <FontRows />
-      <SidebarIconsRow />
-      <PhoneNavRow />
-    </Group>
+    <>
+      <Group title={t("settings.appearance")} anchor="appearance">
+        <SurfaceStyleRow />
+        <ThemeColorPicker />
+        <ExtensionThemePicker />
+        <FontRows />
+        <SidebarIconsRow />
+        <PhoneNavRow />
+      </Group>
+      <Group title={t("approval-impact.approvals")} anchor="outward-confirmation">
+        <Row label={t("approval-impact.setting")} hint={t("approval-impact.hint")} wrapHint>
+          <Switch label={t("approval-impact.setting")} on={confirm} onChange={setConfirmationEnabled} />
+        </Row>
+      </Group>
+    </>
   );
 }
 

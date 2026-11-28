@@ -73,6 +73,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.disconnect_browser"), hint: t("disconnect.sign_out"), anchor: "disconnect" },
   { tab: "general", group: t("settings.source_code"), hint: t("settings.about_persona"), anchor: "about-persona" },
   // Advanced › Appearance (#13398): the non-default looks. General keeps the default appearance and text size.
+  { tab: "advanced", group: t("approval-impact.setting"), hint: t("approval-impact.hint"), anchor: "outward-confirmation" },
   { tab: "advanced", group: t("settings.appearance"), anchor: "appearance" },
   { tab: "advanced", group: t("ui-look.surface_style"), hint: words(t("ui-look.surface_default"), t("ui-look.surface_liquid_glass"), t("ui-look.glass_translucency")), anchor: "surface-style" },
   { tab: "advanced", group: t("ui-look.accent"), anchor: "theme-color" },
