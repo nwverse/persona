@@ -1,6 +1,6 @@
 // One manager-scoped read serves all connector panels, including their startup polling.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { errorText } from "../../../lib/api";
+import { errorText, invalidateInFlightGets } from "../../../lib/api";
 import { isStarting, listConnectors, type HubConnector } from "../../../lib/connectors";
 import { sameManager } from "../../../lib/manager-choice";
 
@@ -14,13 +14,14 @@ export function useDetailConnectors(ids: readonly string[], manager?: string) {
   const pending = useRef(false);
   const key = JSON.stringify(ids);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { fresh?: boolean }) => {
     const wanted: string[] = JSON.parse(key);
     if (!wanted.length) return;
     const read = ++sequence.current;
     pending.current = true;
     setLoading(true);
     try {
+      if (options?.fresh) invalidateInFlightGets("/connectors");
       const list = await listConnectors();
       if (sequence.current !== read) return;
       const found = wanted.flatMap((id) => list.find((c) => c.id === id && sameManager(c.manager, manager)) ?? []);
