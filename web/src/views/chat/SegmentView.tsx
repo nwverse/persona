@@ -4,8 +4,7 @@ import { clock } from "../../lib/format";
 import type { stripCloseout as stripCloseoutText } from "../../lib/closeout-text";
 import { useCloseoutReader } from "./closeout-chunks";
 import { getSession, getState, useStore } from "../../lib/store";
-import { paneHost } from "../../lib/agent-groups";
-import { botmuxSentinelOnly, useBotmuxMode } from "../../lib/botmux-mode";
+import { BOTMUX_SENTINEL, useBotmuxMode } from "../../lib/botmux-mode";
 import { withChildSessions } from "../../lib/child-cards";
 import { agentStatus, isNestedSubagentStep, nestedSubagentStatus, nestingKey, subagentFor, withNestedSubagents } from "../../lib/tasks";
 import { turnImages } from "../../lib/turn-images";
@@ -414,12 +413,11 @@ export const SegmentView = memo(function SegmentView({
   if (tail?.kind === "step" && tail.step.kind === "text") cut--;
   const latest = nodes.at(-1);
   const lastWords = latest?.kind === "step" && latest.step.kind === "text" ? latest.step.item : undefined;
-  // A decoded botmux exchange whose last words are only BOTMUX_NOTHING_TO_SEND said everything in its replies to Lark
-  // (BotmuxReplies below): the control line is not drawn. Raw mode, and any other words, stay as written.
-  const botmuxDecoded = useBotmuxMode() === "decode";
-  const sentinelOnly = botmuxDecoded && streaming === undefined && !lastWords?.full_size && botmuxSentinelOnly(lastWords?.text);
-  const hideSentinel = useStore(() => sentinelOnly && (Boolean(seg.user?.botmux) || paneHost(getSession(mid, sid)?.pane_id) === "botmux"));
-  const latestItem = hideSentinel ? undefined : lastWords;
+  // A decoded botmux exchange (`botmux` is only on a BotMux session's messages) whose last words are only
+  // BOTMUX_NOTHING_TO_SEND said everything in its replies to Lark (BotmuxReplies below): the control line is not drawn.
+  // Raw mode, and any other words, stay as written.
+  const decoded = useBotmuxMode() === "decode";
+  const latestItem = decoded && seg.user?.botmux && streaming === undefined && lastWords?.text?.trim() === BOTMUX_SENTINEL ? undefined : lastWords;
   // The card above the transcript shows this exchange's closeout (#3612): its last words are drawn without the raw
   // block, and not at all when the block was all they said.
   const noCloseout = closeoutSegment === seg.id && streaming === undefined;

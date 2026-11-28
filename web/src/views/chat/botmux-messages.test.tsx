@@ -147,6 +147,12 @@ describe("botmux sessions in the chat", () => {
     expect(html).not.toContain("BOTMUX_NOTHING_TO_SEND");
   });
 
+  it("decoded: the sentinel with blank space around it is still only the control line", async () => {
+    const html = await render(card("", "  BOTMUX_NOTHING_TO_SEND\n"));
+    expect(html).not.toContain("BOTMUX_NOTHING_TO_SEND");
+    expect(html).toContain("data-botmux-no-text");
+  });
+
   it("decoded: last words beside the sentinel stay as written", async () => {
     const html = await render(card("", "Sent the card.\nBOTMUX_NOTHING_TO_SEND"));
     expect(html).toContain("data-latest-text");
