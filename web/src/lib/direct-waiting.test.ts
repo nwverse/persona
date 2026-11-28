@@ -94,6 +94,19 @@ describe("main conversation direct-user waiting", () => {
     expect(directWaitingCount(rows, own)).toBe(4);
   });
 
+  it("counts the assistant's own approval requests as one row and excludes held cards", () => {
+    const permission = card("approval", "permission", { tool_name: "ATS" });
+    const plan = card("plan-approval", "plan");
+    const screen = card("terminal-approval", "screen");
+    const held = card("held", "permission", { delegating: true });
+    const row = agent([permission, plan, screen, held]);
+    const assistant = { ...row, session: { ...row.session, assistant: true } };
+    const waiting = directUserWaiting([assistant]);
+    expect(waiting).toEqual([{ ...assistant, asks: [permission, plan, screen] }]);
+    expect(directWaitingCount(waiting, [])).toBe(1);
+    expect(directUserWaiting([{ ...assistant, asks: [held] }])).toEqual([]);
+  });
+
   it("follows the hub's view of a to-do when there is one, as the To-dos badge does", () => {
     const view = (section: string, reason = section === "needs_you" ? "failed_start" : "persona_working") => ({ phase: section, section, reason, rank: 0 }) as TodoSummary;
     // a failed start the hub files under Needs you is the owner's; one its supervisor handles (working) is not

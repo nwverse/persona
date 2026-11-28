@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/entries/cases.json";
-import { assistantEntries, decisionLaterKey, needsYouBySupervisor, taskRequestRouting, type NeedsYouItem } from "./assistant-entries";
+import { assistantEntries, decisionLaterKey, needsYouBySupervisor, taskRequestRouting, type AssistantEntriesInput, type NeedsYouItem } from "./assistant-entries";
+import { backgroundSupervisorTitle } from "./background-supervisor";
 import { triageTodos } from "./todo-triage";
 import { makeSessionLookup } from "./todos";
 import type { FeedItem, TaskPlan } from "./feed";
@@ -31,6 +32,58 @@ it("does not rehome a conversation request when a task agent shares its session 
   const { asksOf } = taskRequestRouting([todo], [request], makeSessionLookup([]), "shared", "hub");
   expect(asksOf.get("hub/shared")).toBeUndefined();
   expect(asksOf.get("other/shared")).toEqual([request]);
+});
+
+describe("the background supervisor's own requests", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const backgroundSupervisor = "background-supervisor";
+  const supervisor: Session = {
+    machine_id: "hub", session_id: backgroundSupervisor, assistant: true, origin: "task",
+    title: "Claude Code", cwd: "/work", state: "working", status: "working",
+  };
+  const permission: Interaction = {
+    id: "approval", machine_id: "hub", session_id: backgroundSupervisor, kind: "permission",
+    tool_name: "ATS", created_at: at,
+  };
+  const held = { ...permission, id: "held", delegating: true };
+  const entries = (input: Partial<AssistantEntriesInput> = {}) => assistantEntries({
+    conversation: "main", main: "main", backgroundSupervisor, todos: [], sessions: [supervisor],
+    interactions: [permission], plans: {}, feed: [], now: Date.parse(at), ...input,
+  });
+
+  it("groups and orders the supervisor's own cards by machine even when a session row is missing", () => {
+    const later = { ...permission, id: "later", created_at: "2026-11-10T08:02:00Z" };
+    const elsewhere = { ...permission, id: "elsewhere", machine_id: "second-hub", manager: "manager-two", cwd: "/work/second", created_at: "2026-11-10T08:01:00Z" };
+    const child = { ...permission, id: "child-request", session_id: "child", folded_under: backgroundSupervisor };
+    const found = { ...supervisor, assistant: false, manager: "manager-one" };
+    const result = entries({ sessions: [found], interactions: [later, child, elsewhere, held, permission] });
+    expect(result.needsYou).toEqual([
+      { kind: "agent", key: `agent:hub/${backgroundSupervisor}`, session: { ...found, assistant: true }, asks: [permission, later] },
+      { kind: "agent", key: `agent:second-hub/${backgroundSupervisor}`, session: {
+        machine_id: "second-hub", session_id: backgroundSupervisor, manager: "manager-two", assistant: true,
+        title: backgroundSupervisorTitle(), cwd: elsewhere.cwd, state: "needs_you", status: "blocked",
+      }, asks: [elsewhere] },
+    ]);
+    expect(result.running).toEqual([]);
+  });
+
+  it.each([{ name: "no requests", interactions: [] }, { name: "only delegated requests", interactions: [held] }])(
+    "keeps a working supervisor out of both lists with $name", ({ interactions }) => {
+      expect(entries({ interactions })).toMatchObject({ needsYou: [], running: [] });
+    },
+  );
+
+  it.each(["direction", backgroundSupervisor])("does not add the supervisor's card to %s", (conversation) => {
+    expect(entries({ conversation }).needsYou).toEqual([]);
+  });
+
+  it("keeps a supervisor request already shown by a task in that one row", () => {
+    const todo: Todo = {
+      id: "task", title: "Review work", origin: "main", created_at: at, updated_at: at,
+      agents: [{ machine_id: supervisor.machine_id, session_id: supervisor.session_id, linked_at: at }],
+    };
+    expect(entries({ todos: [todo] }).needsYou).toMatchObject([{ key: "task:task", asks: [permission] }]);
+  });
 });
 
 describe("steps carried by an open request", () => {

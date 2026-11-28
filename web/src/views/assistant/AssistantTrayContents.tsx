@@ -16,7 +16,7 @@ import { Icon } from "../../ui/icons";
 import { StatusMark } from "../../ui/StatusMark";
 import { cardLine } from "../chat/dock";
 import { TaskActivityDetail } from "./TaskActivityDetail";
-import { FinishedTasks, isDecision, NeedsYouBody, OpenEntry, ParkedTasks, ProgressTaskRow, type AssistantTray } from "./Tasks";
+import { FinishedTasks, isDecision, NeedsYouBody, OpenEntry, openWaitingSession, ParkedTasks, ProgressTaskRow, waitingSessionTitle, type AssistantTray } from "./Tasks";
 import { conversationTitle } from "./conversations";
 
 /** What a Needs you row says folded (#5569): its mark, the title and, under it, what it waits for, with the kind at the
@@ -27,7 +27,7 @@ function foldedRow(item: NeedsYouItem, calmVerify = false): { title: string; lin
     return { title: item.plan.tasks.length > 1 ? t("assistant-tasks.needs_more", { title: first, count: item.plan.tasks.length - 1 }) : first, kicker: t("assistant-tasks.plan_waiting") };
   }
   if (item.kind === "message") return { title: [field(item.item, "sender"), field(item.item, "chat")].filter(Boolean).join(" · ") || t("assistant-tasks.task_fallback"), line: field(item.item, "text"), kicker: stateName("needs_you") };
-  if (item.kind === "agent") return item.asks.length ? { title: sessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
+  if (item.kind === "agent") return item.asks.length ? { title: waitingSessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
   if (item.asks.length) return { title: item.todo.title, line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) };
   // In the urgent Needs-you tray a verification whose Pass round has not arrived is already one line (the body's
   // open-task button), so it has no folded form. The calm To verify tray keeps its folded note + one-click Pass.
@@ -51,7 +51,7 @@ function openKey(item: NeedsYouItem): string {
   return item.key;
 }
 
-/** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking Agent (or the task
+/** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking session (or the task
  *  for a task-level decision), while the chevron folds it again. `verify` draws calm non-attention styling for
  *  completed tasks awaiting optional owner verification (`user_check`). */
 function NeedsYouRow({ item, open, onToggle, onOpenChat, verify = false }: { item: NeedsYouItem; open: boolean; onToggle: () => void; onOpenChat?: () => void; verify?: boolean }) {
@@ -86,7 +86,7 @@ function NeedsYouRow({ item, open, onToggle, onOpenChat, verify = false }: { ite
   // is summed from this same flag, so the trays and the header tell one number.
   const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (!folded) return <NeedsYouBody item={item} calmVerify={verify} onOpenChat={onOpenChat} />;
-  const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
+  const openTitle = item.kind === "agent" ? () => openWaitingSession(item.session)
     : shown.kind === "task" ? () => {
       const ask = shown.asks[0];
       if (ask && !showStep && reviewState(shown.todo) !== "user_check") openAgent(ask.machine_id, ask.session_id);

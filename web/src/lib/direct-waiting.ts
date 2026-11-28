@@ -75,7 +75,9 @@ export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string
       continue;
     }
     if (item.kind === "task" && (item.status === "failed" || (item.status === "not_started" && heldDelivery(item.todo)?.unblock !== "user"))) continue;
-    const asks = item.asks.filter(directUserInteraction);
+    const asks = item.kind === "agent" && item.session.assistant === true
+      ? item.asks.filter((ix) => !ix.delegating)
+      : item.asks.filter(directUserInteraction);
     if (asks.length) out.push({ ...item, asks });
     else if (item.kind === "task" && ownerDecision(item, deferred)) out.push({ ...item, asks: [] });
   }

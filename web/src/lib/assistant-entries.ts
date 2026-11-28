@@ -1,3 +1,4 @@
+import { backgroundSupervisorTitle } from "./background-supervisor";
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
@@ -27,7 +28,7 @@ export type NeedsYouItem =
    *  `countsOpen` says whether the To-dos page's "Not done" counts the to-do (#3331): the row stays visible whatever
    *  it says, the chip badge counts it only when it does. */
   | NeedsYouTask
-  /** An Agent that belongs to no task, asking something. */
+  /** A standalone Agent or the background supervisor asking something. */
   | { kind: "agent"; key: string; session: Session; asks: Interaction[] }
   /** A plan waiting for Start. */
   | { kind: "plan"; key: string; plan: TaskPlan }
@@ -73,6 +74,7 @@ export interface AssistantEntriesInput {
   conversationMachine?: string;
   /** The main conversation's id: it watches every task and the Agents opened by hand. */
   main?: string;
+  backgroundSupervisor?: string;
   manager?: string;
   todos: Todo[];
   /** Every session, as the lists show them (answered cards applied). */
@@ -201,7 +203,7 @@ export function taskRequestRouting(todos: readonly Todo[], interactions: readonl
 }
 
 export function assistantEntries(input: AssistantEntriesInput): AssistantEntries {
-  const { conversation, main, feed } = input;
+  const { conversation, main, backgroundSupervisor, feed } = input;
   const owns = (owner: string | undefined) => !input.manager || sameManager(owner, input.manager);
   const todos = input.manager ? input.todos.filter((t) => owns(t.manager)) : input.todos;
   const sessions = input.manager ? input.sessions.filter((s) => owns(s.manager)) : input.sessions;
@@ -342,7 +344,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const agentsRunning: RunningItem[] = [];
   for (const { session, state } of dockAgents(sessions.map((s) => lookup(s.machine_id, s.session_id) ?? s), todos, conversation, main)) {
     const sk = sessionKey(session.machine_id, session.session_id);
-    if (folded.has(sk)) continue;
+    if (folded.has(sk) || session.session_id === backgroundSupervisor) continue;
     const key = `agent:${sk}`;
     const agentAsks = asksOf.get(sk) ?? [];
     const userAsks = agentAsks.filter((ix) => !ix.delegating);
@@ -350,6 +352,21 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       agentsAsking.push({ kind: "agent", key, session, asks: userAsks });
     } else {
       agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    }
+  }
+  if (isMain && backgroundSupervisor && backgroundSupervisor !== conversation) {
+    for (const [sk, pending] of asksOf) {
+      if (folded.has(sk)) continue;
+      const asks = pending.filter((ix) => !ix.delegating && ix.session_id === backgroundSupervisor && sessionKey(ix.machine_id, ix.session_id) === sk);
+      const first = asks[0];
+      if (!first) continue;
+      const { machine_id, session_id, manager, cwd } = first;
+      const found = lookup(machine_id, session_id);
+      const session: Session = found ? { ...found, assistant: true } : {
+        machine_id, session_id, manager, assistant: true, title: backgroundSupervisorTitle(),
+        cwd: cwd ?? "", state: "needs_you", status: "blocked",
+      };
+      agentsAsking.push({ kind: "agent", key: `agent:${sk}`, session, asks });
     }
   }
 

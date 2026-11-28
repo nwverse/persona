@@ -8,6 +8,7 @@ import { lazy, memo, Suspense, useEffect, useId, useMemo, useRef, useState } fro
 import { taskMeter, type TaskCardMetadata } from "../../lib/task-cards";
 import { agentRowKey, agentRowLabel, agentRowMark, agentRowTone, todoChipLabel, todoChipState } from "../../lib/task-row-status";
 import { assistantEntries, type NeedsYouItem } from "../../lib/assistant-entries";
+import { backgroundSupervisorTitle } from "../../lib/background-supervisor";
 import { directUserInteraction, directUserWaiting, directWaitingCount, takeDirectWaitingRequest } from "../../lib/direct-waiting";
 import { useRestoredTodos } from "../../lib/todo-restore";
 import {
@@ -962,6 +963,15 @@ export function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void
   );
 }
 
+export function waitingSessionTitle(session: Session): string {
+  return session.assistant ? backgroundSupervisorTitle(session) : sessionTitle(session);
+}
+
+export function openWaitingSession(session: Session): void {
+  if (session.assistant) navigate(conversationPage(session.session_id, undefined, session.manager));
+  else openAgent(session.machine_id, session.session_id);
+}
+
 /** One-click Pass row for a `user_check` task whose ask payload is absent (e.g. recovered or legacy ledger). */
 function VerifyPassRow({ todo, rowKey, countsOpenAttr }: { todo: Todo; rowKey?: string; countsOpenAttr: { "data-counts-open"?: string } }) {
   const [busy, setBusy] = useState(false);
@@ -1002,8 +1012,8 @@ export function NeedsYouBody({ item, nested = false, calmVerify = false, onOpenC
   if (item.kind === "message") return <MessageCard item={item.item} />;
   const taskOpenAttr = item.kind === "task" && !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (item.asks.length) {
-    const title = item.kind === "agent" ? sessionTitle(item.session) : item.todo.title;
-    const open = () => item.kind === "agent" ? openAgent(item.session.machine_id, item.session.session_id) : openTask(item.todo.id);
+    const title = item.kind === "agent" ? waitingSessionTitle(item.session) : item.todo.title;
+    const open = () => item.kind === "agent" ? openWaitingSession(item.session) : openTask(item.todo.id);
     return <div data-needs-row={rowKey} {...taskOpenAttr}>
       {!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{title}</button>}
       {item.asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}
@@ -1012,8 +1022,8 @@ export function NeedsYouBody({ item, nested = false, calmVerify = false, onOpenC
   }
   if (item.kind === "agent") {
     const { session } = item;
-    return <button type="button" data-needs-row={rowKey} onClick={() => openAgent(session.machine_id, session.session_id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm">
-      <StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span>
+    return <button type="button" data-needs-row={rowKey} onClick={() => openWaitingSession(session)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm">
+      <StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{waitingSessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span>
     </button>;
   }
   const { todo, status } = item;
@@ -1128,6 +1138,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   const interactions = useStore((s) => s.interactions);
   const answered = useStore((s) => s.answered);
   const main = useStore((s) => s.assistant?.main);
+  const backgroundSupervisor = useStore((s) => s.assistant?.background_supervisor);
   const lookup = useTaskLookup();
   const [restored] = useRestoredTodos();
   // a minute's tick moves tasks across the 48 h shelving line while nothing else changes, as on the To-dos page
@@ -1137,9 +1148,9 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     return () => window.clearInterval(id);
   }, []);
   const entries = useMemo(
-    () => assistantEntries({ conversation, main, manager, todos, sessions: answeredSessions(sessionRows, interactions, answered), interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now() }),
+    () => assistantEntries({ conversation, main, backgroundSupervisor, manager, todos, sessions: answeredSessions(sessionRows, interactions, answered), interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now() }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick: re-read the clock once a minute
-    [conversation, main, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
+    [conversation, main, backgroundSupervisor, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick],
   );
   const directWaiting = main === conversation;
   const waiting = useMemo(() => directWaiting ? directUserWaiting(entries.needsYou, deferred) : entries.needsYou, [directWaiting, entries.needsYou, deferred]);

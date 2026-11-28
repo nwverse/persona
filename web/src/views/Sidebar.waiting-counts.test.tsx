@@ -20,6 +20,7 @@ import type { Todo } from "../lib/todos";
 import type { OwnerAsk } from "../lib/todo-view-wire";
 import type { Interaction, Session } from "../lib/types";
 import { Sidebar } from "./Sidebar";
+import { AssistantActionBar } from "./assistant/Tasks";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -67,6 +68,75 @@ afterEach(async () => {
 });
 
 describe("sidebar waiting counts and cross-surface agreement", () => {
+  it("shows a background supervisor approval in Main, opens its conversation, and clears both counts after approval", async () => {
+    await initI18n("zh-Hans");
+    const supervisor: Session = { ...conv("bg-sup", "Claude Code"), origin: "task", state: "needs_you", status: "blocked", pending_interactions: 1 };
+    const approval: Interaction = {
+      id: "supervisor-approval", kind: "permission", tool_name: "ATS", machine_id: supervisor.machine_id,
+      session_id: supervisor.session_id, created_at: AT, summary: "Approve the review command",
+    };
+    const resolvePath = `/api/v1/interactions/${approval.id}/resolve`;
+    let pending = [approval];
+    const fetchHub = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = new URL(url, "http://hub.example.com").pathname;
+      if (path === "/api/v1/assistant") return Response.json({
+        machine_id: "hub", main: "main", background_supervisor: supervisor.session_id,
+        conversations: [conv("main", "Persona"), supervisor],
+      });
+      if (path === "/api/v1/machines") return Response.json({ machines: [{ id: "hub", name: "Hub", online: true }] });
+      if (path === "/api/v1/sessions") return Response.json({ sessions: [supervisor] });
+      if (path === "/api/v1/todos") return Response.json({ todos: [] });
+      if (path === "/api/v1/interactions") return Response.json({ interactions: pending });
+      if (path === resolvePath && init?.method === "POST") {
+        pending = [];
+        return Response.json({ ok: true });
+      }
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchHub);
+
+    await act(() => refresh());
+    act(() => root.render(<>
+      <Sidebar route={{ name: "persona", sid: "main" }} onSearch={() => {}} onNewAgent={() => {}} />
+      <AssistantActionBar conversation="main" />
+    </>));
+    await flush();
+
+    const badge = () => host.querySelector("[data-main-waiting]");
+    const needs = host.querySelector<HTMLButtonElement>('[data-assistant-actionbar] [data-tray-entry="needs"]')!;
+    const needsLabel = t("assistant-tasks.tray_needs_you");
+    expect(badge()?.textContent).toBe("1");
+    expect(needs.textContent).toBe(`${needsLabel}1`);
+
+    await act(async () => needs.click());
+    await flush();
+    const row = '[data-needs-row="agent:hub/bg-sup"]';
+    const folded = host.querySelector<HTMLButtonElement>(`button${row}`)!;
+    expect(folded.textContent).toContain("后台督办");
+    await act(async () => folded.click());
+    await flush();
+
+    const title = host.querySelector<HTMLButtonElement>(`${row} [data-needs-title]`)!;
+    const open = host.querySelector<HTMLButtonElement>(`${row} [data-needs-open-entry]`)!;
+    expect(title.textContent).toBe("后台督办");
+    for (const button of [title, open]) {
+      history.replaceState(null, "", "/persona/main");
+      act(() => button.click());
+      expect(location.pathname).toBe("/persona/bg-sup");
+    }
+
+    const card = host.querySelector<HTMLElement>(`${row} [data-card="${approval.id}"]`)!;
+    expect(card.textContent).toContain("ATS");
+    const allow = [...card.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === t("chat-interactions.allow"))!;
+    await act(async () => allow.click());
+    await flush();
+    const answers = fetchHub.mock.calls.filter(([url, init]) => String(url) === resolvePath && init?.method === "POST");
+    expect(answers.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([{ allow: true }]);
+    expect(host.querySelector(row)).toBeNull();
+    expect(needs.textContent).toBe(needsLabel);
+    expect(badge()).toBeNull();
+  });
+
   it("sums only visible rows in the Persona chats header, excluding hidden directions, main plans, and folded recent rows", async () => {
     setRecentCount(5);
     const conversations: Session[] = [
