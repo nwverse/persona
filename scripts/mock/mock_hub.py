@@ -2213,7 +2213,10 @@ LN = {"on": bool(os.environ.get("MOCK_LN"))}
 SESSION_DELETED = []
 PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins: what the Agents list keeps on top
 # GET / PUT /api/v1/agents/display-settings (server/internal/assistant/agents_display.go): both new switches are off by default
-AGENTS_DISPLAY = {"show_botmux": True, "configured": False, "use_herdr_tab_name": False, "sort_by_activity": False, "show_filter": False}
+AGENTS_DISPLAY = {"show_botmux": True, "configured": False, "use_herdr_tab_name": False, "sort_by_activity": False, "show_filter": False,
+                  "botmux_owner_union_id": ""}
+# GET /api/v1/agents/botmux-owner-candidates (server/internal/assistant/agents_botmux_owner.go): made-up union_ids only
+BOTMUX_OWNER_CANDIDATES = [{"union_id": "on_0123456789abcdef0123456789abcdef", "bots": 3, "sole": 3, "machines": 1}]
 
 
 def mark_seen(sid):
@@ -27662,6 +27665,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
         if p == "/api/v1/agents/display-settings": return self.send_json(AGENTS_DISPLAY)
+        if p == "/api/v1/agents/botmux-owner-candidates": return self.send_json({"candidates": BOTMUX_OWNER_CANDIDATES})
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
@@ -29706,7 +29710,14 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/v1/agents/display-settings" and self.command == "PUT":  # exactly one boolean per request
             body = json.loads(self.last_body or b"{}")
             sent = [k for k in ("show_botmux", "use_herdr_tab_name", "sort_by_activity", "show_filter") if isinstance(body.get(k), bool)]
+            if isinstance(body.get("botmux_owner_union_id"), str): sent.append("botmux_owner_union_id")
             if len(sent) != 1: return self.send_json({"error": "send exactly one switch"}, 400)
+            if sent[0] == "botmux_owner_union_id":
+                owner = body["botmux_owner_union_id"].strip()
+                if owner and not re.fullmatch(r"on_[A-Za-z0-9_-]{1,125}", owner):
+                    return self.send_json({"error": "botmux_owner_union_id must be a Feishu union_id (on_…) or empty"}, 400)
+                AGENTS_DISPLAY["botmux_owner_union_id"] = owner
+                return self.send_json(AGENTS_DISPLAY)
             AGENTS_DISPLAY[sent[0]] = body[sent[0]]
             if sent[0] == "show_botmux": AGENTS_DISPLAY["configured"] = True
             return self.send_json(AGENTS_DISPLAY)

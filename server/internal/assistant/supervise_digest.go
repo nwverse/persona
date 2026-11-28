@@ -437,9 +437,8 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	s.clearSentParentCloseout(moot)
 	s.turnsTold(ctx, moot) // what no longer holds is not told after a restart either (task_turns.go)
 	s.discardFailedStartBatches(ctx, moot, now)
-	ackable := append(slices.Clone(moot), kept...) // retry entries were restored and must survive every ACK path
 	if len(entries) == 0 {
-		s.ackSupervisePending(ackable)
+		s.ackSupervisePending(moot)
 		return false
 	}
 	for i := range kept {
@@ -467,8 +466,13 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			// merge into one digest instead of looping in SupervisePending behind them.
 			s.restoreDigest(reval, time.Time{}, prev)
 			entries, kept = queueableEntries, queueable
-			ackable = append(slices.Clone(moot), kept...)
 		}
+	}
+	entries, kept = s.screenModelSupervision(ctx, to, entries, kept, now, prev)
+	ackable := append(slices.Clone(moot), kept...) // retry entries stay in the outbox
+	if len(entries) == 0 {
+		s.ackSupervisePending(moot)
+		return false
 	}
 	holds := kept
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
@@ -927,6 +931,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		}
 		v = &Supervision{} // a failed start or reporting conversation has no ledger and grants no acceptance authority
 	}
+	if !triedQueued && routineSupervisionSuppressed(t, g, time.Now()) {
+		return prompts.SuperviseEntry{}, false
+	}
 	st := v.state(t)
 	var replyAsk acceptAsk
 	var draft *TodoPRStatus
@@ -1086,6 +1093,15 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // told by another message meanwhile (a later decision's)
 		}
 	case sigOrphaned:
+		if g.Orphan == orphanQueued {
+			p, i, err := s.currentPlanAssignment(ctx, t)
+			if err != nil || orphanWaitsOnDecision(t) || s.taskStartOnWay(t.ID) {
+				return prompts.SuperviseEntry{}, false
+			}
+			if q, ok := queuedTaskOrphan(p.ID, p.Tasks[i], time.Now()); !ok || q.key != g.Key {
+				return prompts.SuperviseEntry{}, false
+			}
+		}
 		if g.WorkerSet != "" {
 			if st != "" && st != reviewRework {
 				return prompts.SuperviseEntry{}, false

@@ -84,10 +84,9 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	if err != nil {
 		return "", err
 	}
-	// Saved delivery bindings precede recovery from the closeout. setTaskStage mirrors every stage PR into a
-	// default-role saved link, so saved PRs that only repeat the stage's own record are still the legacy record.
+	// Saved delivery bindings precede closeout recovery, including bindings for a PR that the stage also names.
 	legacyPR := !explicitLinkPR && len(repoIssues) == 0 &&
-		!slices.ContainsFunc(repoPRs, func(u string) bool { return !stageRecords(t.PRURL, t.PRs, u) })
+		!slices.ContainsFunc(repoPRs, func(link repository.TaskLink) bool { return !stageMirrorsLink(t.PRURL, t.PRs, link) })
 	if legacyPR {
 		replacement, noPR, err := s.reportedTaskPR(ctx, t, pr)
 		if err != nil {
@@ -133,16 +132,19 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	if legacyPR && !referencePRs[normalizePRKey(pr)] {
 		addPR(pr) // the recovered stage PR first, so a disproved PR's leftover mirror cannot answer for it
 	}
-	for _, u := range repoPRs {
-		addPR(u)
+	for _, link := range repoPRs {
+		addPR(link.CanonicalURL)
 	}
 	if explicitLinkPR && !referencePRs[normalizePRKey(pr)] {
 		addPR(pr)
 	}
 
 	var notes []string
+	allowLegacyCleanup := legacyPR && !slices.ContainsFunc(repoPRs, func(link repository.TaskLink) bool {
+		return link.Provenance == repository.LinkProvenanceExplicit
+	})
 	for _, curPR := range prs {
-		allowNonPRCleanup := legacyPR && curPR == t.PRURL
+		allowNonPRCleanup := allowLegacyCleanup && curPR == t.PRURL
 		var n string
 		if ciPRURL.MatchString(curPR) {
 			n, err = s.checkGitHubPRDelivery(ctx, t, curPR, gate, outcome, allowNonPRCleanup)
@@ -351,11 +353,9 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 	return "", issueOpenError(s, t, issueURL, d.State)
 }
 
-// todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links,
-// issues included (#14050), are returned for gate verification; reference links are display-only. referencePRs carries
-// their normalized keys too, so acceptance cannot re-add a reference PR from legacy stage tracking. Stored delivery
-// bindings are authoritative. Storage also uses the empty role for explicit delivery, so both forms are honored.
-func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id, pr string) (prs, issues []string, referencePRs map[string]bool, err error) {
+// todoLinkedDeliveryRefs reads saved delivery PRs with their provenance and delivery issue URLs (#14050).
+// referencePRs carries normalized keys so legacy stage tracking cannot re-add a reference PR to the gate.
+func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id, pr string) (prs []repository.TaskLink, issues []string, referencePRs map[string]bool, err error) {
 	if _, ok := s.store().(todoRepositoryStore); !ok {
 		return nil, nil, nil, nil
 	}
@@ -379,7 +379,7 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id, pr string) (pr
 				if role == repository.LinkRoleReference {
 					referencePRs[normalizePRKey(u)] = true
 				} else if role == repository.LinkRoleDelivery {
-					prs = append(prs, u)
+					prs = append(prs, l)
 				}
 			case "issue":
 				// A reference issue is related work, never this task's delivery: only a delivery (or role-less) issue

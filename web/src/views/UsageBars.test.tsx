@@ -1989,3 +1989,56 @@ describe("grouped windows, extension metadata, compact views, and collapsible ti
     }
   });
 });
+
+describe("Codex historical rollout readings", () => {
+  const live = account("verified", 20, 30, { local: true, machines: ["Machine A"] });
+  const old = { ...account("rollout", 68, 44, { local: true, machines: ["Machine B"], sampled_at: iso(-H), stale: true }), reading_source: "rollout" } as const;
+
+  function panel(accounts: UsageAccount[], mode: "cards" | "table" = "cards") {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(<UsagePopover accounts={accounts} defaultViewMode={mode} now={NOW} defaultTimelineOpen />);
+    return host;
+  }
+
+  it("counts one account and draws one reset row while retaining the old sample", () => {
+    const host = panel([live, old]);
+    expect({
+      count: host.querySelector('[data-usage-provider="codex"] > header')?.textContent?.match(/\d+ 个账号/)?.[0],
+      resets: [...host.querySelectorAll("[data-timeline-row]")].map(row => row.getAttribute("data-timeline-row")),
+    }).toEqual({ count: "1 个账号", resets: ["verified"] });
+    for (const mode of ["cards", "table"] as const) {
+      const view = panel([live, old], mode);
+      const source = view.querySelector("details")!;
+      expect(source.open).toBe(false);
+      source.querySelector("summary")!.click();
+      expect(source.open).toBe(true);
+      expect(source.textContent).toContain("Machine B");
+      expect(source.querySelector("time")?.dateTime).toBe(iso(-H));
+      expect(source.textContent).toContain("32%");
+      expect(source.querySelector("dd time")?.getAttribute("datetime")).toBe(old.windows[0].resets_at);
+      if (mode === "table") expect(view.querySelectorAll("[data-usage-table-row]")).toHaveLength(1);
+    }
+  });
+
+  it("keeps a source-only panel reachable without adding an account or a reset", () => {
+    const sidebar = document.createElement("div");
+    sidebar.innerHTML = renderToStaticMarkup(<UsageBars accounts={[old]} now={NOW} />);
+    expect(sidebar.querySelector('button[aria-haspopup="dialog"]')).not.toBeNull();
+    expect(sidebar.querySelector('[role="progressbar"]')).toBeNull();
+    for (const mode of ["cards", "table"] as const) {
+      const host = panel([old], mode);
+      expect(host.querySelector("details")?.textContent).toContain("Machine B");
+      expect(host.querySelector("[data-timeline-row], [data-usage-table-row]")).toBeNull();
+    }
+  });
+
+  it("keeps both accounts at a shared reset, including old-hub and keyless team readings", () => {
+    const team = account("team", 55, 11, { name: "Team", local: true, machines: ["Machine C"] });
+    for (const other of [team, { ...team, stale: true }, { ...team, reading_source: "rollout" as const }]) {
+      const host = panel([live, other]);
+      expect(host.querySelector('[data-usage-provider="codex"] > header')?.textContent).toContain("2 个账号");
+      expect(host.querySelectorAll("[data-timeline-row]")).toHaveLength(2);
+      expect(host.querySelector("details")).toBeNull();
+    }
+  });
+});

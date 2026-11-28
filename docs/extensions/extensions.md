@@ -1638,6 +1638,39 @@ Exactly one of `archive` and `npm`; if this hub's platform has no `archive` entr
 - **No sudo, nothing global**: it writes only the hub's state directory; anything else the program needs (credentials, caches) goes in the extension's data directory, e.g. by pointing its config directory there with an env var.
 - `tools` in the list and details are the programs this version uses: `[{name, title?, version, reused}]`.
 
+### Read-only Integrations settings projection
+
+People managing connections for several assistants can open the settings of the assistant that owns each integration.
+The hub relays `GET /api/v1/assistant/integrations` and `GET /api/v1/assistant/integrations/{kind}/{id}` through its
+normal `X-Persona-Manager` routing. Use the selected assistant's `integrations_projection_v1` field in
+`GET /api/v1/managers` to opt in. Both reads require a full-access client, like the settings reads they compose.
+Clients use the existing settings routes for writes and for reading the settings inside each section.
+
+- The catalog returns `items`, `counts` and `availability`. Each row has a stable `ref {manager, kind, id}`
+  including the explicit default assistant id, a display name, `origin`, typed `capabilities` and
+  `availability {state, reason?}`. `counts.all` counts visible rows once. Each other count is the number of visible
+  rows that have that capability. One row may belong to several filters. Only the detail response carries sections.
+- Host registrations take precedence over extension contribution references. A legacy producer can use an exact id
+  match within a resource type and the same assistant when it has no explicit relationship of that type.
+  An independent row reports `relationship_issue` for ambiguous claims, a missing or unavailable owner, or a
+  subscription whose saved extension conflicts with the connector's current owner. Push sources use their own refs.
+- A failed read reports `unavailable` and `read_failed` for its source in `availability`. The catalog keeps successful
+  reads and their counts. A row can also have a `capability_availability` entry for a failed or unready related resource.
+  Detail returns 503 when the requested resource's source failed and the resource could not be resolved, and 404
+  when that source answered and the resource is absent.
+- The host reports `module.lark` and `module.mail` in the service entries of `availability`. A service whose
+  provider is off or excluded from the build is omitted from the catalog and counts. Its service detail can still
+  report `module_off` for an older settings link such as `service/mail`. A readable saved subscription can still
+  appear there. An installed Lark gateway extension has its own entry and follows its own settings.
+- Detail returns the canonical `item`, typed `sections` and source `availability`. Each section names its own
+  typed resource `ref` and `edit` mode. `settings` delegates actions to the existing settings workflow, including
+  its permission and confirmation checks. An addressable member resolves to its owning integration. Configuration
+  hints map to Connection, Conversation and Push, Inbox and Sync, or Extension Configuration. Missing and unknown
+  hints map to the general configuration group. The projection carries section descriptors and status codes.
+
+The wire contract is generated from `schema/wire/integrations-projection.schema.json`. The reads require no new
+setting or migration, and `integrations_v2` continues to control the client entry.
+
 ### Host CLI integrations
 
 `tools` installs a program for an extension. `host_integrations` instead names a command-line integration that the owner has already configured on the manager. It is not an alternative way to write an executable or a shell command: the closed integration ID is resolved by the manager, and the extension gets no binary path, profile, configuration or credential.

@@ -472,10 +472,13 @@ func keptPRs(prs []string, pr string) []string {
 	return out[max(0, len(out)-stagePRsKept):]
 }
 
-// stageRecords reports whether u is pr or one of earlier, the PRs a task's stage tracks. setTaskStage mirrors each of
-// them into a default-role saved link, so such a link repeats the legacy record rather than binding a delivery.
-func stageRecords(pr string, earlier []string, u string) bool {
-	key := normalizePRKey(u)
+// stageMirrorsLink matches an unbound link to the current or an earlier stage PR. Rows saved before provenance was
+// recorded use the same stage comparison (#17796).
+func stageMirrorsLink(pr string, earlier []string, link repository.TaskLink) bool {
+	if link.Provenance == repository.LinkProvenanceExplicit {
+		return false
+	}
+	key := normalizePRKey(link.CanonicalURL)
 	same := func(p string) bool { return normalizePRKey(p) == key }
 	return key != "" && (same(pr) || slices.ContainsFunc(earlier, same))
 }
@@ -551,9 +554,8 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 	return nil
 }
 
-// forgetReportedPRLinks removes the pull-request links imported from the task's reports, while preserving issue links
-// and every other kind of evidence. It refuses while a delivery PR outside stage's own record is saved, and its
-// revision-checked writes fail closed if the catalog changed meanwhile.
+// forgetReportedPRLinks removes reported PRs and retains other links. A saved delivery binding can appear while
+// acceptance checks the forge, so recheck the links and require the revision read here when saving.
 func (s *Service) forgetReportedPRLinks(ctx context.Context, id string, stage todoStage) error {
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
@@ -567,7 +569,7 @@ func (s *Service) forgetReportedPRLinks(ctx context.Context, id string, stage to
 		if slices.ContainsFunc(row.Links, func(link repository.TaskLink) bool {
 			role, _ := repository.NormalizeLinkRole(link.Role)
 			return link.Kind == "pull_request" && role == repository.LinkRoleDelivery &&
-				!stageRecords(stage.PR, stage.PRs, link.CanonicalURL)
+				!stageMirrorsLink(stage.PR, stage.PRs, link)
 		}) {
 			return fmt.Errorf("task %s: its delivery links changed during verification; retry the review", id)
 		}
@@ -580,7 +582,11 @@ func (s *Service) forgetReportedPRLinks(ctx context.Context, id string, stage to
 				changed = true
 				continue
 			}
-			kept = append(kept, repository.LinkInput{URL: link.CanonicalURL, Kind: link.Kind, Number: link.Number, Title: link.Title})
+			in := repository.LinkInput{URL: link.CanonicalURL, Title: link.Title, Role: link.Role}
+			if repository.IsExtensionProvider(row.SourceSnapshot.Identity.Provider) {
+				in.Resolved = &repository.ResolvedLink{Source: row.SourceSnapshot, Link: link}
+			}
+			kept = append(kept, in)
 		}
 		if !changed {
 			continue

@@ -2256,6 +2256,7 @@ A domain space is a track of the assistant's (`docs/assistant/health.md`, "Track
 - **Compatibility addresses** (`src/lib/router.ts`, `src/views/spaces/SpaceExtensionEntry.tsx`): `/tracks/new` opens the extension's creation page, and `/tracks/<slug>` its detail page, when the extension is present; otherwise a plain install/enable prompt leads to Extensions. `/tracks/<slug>/<id>` still opens the ordinary conversation host, preserving existing bookmarks. `/tracks/health…` remains the health module's own surface, never the extension's.
 - **Conversation handoff** (`src/lib/extension-ui.ts`, `extensionTrackRoute`): the extension may ask the host to open only `persona://tracks/<machine>/<space>/<session>` with bounded ASCII path segments and no query or fragment. Health is refused. Web turns that exact target into the existing assistant conversation route; it is not a general internal-link permission and no extension JavaScript runs.
 - **Core data** (`src/lib/tracks.ts`): the typed track, `SPACE.md`, conversation category and extension-trust clients remain available for compatibility and the enabled native surface. Writes from an extension require the explicit `spaces` scope; starting or reading a conversation still uses `assistant.ask` and existing privacy filtering. Extension-provided kinds are read-only through the custom-kind API.
+- **Personal information an extension may read** (#17699): both Web extension detail paths use the same card for the extension's owning assistant. Other assistants' extensions get the card when their roster entry explicitly reports `extension_info_access_scoped`, with either Labs setting. Older peers keep the default-assistant entry. The card enables edits after a successful trust-list read for that assistant. A missing row in a confirmed list means third-party access with no grants. Failed or unconfirmed reads offer Retry, and read-only details show the confirmed values with disabled controls. Replacing credentials clears the card and checks the roster and grants again.
 - **Legacy native surface** (`src/views/spaces/Space.tsx`, `SpaceMdEditor.tsx`, `NewSpace.tsx`): kept only to host existing conversations and shared behavior; it is not mounted as a default list or creation surface. New management UI lives in the extension's declarative pages.
 - Tests: `src/lib/tracks.test.ts`, `src/lib/space-md.test.ts`, `src/views/spaces/Space.test.tsx`, `src/lib/extension-ui.test.ts`, plus the server migration and extension process tests.
 
@@ -2443,6 +2444,20 @@ Under the trial, Assistant settings shows the state of `inbox_todo_forward` and 
 settings. Mail, Feishu and sources with history link to the sync scope in Knowledge. Turning off the trial restores the
 original forwarding switch. See the [split layout](../design/DESIGN_SYSTEM.md#integrations--extensions-in-web-settings),
 [channel settings](../extensions/channels.md#7-ui) and [connector overview](../extensions/connectors.md).
+
+An assistant that advertises `integrations_projection_v1` in the hub roster supplies the rows, filter counts and
+detail sections through its read-only Integrations projection (#17762). The Web view loads these reads only inside
+Settings and keeps them scoped to the named assistant and hub credential. A failed read can be retried on that
+assistant while readable sections remain usable. Older hubs or assistants that lack the announcement use the legacy
+catalog, and existing settings endpoints still handle edits.
+
+Channel and extension editors keep their configuration in tab memory under the bound hub credential, assistant, resource
+kind, and ID (#17762). The split breakpoint and legacy Extensions entry read the same drafts. Saves run in order for a
+resource, and a refresh requested during a write reads again after it. The channel form checks the document revision
+and sends only the named fields. Extension saves first load a fresh baseline for their full-config PUT, apply the
+edited fields, and keep the entry-preserving mode for immediate machine switches. Overlapping changes and the hub's
+`settings_moved` refusal keep the draft for review. If the save response is lost, the editor reads the same resource and
+compares the submitted fields with the confirmed values before showing a receipt. Pairing again clears these drafts.
 
 Graduation (making the new experience the default for at least one release with rollback kept) or removal is tracked in #14802.
 
@@ -2691,7 +2706,7 @@ filters. `views/inbox/StoredMailBody.tsx` reads the archived item from `GET /api
 folders and other Inbox actions remain available. Live account requests, message reads, attachments and sending
 require the enabled provider.
 
-**Source availability (#17399).** The Inbox reads the optional `stored_sources` from full, delta, refresh, and 304-held responses. The Lark chip and the source words in the caught-up hint follow the shared rule: the existing Lark extension capability or `hubServes(module.lark)` wins, then stored Lark items, with missing / `null` treated as unknown and visible. Mail wording follows `hubServes(module.mail)` and stored mail independently; the browser's optional-feature switch is not mistaken for hub availability. A hidden persisted Lark selection is cleared so it cannot filter invisibly. Mail account chips and all stored readers are unchanged. Shared cases: `spec/fixtures/inbox-sources/presence.json`; rendered coverage: `InboxList.source-availability.test.tsx`.
+**Source availability (#17399).** The Inbox reads the optional `stored_sources` from full, delta, refresh, and 304-held responses. The Lark chip and the source words in the caught-up hint follow the shared rule: the existing Lark extension capability or `hubServes(module.lark)` wins, then stored Lark items, with missing / `null` treated as unknown and visible. Mail wording follows `hubServes(module.mail)` and stored mail independently; the browser's optional-feature switch is not mistaken for hub availability. A hidden persisted Lark selection is cleared so it cannot filter invisibly. The fixed Mail *kind* chip (`KIND_FILTERS` key `mail`) follows the same mail decision through `visibleInboxKinds` (#17814), and a persisted `inbox.kind=mail` is cleared when it hides; the other kind chips stay. Per-account Mail source chips and all stored readers are unchanged. Shared cases: `spec/fixtures/inbox-sources/presence.json`; rendered coverage: `InboxList.source-availability.test.tsx`.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
@@ -3805,7 +3820,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connectors: Lark | Yes | #297 | Read-only status |
 | Connectors: Lark › Show messages on home screen | Yes | #1327 | Only applies to the current browser |
 | Lark anti-recall and edit history (Message display) | Yes | #2900 | The toggles are shared with the Lark gateway web page for the current account; encrypted old versions only show the public display (iOS can show the body after unlocking) |
-| Integrations & Extensions (Labs) | Web first | #14802, #16190 | One detail per service, channel routing and Data flow. Assistant links to its forwarding switch. GitHub and history-capable sources link to Repositories and Knowledge settings respectively. |
+| Integrations & Extensions (Labs) | Web first | #14802, #16190, #17762 | One detail per service, channel routing and Data flow. Assistants with projection support supply the catalog and detail sections. Assistant links to its forwarding switch, and GitHub and history-capable sources link to Repositories and Knowledge settings. |
 | Connectors: Lark bot (status, credentials, pairing, what it can do) | Yes | #1325 | Settings › Connectors, opens as a dialog; copying the pairing code uses the clipboard (falls back to execCommand over http) |
 | hub version and updates (check, update, update now, auto-update, history, Docker commands) | Yes | #1325, #2897, #15240 | Settings › hub shows second-level local times and a stage and step pipeline during updates. The hub notice row below the filter bar in the Agents sidebar is chosen by `hubNotice` in `lib/hub-update.ts`. The hub hosts the web app itself, so the app and hub version compatibility notices are inapplicable here. |
 | Whole-install Recovery overview, offline bundle inspection, temporary-database verification | Web first | #12553 | Settings › Hub › Recovery, separate from update program backups and Machines. Full-credential, audited reads only; no create, restore, download, key export, or service-starting drill. Missing tools, Compose, unsafe inventory, changed bundles, and unavailable restore history stay explicitly unsupported or unverified. See [server.md](../server/server.md) "Settings → Hub → Recovery" |
@@ -3814,7 +3829,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connectors: Telegram, connectors provided by extensions (toggle, step-by-step sign-in, into knowledge base / into Inbox, sign out, delete) | Yes | #1324, #1425 | Brand, footer, and "Reply in X" are looked up by connector id in a table in `lib/connectors.ts`; extension connectors not in the table use a generic icon and generic copy (with their own name); WeChat's brand image is not decided yet, so it uses the generic icon for now |
 | Connectors: Messages (iMessage) | Yes | #1324, #2898 | Status, the "Hand to Persona" toggle, deleting messages already stored on the hub; browsing that Mac's chats is phone-only |
 | Sent as you: what Persona sent in your name through the connectors, how the gate let it through, the chat that asked, the full text | Yes | #5278, #2412 | Settings › Connectors › Records sent as you (`GET /api/v1/connectors/sent`, full-access devices only); filter by connector only. iOS and the Mac have the same page, **Settings › Sent as You** (`SentView`, `docs/extensions/connectors.md` "Sent as the user"); Android has it too, **Settings › Sent as you** (`SentScreen.kt`, `docs/android/android.md`); web and Android can recall a message the hub says can be taken back (#3100), iOS and the Mac too (#3219); web per-chat rules are available on eligible records |
-| Extensions (list, toggles, schema-driven forms, write-only secrets) | Yes | #1207 | Install, upgrade, and uninstall happen on the hub machine (same as iOS) |
+| Extensions (list, toggles, schema-driven forms, write-only secrets) | Yes | #1207, #17699 | Install, upgrade, and uninstall happen on the hub machine. Web information-access settings follow the owning assistant when it advertises scoped access. Older peers keep the default-assistant entry. |
 | "Run isolation" in extension details, entry from channel extensions to the Channels page | Yes | #2968 | After Android; iOS doesn't have it yet (#2919) |
 | Keyboard shortcuts, command palette | Yes | #2330 | See "Shortcuts and command palette"; the phones have no physical keyboard |
 | ⌘K searching the Inbox, "Go to" pages (Mac's Quick Open) | Yes | #2988 | No Mac "Actions" group: New agent / New chat are in the `>` command mode |
@@ -3843,6 +3858,20 @@ filters disappear and a stale selection resolves to All without changing the
 shared display preference. Saving uses the acknowledged server value with local
 pending feedback and recoverable errors. The per-computer switch still controls
 inventory, and hidden rows remain usable for to-do attribution and dispatch.
+
+While it is on, **BotMux Owner Union ID** sits under it (lazy-loaded
+`views/settings/BotmuxOwnerField.tsx`, so neither the field nor its words reach
+the first screen): a text field with Save and Clear, saved as the hub-wide
+`botmux_owner_union_id` and checked as a union_id (`on_…`) before it is sent.
+Filled in, the computers' botmux sends go as the bot's owner; empty, they go the
+usual way. A union_id found in the computers' bots.json
+(`GET /api/v1/agents/botmux-owner-candidates`) is offered as **Use suggestion**,
+which only fills the field; nothing changes until Save. A hub without the field
+shows neither. Under the composer, `botmux_external_trigger_reason:
+"owner_unset"` reads as one quiet line saying no BotMux Owner Union ID is set
+(`AgentStatusLine`); botmux's 403 refusals arrive as the hub's worded send
+error. The botmux chip's decoded / raw modes do not depend on it
+([protocol.md](../protocol/protocol.md), "BotMux messages").
 
 ### herdr tab names in Agents
 
