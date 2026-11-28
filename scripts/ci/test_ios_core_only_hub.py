@@ -94,6 +94,23 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         self.assertIn('"CLAUDE_CONFIG_DIR": str(paths["claude"])', source)
         self.assertIn("wait_for_main_fixture(base, master, main_session, nodes)", source)
 
+    def test_connector_status_text_does_not_hide_visible_rows(self):
+        class Tree:
+            def call(self, command, **kwargs):
+                if command == "tree":
+                    return {"elements": [
+                        {"label": "Mail, None added", "visible": True},
+                        {"label": "Lark Bot, Off", "visible": False},
+                    ]}
+                if command == "scroll":
+                    return {"offset": 0}
+                raise AssertionError(command)
+
+        ctl = Tree()
+        self.assertTrue(DRIVER.find_on_page(ctl, label_prefix="Mail"))
+        self.assertFalse(DRIVER.find_on_page(ctl, label="Mail"))
+        self.assertFalse(DRIVER.find_on_page(ctl, label_prefix="Lark Bot"))
+
     def test_hub_shutdown_runs_after_fixture_node_cleanup(self):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
         self.assertIn("stop_fixture_nodes(nodes)\n        smoke.stop_hub(hub, bindir)", source)

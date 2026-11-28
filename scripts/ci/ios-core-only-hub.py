@@ -364,20 +364,22 @@ def require_any(ctl, labels, seconds=30):
     return wait_for(ctl, "one of " + ", ".join(labels), seconds, probe)
 
 
-def visible_matches(ctl, element_id=None, label=None):
-    return [row for row in matches(elements(ctl), element_id=element_id, label=label) if row.get("visible") is True]
+def visible_matches(ctl, element_id=None, label=None, label_prefix=None):
+    rows = matches(elements(ctl), element_id=element_id, label=label)
+    return [row for row in rows if row.get("visible") is True and
+            (label_prefix is None or (row.get("label") or "").startswith(label_prefix))]
 
 
-def find_on_page(ctl, element_id=None, label=None):
+def find_on_page(ctl, element_id=None, label=None, label_prefix=None):
     """Find a visible control, scrolling the page; never count a retained hidden page as a module entry."""
     try:
         try:
             ctl.call("scroll", to="top")
         except CtlError:
-            return bool(visible_matches(ctl, element_id=element_id, label=label))
+            return bool(visible_matches(ctl, element_id=element_id, label=label, label_prefix=label_prefix))
         previous = None
         for _ in range(8):
-            if visible_matches(ctl, element_id=element_id, label=label):
+            if visible_matches(ctl, element_id=element_id, label=label, label_prefix=label_prefix):
                 return True
             try:
                 answer = ctl.call("scroll", pages=1)
@@ -574,9 +576,9 @@ def exercise_app(ctl, base, code, edition, shots, master):
     settings(ctl, "openConnectors")
     require(ctl, element_id="connectors-list")
     # Connector rows use visible titles, not registry accessibility identifiers.
-    mail = find_on_page(ctl, label="Mail")
+    mail = find_on_page(ctl, label_prefix="Mail")
     lark = find_on_page(ctl, label="Lark")
-    bot = find_on_page(ctl, label="Lark Bot")
+    bot = find_on_page(ctl, label_prefix="Lark Bot")
     proof["entries"]["settings-mail"] = mail
     proof["entries"]["connector-lark"] = lark
     proof["entries"]["connector-lark-bot"] = bot
