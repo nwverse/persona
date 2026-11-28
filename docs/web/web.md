@@ -2687,6 +2687,8 @@ filters. `views/inbox/StoredMailBody.tsx` reads the archived item from `GET /api
 folders and other Inbox actions remain available. Live account requests, message reads, attachments and sending
 require the enabled provider.
 
+**Source availability (#17399).** The Inbox reads the optional `stored_sources` from full, delta, refresh, and 304-held responses. The Lark chip and the source words in the caught-up hint follow the shared rule: the existing Lark extension capability or `hubServes(module.lark)` wins, then stored Lark items, with missing / `null` treated as unknown and visible. Mail wording follows `hubServes(module.mail)` and stored mail independently; the browser's optional-feature switch is not mistaken for hub availability. A hidden persisted Lark selection is cleared so it cannot filter invisibly. Mail account chips and all stored readers are unchanged. Shared cases: `spec/fixtures/inbox-sources/presence.json`; rendered coverage: `InboxList.source-availability.test.tsx`.
+
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
