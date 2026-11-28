@@ -31,6 +31,7 @@ export function BackHeader({
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
       {leading}
       <IconButton icon="chevronLeft" label={t("session-files-parts.back")} onClick={onBack} iconSize={16} />
+      {leading}
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13.5px] font-semibold text-ink">{title}</div>
         {subtitle && <div className="truncate text-[11.5px] text-ink-3">{subtitle}</div>}

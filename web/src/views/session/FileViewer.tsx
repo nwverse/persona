@@ -1,5 +1,6 @@
 // The file viewer as its own panel (a path from a tool step or a message; docs/apple/ios.md "File viewer"):
-// shares the unified File Workbench (FilesPanel) with a collapsible directory tree and in-place file switching.
+// shares the unified File Workbench (FilesPanel) with a collapsible directory tree, in-place file switching and back
+// for folders and Markdown links.
 import { dirName, fileName } from "../../lib/files";
 import { relativeSegments, sameTreePath } from "../../lib/files-tree";
 import { openPanel } from "../../lib/panel";

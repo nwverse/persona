@@ -462,6 +462,19 @@ export function FilesPanel({
         </div>
       </div>
       )}
+      {splitWorkbench && (
+        <TreePaneSplitter
+          value={treePane.width}
+          min={treePane.min}
+          max={treePane.max}
+          onResize={treePane.setWidth}
+          onCommit={treePane.commitWidth}
+          onReset={treePane.resetWidth}
+          label={t("session-filespanel.resize_label")}
+          title={t("session-filespanel.resize_title")}
+          controls={treePaneId}
+        />
+      )}
       {rowMenu?.scope === ops.scope && (
         <Menu
           items={beforeTrash(ops.rowItems(rowMenu.x, rowMenu.open), [
@@ -503,23 +516,10 @@ export function FilesPanel({
         />
       )}
       {perm && <PermissionsDialog mid={mid} cwd={cwd} path={perm.path} mode={perm.mode} onClose={() => setPerm(null)} onChanged={() => setReloads((n) => n + 1)} />}
-      {splitWorkbench && (
-        <TreePaneSplitter
-          value={treePane.width}
-          min={treePane.min}
-          max={treePane.max}
-          onResize={treePane.setWidth}
-          onCommit={treePane.commitWidth}
-          onReset={treePane.resetWidth}
-          label={t("session-filespanel.resize_label")}
-          title={t("session-filespanel.resize_title")}
-          controls={treePaneId}
-        />
-      )}
       {viewing && (
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           <FileView
-            key={viewing.path}
+            key={`${open.length}:${viewing.path}`}
             mid={mid}
             sid={sid || undefined}
             path={viewing.path}

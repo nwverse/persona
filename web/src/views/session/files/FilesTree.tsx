@@ -162,8 +162,8 @@ export function FilesTree({
   );
 }
 
-/** Where a row's content starts: 8px inset plus 12px per depth level (shared with ChangesPanel). */
-const indent = (depth: number, extra = 0) => ({ paddingLeft: `${8 + depth * 12 + extra}px` });
+/** Where a row's content starts: one step in per level (the design system's spacing unit). */
+const indent = (depth: number, extra = 0) => ({ paddingLeft: `calc(var(--spacing) * ${2 + depth * 4 + extra})` });
 
 function Row({
   r,
@@ -189,6 +189,10 @@ function Row({
   onRetry: (dir: string) => void;
   ops?: RowOps;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (active) rowRef.current?.scrollIntoView?.({ block: "nearest", behavior: scrollBehavior() });
+  }, [active]);
   if (r.kind === "loading") {
     return (
       <div role="none" style={indent(r.depth, 28)} className="flex h-7 items-center gap-2 text-[12px] text-ink-3">
@@ -230,6 +234,7 @@ function Row({
   const picked = ops?.selecting && ops.isSelected(r.path);
   return (
     <div
+      ref={rowRef}
       {...rowFrameProps(ops, x, open)}
       role="treeitem"
       aria-level={r.depth + 1}
@@ -237,8 +242,8 @@ function Row({
       aria-selected={ops?.selecting ? ops.isSelected(r.path) : active || undefined}
       data-active={active ? "true" : undefined}
       className={cx(
-        "group/row relative flex h-7 items-center rounded-md transition-colors hover:bg-hover [@media(pointer:coarse)]:min-h-11",
-        (active || picked) && "bg-hover-2 font-medium text-ink",
+        "group/row relative mx-1 flex h-7 items-center rounded-md transition-colors [@media(pointer:coarse)]:min-h-11",
+        active || picked ? "bg-hover-2 font-medium text-ink" : "hover:bg-hover",
       )}
       // dragged into a terminal or the chat box it becomes `@path ` (lib/entry-drag.ts)
       draggable
