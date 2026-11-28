@@ -626,7 +626,11 @@ func (h *runtimeConn) agyWorking() bool {
 // loaded (a terminal's tasks come separately, in agyPaneBackground, and a restart does not stop them), and the
 // hub-derived BackgroundWorking / BackgroundWaiting are not read, as they count a monitor too. Unlike
 // agySessionRowSafeIdle, which keeps idle compaction off every session with any background entry, this only decides
-// whether a restart must wait.
+// whether a restart must wait. The list is not a full inventory: the companion lists only its recent sessions
+// (rt.recent: up to 80 from the last 14 days, besides those with live work, assistants and ones the phone drove lately)
+// and at most 50 running tasks per session, which this node caps at 50 too, so a command in an unlisted idle session or
+// behind 50 schedules is missed. Closing that needs a drain signal the companion computes before those limits (#17200,
+// the companion-side follow-up).
 func agyFiniteBackground(s proto.Session) bool {
 	for _, task := range s.Background {
 		if task.Kind != "monitor" {

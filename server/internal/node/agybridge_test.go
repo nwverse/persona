@@ -870,7 +870,11 @@ func TestAgyBridgeRestartWaitsForFiniteBackgroundWork(t *testing.T) {
 	oldFind, oldCmd, oldProbe := findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery
 	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery = oldFind, oldCmd, oldProbe })
 	agyBridgeProbeEvery = 10 * time.Millisecond
-	findAgyExecutable = func() string { return bin }
+	var probes atomic.Int32 // the bridge looks up agy once per probe, before it asks whether the companion is busy
+	findAgyExecutable = func() string {
+		probes.Add(1)
+		return bin
+	}
 	agyBridgeCommand = func(context.Context, *RuntimeHost, string, string) (*exec.Cmd, error) {
 		script := fmt.Sprintf("echo start >> %q; trap 'echo stopped >> %q; exit 0' TERM; while :; do sleep 0.02; done", marks, marks)
 		return exec.Command("/bin/sh", "-c", script), nil
@@ -899,7 +903,8 @@ func TestAgyBridgeRestartWaitsForFiniteBackgroundWork(t *testing.T) {
 	}
 	command := proto.BackgroundTask{ID: "s1/task-2", Kind: "shell", Command: "make test"}
 
-	// waitAgyIdle (the external-runtime handoff's wait) holds while the command runs.
+	// waitAgyIdle (the external-runtime handoff's wait) holds while the command runs. Without it waitAgyIdle returns on
+	// its first look, with no tick to wait for, so the window below only has to outlast a goroutine start.
 	background(monitor, command)
 	idle := make(chan struct{})
 	go func() {
@@ -925,7 +930,10 @@ func TestAgyBridgeRestartWaitsForFiniteBackgroundWork(t *testing.T) {
 		return strings.Contains(logs.String(), "agy at "+bin+" was replaced; restarting once no agy session is working or running background work") &&
 			host.agyDraining(instance)
 	})
-	<-time.After(100 * time.Millisecond) // ten more probes
+	// Two more probes found the command still running. Had one restarted, it would have stopped the companion (and its
+	// trap written "stopped") before the next lookup of agy, the one for the companion's next start.
+	seen := probes.Load()
+	waitFor(t, "two more probes", func() bool { return probes.Load() >= seen+2 })
 	if got := starts(marks); !slices.Equal(got, []string{"start"}) {
 		t.Fatalf("the companion was stopped while a background command was running: %v", got)
 	}
