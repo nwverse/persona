@@ -357,6 +357,12 @@ func (s *Service) drainWorkspaceQueue(ctx context.Context, machine, cwd string) 
 		if !readiness.ready() {
 			s.ensureApprovedPRBlockers(dctx, w.todo.ID, readiness.missingPRs)
 			blockers := readiness.refs()
+			if len(readiness.after) == 0 {
+				q := s.blockerWaitQueue(dctx, blockers)
+				q.Retry = w.task.Queue.Retry
+				s.replaceTaskQueue(dctx, w.task, q, queueCAS)
+				continue
+			}
 			if w.task.Queue.Workspace.OwnerID != "" || !slices.Equal(w.task.Queue.Blockers, blockers) {
 				updated := s.workspaceAfterWaitEntry(dctx, effMachine, w.task.Queue.Workspace.Path, blockers, w.task.Queue)
 				s.replaceTaskQueue(dctx, w.task, &updated, queueCAS)

@@ -19,8 +19,9 @@ type todoReadiness struct {
 }
 
 type todoStartBlocked struct {
-	refs []string
-	err  error
+	refs  []string
+	after bool
+	err   error
 }
 
 // ensureApprovedPRBlockers retries any missing writes from an approved plan. The plan records
@@ -56,7 +57,7 @@ func (s *Service) checkTodoStartReadiness(ctx context.Context, task PlanTask) er
 	todo, _ := s.todoNow(task.TodoID)
 	readiness, err := s.taskTodoReadiness(ctx, todo, task)
 	if err != nil || !readiness.ready() {
-		return &todoStartBlocked{refs: readiness.refs(), err: err}
+		return &todoStartBlocked{refs: readiness.refs(), after: len(readiness.after) > 0, err: err}
 	}
 	return nil
 }
@@ -91,6 +92,10 @@ func (r todoReadiness) refs() []string {
 }
 
 func (s *Service) taskTodoReadiness(ctx context.Context, todo Todo, task PlanTask) (todoReadiness, error) {
+	return s.readTodoReadiness(ctx, todo, task, true)
+}
+
+func (s *Service) readTodoReadiness(ctx context.Context, todo Todo, task PlanTask, dispatch bool) (todoReadiness, error) {
 	if todo.ID == "" {
 		todo.ID, todo.PartOf = task.TodoID, task.PartOf
 	}
@@ -102,7 +107,14 @@ func (s *Service) taskTodoReadiness(ctx context.Context, todo Todo, task PlanTas
 			return todoReadiness{}, err
 		}
 	}
-	return s.evaluateTodoReadiness(ctx, todo, task, rows, s.settings(ctx).todosV2On())
+	v2 := s.settings(ctx).todosV2On()
+	if dispatch && !v2 && task.RequestGate == "" && (task.Queue == nil || task.Queue.Workspace == nil) &&
+		len(task.BlockedByPR) == 0 && task.UnlockStage == "" && len(task.UnlockContracts) == 0 &&
+		!slices.ContainsFunc(rows, isTodoAfterMirror) {
+		// Plain legacy after edges remain advisory outside enforced requests and workspace waits.
+		todo.After, task.After = nil, nil
+	}
+	return s.evaluateTodoReadiness(ctx, todo, task, rows, v2)
 }
 
 // evaluateTodoReadiness joins the live after graph, any prerequisites kept in an approved plan,

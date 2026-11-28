@@ -1208,7 +1208,7 @@ func (s *Service) closeDeferredTaskStart(ctx context.Context, t *PlanTask, mid, 
 	}
 }
 
-// deferBlockedTaskStart returns a known-unsent start to its queue. A workspace waiter keeps its FIFO position.
+// deferBlockedTaskStart returns a known-unsent start to a retryable queue.
 func (s *Service) deferBlockedTaskStart(ctx context.Context, t PlanTask, blocked *todoStartBlocked, retry bool) {
 	if blocked.err != nil {
 		s.logf("task %s: defer start: read prerequisites: %v", t.TodoID, blocked.err)
@@ -1222,7 +1222,7 @@ func (s *Service) deferBlockedTaskStart(ctx context.Context, t PlanTask, blocked
 	case t.claimedGatewayStart():
 		policy = queueQuotaStart
 	}
-	if t.Queue != nil && (blocked.err != nil || t.Queue.Workspace != nil) {
+	if t.Queue != nil && (blocked.err != nil || blocked.after && t.Queue.Workspace != nil) {
 		*q = *t.Queue
 		q.Claimed, q.NextAt = false, time.Now().UTC()
 		if ws := t.Queue.Workspace; ws != nil && len(blocked.refs) > 0 {

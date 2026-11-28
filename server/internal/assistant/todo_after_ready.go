@@ -588,7 +588,7 @@ func (s *Service) checkTodoAfterReady(ctx context.Context, candidate Todo) ([]pr
 	if err != nil || task.Queue != nil && (task.RequestGate != "" || task.Queue.Workspace != nil) {
 		return nil, false, err
 	}
-	result, err := s.taskTodoReadiness(ctx, candidate, task)
+	result, err := s.readTodoReadiness(ctx, candidate, task, false)
 	if err != nil || !result.ready() {
 		return nil, false, err
 	}
