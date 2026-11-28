@@ -200,6 +200,9 @@ func (c *Client) subscribe(ctx context.Context, started func(), fn func(Event)) 
 	}
 	conn, err := c.dial(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
 	defer conn.Close()
@@ -216,6 +219,9 @@ func (c *Client) subscribe(ctx context.Context, started func(), fn func(Event)) 
 	}
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for live := false; ; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		line, err := readLine(r, maxLine)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -223,12 +229,12 @@ func (c *Client) subscribe(ctx context.Context, started func(), fn func(Event)) 
 			}
 			return fmt.Errorf("herdr-core events: %w", err)
 		}
-		if live {
-			_ = conn.SetReadDeadline(time.Now().Add(heartbeatGap))
-		}
 		var msg response
 		if json.Unmarshal(line, &msg) != nil {
 			continue
+		}
+		if live {
+			_ = conn.SetReadDeadline(time.Now().Add(heartbeatGap))
 		}
 		if !live {
 			if msg.Method != "" {

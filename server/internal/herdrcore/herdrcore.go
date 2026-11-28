@@ -22,6 +22,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Client is one herdr-core server, reached at Socket.
@@ -115,46 +117,19 @@ func isDir(p string) bool {
 	return err == nil && st.IsDir()
 }
 
-// configSocket reads the top-level `socket = "…"` of hc's config.toml ("" when there is none). Only that one key is
-// read, so this is a line scan, not a TOML parser: a key inside a [table] does not count.
+// configSocket reads the top-level `socket = "…"` string of hc's config.toml ("" when absent or invalid TOML).
+// Keys inside a [table] do not count.
 func configSocket(path string) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	for line := range strings.SplitSeq(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") {
-			return ""
-		}
-		k, v, ok := strings.Cut(line, "=")
-		if !ok || strings.TrimSpace(k) != "socket" {
-			continue
-		}
-		v = strings.TrimSpace(v)
-		if len(v) >= 2 && v[0] == '"' {
-			for i := 1; i < len(v); i++ {
-				if v[i] == '\\' {
-					i++
-					continue
-				}
-				if v[i] == '"' {
-					if s, err := strconv.Unquote(v[:i+1]); err == nil {
-						return s
-					}
-					return ""
-				}
-			}
-			return ""
-		}
-		if len(v) >= 2 && v[0] == '\'' {
-			if end := strings.IndexByte(v[1:], '\''); end >= 0 {
-				return v[1 : 1+end]
-			}
-		}
+	var cfg map[string]any
+	if err := toml.Unmarshal(b, &cfg); err != nil {
 		return ""
 	}
-	return ""
+	s, _ := cfg["socket"].(string)
+	return s
 }
 
 // Error is herdr-core's JSON-RPC error; Kind is its stable data.kind ("not_found", "blocked", "unknown_method"…).
@@ -282,10 +257,7 @@ func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method str
 		return err
 	}
 	defer conn.Close()
-	if dl, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(dl)
-	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 	id := c.seq.Add(1)
 	idStr := strconv.FormatInt(id, 10)
@@ -297,6 +269,9 @@ func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method str
 	}
 	r := bufio.NewReaderSize(conn, 64<<10)
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("herdr-core %s: %w", method, err)
+		}
 		line, err := readLine(r, maxLine)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -308,12 +283,15 @@ func (c *Client) callOnce(ctx context.Context, timeout time.Duration, method str
 		if err := json.Unmarshal(line, &env); err != nil {
 			return fmt.Errorf("herdr-core %s: decode: %v", method, err)
 		}
+		if env.Method != "" {
+			continue // a notification or server-initiated request
+		}
 		rawID := bytes.TrimSpace(env.ID)
 		if env.Error != nil && (len(rawID) == 0 || string(rawID) == "null") {
 			return env.decode(out)
 		}
 		if len(rawID) == 0 || string(rawID) != idStr {
-			continue // a notification or unrelated response
+			continue // an unrelated response
 		}
 		return env.decode(out)
 	}
@@ -337,17 +315,21 @@ type response struct {
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			Kind string `json:"kind"`
-		} `json:"data"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	} `json:"error"`
 }
 
 func (r response) decode(out any) error {
 	if r.Error != nil {
-		return &Error{Code: r.Error.Code, Message: r.Error.Message, Kind: r.Error.Data.Kind}
+		var data struct {
+			Kind string `json:"kind"`
+		}
+		if len(r.Error.Data) > 0 {
+			_ = json.Unmarshal(r.Error.Data, &data)
+		}
+		return &Error{Code: r.Error.Code, Message: r.Error.Message, Kind: data.Kind}
 	}
 	if out == nil || len(r.Result) == 0 {
 		return nil
