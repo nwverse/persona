@@ -315,27 +315,24 @@ func repoGateOpenNonDraftPR(g *repoGate) bool {
 	}
 }
 
-func repoGateProjection(g *repoGate) *projection.RepoGate {
+func repoGateProjection(g *repoGate) *assistantwire.TodoWait {
 	if !repoGateOpenNonDraftPR(g) {
 		return nil
 	}
-	f := &projection.RepoGate{
-		Repository: strings.TrimSpace(g.BlockingRepo),
-		PRURL:      strings.TrimSpace(g.BlockingPR),
-	}
+	var blocker assistantwire.TodoWaitPRBlocker
 	switch g.State {
 	case repoGateBlockedConflict:
-		f.Blocker = assistantwire.TodoWaitPRBlockerConflicts
+		blocker = assistantwire.TodoWaitPRBlockerConflicts
 	case repoGateBlockedChanges:
-		f.Blocker = assistantwire.TodoWaitPRBlockerChangesRequested
+		blocker = assistantwire.TodoWaitPRBlockerChangesRequested
 	case repoGateBlockedCI:
-		f.Blocker = assistantwire.TodoWaitPRBlockerChecksFailing
+		blocker = assistantwire.TodoWaitPRBlockerChecksFailing
 	case repoGateAwaitingReview:
-		f.Blocker = assistantwire.TodoWaitPRBlockerReviewRequired
+		blocker = assistantwire.TodoWaitPRBlockerReviewRequired
 	case repoGateChecksPending:
 		if strings.EqualFold(strings.TrimSpace(g.Reason), "checks_pending") {
-			f.Blocker = assistantwire.TodoWaitPRBlockerChecksPending
+			blocker = assistantwire.TodoWaitPRBlockerChecksPending
 		}
 	}
-	return f
+	return projection.RepoGateWait(strings.TrimSpace(g.BlockingRepo), strings.TrimSpace(g.BlockingPR), blocker)
 }
