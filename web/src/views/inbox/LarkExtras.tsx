@@ -4,9 +4,11 @@
 // LarkReactionPicker / LarkProfileSheet).
 import { useEffect, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
+import { safeWebURL } from "../../lib/format";
 import { withToken, type LarkPart } from "../../lib/inbox";
 import { emojiLabel } from "../../lib/inbox-page";
 import { useItemManager, withManager } from "../../lib/manager-choice";
+import { safeApiPath } from "../../lib/safe-media-url";
 import {
   cardIconName, directChat, duration, emojiCatalog, fileSize, pressCardAction, profile, profileRows, quickBar, quickReactions,
   type CardButton, type EmojiCatalog, type LarkProfile, type LarkProfileRef, type LarkReaction, type ReadMark,
@@ -24,7 +26,8 @@ export function FilePart({ p }: { p: LarkPart }) {
   const meta = p.metadata ?? {};
   const name = p.text || (typeof meta.name === "string" ? meta.name : "") || t("inbox-larkthread.file");
   const ext = String(meta.extension ?? (name.includes(".") ? name.split(".").pop() : "") ?? "").toUpperCase().slice(0, 4);
-  const href = p.url?.startsWith("/api/") ? withToken(withManager(p.url, manager)) : undefined;
+  const safeHrefPath = p.url ? safeApiPath(p.url) : undefined;
+  const href = safeHrefPath ? withToken(withManager(safeHrefPath, manager)) : undefined;
   const size = fileSize(meta.size);
   const gone = meta.destroyed === true;
   const body = (
@@ -49,7 +52,8 @@ export function FilePart({ p }: { p: LarkPart }) {
 /** A voice message: play / pause, a few bars, how long; plays in the page. */
 export function VoicePart({ p }: { p: LarkPart }) {
   const manager = useItemManager();
-  const src = p.url?.startsWith("/api/") ? withToken(withManager(p.url, manager)) : undefined;
+  const safeAudioPath = p.url ? safeApiPath(p.url) : undefined;
+  const src = safeAudioPath ? withToken(withManager(safeAudioPath, manager)) : undefined;
   const ms = Number(p.metadata?.duration ?? 0);
   const audio = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -103,8 +107,10 @@ export function VoicePart({ p }: { p: LarkPart }) {
 export function VideoPart({ p }: { p: LarkPart }) {
   const manager = useItemManager();
   const meta = p.metadata ?? {};
-  const src = p.url?.startsWith("/api/") ? withToken(withManager(p.url, manager)) : undefined;
-  const poster = typeof meta.posterUrl === "string" && meta.posterUrl.startsWith("/api/") ? withToken(withManager(meta.posterUrl, manager)) : undefined;
+  const safeVideoPath = p.url ? safeApiPath(p.url) : undefined;
+  const src = safeVideoPath ? withToken(withManager(safeVideoPath, manager)) : undefined;
+  const safePosterPath = typeof meta.posterUrl === "string" ? safeApiPath(meta.posterUrl) : undefined;
+  const poster = safePosterPath ? withToken(withManager(safePosterPath, manager)) : undefined;
   const [playing, setPlaying] = useState(false);
   const w = Number(meta.posterWidth) || 16;
   const h = Number(meta.posterHeight) || 9;
@@ -306,7 +312,8 @@ function useCatalog(): EmojiCatalog | null {
 export function EmojiImage({ name, size, catalog }: { name: string; size: number; catalog: EmojiCatalog | null }) {
   const manager = useItemManager();
   const e = catalog?.emojis[name.toLowerCase()];
-  const src = e?.url?.startsWith("/api/") ? withToken(withManager(e.url, manager)) : e?.url && /^https:/i.test(e.url) ? e.url : undefined;
+  const safeEmojiPath = e?.url ? safeApiPath(e.url) : undefined;
+  const src = safeEmojiPath ? withToken(withManager(safeEmojiPath, manager)) : safeWebURL(e?.url, true);
   if (src) return <img src={src} alt={e?.label || name} width={size} height={size} className="shrink-0 object-contain" style={{ width: size, height: size }} />;
   // The catalogue is still loading (its fetch only starts once reactions draw): reserve a neutral dot instead of
   // flashing the raw "[key]" text, which made the reaction row jump when the picture replaced it.

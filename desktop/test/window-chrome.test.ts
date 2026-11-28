@@ -9,7 +9,7 @@ const source = (name: string) => readFile(join(import.meta.dirname, "..", "..", 
 test("showMain configures macOS hiddenInset titlebar and publishes window chrome changes", async () => {
   const main = await source("main.ts");
   const showMain = main.slice(main.indexOf("async function showMain"), main.indexOf("async function showSetup"));
-  assert.ok(showMain.includes("transparent: true"), "showMain must enable transparent backing on darwin so Chromium clears alpha frames cleanly over vibrancy");
+  assert.ok(!showMain.includes("transparent: true"), "showMain must not set transparent: true on darwin; vibrancy + #00000000 avoids macOS Stage Manager's ~400ms gray vibrancy dropout");
   assert.ok(showMain.includes('titleBarStyle: "hiddenInset"'), "showMain must enable hiddenInset on darwin");
   assert.ok(showMain.includes("trafficLightPosition: { x: 14, y: 19 }"), "showMain must anchor traffic lights inside the 44px bay");
   assert.ok(showMain.includes("vibrancy: initialVibrancy"), "showMain must initialize vibrancy in constructor alongside visualEffectState");

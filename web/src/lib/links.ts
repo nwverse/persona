@@ -163,7 +163,9 @@ function safeSystemHref(raw: string): string | undefined {
 }
 
 function isApiPath(raw: string): boolean {
-  if (CTRL.test(raw) || raw.includes("\\")) return false;
+  if (!raw.startsWith("/") || CTRL.test(raw) || raw.includes("\\") || raw.includes("#")) return false;
+  const p = raw.split("?", 1)[0];
+  if (p.includes("//") || /%(?:25)*5c/i.test(p) || /(?:^|\/|%2f)(?:\.|%(?:25)*2e){1,2}(?:$|\/|%2f)/i.test(p)) return false;
   const u = parse(raw, "https://hub.invalid");
   return !!u && u.origin === "https://hub.invalid" && (u.pathname.startsWith("/api/") || (!!BASE && u.pathname.startsWith(`${BASE}/api/`)));
 }
