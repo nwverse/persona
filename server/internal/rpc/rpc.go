@@ -25,6 +25,15 @@ type Handler func(ctx context.Context, method string, params json.RawMessage) (a
 
 type EventHandler func(event string, params json.RawMessage)
 
+type writeOpKind string
+
+const (
+	writeOpRequest writeOpKind = "request"
+	writeOpEvent   writeOpKind = "event"
+	writeOpReply   writeOpKind = "reply"
+	writeOpMessage writeOpKind = "message"
+)
+
 type message struct {
 	ID     string          `json:"id,omitempty"`
 	Method string          `json:"method,omitempty"`
@@ -35,23 +44,23 @@ type message struct {
 	// line is the whole line, written already (Marshaled params); nothing else is set.
 	line []byte
 	// opKind and opName label the operation for write-budget diagnostics without changing the wire JSON.
-	opKind string
+	opKind writeOpKind
 	opName string
 }
 
-func (m message) writeOp() (kind, op string) {
+func (m message) writeOp() (kind writeOpKind, op string) {
 	if m.opKind != "" || m.opName != "" {
 		return m.opKind, m.opName
 	}
 	switch {
 	case m.Method != "":
-		return "request", m.Method
+		return writeOpRequest, m.Method
 	case m.Event != "":
-		return "event", m.Event
+		return writeOpEvent, m.Event
 	case m.ID != "":
-		return "reply", m.ID
+		return writeOpReply, m.ID
 	default:
-		return "message", ""
+		return writeOpMessage, ""
 	}
 }
 
@@ -76,7 +85,8 @@ var errFrameBudget = errors.New("rpc: runtime frame budget exceeded")
 var ErrMessageTooLarge = errors.New("rpc: message exceeds write limit")
 
 type writeLimitError struct {
-	kind, op    string
+	kind        writeOpKind
+	op          string
 	size, limit int
 }
 
@@ -494,7 +504,7 @@ func (p *Peer) handle(ctx context.Context, m message) {
 	} else {
 		res, err = p.OnRequest(ctx, m.Method, m.Params)
 	}
-	out := message{ID: m.ID, opKind: "reply", opName: m.Method}
+	out := message{ID: m.ID, opKind: writeOpReply, opName: m.Method}
 	var coded *Error
 	if errors.As(err, &coded) {
 		out.Error = coded
@@ -512,7 +522,7 @@ func (p *Peer) handle(ctx context.Context, m message) {
 	var werr error
 	if limit := p.writeLimit(); limit > 0 && out.Error == nil {
 		if size, ok := replyResultSize(m.ID, len(out.Result)); ok && size > limit {
-			werr = p.writeTooLarge("reply", m.Method, size, limit)
+			werr = p.writeTooLarge(writeOpReply, m.Method, size, limit)
 		}
 	}
 	if werr == nil {
@@ -521,7 +531,7 @@ func (p *Peer) handle(ctx context.Context, m message) {
 	if isWriteBudgetErr(werr) {
 		// The request must get an error, not a permanently unresolved promise.
 		// If even the error cannot fit, disconnect so all pending calls fail.
-		if err := p.write(message{ID: m.ID, Error: &Error{Message: werr.Error()}, opKind: "reply", opName: m.Method}, r); err != nil {
+		if err := p.write(message{ID: m.ID, Error: &Error{Message: werr.Error()}, opKind: writeOpReply, opName: m.Method}, r); err != nil {
 			p.Close(err)
 		}
 	}
@@ -534,9 +544,9 @@ func (p *Peer) writeLimit() int {
 	return p.WriteLimit
 }
 
-func (p *Peer) writeTooLarge(kind, op string, size, limit int) error {
+func (p *Peer) writeTooLarge(kind writeOpKind, op string, size, limit int) error {
 	if p.OnWriteRejected != nil {
-		p.OnWriteRejected(kind, op, size, limit)
+		p.OnWriteRejected(string(kind), op, size, limit)
 	}
 	if p.Limits.FrameBytes > 0 {
 		return errFrameBudget
@@ -722,9 +732,9 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 	if a, ok := params.(Appended); ok {
 		if size, ok := callSize(id, method, a); ok {
 			if limit > 0 && size > limit { // before the line is made
-				return p.writeTooLarge("request", method, size, limit)
+				return p.writeTooLarge(writeOpRequest, method, size, limit)
 			}
-			req = message{line: callLine(id, method, a, size), opKind: "request", opName: method}
+			req = message{line: callLine(id, method, a, size), opKind: writeOpRequest, opName: method}
 		} else {
 			params = json.RawMessage(a.Append(make([]byte, 0, a.Size))) // the encoder writes the envelope
 		}
@@ -732,7 +742,7 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 	if req.line == nil {
 		if raw, ok := params.(Marshaled); ok && len(raw) > 0 {
 			if size, ok := callRawSize(id, method, len(raw)); ok && limit > 0 && size > limit {
-				return p.writeTooLarge("request", method, size, limit)
+				return p.writeTooLarge(writeOpRequest, method, size, limit)
 			}
 		}
 		raw, err := marshal(params)
@@ -740,7 +750,7 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 			return err
 		}
 		if size, ok := callRawSize(id, method, len(raw)); ok && limit > 0 && size > limit {
-			return p.writeTooLarge("request", method, size, limit)
+			return p.writeTooLarge(writeOpRequest, method, size, limit)
 		}
 		req = message{ID: id, Method: method, Params: raw}
 	}
@@ -800,9 +810,9 @@ func (p *Peer) notifyRoute(ctx context.Context, event string, params any, r rout
 	if raw, ok := params.(Marshaled); ok {
 		if size, ok := marshaledLineSize(event, raw); ok {
 			if limit > 0 && size > limit {
-				return p.writeTooLarge("event", event, size, limit)
+				return p.writeTooLarge(writeOpEvent, event, size, limit)
 			}
-			return p.writeContext(ctx, message{line: marshaledLineWithSize(event, raw, size), opKind: "event", opName: event}, r)
+			return p.writeContext(ctx, message{line: marshaledLineWithSize(event, raw, size), opKind: writeOpEvent, opName: event}, r)
 		}
 		params = json.RawMessage(raw)
 	}
@@ -817,7 +827,7 @@ func (p *Peer) notifyRoute(ctx context.Context, event string, params any, r rout
 		return err
 	}
 	if size, ok := marshaledLineSize(event, Marshaled(raw)); ok && limit > 0 && size > limit {
-		return p.writeTooLarge("event", event, size, limit)
+		return p.writeTooLarge(writeOpEvent, event, size, limit)
 	}
 	return p.writeContext(ctx, message{Event: event, Params: raw}, r)
 }
