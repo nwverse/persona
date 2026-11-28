@@ -90,6 +90,10 @@ type Machine struct {
 	// FileTransfer: whether files may be sent to this computer to keep and between it and others (#3065,
 	// docs/protocol/file-transfer.md). Always set by a manager that knows the feature; nil (from an older one) is off.
 	FileTransfer *MachineFileTransfer `json:"file_transfer,omitempty"`
+	// OrcaChatStarts: "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's
+	// default"), the switch's value, set only while Orca is in the computer's engine set, where it applies; nil
+	// otherwise and from an older manager (the apps then offer no switch). Changed with PUT …/orca-chat-starts.
+	OrcaChatStarts *bool `json:"orca_chat_starts,omitempty"`
 	// ClaudePlugin: the Persona plugin for Claude Code on it, as its node last said (docs/operations/link.md "Claude
 	// Code plugin"); nil from an older node or one that has not checked.
 	ClaudePlugin *ClaudePlugin `json:"claude_plugin,omitempty"`

@@ -164,9 +164,11 @@ type Devices struct {
 	clipboard clipboardSwitches
 	// fileTransfer: the machines the user turned file transfer on for (transfer_settings.go).
 	fileTransfer fileTransferSwitches
-	links        linkSet
-	stopping     atomic.Bool
-	workers      sync.WaitGroup
+	// orcaChats: the machines the user turned "Start new Agents as Orca chats" on for (orca_chat_starts.go).
+	orcaChats orcaChatSwitches
+	links     linkSet
+	stopping  atomic.Bool
+	workers   sync.WaitGroup
 
 	// attention: the assistant's latest "Needs you" summary for Persona Link (attention.go); nil before the first.
 	attention atomic.Pointer[link.Attention]
