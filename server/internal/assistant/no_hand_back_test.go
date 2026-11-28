@@ -243,7 +243,7 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 		defer close(ownDone)
 		_, _ = s.AskCard(ctx, proto.Interaction{
 			ID: "ix_own_hub", MachineID: "mac", SessionID: "asst-codex", Kind: proto.IxPermission,
-			ToolName: "iphone_do", ExpiresAt: time.Now().Add(time.Hour),
+			ToolName: "iphone_do", SessionTitle: "Persona", ExpiresAt: time.Now().Add(time.Hour),
 		})
 	}()
 	gotOwn := ft.waitPending(1)[0]
