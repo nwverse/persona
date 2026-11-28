@@ -888,6 +888,99 @@
         },
         null
       ]
+    },
+    {
+      "name": "structured_card_reply_without_text",
+      "status": 200,
+      "response": {
+        "ok": true,
+        "schema": "botmux.session-turns.v1",
+        "capabilities": [
+          "ownerActor"
+        ],
+        "next": "30",
+        "turns": [
+          {
+            "turnId": "t_card",
+            "seq": 30,
+            "at": 1763520300000,
+            "inbound": [
+              {
+                "messageId": "om_example_card_in",
+                "text": "summarize the cart fields",
+                "sender": {
+                  "type": "user",
+                  "openId": "ou_example_owner",
+                  "name": "Alex Chen"
+                },
+                "via": "lark"
+              }
+            ],
+            "replies": [
+              {
+                "messageId": "om_example_card",
+                "responseKind": "final",
+                "at": 1763520360000
+              }
+            ],
+            "anchor": {
+              "cliId": "codex",
+              "cliEntryId": "u_card"
+            }
+          }
+        ]
+      },
+      "want_owner_actor": true,
+      "items": [
+        {
+          "id": "u_card#0",
+          "seq": 1,
+          "role": "user",
+          "kind": "text",
+          "text": "<botmux_reminder>reply with botmux send</botmux_reminder>\n\n<user_message>\nsummarize the cart fields\n</user_message>\n\n<sender type=\"user\" open_id=\"ou_example_owner\" name=\"Alex Chen\" />"
+        },
+        {
+          "id": "a_card#0",
+          "seq": 2,
+          "role": "assistant",
+          "kind": "tool_use",
+          "tool_name": "Bash",
+          "tool_use_id": "tu_card",
+          "tool_input": {
+            "command": "botmux send --card-file /tmp/card.json --response-kind final --mention ou_example_owner"
+          }
+        },
+        {
+          "id": "r_card#1",
+          "seq": 2,
+          "role": "user",
+          "kind": "tool_result",
+          "tool_use_id": "tu_card",
+          "text": "Chunk ID: 0a1b2c\nWall time: 2.0 seconds\nProcess exited with code 0\nOriginal token count: 80\nOutput:\n{\"success\":true,\"messageId\":\"om_example_card\",\"quotedMessageId\":null}"
+        },
+        {
+          "id": "m_card#0",
+          "seq": 3,
+          "role": "assistant",
+          "kind": "text",
+          "text": "BOTMUX_NOTHING_TO_SEND"
+        }
+      ],
+      "want_botmux": [
+        {
+          "kind": "message",
+          "text": "summarize the cart fields",
+          "sender": "Alex Chen",
+          "sender_type": "user"
+        },
+        {
+          "kind": "reply",
+          "text": "",
+          "final": true
+        },
+        null,
+        null
+      ]
     }
   ]
 }

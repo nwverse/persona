@@ -245,7 +245,7 @@ func ApplyBotmuxTurns(items []proto.Item, turns []BotmuxTurn, transcriptSessionI
 			if sendCount == 0 {
 				continue
 			}
-			messageIDs := botmuxSendReceiptIDs(result.Text)
+			messageIDs := botmuxSendReceiptIDs(result)
 			if len(messageIDs) > sendCount {
 				continue
 			}
@@ -269,22 +269,41 @@ func ApplyBotmuxTurns(items []proto.Item, turns []BotmuxTurn, transcriptSessionI
 	return out
 }
 
-func botmuxSendReceiptIDs(text string) []string {
+// botmuxSendReceiptIDs is the messageId of each successful BotMux JSON receipt in res's output, in order. A page carries
+// only the start of a long output (light): the end, where `botmux send` prints its receipt after whatever ran before it
+// (a script that builds and checks a card first), is in the outcome's tail then.
+func botmuxSendReceiptIDs(res *proto.Item) []string {
 	var messageIDs []string
-	for line := range strings.SplitSeq(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "{") {
-			continue
-		}
-		var receipt struct {
-			Success   bool   `json:"success"`
-			MessageID string `json:"messageId"`
-		}
-		if json.Unmarshal([]byte(line), &receipt) == nil && receipt.Success && receipt.MessageID != "" {
-			messageIDs = append(messageIDs, receipt.MessageID)
+	seen := map[string]bool{}
+	for _, text := range botmuxResultTexts(res) {
+		for line := range strings.SplitSeq(text, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "{") {
+				continue
+			}
+			var receipt struct {
+				Success   bool   `json:"success"`
+				MessageID string `json:"messageId"`
+			}
+			if json.Unmarshal([]byte(line), &receipt) == nil && receipt.Success && receipt.MessageID != "" && !seen[receipt.MessageID] {
+				seen[receipt.MessageID] = true
+				messageIDs = append(messageIDs, receipt.MessageID)
+			}
 		}
 	}
 	return messageIDs
+}
+
+// botmuxResultTexts is what a tool result shows of its output: its text, and the outcome's tail when the page cut the
+// text (FullSize) so the end of the output is only there.
+func botmuxResultTexts(res *proto.Item) []string {
+	if res == nil {
+		return nil
+	}
+	if res.FullSize > 0 && res.Outcome != nil && res.Outcome.Tail != "" {
+		return []string{res.Text, res.Outcome.Tail}
+	}
+	return []string{res.Text}
 }
 
 func itemInputHashCandidates(it proto.Item) []string {
@@ -402,9 +421,8 @@ func botmuxFromReply(r BotmuxTurnReply, existing *proto.Botmux) *proto.Botmux {
 		voice = existing.Voice
 		attachments = existing.Attachments
 	}
-	if text == "" && !voice && attachments == 0 {
-		return nil
-	}
+	// BotMux confirmed this reply by its messageId: it was delivered even when neither its record nor the command line
+	// has its words (a card, or a record from before BotMux kept them), and the apps show it as sent without text.
 	return &proto.Botmux{
 		Kind:        proto.BotmuxReply,
 		Text:        text,
@@ -440,9 +458,6 @@ func botmuxFromReplies(replies []BotmuxTurnReply, existing *proto.Botmux) *proto
 	if existing != nil {
 		voice = existing.Voice
 		attachments = existing.Attachments
-	}
-	if text == "" && !voice && attachments == 0 {
-		return nil
 	}
 	return &proto.Botmux{
 		Kind:        proto.BotmuxReply,

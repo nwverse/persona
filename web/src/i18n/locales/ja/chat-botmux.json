@@ -9,6 +9,7 @@
   "attachments_one": "添付 {count} 件",
   "attachments_other": "添付 {count} 件",
   "voice": "音声",
+  "sent_without_text": "カードなどテキスト以外の内容を送信しました。Lark で確認できます。",
   "truncated": "途中まで",
   "original": "原文",
   "hide_original": "原文を隠す",

@@ -723,7 +723,12 @@ func botmuxToolResultSucceeded(res *proto.Item) bool {
 			return false
 		}
 	}
-	return !botmuxResultReportsFailure(res.Text)
+	for _, text := range botmuxResultTexts(res) {
+		if botmuxResultReportsFailure(text) {
+			return false
+		}
+	}
+	return true
 }
 
 // skipShellAssignments drops the NAME=value words before a command's name (`LANG=C botmux send hi`): they set its
