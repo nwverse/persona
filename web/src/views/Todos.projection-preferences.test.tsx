@@ -220,6 +220,7 @@ describe("the Web To-dos projection and saved views", () => {
   });
 
   it("uses the selected assistant's hub counts instead of the merged board's counts", async () => {
+    getState().todoBoard = null;
     setRoster({ default: "assistant", managers: [
       { id: "assistant", name: "Personal", online: true },
       { id: "work", name: "Work", online: true },
