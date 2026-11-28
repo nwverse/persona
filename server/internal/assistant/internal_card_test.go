@@ -172,8 +172,16 @@ func TestInternalRouteRestoresAndRejectsStaleRelay(t *testing.T) {
 	ix.MachineID = "server"
 	ix.ToolInput = json.RawMessage(`{"command":"ls /tmp | head"}`)
 	done := e.raise(ix)
-	waitFor(t, "first active relay queued", func() bool { return len(queuedRelays(e.s, "conv1")) == 1 })
-	old := queuedRelays(e.s, "conv1")[0]
+	var old relayMsg
+	waitFor(t, "first active relay queued", func() bool {
+		for _, msg := range queuedRelays(e.s, "conv1") {
+			if msg.Card == ix.ID {
+				old = msg
+				return true
+			}
+		}
+		return false
+	})
 	e.s.fleet.mu.Lock()
 	e.s.fleet.interactions[ix.ID].route = nil
 	e.s.fleet.mu.Unlock()

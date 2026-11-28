@@ -19,10 +19,13 @@ func sensitiveDelegationEnv(t *testing.T) *routeEnv {
 	e.f.mu.Lock()
 	e.f.infoTag = `{"categories":["legal_id"]}`
 	e.f.mu.Unlock()
-	e.f.setSessions("server",
-		proto.Session{SessionID: "conv1", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
-		proto.Session{SessionID: "lead1", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
-		proto.Session{SessionID: "side-chat", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle})
+	rows := []proto.Session{
+		{SessionID: "conv1", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+		{SessionID: "lead1", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+		{SessionID: "side-chat", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+	}
+	e.sessions("server", rows...)
+	e.f.setSessions("server", rows...)
 	return e
 }
 
@@ -141,6 +144,7 @@ func TestInternalOutboundApprovalIsScopedToCurrentBoundary(t *testing.T) {
 				if present {
 					rows = append(rows, proto.Session{SessionID: "side-chat", Cwd: assistantHome, Space: space, Assistant: true, Status: proto.StatusIdle})
 				}
+				e.sessions("server", rows...)
 				e.f.setSessions("server", rows...)
 			}
 			callCtx := ctx

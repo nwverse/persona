@@ -162,10 +162,12 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 	if home == "" {
 		home = s.settings(ctx).MachineID
 	}
-	if row, present := s.session(ctx, home, self); present {
-		space, known = spaceOf(row), true
-	} else {
-		known = false
+	if tool == "agent_send" {
+		if row, present := s.session(ctx, home, self); present {
+			space, known = spaceOf(row), true
+		} else {
+			known = false
+		}
 	}
 	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.trackPolicy(ctx, space).ConfirmOutbound {
 		return true, "", nil // fresh confirmation covers these words, never an isolated track boundary
@@ -200,7 +202,7 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 		}
 		return validInternalAnswer(ix, r), r.Outcome(), nil
 	})
-	if allowed {
+	if allowed && tool == "agent_send" {
 		// Read live membership, not an MCP caller snapshot captured before the approval wait.
 		currentSpace := space
 		if row, present := s.session(ctx, home, self); present {
