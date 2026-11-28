@@ -546,9 +546,14 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 
 	now := time.Now().UTC()
 	resolvedSet := make(map[string]struct{}, len(result.ResolvedIDs))
+	lastResolvedByTodo := make(map[string]db.TodoBlockerRow)
 	for _, id := range result.ResolvedIDs {
-		if _, err := st.ResolveTodoBlocker(ctx, id, now); err != nil {
+		row, err := st.ResolveTodoBlocker(ctx, id, now)
+		if err != nil {
 			return todoBlockerReconcileSummary{}, err
+		}
+		if row != nil && laterBlockerResolution(*row, lastResolvedByTodo[row.TodoID]) {
+			lastResolvedByTodo[row.TodoID] = *row
 		}
 		resolvedSet[id] = struct{}{}
 	}
@@ -564,7 +569,7 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 	}
 
 	for _, todoID := range result.UnblockedTodoIDs {
-		s.notifyTodoBlockerUnblockedWithResolved(ctx, todoID, resolvedByTodo[todoID], onUnblocked)
+		s.notifyTodoBlockerUnblocked(ctx, todoID, lastResolvedByTodo[todoID], resolvedByTodo[todoID], onUnblocked)
 	}
 	if len(result.UnblockedTodoIDs) > 0 && s.settings(ctx).todosV2On() {
 		s.sweepAdmissionQueue(ctx)
@@ -700,37 +705,53 @@ func (s *Service) collectUpstreamPRURLs(ctx context.Context, todoID string, extr
 	return out
 }
 
-func (s *Service) notifyTodoBlockerUnblockedOnly(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
-	s.notifyTodoBlockerUnblockedWithResolved(ctx, todoID, nil, hook)
+func laterBlockerResolution(row, previous db.TodoBlockerRow) bool {
+	return row.ResolvedAt != nil && (previous.ResolvedAt == nil || row.ResolvedAt.After(*previous.ResolvedAt) ||
+		row.ResolvedAt.Equal(*previous.ResolvedAt) && row.ID > previous.ID)
 }
 
-func (s *Service) notifyTodoBlockerUnblockedWithResolved(ctx context.Context, todoID string, resolved []todoBlockerRecord, hook func(ctx context.Context, todoID string)) {
-	key := "blockers_unblocked:" + todoID
-	to := ""
-	if t, ok := s.todoNow(todoID); ok {
-		to = s.todoReadySupervisor(ctx, s.settings(ctx), t)
+func blockerResolutionKey(row db.TodoBlockerRow) string {
+	if row.ResolvedAt == nil {
+		return ""
 	}
-	detail := "all persistent blockers resolved"
-	if prURLs := s.collectUpstreamPRURLs(ctx, todoID, nil, resolved, nil); len(prURLs) > 0 {
-		detail += "; upstream PRs: " + strings.Join(prURLs, ", ")
+	return row.ID + "@" + row.ResolvedAt.UTC().Format(time.RFC3339Nano)
+}
+
+func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, last db.TodoBlockerRow, resolved []todoBlockerRecord, hook func(ctx context.Context, todoID string)) {
+	if t, ok := s.todoNow(todoID); ok && t.DoneAt == nil && !t.Cancelled() && last.ResolvedAt != nil {
+		s.signal(superviseSignal{
+			Todo:       todoID,
+			Kind:       sigBlockersUnblocked,
+			Key:        blockerResolutionKey(last),
+			To:         s.todoReadySupervisor(ctx, s.settings(ctx), t),
+			BlockerPRs: s.collectUpstreamPRURLs(ctx, todoID, nil, resolved, nil),
+		})
 	}
-	s.signal(superviseSignal{
-		Todo:   todoID,
-		Kind:   sigTodoReady,
-		Key:    key,
-		To:     to,
-		Detail: detail,
-	})
 	if hook != nil {
 		hook(ctx, todoID)
 	}
 }
 
-func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
-	s.notifyTodoBlockerUnblockedOnly(ctx, todoID, hook)
-	if s.settings(ctx).todosV2On() {
-		s.sweepAdmissionQueue(ctx)
+// blockerUnblockStillHolds checks both the current wait and the persisted resolution that ended this round.
+func (s *Service) blockerUnblockStillHolds(ctx context.Context, g superviseSignal) (bool, error) {
+	st := s.todoBlockerDB()
+	if st == nil {
+		return false, nil
 	}
+	rows, err := st.ListTodoBlockersByTodo(ctx, g.Todo)
+	if err != nil {
+		return false, err
+	}
+	var latest db.TodoBlockerRow
+	for _, row := range rows {
+		if row.State == db.TodoBlockerStateActive {
+			return false, nil
+		}
+		if laterBlockerResolution(row, latest) {
+			latest = row
+		}
+	}
+	return g.Key != "" && g.Key == blockerResolutionKey(latest), nil
 }
 
 func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []todoBlockerRecord, observedPR *todoBlockerPRFact) (todoBlockerFactSnapshot, error) {
