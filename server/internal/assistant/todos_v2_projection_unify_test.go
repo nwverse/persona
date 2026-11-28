@@ -123,7 +123,7 @@ func TestTodosV2ProjectionUnifyDirectionTree(t *testing.T) {
 		t.Fatalf("listedTodos: %v", err)
 	}
 	p := e.s.viewed(ctx, listed, now)
-	board := buildTodoBoardProjection(listed, e.s.todoBoardDirectionLabels(ctx))
+	board := buildTodoBoardProjection(listed, e.s.todoBoardDirectionLabels(ctx, e.s.settings(ctx)))
 	treeOpen := leadDir.Counts.NeedsYou + leadDir.Counts.Working + leadDir.Counts.Review + leadDir.Counts.Stuck + leadDir.Counts.Planned
 	if treeOpen != board.Counts.OpenTotal {
 		t.Fatalf("direction tree open count (%d) != board projection OpenTotal (%d)", treeOpen, board.Counts.OpenTotal)

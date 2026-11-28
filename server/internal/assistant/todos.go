@@ -491,8 +491,7 @@ func (s *Service) todosLoaded() bool {
 // todosChanged tells the apps to read the todos again ({"type":"todos"}), once the rest of the write is in
 // (todosPushSoon).
 func (s *Service) todosChanged(ctx context.Context) {
-	s.trevision.changed() // seen/restored/Someday come through here too, without moving updated_at
-	s.todosPushSoon()
+	s.todoRevisionChanged() // seen/restored/Someday come through here too, without moving updated_at
 	s.todoChangedSoon()
 	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
 	s.boardChanged()      // a to-do closed, reopened or gone leaves "Please verify"
@@ -1108,34 +1107,44 @@ func (s *Service) todoRoutes() {
 			}
 		}
 		writes := s.trevision.writes.Load()
-		list, p, err := s.todosViewed(r.Context(), true)
+		ctx := r.Context()
+		isExtension := r.Header.Get(RoleHeader) == roleExtension
+		var cfg Settings
+		if !isExtension {
+			cfg, _ = s.settingsLastGood(ctx)
+		}
+		list, p, err := s.todosViewed(ctx, true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
 		partial := false
-		isExtension := r.Header.Get(RoleHeader) == roleExtension
 		if isExtension {
-			if list, partial, err = s.extensionRows(r.Context(), list, p); err != nil {
+			if list, partial, err = s.extensionRows(ctx, list, p); err != nil {
 				apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 				return
 			}
-		} else if !paged {
-			s.tagTodoRevision(w, writes, p)
 		}
 		var sharedBlockers []projection.SharedBlocker
 		var board *todoBoardProjection
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
-			if cfg := s.settings(r.Context()); cfg.todosV2On() {
+			prefs := todoRevisionPrefsOf(cfg)
+			var directions map[string]string
+			if prefs.V2 || !paged {
+				directions = s.todoBoardDirectionLabels(ctx, cfg)
+			}
+			if prefs.V2 {
 				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
-				directions := s.todoBoardDirectionLabels(r.Context())
 				populateTodoEffectiveDirections(list, directions)
 				if !paged {
 					// The board is the same complete projection as Counts. The closed_limit option bounds the rows a list
 					// client has to parse; it does not silently create a second, smaller set of board totals.
-					board = buildTodoBoardProjectionWithOptions(list, directions, cfg.todosV2FoldChildrenOn())
+					board = buildTodoBoardProjectionWithOptions(list, directions, prefs.FoldChildren)
 				}
+			}
+			if !paged {
+				s.tagTodoRevision(ctx, w, writes, p, prefs, directions)
 			}
 		}
 		var closedNext string

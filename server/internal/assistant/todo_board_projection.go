@@ -106,11 +106,13 @@ type todoBoardItemMeta struct {
 	itemType    string
 }
 
-// todoBoardDirectionLabels resolves display names for all known directions once per GET /api/v1/todos read.
-func (s *Service) todoBoardDirectionLabels(ctx context.Context) map[string]string {
-	cfg := s.settings(ctx)
-	titles, _ := s.conversationTitles()
-	names := s.directionSessionNames(ctx, cfg, titles)
+// todoBoardDirectionLabels resolves the display names shared by the to-do board and its revision.
+func (s *Service) todoBoardDirectionLabels(ctx context.Context, cfg Settings) map[string]string {
+	var names map[string]string
+	if len(cfg.Leaders) > 0 {
+		titles, _ := s.conversationTitles()
+		names = s.directionSessionNames(ctx, cfg, titles)
+	}
 	if names == nil {
 		names = map[string]string{}
 	}
