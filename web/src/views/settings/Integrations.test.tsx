@@ -55,12 +55,14 @@ vi.mock("../../lib/store", async (original) => ({
 vi.mock("./IntegrationDetail", () => ({
   IntegrationDetail: ({
     target,
+    prefill,
     onBack,
     onUpgrade,
     onPage,
     onSettings,
   }: {
     target: { kind: string; id: string; channelId?: string; connectorId?: string | null; manager?: string };
+    prefill?: Record<string, unknown>;
     onBack?: () => void;
     onUpgrade?: (market: string, id: string, manager?: string) => void;
     onPage?: (extId: string, uiId: string, manager?: string) => void;
@@ -73,6 +75,7 @@ vi.mock("./IntegrationDetail", () => ({
       data-channel-id={target.channelId ?? ""}
       data-connector-id={target.connectorId ?? ""}
       data-manager={target.manager ?? ""}
+      data-prefill={prefill && JSON.stringify(prefill)}
     >
       {onBack && (
         <button type="button" data-mock-detail-back onClick={onBack}>
@@ -105,12 +108,14 @@ vi.mock("./IntegrationDetail", () => ({
 
 vi.mock("./ExtensionMarket", () => ({
   MarketCatalog: ({
+    manager,
     onBack,
     backLabel,
     onOpen,
     onMarkets,
     onManageMarkets,
   }: {
+    manager?: string;
     onBack?: () => void;
     backLabel?: string;
     onOpen: (it: { market: string; id: string }) => void;
@@ -119,7 +124,7 @@ vi.mock("./ExtensionMarket", () => ({
   }) => {
     const manage = onManageMarkets ?? onMarkets;
     return (
-      <div data-mock-market-catalog data-back-label={backLabel ?? ""}>
+      <div data-mock-market-catalog data-back-label={backLabel ?? ""} data-manager={manager}>
         {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
         <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
         {manage && <button type="button" data-mock-markets-open onClick={manage}>Manage markets</button>}
@@ -960,6 +965,18 @@ describe("Integrations unified list view", () => {
 });
 
 describe("Settings navigation collapse and bidirectional redirects under integrations_v2", () => {
+  it("passes the extension prefill through the legacy URL redirect to Integrations", async () => {
+    stubFullHubFetch();
+    const proposal = JSON.stringify({ display_alias: "From a link" });
+    history.replaceState(null, "", "/settings/extensions/larkx?set=" + encodeURIComponent(proposal));
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const search = new URLSearchParams(location.search);
+    expect(search.get("tab")).toBe("integrations");
+    expect(search.get("set")).toBe(proposal);
+    expect(host.querySelector('[data-mock-integration-detail][data-id="larkx"]')?.getAttribute("data-prefill")).toBe(proposal);
+  });
+
   it("keeps legacy Channels/Connectors/Extensions tabs untouched when integrations_v2 is off and redirects /settings/integrations/*", async () => {
     state.integrationsV2 = false;
     stubFullHubFetch();
@@ -1450,8 +1467,12 @@ describe("assistant isolation across integration routes", () => {
     chooseManager("work");
     const onOpen = vi.fn();
     await act(async () => root.render(<Integrations open="-sources" onOpen={onOpen} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await act(async () => root.render(<Integrations open="-market" onOpen={onOpen} />));
+    await flush();
+    expect(host.querySelector("[data-mock-market-catalog]")?.getAttribute("data-manager")).toBe("work");
     await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());

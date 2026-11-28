@@ -19,7 +19,7 @@ import { marketOf } from "../../lib/extension-market";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
 import {
   changed, channelOf, checkError, clearedSecrets, compact, configError, extensionDetail,
-  extensionTone, fieldLabel, fieldPath, isDirty, isEntryList, numberProblems, pointText,
+  extensionTone, fieldLabel, fieldPath, isDirty, isEntryList, numberProblems, pointText, prefillDraft,
   readNumber, rebaseDraft, runNote, saveFooter, secretState, setAt, setContribution,
   setExtensionAutoUpgrade, setExtensionConfig, setExtensionConfigPreservingEntries,
   setExtensionEnabled, setupSecret, stateLine, valueAt,
@@ -69,6 +69,8 @@ export { isIntegrationsV2Active, partitionExtensionFields };
 
 export interface IntegrationDetailProps {
   target: IntegrationTarget;
+  /** Proposed configuration from a settings link, kept as an unsaved draft. */
+  prefill?: JsonObject;
   /** Back action; omit when the top bar (phone) or desktop split-pane list already provides navigation. */
   onBack?: () => void;
   /** Way back from a disabled integration that has no row in the split-pane catalog. */
@@ -286,6 +288,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
         key={`ext:${props.target.id}@${effectiveManager ?? ""}`}
         target={props.target}
         manager={effectiveManager}
+        prefill={props.prefill}
         onBack={props.onBack}
         onUninstalled={props.onUninstalled}
         onPage={props.onPage}
@@ -374,7 +377,7 @@ function FeishuBotBuiltinDetail({
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const channelId = resolveBuiltinChannelId(target) ?? "feishu";
-  useLayoutEffect(() => pinManagerAt(["/bots", "/connectors/larkcli"], otherManager(manager)), [manager]);
+  useLayoutEffect(() => pinManagerAt(["/bots/feishu", "/connectors/larkcli"], manager), [manager]);
 
   const channelCtl = useChannelController(channelId, manager);
   const { connectors: [larkcli], load: loadLarkcli, loading: connectorLoading, error: connectorError, onSaved } =
@@ -491,14 +494,15 @@ function BuiltinIntegrationDetail({
 
   useLayoutEffect(() => {
     const prefixes: string[] = [];
-    if (isMail) prefixes.push("/mail", "/connectors/mail");
-    if (isLarkGateway) prefixes.push("/lark");
+    // The item paths are more specific than the Settings category's assistant pins.
+    if (isMail) prefixes.push("/mail/accounts", "/mail/oauth", "/connectors/mail");
+    if (isLarkGateway) prefixes.push("/lark/status", "/lark/accounts");
     if (connectorId) {
       prefixes.push(`/connectors/${enc(connectorId)}`);
       if (connectorId === "imessage") prefixes.push("/imessage");
     }
     if (!prefixes.length) return undefined;
-    return pinManagerAt(prefixes, otherManager(manager));
+    return pinManagerAt(prefixes, manager);
   }, [isMail, isLarkGateway, connectorId, manager]);
 
   const channelCtl = useChannelController(channelId, manager);
@@ -649,6 +653,7 @@ function BuiltinIntegrationDetail({
 function ExtensionIntegrationDetail({
   target,
   manager,
+  prefill,
   onBack: back,
   onUninstalled,
   onPage,
@@ -658,6 +663,7 @@ function ExtensionIntegrationDetail({
 }: {
   target: Extract<IntegrationTarget, { kind: "extension" }>;
   manager?: string;
+  prefill?: JsonObject;
   onBack?: () => void;
   onUninstalled?: () => void;
   onPage?: (extensionId: string, uiId: string, manager?: string) => void;
@@ -819,6 +825,21 @@ function ExtensionIntegrationDetail({
   }, [id, manager, load]);
   const canSave = dirty && !Object.keys(problems).length && !saving && !offline;
   const editable = !!detail && !detail.read_only && detail.source !== "dev" && detail.source !== "hub.json";
+  const prefillKey = prefill ? JSON.stringify(prefill) : "";
+  const prefilled = useRef("");
+  useEffect(() => {
+    if (!prefill) {
+      prefilled.current = "";
+      return;
+    }
+    if (!editable || prefillKey === "{}" || prefilled.current === prefillKey) return;
+    prefilled.current = prefillKey;
+    editRevision.current++;
+    setDraft((cur) => prefillDraft(cur, prefill, allFields));
+    setTyped({});
+    setFieldErrors({});
+    setCheckFailed("");
+  }, [allFields, editable, prefill, prefillKey]);
 
   // Auto-open the Advanced disclosure when a validation error targets a field inside it.
   const advancedError = useMemo(

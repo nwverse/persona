@@ -238,7 +238,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return () => observer.disconnect();
   }, [tab, phone]);
   const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
-  const extensionPrefill = tab === "extensions" ? settingsPrefill(location.search) : undefined;
+  const extensionPrefill = tab === "extensions" || tab === "integrations" ? settingsPrefill(location.search) : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
@@ -508,6 +508,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
                     open={sub}
+                    prefill={extensionPrefill}
                     twoCol={integrationsSplit}
                     headerBack={phone}
                     onOpen={(id, drillDown) => pick("integrations", id, undefined, { drillDown })}

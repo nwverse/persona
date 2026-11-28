@@ -17,7 +17,7 @@ import { hubHasExt } from "../../lib/extension-api";
 import { onAuthChange, withAuth } from "../../lib/extension-auth";
 import { watchOperations } from "../../lib/extension-operations";
 import { EXTENSIONS_CHANGED } from "../../lib/extension-prompts";
-import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail } from "../../lib/extensions";
+import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail, type JsonObject } from "../../lib/extensions";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
@@ -72,6 +72,7 @@ const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((
 
 export interface IntegrationsProps {
   open: string | null;
+  prefill?: JsonObject;
   onOpen: (sub: string | null, drillDown?: boolean) => void;
   /** Desktop split-pane layout (when the Settings host has room): list stays beside the open integration detail. */
   twoCol?: boolean;
@@ -308,6 +309,7 @@ export function Integrations(props: IntegrationsProps) {
 function IntegrationsForManager({
   picked,
   open,
+  prefill,
   onOpen,
   twoCol = false,
   headerBack = false,
@@ -517,6 +519,8 @@ function IntegrationsForManager({
     return (
       <Suspense fallback={<Loading />}>
         <MarketCatalog
+          key={effectiveManager}
+          manager={effectiveManager}
           backLabel={t("settings-integrations.back")}
           onBack={headerBack ? undefined : () => onOpen(null)}
           onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
@@ -850,7 +854,8 @@ function IntegrationsForManager({
   ) : showDetail && resolvedTarget ? (
     <Suspense fallback={<Loading />}>
       <IntegrationDetail
-        target={resolvedTarget}
+        target={{ ...resolvedTarget, manager: effectiveManager }}
+        prefill={prefill}
         integrationsV2={true}
         onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
         onUnavailableBack={headerBack ? undefined : () => onOpen(null)}

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Unit & integration tests for the lazy-loaded unified IntegrationDetail view (integrations_v2, #14847).
 import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectModuleHub } from "../../core/module-host";
@@ -13,7 +13,7 @@ import { askSignIn, signInAsked } from "../../lib/extension-auth";
 import { track, type ExtensionOperation } from "../../lib/extension-operations";
 import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
-import { chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
+import { chooseManager, chosenManager, managerHeaderFor, pinManagerAt, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
 import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
 import { FEATURES } from "./FeishuBot";
@@ -965,6 +965,28 @@ describe("Older Hub and legacy extension graceful degradation", () => {
 });
 
 describe("manager-owned integration links", () => {
+  it.each([
+    ["feishu-bot", "/bots/feishu"],
+    ["lark", "/lark/status"],
+    ...(installedMailbox ? [["mail", "/mail/accounts"]] : []),
+  ])("keeps an explicit default-assistant %s link scoped inside a secondary assistant's Settings", async (id, path) => {
+    if (id === "mail") await preloadMailbox("Settings");
+    chooseManager("work");
+    function SecondarySettings() {
+      useLayoutEffect(() => pinManagerAt(["/bots", "/lark", "/mail", "/channels"], "work"), []);
+      return <IntegrationDetail integrationsV2 target={{ kind: "builtin", id, manager: "assistant" }} />;
+    }
+    await act(async () => root.render(<SecondarySettings />));
+    expect(requests).toContainEqual(expect.objectContaining({ url: `/api/v1${path}`, method: "GET", manager: null }));
+    if (id === "feishu-bot") {
+      const toggle = host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)!;
+      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/channels/feishu", method: "GET", manager: null }));
+      await act(async () => toggle.click());
+      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/bots/feishu", method: "PUT", manager: null }));
+    }
+    expect(chosenManager()).toBe("work");
+  });
+
   it("scopes contributed and target connectors to the extension owner for the lifetime of the detail", async () => {
     currentConnectors.push({ ...COMPOSITE_CONNECTOR, manager: "work" }, { id: "imessage", name: "Messages", status: "ok", manager: "work" });
     await act(async () => root.render(
@@ -1011,6 +1033,21 @@ describe("integration detail parity", () => {
   const refresh = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!.click();
   const unloadWarns = () => !window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   const input = (name: string) => host.querySelector<HTMLInputElement>(`#extension-field-${name}`)!;
+
+  it("puts link-prefilled values in an editable draft once and saves only recognized fields on request", async () => {
+    const page = <IntegrationDetail target={extension} prefill={{ display_alias: "From a link", unknown_key: "ignored", app_secret: "ignored" }} />;
+    await act(async () => root.render(page));
+    expect(input("display_alias").value).toBe("From a link");
+    expect(requests.some((r) => r.method === "PUT")).toBe(false);
+
+    await act(async () => setInputValue(input("display_alias"), "My edit"));
+    await act(async () => refresh());
+    expect(input("display_alias").value).toBe("My edit");
+    const save = [...host.querySelectorAll<HTMLButtonElement>('[data-settings-group="integration-save-bar"] button')]
+      .find((b) => b.textContent === t("common.save"))!;
+    await act(async () => save.click());
+    expect(currentExt.config).toEqual({ ...COMPOSITE_EXTENSION.config, display_alias: "My edit" });
+  });
 
   it.each(["feishu-bot", "github", "larkx"])("marks retained connector and channel details when a refresh fails for %s", async (id) => {
     currentConnectors.push({ id: "larkcli", name: "Lark CLI", status: "ok", capabilities: ["inbox", "login"] });
