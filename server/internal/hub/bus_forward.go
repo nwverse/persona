@@ -16,7 +16,9 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/memtrim"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
 
 // The apps' requests on the assistant's routes (assistantwire.Routes, assistant_link.go) are its to answer: the hub
@@ -172,8 +174,14 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 	req.ReplyInput = assistantwire.ReplyInputOf(r.Context())
 	ctx := r.Context()
 	if _, ok := ctx.Deadline(); !ok {
+		timeout := 5 * time.Minute
+		if r.Pattern == assistantwire.RouteBackendWorkspacePrepare {
+			// The manager knows the actual plan. Allow it enough time for the
+			// largest valid plan, plus planning and response delivery.
+			timeout += taskworkspace.PrepareTimeout(repositorywire.MaxTaskRepositories)
+		}
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 	// What may change the manager's inbox: a merged list fetched while it is under way is not kept, and one kept from
