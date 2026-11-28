@@ -99,6 +99,7 @@ try {
     const pill = page.locator('[data-testid="new-agent-model"] [data-model-pill]');
     await until(async () => (await pill.getAttribute("data-model-pill")) === "ready", `${theme}: the model pill never got ready`);
     const line = page.locator('[data-testid="new-agent-orca-chat"]');
+    await page.locator('[data-testid="new-agent-model"]').scrollIntoViewIfNeeded(); // the box, its notes and Start in view
     if (without) {
       await page.waitForTimeout(600);
       if (await line.count()) fail(`${theme}: New Agent names an Orca chat without the switch`);
@@ -107,6 +108,7 @@ try {
     } else {
       await until(async () => (await line.count()) > 0 && ((await line.textContent()) ?? "").startsWith(LINE), `${theme}: New Agent does not say where the start goes`);
       ok(`${theme}: New Agent says ${JSON.stringify(((await line.textContent()) ?? "").trim())}`);
+      await line.scrollIntoViewIfNeeded();
       await shot("new-agent");
     }
 
