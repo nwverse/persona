@@ -20,7 +20,7 @@ import { type Manager } from "../../lib/managers";
 import { scoped, useScope, useScoped } from "../../lib/current-assistant";
 import { useStore, useLarkOn } from "../../lib/store";
 import { hubServes, moduleFeature, useModuleStates } from "../../core/module-host";
-import { inboxSourceVisibility } from "../../lib/inbox-source-availability";
+import { inboxSourceVisibility, visibleInboxKinds } from "../../lib/inbox-source-availability";
 import { directoryVisibleCards } from "../../lib/sessions";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
@@ -147,10 +147,11 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   const ready = loaded && storeLoaded;
   const [source, setSource] = useStored("inbox.source");
   const [kind, setKind] = useStored("inbox.kind");
-  // A hidden source must not remain as an invisible persisted filter (#17399).
+  // A hidden source or kind chip must not remain as an invisible persisted filter (#17399, #17814).
   useEffect(() => {
     if (!sourceVisibility.lark && source === "feishu") setSource("");
-  }, [sourceVisibility.lark, source]);
+    if (!sourceVisibility.mail && kind === "mail") setKind("");
+  }, [sourceVisibility.lark, source, sourceVisibility.mail, kind]);
   // Needs you, FYI and Collapsed by source or by time (#2059), kept on this device; Done is always by time
   const [groupingSaved, setGrouping] = useStored("inbox.grouping");
   const grouping: Grouping = groupingSaved === "time" ? "time" : "source";
@@ -245,8 +246,10 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   const [filtersExpanded, setFiltersExpanded] = useStoredFlag(FILTERS_EXPANDED_KEY);
   const [filtersOverflow, setFiltersOverflow] = useState(false);
   const [filtersFade, setFiltersFade] = useState({ left: 0, right: 0 });
-  const filtersKey = `${sourceVisibility.lark}|${chips.map((a) => `${a.id}:${a.email}`).join("\0")}|${connectors.map((c) => `${c.id}:${c.name}`).join("\0")}`;
+  const filtersKey = `${sourceVisibility.lark}|${sourceVisibility.mail}|${chips.map((a) => `${a.id}:${a.email}`).join("\0")}|${connectors.map((c) => `${c.id}:${c.name}`).join("\0")}`;
   const hasSourceChips = sourceVisibility.lark || chips.length > 0 || connectors.length > 0;
+  // The Mail kind chip follows the same offered/retained rule as the Mail source entry (#17814).
+  const kindFilters = visibleInboxKinds(KIND_FILTERS, sourceVisibility);
   const measureFilters = useCallback(() => {
     if (filtersExpanded) {
       setFiltersFade((prev) => (prev.left === 0 && prev.right === 0 ? prev : { left: 0, right: 0 }));
@@ -605,7 +608,7 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
             <Chip key={`c:${c.id}`} on={source === c.id} onClick={() => pickSource(c.id)}>{c.name}</Chip>
           ))}
           {!filtersExpanded && hasSourceChips && <span aria-hidden data-source-kind-divider className="mx-0.5 h-4 w-px bg-line-strong" />}
-          {KIND_FILTERS.map((k) => (
+          {kindFilters.map((k) => (
             <Chip key={k.key} on={kind === k.key} onClick={() => pickKind(k.key)}>{k.label}</Chip>
           ))}
         </div>
@@ -931,7 +934,7 @@ function GroupTick({ state }: { state: "none" | "some" | "all" }) {
 function Group({ id, title, count, more, open, onToggle, pick, clear, children }: { id: string; title: string; count: number; more?: boolean; open: boolean; onToggle: (open: boolean) => void; pick?: { state: "none" | "some" | "all"; picked: number; run: () => void }; /** FYI's / Collapsed's pull-down for the group or the whole section (#10422). */ clear?: GroupClear; children: React.ReactNode }) {
   return (
     <div data-group={id}>
-      <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-canvas/95 px-2 pt-2 pb-0.5 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 -mx-1 flex items-center gap-1.5 bg-page/95 px-2 pt-2 pb-0.5 backdrop-blur-sm">
         {pick && (
           <button type="button" role="checkbox" aria-checked={pick.state === "all" ? true : pick.state === "some" ? "mixed" : false} aria-label={t("inbox-inboxlist.pick_group", { name: title })} onClick={pick.run} className="touch-hit flex shrink-0 items-center">
             <GroupTick state={pick.state} />

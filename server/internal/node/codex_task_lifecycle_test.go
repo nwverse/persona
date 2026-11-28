@@ -120,7 +120,7 @@ func TestCodexHistoryActiveRolloutReportsWorkingBetweenScans(t *testing.T) {
 		t.Fatalf("stale rows: %+v", staleRows)
 	}
 	stale := staleRows[0]
-	if stale.Status != proto.StatusOffline || stale.Capabilities == nil || !stale.Capabilities.Terminal || !stale.Capabilities.Send || stale.ReadOnlyReason != "" {
+	if stale.Status != proto.StatusOffline || stale.Capabilities == nil || !stale.Capabilities.Terminal || stale.ReadOnlyReason != stoppedReason {
 		t.Fatalf("stale row = %+v, want offline resumable", stale)
 	}
 }

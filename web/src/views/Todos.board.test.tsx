@@ -613,6 +613,10 @@ describe("To-dos v2 board direction, hierarchy, and grouping (#16939)", () => {
     const parentBtn = row("goal-child")?.querySelector<HTMLButtonElement>("button[data-testid=board-parent-goal]");
     expect(parentBtn).toBeTruthy();
     expect(parentBtn?.textContent).toContain(t("todos.goal_parent_hint", { title: "Ship Q4 platform release" }));
+    // Board row with clickable parent goal uses sibling controls rather than nesting a button inside role="button" (#17696)
+    expect(row("goal-child")?.getAttribute("role")).toBeNull();
+    expect(parentBtn?.closest('[role="button"]')).toBeNull();
+    expect(row("goal-child")?.querySelector<HTMLButtonElement>("button[data-testid=board-row-open]")).toBeTruthy();
 
     // Inherited direction from parent also resolves cleanly via effectiveDirectionOf.
     expect(row("goal-child")?.querySelector("[data-testid=board-direction-tag]")?.textContent).toBe("Platform Direction");

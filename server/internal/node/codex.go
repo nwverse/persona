@@ -56,13 +56,14 @@ type rolloutCache struct {
 	older    []rolloutFile  // rollouts in day directories before the window and archived ones, listed once a minute
 	olderAt  time.Time
 	// misses are the ids rolloutPath globbed for and found nowhere: a thread with no rollout (an app-server thread that
-	// never wrote one, an App chat whose rollout Codex compressed to .jsonl.zst or deleted) was globbed across all of
+	// never wrote one, an App chat whose rollout Codex deleted) was globbed across all of
 	// history every second. A miss holds while the directories a new rollout appears in (missDirs) are unchanged; when
 	// they changed, while no rollout name in them has the thread's id (recentNames). A rollout put into an older day
 	// directory is seen when rollouts lists the older days again (a minute), which lets that thread's miss go.
 	misses map[string]rolloutMiss
 	// hits are the paths rolloutPath found for an id with that missLook's stamp. Their file and header are checked again
-	// on every call; a recentNames look without the id or the next older-day relist keeps the hit from going stale.
+	// on every call; a recentNames look without the id or the next older-day relist keeps the hit from going stale. A
+	// rollout Codex compressed to .jsonl.zst (#17768) is a hit, not a miss.
 	hits map[string]rolloutHit
 	// recentNames are the rollout names in missDirs when their missStamp was recentStamp ("\n" after each name): listed
 	// again only when a directory changes.
@@ -624,8 +625,8 @@ func relistedSinceIn(home string, at time.Time, pass *codexListPass) (bool, bool
 }
 
 // keepHit records the paths found for id as of the look, under the same settled and relist safeguards as a miss. A hit
-// and a miss for one id cannot coexist. The older-day listing lets every hit go: it may name a continuation the hit did
-// not have, and the next lookup reads the current set once.
+// and a miss for one id cannot coexist. The older-day listing lets a hit go when it names a rollout of the thread the
+// hit does not have (a continuation in another old day directory), and the next lookup reads the current set once.
 func (l *missLook) keepHit(id string, paths []string) {
 	if !l.settled() {
 		return
@@ -732,11 +733,12 @@ func rolloutNames(paths []string) string {
 // relistMisses checks the misses against every rollout on disk (all, listed after look was taken). A thread whose id
 // is in no name has no rollout anywhere: its miss holds, from now on for look's stamp when look is settled. One whose
 // id is in a name is let go, to be globbed (and the rollout's header read) at its next look, and so is one not asked
-// about for missKeptFor. Every hit is let go too: this listing may name a continuation it did not have. Into a new map
-// for the misses: deleting from a map never gives its memory back.
+// about for missKeptFor. A hit is let go when this listing names a rollout of its thread it does not have (a
+// continuation in another old day directory, a copy), and kept otherwise (relistHits). Into new maps: deleting from a
+// map never gives its memory back.
 func (c *rolloutCache) relistMisses(all []string, look *missLook) {
 	c.relistedAt = look.at
-	clear(c.hits)
+	c.relistHits(all)
 	if len(c.misses) == 0 {
 		return
 	}
@@ -753,6 +755,32 @@ func (c *rolloutCache) relistMisses(all []string, look *missLook) {
 		}
 	}
 	c.misses = kept
+}
+
+// relistHits keeps the hits whose thread the listing (all) names in exactly the paths the hit has. Threads whose
+// rollout Codex compressed (.jsonl.zst, #17768) are hits outside the window, hundreds of them on a long-used computer;
+// letting every hit go each minute globbed each of them across all of history again (#17809), as the misses did before
+// relistMisses kept them (528 threads, 14 s of CPU every minute).
+func (c *rolloutCache) relistHits(all []string) {
+	if len(c.hits) == 0 {
+		return
+	}
+	listed := make(map[string][]string, len(c.hits))
+	for _, p := range all {
+		if id := rolloutID(p); id != "" {
+			if _, ok := c.hits[id]; ok {
+				listed[id] = append(listed[id], p)
+			}
+		}
+	}
+	kept := make(map[string]rolloutHit, len(c.hits))
+	for id, h := range c.hits {
+		paths := listed[id]
+		if len(paths) == len(h.paths) && !slices.ContainsFunc(paths, func(p string) bool { return !slices.Contains(h.paths, p) }) {
+			kept[id] = h
+		}
+	}
+	c.hits = kept
 }
 
 // missDirs are the directories a new rollout appears in: the day directories of the window, where a thread's rollout
