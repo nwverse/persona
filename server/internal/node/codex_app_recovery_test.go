@@ -114,7 +114,7 @@ func TestCodexAppIdleUnownedOffersContinueTakeoverAndResume(t *testing.T) {
 			if !ok {
 				t.Fatal("Codex App thread missing from session list")
 			}
-			if row.SourceKind != "codex_history" || row.Capabilities == nil || row.Capabilities.Send {
+			if row.SourceKind != "codex_history" || row.Capabilities == nil || !row.Capabilities.Send || row.ReadOnlyReason != "" {
 				t.Fatalf("unexpected source/send: %+v (%+v)", row, row.Capabilities)
 			}
 			if !row.Capabilities.Terminal || row.Capabilities.StopCause != proto.StopTaskCompleted {
@@ -123,14 +123,11 @@ func TestCodexAppIdleUnownedOffersContinueTakeoverAndResume(t *testing.T) {
 			if row.Capabilities.Takeover == nil || row.Capabilities.Takeover.Running || !row.Capabilities.Takeover.CanResume || !row.Capabilities.Takeover.AppOwned {
 				t.Fatalf("takeover capability = %+v", row.Capabilities.Takeover)
 			}
-			if want := i18n.T(i18n.Default, codexDesktopRecoverableKey); row.ReadOnlyReason != want {
-				t.Fatalf("read_only_reason = %q, want %q", row.ReadOnlyReason, want)
-			}
 
-			// Plain send still refuses with agent_stopped without launching a terminal.
+			// An exit command cannot wake a stopped thread.
 			f.reset()
-			if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "un-draft the MR"}); refusalCode(err) != agentStopped {
-				t.Fatalf("plain send to idle App thread = %v, want %s", err, agentStopped)
+			if _, err := request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "/exit"}); refusalCode(err) != agentStopped {
+				t.Fatalf("exit command = %v, want %s", err, agentStopped)
 			}
 			if calls := f.trace("tab.create", "pane.send_input"); len(calls) != 0 {
 				t.Fatalf("plain send touched terminal: %v", calls)

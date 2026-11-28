@@ -54,6 +54,9 @@ type Options struct {
 	AgentDirs AgentDirs
 	// HerdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go): the devices; nil: none.
 	HerdrSessions HerdrSessions
+	// OrcaChats says which computers start a person's New Agents as Orca chats (orca_chat_default.go): the devices;
+	// nil: none does.
+	OrcaChats OrcaChats
 	// SecretKey is the path of the key the model providers' keys are sealed with (the manager's own secret.key,
 	// models_launchers.go); "" makes one for this run only (tests).
 	SecretKey string
@@ -92,6 +95,8 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	blockerReconcile todoBlockerReconciler
+	mergeTrain       mergeTrainCoordinator
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules *kernel.Kernel
 	// moduleSwitch is the same list as the provider seams read it (moduleswitch): recording's and Lark's layers.
@@ -113,6 +118,8 @@ type Service struct {
 	projectReview *projectReview
 	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
 	herdrSessions HerdrSessions
+	// orcaChats says which computers start a person's New Agents as Orca chats (orca_chat_default.go); nil: none.
+	orcaChats OrcaChats
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
 	remoteImages *remoteimage.Fetcher
 	// channelPicture fetches an answer's pictures for a channel that sends them (channels_images.go): remoteImages.Get,
@@ -273,6 +280,7 @@ type Service struct {
 	agentNames       agentNamingBook        // agent_naming.go
 	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
 	taskCloseStops   taskCloseStopBook      // tasks_close_stops.go: stopped Agents of completed tasks
+	spawnedDone      spawnedDoneBook        // tasks_spawned_close.go: completed task_spawn sessions on open to-dos
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
@@ -471,7 +479,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, orcaChats: o.OrcaChats, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	if o.SpeakerTurnsImport {
 		s.speakerTurnsImport.Store(true)
@@ -1245,6 +1253,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
 	s.rememberTaskCloseExcerpt(r, text)
 	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
+	s.clearSpawnedDone(r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake

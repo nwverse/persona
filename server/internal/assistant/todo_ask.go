@@ -85,6 +85,7 @@ type todoActiveBlockerView struct {
 // the routes, its view (todo_view_routes.go).
 type listedTodo struct {
 	Todo
+	readinessWaits         []assistantwire.TodoWait
 	PrerequisiteBlockers   []string                   `json:"prerequisite_blockers,omitzero"`
 	ActiveBlockers         []todoActiveBlockerView    `json:"active_blockers,omitempty"`
 	Ask                    *todoAsk                   `json:"ask,omitempty"`

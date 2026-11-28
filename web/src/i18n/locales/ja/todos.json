@@ -281,6 +281,8 @@
   "section_awaiting_review": "交付済み・レビュー待ち",
   "section_pr": "マージ待ち",
   "section_other": "その他の未完了",
+  "section_todo": "未着手",
+  "section_can_wait": "後で対応",
   "section_shelved": "動きなし",
   "section_done": "完了",
   "shelved_hint": "48時間進展がなく、動いているエージェントもありません。未完了には数えません。データは削除されていません。",

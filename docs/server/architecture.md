@@ -735,9 +735,9 @@ stated above; #15088 lists the ones known.
 | `core-alias` | no exported alias | the package |
 | `core-field-name` | a one-field struct's field is named for its type | the package |
 | `core-distinct-shape` | no two exported structs of a package share a field list | the package |
-| `core-primitive-field` | a struct with more than one field holds no primitive, a kit type's argument and a name of the package's own included | the package |
-| `core-primitive-signature` | primitives, a kit type's argument and a name of the package's own included, only as `ParseX` parameters, `bool` results and `Wire`'s result | the package |
-| `core-collection` | slices and maps in exported signatures, a kit type's argument and a name of the package's own included, only as `NewX` and `RestoreX` parameters | the package |
+| `core-primitive-field` | a struct with more than one field holds no primitive, a kit type's argument, a name of the package's own and a computing standard-library named primitive type (`sort.StringSlice`, `strings.Builder`, `bytes.Buffer`, …) included | the package |
+| `core-primitive-signature` | primitives, a kit type's argument, a name of the package's own and a computing standard-library named primitive type included, only as `ParseX` parameters, `bool` results and `Wire`'s result | the package |
+| `core-collection` | slices and maps in exported signatures, a kit type's argument, a name of the package's own and a computing standard-library named slice type (`sort.StringSlice`, `bytes.Buffer`, …) included, only as `NewX` and `RestoreX` parameters | the package |
 | `core-interface-param` | no func or interface parameter, a func type of the package's own included, but the package's own visitors and sealed interfaces | the package |
 | `core-accessor` | every exported method returns nothing, a bool, its receiver's type or an outcome of it, and no exported function or method but `ID` and `Wire` has a body that is one `return` of its inputs' fields | the package |
 | `core-pointer-receiver` | no pointer receivers | the package |

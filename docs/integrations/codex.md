@@ -122,7 +122,8 @@ not screen reading or typing into the terminal. Panes it cannot join retain the 
 - **Starting with an explicit effort**: when the requested effort differs from the effective configuration, Persona creates a thread on the launcher's shared daemon before opening the pane. A new paginated thread may defer writing its rollout until the first turn. Persona asks Codex to materialize the rollout through `thread/read` with `includeTurns` before it applies the effort with `thread/settings/update` and checks the effective setting. A server that supports only the start configuration can confirm the effort in its `thread/start` reply. An ambiguous creation error stops the start because a thread may already exist. The pane resumes that thread, and Persona sends the first message through `turn/start` once the composer is ready. An empty start opens the configured thread without sending a turn. Both retain structured approvals, questions, and model and effort controls. If the TUI refuses to resume, Persona reports its error and discards the unused preparation.
 - **Which panes use it**: if the thread id identified by the node for a live Codex pane in herdr (`agent_session` / thread name / rollout, see "Recognition") appears in a connected
   app-server's `thread/loaded/list`, that app-server runs the thread (only one writer per thread); the TUI in the pane is its client.
-  The node checks every second, joining unconnected threads in the background with `thread/resume` (only `threadId` and `excludeTurns`, no model, directory, sandbox, or instructions, changing no session settings;
+  The node also joins loaded threads that are working or waiting for approval or input, including external terminals and subagents. It checks every second and
+  joins in the background with `thread/resume` (only `threadId` and `excludeTurns`, no model, directory, sandbox, or instructions, changing no session settings;
   app-server also ignores overrides when subscribers already exist). Failed joins retry after 30 seconds, with the reason recorded on the session (`codex_daemon.go`).
 - **Once connected**:
   - Approvals (commands, file changes, permissions, MCP tools) and Plan-mode `request_user_input` are app-server requests, converted to the same cards as the assistant's
@@ -691,7 +692,7 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 
 ## Not supported yet
 
-- Resuming from the phone covers a thread nothing has open in the default home ("Resuming from the phone"). Offline / archived history on external app-server instances is read-only; never silently start another app-server to continue it. Codex App threads continue through the App while it owns them; once the App has exited, the guarded same-home resume / takeover described above is available.
+- A stopped thread can resume in the default home or on its already connected shared app-server. Shared recovery on send requires an unarchived thread and no live writer. Codex App threads continue through the App while it owns them. Once the App exits, guarded same-home terminal resume is available.
 - Threads archived only in Codex (the Codex App's Archive) are not listed in Persona's archive; only Persona's own archives are mirrored to Codex ("Archive").
 - Custom launcher functions can supply their own provider, home, or profile. Persona preserves their launch behavior and shows a task-card notice when an effort override requires the terminal route.
 - Permission mode cannot be changed on the phone. Thinking effort and model change on app-server sessions ("Thinking effort") and, from Codex 0.169, on the terminal route ("On the terminal route"); TRAE CLI changes neither.
