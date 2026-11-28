@@ -589,6 +589,7 @@
     <string name="agents_tab_lead_words">%1$s: %2$s</string>
     <string name="agents_tab_lead_asks">%1$s · %2$s</string>
     <string name="agents_source_feishu">Lark group</string>
+    <string name="agents_source_desktop">Desktop app</string>
     <string name="agents_source_feishu_open">Open this topic in Lark</string>
     <string name="agents_filter_feishu">Lark groups</string>
     <string name="agents_filter_terminal">In a tab</string>

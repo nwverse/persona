@@ -17,7 +17,11 @@ class AgentSortSourceTest {
         assertEquals(AgentSource.Terminal, row("a", pane = "herdr-core:1").session.agentSource)
         assertEquals(AgentSource.Feishu, row("a", pane = "botmux:topic").session.agentSource)
         assertTrue(row("a", pane = "botmux:topic").session.isBotmux)
-        assertNull(row("a", pane = "orca:1").session.agentSource)
+        // An Orca terminal is a terminal; an Orca chat (the bridge's, no pane) Orca's own app (#17054).
+        assertEquals(AgentSource.Terminal, row("a", pane = "orca:1").session.agentSource)
+        val chat = row("a", pane = null).session.copy(sourceKind = "runtime", sourceInstanceId = "orca", spaceKind = "orca")
+        assertEquals(AgentSource.Desktop, chat.agentSource)
+        assertNull(chat.copy(sourceInstanceId = "paseo").agentSource)
         // A Tern pane is a block's number behind its kind; it is a terminal like herdr's.
         assertTrue(row("a", pane = "tern:201863462919").session.isTern)
         assertEquals(AgentSource.Terminal, row("a", pane = "tern:201863462919").session.agentSource)

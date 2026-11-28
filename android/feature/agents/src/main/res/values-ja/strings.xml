@@ -566,6 +566,7 @@
     <string name="agents_tab_lead_words">%1$s：%2$s</string>
     <string name="agents_tab_lead_asks">%1$s · %2$s</string>
     <string name="agents_source_feishu">Lark グループ</string>
+    <string name="agents_source_desktop">デスクトップアプリ</string>
     <string name="agents_source_feishu_open">このトピックを Lark で開く</string>
     <string name="agents_filter_feishu">Lark グループ</string>
     <string name="agents_filter_terminal">タブで実行中</string>
