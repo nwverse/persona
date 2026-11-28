@@ -248,13 +248,31 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 				t.Fatal("async source did not persist a question")
 			}
 			ix := qs[0]
-			next := newRouteEnv(t, e.s.store(), true)
+			e.noticeWith("lead1", "interaction_id="+ix.ID)
+			// Restart from a durable snapshot, not two live managers writing the same fake store.
+			restarted := newFleetMem()
+			values, err := e.st.SettingsPrefix(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for key, raw := range values {
+				restarted.setRawSetting(key, raw)
+			}
+			rec, err := e.st.InteractionRecord(context.Background(), ix.ID)
+			if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.Resumable {
+				t.Fatalf("source question was not durable: %+v, %v", rec, err)
+			}
+			if err := restarted.InsertInteraction(context.Background(), rec.Interaction); err != nil {
+				t.Fatal(err)
+			}
+			next := newRouteEnv(t, restarted, true)
 			next.s.loadAskLater(context.Background())
 			next.s.publish(context.Background())
 			waitFor(t, "durable internal question restored", func() bool {
 				p, ok := next.s.pendingIx(ix.ID)
-				return ok && next.s.internalCard(p) && hasRelayFrom(next.s, "lead1", cardAskUser, "interaction_id="+ix.ID)
+				return ok && next.s.internalCard(p)
 			})
+			next.noticeWith("lead1", "interaction_id="+ix.ID)
 			r := proto.Resolution{Answers: map[string]string{"Which shard after restart?": "Affected"}, AnsweredBy: proto.AnsweredByAssistant}
 			if terminal == "cancel" {
 				r = proto.Resolution{Cancel: true}
