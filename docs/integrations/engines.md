@@ -681,7 +681,8 @@ isolated 1.4.277 runtime with a stub `claude` (2026-11-28):
   `claude --plugin-dir <Orca's agent view plugin> --resume <id>`, in the session's directory, without the start's
   environment. Persona's launcher (a gateway's credentials), `--settings`, `--mcp-config` and hooks are gone, as with a
   bare herdr resume. Without Orca's Claude hooks in Claude Code's settings (Orca installs them when it finds `claude`),
-  Orca knows no session to resume and the tab opens as a plain shell.
+  Orca knows no session to resume, and a tab Persona opened (no `launchAgent`) should open as a plain shell (read from
+  Orca's bundle, not checked live).
 - `terminal.create` takes `launchAgent`, `launchToken` and `launchConfig {agentCommand, agentArgs, agentEnv}`, and Orca's
   resume builder would run `<agentCommand> --resume <id>` from such a config. It uses only a launch config Orca holds as
   its own launch evidence, which a create over the local socket never gets: a start typed after a create with those fields,
