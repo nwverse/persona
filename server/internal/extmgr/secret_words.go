@@ -140,22 +140,25 @@ func (ps *extensions) keepWords(ctx context.Context, reference string, d SecretD
 	ps.saveWords(ctx)
 }
 
-// editWords runs fn on every reference's words; one it returns false for is dropped. Saves when any changed.
-func (ps *extensions) editWords(ctx context.Context, fn func(ref string, k *keptWords) bool) {
+// editWords runs fn on every reference's words; one it returns false for is dropped. Saves when any changed. The
+// generation moves (words described meanwhile are not kept) when revoking or when any is dropped, as editGen does.
+func (ps *extensions) editWords(ctx context.Context, revoking bool, fn func(ref string, k *keptWords) bool) {
 	ps.loadWords(ctx)
 	w := &ps.words
 	w.mu.Lock()
-	w.gen++
-	changed := false
+	changed, dropped := false, false
 	for ref, k := range w.kept {
 		was := k
 		if !fn(ref, &k) {
 			delete(w.kept, ref)
-			changed = true
+			changed, dropped = true, true
 		} else if k != was {
 			w.kept[ref] = k
 			changed = true
 		}
+	}
+	if revoking || dropped {
+		w.gen++
 	}
 	w.mu.Unlock()
 	if changed {
@@ -175,7 +178,8 @@ func (ps *extensions) wordsProviderChanged(ctx context.Context, c extension.Chan
 	if c.Kind != "removed" {
 		p = ps.reg.Snapshot(c.ID)
 	}
-	ps.editWords(ctx, func(ref string, k *keptWords) bool {
+	revoking := c.Kind == "removed" || old != "" || p == nil || !p.Record.Enabled
+	ps.editWords(ctx, revoking, func(ref string, k *keptWords) bool {
 		if k.d.Provider != c.ID && (old == "" || k.d.Provider != old) {
 			return true
 		}
@@ -195,7 +199,7 @@ func (ps *extensions) wordsProviderChanged(ctx context.Context, c extension.Chan
 
 // staleWords: provider stored a secret (secrets.store): its references may name other things now.
 func (ps *extensions) staleWords(ctx context.Context, provider string) {
-	ps.editWords(ctx, func(_ string, k *keptWords) bool {
+	ps.editWords(ctx, true, func(_ string, k *keptWords) bool {
 		if k.d.Provider == provider {
 			k.stale = true
 		}

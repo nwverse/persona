@@ -103,20 +103,27 @@ func (k *keptSecrets) put(key keptKey, value, provider string, gen uint64) bool 
 }
 
 // edit runs fn on every kept value; one it returns false for is dropped. Whether any was dropped or changed.
-func (k *keptSecrets) edit(fn func(keptKey, *keptSecret) bool) bool {
+func (k *keptSecrets) edit(fn func(keptKey, *keptSecret) bool) bool { return k.editGen(true, fn) }
+
+// editGen is edit; revoking says the edit may revoke what a resolution under way would bring (a provider gone): it
+// moves the generation, so that value is not kept. An edit that is not revoking moves it only when it drops one: a
+// provider's restart or new configuration must not turn away a value resolved meanwhile.
+func (k *keptSecrets) editGen(revoking bool, fn func(keptKey, *keptSecret) bool) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.gen++
-	changed := false
+	changed, dropped := false, false
 	for key, v := range k.kept {
 		was := v
 		if !fn(key, &v) {
 			delete(k.kept, key)
-			changed = true
+			changed, dropped = true, true
 		} else if v != was {
 			k.kept[key] = v
 			changed = true
 		}
+	}
+	if revoking || dropped {
+		k.gen++
 	}
 	return changed
 }
@@ -395,7 +402,10 @@ func (ps *extensions) keptProviderChanged(ctx context.Context, c extension.Chang
 	if ps.h != nil {
 		ps.h.loadKept(ctx)
 	}
-	changed := ps.kept.edit(func(key keptKey, v *keptSecret) bool {
+	// Removed, switched off or renamed may revoke a value resolved meanwhile; a restart, an upgrade that keeps the
+	// schemes or a new configuration does not (an upgrade that drops a scheme drops what it kept of it).
+	revoking := c.Kind == "removed" || old != "" || p == nil || !p.Record.Enabled
+	changed := ps.kept.editGen(revoking, func(key keptKey, v *keptSecret) bool {
 		if key.kind == "extension" && (key.id == old || c.Kind == "removed" && key.id == c.ID) {
 			return false // the extension that held the reference is gone (or another now: it resolves again)
 		}
