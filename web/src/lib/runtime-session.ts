@@ -37,7 +37,11 @@ async function exactLookup(mid: string, sid: string, signal?: AbortSignal): Prom
 export interface ListHint { revision?: unknown; since?: unknown; changed?: unknown }
 
 /** `ready`: an answer (the full row, or the legacy route's) arrived for this chat at least once. */
-export interface DetailState { loading: boolean; error: string; missing: boolean; legacy: boolean; ready?: boolean }
+export interface DetailState {
+  loading: boolean; error: string; missing: boolean; legacy: boolean; ready?: boolean;
+  /** The full row and revision from this exact read, including a confirmed absence. */
+  snapshot?: { row: Session | undefined; revision: string };
+}
 
 /** The wait before a failed read's quiet retry: 2 s, doubling, then every minute. */
 const detailRetryMs = (failures: number) => Math.min(60_000, 2_000 * 2 ** Math.max(0, failures - 1));
@@ -95,7 +99,7 @@ export class SessionDetailLoader {
             this.gone = !row;
             this.last = row ? "" : t("runtime-session.missing");
             if (row) this.ready = true;
-            this.emit({ loading: false, error: this.last, missing: this.gone, legacy: false, ready: this.ready });
+            this.emit({ loading: false, error: this.last, missing: this.gone, legacy: false, ready: this.ready, snapshot: { row, revision } });
             if (row) this.misses = 0;
             else this.missed();
           } else {

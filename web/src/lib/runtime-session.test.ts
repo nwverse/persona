@@ -93,7 +93,7 @@ describe("a lookup that finds no row", () => {
       vi.mocked(api).mockResolvedValue(page([]));
       const model = loader(true, null);
       await model.load();
-      expect(states.at(-1)).toMatchObject({ loading: false, missing: true, ready: false });
+      expect(states.at(-1)).toMatchObject({ loading: false, missing: true, ready: false, snapshot: { revision: "checkpoint", row: undefined } });
       expect(api).toHaveBeenCalledTimes(1);
       let wait = 2_000;
       for (let i = 1; i <= MISSING_RETRIES; i++) {
@@ -119,7 +119,7 @@ describe("a lookup that finds no row", () => {
       expect(states.at(-1)).toMatchObject({ missing: true });
       await vi.advanceTimersByTimeAsync(2_000 + 4_000);
       expect(commit).toHaveBeenLastCalledWith(row());
-      expect(states.at(-1)).toMatchObject({ loading: false, missing: false, error: "", ready: true });
+      expect(states.at(-1)).toMatchObject({ loading: false, missing: false, error: "", ready: true, snapshot: { revision: "checkpoint", row: row() } });
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(api).toHaveBeenCalledTimes(3);
     } finally { vi.useRealTimers(); }
