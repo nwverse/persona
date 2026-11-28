@@ -1,5 +1,10 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## Codex dialog hints do not identify the active dialog (#17406)
+
+Codex 0.172 shares submit/cancel hints between approvals and questions; match the active title and options, and
+ignore approval titles above a composer or a newer question. PlainScreen drops dim styling: compare complete known
+placeholders after joining wrapped rows, and preserve text that only starts with a placeholder.
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
