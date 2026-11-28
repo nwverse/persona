@@ -37,6 +37,8 @@ classified only with that unreplaced dependency.
 The seven known swift-nio-ssh algorithm/certificate names are also classified as a complete original printable field
 or a complete comma-separated list; that fallback excludes URLs, surrounding context and normalized fragments.
 """
+from __future__ import annotations
+
 import base64
 import datetime
 import hashlib
