@@ -44,6 +44,7 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.canAnswerInteraction
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
+import persona.core.domain.engines.Engines
 import persona.core.domain.answer.rowLine
 import persona.core.domain.answer.askingLine
 import persona.core.domain.showsStarCard
@@ -619,6 +620,11 @@ internal fun AgentsScreen(
                     HerdrNotice(names[machine.id] ?: machine.displayName, machine.id in startingHerdr, { model.herdr.start(machine.id) },
                         failure = herdrFailures[machine.id])
                 }
+            }
+            if (page.preferences.range != AgentRange.History) {
+                items(page.machines.filter { Engines.orcaStopped(it) && groups.stateFor(it.id, connection) == ConnectionState.Online &&
+                    (page.settings.machineFilter.isEmpty() || page.settings.machineFilter == it.id) },
+                    key = { "orca:${it.id}" }) { machine -> OrcaNotice(names[machine.id] ?: machine.displayName) }
             }
             if (page.preferences.range != AgentRange.History && needsYou.isNotEmpty()) {
                 item(NeedsYouListKey) {

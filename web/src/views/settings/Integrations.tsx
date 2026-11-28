@@ -3,9 +3,9 @@
 // into one deduplicated list with capability filter chips, subscription health alerts, Extension Market access,
 // inline IntegrationDetail (#14868) mounting, and a lazy-loaded Data Flow view (#15423).
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { hubServes, moduleFeature } from "../../core/module-host";
 import { loadMailAccounts, useMailboxEnabled } from "../../lib/mail";
 import { t } from "../../i18n";
-import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import type { MailAccount } from "../../lib/agent-settings";
 import { api, enc, errorText } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
@@ -17,7 +17,7 @@ import { hubHasExt } from "../../lib/extension-api";
 import { onAuthChange, withAuth } from "../../lib/extension-auth";
 import { watchOperations } from "../../lib/extension-operations";
 import { EXTENSIONS_CHANGED } from "../../lib/extension-prompts";
-import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail } from "../../lib/extensions";
+import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail, type JsonObject } from "../../lib/extensions";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
@@ -73,6 +73,7 @@ const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((
 
 export interface IntegrationsProps {
   open: string | null;
+  prefill?: JsonObject;
   onOpen: (sub: string | null, drillDown?: boolean) => void;
   /** Desktop split-pane layout (when the Settings host has room): list stays beside the open integration detail. */
   twoCol?: boolean;
@@ -231,7 +232,6 @@ function PushSourceDetailPane({
       <Suspense fallback={<Loading />}>
         <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
       </Suspense>
-      {item?.kind === "source" && <ExternalSourceSettingsEntry provider="subscription" channel="" manager={manager} />}
     </div>
   );
 }
@@ -316,6 +316,7 @@ export function Integrations(props: IntegrationsProps) {
 function IntegrationsForManager({
   picked,
   open,
+  prefill,
   onOpen,
   twoCol = false,
   headerBack = false,
@@ -355,6 +356,8 @@ function IntegrationsForManager({
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   const hasMail = useMailboxEnabled();
   const hasLark = useLarkOn();
+  const larkModule = useStore((s) => hubServes(moduleFeature("lark"), s));
+  const announcesLarkModule = useStore((s) => s.features.includes(moduleFeature("lark")));
   const hasSubscriptions = useSubscriptionsShown();
   const hasInboxSources = useInboxSourcesShown();
 
@@ -377,17 +380,26 @@ function IntegrationsForManager({
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
+  const [subscriptionError, setSubscriptionError] = useState("");
   const [sourcesReload, setSourcesReload] = useState(0);
 
   const seq = useRef(0);
+  const subscriptionSeq = useRef(0);
   const loadSubscriptionsOnly = useCallback(async () => {
+    const mine = ++subscriptionSeq.current;
     if (!hasSubscriptions && !hasInboxSources) {
       setSubscriptions([]);
+      setSubscriptionError("");
       return;
     }
-    const mine = seq.current;
-    const list = await listSubscriptions(owner).catch(() => null);
-    if (mine === seq.current && list) setSubscriptions(list);
+    try {
+      const list = await listSubscriptions(owner);
+      if (mine !== subscriptionSeq.current) return;
+      setSubscriptions(list);
+      setSubscriptionError("");
+    } catch (error) {
+      if (mine === subscriptionSeq.current) setSubscriptionError(errorText(error));
+    }
   }, [hasSubscriptions, hasInboxSources, owner]);
 
   const loadAll = useCallback(async () => {
@@ -410,20 +422,29 @@ function IntegrationsForManager({
         : applyExtensions([], false),
       hasChannels ? listChannels(owner).then(publish(setChannels), report) : setChannels([]),
       hasConnectors ? listConnectors().then(publish(setConnectors), report) : setConnectors([]),
-      hasMail ? loadMailAccounts(owner).catch(() => null).then(publish(setMailAccounts)) : setMailAccounts(null),
-      hasLark ? api<LarkGatewaySummary>("/lark/status").catch(() => null).then(publish(setLarkStatus)) : setLarkStatus(null),
-      botStatus().catch(() => null).then(publish(setFeishuBotStatus)),
+      hasMail ? loadMailAccounts(owner).then(publish(setMailAccounts), (error) => {
+        report(error);
+        publish(setMailAccounts)(null);
+      }) : setMailAccounts(undefined),
+      hasLark ? api<LarkGatewaySummary>("/lark/status").then(publish(setLarkStatus), (error) => {
+        report(error);
+        publish(setLarkStatus)(null);
+      }) : setLarkStatus(undefined),
+      larkModule ? botStatus().then(publish(setFeishuBotStatus), report) : setFeishuBotStatus(null),
       loadSubscriptionsOnly(),
     ]);
 
     if (mine !== seq.current) return;
     setLoaded(true);
     setLoading(false);
-  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, loadSubscriptionsOnly, owner]);
+  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, larkModule, loadSubscriptionsOnly, owner]);
 
   useEffect(() => {
     void loadAll();
-    return () => { seq.current++; };
+    return () => {
+      seq.current++;
+      subscriptionSeq.current++;
+    };
   }, [loadAll]);
 
   // Refresh subscriptions when a subscription state changes on the hub (at most once per second).
@@ -477,18 +498,18 @@ function IntegrationsForManager({
     () =>
       buildIntegrationCatalog({
         extensions: ownExtensions,
-        channels,
-        connectors: ownConnectors,
+        channels: larkModule ? channels : channels.filter((c) => c.id !== "feishu"),
+        connectors: larkModule ? ownConnectors : ownConnectors.filter((c) => c.id !== "larkcli"),
         subscriptions,
         hasMail: hasMail && mailAccounts !== undefined,
         hasLark: hasLark && larkStatus !== undefined,
-        hasFeishuBot: feishuBotStatus !== null,
+        hasFeishuBot: larkModule && (announcesLarkModule || feishuBotStatus !== null),
         mailAccounts,
         larkStatus,
         feishuBotStatus,
         ownerManager: owner,
       }),
-    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, mailAccounts, larkStatus, feishuBotStatus, owner],
+    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, larkModule, announcesLarkModule, mailAccounts, larkStatus, feishuBotStatus, owner],
   );
 
   const counts = useMemo(
@@ -525,6 +546,8 @@ function IntegrationsForManager({
     return (
       <Suspense fallback={<Loading />}>
         <MarketCatalog
+          key={effectiveManager}
+          manager={effectiveManager}
           backLabel={t("settings-integrations.back")}
           onBack={headerBack ? undefined : () => onOpen(null)}
           onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
@@ -791,12 +814,13 @@ function IntegrationsForManager({
     </div>
   );
 
+  const loadErrors = subscriptionError ? [...partialErrors, subscriptionError] : partialErrors;
   const listBody = (
     <>
-      {partialErrors.length > 0 && (
+      {loadErrors.length > 0 && (
         <div className="mb-4">
           <Group>
-            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: partialErrors.join(" · ") })}</SettingsHint>
+            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint>
           </Group>
         </div>
       )}
@@ -930,9 +954,11 @@ function IntegrationsForManager({
   ) : showDetail && resolvedTarget ? (
     <Suspense fallback={<Loading />}>
       <IntegrationDetail
-        target={resolvedTarget}
+        target={{ ...resolvedTarget, manager: effectiveManager }}
+        prefill={prefill}
         integrationsV2={true}
         onBack={headerBack || twoCol ? undefined : backFromDetail}
+        onUnavailableBack={headerBack ? undefined : backFromDetail}
         onUninstalled={() => onOpen(null)}
         onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
         onUpgrade={(market, extId, manager) => drillDown({ kind: "item", market, id: extId, manager })}
@@ -943,42 +969,40 @@ function IntegrationsForManager({
     </Suspense>
   ) : null;
 
-  if (detailPane && !twoCol) {
-    return detailPane;
-  }
-
-  if (compactList && detailPane) {
+  if (detailPane) {
     return (
       <div
-        className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-        data-integrations-split=""
+        className={compactList ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden" : undefined}
+        data-integrations-split={compactList ? "" : undefined}
       >
-        <div
-          data-integrations-list
-          className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
-        >
+        {compactList && (
           <div
-            data-integrations-list-header
-            className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+            data-integrations-list
+            className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
           >
-            {listHeader}
-            {viewSwitch}
-            {filterBar}
+            <div
+              data-integrations-list-header
+              className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+            >
+              {listHeader}
+              {viewSwitch}
+              {filterBar}
+            </div>
+            <div
+              ref={listScrollRef}
+              data-integrations-list-scroll
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
+            >
+              {listBody}
+            </div>
           </div>
-          <div
-            ref={listScrollRef}
-            data-integrations-list-scroll
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
-          >
-            {listBody}
-          </div>
-        </div>
+        )}
         <div
           ref={detailScrollRef}
-          data-integrations-detail-scroll
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+          data-integrations-detail-scroll={compactList ? "" : undefined}
+          className={compactList ? "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain" : undefined}
         >
-          <div className="mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8">
+          <div className={compactList ? "mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8" : undefined}>
             {detailPane}
           </div>
         </div>

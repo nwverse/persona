@@ -748,6 +748,9 @@ func (n *Node) workspaceFor(ctx context.Context, launch host.Launcher, cwd strin
 		startErr = n.ensureHerdr(ctx, "start or resume a session") // herdrstart.go
 	}
 	wss, err := launch.Spaces(ctx)
+	if _, orca := launch.(*orcaHost); orca && err != nil && orcaUnreachable(err) {
+		return "", orcaMissing(err) // Orca's words, not herdr's (orcaengine.go)
+	}
 	if err != nil {
 		// Nothing was started or typed: say so, and what to do, instead of herdr's own words (the app showed
 		// "herdr workspace list: exec: \"herdr\": executable file not found").
@@ -761,8 +764,11 @@ func (n *Node) workspaceFor(ctx context.Context, launch host.Launcher, cwd strin
 			msg = fmt.Sprintf("这台电脑上的 %s 没在运行，自动启动也没成功，不能在这里新开或接着会话，这次没有发送。"+
 				"请在这台电脑上打开 %s 再试；原因见详情。", name, name)
 		}
-		return "", refusal(engineMissing, msg,
-			map[string]any{"detail": herdrMissingDetail(err, startErr)})
+		detail := name + ": " + err.Error()
+		if _, ok := launch.(*herdrHost); ok {
+			detail = herdrMissingDetail(err, startErr)
+		}
+		return "", refusal(engineMissing, msg, map[string]any{"detail": detail})
 	}
 	base := filepath.Base(cwd)
 	for _, w := range wss {

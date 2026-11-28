@@ -264,6 +264,7 @@
     <string name="agents_herdr_starting">Starting herdr…</string>
     <string name="agents_herdr_stopped">herdr isn\'t running on this computer</string>
     <string name="agents_herdr_start">Start</string>
+    <string name="agents_orca_stopped">Orca isn\'t running on this computer. Open Orca there to see its Agents again and start new ones.</string>
     <string name="agents_hub_notice_turn_off">Turn off</string>
     <string name="agents_hub_notice_got_it">Got it</string>
     <string name="agents_hub_notice_update">Update</string>

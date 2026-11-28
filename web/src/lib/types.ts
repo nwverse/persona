@@ -7,13 +7,16 @@ import type { RuleSuggestion } from "./rule-suggestion";
 export type AgentState = NonNullable<Session["state"]>;
 export type StatusMarkState = AgentPhase | AgentState;
 
-/** An engine as the machine's node found it (docs/integrations/engines.md): `note` says why one that is there cannot be used. */
+/** An engine as the machine's node found it (docs/integrations/engines.md): `note` says why one that is there cannot be used.
+ *  `state` (Orca's row only, #17037; proto.EngineState) tells installed-and-stopped from not there; read it through
+ *  engines.ts `engineState`, which turns a state this client does not know into "unknown". */
 export interface DetectedEngine {
   id: string;
   name: string;
   available: boolean;
   version?: string;
   note?: string;
+  state?: string;
 }
 
 export interface Machine {

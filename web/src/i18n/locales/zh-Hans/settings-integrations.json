@@ -33,6 +33,8 @@
   "status_error": "异常",
   "status_receiving": "接收中",
   "status_off": "已关闭",
+  "mail_module_off": "hub 所在的机器上已关闭邮件功能。",
+  "feishu_module_off": "hub 所在的机器上已关闭飞书机器人。",
   "sub_alert_failing": "订阅拉取失败",
   "sub_alert_needs_recipe": "订阅需更新规则",
   "sub_alert_rate_limited": "订阅触发限流",

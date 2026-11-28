@@ -582,7 +582,7 @@ func TestChannelThreadIdleHoursRotationAndPruning(t *testing.T) {
 		t.Fatalf("PUT 1000: %d %s", rec.Code, rec.Body.String())
 	}
 	now = now.Add(35 * 24 * time.Hour) // 840h: > 30d (720h), < 1000h
-	s.bindChannelThread("examplechat", channelGroupRouteKey("oc_other"), "server", "s_other")
+	s.bindChannelThread("examplechat", channelThreadKeys{primary: channelGroupRouteKey("oc_other")}, "server", "s_other")
 	if got := boundThread(s, groupKey); got != s3 {
 		t.Fatalf("binding with 1000h timeout was pruned at 35d: got %q want %q", got, s3)
 	}

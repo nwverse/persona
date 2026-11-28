@@ -7,10 +7,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Catalog, Market } from "../../lib/extension-market";
 
-const catalog = vi.hoisted(() => ({ value: null as unknown, impl: null as null | ((q: string, market: string) => Promise<unknown>) }));
+const catalog = vi.hoisted(() => ({
+  value: null as unknown,
+  impl: null as null | ((q: string, market: string, refresh?: boolean, manager?: string) => Promise<unknown>),
+}));
 vi.mock("../../lib/extension-market", async (original) => ({
   ...(await original<typeof import("../../lib/extension-market")>()),
-  getCatalog: (q: string, m: string) => (catalog.impl ? catalog.impl(q, m) : Promise.resolve(catalog.value)),
+  getCatalog: (q: string, m: string, refresh?: boolean, manager?: string) =>
+    (catalog.impl ? catalog.impl(q, m, refresh, manager) : Promise.resolve(catalog.value)),
 }));
 import { MarketCatalog } from "./ExtensionMarket";
 
@@ -164,6 +168,18 @@ describe("MarketCatalog updating state (#6468)", () => {
 });
 
 describe("MarketCatalog header Manage markets entry (#14958)", () => {
+  it("requests installed status for the assistant selected for marketplace installs", async () => {
+    const request = vi.fn(async () => ({ markets: [market("official")], extensions: [] }));
+    catalog.impl = request;
+    try {
+      await act(async () => root.render(<MarketCatalog manager="work" onOpen={() => {}} />));
+      await flush();
+      expect(request).toHaveBeenCalledWith("", "", false, "work");
+    } finally {
+      catalog.impl = null;
+    }
+  });
+
   it("supports onManageMarkets and custom backLabel for Integrations while keeping legacy onMarkets compatible", async () => {
     catalog.value = { markets: [market("official")], extensions: [] } satisfies Catalog;
     const onManageMarkets = vi.fn();

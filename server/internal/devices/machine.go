@@ -1095,6 +1095,9 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		return // the manager's alone
 	case "claude.dirs":
 		m.rememberClaudeDirs(params)
+	case proto.EventEnginesChanged: // what the node found of its engines changed since node.info (node/orcaengine.go)
+		m.onEnginesChanged(params)
+		return
 	case "claude.plugin": // the Persona plugin for Claude Code there changed (node/claudeplugin.go)
 		var st proto.ClaudePlugin
 		if json.Unmarshal(params, &st) == nil && st.State != "" {

@@ -1,5 +1,9 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A channel topic may have two routing keys during a Labs rollback (#17664). Reserve both keys at admission, use the active
+  binding under the other key on a lookup miss, and refresh both known bindings after delivery. A `/new` can supply only one
+  key. Clear the other bindings for the same conversation so the next message starts fresh.
+
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
   receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real

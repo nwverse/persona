@@ -55,6 +55,7 @@ vi.mock("../../lib/store", async (original) => ({
 vi.mock("./IntegrationDetail", () => ({
   IntegrationDetail: ({
     target,
+    prefill,
     onBack,
     onUpgrade,
     onPage,
@@ -62,6 +63,7 @@ vi.mock("./IntegrationDetail", () => ({
     onOpenSources,
   }: {
     target: { kind: string; id: string; channelId?: string; connectorId?: string | null; manager?: string };
+    prefill?: Record<string, unknown>;
     onBack?: () => void;
     onUpgrade?: (market: string, id: string, manager?: string) => void;
     onPage?: (extId: string, uiId: string, manager?: string) => void;
@@ -75,6 +77,7 @@ vi.mock("./IntegrationDetail", () => ({
       data-channel-id={target.channelId ?? ""}
       data-connector-id={target.connectorId ?? ""}
       data-manager={target.manager ?? ""}
+      data-prefill={prefill && JSON.stringify(prefill)}
     >
       {onBack && (
         <button type="button" data-mock-detail-back onClick={onBack}>
@@ -116,12 +119,14 @@ vi.mock("./IntegrationDetail", () => ({
 
 vi.mock("./ExtensionMarket", () => ({
   MarketCatalog: ({
+    manager,
     onBack,
     backLabel,
     onOpen,
     onMarkets,
     onManageMarkets,
   }: {
+    manager?: string;
     onBack?: () => void;
     backLabel?: string;
     onOpen: (it: { market: string; id: string }) => void;
@@ -130,7 +135,7 @@ vi.mock("./ExtensionMarket", () => ({
   }) => {
     const manage = onManageMarkets ?? onMarkets;
     return (
-      <div data-mock-market-catalog data-back-label={backLabel ?? ""}>
+      <div data-mock-market-catalog data-back-label={backLabel ?? ""} data-manager={manager}>
         {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
         <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
         {manage && <button type="button" data-mock-markets-open onClick={manage}>Manage markets</button>}
@@ -949,6 +954,54 @@ describe("Integrations unified list view", () => {
     expect(host.querySelector('[data-integration-id="mail"]')).not.toBeNull();
   });
 
+  it("hides the Feishu bot and its channel when the hub turns off module.lark, with the gateway still available", async () => {
+    stubFullHubFetch();
+    state.features.push("modules", "module.mail");
+    const draw = () => act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await draw();
+    await flush();
+
+    expect(host.querySelector('[data-integration-id="feishu-bot"], [data-integration-id="feishu"], [data-integration-id="larkcli"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="lark"]')?.textContent).toContain(t("settings-integrations.status_connected"));
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/bots/feishu"))).toBe(false);
+
+    state.features.push("module.lark");
+    await draw();
+    expect(host.querySelector('[data-integration-id="feishu-bot"]')).not.toBeNull();
+  });
+
+  it("reports each partial catalog failure, keeps the bot entry, and clears the warning after a successful reload", async () => {
+    state.features.push("source_subscriptions");
+    stubFullHubFetch({ channels: [], connectors: [] });
+    const mockFetch = vi.mocked(fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    const errors: Record<string, string> = {
+      "/api/v1/mail/accounts": "Mail account read failed",
+      "/api/v1/lark/status": "Gateway status read failed",
+      "/api/v1/bots/feishu": "Bot status read failed",
+      "/api/v1/subscriptions": "Subscription list read failed",
+    };
+    let failing = false;
+    mockFetch.mockImplementation((url, init) => failing && errors[String(url)]
+      ? Promise.resolve(json({ error: errors[String(url)] }, 500))
+      : fallback(url, init));
+    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await flush();
+
+    const refresh = host.querySelector<HTMLButtonElement>(`[aria-label="${t("settings-integrations.refresh")}"]`)!;
+    failing = true;
+    await act(async () => refresh.click());
+    const alert = host.querySelector('[role="alert"]')?.textContent ?? "";
+    for (const error of Object.values(errors)) expect(alert).toContain(error);
+    expect(host.querySelector('[data-integration-id="feishu-bot"]')).not.toBeNull();
+    expect(host.querySelector('[data-integration-id="mail"]')?.textContent).toContain(t("settings-connectors.status_unknown"));
+
+    failing = false;
+    await act(async () => refresh.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="mail"]')?.textContent).not.toContain(t("settings-connectors.status_unknown"));
+  });
+
   it.each(["en", "zh-Hans", "ja"])("renders localized labels, compact Market entry, and single-row narrow capability chips in %s", async (lang) => {
     stubFullHubFetch();
     try {
@@ -1047,6 +1100,18 @@ describe("Integrations unified list view", () => {
 });
 
 describe("Settings navigation collapse and bidirectional redirects under integrations_v2", () => {
+  it("passes the extension prefill through the legacy URL redirect to Integrations", async () => {
+    stubFullHubFetch();
+    const proposal = JSON.stringify({ display_alias: "From a link" });
+    history.replaceState(null, "", "/settings/extensions/larkx?set=" + encodeURIComponent(proposal));
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const search = new URLSearchParams(location.search);
+    expect(search.get("tab")).toBe("integrations");
+    expect(search.get("set")).toBe(proposal);
+    expect(host.querySelector('[data-mock-integration-detail][data-id="larkx"]')?.getAttribute("data-prefill")).toBe(proposal);
+  });
+
   it("keeps legacy Channels/Connectors/Extensions tabs untouched when integrations_v2 is off and redirects /settings/integrations/*", async () => {
     state.integrationsV2 = false;
     stubFullHubFetch();
@@ -1207,11 +1272,14 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
 
     // Both sidebars are outside the measured host. The 1080px, 1200px and 1280px layouts leave 552px, 672px and 752px.
+    const detail = host.querySelector("[data-mock-integration-detail]");
+    expect(detail).not.toBeNull();
     for (const width of [552, 672, 739, 740, 752, 912]) {
       hostWidth = width;
       await act(async () => resized());
       expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(width >= 740);
       expect(!!host.querySelector("[data-integrations-detail-scroll]")).toBe(width >= 740);
+      expect(host.querySelector("[data-mock-integration-detail]")).toBe(detail);
     }
     hostWidth = 560;
 
@@ -1309,6 +1377,8 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       const pushExtUI = pushDetail.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
       expect(pushExtUI).not.toBeNull();
       expect(pushExtUI.dataset.state).toBe(subscriptionSourceState("sub_push_iphone"));
+      await act(async () => vi.dynamicImportSettled());
+      expect(pushDetail.querySelector("[data-external-source-settings]")).toBeNull();
       expect(host.querySelector('[data-integration-id="sub_push_iphone"]')?.getAttribute("aria-current")).toBe("true");
       // Split-pane compact header still keeps both view switch and Market button.
       expect(host.querySelector("[data-integrations-list-header] [data-integrations-view-switch]")).not.toBeNull();
@@ -1331,6 +1401,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       // SourcesGraph renders source nodes AND InboxForwardSetting switch is mounted untouched.
       expect(host.textContent).toContain("My iPhone Notifications");
       expect(host.textContent).toContain("Team Wiki Updates");
+      expect(host.querySelector("[data-integrations-sources-view] [data-external-source-settings]")).not.toBeNull();
       const forwardSwitch = host.querySelector<HTMLButtonElement>(
         `[role="switch"][aria-label="${t("settings-assistantsettings.inbox_todo_forward")}"]`,
       )!;
@@ -1663,8 +1734,12 @@ describe("assistant isolation across integration routes", () => {
     chooseManager("work");
     const onOpen = vi.fn();
     await act(async () => root.render(<Integrations open="-sources" onOpen={onOpen} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await act(async () => root.render(<Integrations open="-market" onOpen={onOpen} />));
+    await flush();
+    expect(host.querySelector("[data-mock-market-catalog]")?.getAttribute("data-manager")).toBe("work");
     await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
