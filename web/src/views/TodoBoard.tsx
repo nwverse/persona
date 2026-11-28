@@ -365,93 +365,115 @@ export function TodoBoard({
             </span>
           </header>
           <div className="divide-y divide-line">
-            {group.rows.map((row) => (
-              <div
-                key={row.todo.id}
-                role="button"
-                tabIndex={0}
-                data-todo={row.todo.id}
-                onClick={() => onOpen(row.todo.id)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  onOpen(row.todo.id);
-                }}
-                className="flex cursor-pointer flex-col gap-1.5 px-3 py-2.5 transition-colors hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
-              >
-                <span className="flex flex-wrap items-center gap-1.5">
-                  <span className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{row.todo.title}</span>
-                  {isV2 && row.childSummary && (
-                    <span
-                      data-testid="board-child-summary"
-                      className="inline-flex shrink-0 items-center gap-1.5 rounded-chip bg-field px-1.5 py-0.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums"
-                    >
-                      <span>{t("todos.goal_progress", { done: row.childSummary.done, total: row.childSummary.total })}</span>
-                      {row.childSummary.working > 0 && (
-                        <span data-testid="board-child-summary-working" className="font-normal text-ink-3">
-                          {t("todos.child_summary_working", { count: row.childSummary.working })}
-                        </span>
-                      )}
-                      {row.childSummary.needs_you > 0 && (
-                        <span data-testid="board-child-summary-blocked" className="font-medium text-attention">
-                          {t("todos.goal_blocked", { count: row.childSummary.needs_you })}
-                        </span>
-                      )}
-                    </span>
+            {group.rows.map((row) => {
+              const hasInteractiveParent = isV2 && Boolean(row.parentGoal?.loaded);
+              return (
+                <div
+                  key={row.todo.id}
+                  role={hasInteractiveParent ? undefined : "button"}
+                  tabIndex={hasInteractiveParent ? undefined : 0}
+                  data-todo={row.todo.id}
+                  onClick={(event) => {
+                    if (hasInteractiveParent && (event.target as HTMLElement).closest("button, a")) return;
+                    onOpen(row.todo.id);
+                  }}
+                  onKeyDown={
+                    hasInteractiveParent
+                      ? undefined
+                      : (event) => {
+                          if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                          event.preventDefault();
+                          onOpen(row.todo.id);
+                        }
+                  }
+                  className={cx(
+                    "relative flex cursor-pointer flex-col gap-1.5 px-3 py-2.5 transition-colors hover:bg-hover",
+                    !hasInteractiveParent && "focus-visible:outline-2 focus-visible:outline-accent",
                   )}
-                  {isV2 && row.direction && (activeGrouping !== "direction" || row.direction.id !== group.key) && (
-                    <span
-                      data-testid="board-direction-tag"
-                      data-direction-id={row.direction.id}
-                      data-direction-inherited={row.direction.inherited ? "true" : "false"}
-                      title={row.direction.inherited ? t("todos.detail_direction_inherited_hint", { name: row.direction.label }) : row.direction.label}
-                      className="max-w-36 shrink-0 truncate rounded-chip bg-field px-1.5 py-0.5 text-submeta text-ink-2 whitespace-nowrap"
-                    >
-                      {row.direction.label}
-                    </span>
+                >
+                  {hasInteractiveParent && (
+                    <button
+                      type="button"
+                      data-testid="board-row-open"
+                      aria-label={row.todo.title}
+                      onClick={() => onOpen(row.todo.id)}
+                      className="absolute inset-0 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent"
+                    />
                   )}
-                  {row.waiting && <Tag tone="accent"><span data-testid="board-owner">{waitName("owner")}</span></Tag>}
-                  {row.stale && <Tag tone="orange"><span data-testid="board-stale">{t("todos.board_stale")}</span></Tag>}
-                </span>
-                {isV2 && row.parentGoal && (
-                  <div className="flex min-w-0 items-center">
-                    {row.parentGoal.loaded ? (
-                      <button
-                        type="button"
-                        data-testid="board-parent-goal"
-                        data-parent-id={row.parentGoal.id}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onOpen(row.parentGoal!.id);
-                        }}
-                        className="touch-hit inline-flex min-w-0 max-w-full items-center gap-1 rounded-chip text-submeta font-medium text-accent-ink whitespace-nowrap hover:underline focus-visible:outline-2 focus-visible:outline-accent"
-                      >
-                        <Icon name="target" size={11} stroke={2} className="shrink-0" />
-                        <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
-                      </button>
-                    ) : (
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="min-w-0 flex-1 truncate text-card-title font-semibold text-ink">{row.todo.title}</span>
+                    {isV2 && row.childSummary && (
                       <span
-                        data-testid="board-parent-goal"
-                        data-parent-id={row.parentGoal.id}
-                        className="inline-flex min-w-0 max-w-full items-center gap-1 text-submeta text-ink-3 whitespace-nowrap"
+                        data-testid="board-child-summary"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-chip bg-field px-1.5 py-0.5 text-submeta font-medium whitespace-nowrap text-ink-2 tabular-nums"
                       >
-                        <Icon name="target" size={11} stroke={2} className="shrink-0" />
-                        <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
+                        <span>{t("todos.goal_progress", { done: row.childSummary.done, total: row.childSummary.total })}</span>
+                        {row.childSummary.working > 0 && (
+                          <span data-testid="board-child-summary-working" className="font-normal text-ink-3">
+                            {t("todos.child_summary_working", { count: row.childSummary.working })}
+                          </span>
+                        )}
+                        {row.childSummary.needs_you > 0 && (
+                          <span data-testid="board-child-summary-blocked" className="font-medium text-attention">
+                            {t("todos.goal_blocked", { count: row.childSummary.needs_you })}
+                          </span>
+                        )}
                       </span>
                     )}
-                  </div>
-                )}
-                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-label text-ink-2">
-                  <span data-testid="board-responsible">{row.responsible}</span>
-                  {row.progress ? (
-                    <time className="text-ink-3" dateTime={row.progress.at}>{formatDate(row.progress.at, { dateStyle: "medium", timeStyle: "short" })}</time>
-                  ) : null}
-                </span>
-                <span data-testid="board-progress" className="truncate text-meta text-ink-3">
-                  {row.progress?.text ?? t("todos.board_no_progress")}
-                </span>
-              </div>
-            ))}
+                    {isV2 && row.direction && (activeGrouping !== "direction" || row.direction.id !== group.key) && (
+                      <span
+                        data-testid="board-direction-tag"
+                        data-direction-id={row.direction.id}
+                        data-direction-inherited={row.direction.inherited ? "true" : "false"}
+                        title={row.direction.inherited ? t("todos.detail_direction_inherited_hint", { name: row.direction.label }) : row.direction.label}
+                        className="max-w-36 shrink-0 truncate rounded-chip bg-field px-1.5 py-0.5 text-submeta text-ink-2 whitespace-nowrap"
+                      >
+                        {row.direction.label}
+                      </span>
+                    )}
+                    {row.waiting && <Tag tone="accent"><span data-testid="board-owner">{waitName("owner")}</span></Tag>}
+                    {row.stale && <Tag tone="orange"><span data-testid="board-stale">{t("todos.board_stale")}</span></Tag>}
+                  </span>
+                  {isV2 && row.parentGoal && (
+                    <div className="flex min-w-0 items-center">
+                      {row.parentGoal.loaded ? (
+                        <button
+                          type="button"
+                          data-testid="board-parent-goal"
+                          data-parent-id={row.parentGoal.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpen(row.parentGoal!.id);
+                          }}
+                          className="touch-hit relative z-10 inline-flex min-w-0 max-w-full items-center gap-1 rounded-chip text-submeta font-medium text-accent-ink whitespace-nowrap hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                        >
+                          <Icon name="target" size={11} stroke={2} className="shrink-0" />
+                          <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
+                        </button>
+                      ) : (
+                        <span
+                          data-testid="board-parent-goal"
+                          data-parent-id={row.parentGoal.id}
+                          className="inline-flex min-w-0 max-w-full items-center gap-1 text-submeta text-ink-3 whitespace-nowrap"
+                        >
+                          <Icon name="target" size={11} stroke={2} className="shrink-0" />
+                          <span className="truncate">{t("todos.goal_parent_hint", { title: row.parentGoal.title })}</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-label text-ink-2">
+                    <span data-testid="board-responsible">{row.responsible}</span>
+                    {row.progress ? (
+                      <time className="text-ink-3" dateTime={row.progress.at}>{formatDate(row.progress.at, { dateStyle: "medium", timeStyle: "short" })}</time>
+                    ) : null}
+                  </span>
+                  <span data-testid="board-progress" className="truncate text-meta text-ink-3">
+                    {row.progress?.text ?? t("todos.board_no_progress")}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </section>
       ))}
