@@ -506,7 +506,7 @@ func TestAGYRuntimeAlwaysAllowLifecycleAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	inboxCard := proto.Interaction{
-		ID: "ix_agy_inbox_rt", MachineID: "mac", SessionID: inboxSid, Kind: proto.IxPermission,
+		ID: "ix_agy_inbox_rt", MachineID: "mac", SessionID: inboxSid, Kind: proto.IxPermission, OutwardWrite: true,
 		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: m.assistantCwd(),
 		ToolName: "Bash", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
 		AlwaysKeys: []string{"runtime:antigravity:tool:Bash"},
@@ -534,7 +534,7 @@ func TestAGYRuntimeAlwaysAllowLifecycleAndRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	healthCard := proto.Interaction{
-		ID: "ix_agy_health", MachineID: "mac", SessionID: healthSid, Kind: proto.IxPermission,
+		ID: "ix_agy_health", MachineID: "mac", SessionID: healthSid, Kind: proto.IxPermission, OutwardWrite: true,
 		Agent: "antigravity", AgentLabel: "Antigravity", Cwd: "/home/me/.persona/health",
 		ToolName: "Write", ExpiresAt: time.Now().Add(time.Hour), Resumable: true,
 		AlwaysKeys: []string{"tool:Edit(//tmp/work/**)"},
