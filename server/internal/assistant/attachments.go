@@ -43,11 +43,11 @@ func hasUnsafeAttachmentPath(p string) bool {
 		return true
 	}
 	norm := strings.ReplaceAll(p, "\\", "/")
-	if norm == "/" || norm == "~/" || strings.HasSuffix(norm, "/") {
+	if norm == "/" || norm == "." || norm == "~" || norm == "~/" || strings.HasSuffix(norm, "/") {
 		return true
 	}
 	for _, seg := range strings.Split(norm, "/") {
-		if seg == ".." {
+		if seg == "." || seg == ".." {
 			return true
 		}
 	}
@@ -112,12 +112,14 @@ func (r attachmentRules) resolve(p string) string {
 	return path.Clean(p)
 }
 
+// Path boundaries intentionally exclude Han/letter runes so paths like "/Users/张三/etc/passwd" or
+// "/home/me/.ssh/id_rsa备份" never falsely match "/etc/passwd" or "/home/me/.ssh/id_rsa".
 func isPathLeftBoundary(r rune) bool {
-	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}：:，,。；;、=`", r)
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：:，,。；;、=!?！？`", r)
 }
 
 func isPathRightDelim(r rune) bool {
-	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}，。；、,;！？!?`", r)
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：，。；、,;！？!?`", r)
 }
 
 func isPathRightBoundary(rest string) bool {
@@ -385,6 +387,9 @@ func replaceAttachmentPaths(text string, moved map[string]string) string {
 			keys = append(keys, k)
 		}
 	}
+	if len(keys) == 0 {
+		return text
+	}
 	slices.SortFunc(keys, func(a, b string) int {
 		if len(a) != len(b) {
 			return cmp.Compare(len(b), len(a))
@@ -392,6 +397,7 @@ func replaceAttachmentPaths(text string, moved map[string]string) string {
 		return cmp.Compare(a, b)
 	})
 	var out strings.Builder
+	out.Grow(len(text))
 	for i := 0; i < len(text); {
 		leftOK := i == 0
 		if !leftOK {
@@ -418,6 +424,22 @@ func replaceAttachmentPaths(text string, moved map[string]string) string {
 	return out.String()
 }
 
+func sanitizeAttachmentName(raw string) string {
+	base := path.Base(strings.ReplaceAll(raw, "\\", "/"))
+	base = strings.ToValidUTF8(base, "")
+	base = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, base)
+	base = strings.TrimSpace(base)
+	if base == "" || base == "/" || strings.Trim(base, ".") == "" {
+		return ""
+	}
+	return base
+}
+
 // readAttachment reads a file on machine whole, in file.chunk's pieces (as the hub's downloads read one), refusing one
 // over attachmentMostBytes before any of it is read.
 func (s *Service) readAttachment(ctx context.Context, machine, p string) (name, mime string, data []byte, err error) {
@@ -434,21 +456,30 @@ func (s *Service) readAttachment(ctx context.Context, machine, p string) (name, 
 	data = make([]byte, 0, min(head.Size, int64(proto.FileDownloadChunkBytes)))
 	for int64(len(data)) < head.Size {
 		var c proto.FileChunk
-		req := proto.FileChunkRequest{Path: p, Offset: int64(len(data)), Length: proto.FileDownloadChunkBytes, Revision: head.Revision}
+		remaining := head.Size - int64(len(data))
+		req := proto.FileChunkRequest{
+			Path:     p,
+			Offset:   int64(len(data)),
+			Length:   int(min(int64(proto.FileDownloadChunkBytes), remaining)),
+			Revision: head.Revision,
+		}
 		if err := s.call(ctx, machine, "file.chunk", req, &c); err != nil {
 			return "", "", nil, err
 		}
 		if len(c.Data) == 0 {
 			return "", "", nil, fmt.Errorf("the file ended early")
 		}
-		if int64(len(c.Data)) > attachmentMostBytes-int64(len(data)) || int64(len(c.Data)) > head.Size-int64(len(data)) {
+		if int64(len(c.Data)) > attachmentMostBytes-int64(len(data)) || int64(len(c.Data)) > remaining {
 			return "", "", nil, fmt.Errorf("file size exceeded declared limit")
 		}
 		data = append(data, c.Data...)
 	}
-	name = path.Base(strings.ReplaceAll(strings.TrimSpace(head.Name), "\\", "/"))
-	if name == "" || name == "." || name == "/" || name == ".." {
-		name = path.Base(strings.ReplaceAll(p, "\\", "/"))
+	name = sanitizeAttachmentName(head.Name)
+	if name == "" {
+		name = sanitizeAttachmentName(p)
+	}
+	if name == "" {
+		name = "file"
 	}
 	return name, head.Mime, data, nil
 }
