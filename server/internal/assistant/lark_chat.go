@@ -589,7 +589,7 @@ func (h larkHost) OpenTodo(ctx context.Context, o assistantwire.ChatOpenTodo) (s
 		}
 	}
 	if err == nil && o.Source != nil {
-		src := TodoSource{Channel: o.Source.Channel, ChatID: o.Source.ChatID, MessageID: o.Source.MessageID, ThreadID: o.Source.ThreadID, Anchor: o.Source.Anchor,
+		src := TodoSource{Channel: o.Source.Channel, ChatID: o.Source.ChatID, MessageID: o.Source.MessageID, ThreadID: string(o.Source.ThreadID), Anchor: o.Source.Anchor,
 			Handoff: o.Source.Handoff}
 		if err = s.setTodoSource(ctx, todo.ID, src); err == nil {
 			s.todosChanged(ctx)
