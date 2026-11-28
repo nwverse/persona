@@ -3260,6 +3260,13 @@ input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConver
 bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
 Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.
 
+## Prerequisite waits survive a Labs rollback (#17693)
+
+An approved plan can still name a PR blocker when Labs is switched off. Keep checking that
+stored wait on the legacy queue and at launch. A failed read leaves the queue available for
+another check. An `after` mirror follows the live dependency verdict, including reopening.
+Publish blocker changes after the compare-and-set commits so the next read sees the result.
+
 ## A built-in bridge is a runtime to every check that counts them (#17049)
 
 The manager update inventory refuses while any runtime is connected (`updateSourceCoverage`). The Orca bridge
