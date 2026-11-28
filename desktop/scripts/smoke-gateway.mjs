@@ -34,6 +34,7 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     outside.push(`${method} ${(req.url ?? "").split("?")[0]} (${req.headers["sec-fetch-dest"] ?? "socket"})`);
   };
   const sockets = new Set();
+  const requests = [];
 
   /** The path inside the hub, or undefined for a request the proxy would never forward. */
   const inner = url => {
@@ -43,6 +44,9 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
   };
 
   const server = createServer(async (req, res) => {
+    const entry = { method: req.method, path: (req.url ?? "/").split("?")[0] };
+    requests.push(entry);
+    res.on("finish", () => { entry.status = res.statusCode; });
     const path = inner(req.url ?? "/");
     if (path === undefined) {
       escaped(req, req.method);
@@ -103,6 +107,8 @@ export async function startGateway({ dist, mockPort, prefix = "" }) {
     /** The page's requests that escaped the prefix, as "METHOD path (destination)" without their query (it can carry a credential). */
     outside: () => [...outside],
     strangers: () => strangers,
+    /** Method, query-free path and response status only; never credentials, bodies or device tokens. */
+    requests: () => requests.map(entry => ({ ...entry })),
     async close() {
       for (const socket of sockets) socket.destroy();
       server.closeAllConnections();
