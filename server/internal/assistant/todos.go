@@ -86,9 +86,10 @@ type Todo struct {
 	Supervision *Supervision `json:"supervision,omitempty"`
 	// Phase and WaitState come from the task stage ledger. They are present in
 	// either to-do mode once the task uses structured runtime reports.
-	Phase     assistantwire.TaskPhase      `json:"phase,omitempty"`
-	WaitState *assistantwire.TaskWaitState `json:"wait_state,omitempty"`
-	runtimeAt time.Time
+	Phase               assistantwire.TaskPhase      `json:"phase,omitempty"`
+	WaitState           *assistantwire.TaskWaitState `json:"wait_state,omitempty"`
+	runtimeAt           time.Time
+	runtimeObservedWait bool
 	// Stage is how far its work got (plan, develop, review, merge, deploy, verify; "" not known) and PRURL the PR it
 	// named, read off its agents' replies (reports.go, #2768); the apps draw the stage bar from them.
 	Stage    string        `json:"stage,omitempty"`

@@ -103,6 +103,14 @@ function paintFrame(
   return w;
 }
 
+type TransitionState = {
+  active: boolean;
+  from: SidebarMode;
+  to: SidebarMode;
+  leaving: "expanded" | "rail" | null;
+  run: number;
+};
+
 export function useSidebarTransition(opts: {
   shellRef: RefObject<HTMLDivElement | null>;
   columnRef: RefObject<HTMLDivElement | null>;
@@ -115,78 +123,96 @@ export function useSidebarTransition(opts: {
   macWindowed: boolean;
 }): { animating: boolean; leaving: "expanded" | "rail" | null } {
   const { shellRef, columnRef, mainEl, fullLayerRef, railLayerRef, contourDriverRef, mode, narrow, macWindowed } = opts;
-  const [state, setState] = useState<{ active: boolean; from: SidebarMode; to: SidebarMode; fromW: number; leaving: "expanded" | "rail" | null }>({
+  const [state, setState] = useState<TransitionState>({
     active: false,
     from: mode,
     to: mode,
-    fromW: 0,
     leaving: null,
+    run: 0,
   });
-  const prevMode = useRef<SidebarMode>(mode);
+  // Keep latest chrome/main references without restarting an active transition on non-mode updates.
+  const envRef = useRef({ mainEl, macWindowed });
+  const stylesDirty = useRef(false);
   const activeRun = useRef(false);
   const liveW = useRef(0);
   const raf = useRef(0);
 
-  useLayoutEffect(() => {
-    const prev = prevMode.current;
-    prevMode.current = mode;
-    if (narrow) {
-      if (activeRun.current) {
-        cancelAnimationFrame(raf.current);
-        activeRun.current = false;
-        clearStyles(shellRef.current, columnRef.current, mainEl, fullLayerRef.current, railLayerRef.current);
-      }
-      if (state.active) setState({ active: false, from: mode, to: mode, fromW: 0, leaving: null });
-      return;
+  // Derive transition state during render so the outgoing layer stays mounted without a 1-frame unmount/remount.
+  const canAnimate = !narrow && typeof requestAnimationFrame === "function" && !prefersReducedMotion();
+  if (!canAnimate) {
+    if (state.active || state.to !== mode || state.from !== mode || state.leaving !== null) {
+      setState({ active: false, from: mode, to: mode, leaving: null, run: state.run });
     }
-    if (prev === mode) return;
-    const shell = shellRef.current;
-    const column = columnRef.current;
-    if (!shell || !column || prefersReducedMotion() || typeof requestAnimationFrame !== "function") {
-      activeRun.current = false;
-      clearStyles(shell, column, mainEl, fullLayerRef.current, railLayerRef.current);
-      if (state.active) setState({ active: false, from: mode, to: mode, fromW: 0, leaving: null });
-      return;
-    }
-    const layoutReady = prev === "hidden"
-      ? (mainEl?.getBoundingClientRect().width ?? 0) > 0
-      : column.getBoundingClientRect().width > 0;
-    if (!layoutReady) {
-      activeRun.current = false;
-      clearStyles(shell, column, mainEl, fullLayerRef.current, railLayerRef.current);
-      if (state.active) setState({ active: false, from: mode, to: mode, fromW: 0, leaving: null });
-      return;
-    }
-    cancelAnimationFrame(raf.current);
-    const fromW = activeRun.current ? liveW.current : targetWidth(prev, column);
-    liveW.current = fromW;
-    activeRun.current = true;
-    shell.dataset.sidebarAnimating = "1";
-    column.style.width = `${fromW.toFixed(2)}px`;
-    column.style.overflow = "hidden";
-    setState({ active: true, from: prev, to: mode, fromW, leaving: prev === "hidden" ? null : prev });
-  }, [mode, narrow]);
+  } else if (state.to !== mode) {
+    const from = state.to;
+    setState({
+      active: true,
+      from,
+      to: mode,
+      leaving: from === "hidden" ? null : from,
+      run: state.run + 1,
+    });
+  }
 
   useLayoutEffect(() => {
-    if (!state.active) return;
+    envRef.current = { mainEl, macWindowed };
+  });
+
+  useLayoutEffect(() => {
     const shell = shellRef.current;
     const column = columnRef.current;
-    if (!shell || !column) return;
+    const { mainEl: curMain } = envRef.current;
+    const clearIfDirty = () => {
+      if (!stylesDirty.current) return;
+      clearStyles(shell, column, curMain, fullLayerRef.current, railLayerRef.current);
+      stylesDirty.current = false;
+    };
+
+    if (!state.active) {
+      cancelAnimationFrame(raf.current);
+      activeRun.current = false;
+      clearIfDirty();
+      return;
+    }
+
+    const layoutReady = Boolean(shell && column) && (
+      activeRun.current
+        ? (curMain?.getBoundingClientRect().width ?? 0) > 0 || column!.getBoundingClientRect().width > 0
+        : state.from === "hidden"
+          ? (curMain?.getBoundingClientRect().width ?? 0) > 0
+          : column!.getBoundingClientRect().width > 0
+    );
+    if (!shell || !column || !layoutReady) {
+      cancelAnimationFrame(raf.current);
+      activeRun.current = false;
+      clearIfDirty();
+      setState((cur) => (cur.active ? { active: false, from: cur.to, to: cur.to, leaving: null, run: cur.run } : cur));
+      return;
+    }
+
+    cancelAnimationFrame(raf.current);
+    const fromW = activeRun.current ? liveW.current : targetWidth(state.from, column);
     const toW = targetWidth(state.to, column);
+    liveW.current = fromW;
+    activeRun.current = true;
+    stylesDirty.current = true;
+    shell.dataset.sidebarAnimating = "1";
+
     const dur = state.to === "expanded" || (state.from === "hidden" && state.to === "rail")
       ? SIDEBAR_EXPAND_MS
       : SIDEBAR_COLLAPSE_MS;
     const drawAt = (p: number) => {
+      const { mainEl: liveMain, macWindowed: liveMacWindowed } = envRef.current;
       liveW.current = paintFrame(
         p,
         state.from,
         state.to,
-        state.fromW,
+        fromW,
         toW,
-        macWindowed,
+        liveMacWindowed,
         shell,
         column,
-        mainEl,
+        liveMain,
         fullLayerRef.current,
         railLayerRef.current,
         contourDriverRef.current,
@@ -200,9 +226,11 @@ export function useSidebarTransition(opts: {
       if (p < 1) {
         raf.current = requestAnimationFrame(tick);
       } else {
+        // Defer clearStyles until React commits active=false and unmounts the leaving layer.
         activeRun.current = false;
-        clearStyles(shell, column, mainEl, fullLayerRef.current, railLayerRef.current);
-        setState((cur) => (cur.active ? { active: false, from: state.to, to: state.to, fromW: toW, leaving: null } : cur));
+        setState((cur) => (cur.active && cur.run === state.run
+          ? { active: false, from: cur.to, to: cur.to, leaving: null, run: cur.run }
+          : cur));
       }
     };
     raf.current = requestAnimationFrame(tick);

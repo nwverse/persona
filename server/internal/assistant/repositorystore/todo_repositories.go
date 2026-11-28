@@ -220,8 +220,7 @@ func (d *Store) SetTodoRepositoryLinks(ctx context.Context, id, repoID string, i
 	return out, err
 }
 
-// SetTodoRepositoryLinkRole rewrites the role of a single link (matched by canonical URL) inside one transaction, so
-// the automatic gate downgrade can never clobber a concurrent edit made to another link.
+// SetTodoRepositoryLinkRole rewrites the role of a single link matched by canonical URL inside one transaction.
 func (d *Store) SetTodoRepositoryLinkRole(ctx context.Context, id, canonicalURL, role string) (repository.TaskSet, error) {
 	normalized, perr := repository.NormalizeLinkRole(role)
 	if perr != "" {
