@@ -21,6 +21,8 @@ import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { Haptics } from '../platform/Haptics';
 import { workspaceGridColumns, workspaceGridGutter, workspaceHorizontalPadding } from '../core/WorkspaceGrid';
+import { isHubPageHidden } from '../core/HubModules';
+import { InboxKBChatLink, parseInboxKBChat } from '../core/KBChatInbox';
 
 const MAX_IMAGE_PIXELS: number = 40000000;
 const MAX_IMAGE_EDGE: number = 8192;
@@ -235,6 +237,7 @@ export struct InboxWorkspacePage {
   @Event onComposeAvailability:(enabled:boolean)=>void=()=>{};
   @Event onChanged: () => void = (): void => {};
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
+  @Event onOpenResource: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onHandoff: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Local environment: NativeEnvironment = nativeEnvironment;
@@ -302,10 +305,10 @@ export struct InboxWorkspacePage {
     if (this.active && this.visible && this.list) this.workspace.refresh().catch(() => undefined);
   }
   @Monitor('composeRevision') composeRequested():void {
-    if (this.active && this.visible && this.list && !this.sheetOpen && this.workspace.canComposeMail()) this.openMailCompose();
+    if (this.active && this.visible && this.list && !this.sheetOpen && this.model.mailModuleAllowed() && this.workspace.canComposeMail()) this.openMailCompose();
   }
-  @Monitor('visible','model.connected','workspace.filterAddresses','workspace.writeState','workspace.handoffBusy','workspace.attachmentBusy') composeAvailabilityChanged():void {
-    if (this.active && this.visible && this.list) this.onComposeAvailability(this.workspace.canComposeMail());
+  @Monitor('visible','model.connected','model.features','workspace.filterAddresses','workspace.writeState','workspace.handoffBusy','workspace.attachmentBusy') composeAvailabilityChanged():void {
+    if (this.active && this.visible && this.list) this.onComposeAvailability(this.model.mailModuleAllowed() && this.workspace.canComposeMail());
   }
   private acknowledged(changed: boolean): void { if (changed && this.active && this.visible) this.onChanged(); }
 
@@ -378,7 +381,10 @@ export struct InboxWorkspacePage {
     return !this.workspace.isHandled(row) && (Wire.bool(data, 'urgent') || inboxTier(data) === 'action');
   }
   private async refreshList(): Promise<void> { await this.workspace.refresh(); }
-  private openMailCompose(): void { this.activeSheet = 'mail'; this.sheetOpen = true; this.workspace.openMailCompose(); }
+  private openMailCompose(): void {
+    if (!this.model.mailModuleAllowed()) return;
+    this.activeSheet = 'mail'; this.sheetOpen = true; this.workspace.openMailCompose();
+  }
   private openHandoff(): void { if (!this.workspace.canWrite()) return; this.handoffText = this.workspace.handoffDraft || tr('inbox_handoff_preset_summary'); this.activeSheet = 'handoff'; this.sheetOpen = true; }
   private chain(): Record<string, Object>[] { return Wire.rows(this.workspace.detail, 'chain'); }
   private handling(): Record<string, Object> { return Wire.object(this.workspace.detail, 'handling'); }
@@ -562,7 +568,7 @@ export struct InboxWorkspacePage {
       }
       if (!this.toolbarActions) {
         MenuItem({content:tr('refresh')}).enabled(!this.workspace.loading).onClick(() => this.refreshList())
-        MenuItem({content:tr('compose')}).enabled(this.workspace.canComposeMail()).onClick(() => this.openMailCompose())
+        if (this.model.mailModuleAllowed()) MenuItem({content:tr('compose')}).enabled(this.workspace.canComposeMail()).onClick(() => this.openMailCompose())
       }
     }.width(Tokens.popupWidth)
   }
@@ -628,13 +634,13 @@ export struct InboxWorkspacePage {
               Text(tr(inboxTierLabel(choice.key))).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale).maxLines(1)
                 .fontWeight(!Colors.systemControls && this.workspace.statusFilter === choice.key ? FontWeight.Bold : FontWeight.Medium)
                 .fontColor(this.workspace.statusFilter === choice.key ? Colors.selectedFilterInk : Colors.ink).id('inbox.choice.label.' + choice.key)
-              if (choice.count && ['action','working','fyi'].includes(choice.key)) Text(choice.count > 99 ? '99+' : String(choice.count)).fontSize(12)
+              if (choice.count && ['action','working','fyi'].includes(choice.key)) Text(choice.count > 99 ? '99+' : String(choice.count)).fontSize(Tokens.typeLabel)
                 .maxFontScale(Tokens.navigationTextMaxScale).maxLines(1).fontWeight(FontWeight.Bold)
                 .fontColor(this.countInk(choice.key))
                 .textAlign(TextAlign.Center).padding({left:6,right:6}).constraintSize({minWidth:PhoneStyle.formSize(20.3,23,this.environment.fontScale)})
                 .height(PhoneStyle.formSize(17.7,25.7,this.environment.fontScale))
-                .backgroundColor(this.countFill(choice.key)).borderRadius(Tokens.capsule)
-            }.padding({left:8,right:8}).height(PhoneStyle.formSize(26.3,33.7,this.environment.fontScale)).borderRadius(Tokens.capsule)
+                .backgroundColor(this.countFill(choice.key)).borderRadius(Tokens.radiusCapsule)
+            }.padding({left:8,right:8}).height(PhoneStyle.formSize(26.3,33.7,this.environment.fontScale)).borderRadius(Tokens.radiusCapsule)
               .backgroundColor(this.workspace.statusFilter === choice.key ? Colors.selectedFilterFill : Color.Transparent)
               .animation(Motion.state(this.environment.reduceMotion))
           }.height(PhoneStyle.sidebarMetric(44,this.environment.fontScale))
@@ -655,7 +661,7 @@ export struct InboxWorkspacePage {
       Row({space:4}) {
         if (value!=='all') SymbolGlyph(account ? Symbols.inbox : value==='lark' ? Symbols.persona : Symbols.apps)
           .fontSize('13vp').fontColor([this.chipSelected(value,account) ? Colors.onAction : Colors.ink])
-        Text(account ? this.workspace.filterAccountName(value) : this.sourceLabel(value)).fontSize(13)
+        Text(account ? this.workspace.filterAccountName(value) : this.sourceLabel(value)).fontSize(Tokens.typeCaption)
           .maxFontScale(Tokens.navigationTextMaxScale).maxLines(1).fontColor(this.chipSelected(value,account) ? Colors.onAction : Colors.ink)
       }
     }.height(PhoneStyle.formSize(30,37.3,this.environment.fontScale)).responseRegion(this.chipTouchRegion()).padding({left:13,right:13,top:3,bottom:3})
@@ -687,7 +693,7 @@ export struct InboxWorkspacePage {
         ForEach(['mention','dm','group','mail','agent'],(kind:string) => {
           Button(tr(kind==='mail' || kind==='agent' ? kind : 'phone_inbox_'+kind),{type:ButtonType.Capsule})
             .height(PhoneStyle.formSize(30,37.3,this.environment.fontScale)).responseRegion(this.chipTouchRegion()).padding({left:13,right:13,top:3,bottom:3})
-            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).backgroundColor(this.workspace.kindFilter===kind ? Colors.action : Colors.subtle)
+            .fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).backgroundColor(this.workspace.kindFilter===kind ? Colors.action : Colors.subtle)
             .animation(Motion.state(this.environment.reduceMotion))
             .fontColor(this.workspace.kindFilter===kind ? Colors.onAction : Colors.ink).accessibilitySelected(this.workspace.kindFilter===kind)
             .onClick(() => { Haptics.selection(); Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => { this.workspace.kindFilter=this.workspace.kindFilter===kind ? '' : kind; }); }).id('inbox.kind.'+kind)
@@ -733,7 +739,7 @@ export struct InboxWorkspacePage {
           SymbolGlyph(this.rowSymbol(row)).fontSize(this.phoneList && row.kind==='session' ? '17vp' : '18vp')
             .fontColor([this.phoneList && row.kind==='session' ? Colors.needsMark : Colors.link])
         }
-      }.width(40).height(40).borderRadius(this.phoneList && row.kind==='session' ? 12 : 10)
+      }.width(40).height(40).borderRadius(this.phoneList && row.kind==='session' ? Tokens.radiusCard : Tokens.radiusControl)
         .backgroundColor(this.phoneList && row.kind==='session' ? $r('app.color.phone_inbox_request_well') : Colors.subtle)
       if (this.rowNeedsPulse(row)) {
         NeedsYouPulseDot({ dotSize: 7, tint: Colors.needsMark, surface: Colors.surface, bordered: true })
@@ -806,8 +812,8 @@ export struct InboxWorkspacePage {
     Row({space:5}) {
       if (section.sourceGroup) SymbolGlyph(this.collapsedSources.includes(section.key) ? Symbols.expand : Symbols.down).fontSize('11vp').fontColor([Colors.secondary])
       Text(section.sourceGroup ? this.subheading(section) : tr(inboxTierLabel(section.tier))+' ·')
-        .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink)
-      Text(String(section.count)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink).layoutWeight(1)
+        .fontSize(Tokens.typeSectionHeader).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSectionHeader)).fontWeight(FontWeight.Medium).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink)
+      Text(String(section.count)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(section.sourceGroup ? Colors.secondary : Colors.ink).layoutWeight(1)
       if (!section.sourceGroup && this.workspace.statusFilter==='all' && ['done','noise'].includes(section.tier))
         SymbolGlyph(this.groupOpen(section.tier) ? Symbols.down : Symbols.expand).fontSize('13vp').fontColor([Colors.secondary])
     }.constraintSize({minHeight:PhoneStyle.sidebarMetric(44,this.environment.fontScale)}).width('100%').padding({left:4,right:4,top:4,bottom:4})
@@ -833,14 +839,14 @@ export struct InboxWorkspacePage {
               this.requestAvatar(binding.value,binding.key)
               Column({ space: 4 }) {
                 Row({space:5}) {
-                  Text(binding.value.title || tr('inbox')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+                  Text(binding.value.title || tr('inbox')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
                     .layoutWeight(1).maxLines(binding.value.kind === 'session' ? 1 : 2).textOverflow({overflow:TextOverflow.Ellipsis})
                   if (this.rowTime(binding.value))
-                    Text(this.rowTime(binding.value)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+                    Text(this.rowTime(binding.value)).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor(Colors.secondary)
                 }.width('100%').alignItems(VerticalAlign.Top)
-                if (this.rowPreview(binding.value)) Text(this.rowPreview(binding.value)).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(binding.value.kind==='session' ? Colors.ink : Colors.secondary).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
+                if (this.rowPreview(binding.value)) Text(this.rowPreview(binding.value)).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(binding.value.kind==='session' ? Colors.ink : Colors.secondary).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
                 Flex({wrap:FlexWrap.Wrap,space:{main:LengthMetrics.vp(5),cross:LengthMetrics.vp(2)}}) {
-                  Text(binding.value.kind === 'session' ? this.requestLabel(binding.value) : tr(inboxTierLabel(inboxTier(binding.value.data())))).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
+                  Text(binding.value.kind === 'session' ? this.requestLabel(binding.value) : tr(inboxTierLabel(inboxTier(binding.value.data())))).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                     .fontWeight(FontWeight.Medium).fontColor(Colors.link)
                   Text(binding.value.kind === 'session' ? '· '+(this.model.machineName(binding.value.machine) || tr('agent')) : this.rowSource(binding.value)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12))
                     .fontColor(Colors.secondary).id('inbox.row.source.' + binding.key)
@@ -888,6 +894,66 @@ export struct InboxWorkspacePage {
       if (Wire.text(this.workspace.detail, 'tier')) Text(tr('inbox_tier_' + Wire.text(this.workspace.detail, 'tier'))).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
       if (Wire.text(this.workspace.detail, 'folder')) Text(Wire.text(this.workspace.detail, 'folder')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
     }.width('100%')
+  }
+
+  private linkedKnowledgeChat(): InboxKBChatLink | null {
+    if (this.workspace.isReference()) return null;
+    if (isHubPageHidden('knowledge', this.model.sidebarConfig, this.model.demo)) return null;
+    return parseInboxKBChat(this.workspace.kbChat);
+  }
+
+  private openKnowledgeChat(link: InboxKBChatLink): void {
+    Haptics.tap();
+    const row = new ResourceRow(link.id, this.workspace.selected.title || link.id, 'knowledge');
+    row.path = link.path;
+    row.manager = this.workspace.selected.manager || this.model.profile.manager;
+    row.group = this.workspace.selected.group || this.model.profile.id;
+    this.onOpenResource(row);
+  }
+
+  @Builder kbChatCard() {
+    if (this.linkedKnowledgeChat()) {
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: Tokens.spaceM }) {
+          SymbolGlyph($r('sys.symbol.books_vertical_fill'))
+            .fontSize('18vp')
+            .fontColor([Colors.ai])
+          Column({ space: Tokens.spaceXxs }) {
+            Text(tr('kb_chat_knowledge_page'))
+              .fontSize(Tokens.typeSecondary)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.ink)
+              .maxLines(1)
+            Text(this.workspace.selected.title || this.linkedKnowledgeChat()!.id)
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+              .fontColor(Colors.secondary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          SymbolGlyph(Symbols.expand)
+            .fontSize('12vp')
+            .fontColor([Colors.tertiary])
+        }
+        .width('100%')
+        .padding({ left: Tokens.spaceL, right: Tokens.spaceM, top: Tokens.spaceM, bottom: Tokens.spaceM })
+        .alignItems(VerticalAlign.Center)
+      }
+      .width('100%')
+      .padding(0)
+      .backgroundColor(Colors.surface)
+      .borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .onClick(() => {
+        const link = this.linkedKnowledgeChat();
+        if (link) this.openKnowledgeChat(link);
+      })
+      .id('inbox.detail.kb_chat')
+    }
   }
 
   @Builder summary() {
@@ -1047,9 +1113,18 @@ export struct InboxWorkspacePage {
 
   @Builder mailContent() {
     if (this.workspace.isMail()) {
-      Column({ space: Tokens.gap }) {
-        ForEach(this.workspace.mailMessages, (message: InboxMailMessage) => this.mailMessage(message), (message: InboxMailMessage) => String(message.uid))
-      }.width('100%').alignItems(HorizontalAlign.Start)
+      if (this.model.mailModuleAllowed()) {
+        Column({ space: Tokens.gap }) {
+          ForEach(this.workspace.mailMessages, (message: InboxMailMessage) => this.mailMessage(message), (message: InboxMailMessage) => String(message.uid))
+        }.width('100%').alignItems(HorizontalAlign.Start)
+      } else if (Wire.text(this.workspace.detail, 'context')) {
+        Column({ space: Tokens.gap }) {
+          MarkdownText({ text: Wire.text(this.workspace.detail, 'context'), onLink: (address: string) => this.onLink(address) })
+        }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
+          .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+          .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      }
     }
   }
 
@@ -1135,6 +1210,7 @@ export struct InboxWorkspacePage {
             this.conversation()
           } else {
             this.summary()
+            this.kbChatCard()
             this.connectorContent()
             this.mailContent()
             this.conversation()
@@ -1152,7 +1228,7 @@ export struct InboxWorkspacePage {
   }
 
   @Builder sheetContent() {
-    if (this.activeSheet === 'mail') this.mailComposer()
+    if (this.activeSheet === 'mail' && this.model.mailModuleAllowed()) this.mailComposer()
     else if (this.activeSheet === 'handoff') this.handoffComposer()
   }
 

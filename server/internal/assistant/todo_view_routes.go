@@ -170,6 +170,9 @@ func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []
 	if err != nil {
 		return listedTodo{}, nil, false, err
 	}
+	if cfg := s.settings(ctx); cfg.todosV2On() {
+		s.populateTodoEffectiveDirections(list, s.todoDirectionLabels(ctx, cfg))
+	}
 	for i, t := range list {
 		if t.ID == id {
 			t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list

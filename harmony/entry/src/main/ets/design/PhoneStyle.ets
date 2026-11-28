@@ -20,14 +20,14 @@ export class PhoneStyle {
   static floatingElevation(dark: boolean): ShadowOptions {
     return PhoneStyle.surfaceShadow({
       radius: dark ? 14 : 12,
-      color: dark ? '#40000000' : '#12000000',
+      color: $r('app.color.persona_floating_shadow'),
       offsetY: dark ? 4 : 3
     });
   }
   static heroElevation(dark: boolean): ShadowOptions {
     return PhoneStyle.surfaceShadow({
       radius: dark ? 18 : 16,
-      color: dark ? '#4D000000' : '#14000000',
+      color: $r('app.color.persona_hero_shadow'),
       offsetY: dark ? 6 : 4
     });
   }
@@ -35,7 +35,7 @@ export class PhoneStyle {
     return Colors.styleEdge || Color.Transparent;
   }
   static floatingBorder(dark: boolean): ResourceColor {
-    return Colors.styleEdge || (dark ? Colors.glassRim : Colors.divider);
+    return Colors.styleEdge || (dark ? Colors.glassRim : Colors.hairlineGlass);
   }
   static surfaceEdgeWidth(fallback: number): number {
     return Colors.styleID === 'clay' ? 1 : Colors.styleID === 'island' ? 0 : fallback;
@@ -112,7 +112,7 @@ export struct PhoneIconButton {
         SymbolGlyph(this.symbol).fontSize(String(19 * this.controlDiameter / PhoneStyle.bar) + 'vp').fontColor([this.tint])
       }
     }.width(this.controlDiameter).height(this.controlDiameter).padding(0)
-      .backgroundColor(Colors.styleID === 'glass' ? (this.env.dark ? '#CC1C1C1E' : '#E6FFFFFF') : Colors.surface)
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
       .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
       .border({ width: PhoneStyle.surfaceEdgeWidth(.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: this.controlDiameter / 2 })
       .shadow(PhoneStyle.floatingElevation(this.env.dark))
@@ -178,7 +178,7 @@ export struct PhoneSettingsRow {
       if (!this.last) Divider().color(this.insetGrouped ? PhoneStyle.settingsSeparator : Colors.divider).strokeWidth(0.5)
         .margin({ left: PhoneStyle.formSize(60,68,this.env.fontScale),right:this.insetGrouped ? 20 : 0 })
     }.width('100%')
-      .backgroundColor(this.pressed ? (this.env.dark ? '#1FFFFFFF' : '#0E000000') : Colors.card(this.elevated))
+      .backgroundColor(this.pressed ? Colors.pressOverlay : Colors.card(this.elevated))
       .animation(Motion.press(this.env.reduceMotion))
       .onTouch((event: TouchEvent) => {
         if (event.type === TouchType.Down) this.pressed = true;

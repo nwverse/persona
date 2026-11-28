@@ -2,9 +2,11 @@ package kblark
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
@@ -25,6 +27,9 @@ const (
 type Config struct {
 	SinceDays int
 	DocSearch []string
+	// Lang is the owner's language, which a minute's note words its labels in (zero: i18n.Default). A note keeps the
+	// language it was written in: the import writes a note only while there is none.
+	Lang i18n.Lang
 }
 
 // Result is what a run did.
@@ -53,13 +58,14 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 		if ctx.Err() != nil {
 			return res, ctx.Err()
 		}
-		if m.Token == "" {
+		tok := strings.TrimSpace(m.Token)
+		if tok == "" {
 			continue
 		}
-		id := minutesPrefix + m.Token
+		id := minutesPrefix + tok
 		// Read the detail only while the note is missing: an imported minute keeps it, a user's edit included.
 		if old, ok := e.Store.Item(kb.KindMeeting, id); !ok || old.Note == "" {
-			d, derr := r.MinuteDetail(ctx, m.Token)
+			d, derr := r.MinuteDetail(ctx, tok)
 			if derr != nil {
 				if logf != nil {
 					logf("kb: lark minutes: reading a minute's detail: %v", derr)
@@ -72,7 +78,7 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 			}
 		}
 		it := kb.Item{Kind: kb.KindMeeting, Source: Source, ID: id, Title: m.Title, URL: m.URL, At: m.Start,
-			Where: Where, Note: minuteNote(m)}
+			Where: Where, Note: minuteNote(m, cfg.Lang)}
 		changed, err := e.PutCollectedItem(&it)
 		if err != nil {
 			return res, err
@@ -92,6 +98,9 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 	if failedTitles > 0 && logf != nil {
 		logf("kb: lark minutes: %d document title(s) could not be read", failedTitles)
 	}
+	if ctx.Err() != nil {
+		return res, ctx.Err()
+	}
 	for _, q := range cfg.DocSearch {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
@@ -101,13 +110,20 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 		}
 		docs, err := r.SearchDocs(ctx, q)
 		if err != nil {
+			if ctx.Err() != nil {
+				return res, ctx.Err()
+			}
 			if logf != nil {
 				logf("kb: lark minutes: searching documents: %v", err)
 			}
 			continue
 		}
 		for _, d := range docs {
-			it := kb.Item{Kind: kb.KindDoc, Source: Source, ID: d.Token, Title: d.Title, URL: d.URL, At: d.At, Where: Where}
+			tok := strings.TrimSpace(d.Token)
+			if tok == "" {
+				continue
+			}
+			it := kb.Item{Kind: kb.KindDoc, Source: Source, ID: tok, Title: d.Title, URL: d.URL, At: d.At, Where: Where}
 			changed, err := e.PutCollectedItem(&it)
 			if err != nil {
 				return res, err
@@ -117,15 +133,18 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 			}
 		}
 	}
+	if ctx.Err() != nil {
+		return res, ctx.Err()
+	}
 	return res, nil
 }
 
 // minuteNote is what the item's note keeps of a minute: one line of its summary, its first few to-dos and chapter
-// titles — never the transcript.
-func minuteNote(m Minute) string {
+// titles — never the transcript. Its labels are in lang (the kb-lark catalog); what Lark sent is kept as it came.
+func minuteNote(m Minute, lang i18n.Lang) string {
 	var b strings.Builder
 	if s := oneLine(m.Summary); s != "" {
-		b.WriteString("摘要：")
+		b.WriteString(i18n.T(lang, "kb-lark.summary"))
 		b.WriteString(clip(s, 240))
 	}
 	add := func(label string, list []string, most, each int) {
@@ -145,10 +164,10 @@ func minuteNote(m Minute) string {
 			b.WriteString(" ")
 		}
 		b.WriteString(label)
-		b.WriteString(strings.Join(parts, "；"))
+		b.WriteString(strings.Join(parts, i18n.T(lang, "kb-lark.list_sep")))
 	}
-	add("待办：", m.Todos, 3, 80)
-	add("章节：", m.Chapters, 5, 40)
+	add(i18n.T(lang, "kb-lark.todos"), m.Todos, 3, 80)
+	add(i18n.T(lang, "kb-lark.chapters"), m.Chapters, 5, 40)
 	return clip(b.String(), 700)
 }
 
@@ -164,8 +183,53 @@ func clip(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// isLarkLink: a document URL lark-cli can inspect; another source's links are left to it.
+func validDNSName(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isLarkLink: an HTTPS Feishu/Lark document URL lark-cli can inspect; foreign or non-HTTPS links are left alone.
 func isLarkLink(it *kb.Item) bool {
-	u := strings.ToLower(it.URL)
-	return strings.Contains(u, "lark") || strings.Contains(u, "feishu")
+	if it == nil {
+		return false
+	}
+	raw := it.URL
+	if raw == "" || strings.TrimSpace(raw) != raw || strings.ContainsRune(raw, '\\') {
+		return false
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] < 0x20 || raw[i] == 0x7f {
+			return false
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || strings.HasSuffix(u.Host, ":") {
+		return false
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if !validDNSName(host) {
+		return false
+	}
+	for _, domain := range []string{"feishu.cn", "larksuite.com", "larkoffice.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
 }

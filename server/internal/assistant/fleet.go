@@ -32,10 +32,19 @@ import (
 // pushes to deliver) and keeps the last of them while the manager is away; it relays the apps' answers here
 // (fleetRoutes) and delivers the pushes (APNs, the relay, its apps' notify events).
 
+// interactionAdmission serializes first-create history checks and registration
+// for one interaction ID without keeping fleet.mu held across database reads.
+// refs includes both the holder and waiters, so an idle gate can be removed.
+type interactionAdmission struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // fleetBook is what the manager keeps of it.
 type fleetBook struct {
 	mu           sync.Mutex
 	interactions map[string]*pending
+	admissions   map[string]*interactionAdmission
 	seen         map[[2]string]time.Time      // (machine, session) -> when the user last looked at it
 	seenLoaded   bool                         // seen holds the table's times (loadSeen succeeded once)
 	stateSince   map[[2]string]stateMark      // (machine, session) -> its state and when it entered it
@@ -175,6 +184,7 @@ type fleetReport struct {
 type fleetStore interface {
 	InsertInteraction(ctx context.Context, ix proto.Interaction) error
 	FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error
+	FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error)
 	InteractionOutcome(ctx context.Context, id string) (status string, res *proto.Resolution, err error)
 	Interactions(ctx context.Context, machine, session string, limit int) ([]db.InteractionRecord, error)
 	AllowAlways(ctx context.Context, session, tool string, keys []string) error
@@ -259,6 +269,11 @@ func (g guardedStore) MarkResolvedInteractionOutcome(ctx context.Context, id str
 func (g guardedStore) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) (err error) {
 	defer guard(&err)
 	return g.st.FinishInteraction(ctx, id, status, res)
+}
+
+func (g guardedStore) FinishInteractionOccurrence(ctx context.Context, ix proto.Interaction, status string, res *proto.Resolution) (matched, currentTerminal bool, err error) {
+	defer guard(&err)
+	return g.st.FinishInteractionOccurrence(ctx, ix, status, res)
 }
 
 func (g guardedStore) InteractionOutcome(ctx context.Context, id string) (status string, res *proto.Resolution, err error) {

@@ -16,9 +16,25 @@ import (
 
 // ---- the nodes ----
 
-// managedNodeCalls is the new-connection configuration callback: the providers in the machine's scope
-// (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A failed
-// read sends nothing.
+// nodeConnectCalls is the new-connection configuration callback (devices.Options.NodeCalls): the node's own settings
+// (node.configure: Antigravity idle compaction and the sessions with cards waiting, agyNodeConfigureCall), then its
+// providers (managedNodeCalls). A provider read that fails holds back only the providers. A computer waiting to be
+// confirmed gets nothing.
+func (s *Service) nodeConnectCalls(ctx context.Context, machine string) []devicewire.NodeCall {
+	providers := s.managedNodeCalls(ctx, machine)
+	if len(providers) == 0 && s.machinePending(ctx, machine) {
+		return nil
+	}
+	var calls []devicewire.NodeCall
+	if cfgCall, ok := s.agyNodeConfigureCall(ctx, machine); ok {
+		calls = append(calls, cfgCall)
+	}
+	return append(calls, providers...)
+}
+
+// managedNodeCalls is a new connection's provider configuration (nodeConnectCalls): the providers in the machine's
+// scope (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A
+// failed read sends nothing.
 func (s *Service) managedNodeCalls(ctx context.Context, machine string) []devicewire.NodeCall {
 	s.invalidateLauncherListCache(machine)
 	if s.machinePending(ctx, machine) {

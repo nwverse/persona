@@ -52,6 +52,16 @@ describe("画一页", () => {
     expect(["positive", "caution", "danger", "neutral", "pink", undefined].map(toneOf)).toEqual(["positive", "caution", "danger", "neutral", "neutral", "neutral"]);
     expect([0.72, -1, 3, undefined, Number.NaN, 0.333].map(percent)).toEqual([72, 0, 100, 0, 0, 33.3]);
     expect(isHttps("https://example.com/a")).toBe(true);
+    expect(isHttps("https://example.com/a?email=me@example.com")).toBe(true);
+    expect(isHttps("https://example.com/@user")).toBe(true);
+    expect(isHttps("https://good.example@evil.example/a")).toBe(false);
+    expect(isHttps("https://me:pw@example.com/a")).toBe(false);
+    expect(isHttps("https://:pw@example.com/a")).toBe(false);
+    expect(isHttps("https:/admin")).toBe(false);
+    expect(isHttps("https://@evil.example/a")).toBe(false);
+    expect(isHttps("https://good.example\\@evil.example/a")).toBe(false);
+    expect(isHttps("https://example.com/\x00a")).toBe(false);
+    expect(isHttps("https://example.com/a b")).toBe(false);
     expect(isHttps("http://example.com")).toBe(false);
     expect(isHttps("javascript:alert(1)")).toBe(false);
     expect(isHttps(undefined)).toBe(false);
@@ -70,7 +80,7 @@ describe("画一页", () => {
     expect(submitValues(view, { note: "new", token: "s", extra: "no" })).toEqual({ note: "new", token: "s", auto: "true", off: "false", plan: "solo", limit: "20" });
     expect(numberProblem("12.5")).toBe("");
     expect(numberProblem("")).toBe("");
-    expect(numberProblem("abc")).toBe("要是一个数");
+    expect(numberProblem("abc")).toBe("必须为数字");
   });
   it("reads what a press answered", () => {
     expect(outcome({})).toEqual({ view: undefined, reload: true, toast: undefined, url: undefined });
@@ -166,7 +176,7 @@ describe("UI 版本 2：上下文", () => {
     vi.stubGlobal("navigator", { language: "zh-CN" });
     const c = uiContext({ machine: "m1", size: "compact" });
     expect(c).toMatchObject({ platform: "web", ui_version: UI_VERSION, locale: "zh-CN", machine: "m1", size: "compact" });
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
     expect(c.tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(uiContext()).not.toHaveProperty("launcher");
     expect(uiContext({ launcher: "work" }).launcher).toBe("work");

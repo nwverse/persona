@@ -79,10 +79,23 @@ vi.mock("./settings/HubConnector", () => ({
 }));
 vi.mock("./settings/SentSettings", () => ({ SentSettings: () => <div data-page="sent" /> }));
 vi.mock("./settings/Integrations", () => ({
-  Integrations: ({ open, onOpen, onSettings }: { open: string | null; onOpen: (id: string | null, drillDown?: boolean) => void; onSettings?: (url: string) => void }) => (
-    <div data-page="integrations" data-open={open ?? ""}>
+  Integrations: ({
+    open,
+    onOpen,
+    parentSub,
+    onBackParent,
+    onSettings,
+  }: {
+    open: string | null;
+    onOpen: (id: string | null, drillDown?: boolean) => void;
+    parentSub?: string | null;
+    onBackParent?: () => void;
+    onSettings?: (url: string) => void;
+  }) => (
+    <div data-page="integrations" data-open={open ?? ""} data-parent={parentSub ?? ""}>
       <button type="button" data-related-connector onClick={() => onOpen("connector:larkcli@work", true)} />
       <button type="button" data-related-sources onClick={() => onOpen("-sources@work/scoped", true)} />
+      {onBackParent && <button type="button" data-back-parent onClick={onBackParent} />}
       <button type="button" data-integrations-sources onClick={() => onOpen("-sources")} />
       <button type="button" data-integrations-repos onClick={() => onSettings?.("settings/persona#repositories")} />
       <button type="button" data-integrations-kb onClick={() => onSettings?.("settings/knowledge#knowledge-items")} />
@@ -207,6 +220,33 @@ describe("Settings category navigation", () => {
     }
   });
 
+  it("controls Needs you auto-open with an off-by-default browser setting (#17061)", async () => {
+    await initI18n("en");
+    try {
+      await mount("/settings?tab=general");
+      const row = () => host.querySelector<HTMLElement>('[data-settings-row="needs-you-auto-open"]');
+      const toggle = () => row()?.querySelector<HTMLButtonElement>('[role="switch"]');
+      expect(row(), 'Auto-open "Needs you" on entering main chat').not.toBeNull();
+      expect(row()?.textContent).toContain('Auto-open "Needs you" on entering main chat');
+      expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBeNull();
+
+      await act(async () => toggle()!.click());
+      expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBe("1");
+
+      await act(async () => root.render(null));
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      expect(toggle()?.getAttribute("aria-checked")).toBe("true");
+
+      await act(async () => toggle()!.click());
+      expect(toggle()?.getAttribute("aria-checked")).toBe("false");
+      expect(localStorage.getItem("persona.needsYouAutoOpen")).toBeNull();
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   // audit item 17: General's hints were cut at one line ("切换后页面会重新载…"), at every width
   it.each([false, true])("lets General's hints wrap rather than cutting them (phone: %s)", async (phone) => {
     viewport.phone = phone;
@@ -215,6 +255,7 @@ describe("Settings category navigation", () => {
       ["language", t("language.hint")],
       ["text-size", t("ui-look.text_size_hint")],
       ["reply-motion", t("settings.reply_motion_hint")],
+      ["needs-you-auto-open", t("settings.needs_you_auto_open_hint")],
       ["agent-details", t("context.details_hint")],
       ["install-app", t("settings.install_installed")],
     ];
@@ -716,6 +757,20 @@ describe("Settings category navigation", () => {
       await popped(() => browserBack ? history.back() : host.querySelector<HTMLButtonElement>("header button")!.click());
       expect(location.href).toBe(parent);
     }
+  });
+
+  it.each([["connector", "connector:larkcli@work"], ["sources", "-sources@work/scoped"]])(
+    "preserves integrationParent and returns to parent integration on desktop %s drill-down", async (kind, child) => {
+    viewport.phone = false;
+    viewport.integrationsV2 = true;
+    await mount("/settings?tab=integrations&integration=builtin%3Afeishu-bot%40work");
+    const parent = location.href;
+    await act(async () => host.querySelector<HTMLButtonElement>(`[data-related-${kind}]`)!.click());
+    expect(new URLSearchParams(location.search).get("integration")).toBe(child);
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-parent")).toBe("builtin:feishu-bot@work");
+    await popped(() => host.querySelector<HTMLButtonElement>("[data-back-parent]")!.click());
+    expect(location.href).toBe(parent);
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-parent")).toBe("");
   });
 
   it.each([["persona", "repositories"], ["knowledge", "knowledge-items"]])(

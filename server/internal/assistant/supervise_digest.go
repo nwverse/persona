@@ -249,6 +249,18 @@ func (s *Service) sendDigestLocked(ctx context.Context) {
 				leaders[key] = append(leaders[key], g)
 				continue
 			}
+			if g.todoV2Wake() {
+				entry, valid, retry := s.todoV2WakeDigestEntry(ctx, g, web)
+				if retry {
+					wait = append(wait, g)
+					continue
+				}
+				if !valid {
+					s.ackSupervisePending([]superviseSignal{g})
+					continue
+				}
+				g.Detail = entry.Detail
+			}
 			// Unreachable, not dropped: it becomes a decision for the conversation above the leader (escalateLeaderSignal),
 			// which has its own delivery target below.
 			worker := g
@@ -806,6 +818,9 @@ func (s *Service) replaceQueuedSupervise(to string, msg relayMsg) bool {
 // digestEntryChecked is digestEntry, additionally reporting retry=true when delivery-time revalidation hit a
 // transient store failure so callers restore the signal instead of treating it as permanently moot.
 func (s *Service) digestEntryChecked(ctx context.Context, g superviseSignal, web string) (prompts.SuperviseEntry, bool, bool) {
+	if g.todoV2Wake() {
+		return s.todoV2WakeDigestEntry(ctx, g, web)
+	}
 	switch g.Kind {
 	case sigTodoReady:
 		return s.todoReadyDigestEntry(ctx, g, web)
@@ -888,6 +903,10 @@ func (s *Service) digestEntry(ctx context.Context, g superviseSignal, web string
 // digestEntryRecheck is digestEntry, allowing an already-tried queued sigDecisionReply whose queue admission set
 // ToldAt to be rechecked for open-round validity before retrying under its original OnceID (#12567).
 func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web string, triedQueued bool) (prompts.SuperviseEntry, bool) {
+	if g.todoV2Wake() {
+		e, ok, _ := s.todoV2WakeDigestEntry(ctx, g, web)
+		return e, ok
+	}
 	switch g.Kind {
 	case sigTopicFollowup:
 		e, ok, _ := s.topicFollowupDigestEntry(ctx, g, web)
@@ -977,10 +996,15 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		}
 		replyAsk = a
 	case sigPRConflict:
-		p := t.PRStatus
-		if p == nil || p.URL != t.PRURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
-			g.Key != p.URL+"@"+p.HeadOID || s.stagePR(t.ID) != p.URL || parkWaitsOnPR(v.parking(), p.URL) {
-			return prompts.SuperviseEntry{}, false // resolved, replaced, or parked for this PR while the signal waited
+		prURL := g.prConflictURL()
+		if prURL == "" || t.PRURL != prURL && !slices.Contains(t.PRs, prURL) {
+			return prompts.SuperviseEntry{}, false
+		}
+		p := prFacts(t, prURL)
+		if p == nil || p.URL != prURL || p.State != "open" || !p.Conflicts || p.HeadOID == "" ||
+			g.Key != p.URL+"@"+p.HeadOID || !s.stageFollows(t.ID, p.URL) || s.isReferencePRLink(ctx, t.ID, p.URL) ||
+			v.externalPRConflictWoke(p.URL, p.HeadOID) {
+			return prompts.SuperviseEntry{}, false // resolved, closed, unfollowed, reference-only, or already woken by external PR park
 		}
 	case sigPREvent:
 		if !s.prEventSignalStillHolds(t, g) {
@@ -999,7 +1023,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			if r == nil || g.Key != reviewKey(v) {
 				return prompts.SuperviseEntry{}, false
 			}
-			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail())
+			g.Detail = strings.TrimSpace(g.Detail + " " + r.ExternalPR.detail(r))
 		}
 	case sigReviewNudge:
 		if !s.settings(ctx).todosV2On() || st != reviewPending || v.handoffResult() != nil {
@@ -1284,8 +1308,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	if g.Kind != sigNeedsYou {
 		e.Ask = ""
 	}
-	if g.Kind == sigAllStopped {
-		return e, true // Detail covers every participant; no arbitrary last agent in the fingerprint
+	if g.Kind == sigAllStopped || len(g.Unlinked) > 0 {
+		// An unlinked terminal has no verified reply: its listed preview can be from an earlier binding.
+		return e, true
 	}
 	if g.Kind == sigInbox && g.Inbox.ToAgent == "unhandled" {
 		// This failure belongs to the delivered turn, not a successor's current reply.
@@ -1343,6 +1368,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 // sortEntries puts what waits on a decision first.
 func sortEntries(list []prompts.SuperviseEntry) []prompts.SuperviseEntry {
 	rank := map[string]int{sigNeedsYou: 0, sigAsk: 0, sigEscalated: 0, sigDecide: 0, sigOwnerCannot: 0, sigUndecidable: 1, sigDeliveryHold: 1, sigRecheck: 1, sigCardlessWait: 1, sigNeedsUserExternalInfo: 1, sigEstimateDue: 2, sigParkedDue: 2, sigParkDecided: 2, sigIdle: 2, sigUnjudged: 2, sigAllStopped: 2, sigFailed: 3, sigStarted: 3, sigTodoReady: 3, sigPRMerged: 3, sigParentCloseout: 3, sigInterrupted: 4, sigOutageRecovery: 4, sigOrphaned: 4, sigRecovered: 4, sigTimedOut: 4, sigReview: 5, sigReviewNudge: 5, sigStalled: 6, sigNoProgress: 6, sigLeaderStuck: 6, sigOverdue: 6, sigInbox: 6, sigReport: 7}
+	rank[sigBlockersUnblocked], rank[sigMergeTrainTurn], rank[sigWriteConflict] = 3, 3, 3
 	at := func(e prompts.SuperviseEntry) int {
 		switch {
 		case e.Kind == sigCheck && e.Report == checkDecidedReport: // the owner's answer

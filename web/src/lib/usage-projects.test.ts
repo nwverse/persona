@@ -38,7 +38,7 @@ describe("usage projects", () => {
     expect(projectName({ kind: "repo", name: "acme/app" })).toBe("acme/app");
     expect(projectName({ kind: "folder", name: "Trip" })).toBe("Trip");
     expect(projectName({ kind: "home", name: "someone" })).toBe("主目录");
-    expect(projectName({ kind: "temp", name: "" })).toBe("临时文件夹");
+    expect(projectName({ kind: "temp", name: "" })).toBe("临时目录");
     expect(projectName({ kind: "assistant", name: "" })).toBe("助手");
     expect(projectName({ kind: "unknown", name: "" })).toBe("未知目录");
   });

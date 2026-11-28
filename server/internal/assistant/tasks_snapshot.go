@@ -95,7 +95,6 @@ func snapshotFailedStartsWithConfig(failed []Todo, all []listedTodo, now time.Ti
 			applyTodosV2FactsConfig(&facts[i], cfg)
 		}
 		views := projection.Views(facts, now)
-		applyActiveBlockersToViews(all, views, nil)
 		viewByID := make(map[string]assistantwire.TodoSummary, len(all))
 		for i := range all {
 			viewByID[all[i].ID] = views[i]
@@ -228,7 +227,7 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 			if st == "not_started" || st == "followup" {
 				var gate *repoGate
 				if bound := reposByTodo[t.ID]; len(bound) > 0 {
-					gate = aggregateRepoGate(buildRepoGateInputs(t, bound))
+					gate = snapshotRepoGate(t, bound, cfg.todosV2On())
 				}
 				if prState := openPRSnapshotState(triageOpenPRs(t, now), gate); prState != "" {
 					st = prState
@@ -503,9 +502,7 @@ func snapshotDoneRuleWithConfig(t Todo, agents []proto.Session, ask *todoAsk, de
 		}
 		f := projectionFacts(lt, sessions, loc)
 		applyTodosV2FactsConfig(&f, cfg)
-		views := projection.Views([]projection.Facts{f}, now)
-		applyActiveBlockersToViews([]listedTodo{lt}, views, nil)
-		return todoTriageFromProjectionView(lt, views[0], lookup).Rule
+		return todoTriageFromProjectionView(lt, projection.View(f, now), lookup).Rule
 	}
 	return triageTodo(lt, lookup, now, time.Time{}, loc, false).Rule
 }

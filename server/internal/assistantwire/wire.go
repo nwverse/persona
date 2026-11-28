@@ -59,6 +59,9 @@ type Hello struct {
 	// ArchivedApart: the hub takes a machine's archived rows apart from its list (EventFleetArchived, #6836). An older
 	// hub never sends it, and a manager then tells them inside EventFleetSessions as before.
 	ArchivedApart bool `json:"archived_apart,omitempty"`
+	// ApprovalMirrors: the hub validates deterministic display copies, normalizes their actions to the authoritative
+	// interaction and withdraws them with it. An older hub omits this; the manager then sends only authoritative cards.
+	ApprovalMirrors bool `json:"approval_mirrors,omitempty"`
 	// QuietPush: the hub's push tiering switch (the low-distraction switch, docs/server/server.md) is on. The manager
 	// then holds back what is its own to send, by the same levels the hub filters pushes by: a supervised card is not
 	// handed to the owner on a timeout, a P1 escalation and conclusion / progress cards post nothing. An older hub never
@@ -181,6 +184,8 @@ type Device struct {
 	ExternalInventory bool `json:"external_inventory,omitempty"`
 	// TaskInstructions: this node preserves delegated instructions separately, including fallback/resume.
 	TaskInstructions bool `json:"task_instructions,omitempty"`
+	// ScratchWorkspace: this node supports managed isolated scratch directories (workspace.scratch.prepare).
+	ScratchWorkspace bool `json:"scratch_workspace,omitempty"`
 	// ClaudeVersion is Claude Code's version there ("" when it has none or never said): 设置 › 模型供应商's built-in
 	// claude lists the machines that have it.
 	ClaudeVersion string `json:"claude_version,omitempty"`

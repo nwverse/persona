@@ -32,6 +32,7 @@ import { conversationImageEntries, conversationImageKey } from '../core/MessageI
 import type { MessageImageGalleryEntry, LoadedMessageImage } from '../core/MessageImageGallery';
 import { MarkdownText } from './MarkdownText';
 import { AssistantCards } from './AssistantCards';
+import { canDirectSendSuggestion, ComposerSuggestionChip, extractSessionSuggestions } from '../core/NextSuggestions';
 import { DecisionPager } from '../models/DecisionPager';
 import { QuestionWorkspace, QuestionSheet, questionPrompt } from '../models/QuestionWorkspace';
 import { InteractionDecisionForm } from './InteractionDecisionForm';
@@ -72,6 +73,19 @@ import type { BubbleFoldDecision } from '../core/BubbleFold';
 import { buildEdgeScrubMarks } from '../core/EdgeScrub';
 import type { EdgeScrubMark, EdgeScrubSourceLine } from '../core/EdgeScrub';
 import { ChatEdgeScrubOverlay } from './ChatEdgeScrubOverlay';
+import {
+  canMutateQueueIndex,
+  extractComposerQueue,
+  mergeQueuedTakeBackDraft,
+  queueKeepSwapped,
+  queueKeepWithout
+} from '../core/ComposerQueue';
+import type { ComposerQueueState } from '../core/ComposerQueue';
+import { ComposerTopStrip } from './ComposerTopStrip';
+import { isVerifiedStarSource } from '../core/StarredMessages';
+import type { StarredSnapshot, StarredSource } from '../core/StarredMessages';
+import { starredStore, StarredStore } from '../models/StarredStore';
+import { toastCenter } from '../models/ToastCenter';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -856,6 +870,8 @@ export struct Conversation {
   @Local composerWidth: number = 360;
   @Local composerFrameWidth: number = 0;
   @Local composerFrameHeight: number = 0;
+  @Local private queueSendNowTarget: string = '';
+  @Local private starred: StarredStore = starredStore;
   @Local decisionPager: DecisionPager = new DecisionPager();
   @Local questions: QuestionWorkspace = new QuestionWorkspace();
   @Local questionInset: number = 0;
@@ -1247,7 +1263,7 @@ export struct Conversation {
     }));
   }
   private syncFeed(): void {
-    if (!this.active || !this.model.connected || this.model.demo || this.model.selected.kind !== 'conversation') {
+    if (!this.active || !this.model.connected || this.model.selected.kind !== 'conversation') {
       if (this.feedTimer !== -1) clearTimeout(this.feedTimer); this.feedTimer = -1;
       this.feed.close(); this.feedKey = ''; this.syncTimeline(); return;
     }
@@ -1368,7 +1384,11 @@ export struct Conversation {
     if (!this.sendCurrent() || this.sending || this.attachments.busy || !this.model.canSend()) return;
     const owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target(), draft = owner.draft, context = owner.sourceContext;
     const current = (): boolean => this.sendCurrent() && this.model === owner && owner.owns(generation, scope) && owner.target() === target;
-    if (!this.attachments.attachments.length) { await owner.send(current); return; }
+    if (!this.attachments.attachments.length) {
+      const sent = await owner.send(current);
+      if (sent && owner.demo && current() && typeof owner.refresh === 'function') void owner.refresh();
+      return;
+    }
     this.sending = true;
     try {
       const hasImage=this.attachments.attachments.some((item:ChatAttachment)=>item.kind==='image');
@@ -1387,6 +1407,7 @@ export struct Conversation {
     catch (_) { if (key === this.attachmentKey) this.attachments.errorKey = 'preview_unavailable'; }
   }
   private syncRevision(): void {
+    this.starred.configure(this.model);
     if (!this.active || !this.model.connected || !this.model.isChat() || this.model.demo) {
       if (this.revisionContextKey) this.invalidateRevisionMenuContext();
       this.revisionContextKey = '';
@@ -1498,10 +1519,86 @@ export struct Conversation {
   private messageMenuBuilder(entry: RepeatItem<ConversationLine>): CustomBuilder {
     return (): void => { const message = entry.item.message; if (message) this.messageMenu(message); };
   }
+  @Monitor('model', 'model.connected', 'model.features', 'model.starredRevision') syncStarredScope(): void {
+    this.starred.configure(this.model);
+  }
+  private starSourceFor(message: ChatMessage): StarredSource | undefined {
+    const row = this.model.selected;
+    const machine = row.machine;
+    const session = row.session || row.id;
+    const itemId = message.itemId || message.id;
+    if (!machine || !session || !itemId || message.ownerTarget !== this.model.target()) return undefined;
+    if (message.role !== 'user' && message.role !== 'assistant') return undefined;
+    if (message.held || message.failed || (message.localOperation && message.deliveryState !== 'done')) return undefined;
+    const conversation = row.kind === 'conversation' ? 'assistant' : 'agent';
+    const source: StarredSource = {
+      machine_id: machine,
+      session_id: session,
+      item_id: itemId,
+      conversation: conversation,
+      source_fingerprint: message.sourceFingerprint || undefined
+    };
+    return isVerifiedStarSource(source) ? source : undefined;
+  }
+  private canStarMessage(message: ChatMessage): boolean {
+    if (!this.active || !this.model.connected || !this.model.isChat()) return false;
+    if (!this.starred.canWriteFor(this.model)) return false;
+    if (!message.text.trim()) return false;
+    return this.starSourceFor(message) !== undefined;
+  }
+  private isMessageStarred(message: ChatMessage): boolean {
+    const _rev = this.starred.indexRevision;
+    const source = this.starSourceFor(message);
+    if (!source) return false;
+    return this.starred.isStarred(this.model, source);
+  }
+  private isStarPending(message: ChatMessage): boolean {
+    const _rev = this.starred.pendingRevision;
+    const source = this.starSourceFor(message);
+    if (!source) return false;
+    return this.starred.isPending(this.model, source);
+  }
+  private async toggleMessageStar(message: ChatMessage): Promise<void> {
+    if (!this.canStarMessage(message)) return;
+    const source = this.starSourceFor(message);
+    if (!source) return;
+    if (this.starred.isStarred(this.model, source)) {
+      await this.starred.remove(this.model, source);
+      return;
+    }
+    const speaker = message.role === 'user'
+      ? tr('chat_lift_me')
+      : (this.composerAgentName() || tr(this.model.selected.kind === 'conversation' ? 'persona' : 'assistant'));
+    const writtenAt = message.at > 0 ? new Date(message.at).toISOString() : undefined;
+    const draft: StarredSnapshot = {
+      id: '',
+      machine_id: source.machine_id,
+      session_id: source.session_id,
+      item_id: source.item_id,
+      conversation: source.conversation,
+      source_fingerprint: source.source_fingerprint,
+      role: message.role,
+      title: this.model.selected.title || tr('conversation'),
+      speaker: speaker,
+      source_manager: this.model.profile.manager || undefined,
+      written_at: writtenAt,
+      text: message.text
+    };
+    await this.starred.add(this.model, draft);
+  }
   @Builder messageMenu(message: ChatMessage) {
     Menu() {
       if (message.text) MenuItem({ content: tr('copy') }).onClick(() => this.copyMessage(message))
       if (message.text) MenuItem({ content: tr('use_as_context') }).onClick(() => this.model.useMessageContext(message))
+      if (this.canStarMessage(message)) {
+        MenuItem({
+          content: tr(this.isMessageStarred(message) ? 'unstar_message' : 'star_message'),
+          symbolStartIcon: new SymbolGlyphModifier(this.isMessageStarred(message) ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
+        })
+          .enabled(!this.isStarPending(message))
+          .onClick(() => { void this.toggleMessageStar(message); })
+          .id('chat.message.star')
+      }
       if (message.itemId && message.ownerTarget === this.model.target() && this.revisions.canFork(message.itemId))
         MenuItem({ content: tr('branch_chat') }).onClick(() => this.openForkConfirmation(message))
       if (message.itemId && message.ownerTarget === this.model.target() && this.revisions.canRewind(message.itemId)) {
@@ -1647,8 +1744,8 @@ export struct Conversation {
       PhoneMessageLift({text:this.liftMessage!.text,own:this.liftMessage!.role==='user',frame:this.liftFrame!,
         canForward:this.model.connected && this.forwardState.isEligible(this.model,this.liftMessage!),
         onForward:():void => this.forwardLiftedMessage(false),onSelectMessages:():void => this.forwardLiftedMessage(true),
-        selectOnOpen:this.liftSelectOnOpen,hasMore:!!this.liftMessage!.itemId &&
-          (this.revisions.canFork(this.liftMessage!.itemId) || this.revisions.canRewind(this.liftMessage!.itemId)),
+        selectOnOpen:this.liftSelectOnOpen,hasMore:this.canStarMessage(this.liftMessage!) || (!!this.liftMessage!.itemId &&
+          (this.revisions.canFork(this.liftMessage!.itemId) || this.revisions.canRewind(this.liftMessage!.itemId))),
         moreMenu:():void => this.liftMore(),onClose:():void => { this.closeOwnedLift(); },
         onCopyText:(text:string):void => { const message=this.currentLift(); if (message) void this.copyMessage(message,text); },
         onQuoteText:(text?:string):void => this.quoteLiftedText(text)})
@@ -1783,9 +1880,9 @@ export struct Conversation {
               .rotate({ angle: this.expanded.includes(entry.item.message!.id) ? 0 : -90 })
               .animation(Motion.state(this.environment.reduceMotion))
           }.constraintSize({ minHeight: 32, maxWidth: '100%' })
-        }.padding({ left: 10, right: 10 }).borderRadius(12)
+        }.padding({ left: 10, right: 10 }).borderRadius(Tokens.radiusCard)
           .backgroundColor(this.model.style==='beautiful' ? this.composerSurface() : Colors.control)
-          .outline({width:this.model.style==='beautiful' ? 1 : PhoneStyle.surfaceEdgeWidth(0.5),color:this.model.style==='beautiful' ? this.composerRim() : PhoneStyle.cardBorder(this.environment.dark),radius:12})
+          .outline({width:this.model.style==='beautiful' ? 1 : PhoneStyle.surfaceEdgeWidth(0.5),color:this.model.style==='beautiful' ? this.composerRim() : PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusCard})
           .accessibilityText(tr('work_summary') + ' · ' + tr(this.expanded.includes(entry.item.message!.id) ? 'agent_collapse' : 'agent_expand'))
           .onClick(() => {
             Haptics.tap();
@@ -1865,6 +1962,24 @@ export struct Conversation {
           }.alignItems(HorizontalAlign.Start)
         }
         }
+      }
+      if (this.isMessageStarred(entry.item.message!)) {
+        Row({ space: Tokens.spaceXs }) {
+          SymbolGlyph($r('sys.symbol.star_fill'))
+            .fontSize('11vp')
+            .fontColor([Colors.working])
+          Text(tr('starred_badge'))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.working)
+            .maxLines(1)
+        }
+        .padding({ left: Tokens.spaceS, right: Tokens.spaceS, top: Tokens.spaceXxs, bottom: Tokens.spaceXxs })
+        .backgroundColor(Colors.workingWash)
+        .borderRadius(Tokens.radiusCapsule)
+        .accessibilityText(tr('starred_badge'))
+        .id('chat.starred.badge.' + (entry.item.message!.itemId || entry.item.message!.id))
       }
       if (entry.item.message!.held) this.heldStatus(entry.item.message!)
       if (entry.item.message!.deliveryState && entry.item.message!.deliveryState !== 'done' && !entry.item.message!.failed &&
@@ -1951,8 +2066,8 @@ export struct Conversation {
             .linearGradient({
               direction: GradientDirection.Bottom,
               colors: [
-                [this.environment.dark ? '#00000000' : '#00FFFFFF', 0],
-                [this.environment.dark ? '#E6000000' : '#E6FFFFFF', 1]
+                [Colors.canvasFogStart, 0],
+                [Colors.canvasFogEnd, 1]
               ]
             })
             .hitTestBehavior(HitTestMode.None)
@@ -1966,7 +2081,7 @@ export struct Conversation {
                 .fontWeight(FontWeight.Medium).fontColor([Colors.link])
                 .width(this.latestArrowSize).height(this.latestArrowSize)
             }.width(this.latestDiameter).height(this.latestDiameter).borderRadius(this.latestDiameter/2).clip(true)
-              .backgroundColor(Colors.styleID==='glass' ? (this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF') : Colors.surface)
+              .backgroundColor(Colors.styleID==='glass' ? Colors.elevatedGlass : Colors.surface)
               .backgroundBlurStyle(Colors.styleID==='glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
               .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.environment.dark), radius: this.latestDiameter / 2 })
               .shadow(PhoneStyle.floatingElevation(this.environment.dark))
@@ -2010,7 +2125,7 @@ export struct Conversation {
             onOpenTodo: (row: ResourceRow) => this.onOpenResource(row), onOpenInbox: (row: ResourceRow) => this.onOpenResource(row), onLink: (address: string) => this.onLink(address) })
           else if (entry.item.decision) this.questionCard(entry)
         }.padding({ left: entry.item.message ? 0 : Tokens.page, right: entry.item.message ? 0 : Tokens.page })
-          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(12)
+          .backgroundColor(entry.item.id === this.highlightedLine ? Colors.selection : Color.Transparent).borderRadius(Tokens.radiusCard)
           .id('chat.line.' + entry.item.id)
       }).key((line: ConversationLine) => line.id).virtualScroll({ totalCount: this.lines.length, reusable: false })
       if (this.active && this.model.sendFeedbackPhase()) ListItem() {
@@ -2084,7 +2199,7 @@ export struct Conversation {
   private composerSurface(): ResourceColor {
     if(this.model.style==='beautiful') return this.environment.dark ? '#232427' : '#FFFFFF';
     if(this.legacyInterface) return Colors.surface;
-    if(Colors.styleID==='glass') return this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF';
+    if(Colors.styleID==='glass') return Colors.elevatedGlass;
     return Colors.surface;
   }
   private composerRim(): ResourceColor {
@@ -2270,6 +2385,209 @@ export struct Conversation {
     }.width('100%').height('100%').backgroundColor(Colors.surface).id(this.pageSheetNodeId)
       .onAreaChange(() => this.measurePageSheet())
   }
+  @Computed get composerQueueState(): ComposerQueueState {
+    const selected = this.model.selected;
+    if (!selected || !selected.id) return extractComposerQueue({});
+    const targetSession = selected.session || selected.id;
+    const pool = selected.kind === 'conversation' ? this.model.conversations : this.model.sessions;
+    const matched = pool.find((row: ResourceRow) =>
+      (row.session || row.id) === targetSession &&
+      (!selected.machine || row.machine === selected.machine) &&
+      (!selected.manager || row.manager === selected.manager)
+    );
+    const source = matched || selected;
+    return extractComposerQueue(source.data());
+  }
+  @Computed get composerSuggestions(): ComposerSuggestionChip[] {
+    if (!this.active || !this.composerAvailable() || this.model.draftLoading || !!this.model.draft.trim() ||
+      this.sending || !!this.model.decision || this.model.canStop() || this.model.assistantReplyWorking()) {
+      return [];
+    }
+    if (this.model.demo && this.model.nextSuggestionsValue === false) return [];
+    const selected = this.model.selected;
+    if (!selected || !selected.id) return [];
+    const targetSession = selected.session || selected.id;
+    const pool = selected.kind === 'conversation' ? this.model.conversations : this.model.sessions;
+    const matched = pool.find((row: ResourceRow) =>
+      (row.session || row.id) === targetSession &&
+      (!selected.machine || row.machine === selected.machine) &&
+      (!selected.manager || row.manager === selected.manager)
+    );
+    const source = matched || selected;
+    return extractSessionSuggestions(source.data());
+  }
+  private fillSuggestion(chip: ComposerSuggestionChip): void {
+    if (!this.sendCurrent() || !this.composerAvailable() || this.sending) return;
+    Haptics.tap();
+    this.model.updateDraft(chip.text);
+    this.getUIContext().getFocusController().requestFocus('chat.input');
+  }
+  private sendSuggestionNow(chip: ComposerSuggestionChip): void {
+    if (!canDirectSendSuggestion(chip) || !this.sendCurrent() || !this.composerAvailable() || this.sending) return;
+    Haptics.success();
+    this.model.updateDraft(chip.text);
+    this.sendDraft().catch(() => undefined);
+  }
+  @Builder suggestionChipMenu(chip: ComposerSuggestionChip) {
+    Menu() {
+      if (canDirectSendSuggestion(chip)) {
+        MenuItem({ content: tr('suggestion_send_now') })
+          .onClick(() => this.sendSuggestionNow(chip))
+          .id('chat.suggestion.send_now')
+      }
+      MenuItem({ content: tr('suggestion_fill_in') })
+        .onClick(() => this.fillSuggestion(chip))
+        .id('chat.suggestion.fill_in')
+    }
+  }
+  @Builder suggestionChipsBar() {
+    if (this.composerSuggestions.length > 0) {
+      Scroll() {
+        Row({ space: Tokens.spaceS }) {
+          ForEach(this.composerSuggestions, (chip: ComposerSuggestionChip, index: number) => {
+            Button({ type: ButtonType.Capsule }) {
+              Row({ space: Tokens.spaceS }) {
+                SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                  .fontSize('14vp')
+                  .fontColor([Colors.ai])
+                Text(chip.text)
+                  .fontSize(Tokens.typeSecondary)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+                  .fontColor(Colors.ink)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .constraintSize({ maxWidth: 220 })
+                Text(tr('suggestion_use'))
+                  .fontSize(Tokens.typeLabel)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(Colors.link)
+                  .maxLines(1)
+              }
+              .alignItems(VerticalAlign.Center)
+            }
+            .constraintSize({ minHeight: Tokens.controlBar })
+            .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
+            .backgroundColor(Colors.aiWash)
+            .border({
+              width: PhoneStyle.surfaceEdgeWidth(0.5),
+              color: PhoneStyle.cardBorder(this.environment.dark),
+              radius: Tokens.radiusCapsule
+            })
+            .accessibilityText(chip.text)
+            .accessibilityDescription(tr(canDirectSendSuggestion(chip) ? 'suggestion_hint_safe' : 'suggestion_hint_risky'))
+            .onClick(() => this.fillSuggestion(chip))
+            .bindContextMenu(this.suggestionChipMenu(chip), ResponseType.LongPress)
+            .id('chat.suggestion.' + String(index))
+          }, (chip: ComposerSuggestionChip, index: number) => String(index) + ':' + chip.text + ':' + String(chip.risky))
+        }
+        .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+      .id('chat.suggestions')
+    }
+  }
+  private queueSendNowKey(owner: ClientModel = this.model, row: ResourceRow = this.model.selected): string {
+    if (!row || !row.id) return '';
+    return JSON.stringify([owner.scope(), row.machine, row.session || row.id]);
+  }
+  private async sendQueuedNow(): Promise<void> {
+    if (!this.sendCurrent()) return;
+    const owner = this.model, row = owner.selected;
+    if (!row || !row.machine || !(row.session || row.id)) return;
+    const busyKey = this.queueSendNowKey(owner, row);
+    if (!busyKey || this.queueSendNowTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const admit = (): boolean => this.active && owner === this.model && owner.owns(generation, scope) && owner.target() === target;
+    this.queueSendNowTarget = busyKey;
+    let sent = false;
+    try {
+      await owner.repo().call(
+        '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue/send-now',
+        'POST',
+        {},
+        '',
+        admit,
+        false,
+        undefined,
+        true
+      );
+      sent = true;
+    } catch (error) {
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        owner.reportError(error as Error);
+        toastCenter.error(tr(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.queueSendNowTarget === busyKey) this.queueSendNowTarget = '';
+    }
+    if (sent && this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+      try { await owner.refresh(); } catch (_) {}
+    }
+  }
+  private async mutateQueued(index: number, action: 'edit' | 'delete' | 'move', delta: -1 | 1 = -1): Promise<void> {
+    if (!this.sendCurrent()) return;
+    const owner = this.model, row = owner.selected;
+    if (!row || !row.machine || !(row.session || row.id)) return;
+    const queueState = this.composerQueueState;
+    if (!canMutateQueueIndex(queueState.ownCount, index)) return;
+    if (action === 'move' && (!queueState.steersQueue || queueState.ownCount <= 1)) return;
+    const keep = action === 'move'
+      ? queueKeepSwapped(queueState.ownCount, index, delta)
+      : queueKeepWithout(queueState.ownCount, index);
+    if (action === 'move' && !keep.length) return;
+    const path = '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue';
+    if (owner.operationBlocked(path)) {
+      toastCenter.error(tr('pending_action'));
+      return;
+    }
+    const busyKey = this.queueSendNowKey(owner, row);
+    if (!busyKey || this.queueSendNowTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const admit = (): boolean => this.active && owner === this.model && owner.owns(generation, scope) && owner.target() === target;
+    this.queueSendNowTarget = busyKey;
+    let mutated = false;
+    try {
+      const response = await owner.repo().call(
+        path,
+        'POST',
+        Wire.payload(['keep'], [keep]),
+        '',
+        admit,
+        false,
+        undefined,
+        true
+      );
+      mutated = true;
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        if (action === 'edit') {
+          const pulled = Wire.strings(response, 'queue');
+          const taken = (index < pulled.length ? pulled[index] : '') || queueState.items[index]?.text || '';
+          owner.updateDraft(mergeQueuedTakeBackDraft(owner.draft, taken));
+          Haptics.success();
+          toastCenter.success(tr('composer_queue_taken_back'));
+        } else if (action === 'delete') {
+          Haptics.success();
+          toastCenter.success(tr('composer_queue_deleted'));
+        } else {
+          Haptics.tap();
+        }
+      }
+    } catch (error) {
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        owner.reportError(error as Error);
+        Haptics.error();
+        toastCenter.error(tr(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.queueSendNowTarget === busyKey) this.queueSendNowTarget = '';
+    }
+    if (mutated && this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+      try { await owner.refresh(); } catch (_) {}
+    }
+  }
   @Computed get quoteRemoveSize(): number { return Math.min(68,44*this.environment.fontScale); }
   @Builder composer() {
     // The shell measures the decorated editor. Its extra paint area never changes editing layout or hit targets.
@@ -2282,12 +2600,22 @@ export struct Conversation {
   }
   @Builder composerContent() {
     Column({ space: Tokens.gap }) {
+      if (this.composerQueueState.items.length > 0) {
+        ComposerTopStrip({
+          queue: this.composerQueueState,
+          busy: this.queueSendNowTarget !== '' && this.queueSendNowTarget === this.queueSendNowKey(),
+          onSendNow: () => { void this.sendQueuedNow(); },
+          onEditQueued: (index: number) => { void this.mutateQueued(index, 'edit'); },
+          onDeleteQueued: (index: number) => { void this.mutateQueued(index, 'delete'); },
+          onMoveQueued: (index: number, delta: -1 | 1) => { void this.mutateQueued(index, 'move', delta); }
+        })
+      }
       if (this.model.hasForwardContext()) PhoneChatForwardTray({model:this.model})
       AttachmentStrip({ attachments: this.attachments.attachments, errorKey: this.attachments.errorKey, actionsEnabled: !this.sending && !this.attachments.busy,
           onRemove: (id: string) => this.attachments.remove(id), onEdit: (id: string) => this.attachments.editPhoto(id), onPreview: (item: ChatAttachment) => this.preview(item) })
       ForEach(this.model.draftMessageQuotes(),(ref:Record<string,Object>) => {
         Row({space:Tokens.gap}) {
-          Rect().width(3).height(28).fill(Colors.ai).borderRadius(2)
+          Rect().width(3).height(28).fill(Colors.ai).borderRadius(Tokens.radiusCapsule)
           Column({space:2}) {
             Text(tr(Wire.text(ref,'part')==='selection' ? 'chat_lift_quote_part' : 'chat_lift_quote_whole').replace('{author}',Wire.text(ref,'title')))
               .fontSize(Tokens.caption).maxFontScale(Tokens.interfaceScaleFor(Tokens.caption)).fontColor(Colors.secondary).maxLines(1)
@@ -2423,7 +2751,7 @@ export struct Conversation {
         color:this.composerRim(),radius:25}).borderRadius(25).width('100%').id('chat.composer')
       .animation(Motion.layout(this.environment.reduceMotion))
       .shadow(this.model.style==='beautiful'
-        ? {radius:8,color:this.environment.dark ? '#40000000' : '#12000000',offsetY:5}
+        ? {radius:8,color:Colors.floatingShadow,offsetY:5}
         : PhoneStyle.floatingElevation(this.environment.dark))
   }
 
@@ -2472,6 +2800,7 @@ export struct Conversation {
       Column({ space: Tokens.gap }) {
         if (this.model.canCompose()) {
           if (this.attachments.busy && !this.sending && (this.attachments.errorKey === 'chat_attachment_storage_unavailable' || this.model.error === 'cache_unavailable')) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry')).bindTips(tr('retry')).onClick(() => { this.attachmentKey = ''; this.syncAttachments(); })
+          this.suggestionChipsBar()
           this.composer()
         } else if (!this.model.canSend()) {
           if (this.model.canAttach()) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('attach_live')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('attach_live', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('attach_live')).bindTips(tr('attach_live')).onClick(() => this.model.attach())

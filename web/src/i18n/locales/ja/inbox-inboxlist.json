@@ -4,6 +4,8 @@
   "search_label": "受信トレイを検索",
   "clear": "クリア",
   "filters": "フィルター",
+  "expand_filters": "フィルターを展開",
+  "collapse_filters": "フィルターを折りたたむ",
   "sections": "セクション",
   "bar_count": "{name}、{count}",
   "bar_all": "すべて",

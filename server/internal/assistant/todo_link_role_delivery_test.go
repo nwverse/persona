@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 const (
@@ -46,13 +47,19 @@ func linkRoles(t *testing.T, s *Service, todoID string) map[string]string {
 	return got
 }
 
+func setTestTodoLinkRole(t *testing.T, s *Service, todoID, u, role string) {
+	t.Helper()
+	if _, err := s.store().(*repositorystore.Store).SetTodoRepositoryLinkRole(t.Context(), todoID, u, role); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A reference-role PR is display-only: an open, unmerged PR the task merely cites must not block acceptance.
 // Removing the role filtering makes this test fail with the not-merged delivery error.
 func TestReferenceRolePRDoesNotBlockAcceptance(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	ctx := context.Background()
-	if err := s.importReportedLinks(ctx, todo.ID, []string{foreignPR}, "pull_request",
-		map[string]string{foreignPR: repository.LinkRoleReference}); err != nil {
+	if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{foreignPR}, "pull_request", nil, map[string]string{foreignPR: repository.LinkRoleReference}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := linkRoles(t, s, todo.ID)[foreignPR]; got != repository.LinkRoleReference {
@@ -69,12 +76,18 @@ func TestReferenceRolePRDoesNotBlockAcceptance(t *testing.T) {
 func TestReferenceReportPRDoesNotBlockThroughStage(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	reply := "Related work: " + foreignPR
-	s.advanceTaskReply(context.Background(), todo, "box", todo.Agents[0].SessionID, reply)
+	ctx := context.Background()
+	s.advanceTaskReply(ctx, todo, "box", todo.Agents[0].SessionID, reply)
 	if got := linkRoles(t, s, todo.ID)[foreignPR]; got != repository.LinkRoleReference {
 		t.Fatalf("related-work PR role = %q, want reference", got)
 	}
+	if got := todoNow(s, todo.ID).PRURL; got != "" {
+		t.Fatalf("a reference PR became the delivery-stage PR: %q", got)
+	}
+	// Older tasks can still carry a reference in the legacy delivery-stage slot.
+	s.setTaskStage(ctx, todo.ID, "review", foreignPR)
 	if got := todoNow(s, todo.ID).PRURL; got != foreignPR {
-		t.Fatalf("stage PR = %q, want reported reference PR %q", got, foreignPR)
+		t.Fatalf("legacy stage PR = %q, want %q", got, foreignPR)
 	}
 	if _, err := acceptReview(s, todo.ID, nil); err != nil {
 		t.Fatalf("a reference PR tracked by the stage blocked acceptance: %v", err)
@@ -88,8 +101,7 @@ func TestReferenceReportPRDoesNotBlockThroughStage(t *testing.T) {
 func TestDeliveryRolePRStillBlocksAcceptance(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	ctx := context.Background()
-	if err := s.importReportedLinks(ctx, todo.ID, []string{ownDeliveryPR}, "pull_request",
-		map[string]string{ownDeliveryPR: repository.LinkRoleDelivery}); err != nil {
+	if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{ownDeliveryPR}, "pull_request", nil, map[string]string{ownDeliveryPR: repository.LinkRoleDelivery}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := acceptReview(s, todo.ID, nil); err == nil ||
@@ -101,12 +113,11 @@ func TestDeliveryRolePRStillBlocksAcceptance(t *testing.T) {
 	}
 }
 
-// A default-role PR the forge proves belongs to someone else is downgraded to reference at the gate, then accepted.
-// Without the ownership downgrade the same open PR hard-blocks acceptance and can only be removed by hand.
-func TestProvenForeignPRDowngradedToReference(t *testing.T) {
+func TestBoundDeliveryRoleSurvivesDifferentForgeAuthor(t *testing.T) {
 	s, todo, forge := linkRoleTask(t)
 	ctx := context.Background()
-	if err := s.importReportedLinks(ctx, todo.ID, []string{foreignPR}, "pull_request", nil); err != nil {
+	if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{foreignPR}, "pull_request", nil,
+		map[string]string{foreignPR: repository.LinkRoleDelivery}, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.setTaskStage(ctx, todo.ID, "review", foreignPR)
@@ -114,11 +125,56 @@ func TestProvenForeignPRDowngradedToReference(t *testing.T) {
 		t.Fatalf("stage PR = %q, want foreign PR %q", got, foreignPR)
 	}
 	forge.ownedPRs = map[string]bool{"o/r#6206": false} // known, opened by another author
-	if _, err := acceptReview(s, todo.ID, nil); err != nil {
-		t.Fatalf("a proven-foreign PR blocked acceptance: %v", err)
+	if _, err := acceptReview(s, todo.ID, nil); err == nil || !strings.Contains(err.Error(), "not merged yet") {
+		t.Fatalf("bound delivery PR should block acceptance before merge: %v", err)
 	}
-	if got := linkRoles(t, s, todo.ID)[foreignPR]; got != repository.LinkRoleReference {
-		t.Fatalf("foreign PR kept role %q, want reference", got)
+	if got := linkRoles(t, s, todo.ID)[foreignPR]; got != repository.LinkRoleDelivery {
+		t.Fatalf("bound PR has role %q, want delivery", got)
+	}
+}
+
+type multiRepoDeliveryForge struct{ *fakeForge }
+
+func (f multiRepoDeliveryForge) PRMerge(ctx context.Context, repo string, number int) (bool, string, error) {
+	if repo == "o/r" && number == 21 {
+		return true, mergeSHA, nil
+	}
+	return f.fakeForge.PRMerge(ctx, repo, number)
+}
+
+func TestBoundMultiRepoDeliveryPrecedesSinglePRRecovery(t *testing.T) {
+	s, todo, forge := linkRoleTask(t)
+	ctx := t.Context()
+	const secondPR = "https://github.com/o/client/pull/32"
+	links := []string{ownDeliveryPR, secondPR, foreignPR}
+	roles := map[string]string{
+		ownDeliveryPR: repository.LinkRoleDelivery, secondPR: repository.LinkRoleDelivery, foreignPR: repository.LinkRoleReference,
+	}
+	if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, links, "pull_request", nil, roles, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The legacy stage still tracks a reference and the report describes two different deliveries.
+	s.setTaskStage(ctx, todo.ID, "review", foreignPR)
+	s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "<closeout status=\"done\" merged=\"yes\" deployed=\"n/a\">\n" +
+		"artifact: pr " + ownDeliveryPR + "\nartifact: pr " + secondPR + "\n</closeout>"})
+	s.deploy.forge = multiRepoDeliveryForge{forge}
+	forge.ownedPRs = map[string]bool{"o/r#21": false, "o/client#32": false}
+	if _, err := acceptReview(s, todo.ID, nil); err == nil || !strings.Contains(err.Error(), secondPR) {
+		t.Fatalf("unmerged PR in the second repository should block acceptance: %v", err)
+	}
+	forge.mu.Lock()
+	forge.merged = true
+	forge.mu.Unlock()
+	if _, err := acceptReview(s, todo.ID, nil); err != nil {
+		t.Fatalf("both bound delivery PRs merged: %v", err)
+	}
+	if todoNow(s, todo.ID).DoneAt == nil {
+		t.Fatal("task stayed open after both delivery PRs merged")
+	}
+	for u, role := range roles {
+		if got := linkRoles(t, s, todo.ID)[u]; got != role {
+			t.Errorf("role for %s = %q, want %q", u, got, role)
+		}
 	}
 }
 
@@ -127,7 +183,7 @@ func TestProvenForeignPRDowngradedToReference(t *testing.T) {
 func TestUnknownOwnershipKeepsDeliveryGate(t *testing.T) {
 	s, todo, forge := linkRoleTask(t)
 	ctx := context.Background()
-	if err := s.importReportedLinks(ctx, todo.ID, []string{foreignPR}, "pull_request", nil); err != nil {
+	if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{foreignPR}, "pull_request", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	forge.ownedPRs = map[string]bool{} // no key: unknown ownership
@@ -144,13 +200,10 @@ func TestUnknownOwnershipKeepsDeliveryGate(t *testing.T) {
 func TestLinkRoleEditRoundTrip(t *testing.T) {
 	s, todo, _ := linkRoleTask(t)
 	ctx := context.Background()
-	if err := s.importReportedLinks(ctx, todo.ID, []string{foreignPR}, "pull_request",
-		map[string]string{foreignPR: repository.LinkRoleReference}); err != nil {
+	if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{foreignPR}, "pull_request", nil, map[string]string{foreignPR: repository.LinkRoleReference}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.setTodoLinkRole(ctx, todo.ID, foreignPR, repository.LinkRoleDelivery); err != nil {
-		t.Fatal(err)
-	}
+	setTestTodoLinkRole(t, s, todo.ID, foreignPR, repository.LinkRoleDelivery)
 	if got := linkRoles(t, s, todo.ID)[foreignPR]; got != repository.LinkRoleDelivery {
 		t.Fatalf("role edit did not persist: %q", got)
 	}
@@ -159,9 +212,12 @@ func TestLinkRoleEditRoundTrip(t *testing.T) {
 // The real report path: an Agent reply whose prose frames a PR as related work stores it as reference at import,
 // while the same reply's own delivery PR keeps the delivery role. Without the prose classifier both land as delivery.
 func TestAdvanceTaskReplyClassifiesReferenceProse(t *testing.T) {
-	s, todo, _ := linkRoleTask(t)
-	reply := "Done.\nRelated work: " + foreignPR + " tracks the upstream dependency.\n" +
-		"Our delivery PR is " + ownDeliveryPR + ".\n"
+	st := repositorystore.New(todoTestDB(t))
+	s, f := newQuietServiceOn(t, st)
+	todo := agentTask(t, s, f)
+	artifactNodeProof(f, ownDeliveryPR, "contributor", "contributor", "fix/parser", "fix/parser", "abc", "abc")
+	reply := "Done.\nOur delivery PR is " + ownDeliveryPR + ".\n" +
+		"Related work: " + foreignPR + " tracks the upstream dependency.\n"
 	s.advanceTaskReply(context.Background(), todo, "box", todo.Agents[0].SessionID, reply)
 	got := linkRoles(t, s, todo.ID)
 	if got[foreignPR] != repository.LinkRoleReference {
@@ -169,5 +225,8 @@ func TestAdvanceTaskReplyClassifiesReferenceProse(t *testing.T) {
 	}
 	if got[ownDeliveryPR] != repository.LinkRoleDelivery {
 		t.Fatalf("delivery PR role = %q, want delivery", got[ownDeliveryPR])
+	}
+	if got := todoNow(s, todo.ID).PRURL; got != ownDeliveryPR {
+		t.Fatalf("legacy delivery PR = %q, want %q", got, ownDeliveryPR)
 	}
 }

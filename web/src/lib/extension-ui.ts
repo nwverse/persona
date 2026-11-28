@@ -23,11 +23,11 @@ import type { SceneCamera, SceneLabel, ScenePin, SceneShape } from "./extension-
 export { isHttps };
 
 /**
- * The UI version the web draws (context.ui_version): all of 12, including the map canvas (ViewBody12.tsx), the lazy
- * 3D scene (ViewBody11.tsx), the graph canvas (ViewBody10.tsx), the columns layout (ViewBody8.tsx) and a tile's gauge
- * (ViewBody9.tsx).
+ * The UI version the web draws (context.ui_version): all of 13, including a code's navigate (CodeViews.tsx), the map
+ * canvas (ViewBody12.tsx), the lazy 3D scene (ViewBody11.tsx), the graph canvas (ViewBody10.tsx), the columns layout
+ * (ViewBody8.tsx) and a tile's gauge (ViewBody9.tsx).
  */
-export const UI_VERSION = 12;
+export const UI_VERSION = 13;
 
 export type UITone = "neutral" | "positive" | "caution" | "danger";
 
@@ -142,6 +142,8 @@ export interface UIItem {
   suggestions?: boolean;
   /** code: a link to lines on the site, {start} and {end} filled in */
   line_url?: string;
+  /** UI version 13, code: go to definition, find usages and back (values path, line, column, word, intent) */
+  navigate?: UIAction;
   /** UI version 6: image */
   src?: UIImageSource;
   alt?: string;
@@ -263,17 +265,8 @@ export interface UIGraphNodeLink {
   url: string;
 }
 
-/** Only a credential-free https url opens from a node's inspector. Unlike isHttps it also refuses a url carrying
- *  username and password, which would otherwise be shown in the page and leaked to the site. */
-export function isGraphLink(url?: string): boolean {
-  if (!url) return false;
-  try {
-    const u = new URL(url);
-    return u.protocol === "https:" && u.hostname !== "" && u.username === "" && u.password === "";
-  } catch {
-    return false;
-  }
-}
+/** Only a credential-free https url opens from a node's inspector. */
+export const isGraphLink = isHttps;
 
 /** One node of a graph (UI version 10, #9727): a box with a title, a state line, a badge, an icon and a progress bar. */
 export interface UIGraphNode {
@@ -1200,7 +1193,7 @@ function readItem(it: UIItem): UIItem {
     }
   }
   // UI version 4: the other places an action sits, each read the same way
-  for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft"] as const) if (k in raw) out[k] = readAction(raw[k]);
+  for (const k of ["expand", "load", "comment", "reply", "context", "mark_viewed", "draft", "navigate"] as const) if (k in raw) out[k] = readAction(raw[k]);
   // UI version 6: a row's control and extra actions, a grid's or a carousel's tiles
   readV6(out as unknown as Record<string, unknown>, raw);
   if ("line_url" in raw && !isHttps(String(raw.line_url).replaceAll("{start}", "1").replaceAll("{end}", "1"))) delete out.line_url;

@@ -60,6 +60,9 @@ type CatalogItem struct {
 	Permissions        []extension.PermissionLine `json:"permissions"`
 	// Problem: why this hub cannot install it (no package for its platform, a newer hub needed); "" when it can.
 	Problem string `json:"problem,omitempty"`
+	// A newer release that needs an updated hub, independent of the active version's installability.
+	LatestIncompatibleVersion string `json:"latest_incompatible_version,omitempty"`
+	LatestIncompatibleReason  string `json:"latest_incompatible_reason,omitempty"`
 	// Installed is the version this hub has ("" none); InstalledSource where that one is from (builtin, hub.json,
 	// installed); FromThisMarket whether it was installed from this market; Upgradable whether this one is newer.
 	Installed       string `json:"installed,omitempty"`
@@ -201,12 +204,18 @@ func (h *Manager) catalogItem(l i18n.Lang, s *marketState, e *extension.MarketEn
 	it := CatalogItem{Replaces: e.Replaces, Market: s.rec.ID, MarketName: marketName(l, s.rec), ID: m.ID, Name: ts.Name(l, m.Name), Version: m.Version, Description: ts.Description(l, m.Description),
 		Publisher: m.Publisher, Homepage: m.Homepage, IconURL: catalogIconURL(s.rec.ID, e), Downloads: e.Downloads, DownloadsUpdatedAt: s.index.DownloadsUpdatedAt,
 		Tags: append([]string{}, e.Tags...), Contributes: m.Contributions(), Permissions: extension.ExplainIn(l, m)}
-	if !marketVerified(s.rec) {
+	verified := marketVerified(s.rec)
+	if verified {
+		if version, reason := e.LatestIncompatible(); reason != nil {
+			it.LatestIncompatibleVersion, it.LatestIncompatibleReason = version, i18n.Localize(reason, l)
+		}
+	}
+	if !verified {
 		it.Problem = i18n.T(l, "hub-extension_market.bad_signature", i18n.Args{"err": i18n.MarketText(l, s.rec.Error)})
+	} else if err := e.EngineProblem(h.build.Number); err != nil {
+		it.Problem = i18n.Localize(err, l)
 	} else if e.PackageFor(extension.Platform()) == nil {
 		it.Problem = i18n.T(l, "hub-extension_market.no_package", i18n.Args{"platform": extension.Platform()})
-	} else if _, err := extension.CheckEngines(m, h.build.Number); err != nil {
-		it.Problem = i18n.Localize(err, l)
 	} else if err := h.cantRunHere(m); err != nil {
 		it.Problem = i18n.Localize(err, l)
 	}

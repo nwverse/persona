@@ -21,6 +21,8 @@ vi.mock("../../lib/store", () => ({
     hub.handlers.add(entry);
     return () => { hub.handlers.delete(entry); };
   },
+  // the grouped list reads the computers' online state (GroupedSessions, #13522): none here
+  useStore: (select: (state: { machines: [] }) => unknown) => select({ machines: [] }),
 }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

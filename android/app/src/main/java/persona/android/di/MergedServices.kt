@@ -136,6 +136,10 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         resolveOutcome(id, resolution, handoffCard = false)
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.resolveOccurrence(it.names.rawInteraction(interaction), resolution, handoffCard)
+        }
     override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
         stacks.use(GroupKeys.namespaceOf(interaction.id)) {
             it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)
@@ -236,6 +240,8 @@ internal fun mergedMachineManagement(
     override suspend fun herdr(machineId: String) = routes.on(machineId) { it.herdr(machineId) }
     override suspend fun startHerdr(machineId: String) = routes.on(machineId) { it.startHerdr(machineId) }
     override suspend fun setEngine(machineId: String, engine: String) = routes.on(machineId) { it.setEngine(machineId, engine) }
+    override suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String) =
+        routes.on(machineId) { it.setEngineHosts(machineId, hosts, default) }
     override suspend fun botmux(machineId: String) = routes.on(machineId) { it.botmux(machineId) }
     override suspend fun setBotmux(machineId: String, on: Boolean) = routes.on(machineId) { it.setBotmux(machineId, on) }
     override suspend fun claudeSettings(machineId: String) = routes.on(machineId) { it.claudeSettings(machineId) }
@@ -503,6 +509,10 @@ internal fun mergedAgentsState(list: List<GroupNames>, states: List<AgentsWiring
         // A computer's catalog workspaces come from the hub that owns it; none when no hub does.
         override suspend fun workspaces(machineId: String) = of(machineId)?.let { creations[it] }?.workspaces(machineId).orEmpty()
         override suspend fun workspaceCatalog(machineId: String) = creation(of(machineId)).workspaceCatalog(machineId)
+        // A computer's worktrees are changed through the hub that owns it.
+        override val worktrees = if (creations.none { it?.worktrees != null }) null else routedWorktreeManagement { machine ->
+            (creation(of(machine)).worktrees ?: throw HubFailure(HubError.NoNetwork)) to machine
+        }
     }
     return AgentsWiringState(
         scope = scope,

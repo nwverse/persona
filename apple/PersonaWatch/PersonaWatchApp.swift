@@ -342,15 +342,15 @@ final class WatchModel {
         // To the hub of the interaction's own group.
         guard canAnswer(ix), let api = api(ix.group) else { return }
         do {
-            _ = try await api.resolve(ix.id, r)
-            interactions.removeAll { $0.uid == ix.uid }
-            petInteractions.removeAll { $0.uid == ix.uid }
+            _ = try await api.resolve(ix.id, r, occurrence: ix.createdAtWire)
+            interactions.removeAll { interactionRemovalMatches($0, resolved: ix) }
+            petInteractions.removeAll { interactionRemovalMatches($0, resolved: ix) }
             forgetSeen(ix.uid)
             WKInterfaceDevice.current().play(.success)
         } catch let e as APIError where e.status == 410 {
             // Already ended on server: remove interaction cleanly without error
-            interactions.removeAll { $0.uid == ix.uid }
-            petInteractions.removeAll { $0.uid == ix.uid }
+            interactions.removeAll { interactionRemovalMatches($0, resolved: ix) }
+            petInteractions.removeAll { interactionRemovalMatches($0, resolved: ix) }
             forgetSeen(ix.uid)
             WKInterfaceDevice.current().play(.directionDown)
         } catch {

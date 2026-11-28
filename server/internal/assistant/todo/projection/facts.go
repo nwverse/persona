@@ -3,9 +3,9 @@
 // decision table of docs/design/proposals/todos-redesign.md 6.3. The rules are pinned by the shared cases in
 // spec/fixtures/todo-view and spec/fixtures/todo-counts, whose READMEs list every rule, line key and judgement call.
 //
-// It is pure: no IO and no clock (the caller passes now), and it imports only the standard library, proto (the
-// sessions as the apps get them) and assistantwire (the wire types). Its input, Facts, is the to-do as GET
-// /api/v1/todos lists it, decoded from the same JSON, plus what the row does not carry: the linked sessions, the steps
+// It is pure: no IO and no clock (the caller passes now), and it imports only the standard library and wire
+// packages. Its input, Facts, is the to-do as GET /api/v1/todos lists it, decoded from the same JSON, plus what
+// the row does not carry: the linked sessions, the steps
 // and the owner's zone. The manager's adapter (internal/assistant/todo_projection.go) builds it; the legacy triage
 // (internal/assistant/todo_triage.go) keeps serving the direction tree and leader reports until they read the view.
 package projection
@@ -65,6 +65,17 @@ type Facts struct {
 	RestoredAt   *time.Time `json:"restored_at,omitempty"`
 	SomedayUntil *time.Time `json:"someday_until,omitempty"`
 
+	Phase     assistantwire.TaskPhase      `json:"phase,omitempty"`
+	WaitState *assistantwire.TaskWaitState `json:"wait_state,omitempty"`
+	// The current task contract and the provenance of the runtime wait come from the brief and stage ledgers.
+	WorkModeNow       assistantwire.WorkMode       `json:"-"`
+	CompletionModeNow assistantwire.CompletionMode `json:"-"`
+	RuntimeAt         time.Time                    `json:"-"`
+	ObservedWait      bool                         `json:"-"`
+	// RepoGate and ActiveBlockers describe v2 delivery and blocker evidence.
+	RepoGate       *RepoGate       `json:"-"`
+	ActiveBlockers []ActiveBlocker `json:"-"`
+
 	// Sessions are the to-do's linked runs' sessions as the hub sends them to the apps (state worked out); a linked
 	// run whose session is not among them is offline.
 	Sessions []proto.Session `json:"-"`
@@ -92,6 +103,20 @@ type Facts struct {
 	// CanWaitSLADisabled disables automatic aging of can_wait decisions into active needs_you.
 	CanWaitSLAHours    int  `json:"-"`
 	CanWaitSLADisabled bool `json:"-"`
+}
+
+// RepoGate is the open delivery PR holding the weakest bound repository's gate.
+type RepoGate struct {
+	Repository string
+	PRURL      string
+	Blocker    assistantwire.TodoWaitPRBlocker
+}
+
+// ActiveBlocker is a persisted blocker with its display target and source.
+type ActiveBlocker struct {
+	Kind   assistantwire.TodoWaitKind
+	Target string
+	URL    string
 }
 
 // Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).
@@ -228,8 +253,9 @@ const (
 	outcomeDecide = "decide"
 	defaultTaken  = "taken"
 
-	deliveryLive = "live"
-	prOpen       = "open"
+	deliveryLive   = "live"
+	deliveryMerged = "merged"
+	prOpen         = "open"
 
 	priorityHigh = "high"
 	priorityLow  = "low"

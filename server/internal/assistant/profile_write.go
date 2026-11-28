@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
@@ -180,6 +181,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
 		return
 	}
+	if m := in.AgyIdleAutoCompactMinutes; m != nil && !assistantwire.AgyIdleMinutesValid(*m) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_agy_idle_auto_compact_minutes"))
+		return
+	}
+	if n := in.AgyIdleAutoCompactTokens; n != nil && !assistantwire.AgyIdleTokensValid(*n) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_agy_idle_auto_compact_tokens"))
+		return
+	}
 	if m := in.IdleReleaseMinutes; m != nil && (*m < minIdleReleaseMinutes || *m > maxIdleReleaseMinutes) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_release_minutes"))
 		return
@@ -308,7 +317,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	errTodosV2Changed := errors.New("todos_v2 setting changed")
 	errIntegrationsV2Changed := errors.New("integrations_v2 setting changed")
 	var labsSeenChanged bool
+	var beforeTodoPrefs todoRevisionPrefs
 	saved, err := s.updateSettings(ctx, func(v *Settings) error {
+		beforeTodoPrefs = todoRevisionPrefsOf(*v)
 		var err error
 		if labsSeenChanged, err = applyLabsSeen(v, labsSeen); err != nil {
 			return err
@@ -354,6 +365,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainTasksQuiet != nil {
 			v.MainTasksQuiet = in.MainTasksQuiet
 		}
+		if in.ApprovalMirrorMain != nil {
+			v.ApprovalMirrorMain = in.ApprovalMirrorMain
+		}
+		if in.ApprovalMirrorTools != nil {
+			tools := cleanApprovalMirrorTools(*in.ApprovalMirrorTools)
+			v.ApprovalMirrorTools = &tools
+		}
 		if in.CacheKeepalive != nil {
 			v.CacheKeepalive = in.CacheKeepalive
 		}
@@ -371,6 +389,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.IdleAutoCompactTokens != nil {
 			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
+		}
+		if in.AgyIdleAutoCompact != nil {
+			v.AgyIdleAutoCompact = in.AgyIdleAutoCompact
+		}
+		if in.AgyIdleAutoCompactMinutes != nil {
+			v.AgyIdleAutoCompactMinutes = in.AgyIdleAutoCompactMinutes
+		}
+		if in.AgyIdleAutoCompactTokens != nil {
+			v.AgyIdleAutoCompactTokens = in.AgyIdleAutoCompactTokens
 		}
 		if in.IdleReleaseMinutes != nil {
 			v.IdleReleaseMinutes = in.IdleReleaseMinutes
@@ -580,6 +607,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if guideChanged {
 		s.mcpChanges.notify()
 	}
+	if todoRevisionPrefsOf(saved) != beforeTodoPrefs {
+		s.todoRevisionChanged()
+	}
 	s.settingsChanged(ctx)
 	// Revoke already captured requests as part of a policy edit. Forwarding stays
 	// available; only a subsequent genuine request can rearm the snapshot.
@@ -592,13 +622,6 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
 		s.rescheduleSupervision()
-	}
-	afterTodosV2 := s.settings(ctx)
-	if (in.TodosV2 != nil && afterTodosV2.todosV2On() != before.todosV2On()) ||
-		(afterTodosV2.todosV2On() && (afterTodosV2.todosV2PendingReviewSLAHours() != before.todosV2PendingReviewSLAHours() ||
-			afterTodosV2.todosV2CanWaitSLAHours() != before.todosV2CanWaitSLAHours() ||
-			afterTodosV2.todosV2FoldChildrenOn() != before.todosV2FoldChildrenOn())) {
-		s.todosPushSoon()
 	}
 	if in.MeetingTranscriptionExtension != nil {
 		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)

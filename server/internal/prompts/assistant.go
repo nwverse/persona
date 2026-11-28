@@ -743,6 +743,7 @@ func RenderAskTodoAnswer(a AskTodoAnswer) string { return render("assistant/ask_
 // (Spoke: no to-do, no default), or, with none of them, that the card ended unanswered. The questions and answers
 // are escaped by the caller.
 type AskLater struct {
+	Internal  bool   // supervisor decision, never attributed to the owner
 	When      string // when it was asked, MM-DD HH:MM in the user's zone
 	Questions []string
 	Answers   []AskTodoChoice
@@ -966,6 +967,19 @@ type SuperviseAsk struct {
 }
 
 func RenderSupervise(s Supervise) string { return render("assistant/supervise", s) }
+
+// AgyUnlinkedPane has no identifiers when the task links or session inventory could not be checked.
+type AgyUnlinkedPane struct {
+	Pane       string
+	Candidates []string
+}
+
+type AgyUnlinked struct {
+	Language string
+	Panes    []AgyUnlinkedPane
+}
+
+func RenderAgyUnlinked(p AgyUnlinked) string { return render("assistant/agy_unlinked", p) }
 
 type DraftPR struct {
 	Language, URL, Head string
