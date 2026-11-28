@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
@@ -180,6 +181,63 @@ func TestScreenCardWait(t *testing.T) {
 	if screenCardWait(claude, false) != 0 || screenCardWait(claude, true) != 1500*time.Millisecond ||
 		screenCardWait(codex, false) != 3*time.Second {
 		t.Fatal("waits")
+	}
+}
+
+func TestScreenCardAfterHookExpires(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, tool, status string
+		withoutTerminal          bool
+		wantScreen               bool
+	}{
+		{"blocked permission", proto.IxPermission, "Bash", proto.StatusBlocked, false, true},
+		{"blocked question", proto.IxQuestion, "AskUserQuestion", proto.StatusBlocked, false, true},
+		{"working again", proto.IxPermission, "Bash", proto.StatusWorking, false, false},
+		{"blocked without a terminal", proto.IxQuestion, "AskUserQuestion", proto.StatusBlocked, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ft, node := newCardFleet(t, false)
+				node.setScreen(dialogScreen)
+				ix := proto.Interaction{ID: "ix_hook", MachineID: "mac", SessionID: "s1", Kind: tc.kind, ToolName: tc.tool,
+					ExpiresAt: time.Now().Add(time.Minute)}
+				ready := make(chan struct{})
+				done := make(chan proto.Resolution, 1)
+				go func() {
+					res, err := ft.s.waitInteractionReady(t.Context(), ix, nil, ready)
+					if err != nil {
+						t.Errorf("wait for hook: %v", err)
+					}
+					done <- res
+				}()
+				<-ready
+				sess := proto.Session{SessionID: ix.SessionID, Agent: "claude", StartedByPersona: true}
+				if tc.withoutTerminal {
+					sess.SourceKind = proto.SourceRuntime
+					sess.Capabilities = &proto.SessionCapabilities{Approve: true}
+				}
+				blockSession(ft, sess)
+				sess.Status = tc.status
+				ft.d.setSessions(ix.MachineID, []proto.Session{sess})
+
+				elapse(time.Until(ix.ExpiresAt))
+				if res := <-done; !res.Dismiss || res.Reason != proto.DismissedExpired {
+					t.Fatalf("hook result %+v, want expired dismissal", res)
+				}
+				elapse(2 * time.Second)
+
+				cards := pendingIDs(ft.s)
+				reads := ft.d.callsTo(ix.MachineID, "session.screen")
+				if tc.wantScreen {
+					id := "scr_mac_s1_" + screen.ParseDialog(dialogScreen).Rev
+					if len(cards) != 1 || cards[id] != proto.IxScreen || len(reads) != 1 {
+						t.Fatalf("after hook expiry, cards %v and %d screen reads, want %s", cards, len(reads), id)
+					}
+				} else if len(cards) != 0 || len(reads) != 0 {
+					t.Fatalf("after hook expiry, cards %v and %d screen reads, want neither", cards, len(reads))
+				}
+			})
+		})
 	}
 }
 

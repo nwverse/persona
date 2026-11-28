@@ -610,8 +610,7 @@ function ExtensionResourceDetail({ binding, id, manager, onBack: back, headerBac
           </>}
           information={<>
           <SecretProviderGroups extension={id} users={p.secret_users} rules={p.handoff_rules} editable={editable} mutate={mutate} />
-          {/* extension trust is the default manager's (docs/web/web.md "Domain spaces"): another manager's page leaves it out */}
-          {!manager && <ExtensionInfoAccess extension={id} editable={editable} />}
+          <ExtensionInfoAccess client={binding.client} extension={id} editable={editable && !offline} />
           {!!p.depends?.length && (
             <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
               {p.depends.map((d) => <Row key={d.id} label={d.name || d.id} hint={d.version}><span className={cx(d.state !== "ok" && "text-orange")}>{dependencyText(d)}</span></Row>)}
