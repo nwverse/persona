@@ -381,7 +381,9 @@ func TestRolloutPathMissesOutliveRelisting(t *testing.T) {
 	writeRollout(t, home, "22222222-2222-2222-2222-222222222222", "/w", now, now)
 	list("just after another thread's rollout was written today", 0, dirs)
 	list("in the next pass, the directory still within its mtime's granularity", 0, dirs)
-	ageDirs(t, codex) // the directories have not changed for an hour
+	// Today's directory, the one that changed, has not changed since for an hour. Only it: re-dating the old day
+	// directories would look like a change to the compressed rollouts' own directories.
+	ageDirs(t, filepath.Join(codex, "sessions", now.Format("2006"), now.Format("01"), now.Format("02")))
 	list("once the directories settled", 0, dirs)
 	list("and after that", 0, 0)
 	if p := rolloutPath(codex, "22222222-2222-2222-2222-222222222222"); p == "" {
