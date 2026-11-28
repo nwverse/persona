@@ -129,6 +129,8 @@ type Service struct {
 	inboxExt inboxExtensionCache
 	// extTr are the extensions' transcription jobs running now (extension_transcribe.go).
 	extTr extTranscriptions
+	// integrationReads is the owning extension manager's settings reader, installed before Run.
+	integrationReads integrationReads
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
@@ -562,6 +564,7 @@ func New(o Options) *Service {
 	// saved's legacy untyped ports, until #15222 types them; a new module takes typed ports through its NewModule.
 	reg.Register(saved.NewModule(func() any { return s.store() }, s.event))
 	reg.Register(externalSourceRoutes{service: s})
+	reg.Register(integrationRoutes{s: s})
 	s.resourceRoutes()
 	s.repositoryRoutes()
 	s.repoMirrorRoutes()

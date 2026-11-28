@@ -362,7 +362,7 @@ func (ps *extensions) list() []ExtensionView {
 	return out
 }
 
-func (ps *extensions) view(ctx context.Context, p *extension.Extension) ExtensionView {
+func (ps *extensions) summaryView(ctx context.Context, p *extension.Extension) ExtensionView {
 	m := p.Full
 	l := ps.h.contextLang(ctx)
 	v := ExtensionView{ID: p.Record.ID, Name: p.L10n.Name(l, m.Name), Kind: m.Kind(), Version: p.Record.Version, Source: p.Record.Source,
@@ -424,12 +424,6 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 		ps.volcView(ctx, p, &v)     // runs, but nothing transcribes or reads aloud without a key (volc_extension.go)
 		ps.imessageView(ctx, p, &v) // no connector until its one Mac is picked (imessage_extension.go)
 	}
-	if ps.h != nil {
-		ps.h.extensionUpgrades().decorate(ctx, &v, p)
-		ps.h.decorateMarketMetadata(ctx, &v, p)
-		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
-		ps.h.decorateInstalledLogo(&v, p)
-	}
 	if m.NodeProgram() != nil {
 		v.Nodes = ps.nodes.views(p.Record.ID)
 		// A plugin whose work happens on computers: while the hub runs no process of its own for it (it has none, or
@@ -446,7 +440,18 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 			}
 		}
 	}
-	if v.Auth = ps.authView(p, l); v.Auth != nil && ps.h != nil {
+	return v
+}
+
+func (ps *extensions) view(ctx context.Context, p *extension.Extension) ExtensionView {
+	v := ps.summaryView(ctx, p)
+	if ps.h != nil {
+		ps.h.extensionUpgrades().decorate(ctx, &v, p)
+		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
+		ps.h.decorateInstalledLogo(&v, p)
+	}
+	if v.Auth = ps.authView(p, ps.h.contextLang(ctx)); v.Auth != nil && ps.h != nil {
 		if line := authWarning(ps.h.contextLang(ctx), v.Auth); line != "" {
 			v.Warnings = append(slices.Clone(v.Warnings), line)
 		}
