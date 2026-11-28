@@ -66,7 +66,7 @@ func TestDialOutValidatesBeforeUpstream(t *testing.T) {
 	}
 }
 
-// The direct path already refuses cloud metadata in dialResolved; moving upstream selection must not weaken it.
+// The direct path also refuses hostnames that resolve to cloud metadata.
 func TestDialOutStillRefusesMetadataDirectly(t *testing.T) {
 	for _, raw := range metadataIPs {
 		p := &Proxy{
