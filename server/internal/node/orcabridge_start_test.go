@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/orcart"
@@ -264,7 +263,7 @@ func TestOrcaBridgeWithdrawsAChatWhoseRuntimeOrcaLacks(t *testing.T) {
 	n, o := orcaChatStartNode(t)
 	o.f.Handle("agent.launch", func(p map[string]any) any {
 		if p["agent"] == "codex" {
-			return orcarttest.Refuse{Code: "agent_launch_surface_unavailable", Message: orcaChatRuntimeMissing}
+			return orcarttest.Refuse("agent_launch_surface_unavailable", orcaChatRuntimeMissing)
 		}
 		return map[string]any{"sessionId": p["sessionId"]}
 	})
@@ -314,8 +313,8 @@ func TestOrcaBridgeWithdrawsAChatWhoseRuntimeOrcaLacks(t *testing.T) {
 func TestOrcaBridgeChatUnavailableForAnotherReason(t *testing.T) {
 	n, o := orcaChatStartNode(t)
 	o.f.Handle("agent.launch", func(map[string]any) any {
-		return orcarttest.Refuse{Code: "agent_launch_surface_unavailable",
-			Message: "Claude can't open as a chat here because this workspace runs under WSL. Start it in a terminal instead."}
+		return orcarttest.Refuse("agent_launch_surface_unavailable",
+			"Claude can't open as a chat here because this workspace runs under WSL. Start it in a terminal instead.")
 	})
 	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
 	_, err := nodeCall(t, n, "session.start", map[string]any{"cwd": "/w/app", "prompt": "hi", "launcher": "orca-claude",
@@ -323,7 +322,8 @@ func TestOrcaBridgeChatUnavailableForAnotherReason(t *testing.T) {
 	if code, reason, program := orcaChatRefusal(t, err); code != "unsupported" || reason != "orca_chat_unavailable" || program != "Claude Code" {
 		t.Fatalf("refusal %v (%s %s %s)", err, code, reason, program)
 	}
-	time.Sleep(3 * orcaBridgePoll)
+	polls := o.f.Count("worktree.ps")
+	waitFor(t, "two refreshes after the refusal", func() bool { return o.f.Count("worktree.ps") >= polls+2 })
 	if ls := orcaLaunchersOf(t, n); len(ls) != 2 {
 		t.Fatalf("launchers %+v", ls)
 	}

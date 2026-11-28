@@ -38,7 +38,7 @@ func TestChatRuntimeMissing(t *testing.T) {
 	c := &orcart.Client{MetaPath: fake.MetaPath}
 	launch := func(message string) error {
 		fake.Handle("agent.launch", func(map[string]any) any {
-			return orcarttest.Refuse{Code: "agent_launch_surface_unavailable", Message: message}
+			return orcarttest.Refuse("agent_launch_surface_unavailable", message)
 		})
 		return c.LaunchChat(context.Background(), "persona-0123456789", orcart.OperationID(time.Now(), "launch"), "id:wt-1",
 			"claude", "hi", nil)
