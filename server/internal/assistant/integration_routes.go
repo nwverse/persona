@@ -17,11 +17,11 @@ import (
 // The projection reads the settings of the manager in this process. The request can select an owner at the hub,
 // while every ref here is stamped with the identity this assistant was started with.
 type integrationReads interface {
-	IntegrationExtensions(context.Context) ([]extmgr.IntegrationExtensionRead, error)
+	IntegrationExtensions(context.Context) ([]assistantwire.IntegrationExtensionRead, error)
 	IntegrationChannels(context.Context) ([]channel.View, error)
-	IntegrationConnectors(context.Context) ([]extmgr.IntegrationConnectorRead, error)
-	IntegrationSubscriptions(context.Context) ([]extmgr.IntegrationSubscriptionRead, error)
-	IntegrationServices(context.Context) []extmgr.IntegrationServiceRead
+	IntegrationConnectors(context.Context) ([]assistantwire.IntegrationConnectorRead, error)
+	IntegrationSubscriptions(context.Context) ([]assistantwire.IntegrationSubscriptionRead, error)
+	IntegrationServices(context.Context) []assistantwire.IntegrationServiceRead
 	IntegrationConfiguration(context.Context, string) ([]string, error)
 }
 

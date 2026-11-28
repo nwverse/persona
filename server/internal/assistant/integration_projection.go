@@ -7,21 +7,16 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/extension"
-	"github.com/nwverse/persona/server/internal/extension/host"
-	"github.com/nwverse/persona/server/internal/extmgr"
-	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
 var errIntegrationRead = errors.New("integration settings unavailable")
 
 type integrationInput struct {
-	extensions       []extmgr.IntegrationExtensionRead
+	extensions       []assistantwire.IntegrationExtensionRead
 	channels         []channel.View
-	connectors       []extmgr.IntegrationConnectorRead
-	subscriptions    []extmgr.IntegrationSubscriptionRead
-	services         []extmgr.IntegrationServiceRead
+	connectors       []assistantwire.IntegrationConnectorRead
+	subscriptions    []assistantwire.IntegrationSubscriptionRead
+	services         []assistantwire.IntegrationServiceRead
 	extensionsErr    error
 	channelsErr      error
 	connectorsErr    error
@@ -33,8 +28,8 @@ type integrationKey struct {
 	id   assistantwire.IntegrationResourceID
 }
 
-func integrationResource(kind assistantwire.IntegrationKind, id string) integrationKey {
-	return integrationKey{kind: kind, id: assistantwire.IntegrationResourceID(id)}
+func integrationResource(kind assistantwire.IntegrationKind, id assistantwire.IntegrationResourceID) integrationKey {
+	return integrationKey{kind: kind, id: id}
 }
 
 type integrationNode struct {
@@ -154,7 +149,7 @@ func (b *integrationBook) attach(n *integrationNode, owner integrationKey) {
 	root.addCapabilities(n.item.Capabilities...)
 }
 
-func (b *integrationBook) addService(v extmgr.IntegrationServiceRead) {
+func (b *integrationBook) addService(v assistantwire.IntegrationServiceRead) {
 	key := integrationResource(assistantwire.IntegrationKindService, v.ID)
 	n := b.add(key, v.Name, assistantwire.IntegrationOriginBuiltinService, v.Availability, v.Capability)
 	n.readOnly = v.ConnectionReadOnly
@@ -173,16 +168,9 @@ func (b *integrationBook) addService(v extmgr.IntegrationServiceRead) {
 	}
 }
 
-func (b *integrationBook) addExtension(v extmgr.IntegrationExtensionRead) {
+func (b *integrationBook) addExtension(v assistantwire.IntegrationExtensionRead) {
 	key := integrationResource(assistantwire.IntegrationKindExtension, v.ID)
-	origin := assistantwire.IntegrationOriginInstalledExtension
-	switch v.Source {
-	case extension.SourceBuiltin:
-		origin = assistantwire.IntegrationOriginBuiltinExtension
-	case extension.SourceHubJSON:
-		origin = assistantwire.IntegrationOriginConfiguredExtension
-	}
-	n := b.add(key, v.Name, origin, extensionIntegrationState(v.Status))
+	n := b.add(key, v.Name, v.Origin, v.Availability)
 	n.readOnly = v.ReadOnly
 	if v.ReadOnly && n.item.Availability.State == assistantwire.IntegrationStateAvailable {
 		n.item.Availability = integrationReadOnly()
@@ -219,7 +207,7 @@ func (b *integrationBook) declare(owner integrationKey, kind assistantwire.Integ
 			continue
 		}
 		b.declaresKind[owner][kind] = true
-		key := integrationResource(kind, id)
+		key := integrationResource(kind, assistantwire.IntegrationResourceID(id))
 		if !slices.Contains(b.declared[key], owner) {
 			b.declared[key] = append(b.declared[key], owner)
 		}
@@ -234,7 +222,7 @@ func (b *integrationBook) addChannels(list []channel.View) {
 		}
 	}
 	for _, v := range list {
-		key := integrationResource(assistantwire.IntegrationKindChannel, v.ID)
+		key := integrationResource(assistantwire.IntegrationKindChannel, assistantwire.IntegrationResourceID(v.ID))
 		if v.ID == "" || v.Source == channel.SourceMarket || b.nodes[key] != nil {
 			continue
 		}
@@ -251,12 +239,12 @@ func (b *integrationBook) addChannels(list []channel.View) {
 			n.item.RelationshipIssue = assistantwire.IntegrationRelationshipIssueAmbiguousOwner
 			n.readOnly = true
 		case v.Source == channel.SourcePlugin:
-			b.attachExtension(n, key, v.Plugin)
+			b.attachExtension(n, key, assistantwire.IntegrationResourceID(v.Plugin))
 		}
 	}
 }
 
-func (b *integrationBook) addConnector(v extmgr.IntegrationConnectorRead) {
+func (b *integrationBook) addConnector(v assistantwire.IntegrationConnectorRead) {
 	key := integrationResource(assistantwire.IntegrationKindConnector, v.ID)
 	service, serviceOwned := b.serviceConnector[key]
 	serviceOwned = serviceOwned && v.Builtin && v.OwnerExtension == ""
@@ -271,7 +259,7 @@ func (b *integrationBook) addConnector(v extmgr.IntegrationConnectorRead) {
 	if v.StoresData {
 		capability = assistantwire.IntegrationFilterCapabilityData
 	}
-	n := b.add(key, v.Name, origin, connectorIntegrationState(v.Status), capability)
+	n := b.add(key, v.Name, origin, v.Availability, capability)
 	n.storesData = v.StoresData
 	n.externalSources = true
 	if v.OwnerExtension != "" || !v.Builtin {
@@ -282,12 +270,12 @@ func (b *integrationBook) addConnector(v extmgr.IntegrationConnectorRead) {
 	}
 }
 
-func (b *integrationBook) addSubscription(v extmgr.IntegrationSubscriptionRead) {
+func (b *integrationBook) addSubscription(v assistantwire.IntegrationSubscriptionRead) {
 	kind, origin := assistantwire.IntegrationKindSubscription, assistantwire.IntegrationOriginStandaloneSubscription
 	if v.Push {
 		kind, origin = assistantwire.IntegrationKindPushSource, assistantwire.IntegrationOriginStandalonePushSource
 	}
-	n := b.add(integrationResource(kind, v.ID), v.Name, origin, subscriptionIntegrationState(v.State), assistantwire.IntegrationFilterCapabilityData)
+	n := b.add(integrationResource(kind, v.ID), v.Name, origin, v.Availability, assistantwire.IntegrationFilterCapabilityData)
 	if v.Push {
 		return
 	}
@@ -311,7 +299,7 @@ func (b *integrationBook) addSubscription(v extmgr.IntegrationSubscriptionRead) 
 	}
 }
 
-func (b *integrationBook) attachExtension(n *integrationNode, resource integrationKey, registered string) {
+func (b *integrationBook) attachExtension(n *integrationNode, resource integrationKey, registered assistantwire.IntegrationResourceID) {
 	if b.failed(assistantwire.IntegrationKindExtension) {
 		n.item.RelationshipIssue = assistantwire.IntegrationRelationshipIssueOwnerUnavailable
 		return
@@ -424,23 +412,6 @@ func integrationReadOnly() assistantwire.IntegrationAvailability {
 	return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateReadOnly, Reason: assistantwire.IntegrationReasonManagedElsewhere}
 }
 
-func extensionIntegrationState(status string) assistantwire.IntegrationAvailability {
-	switch status {
-	case "needs_setup":
-		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
-	case "disabled":
-		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
-	case "incompatible":
-		return integrationUnavailable(assistantwire.IntegrationReasonIncompatible)
-	case host.StateError:
-		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
-	case host.StateRunning, host.StateStopped:
-		return integrationAvailable()
-	default:
-		return integrationUnavailable(assistantwire.IntegrationReasonNotConnected)
-	}
-}
-
 func channelIntegrationState(v channel.View) assistantwire.IntegrationAvailability {
 	switch v.State {
 	case channel.StateConnected:
@@ -452,38 +423,6 @@ func channelIntegrationState(v channel.View) assistantwire.IntegrationAvailabili
 		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
 	case channel.StateDisabled:
 		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
-	default:
-		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
-	}
-}
-
-func connectorIntegrationState(status string) assistantwire.IntegrationAvailability {
-	switch status {
-	case connector.StateOK:
-		return integrationAvailable()
-	case connector.StateNotConfigured, connector.StateNotSignedIn, connector.StateNoPermission:
-		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
-	case connector.StateDisabled:
-		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
-	case connector.StateRateLimited:
-		return integrationUnavailable(assistantwire.IntegrationReasonRateLimited)
-	default:
-		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
-	}
-}
-
-func subscriptionIntegrationState(state string) assistantwire.IntegrationAvailability {
-	switch state {
-	case subscriptions.StateOK:
-		return integrationAvailable()
-	case subscriptions.StateOff:
-		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
-	case subscriptions.StateNeedsRecipe:
-		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
-	case subscriptions.StateNotConnected:
-		return integrationUnavailable(assistantwire.IntegrationReasonNotConnected)
-	case subscriptions.StateRateLimited:
-		return integrationUnavailable(assistantwire.IntegrationReasonRateLimited)
 	default:
 		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
 	}

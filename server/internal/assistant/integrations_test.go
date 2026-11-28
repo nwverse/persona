@@ -12,8 +12,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/extension"
-	"github.com/nwverse/persona/server/internal/extmgr"
 )
 
 func TestIntegrationProjectionSettingsAccess(t *testing.T) {
@@ -47,7 +45,7 @@ type integrationFixture struct {
 	configurationFailure error
 }
 
-func (f *integrationFixture) IntegrationExtensions(context.Context) ([]extmgr.IntegrationExtensionRead, error) {
+func (f *integrationFixture) IntegrationExtensions(context.Context) ([]assistantwire.IntegrationExtensionRead, error) {
 	return f.input.extensions, f.input.extensionsErr
 }
 
@@ -55,15 +53,15 @@ func (f *integrationFixture) IntegrationChannels(context.Context) ([]channel.Vie
 	return f.input.channels, f.input.channelsErr
 }
 
-func (f *integrationFixture) IntegrationConnectors(context.Context) ([]extmgr.IntegrationConnectorRead, error) {
+func (f *integrationFixture) IntegrationConnectors(context.Context) ([]assistantwire.IntegrationConnectorRead, error) {
 	return f.input.connectors, f.input.connectorsErr
 }
 
-func (f *integrationFixture) IntegrationSubscriptions(context.Context) ([]extmgr.IntegrationSubscriptionRead, error) {
+func (f *integrationFixture) IntegrationSubscriptions(context.Context) ([]assistantwire.IntegrationSubscriptionRead, error) {
 	return f.input.subscriptions, f.input.subscriptionsErr
 }
 
-func (f *integrationFixture) IntegrationServices(context.Context) []extmgr.IntegrationServiceRead {
+func (f *integrationFixture) IntegrationServices(context.Context) []assistantwire.IntegrationServiceRead {
 	return f.input.services
 }
 
@@ -97,30 +95,30 @@ func integrationGET(t *testing.T, target *Service, suffix string, status int, ou
 func TestIntegrationProjectionCatalogAndOwnedDetail(t *testing.T) {
 	a, b := New(Options{}), New(Options{ID: "m-example"})
 	fixture := &integrationFixture{input: integrationInput{
-		extensions: []extmgr.IntegrationExtensionRead{
-			{ID: "bridge", Name: "Bridge for personal use", Source: extension.SourceInstalled, Status: "running", Contributions: map[string][]string{
+		extensions: []assistantwire.IntegrationExtensionRead{
+			{ID: "bridge", Name: "Bridge for personal use", Origin: assistantwire.IntegrationOriginInstalledExtension, Availability: integrationAvailable(), Contributions: map[string][]string{
 				"channel": {"messages"}, "connectors": {"records"}, "tools": {"lookup"},
 			}},
-			{ID: "voice", Name: "Voice", Source: extension.SourceBuiltin, Status: "running", Contributions: map[string][]string{"voice": {"voice"}}},
+			{ID: "voice", Name: "Voice", Origin: assistantwire.IntegrationOriginBuiltinExtension, Availability: integrationAvailable(), Contributions: map[string][]string{"voice": {"voice"}}},
 		},
 		channels: []channel.View{
 			{ID: "messages", Kind: channel.KindIM, Source: channel.SourcePlugin, Plugin: "bridge", State: channel.StateConnected, Account: &channel.Account{Name: "private-account-field"}},
 			{ID: "voice", Kind: channel.KindVoice, Source: channel.SourcePlugin, Plugin: "voice", State: channel.StateConnected, ReadOnly: true},
 			{ID: "uninstalled", Source: channel.SourceMarket},
 		},
-		connectors: []extmgr.IntegrationConnectorRead{{ID: "records", OwnerExtension: "bridge", Status: "ok", StoresData: true}},
-		subscriptions: []extmgr.IntegrationSubscriptionRead{
-			{ID: "sub-records", Connector: "records", State: "rate_limited"},
-			{ID: "records", Name: "From Shortcuts", Connector: "records", Extension: "bridge", Push: true, State: "ok"},
+		connectors: []assistantwire.IntegrationConnectorRead{{ID: "records", OwnerExtension: "bridge", Availability: integrationAvailable(), StoresData: true}},
+		subscriptions: []assistantwire.IntegrationSubscriptionRead{
+			{ID: "sub-records", Connector: "records", Availability: integrationUnavailable(assistantwire.IntegrationReasonRateLimited)},
+			{ID: "records", Name: "From Shortcuts", Connector: "records", Extension: "bridge", Push: true, Availability: integrationAvailable()},
 		},
-		services: []extmgr.IntegrationServiceRead{
+		services: []assistantwire.IntegrationServiceRead{
 			{ID: "mail", Name: "Mail", Connector: "mail", ModuleFeature: "module.mail", Capability: assistantwire.IntegrationFilterCapabilityData,
 				Availability: assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}},
 		},
 	}}
 	a.integrationReads = fixture
-	b.integrationReads = &integrationFixture{input: integrationInput{extensions: []extmgr.IntegrationExtensionRead{
-		{ID: "bridge", Name: "Bridge for team use", Source: extension.SourceInstalled, Status: "disabled"},
+	b.integrationReads = &integrationFixture{input: integrationInput{extensions: []assistantwire.IntegrationExtensionRead{
+		{ID: "bridge", Name: "Bridge for team use", Origin: assistantwire.IntegrationOriginInstalledExtension, Availability: assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}},
 	}}}
 
 	var list assistantwire.IntegrationCatalog
@@ -183,22 +181,22 @@ func TestIntegrationProjectionCatalogAndOwnedDetail(t *testing.T) {
 
 func TestIntegrationProjectionOwnershipPrecedence(t *testing.T) {
 	book := newIntegrationBook("assistant", integrationInput{
-		extensions: []extmgr.IntegrationExtensionRead{
-			{ID: "registered", Status: "running"},
-			{ID: "declared", Status: "running", Contributions: map[string][]string{"channels": {"same"}, "connectors": {"shared", "explicit", "live", "other"}}},
-			{ID: "same", Status: "running", Contributions: map[string][]string{"connectors": {"other"}}},
-			{ID: "second", Status: "running", Contributions: map[string][]string{"connector": {"shared", "live"}}},
-			{ID: "legacy", Status: "running"},
-			{ID: "kind-only", Status: "running", Contributions: map[string][]string{"channel": {"other"}}},
-			{ID: "missing", Status: "running"},
+		extensions: []assistantwire.IntegrationExtensionRead{
+			{ID: "registered", Availability: integrationAvailable()},
+			{ID: "declared", Availability: integrationAvailable(), Contributions: map[string][]string{"channels": {"same"}, "connectors": {"shared", "explicit", "live", "other"}}},
+			{ID: "same", Availability: integrationAvailable(), Contributions: map[string][]string{"connectors": {"other"}}},
+			{ID: "second", Availability: integrationAvailable(), Contributions: map[string][]string{"connector": {"shared", "live"}}},
+			{ID: "legacy", Availability: integrationAvailable()},
+			{ID: "kind-only", Availability: integrationAvailable(), Contributions: map[string][]string{"channel": {"other"}}},
+			{ID: "missing", Availability: integrationAvailable()},
 		},
 		channels: []channel.View{{ID: "same", Source: channel.SourcePlugin}, {ID: "kind-only", Source: channel.SourcePlugin}},
-		connectors: []extmgr.IntegrationConnectorRead{
+		connectors: []assistantwire.IntegrationConnectorRead{
 			{ID: "shared"}, {ID: "explicit"}, {ID: "live", OwnerExtension: "registered"}, {ID: "legacy"},
 			{ID: "same"}, {ID: "kind-only"}, {ID: "missing", OwnerExtension: "absent"},
 			{ID: "other", Builtin: true},
 		},
-		subscriptions: []extmgr.IntegrationSubscriptionRead{
+		subscriptions: []assistantwire.IntegrationSubscriptionRead{
 			{ID: "saved", Connector: "explicit", Extension: "registered"},
 			{ID: "unscoped", Connector: "shared"},
 		},
@@ -222,7 +220,7 @@ func TestIntegrationProjectionOwnershipPrecedence(t *testing.T) {
 		{"subscription", "saved", "", "owner_conflict"},
 		{"subscription", "unscoped", "shared", ""},
 	} {
-		key := integrationResource(tt.kind, tt.id)
+		key := integrationResource(tt.kind, assistantwire.IntegrationResourceID(tt.id))
 		if string(book.owners[key].id) != tt.owner || book.nodes[key].item.RelationshipIssue != tt.problem {
 			t.Errorf("%s/%s owner %+v, issue %s", tt.kind, tt.id, book.owners[key], book.nodes[key].item.RelationshipIssue)
 		}
@@ -234,12 +232,12 @@ func TestIntegrationProjectionIsolatesFailedReads(t *testing.T) {
 	readError := errors.New("private diagnostic from the provider")
 	fixture := &integrationFixture{
 		input: integrationInput{
-			extensions: []extmgr.IntegrationExtensionRead{
-				{ID: "example", Status: "running", Contributions: map[string][]string{"connector": {"one"}, "channel": {"chat"}}},
+			extensions: []assistantwire.IntegrationExtensionRead{
+				{ID: "example", Availability: integrationAvailable(), Contributions: map[string][]string{"connector": {"one"}, "channel": {"chat"}}},
 			},
 			channels:      []channel.View{{ID: "chat", Source: channel.SourcePlugin, Plugin: "example", State: channel.StateConnected}},
 			connectorsErr: readError,
-			subscriptions: []extmgr.IntegrationSubscriptionRead{{ID: "shortcuts", Push: true, State: "ok"}},
+			subscriptions: []assistantwire.IntegrationSubscriptionRead{{ID: "shortcuts", Push: true, Availability: integrationAvailable()}},
 		},
 		configurationFailure: readError,
 	}
@@ -273,20 +271,20 @@ func TestIntegrationProjectionIsolatesFailedReads(t *testing.T) {
 func TestIntegrationProjectionModuleOffPreservesLegacyMailLink(t *testing.T) {
 	s := New(Options{})
 	fixture := &integrationFixture{input: integrationInput{
-		services: []extmgr.IntegrationServiceRead{
+		services: []assistantwire.IntegrationServiceRead{
 			{ID: "mail", Connector: "mail", ModuleFeature: "module.mail", Capability: assistantwire.IntegrationFilterCapabilityData,
 				Availability: assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateModuleOff}},
 			{ID: "feishu-bot", Channel: channel.Feishu, Connector: "larkcli", ModuleFeature: "module.lark", Capability: assistantwire.IntegrationFilterCapabilityChannels,
 				Availability: assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateModuleOff}},
 		},
-		extensions: []extmgr.IntegrationExtensionRead{
-			{ID: "gateway", Status: "running", Contributions: map[string][]string{"channel": {"gateway-chat"}, "connector": {"lark"}}},
+		extensions: []assistantwire.IntegrationExtensionRead{
+			{ID: "gateway", Availability: integrationAvailable(), Contributions: map[string][]string{"channel": {"gateway-chat"}, "connector": {"lark"}}},
 		},
 		channels: []channel.View{{ID: "gateway-chat", Source: channel.SourcePlugin, Plugin: "gateway", State: channel.StateConnected}},
-		connectors: []extmgr.IntegrationConnectorRead{
-			{ID: "larkcli", Builtin: true, StoresData: true}, {ID: "lark", OwnerExtension: "gateway", StoresData: true, Status: "ok"},
+		connectors: []assistantwire.IntegrationConnectorRead{
+			{ID: "larkcli", Builtin: true, StoresData: true}, {ID: "lark", OwnerExtension: "gateway", StoresData: true, Availability: integrationAvailable()},
 		},
-		subscriptions: []extmgr.IntegrationSubscriptionRead{{ID: "saved-mail", Connector: "mail", State: "off"}},
+		subscriptions: []assistantwire.IntegrationSubscriptionRead{{ID: "saved-mail", Connector: "mail", Availability: assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}}},
 	}}
 	s.integrationReads = fixture
 	var catalog assistantwire.IntegrationCatalog

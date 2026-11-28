@@ -9,51 +9,30 @@ import (
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extension/host"
 	"github.com/nwverse/persona/server/internal/extmgr/mailport"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/subscriptions"
 )
 
-// These reads are local to an assistant process. They carry the settings metadata needed for projection
-// and use the same registries as the settings routes.
-type IntegrationExtensionRead struct {
-	ID, Name, Source, Status string
-	Contributions            map[string][]string
-	ChannelConnectors        []string
-	ReadOnly                 bool
-}
-
-type IntegrationConnectorRead struct {
-	ID, Name, Status string
-	OwnerExtension   string // the extension that registered this connector, if one did
-	Builtin          bool   // a registration from the host, where another extension cannot claim ownership by ID
-	StoresData       bool
-}
-
-type IntegrationSubscriptionRead struct {
-	ID, Name, Connector, Extension, State string
-	Push                                  bool
-}
-
-type IntegrationServiceRead struct {
-	ID, Name, ModuleFeature string
-	// Registered children of this service. The connector is optional and may be referenced by older saved subscriptions.
-	Channel, Connector string
-	Capability         assistantwire.IntegrationFilterCapability
-	Availability       assistantwire.IntegrationAvailability
-	ConnectionReadOnly bool
-}
-
-func (h *Manager) IntegrationExtensions(ctx context.Context) ([]IntegrationExtensionRead, error) {
+func (h *Manager) IntegrationExtensions(ctx context.Context) ([]assistantwire.IntegrationExtensionRead, error) {
 	if !h.ready(ctx) || h.extensions == nil {
 		return nil, errAssistantOffline
 	}
 	ps := h.extensions
-	var out []IntegrationExtensionRead
+	var out []assistantwire.IntegrationExtensionRead
 	for _, p := range ps.reg.Snapshots() {
 		v := ps.summaryView(ctx, p)
-		item := IntegrationExtensionRead{ID: v.ID, Name: v.Name, Source: v.Source, Status: v.Status,
+		origin := assistantwire.IntegrationOriginInstalledExtension
+		switch p.Record.Source {
+		case extension.SourceBuiltin:
+			origin = assistantwire.IntegrationOriginBuiltinExtension
+		case extension.SourceHubJSON:
+			origin = assistantwire.IntegrationOriginConfiguredExtension
+		}
+		item := assistantwire.IntegrationExtensionRead{ID: assistantwire.IntegrationResourceID(v.ID), Name: v.Name,
+			Origin: origin, Availability: extensionIntegrationState(v.Status),
 			Contributions: v.Contributes, ReadOnly: p.ReadOnly()}
 		for _, ch := range p.Manifest.Channels() {
 			if ch.Connector != "" {
@@ -102,24 +81,24 @@ func (h *Manager) IntegrationChannels(ctx context.Context) ([]channel.View, erro
 	return out, nil
 }
 
-func (h *Manager) IntegrationConnectors(ctx context.Context) ([]IntegrationConnectorRead, error) {
+func (h *Manager) IntegrationConnectors(ctx context.Context) ([]assistantwire.IntegrationConnectorRead, error) {
 	if !h.ready(ctx) || h.connectors == nil {
 		return nil, errAssistantOffline
 	}
-	var out []IntegrationConnectorRead
+	var out []assistantwire.IntegrationConnectorRead
 	for _, c := range h.connectors.All() {
 		manifest := c.Manifest()
-		v := IntegrationConnectorRead{ID: c.ID(), Name: connector.DisplayName(ctx, c),
-			Status: connector.StatusOf(ctx, c).State, Builtin: !manifest.Proxy,
+		v := assistantwire.IntegrationConnectorRead{ID: assistantwire.IntegrationResourceID(c.ID()), Name: connector.DisplayName(ctx, c),
+			Availability: connectorIntegrationState(connector.StatusOf(ctx, c).State), Builtin: !manifest.Proxy,
 			StoresData: len(connector.Capabilities(c)) == 0 ||
 				manifest.Has(connector.CapArchive) || manifest.Has(connector.CapInbox) || manifest.InboxSwitch}
 		if owner := h.extensions.ownerOf(c); owner != nil {
-			v.OwnerExtension, v.Builtin = owner.id, false
+			v.OwnerExtension, v.Builtin = assistantwire.IntegrationResourceID(owner.id), false
 		} else if c.ID() == imessagewire.ID && h.extensions != nil {
 			// applyIMessage registers the host adapter for the built-in settings extension.
 			if _, ok := c.(imessagewire.Remote); ok {
 				if p := h.extensions.reg.Snapshot(imessageExtensionID); p != nil && p.Record.Source == extension.SourceBuiltin {
-					v.OwnerExtension = p.Record.ID
+					v.OwnerExtension = assistantwire.IntegrationResourceID(p.Record.ID)
 				}
 			}
 		}
@@ -128,7 +107,7 @@ func (h *Manager) IntegrationConnectors(ctx context.Context) ([]IntegrationConne
 	return out, nil
 }
 
-func (h *Manager) IntegrationSubscriptions(ctx context.Context) ([]IntegrationSubscriptionRead, error) {
+func (h *Manager) IntegrationSubscriptions(ctx context.Context) ([]assistantwire.IntegrationSubscriptionRead, error) {
 	if !h.ready(ctx) || h.subs == nil {
 		return nil, errAssistantOffline
 	}
@@ -136,25 +115,26 @@ func (h *Manager) IntegrationSubscriptions(ctx context.Context) ([]IntegrationSu
 	if err != nil {
 		return nil, err
 	}
-	out := make([]IntegrationSubscriptionRead, 0, len(list))
+	out := make([]assistantwire.IntegrationSubscriptionRead, 0, len(list))
 	for _, sub := range list {
 		push := subscriptions.IsPush(sub) || sub.RecipeOrigin == subscriptions.OriginPush
 		name := firstNonEmpty(sub.Label, sub.SourceName)
 		if push && name == "" {
 			name = i18n.T(h.contextLang(ctx), "subscriptions-pages.list.push_section")
 		}
-		out = append(out, IntegrationSubscriptionRead{ID: sub.ID, Name: name, Connector: sub.Connector,
-			Extension: sub.Extension, State: sub.State, Push: push})
+		out = append(out, assistantwire.IntegrationSubscriptionRead{ID: assistantwire.IntegrationResourceID(sub.ID), Name: name,
+			Connector: assistantwire.IntegrationResourceID(sub.Connector), Extension: assistantwire.IntegrationResourceID(sub.Extension),
+			Availability: subscriptionIntegrationState(sub.State), Push: push})
 	}
 	return out, nil
 }
 
 // IntegrationServices describes the host registrations and their provider switches, including dormant routes
 // so an existing settings link can report the module state.
-func (h *Manager) IntegrationServices(ctx context.Context) []IntegrationServiceRead {
+func (h *Manager) IntegrationServices(ctx context.Context) []assistantwire.IntegrationServiceRead {
 	l := h.contextLang(ctx)
 	botStatus, botReadOnly := h.integrationBotAvailability(ctx)
-	return []IntegrationServiceRead{
+	return []assistantwire.IntegrationServiceRead{
 		{ID: "feishu-bot", Name: i18n.T(l, "hub-channels.feishu_name"), ModuleFeature: "module.lark",
 			Channel: channel.Feishu, Connector: "larkcli", Capability: assistantwire.IntegrationFilterCapabilityChannels,
 			Availability: botStatus, ConnectionReadOnly: botReadOnly},
@@ -216,4 +196,61 @@ func (h *Manager) integrationMailAvailability(ctx context.Context) assistantwire
 
 func integrationReadFailed() assistantwire.IntegrationAvailability {
 	return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateUnavailable, Reason: assistantwire.IntegrationReasonReadFailed}
+}
+
+func integrationAvailable() assistantwire.IntegrationAvailability {
+	return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateAvailable}
+}
+
+func integrationUnavailable(reason assistantwire.IntegrationReason) assistantwire.IntegrationAvailability {
+	return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateUnavailable, Reason: reason}
+}
+
+func extensionIntegrationState(status string) assistantwire.IntegrationAvailability {
+	switch status {
+	case "needs_setup":
+		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
+	case "disabled":
+		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
+	case "incompatible":
+		return integrationUnavailable(assistantwire.IntegrationReasonIncompatible)
+	case host.StateError:
+		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
+	case host.StateRunning, host.StateStopped:
+		return integrationAvailable()
+	default:
+		return integrationUnavailable(assistantwire.IntegrationReasonNotConnected)
+	}
+}
+
+func connectorIntegrationState(status string) assistantwire.IntegrationAvailability {
+	switch status {
+	case connector.StateOK:
+		return integrationAvailable()
+	case connector.StateNotConfigured, connector.StateNotSignedIn, connector.StateNoPermission:
+		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
+	case connector.StateDisabled:
+		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
+	case connector.StateRateLimited:
+		return integrationUnavailable(assistantwire.IntegrationReasonRateLimited)
+	default:
+		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
+	}
+}
+
+func subscriptionIntegrationState(state string) assistantwire.IntegrationAvailability {
+	switch state {
+	case subscriptions.StateOK:
+		return integrationAvailable()
+	case subscriptions.StateOff:
+		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateDisabled}
+	case subscriptions.StateNeedsRecipe:
+		return assistantwire.IntegrationAvailability{State: assistantwire.IntegrationStateNeedsSetup}
+	case subscriptions.StateNotConnected:
+		return integrationUnavailable(assistantwire.IntegrationReasonNotConnected)
+	case subscriptions.StateRateLimited:
+		return integrationUnavailable(assistantwire.IntegrationReasonRateLimited)
+	default:
+		return integrationUnavailable(assistantwire.IntegrationReasonRuntimeError)
+	}
 }
