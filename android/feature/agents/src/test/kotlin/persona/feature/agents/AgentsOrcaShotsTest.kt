@@ -99,6 +99,20 @@ class AgentsOrcaShotsTest {
         override fun selectTab(tab: AppTab) = Unit
     }
 
+    private class Api : TasksApi {
+        override suspend fun todos() = emptyList<Todo>()
+        override suspend fun feed(conversation: String, since: String?) = FeedResponse(emptyList(), emptyMap())
+        override suspend fun startPlan(id: String, remember: Boolean): TaskPlan = error("unused")
+        override suspend fun dismissPlan(id: String): TaskPlan = error("unused")
+        override suspend fun retryTask(todoId: String): Todo = error("unused")
+        override suspend fun removeTask(todoId: String) = Unit
+        override suspend fun route(conversation: String, todoId: String, text: String): FeedItem = error("unused")
+        override suspend fun today(conversation: String): FeedItem = error("unused")
+        override suspend fun mainConversation(): String? = null
+        override suspend fun inboxReply(itemId: String, text: String, card: String?) = Unit
+    }
+
+    /** The list's model, By to-do (set before it starts, as `AgentsTodoTreeShotsTest` does), with no to-dos. */
     private fun model(): AgentsViewModel {
         val store = object : DataStore<Preferences> {
             override val data = MutableStateFlow<Preferences>(emptyPreferences())
@@ -112,7 +126,11 @@ class AgentsOrcaShotsTest {
             override suspend fun toggleMute(path: String, space: Boolean) = Unit
             override suspend fun markSeen(session: SessionKey, version: String) = Unit
         }
-        return AgentsViewModel(Repository(sessions, machines), Interactions(), Connection(), Sender(), AgentsPreferences(store, hub))
+        val prefs = AgentsPreferences(store, hub)
+        kotlinx.coroutines.runBlocking { prefs.grouping(AgentGrouping.Todo) }
+        val tasks = persona.core.domain.tasks.TasksStore(Api(), Connection(), kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined))
+        tasks.reloadTodos()
+        return AgentsViewModel(Repository(sessions, machines), Interactions(), Connection(), Sender(), prefs, tasks = tasks)
     }
 
     private fun save(node: SemanticsNodeInteraction, name: String) {
@@ -134,8 +152,6 @@ class AgentsOrcaShotsTest {
                 }
             }
         }
-        rule.runOnIdle { model.grouping(AgentGrouping.Todo) }
-        rule.waitUntil(5_000) { model.page.value.preferences.grouping == AgentGrouping.Todo }
         rule.waitForIdle()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             rule.runOnIdle { style = s; dark = d }
@@ -152,15 +168,17 @@ class AgentsOrcaShotsTest {
         val model = model()
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
+        // The dialog's window never settles under native graphics with the clock running; step it by hand.
+        rule.mainClock.autoAdvance = false
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 AgentOperationDialog(dialog = AgentOperationDialog.Rename(orcaTab), model = model, machineName = "MacBook Pro", dismiss = {})
             }
         }
-        rule.waitForIdle()
+        rule.mainClock.advanceTimeBy(1_000)
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             rule.runOnIdle { style = s; dark = d }
-            rule.waitForIdle()
+            rule.mainClock.advanceTimeBy(1_000)
             exists("Tab name (Orca tab)")
             exists("The tab name syncs to Orca", substring = true)
             assertTrue(rule.onAllNodesWithText("herdr", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isEmpty())

@@ -50,7 +50,8 @@ class AgentSortSourceTest {
     @Test fun sourceFiltersCountAndShowOnlyWhileTheyHaveAgents() {
         val rows = listOf(row("t"), row("f", pane = "botmux:topic"), row("o", pane = "orca:1"))
         val list = buildAgentList(rows, machines, settings = AgentListSettings(quick = AgentQuickFilter.Feishu))
-        assertEquals(1, list.counts[AgentQuickFilter.Feishu]); assertEquals(1, list.counts[AgentQuickFilter.Terminal])
+        // the Orca pane is in a tab like herdr's (#17054)
+        assertEquals(1, list.counts[AgentQuickFilter.Feishu]); assertEquals(2, list.counts[AgentQuickFilter.Terminal])
         assertEquals(listOf("m/f"), list.groups.flatMap { it.rows }.map { it.id })
         val none = mapOf(AgentQuickFilter.NeedsYou to 1, AgentQuickFilter.Unread to 0, AgentQuickFilter.Feishu to 0, AgentQuickFilter.Terminal to 0)
         assertEquals(listOf(AgentQuickFilter.All, AgentQuickFilter.NeedsYou), AgentQuickFilter.shown(AgentQuickFilter.All, none))
