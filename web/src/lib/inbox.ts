@@ -1534,6 +1534,9 @@ export async function suggestionAct(item: InboxItem, action: SuggestionAction, t
       if (r.item) reconcileSuggestionItem(current, r.item);
       else void reloadInbox();
       toast(r.error, "info");
+    } else if (s.kind === "handoff" && r.code === "handoff_target_unavailable") {
+      if (r.item) reconcileSuggestionItem(current, r.item);
+      toast(t("lib-inbox-events.handoff_unavailable"), "error");
     } else {
       if (confirmation) {
         set({ uncertainReplies: { ...state.uncertainReplies, [uncertainKey]: {

@@ -444,6 +444,9 @@ func validate(method string, p map[string]any) string {
 	case "worktree.create":
 		return first(str("repo", true), str("name", false), str("branchNameOverride", false), str("baseBranch", false),
 			str("parentWorktree", false), boolean("activate"), boolean("nameWasGenerated"))
+	case "worktree.rm": // Orca 1.4.277's worktree.rm params (the ones Persona sends)
+		return first(str("worktree", true), str("hostId", false), boolean("deleteBranch"), boolean("force"),
+			boolean("runHooks"), boolean("waitForBackgroundRemoval"))
 	case "agentSession.history":
 		if r := str("sessionId", true); r != "" {
 			return r

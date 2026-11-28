@@ -4,6 +4,7 @@ import { PhoneOutlineIcon } from '../design/PhoneOutlineIcon';
 import { Symbols } from '../design/Symbols';
 import { AgentDecisionQueue, AgentDecisionCard } from '../models/AgentDecisionQueue';
 import { InteractionDecisionForm } from './InteractionDecisionForm';
+import { RuleSuggestionBar } from './RuleSuggestionBar';
 import { util } from '@kit.ArkTS';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { nativeSheetInset } from '../platform/NativeInsets';
@@ -531,6 +532,15 @@ export struct AssistantCards {
               .onClick(() => this.feed.startPlan(this.planId(item), this.feed.rememberPlan(this.planId(item)), undefined,
                 JSON.stringify(this.plan(item))))
           }.width('100%')
+          if (Object.keys(Wire.object(this.plan(item), 'suggestion')).length > 0) {
+            RuleSuggestionBar({
+              model: this.model,
+              rawSuggestion: Wire.object(this.plan(item), 'suggestion'),
+              cardKey: 'plan|' + this.planId(item),
+              manager: this.feed.owner,
+              onSettled: () => { this.feed.refreshPlan(this.planId(item)); }
+            })
+          }
         }
         if (this.feed.planActionError(this.planId(item)) && this.feed.planIsFresh(this.planId(item))) Row({ space: Tokens.gap }) {
           Text(tr(this.feed.planActionError(this.planId(item)))).fontSize(Tokens.meta).fontColor(Colors.needs).layoutWeight(1)
