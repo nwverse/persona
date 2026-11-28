@@ -1,0 +1,27 @@
+<resources>
+    <string name="pair_link_or_address">Pairing link or Hub address</string>
+    <string name="text_photo">[Photo]</string>
+    <string name="text_video">[Video]</string>
+    <string name="text_file">[File]</string>
+    <string name="text_card">[Card]</string>
+    <string name="text_context">[Context]</string>
+    <string name="text_contexts">[%1$d context items]</string>
+    <string name="message_system_source">System</string>
+    <string name="screen_escape">Esc</string>
+    <string name="screen_enter">Enter</string>
+    <string name="screen_enter_body">Confirm the current choice on the computer?</string>
+    <string name="inbox_ai_reply">AI reply</string>
+    <string name="inbox_draft_ready">Draft ready. Review it before sending.</string>
+    <string name="inbox_replace_draft_body">Replace the current unsent draft with a new suggestion?</string>
+    <string name="hub_groups">Connections</string>
+    <string name="hub_add">Add connection</string>
+    <string name="hub_name">Connection name</string>
+    <string name="hub_primary">Primary connection</string>
+    <string name="hub_remove">Remove connection</string>
+    <string name="hub_remove_body">Remove this connection from the watch? Other connections will remain.</string>
+    <string name="hub_partial">Some connections couldn’t update. Their saved tasks are read-only.</string>
+    <string name="hub_added">Connection added</string>
+    <string name="hub_add_failed">Couldn’t save the connection. Check the address; a new pairing link may be needed.</string>
+    <string name="hub_add_pending">Couldn’t finish the saved connection changes. Please retry.</string>
+    <string name="hub_duplicate">This connection is already saved.</string>
+</resources>

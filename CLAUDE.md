@@ -316,6 +316,7 @@ Tokens live in `apple/Shared/Design` (also compiled for the watch and widgets); 
 | `desktop/` | Electron desktop shell around the existing web app (`docs/desktop/desktop.md`); it does not manage Persona Link |
 | `apple/` | XcodeGen project (`apple/project.yml`): iOS, watchOS and visionOS (`Vision/`) apps, extensions, shared code in `Shared/`, tests; `apple/PersonaLink/` is Persona Link's Mac side: Persona Screen and Input, and the menu bar App in `App/` (`docs/operations/link.md`) |
 | `android/` | Kotlin + Compose: `app`, `core/*`, `feature/*`, `platform/*` (`docs/android/android.md`) |
+| `wear/` | Standalone Kotlin Wear OS app for Samsung Galaxy Watch; core wrist chat, requests and Inbox over the existing watch REST contract; build and platform limits in `wear/README.md` |
 | `web/` | Web app (Vite + React + Tailwind) served by the hub (`docs/web/web.md`) |
 | `integrations/` | Agent runtime integrations and the runtime SDK (`docs/integrations/runtimes.md`) |
 | `native/iphone-bridge/` | Optional Rust bridge a node runs to operate a paired iPhone, built on its own (`docs/extensions/iphone-bridge.md`) |

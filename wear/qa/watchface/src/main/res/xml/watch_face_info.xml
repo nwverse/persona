@@ -1,0 +1,5 @@
+<WatchFaceInfo>
+    <Preview value="@drawable/preview" />
+    <Editable value="true" />
+    <MultipleInstancesAllowed value="false" />
+</WatchFaceInfo>

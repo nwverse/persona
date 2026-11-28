@@ -1,0 +1,31 @@
+{
+  "manifest_version": 1,
+  "id": "watch-hub-status",
+  "name": "Hub Status",
+  "version": "0.1.0",
+  "description": "Read-only counts of this Hub's computers, sessions and pending requests.",
+  "engines": {"extension_protocol": 1, "plugin_protocol": 1},
+  "runtime": {
+    "command": {
+      "linux-amd64": "bin/watch-hub-status-linux-amd64",
+      "linux-arm64": "bin/watch-hub-status-linux-arm64",
+      "android-arm64": "bin/watch-hub-status-android-arm64"
+    },
+    "rpc": "stdio"
+  },
+  "activation_events": ["on_startup"],
+  "permissions": {"hub": ["agents.read", "machines.read"]},
+  "contributes": {
+    "ui": [
+      {"id": "watch-hub-status-page", "title": "Hub Status", "placement": "extension_page"},
+      {
+        "id": "watch-hub-status-counts",
+        "title": "Hub Status",
+        "placement": "widget",
+        "families": ["accessory_circular", "accessory_rectangular", "large"],
+        "refresh_minutes": 15,
+        "opens": "watch-hub-status-page"
+      }
+    ]
+  }
+}

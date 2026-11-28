@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pet_title">ミルクフロッグ</string>
+    <string name="pet_tap">タップしてアニメーションを再生</string>
+    <string name="pet_needs_you">%1$d 件の確認待ち</string>
+    <string name="pet_working">%1$d 件を実行中</string>
+    <string name="pet_done">%1$d 件が完了</string>
+    <string name="pet_idle">今は何もありません</string>
+    <string name="pet_sleep">眠っています</string>
+    <string name="pet_offline">Hub に接続できません</string>
+    <string name="pet_unavailable">ミルクフロッグを利用できません</string>
+    <string name="pet_unavailable_body">読み込めませんでした。Hub に接続してから再試行してください。</string>
+    <string name="pet_unsupported">この Hub はウォッチにミルクフロッグを提供していません。</string>
+    <string name="pet_pair_first">まず設定で Hub に接続してください。</string>
+    <string name="pet_retry_body">前回の更新を表示しています。再試行で接続します。</string>
+    <string name="pet_loading">ミルクフロッグを読み込み中…</string>
+    <string name="pet_updated">更新時刻 %1$s</string>
+    <string name="pet_short_waiting">確認待ち</string>
+    <string name="pet_short_working">実行中</string>
+    <string name="pet_short_done">完了</string>
+    <string name="pet_short_idle">待機中</string>
+    <string name="pet_short_sleep">睡眠中</string>
+    <string name="pet_short_offline">オフライン</string>
+</resources>

@@ -1,0 +1,6 @@
+<resources>
+    <string name="watch_face_name">Persona 测试</string>
+    <string name="slot_short">短文本</string>
+    <string name="slot_long">长文本</string>
+    <string name="slot_image">小图像</string>
+</resources>

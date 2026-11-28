@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="pet_title">Milk Frog</string>
+    <string name="pet_tap">Tap Milk Frog to play</string>
+    <string name="pet_needs_you">%1$d need you</string>
+    <string name="pet_working">%1$d working</string>
+    <string name="pet_done">%1$d finished</string>
+    <string name="pet_idle">Nothing going on</string>
+    <string name="pet_sleep">Asleep</string>
+    <string name="pet_offline">Can’t reach the Hub</string>
+    <string name="pet_unavailable">Milk Frog unavailable</string>
+    <string name="pet_unavailable_body">Couldn’t load Milk Frog. Try again when your Hub is reachable.</string>
+    <string name="pet_unsupported">Your Hub does not provide Milk Frog for this watch.</string>
+    <string name="pet_pair_first">Connect your Hub in Settings first.</string>
+    <string name="pet_retry_body">Showing the last update. Tap Retry to reconnect.</string>
+    <string name="pet_loading">Getting Milk Frog…</string>
+    <string name="pet_updated">Updated %1$s</string>
+    <string name="pet_short_waiting">Waiting</string>
+    <string name="pet_short_working">Working</string>
+    <string name="pet_short_done">Done</string>
+    <string name="pet_short_idle">Idle</string>
+    <string name="pet_short_sleep">Asleep</string>
+    <string name="pet_short_offline">Offline</string>
+</resources>

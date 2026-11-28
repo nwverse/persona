@@ -3254,6 +3254,61 @@ HarmonyOS functional actions reuse `IconActions`, `ButtonStyles.icon` and `iconP
 
 This requested HarmonyOS presentation uses compact icon submissions while retaining the visible decision choices and execution context; it does not change Apple decision-row sizing. Approval/Deny use distinct symbols and colors, and pending/unknown never appears as an ordinary actionable Send. The sidebar shares the canvas; plan content has explicit context/goal/bounds/criteria hierarchy, question Answer is trailing, Todo rows have native group dividers, and card outer insets are applied once. Avoid repeated Details rows or descriptive subtitles. Recording, external sends, Forget Hub and extension installation retain visible consequences in a single native confirmation or permission sheet. The [HarmonyOS guide](../harmony/harmony.md#compact-native-actions) owns the complete interaction contract.
 
+## Wear OS native structure
+
+Audience: people away from their phone who need to read an existing conversation or answer a request on a round
+Samsung Galaxy Watch. The standalone app in `wear/` follows the core Apple Watch flow: pending requests, Assistant
+and Agent conversations, short replies and Inbox handling. Its [build and scope guide](../../wear/README.md) records
+the platform limits; voice/recording expansion and phone synchronization are deferred. Non-voice additions include
+owner-scoped hub groups, the Milk Frog and read-only extension projections with optional complication data sources.
+
+The watch uses native Android `ScrollView`, `LinearLayout`, `TextView`, `Button`, `CheckBox` and `EditText`, with
+system keyboard and optional system dictation. All screen colors, type sizes, spacing, corner radii and control
+sizes come from `wear/app/src/main/java/dev/persona/watch/ui/WatchTheme.kt`. Reuse its text, column, button and
+surface factories. This is a watch-specific component set; it does not change the phone's styles or tokens.
+The black background stays black in either system appearance, with high-contrast text and separate rounded cards.
+Round-screen side and end insets keep text and actions inside the circle. Controls have a minimum 48 dp touch
+height, single-line action labels, accessible names and scrollable content; long text opens in a reading page.
+Typography uses system-scaled text, and system Back returns from details and expanded work.
+
+Questions stay with their owning session and appear on the watch home without opening a conversation. Request
+counts describe the visible unresolved cards. Quiet sessions, muted requests and questions still being considered
+by the assistant do not alert the wrist. A permission requiring secret input directs the user to another device;
+the watch offers no Always grant, arbitrary terminal input or approval fallback for an unknown request kind.
+Plans and permission choices use the existing answer-only watch contract. Assistant and Agents both keep tool
+activity collapsed: show the latest assistant segment and open earlier narration and tool work only on a tap.
+
+Default behavior: refresh immediately on entering the foreground, then every eight seconds while active. Leaving
+the foreground stops the polling timer; there is no background polling, background notification service or ambient
+data loop. Failed refreshes retain earlier content with an offline/stale indication. Sending gives immediate local
+feedback, retains the draft on failure and reuses the same operation identity on retry; hub receipt is distinct from
+the Agent completing the task. Connection details and pairing credentials belong in setup and Settings.
+
+Additional connections remain behind Settings. Every request and draft belongs to one connection even when hubs
+reuse the same server-side IDs. A failed group retains its content as read-only with its earlier timestamp; it does
+not stall a healthy group's send queue. Inbox stays on the primary connection. AI Reply creates an editable draft,
+requires confirmation before replacing one, and never sends automatically. Continue sends the visible localized
+Continue text through the existing message contract.
+
+Milk Frog artwork comes from the existing hub package with content hashes checked before display; its fixed art
+measurements live in `PetTokens`. Animation runs only on its visible, interactive page and follows reduced-motion
+settings. Complications display cached state and explicitly expire. Read-only extension projections use the native
+watch tokens and do not turn provider actions, fields or arbitrary links into controls. Selecting a complication
+remains the user's watch-face choice; the app never replaces the face itself.
+
+Extension pie charts use proportional positive-value slices; donut charts use the same slices with the
+`ExtensionTokens.chartDonutHole` inner-radius ratio. Zero/nonpositive totals draw no fabricated slices, while
+the accessible value list retains the original values. Line, area, bar and readable OHLC presentations remain
+distinct rendering paths. Connection registration failures retain encrypted issued credentials for local retry;
+retrying a saved registration never redeems the one-time pairing token again.
+
+The independent Gradle build pins the watch to SDK 35, JVM 17, AGP 8.13.2 and Kotlin 2.1.20. The current phone
+Android dependency graph targets SDK 37 with AGP 9.5 and Kotlin 2.4.21, which the pinned watch toolchain cannot
+consume. The watch therefore shares the existing REST protocol and safety rules rather than importing that graph.
+This keeps the source-built watch app usable with the available toolchain without changing the phone build.
+Acceptance covers the actual circular device screen, large system text, offline recovery and explicit action
+outcomes; synthetic fixture checks and real hub/device checks are recorded separately.
+
 ## 8. Inconsistencies and duplicate definitions
 
 | ID | What | Where | Impact | Recommended unification |

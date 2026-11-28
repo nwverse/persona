@@ -1,0 +1,27 @@
+<resources>
+    <string name="pair_link_or_address">配对链接或 Hub 地址</string>
+    <string name="text_photo">[图片]</string>
+    <string name="text_video">[视频]</string>
+    <string name="text_file">[文件]</string>
+    <string name="text_card">[卡片]</string>
+    <string name="text_context">[上下文]</string>
+    <string name="text_contexts">[%1$d 项上下文]</string>
+    <string name="message_system_source">系统消息</string>
+    <string name="screen_escape">Esc</string>
+    <string name="screen_enter">确认当前选择</string>
+    <string name="screen_enter_body">确认电脑上当前选中的选项？</string>
+    <string name="inbox_ai_reply">生成回复草稿</string>
+    <string name="inbox_draft_ready">草稿已生成，请检查后再发送。</string>
+    <string name="inbox_replace_draft_body">用新生成的建议替换当前未发送草稿？</string>
+    <string name="hub_groups">连接管理</string>
+    <string name="hub_add">添加连接</string>
+    <string name="hub_name">连接名称</string>
+    <string name="hub_primary">默认连接</string>
+    <string name="hub_remove">移除连接</string>
+    <string name="hub_remove_body">从手表移除这条连接？其他连接会保留。</string>
+    <string name="hub_partial">部分连接未能更新，其缓存任务暂时只能查看。</string>
+    <string name="hub_added">已添加连接</string>
+    <string name="hub_add_failed">无法保存连接。请检查地址；可能需要新的配对链接。</string>
+    <string name="hub_add_pending">尚未完成保存的连接更改，请重试。</string>
+    <string name="hub_duplicate">这条连接已保存。</string>
+</resources>
