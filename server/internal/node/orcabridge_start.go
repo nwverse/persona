@@ -279,27 +279,29 @@ func (b *orcaBridge) noteStarted(orca, persona, agent string, row map[string]any
 		b.starts = map[string]orcaStarted{}
 	}
 	b.starts[orca] = orcaStarted{row: row, until: now.Add(orcaStartKeep)}
-	b.tabsAt = time.Time{}
+	b.tabsAt, b.repush = time.Time{}, true
 }
 
-// startedRow is the row of a chat Persona started that Orca does not list yet; nil for any other.
+// startedRow is the row of a chat Persona started that Orca does not list yet; nil for any other. The rows go to the
+// node again on the next refresh: the answer stands in for the chat's listed row until then.
 func (b *orcaBridge) startedRow(orca string) map[string]any {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if s, ok := b.starts[orca]; ok && time.Now().Before(s.until) {
+		b.repush = true
 		return s.row
 	}
 	return nil
 }
 
-// startedRows are the rows of the chats Persona started that Orca does not list yet (open: the chats it lists), whose
-// Persona ids are not taken; the ones Orca lists now, or that stood orcaStartKeep, go.
-func (b *orcaBridge) startedRows(open map[string]bool, taken map[string]string, now time.Time) (rows []map[string]any, orcas []string) {
+// startedRows are the rows of the chats Persona started that the bridge does not list yet from Orca (taken: the
+// Persona ids it lists); the ones it lists now, or that stood orcaStartKeep, go.
+func (b *orcaBridge) startedRows(taken map[string]string, now time.Time) (rows []map[string]any, orcas []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for orca, s := range b.starts {
 		persona, _ := s.row["session_id"].(string)
-		if open[orca] || !now.Before(s.until) || taken[persona] != "" {
+		if !now.Before(s.until) || taken[persona] != "" {
 			delete(b.starts, orca)
 			continue
 		}

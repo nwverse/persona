@@ -165,11 +165,13 @@ type orcaBridge struct {
 	st      *orcart.Status // the runtime's status.get last read (orcabridge_controls.go status), and when
 	stAt    time.Time
 	// Starting chats (orcabridge_start.go): the agents Orca found installed and when, the launchers last pushed, the
-	// chats Persona started that Orca does not list yet (by Orca session id).
+	// chats Persona started that Orca does not list yet (by Orca session id), and whether the rows go to the node
+	// again on the next refresh even if unchanged (a start's answer stood in for one).
 	agents   []string
 	agentsAt time.Time
 	launches string
 	starts   map[string]orcaStarted
+	repush   bool
 }
 
 // orcaHead is what the bridge knows of one Orca session beyond its worktree.ps row.
@@ -294,7 +296,7 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 			waiting[c.orca] = e.Persona
 		}
 	}
-	started, startedOrca := b.startedRows(open, orcaOf, now)
+	started, startedOrca := b.startedRows(orcaOf, now)
 	for i, row := range started {
 		rows = append(rows, row)
 		orcaOf[row["session_id"].(string)] = startedOrca[i]
@@ -309,6 +311,9 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 	b.book.flush(now, false)
 	b.mu.Lock()
 	b.orcaOf, b.closed = orcaOf, closed
+	if b.repush {
+		b.pushed, b.repush = "", false
+	}
 	b.mu.Unlock()
 	if raw, err := json.Marshal(rows); err == nil && string(raw) != b.pushed {
 		// unlisted_transcripts: none. The bridge lists the chats Orca closed itself (orcaClosedRow), so none of their
