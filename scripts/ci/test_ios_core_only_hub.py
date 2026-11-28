@@ -94,6 +94,11 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         self.assertIn('"CLAUDE_CONFIG_DIR": str(paths["claude"])', source)
         self.assertIn("wait_for_main_fixture(base, master, main_session, nodes)", source)
 
+    def test_hub_shutdown_runs_after_fixture_node_cleanup(self):
+        source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
+        self.assertIn("stop_fixture_nodes(nodes)\n        smoke.stop_hub(hub, bindir)", source)
+        self.assertIn("finally:\n        stop_fixture_nodes(nodes)", source)
+
     def test_main_session_is_a_uuid_with_a_directly_discoverable_transcript(self):
         def database(*args, **kwargs):
             query = args[0][-1]

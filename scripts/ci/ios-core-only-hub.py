@@ -260,6 +260,25 @@ def start_fixture_node(base, bindir, work, master, node_home):
         raise
 
 
+def stop_fixture_nodes(processes):
+    """Stop the fixture before stop_hub scans their shared binary directory; make normal and failure cleanup idempotent."""
+    for process in processes:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(10)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(10)
+    processes.clear()
+
+
 def prepare_app(source, work, simulator, readings):
     config = work / "public-config.json"
     config.write_text(json.dumps({"app": {"bundle_id": "org.example.persona.ci", "team_id": ""}}))
@@ -727,6 +746,7 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         run_composer_ui_test(parent, work, client_env, simulator, shots, proof, main_session, readings)
         validate_proof(proof, edition, run_id, shots)
         (shots / f"{edition}-proof.json").write_text(json.dumps(proof, indent=2, sort_keys=True) + "\n")
+        stop_fixture_nodes(nodes)
         smoke.stop_hub(hub, bindir)
         hub = None
         print(f"PASS {edition}: paired with a redeemed device credential; core pages loaded; module surfaces compared", flush=True)
@@ -747,14 +767,7 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
             sys.stderr.write(log.read_text()[-4000:])
         raise
     finally:
-        for process in nodes:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(10)
+        stop_fixture_nodes(nodes)
         if node_home is not None:
             shutil.rmtree(node_home, ignore_errors=True)
         if hub is not None and hub.poll() is None:
