@@ -1024,4 +1024,11 @@ test('interrupt refuses with turn_over_background when only background work rema
   await until('foreground prompt is active', () => received(record).filter((m) => m.method === 'session/prompt').length === 2, SLOW)
   const res = await n.peer.call('session.interrupt', { session_id: pid })
   assert.equal(res?.settled, true)
+
+  // A native foreground turn (outside Persona's activeTurns/queuedTurns/autonomousTurns) with
+  // background work still running is cancelled rather than refused as turn_over_background.
+  nativeSummary(agyDir, 'CASCADE_RUN_STATUS_RUNNING', 2)
+  assert.equal(await refresh(pid), 'working')
+  await n.peer.call('session.interrupt', { session_id: pid })
+  assert.ok(received(record).filter((m) => m.method === 'session/cancel').length >= 2)
 })
