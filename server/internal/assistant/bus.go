@@ -193,6 +193,7 @@ func NewBusHub(o BusOptions) *BusHub {
 			if reviewEnabled {
 				capabilities = append(capabilities, assistantwire.CapabilityProjectReview)
 			}
+			capabilities = append(capabilities, assistantwire.CapabilityIntegrationsProjection)
 			b.mu.Lock()
 			svc := b.svc
 			b.mu.Unlock()

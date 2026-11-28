@@ -24,6 +24,13 @@ different component tree at the split-pane breakpoint discards unsaved input. A 
 when a GET overlaps it. Read again after the PUT to reconcile the displayed state and ignore the overlapping reply once
 that follow-up starts.
 
+## Configuration editors share the resource's write order (#17762)
+
+A layout can remount an editor while its save is in flight. Put the confirmed snapshot, draft and write queue under the
+same scoped resource key as its requests. When an endpoint receives a whole document, read a fresh baseline before
+applying the edited fields. A follow-up read can confirm a lost response for the named fields without repeating the
+write. Test a remount and a credential replacement separately, since only the latter retires the resource's queue.
+
 ## A TypeError is not a network failure (#16182)
 
 fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.

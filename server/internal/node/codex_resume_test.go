@@ -62,10 +62,14 @@ func resumeFile(f *fakeHerdr, cwd string) func() codexStartFile {
 	return func() codexStartFile { mu.Lock(); defer mu.Unlock(); return file }
 }
 
-func TestSendCodexResumesStoppedTerminalThread(t *testing.T) {
-	n, f, cwd := codexHistoryNode(t)
+// A Codex history row nothing has open is a stopped agent (#4754): read-only, with its terminal page offered for
+// Resume, and a message to it is refused with nothing opened. While a process holds its rollout it stays view only, as
+// before.
+func TestCodexHistoryIsReadOnlyWhenStopped(t *testing.T) {
+	n, f, _ := codexHistoryNode(t)
 	s, ok := byID(listSessions(t, n))[startThread]
-	if !ok || s.SourceKind != "codex_history" || s.Capabilities == nil || !s.Capabilities.Send || !s.Capabilities.Terminal || s.ReadOnlyReason != "" {
+	if !ok || s.SourceKind != "codex_history" || s.Capabilities == nil || s.Capabilities.Send || !s.Capabilities.Terminal ||
+		s.ReadOnlyReason != stoppedReason {
 		t.Fatalf("history row = %+v (%+v)", s, s.Capabilities)
 	}
 
@@ -81,14 +85,15 @@ func TestSendCodexResumesStoppedTerminalThread(t *testing.T) {
 	}
 	n.codices.mu.Lock()
 	n.codices.liveRollouts = nil
-	delete(n.codices.threads, startThread) // a send before discovery has registered the rollout
 	n.codices.mu.Unlock()
 
 	f.reset()
-	file := resumeFile(f, cwd)
 	_, err = request(t, n, "session.send", map[string]any{"session_id": startThread, "text": "go on", "launcher": "claude"})
-	if got := file(); err != nil || got.Prompt != "go on" || strings.Join(got.Argv, " ") != "codex resume "+startThread {
-		t.Fatalf("resumed with %+v: %v", got, err)
+	if code, _ := refusalOf(t, err); code != agentStopped {
+		t.Fatalf("a message to a stopped Codex: %v", err)
+	}
+	if got := f.trace("tab.create", "pane.send_input"); len(got) != 0 {
+		t.Errorf("resumed it: %q", got)
 	}
 }
 
@@ -153,7 +158,7 @@ func TestCodexDesktopThreadIsNotResumedInATerminal(t *testing.T) {
 
 	appRunning = false
 	n.discoverCodex()
-	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || !s.Capabilities.Send || !s.Capabilities.Terminal ||
+	if s := byID(listSessions(t, n))[startThread]; s.Capabilities == nil || s.Capabilities.Send || !s.Capabilities.Terminal ||
 		s.Capabilities.Takeover == nil || !s.Capabilities.Takeover.CanResume || !s.Capabilities.Takeover.AppOwned {
 		t.Fatalf("idle unowned Codex App thread should be resumable: %+v (%+v)", s, s.Capabilities)
 	}

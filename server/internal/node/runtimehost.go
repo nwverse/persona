@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
@@ -64,6 +65,9 @@ type RuntimeHost struct {
 	paseo paseoBridge
 	// orca runs the bridge to Orca's structured sessions while the machine's engine is Orca (orcabridge.go).
 	orca orcaBridgeState
+	// orcaBots is what the Orca bridge last learned of the computer's bots for the session list (orcabots.go); nil
+	// while it runs no bridge or knows of no bot with a listed Home Chat.
+	orcaBots atomic.Pointer[orcaBotHomes]
 	// cindy runs the Cindy bridge while the machine's engine is Cindy (cindybridge.go).
 	cindy cindyBridgeState
 	// t3code runs the T3 Code bridge while the machine's engine is T3 Code (t3codebridge.go).

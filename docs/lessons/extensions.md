@@ -1,5 +1,9 @@
 # Lessons: extension settings lifecycle
 
+- Installed extension ids can collide with connector or channel ids under one assistant (#17762). Use the live
+  host registration when it exists and an unambiguous contribution of the matching resource type next. Check both
+  before using an older producer's equal id, so a built-in connector or a second claimant keeps its own settings.
+
 - A computer's extension sync must not prune other computers using an old configuration snapshot (#15433). A snapshot can pass the registry-current check, then be overtaken by a configuration change while another computer completes its sync. Read the current selected-computers list under the node-state lock before pruning: this preserves newly selected computers' `running` or `outdated` rows and still cleans unselected rows for computers removed from the fleet. A deterministic old-snapshot regression checks both contracts without sleeps; multi-CPU repeats exercise the original fan-out race.
 
 - A partial Lark feature save through Settings PUT or `feishu.configure` must retain its supplied keys until the final locked commit (#12646). Expanding them into a full snapshot before credential validation lets a delayed save overwrite another client's successful switch change. Merge into current features after validation, and snapshot rollback state at that commit so a failed write preserves intervening saves. Test the real settings route with a paused fake BotInfo response and let a second single-switch request finish before releasing it.
