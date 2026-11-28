@@ -226,6 +226,10 @@ func (s *Service) launcherRoutes() {
 			apierr.Write(w, http.StatusNotFound, i18n.Err("assistant-models_launchers.err_not_managed"))
 			return
 		}
+		if old.channelAlias != "" {
+			apierr.Write(w, http.StatusBadRequest, errChannelAlias(*old))
+			return
+		}
 		if err := s.checkScope(r.Context(), in.scopeInput); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
@@ -262,6 +266,11 @@ func (s *Service) launcherRoutes() {
 			return
 		}
 		if i := slices.IndexFunc(list, func(l storedLauncher) bool { return l.Name == name }); i >= 0 {
+			if list[i].channelAlias != "" {
+				s.models.mu.Unlock()
+				apierr.Write(w, http.StatusBadRequest, errChannelAlias(list[i]))
+				return
+			}
 			// Check dependencies, delete and publish the confirmed snapshot under the configuration lock.
 			uses, err := s.providerModelUses(withManagedSnapshot(ctx, list), launcherProvider(name))
 			if err == nil && len(uses) == 0 {

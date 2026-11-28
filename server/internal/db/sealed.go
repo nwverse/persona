@@ -51,6 +51,11 @@ var sealedSettings = []SealedSetting{
 	{Key: "bots.feishu.sync", Fields: []string{"registration_device_enc"}},
 	{Key: "bots.feishu.sync.bots", List: true, Fields: []string{"secret_enc", "registration_device_enc"}},
 	{Key: "bots.feishu.sync.bindings", List: true, Fields: []string{"access_token_enc", "refresh_token_enc", "auth_verifier_enc", "auth_device_enc"}},
+	// internal/assistant: the managed channels (storedChannel), the channel ledger's points (ledgerChannel) and the
+	// launchers a channel replaced, kept for a rollback (ledgerLauncher).
+	{Key: "execution.channels", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
+	{Key: "execution.channels.ledger", List: true, Fields: []string{"key_sealed", "headers_sealed"}},
+	{Key: "execution.channels.ledger_launchers", List: true, Fields: []string{"key_sealed", "headers_sealed", "env_sealed"}},
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).

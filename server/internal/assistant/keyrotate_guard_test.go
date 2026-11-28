@@ -76,6 +76,7 @@ func TestPlacesThatSealAreKnown(t *testing.T) {
 		"internal/assistant/models_launchers_scope.go": 1, // launchers.machine_keys
 		"internal/assistant/launcher_secrets.go":       1, // sealKey: a reference in key_sealed, launchers.managed / launchers.machine_keys
 		"internal/assistant/keyrotate.go":              1, // the rotation itself
+		"internal/assistant/execution_channels.go":     2, // execution.channels (and its ledger): key and headers
 		"internal/extmgr/manager.go":                   3, // its box, sealKey
 		"internal/extmgr/extensions.go":                1, // hubSealer: the registry's plugin_secrets
 		"internal/extmgr/bots.go":                      1, // bots.feishu
