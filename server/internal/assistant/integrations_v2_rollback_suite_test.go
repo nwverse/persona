@@ -69,7 +69,7 @@ func getChannelListByID(t *testing.T, s *Service) map[string]channel.View {
 
 func boundThreadFor(s *Service, channelID, key string) string {
 	ctx := context.Background()
-	if t := s.channelThreadOf(ctx, channelID, channelThreadKeys{primary: key}, s.integrationsV2On(ctx)); t != nil {
+	if t := s.lookupThreadBinding(ctx, s.storedThreadBindingForTest(channelID, key, s.integrationsV2On(ctx))); t != nil {
 		return t.SessionID
 	}
 	return ""
@@ -767,7 +767,7 @@ func TestIntegrationsV2LegacyClientPartialChannelUpdatePreservesRoutingConfig(t 
 		t.Fatalf("seed PUT: %d %s", rec.Code, rec.Body.String())
 	}
 	routeKey := channelGroupRouteKey("oc_keep_me")
-	if !s.bindChannelThread("examplechat", channelThreadKeys{primary: routeKey}, "server", "c1") {
+	if !s.seedThreadBinding("examplechat", routeKey, "server", "c1") {
 		t.Fatal("failed to bind channel thread")
 	}
 
