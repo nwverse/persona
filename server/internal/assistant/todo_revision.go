@@ -102,7 +102,7 @@ func (s *Service) todoRevisionCurrent(ctx context.Context) string {
 	known := b.listed != nil
 	b.mu.Unlock()
 	cfg, _ := s.settingsLastGood(ctx)
-	labels := s.todoBoardDirectionLabels(ctx, cfg)
+	labels := s.todoDirectionLabels(ctx, cfg)
 	return s.todoRevisionFor(s.trevision.writes.Load(), views, known, todoRevisionPrefsOf(cfg), labels)
 }
 

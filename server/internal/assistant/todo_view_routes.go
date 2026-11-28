@@ -171,7 +171,7 @@ func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []
 		return listedTodo{}, nil, false, err
 	}
 	if cfg := s.settings(ctx); cfg.todosV2On() {
-		populateTodoEffectiveDirections(list, s.todoBoardDirectionLabels(ctx, cfg))
+		s.populateTodoEffectiveDirections(list, s.todoDirectionLabels(ctx, cfg))
 	}
 	for i, t := range list {
 		if t.ID == id {

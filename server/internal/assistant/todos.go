@@ -1118,6 +1118,10 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
+		var counts assistantwire.TodoCounts
+		if !paged {
+			counts = p.counts()
+		}
 		partial := false
 		if isExtension {
 			if list, partial, err = s.extensionRows(ctx, list, p); err != nil {
@@ -1132,15 +1136,15 @@ func (s *Service) todoRoutes() {
 			prefs := todoRevisionPrefsOf(cfg)
 			var directions map[string]string
 			if prefs.V2 || !paged {
-				directions = s.todoBoardDirectionLabels(ctx, cfg)
+				directions = s.todoDirectionLabels(ctx, cfg)
 			}
 			if prefs.V2 {
 				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
-				populateTodoEffectiveDirections(list, directions)
+				s.populateTodoEffectiveDirections(list, directions)
 				if !paged {
 					// The board is the same complete projection as Counts. The closed_limit option bounds the rows a list
 					// client has to parse; it does not silently create a second, smaller set of board totals.
-					board = buildTodoBoardProjectionWithOptions(list, directions, prefs.FoldChildren)
+					board = buildTodoBoardProjectionWithOptions(list, directions, prefs.FoldChildren, counts)
 				}
 			}
 			if !paged {
@@ -1158,7 +1162,7 @@ func (s *Service) todoRoutes() {
 		}
 		apierr.WriteJSON(w, todosList{
 			Todos:            list,
-			Counts:           p.counts(),
+			Counts:           counts,
 			SharedBlockers:   sharedBlockers,
 			Board:            board,
 			ClosedNextCursor: closedNext,

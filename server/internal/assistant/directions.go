@@ -299,11 +299,7 @@ func (s *Service) directionsSync(ctx context.Context) {
 		}
 		curName := nameOf(d, titles[id].title, pnames, pok)
 		if id != "" && id != cfg.Main {
-			if leaders[id] {
-				labels[id] = curName
-			} else if label := strings.TrimSpace(d.Name); label != "" {
-				labels[id] = label
-			}
+			labels[id] = curName
 		}
 		curTitle := titles[id].title
 		if d.Outside != nil {

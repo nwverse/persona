@@ -233,16 +233,40 @@ func (s *Service) directionOf(id string) *direction {
 // the knowledge base while publish holds pubMu. directionsSync publishes refreshed
 // project fallbacks once the knowledge base is available; explicit names are immediate.
 func (s *Service) directionSessionNames(ctx context.Context, cfg Settings, titles map[string]shownTitle) map[string]string {
+	return s.directionNames(ctx, cfg, titles, false)
+}
+
+// todoDirectionLabels includes recorded directions even after they stop receiving new work.
+func (s *Service) todoDirectionLabels(ctx context.Context, cfg Settings) map[string]string {
+	titles, _ := s.conversationTitles()
+	return s.directionNames(ctx, cfg, titles, true)
+}
+
+// directionNames can include ended directions for to-do attribution. Only cfg.Leaders are current leaders.
+func (s *Service) directionNames(ctx context.Context, cfg Settings, titles map[string]shownTitle, includeEnded bool) map[string]string {
 	b := &s.directions
 	b.mu.Lock()
-	if !s.directionsLocked(ctx) {
+	loaded := s.directionsLocked(ctx)
+	if !loaded && !includeEnded {
 		b.mu.Unlock()
 		return nil
 	}
 	records := make(map[string]direction, len(cfg.Leaders))
 	for _, id := range cfg.Leaders {
-		if d := b.m[id]; d != nil {
+		if id == "" || id == cfg.Main {
+			continue
+		}
+		if d := b.m[id]; loaded && d != nil {
 			records[id] = *d
+		} else {
+			records[id] = direction{} // the title is the only available fallback
+		}
+	}
+	if includeEnded && loaded {
+		for id, d := range b.m {
+			if id != "" && id != cfg.Main && d != nil {
+				records[id] = *d
+			}
 		}
 	}
 	b.mu.Unlock()
@@ -251,22 +275,15 @@ func (s *Service) directionSessionNames(ctx context.Context, cfg Settings, title
 	opened := s.kb.cur.Load()
 	available := opened != nil && s.kbOn(ctx)
 	projects := map[string]string{}
-	names := make(map[string]string, len(cfg.Leaders))
-	for _, id := range cfg.Leaders {
-		if id == "" || id == cfg.Main {
-			continue
-		}
-		name := directionName(nil, titles[id].title, "")
-		if d, ok := records[id]; ok {
-			if _, known := projects[d.Project]; available && d.Name == "" && d.Project != "" && !known {
-				projects[d.Project] = ""
-				if project, ok := opened.eng.Store.Project(d.Project); ok {
-					projects[d.Project] = project.Name
-				}
+	names := make(map[string]string, len(records))
+	for id, d := range records {
+		if _, known := projects[d.Project]; available && d.Name == "" && d.Project != "" && !known {
+			projects[d.Project] = ""
+			if project, ok := opened.eng.Store.Project(d.Project); ok {
+				projects[d.Project] = project.Name
 			}
-			name = nameOf(&d, titles[id].title, projects, available)
 		}
-		names[id] = name
+		names[id] = nameOf(&d, titles[id].title, projects, available)
 	}
 	return names
 }
