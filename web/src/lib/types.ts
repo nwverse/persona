@@ -47,6 +47,9 @@ export interface Machine {
   engine_suggested?: { hosts: string[]; default: string };
   /** The node is too old for sets and runs `engine` alone until it is updated. */
   engine_sets_unsupported?: boolean;
+  /** "Start new Agents as Orca chats" (#17650): the switch, present only while Orca is in its engine set (where it applies);
+   *  absent elsewhere and from older hubs, which then offer no switch. Changed with PUT …/orca-chat-starts {"on"}. */
+  orca_chat_starts?: boolean;
   kind?: string;
   arch?: string;
   home?: string;
