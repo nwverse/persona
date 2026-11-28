@@ -238,6 +238,7 @@ describe("another manager's connector and channel pages", () => {
   it("reads another manager's channel with its name", async () => {
     setRoster(ROSTER);
     act(() => root.render(<ChannelPage id="wechat" manager="m-1" onBack={() => {}} onSettings={() => {}} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
   });
@@ -253,6 +254,7 @@ describe("a page opened by an address that names no assistant, or another one", 
     expect(host.textContent).not.toContain("home@example.com");
     expect(managerHeaderFor("/connectors/wechat/settings")).toBe("m-1");
     act(() => root.render(<ChannelPage id="wechat" onBack={() => {}} onSettings={() => {}} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(calls.find((c) => c.url.endsWith("/channels/wechat"))?.header).toBe("m-1");
   });

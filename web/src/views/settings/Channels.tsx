@@ -3,7 +3,7 @@
 // bot, credentials), where its messages go, what it does, a test message to the owner — and, for a market's, the way
 // to install it. Read-only ones (the apps, /agent, voice) say where they are set up.
 import { OwnerMark } from "./OwnerMark";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
+import { lazyPage } from "../../lib/lazy-page";
 import { otherManager, ownedSub, useChosenManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import { ago, safeWebURL } from "../../lib/format";
@@ -22,7 +23,7 @@ import { ChannelMark } from "../../ui/ChannelMark";
 import { Icon } from "../../ui/icons";
 import { QRStep, useStepPolling } from "./LoginSteps";
 import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
-import { useChannelController, type ChannelController } from "./useChannelController";
+import type { ChannelController } from "./useChannelController";
 import { byTime } from "../../lib/times";
 
 const DOT: Record<ChannelTone, string> = { green: "bg-green", red: "bg-red", idle: "bg-line-strong" };
@@ -421,26 +422,35 @@ export function ChannelDeliveryControls({
 /** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
  *  is open; none: the current assistant's. */
 /** `headerBack`: the page's top bar has the way back (a phone), so it draws no Back of its own. */
-export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean }) {
+type ChannelPageProps = { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean };
+
+const ChannelResource = lazyPage(() => import("./ChannelResource").then((m) => m.ChannelResource));
+
+export function ChannelPage({ id, manager: named, ...props }: ChannelPageProps) {
   // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
-  const manager = named ?? otherManager(useChosenManager() ?? undefined);
-  const ctl = useChannelController(id, manager);
-  const d = ctl.detail;
+  const chosen = useChosenManager();
+  const manager = named ?? otherManager(chosen ?? undefined);
+  const show = (ctl: ChannelController | null) => <ChannelPageContent {...props} manager={manager} ctl={ctl} />;
+  return <Suspense fallback={show(null)}><ChannelResource id={id} manager={manager}>{show}</ChannelResource></Suspense>;
+}
+
+function ChannelPageContent({ ctl, manager, onBack, onSettings, headerBack }: Omit<ChannelPageProps, "id"> & { ctl: ChannelController | null }) {
+  const d = ctl?.detail;
 
   const head = (
     <div className="mb-3 flex items-center gap-2">
       {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>}
       <OwnerMark manager={manager} />
       <span className="flex-1" />
-      <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void ctl.load()} />
+      <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void ctl?.load()} />
     </div>
   );
-  if (!d) {
+  if (!ctl || !d) {
     return (
       <>
         {head}
         <Group>
-          <div className="px-4 py-3">{ctl.error ? <p className="text-meta text-red">{t("settings-channels.channel_load_failed", { error: ctl.error })}</p> : <Loading />}</div>
+          <div className="px-4 py-3">{ctl?.error ? <p className="text-meta text-red">{t("settings-channels.channel_load_failed", { error: ctl.error })}</p> : <Loading />}</div>
         </Group>
       </>
     );

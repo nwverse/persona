@@ -77,6 +77,7 @@ beforeEach(async () => {
   document.body.appendChild(host);
   root = createRoot(host);
   await act(async () => root.render(<ChannelPage id="demo" onBack={() => {}} onSettings={onSettings} />));
+  await act(async () => vi.dynamicImportSettled());
   await answer(hub.asked.shift(), detail(false, false));
   hub.asked = [];
 });
