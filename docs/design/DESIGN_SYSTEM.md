@@ -1972,6 +1972,21 @@ shared document keeps the text, references and caret through local edits and the
 uploads, pasted blocks and selections brought in from a reader continue to use their existing space above the field.
 The wire format is in `docs/protocol/protocol.md` under "Tags in messages (parsed by clients)".
 
+#### Combination verdicts (#17524)
+
+`views/execution/VerdictNote.tsx` shows the hub's check of a runtime · channel · model · effort combination in three
+levels, built from `bg-inset`, `rounded-control`, `text-label`, `Pill` and `Button`:
+
+- **Allowed**: nothing.
+- **Notice**: `role="status"`, `text-ink-2`, one line per reason with a 12 px icon in `text-ink-3`; an experimental bridge
+  adds an orange small `Pill` ("Compatibility bridge (experimental)") above them.
+- **Blocked**: `role="alert"`, `text-red` with the alert-circle icon; the first reason only; then "Try instead:" and one
+  secondary small `Button` per alternative (model · effort · engine · channel). The form's confirm is disabled while any
+  of its parts is blocked.
+
+The words are always the hub's `reasons[].text`. The route fields next to it (`RouteFields`) are the same 36 px field as
+Settings' model pickers, one column on a phone and two from `sm`.
+
 ### 3.11 Code blocks, inline code and quotes in replies
 
 Drawn as Telegram draws them (#2984), with one look on iPhone / iPad, the web and Android; the frozen Mac keeps its hover Copy and plain quotes. Inline code lost its gray box on iPhone / iPad and the web (#9477); Android uses the same treatment (#9483). There was no component for these: replies used the Markdown renderer's defaults (a plain code box with Copy on hover, a thin bar), and the one code block with a title bar (`LarkCodeBlock`, Inbox) is the template, not a reply's.
