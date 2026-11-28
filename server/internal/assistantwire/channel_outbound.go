@@ -33,3 +33,10 @@ type ThreadEvent struct {
 	Text  string
 	DM    bool
 }
+
+// FeishuAnswerDelivery describes which answer delivery the module could confirm.
+// AllRefused means every attempted send was definitively rejected.
+type FeishuAnswerDelivery struct {
+	Complete   bool
+	AllRefused bool
+}

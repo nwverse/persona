@@ -1,62 +1,32 @@
-Update supplied fields immediately, including task to-dos; no confirmation. Omitted fields stay; "" clears notes/due/remind/project/part_of/audience/direction_id, [] clears after. New remind notifies again. Close/reopen via todo_complete/todo_reopen.{{template "shared/mcp_language" .}}
+Set supplied fields now; no prompt. "" clears notes/due/remind/project/part_of/audience/direction_id; [] clears after. Use todo_complete/todo_reopen. outward_reply records only: HTTPS source topic, sent permalink, exact text, RFC3339 time. Retry recording only. promise overrides detection; due_at defaults 24h.{{template "shared/mcp_language" .}}
 
 ```json
 {
   "type": "object",
-  "required": [
-    "id"
-  ],
+  "required": ["id"],
   "properties": {
-    "id": {
-      "type": "string",
-      "description": "To-do id from todo_list."
-    },
-    "title": {
-      "type": "string",
-      "description": "the new title"
-    },
-    "notes": {
-      "type": "string",
-      "description": "Replacement notes; retain anything still needed. \"\" clears."
-    },
-    "due": {
-      "type": "string",
-      "description": "YYYY-MM-DD or datetime (local/RFC3339); \"\" clears."
-    },
-    "remind": {
-      "type": "string",
-      "description": "Future datetime (local/RFC3339) or 30m/2h/1d; \"\" clears."
-    },
-    "priority": {
-      "type": "string",
-      "enum": [
-        "high",
-        "normal",
-        "low"
-      ]
-    },
-    "project": {
-      "type": "string",
-      "description": "Existing kb_list project slug/name; only when clear, no near-duplicates. \"\" clears."
-    },
-    "audience": {
-      "type": "string",
-      "description": "human, autonomous, or \"\" clears."
-    },
-    "direction_id": {
-      "type": "string",
-      "description": "Direction id, or \"\" clears."
-    },
-    "part_of": {
-      "type": "string",
-      "description": "Request to-do this is a piece of; changing clears after."
-    },
-    "after": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "description": "Sibling piece ids it waits for; replaces old."
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "notes": {"type": "string", "description": "Keep needed text."},
+    "due": {"type": "string", "description": "Date or local/RFC3339."},
+    "remind": {"type": "string", "description": "Future time or 30m/2h/1d; renotifies."},
+    "priority": {"type": "string", "enum": ["high", "normal", "low"]},
+    "project": {"type": "string", "description": "Existing KB slug/name; no dupes."},
+    "audience": {"type": "string", "description": "human/autonomous."},
+    "direction_id": {"type": "string"},
+    "part_of": {"type": "string", "description": "Request ID; change clears after."},
+    "after": {"type": "array", "items": {"type": "string"}, "description": "Sibling IDs."},
+    "outward_reply": {
+      "type": "object",
+      "required": ["topic_url", "sent_url", "text", "sent_at"],
+      "properties": {
+        "topic_url": {"type": "string"},
+        "sent_url": {"type": "string"},
+        "text": {"type": "string"},
+        "sent_at": {"type": "string"},
+        "due_at": {"type": "string"},
+        "promise": {"type": "boolean"}
+      }
     }
   }
 }

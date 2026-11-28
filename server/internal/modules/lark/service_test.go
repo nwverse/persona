@@ -317,7 +317,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 	if strings.TrimSpace(answer) == "" && res.Note == "" && !quiet {
 		answer = "(empty: " + res.Stopped + ")"
 	}
-	if err := s.layer.TurnAnswer(context.Background(), &snap, answer, res.Note, took, !res.Held, quiet, res.End); err != nil {
+	if _, err := s.layer.TurnAnswer(context.Background(), &snap, answer, res.Note, took, !res.Held, quiet, res.End, false); err != nil {
 		c.mu.Lock()
 		if prog.failing.IsZero() {
 			prog.failing = now
@@ -697,6 +697,10 @@ func lastCard(t *testing.T, r *channel.Run, posts []map[string]any) string {
 	return card
 }
 
+func (s *Service) AnswerDefinitelyRejected(err error) bool {
+	return botcard.Refused(err) || botcard.ChatRefused(err) || botcard.MessageGone(err) || botcard.RateLimited(err)
+}
+
 // ---- the workbench's part of the host ----
 
 // wbData is what the fake core gives the workbench (tests set it).
@@ -816,6 +820,10 @@ func (s *Service) ThreadOf(id string) (string, string, bool) {
 	defer s.tmu.Unlock()
 	b, ok := d.bound[id]
 	return b[0], b[1], ok
+}
+
+func (s *Service) DeliverTopicLine(_ context.Context, _, _, _, _, _, _ string, send func() error) error {
+	return send()
 }
 
 func (s *Service) TodoLink(web, id string) string { return web + "/todos/" + id }

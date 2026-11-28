@@ -208,6 +208,8 @@ type TaskReview struct {
 	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
 	// pending needs_user decision without fabricating an owner selection (#13112).
 	SupersededReason string `json:"superseded_reason,omitempty"`
+	// OutwardPreviousState is the state before an automated outward-promise decision.
+	OutwardPreviousState string `json:"outward_previous_state,omitempty"`
 	// WithdrewNeedsUser: this accepted review is the supervisor taking back the needs_user it had raised
 	// (task_review withdraw_needs_user): no owner answered it, and nothing was pushed or carded for it.
 	WithdrewNeedsUser bool `json:"withdrew_needs_user,omitempty"`
@@ -575,6 +577,11 @@ func (s *Service) updateSupervisionWithClose(ctx context.Context, id string, cha
 func (s *Service) updateSupervisionGuardedWithClose(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
 	if closing == nil {
 		return s.updateSupervisionGuarded(ctx, id, guard, change)
+	}
+	if closing.accepted {
+		if err := s.outboundCompletionError(ctx, id); err != nil {
+			return Supervision{}, false, err
+		}
 	}
 	s.loadSeen(ctx)
 	_ = s.loadTaskActivity(ctx)

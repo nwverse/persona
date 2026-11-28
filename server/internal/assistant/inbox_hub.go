@@ -194,6 +194,7 @@ func (s *Service) connectorReply(ctx context.Context, source string, r connector
 	} else {
 		already, err = send()
 	}
+	noteOutboundReadback(ctx, already)
 	s.inboxSent(sent, sendID)
 	return already, err
 }

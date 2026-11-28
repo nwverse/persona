@@ -68,7 +68,7 @@ func TestFeishuUnifiedTimeoutDuringBlockedProgressDoesNotDuplicateAnswer(t *test
 	// Finish the turn while the progress append is blocked. cot_answer_wait expires immediately so answer()
 	// falls back to posting the answer card.
 	snap := snapshotRun(s, r)
-	if err := s.sink().answer(t.Context(), &snap, "结论在这里", "", time.Second, true, false, channel.EndDone); err != nil {
+	if _, err := s.layer.TurnAnswer(t.Context(), &snap, "结论在这里", "", time.Second, true, false, channel.EndDone, false); err != nil {
 		t.Fatal(err)
 	}
 	postedAnswer(t, *posts, "结论在这里")
@@ -134,7 +134,7 @@ func TestFeishuUnifiedTimeoutBeforeCreateDoesNotSpawnOrphanAgentMessage(t *testi
 	}
 
 	snap := snapshotRun(s, r)
-	if err := s.sink().answer(t.Context(), &snap, "结论在这里", "", time.Second, true, false, channel.EndDone); err != nil {
+	if _, err := s.layer.TurnAnswer(t.Context(), &snap, "结论在这里", "", time.Second, true, false, channel.EndDone, false); err != nil {
 		t.Fatal(err)
 	}
 	postedAnswer(t, *posts, "结论在这里")
@@ -226,7 +226,8 @@ func TestFeishuUnifiedTimeoutDuringSaveRunsAfterAnswerAckDoesNotPostCard(t *test
 	snap := snapshotRun(s, r)
 	answerErr := make(chan error, 1)
 	go func() {
-		answerErr <- s.sink().answer(ansCtx, &snap, "结论在这里", "", time.Second, true, false, channel.EndDone)
+		_, err := s.layer.TurnAnswer(ansCtx, &snap, "结论在这里", "", time.Second, true, false, channel.EndDone, false)
+		answerErr <- err
 	}()
 
 	select {
@@ -343,7 +344,8 @@ func TestFeishuUnifiedTimeoutCancelBeforeFinishStillClosesOpenAgentMessage(t *te
 	snap := snapshotRun(s, r)
 	answerErr := make(chan error, 1)
 	go func() {
-		answerErr <- s.sink().answer(ansCtx, &snap, "结论在这里", "", time.Second, true, false, channel.EndDone)
+		_, err := s.layer.TurnAnswer(ansCtx, &snap, "结论在这里", "", time.Second, true, false, channel.EndDone, false)
+		answerErr <- err
 	}()
 
 	select {

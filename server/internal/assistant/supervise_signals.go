@@ -234,6 +234,9 @@ func (g superviseSignal) prConflictURL() string {
 // id names what a newer signal replaces while it waits: the task's signal of that kind (a report: of that kind of
 // report, so a progress report does not push out a question).
 func (g superviseSignal) id() string {
+	if g.Kind == sigReport && strings.HasPrefix(g.Key, "promise:") {
+		return g.Todo + "|" + g.Key
+	}
 	if g.Kind == sigMergeTrainTurn && g.MergeTrainTurn != nil {
 		return g.Todo + "|" + g.Kind + "@" + g.MergeTrainTurn.RepoKey
 	}
@@ -1400,6 +1403,8 @@ func (s *Service) superviseLoop(ctx context.Context) {
 // main conversation's pushes that outlived superviseHoldMax.
 func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.syncAutoSupervision(ctx) // a switch left off, also across a restart, empties what automatic supervision holds
+	s.watchOutboundCommitments(ctx, now)
+	s.checkInboxReplyApprovals(ctx, now)
 	s.autoReviewTick(ctx, now)
 	s.sessionReviewTick(ctx, now)
 	s.recheckOutageHolds(ctx, now)

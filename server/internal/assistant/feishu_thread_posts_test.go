@@ -164,6 +164,26 @@ func TestThreadPostsANewDecision(t *testing.T) {
 	}
 }
 
+func TestThreadPostsRecordsDeliveredPromise(t *testing.T) {
+	needsLarkLayer(t)
+	e := newPostEnv(t)
+	id := e.bound("Release", testThread)
+	e.decide(id, "I'll share the results in 2 hours.")
+	e.clk.advance(threadPostSettle)
+
+	post := e.onlyPost(t)
+	receipts := outwardReceipts(t, e.s.store())
+	if len(receipts) != 1 {
+		t.Fatalf("commitment receipts = %+v", receipts)
+	}
+	receipt := receipts[0]
+	if receipt.SentAt.IsZero() || receipt.Reply.TodoID != id || receipt.Reply.ID != post["uuid"] ||
+		receipt.Reply.Topic != "lark-bot/"+testChat+"/"+testThread ||
+		receipt.DueAt.Sub(receipt.SentAt) != 2*time.Hour {
+		t.Fatalf("topic line's delivery receipt = %+v", receipt)
+	}
+}
+
 // 2. What happens within a minute is one line; the next line is not before the minute is over.
 func TestThreadPostsJoinWithinAMinute(t *testing.T) {
 	needsLarkLayer(t)

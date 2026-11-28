@@ -202,7 +202,7 @@ func (f feishuSink) recalled(ctx context.Context, m channel.Folded) {
 // still turns the progress card into that line — or, when that card was refused or the run gave it back on a held
 // wait, posts it as a card of its own under a key (so a retry lands once) — so the chat never stays on "Working" and
 // is never left silent.
-func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) (answerErr error) {
+func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End, strictTopic bool, delivery *assistantwire.FeishuAnswerDelivery) (answerErr error) {
 	s := f.s
 	ctx = s.sendAs(ctx, "answer", r.MachineID, r.SessionID)
 	l := s.botLang(ctx)
@@ -235,6 +235,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if fin.answer != "" && worker != nil {
 		out, ok := worker.result(ctx, s.timing("cot_answer_wait"))
 		if ok && out.answered {
+			*delivery = assistantwire.FeishuAnswerDelivery{Complete: true}
 			f.markDone(ctx, r, final, end)
 			return nil
 		}
@@ -301,6 +302,9 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 		return nil
 	}
 	to := runTo(r.Ext)
+	if strictTopic {
+		to.NoDetour = true
+	}
 	var missing []int // the pieces that did not get out (1-based): said at the end, not sent again
 	defer func() {
 		if len(missing) > 0 {
@@ -378,8 +382,10 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 					s.logf("bots: fold the progress card: %v", ferr)
 				}
 			} else if s.unreachable(err) {
-				return err // nothing went out: the whole answer is tried again later, under the same key
+				delivery.AllRefused = false
+				return err // nothing is confirmed: the whole answer is tried again later, under the same key
 			} else {
+				delivery.AllRefused = delivery.AllRefused && s.h.AnswerDefinitelyRejected(err)
 				s.logf("bots: answer as a new card: %v; writing it into the progress card", err)
 				mid = ""
 			}
@@ -388,6 +394,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			if err = s.botUpdateAnswerCard(ctx, card, c); err == nil {
 				mid = card
 			} else {
+				delivery.AllRefused = delivery.AllRefused && s.h.AnswerDefinitelyRejected(err)
 				s.logf("bots: answer into the progress card: %v; sending it", err)
 			}
 		}
@@ -400,6 +407,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			}
 			mid, err = s.botPostTo(ctx, to, r.ReplyTo, c, piece, key)
 		}
+		delivery.AllRefused = delivery.AllRefused && s.h.AnswerDefinitelyRejected(err)
 		if err != nil {
 			if i == 0 && s.unreachable(err) {
 				return err // nothing went out: the whole answer is tried again later
@@ -415,6 +423,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 			s.rememberRun(mid, r)
 		}
 	}
+	delivery.Complete = !quiet && len(missing) == 0
 	f.markDone(ctx, r, final, end)
 	return nil
 }

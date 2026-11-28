@@ -134,6 +134,7 @@ type Service struct {
 	// id is Options.ID: the manager this assistant is.
 	id               string
 	repositoriesMu   sync.Mutex
+	commitments      outboundBook
 	repositoryConfig string
 	repositoryCheck  func(context.Context, repository.Identity) error // tests only; production uses the guarded checker
 	// gitlabReview reads a GitLab merge request (tests only; production uses the guarded checker, code_host_gitlab.go).

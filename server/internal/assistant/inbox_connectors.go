@@ -287,7 +287,10 @@ func (s *Service) replyConnectorItem(ctx context.Context, r inboxReplyReq) (alre
 	}
 	// A transport duplicate may be this manager's first delivered receipt.
 	// Only the local repeat above can skip sent/waiting bookkeeping.
-	if _, err = s.connectorReply(ctx, c.Source, connector.InboxReply{Thread: c.Connector.Thread, ItemID: c.ID, Last: c.Last, Text: r.text}, r.sendID); err != nil {
+	if err = s.deliverInboxReply(ctx, r, func(ctx context.Context) error {
+		_, err := s.connectorReply(ctx, c.Source, connector.InboxReply{Thread: c.Connector.Thread, ItemID: c.ID, Last: c.Last, Text: r.text}, r.sendID)
+		return err
+	}); err != nil {
 		return false, err
 	}
 	r.once.clientID = r.text

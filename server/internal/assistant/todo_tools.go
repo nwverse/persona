@@ -477,18 +477,19 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 
 func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args json.RawMessage) (string, error) {
 	var a struct {
-		ID          string          `json:"id"`
-		Title       json.RawMessage `json:"title"`
-		Notes       json.RawMessage `json:"notes"`
-		Due         json.RawMessage `json:"due"`
-		Remind      json.RawMessage `json:"remind"`
-		Priority    json.RawMessage `json:"priority"`
-		Project     json.RawMessage `json:"project"`
-		Audience    json.RawMessage `json:"audience"`
-		DirectionID json.RawMessage `json:"direction_id"`
-		ItemType    json.RawMessage `json:"item_type"`
-		PartOf      json.RawMessage `json:"part_of"`
-		After       json.RawMessage `json:"after"`
+		ID           string             `json:"id"`
+		Title        json.RawMessage    `json:"title"`
+		Notes        json.RawMessage    `json:"notes"`
+		Due          json.RawMessage    `json:"due"`
+		Remind       json.RawMessage    `json:"remind"`
+		Priority     json.RawMessage    `json:"priority"`
+		Project      json.RawMessage    `json:"project"`
+		Audience     json.RawMessage    `json:"audience"`
+		DirectionID  json.RawMessage    `json:"direction_id"`
+		ItemType     json.RawMessage    `json:"item_type"`
+		PartOf       json.RawMessage    `json:"part_of"`
+		After        json.RawMessage    `json:"after"`
+		OutwardReply *outwardAnnotation `json:"outward_reply"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %w", err)
@@ -498,6 +499,14 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 		return "", fmt.Errorf("no to-do %q: todo_list has their ids", a.ID)
 	}
 	now, loc := time.Now(), s.location(ctx)
+	var outward outboundReply
+	if a.OutwardReply != nil {
+		var err error
+		outward, err = a.OutwardReply.reply(t, now)
+		if err != nil {
+			return "", err
+		}
+	}
 	var e db.TodoEdit
 	changed := false
 	for _, f := range []struct {
@@ -569,15 +578,27 @@ func (s *Service) toolTodoUpdate(ctx context.Context, machine, self string, args
 	}
 	e.PartOf, e.After = links.PartOf, links.After
 	changed = changed || !pieces.empty()
-	if !changed {
-		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, audience, direction_id, part_of or after")
+	if !changed && a.OutwardReply == nil {
+		return "", errors.New("nothing to change: give title, notes, due, remind, priority, project, audience, direction_id, part_of, after or outward_reply")
 	}
 	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_update", "", t.Title, args); err != nil || !ok {
 		return todoNotAllowed(outcome, err)
 	}
-	out, err := s.editTodo(ctx, t.ID, e)
-	if err != nil {
-		return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+	out := t
+	if changed {
+		out, err = s.editTodo(ctx, t.ID, e)
+		if err != nil {
+			return "", fmt.Errorf("the change could not be saved, nothing changed: %w", err)
+		}
+	}
+	if a.OutwardReply != nil {
+		if _, err := s.prepareOutbound(ctx, outward, a.OutwardReply.SentAt); err != nil {
+			return "", fmt.Errorf("outward reply receipt not recorded; retry recording it without resending: %w", err)
+		}
+		if err := s.finishOutbound(ctx, outward, a.OutwardReply.SentAt); err != nil {
+			return "", fmt.Errorf("outward reply receipt not recorded; retry recording it without resending: %w", err)
+		}
+		out, _ = s.todoNow(t.ID)
 	}
 	if e.After != nil {
 		s.syncAfterBlockers(ctx, out.ID, out.After, "", nil)

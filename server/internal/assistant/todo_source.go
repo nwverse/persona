@@ -512,8 +512,21 @@ func (s *Service) tellOwner(ctx context.Context, t Todo, st FeishuStatus, key st
 func (s *Service) sendSourceReport(ctx context.Context, src TodoSource, todoID string) error {
 	switch src.Channel {
 	case channel.Feishu:
-		return s.chat().Reply(ctx, larkhost.Target{ChatID: src.ChatID, NoDetour: true}, src.MessageID, src.ReportText,
-			reportKey(todoID, src.MessageID), src.ReportFullReply)
+		if !larkhost.InBuild(s.moduleSwitch) {
+			return larkhost.ErrNoChannel
+		}
+		r := outboundReply{ID: reportKey(todoID, src.MessageID), TodoID: todoID, Text: src.ReportText,
+			Topic: "lark-message/" + src.ChatID + "/" + src.MessageID, URL: "/todos/" + todoID}
+		if src.ThreadID != "" {
+			r.Topic = "lark-bot/" + src.ChatID + "/" + src.ThreadID
+			r.URL = outboundTopicURL(src.ChatID, src.ThreadID, src.MessageID)
+		} else {
+			r.Topic = s.outboundFeishuSourceTopic(ctx, src.ChatID, src.MessageID)
+		}
+		return s.deliverOutbound(ctx, r, func() error {
+			return s.chat().Reply(ctx, larkhost.Target{ChatID: src.ChatID, NoDetour: true}, src.MessageID, src.ReportText,
+				r.ID, src.ReportFullReply)
+		})
 	}
 	return fmt.Errorf("no way back to channel %q", src.Channel)
 }

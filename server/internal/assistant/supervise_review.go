@@ -291,6 +291,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				return "", err
 			}
 		}
+		if err := s.outboundCompletionError(ctx, t.ID); err != nil {
+			return "", err
+		}
 		if t.DoneAt == nil && !a.UserCheck {
 			if err := s.checkOwnerResultBeforeAccept(ctx, t); err != nil {
 				return "", err
@@ -987,6 +990,11 @@ func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason 
 }
 
 func (s *Service) commitReviewedTodo(ctx context.Context, id, reason string, accepted bool, ledger *Supervision, ownerPass bool) (*db.TodoRow, error) {
+	if accepted {
+		if err := s.outboundCompletionError(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	if !ownerPass {
 		s.loadSeen(ctx)
 		_ = s.loadTaskActivity(ctx)

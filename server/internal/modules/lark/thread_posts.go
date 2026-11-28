@@ -157,7 +157,10 @@ func (s core) threadFlush(id string) {
 	to := feishuTarget{ChatID: chatID, InThread: true, NoDetour: true}
 	// Its own key for every line: the reply's usual key is made of the parent and the words, so two lines that read the
 	// same (two finished turns) under one anchor would be one to Feishu, and the second silently dropped.
-	err = s.appCall(ctx, assistantwire.FeishuText, targetParams(to, map[string]any{"reply_to": anchor, "text": text, "uuid": s.threadPostKey(id)}), nil)
+	key := s.threadPostKey(id)
+	err = s.h.DeliverTopicLine(ctx, id, chatID, threadID, anchor, key, text, func() error {
+		return s.appCall(ctx, assistantwire.FeishuText, targetParams(to, map[string]any{"reply_to": anchor, "text": text, "uuid": key}), nil)
+	})
 	switch {
 	case err == nil:
 	case botcard.MessageGone(err):

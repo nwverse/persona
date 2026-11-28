@@ -156,6 +156,7 @@ type ChatTodoSource struct {
 	Channel   string
 	ChatID    string
 	MessageID string
+	ThreadID  FeishuThreadID
 	Anchor    string
 	Handoff   string
 }

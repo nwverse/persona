@@ -26,6 +26,8 @@ type Host interface {
 	// What a to-do's topic lines (thread_posts.go) read of the core: the Feishu thread the to-do is bound to (ok
 	// false: none, or one of another channel), the to-do's web link, and the clock and timer the lines wait on.
 	ThreadOf(todoID string) (chatID, threadID string, ok bool)
+	// DeliverTopicLine records any outward commitment around the module's send.
+	DeliverTopicLine(ctx context.Context, todoID, chatID, threadID, anchor, key, text string, send func() error) error
 	TodoLink(web, todoID string) string
 	PostNow() time.Time
 	PostLater(d time.Duration, f func())
@@ -47,6 +49,7 @@ type Host interface {
 	OpenButton(ctx context.Context, machine, session string) botcard.Button
 	// Unreachable: the call did not reach the hub or did not come back; Offline: the hub is not connected.
 	Unreachable(err error) bool
+	AnswerDefinitelyRejected(err error) bool
 	Offline(err error) bool
 	// Answered reports a definitive hub refusal, so a status failure does not consume a push retry.
 	Answered(err error) bool
@@ -301,8 +304,10 @@ func (l *Layer) TurnFolded(ctx context.Context, o *channel.Run, owner any) {
 func (l *Layer) TurnRecalled(ctx context.Context, m channel.Folded) { l.turns.sink().recalled(ctx, m) }
 
 // TurnAnswer sends a run's answer (channels_runs.go's channelSink.answer).
-func (l *Layer) TurnAnswer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error {
-	return l.turns.sink().answer(ctx, r, answer, note, took, final, quiet, end)
+func (l *Layer) TurnAnswer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End, strictTopic bool) (assistantwire.FeishuAnswerDelivery, error) {
+	delivery := assistantwire.FeishuAnswerDelivery{AllRefused: true}
+	err := l.turns.sink().answer(ctx, r, answer, note, took, final, quiet, end, strictTopic, &delivery)
+	return delivery, err
 }
 
 // Wait waits until the layer's background work (the agent messages' workers, the chat's messages being handled) has

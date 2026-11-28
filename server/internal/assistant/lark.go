@@ -103,7 +103,25 @@ func (f feishuSink) recalled(ctx context.Context, m channel.Folded) {
 }
 
 func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error {
-	return f.s.larkModule().TurnAnswer(ctx, r, answer, note, took, final, quiet, end)
+	module := f.s.larkModule()
+	if quiet || !larkhost.InBuild(f.s.moduleSwitch) {
+		_, err := module.TurnAnswer(ctx, r, answer, note, took, final, quiet, end, false)
+		return err
+	}
+	out := f.s.outboundRunReply(ctx, r, answer)
+	prepared, err := f.s.prepareOutbound(ctx, out, time.Now())
+	if err != nil {
+		return err
+	}
+	delivery, err := module.TurnAnswer(ctx, r, answer, note, took, final, quiet, end, f.s.outboundTracksTopic(out))
+	if err == nil && delivery.Complete {
+		if receiptErr := f.s.finishOutbound(ctx, out, time.Now()); receiptErr != nil {
+			f.s.logf("bot reply delivered; commitment receipt not saved: %v", receiptErr)
+		}
+	} else if delivery.AllRefused {
+		f.s.rejectOutbound(ctx, out, prepared)
+	}
+	return err
 }
 
 func (f feishuSink) progressAfter(r *channel.Run) time.Duration {
@@ -130,6 +148,8 @@ func (s *Service) answerCards(l i18n.Lang, name func(*url.URL) string, answer st
 // larkHost is the core as the lark module reaches it (larkhost.Host).
 type larkHost struct{ s *Service }
 
+func (h larkHost) AnswerDefinitelyRejected(err error) bool { return outboundDefinitelyRejected(err) }
+
 func (h larkHost) Post(ctx context.Context, to larkhost.Target, replyTo string, card *botcard.Card, fallback, key string) (string, error) {
 	return h.s.botPostTo(ctx, to, replyTo, card, fallback, key)
 }
@@ -150,6 +170,12 @@ func (h larkHost) ThreadOf(todoID string) (string, string, bool) {
 		return "", "", false
 	}
 	return th.ChatID, th.ThreadID, true
+}
+
+func (h larkHost) DeliverTopicLine(ctx context.Context, todoID, chatID, threadID, anchor, key, text string, send func() error) error {
+	reply := outboundReply{ID: key, TodoID: todoID, Topic: "lark-bot/" + chatID + "/" + threadID,
+		URL: outboundTopicURL(chatID, threadID, anchor), Text: text}
+	return h.s.deliverOutbound(ctx, reply, send)
 }
 
 func (h larkHost) TodoLink(web, todoID string) string  { return todoLink(web, todoID) }

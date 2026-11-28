@@ -787,6 +787,11 @@ checks the orders a stress test meets only by chance; and a status that says "at
 that can say otherwise: the requests out, the cap, and how long the longest has been out, since none outlives its
 caller's deadline.
 
+## Outbound commitments (#9754)
+
+- An outward promise belongs to the actual source topic, not the task's work topic (#9754). A request forwarded from one group can have a separate Lark work thread, and a GitHub Inbox comment can be associated with that same task. Keep the original source thread identity; never substitute the work thread or use an update there as proof that the other person received a follow-up. An intent without a saved delivery receipt requires source readback, not a resend.
+- Keep local reply deduplication, provider readback, and receipt attachment distinct (#9754). Validate a source and check local duplicates before preparing an intent, require explicit receipts to match the original topic for every source, and retain the first confirmation until task attachment is durable. A retry repairs the original receipt; it cannot invent a send, advance its time, or fulfill a newer promise. Only real reply content enters this bookkeeping: automatic bot status notes, especially a deferred missing-pieces warning, must stay outside it.
+
 ## Channel image downloads reuse the bytes already read (#12654)
 
 An inline-size check must not discard a resource that its file fallback immediately needs (#12654). The official Feishu bot read a 4 MiB image twice: the 3 MiB inline decision used the 50 MiB downloader, then saving fetched it again. Decide inline versus file inside the same download lifecycle and upload the existing bytes; pass the image-count decision into that call too. Keep the file ceiling on both routes, distinguish download and upload failures, and turn only the size sentinel into the existing skipped-file result so accompanying words survive. Count actual response-body reads and uploads at the production transport entry, and separately test the asynchronous message entry.

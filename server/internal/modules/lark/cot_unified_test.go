@@ -306,7 +306,7 @@ func TestFeishuUnifiedAnswerRetryDoesNotRepeat(t *testing.T) {
 	s.chans.st.Runs = append(s.chans.st.Runs, r)
 	s.chans.live[r.ID] = newLive()
 	s.chans.mu.Unlock()
-	if err := s.sink().answer(t.Context(), r, "结论在这里", "", time.Second, true, false, channel.EndDone); err != nil {
+	if _, err := s.layer.TurnAnswer(t.Context(), r, "结论在这里", "", time.Second, true, false, channel.EndDone, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(s.hub.(*fakeHub).appParams(AppFeishu, FeishuCotAppend)); got != before || len(*posts) != 0 {
@@ -329,7 +329,8 @@ func TestFeishuUnifiedAnswerWaitTimeoutSendsCard(t *testing.T) {
 	})
 	done := make(chan error, 1)
 	go func() {
-		done <- s.sink().answer(t.Context(), r, "结论在这里", "", time.Second, true, false, channel.EndDone)
+		_, err := s.layer.TurnAnswer(t.Context(), r, "结论在这里", "", time.Second, true, false, channel.EndDone, false)
+		done <- err
 	}()
 	select {
 	case err := <-done:

@@ -202,6 +202,8 @@ type InboxItem struct {
 	// ChainSeq numbers the chain's entries; SuggestSeq is the last suggestion's version (a new one is the next).
 	ChainSeq   int `json:"chain_seq,omitempty"`
 	SuggestSeq int `json:"suggest_seq,omitempty"`
+	// ReplyApproval is the overdue reminder's receipt, not another owner request.
+	ReplyApproval *inboxReplyApproval `json:"reply_approval,omitempty"`
 	// ReplyPolicy is the latest server-side reply-policy classification for this item (inbox_reply_policy.go).
 	// Persisted, never listed.
 	ReplyPolicy *InboxReplyPolicySnapshot `json:"reply_policy,omitempty"`
@@ -312,6 +314,7 @@ func (it *InboxItem) listed() InboxItem {
 	c.ExternalPath = slices.Clone(it.ExternalPath)
 	c.ExternalAsked, c.ExternalRouteOf, c.externalMoves, c.externalChecking = "", "", nil, false
 	c.ChainSeq, c.SuggestSeq = 0, 0
+	c.ReplyApproval = nil
 	c.ReplyPolicy = nil
 	c.ReplyContentSources, c.ReplyContextTruncated, c.MailBodyTruncated = nil, false, nil
 	c.ReplyInstruction, c.RejectedReplyDraft, c.RejectedReplyDrafts = nil, "", nil

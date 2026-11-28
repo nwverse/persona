@@ -95,7 +95,7 @@ type Turns interface {
 	// TurnFolded: o went into a later run; owner is that run's state (Host.RunState), nil when it has none.
 	TurnFolded(ctx context.Context, o *channel.Run, owner any)
 	TurnRecalled(ctx context.Context, m channel.Folded)
-	TurnAnswer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End) error
+	TurnAnswer(ctx context.Context, r *channel.Run, answer, note string, took time.Duration, final, quiet bool, end channel.End, strictTopic bool) (assistantwire.FeishuAnswerDelivery, error)
 	TurnProgressAfter(r *channel.Run) time.Duration
 	TurnProgressIdle() time.Duration
 	// Wait waits until the module's background work (the turns' workers, the chat's messages being handled) has
@@ -271,6 +271,8 @@ type Host interface {
 	// What a to-do's topic lines (thread_posts.go) read of the core: the Feishu thread the to-do is bound to (ok
 	// false: none, or one of another channel), the to-do's web link, and the clock and timer the lines wait on.
 	ThreadOf(todoID string) (chatID, threadID string, ok bool)
+	// DeliverTopicLine records any outward commitment around the module's send.
+	DeliverTopicLine(ctx context.Context, todoID, chatID, threadID, anchor, key, text string, send func() error) error
 	TodoLink(web, todoID string) string
 	PostNow() time.Time
 	PostLater(d time.Duration, f func())
@@ -292,6 +294,7 @@ type Host interface {
 	OpenButton(ctx context.Context, machine, session string) botcard.Button
 	// Unreachable: the call did not reach the hub or did not come back; Offline: the hub is not connected.
 	Unreachable(err error) bool
+	AnswerDefinitelyRejected(err error) bool
 	Offline(err error) bool
 	// Answered reports a definitive hub refusal, so a status failure does not consume a push retry.
 	Answered(err error) bool
@@ -488,8 +491,8 @@ func (None) SendGroupGuest(context.Context, string, string, string, string) erro
 func (None) TurnProgress(context.Context, *channel.Run, time.Duration, []string, string) {}
 func (None) TurnFolded(context.Context, *channel.Run, any)                               {}
 func (None) TurnRecalled(context.Context, channel.Folded)                                {}
-func (None) TurnAnswer(context.Context, *channel.Run, string, string, time.Duration, bool, bool, channel.End) error {
-	return nil
+func (None) TurnAnswer(context.Context, *channel.Run, string, string, time.Duration, bool, bool, channel.End, bool) (assistantwire.FeishuAnswerDelivery, error) {
+	return assistantwire.FeishuAnswerDelivery{}, nil
 }
 func (None) TurnProgressAfter(*channel.Run) time.Duration { return channel.ProgressAfter }
 func (None) TurnProgressIdle() time.Duration              { return channel.ProgressIdle }
