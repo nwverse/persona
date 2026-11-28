@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strconv"
@@ -135,18 +137,40 @@ func (s *Service) loadChannelsLocked(ctx context.Context) {
 	c.loaded = true
 }
 
-// saveChannelsLocked writes the settings, once they were read: saving what is in memory after a failed read would
-// write one channel's settings over every other's.
-func (s *Service) saveChannelsLocked() {
+var errChannelSettingsWrite = errors.New("channel settings could not be saved")
+
+// saveChannelsLocked stages one channel's replacement while the book is locked and restores its previous entry
+// on a failed write. Callers must copy any map or slice they edit before passing the replacement here.
+func (s *Service) saveChannelsLocked(id string, next channelPrefs) error {
+	c := &s.chans
+	if !c.loaded {
+		return errChannelsUnread
+	}
+	previous, existed := c.prefs[id]
+	c.prefs[id] = &next
 	st := s.store()
-	if st == nil || !s.chans.loaded {
-		return
+	if st == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := st.PutSetting(ctx, channelsKey, s.chans.prefs); err != nil {
+	if err := st.PutSetting(ctx, channelsKey, c.prefs); err != nil {
+		if existed {
+			c.prefs[id] = previous
+		} else {
+			delete(c.prefs, id)
+		}
 		s.logf("channels: save: %v", err)
+		return fmt.Errorf("%w: %w", errChannelSettingsWrite, err)
 	}
+	return nil
+}
+
+func (c *channelsBook) prefsForUpdate(id string) channelPrefs {
+	if p := c.prefs[id]; p != nil {
+		return *p
+	}
+	return channelPrefs{}
 }
 
 // channelPrefLocked is channel id's settings (created on first use; the caller holds s.chans.mu).
@@ -250,7 +274,8 @@ func (s *Service) bindChannelThread(id string, keys channelThreadKeys, machine, 
 		return false
 	}
 	s.loadChannelsLocked(context.Background())
-	p := s.channelPrefLocked(id)
+	p := c.prefsForUpdate(id)
+	p.Threads = maps.Clone(p.Threads)
 	if p.Threads == nil {
 		p.Threads = map[string]*channelThread{}
 	}
@@ -261,30 +286,48 @@ func (s *Service) bindChannelThread(id string, keys channelThreadKeys, machine, 
 	if keys.alternate != "" && p.Threads[keys.alternate] != nil {
 		p.Threads[keys.alternate] = binding
 	}
-	keepFor := max(channelThreadsKeepFor, channelThreadIdleTTL(true, p))
+	keepFor := max(channelThreadsKeepFor, channelThreadIdleTTL(true, &p))
 	pruneChannelThreadsWithTTL(p.Threads, now, keepFor)
-	s.saveChannelsLocked()
+	// The message was already delivered. Follow its turn even if the binding could not be saved.
+	_ = s.saveChannelsLocked(id, p)
 	return true
 }
 
 // unbindChannelThread forgets both keys for the topic so /new cannot fall back to the old conversation.
-func (s *Service) unbindChannelThread(id string, keys channelThreadKeys, generation uint64) {
+func (s *Service) unbindChannelThread(id string, keys channelThreadKeys, generation uint64) error {
 	c := &s.chans
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.generation[id] != generation {
-		return
+		return nil
 	}
 	s.loadChannelsLocked(context.Background())
-	p := s.channelPrefLocked(id)
-	if p.Threads[keys.primary] == nil && p.Threads[keys.alternate] == nil {
-		return
+	if !c.loaded {
+		return errChannelsUnread
 	}
+	p := c.prefsForUpdate(id)
+	if p.Threads[keys.primary] == nil && p.Threads[keys.alternate] == nil {
+		return nil
+	}
+	p.Threads = maps.Clone(p.Threads)
 	delete(p.Threads, keys.primary)
 	if keys.alternate != "" {
 		delete(p.Threads, keys.alternate)
 	}
-	s.saveChannelsLocked()
+	return s.saveChannelsLocked(id, p)
+}
+
+func (s *Service) setChannelTarget(ctx context.Context, id string, target channel.Target, generation uint64) error {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation[id] != generation {
+		return nil
+	}
+	s.loadChannelsLocked(ctx)
+	p := c.prefsForUpdate(id)
+	p.Target = &target
+	return s.saveChannelsLocked(id, p)
 }
 
 // channelThreadIdleTTL returns the inactivity timeout for a channel's routed thread/group/topic bindings.
@@ -408,13 +451,13 @@ func (s *Service) noteChannelConversation(id, machine, session string) {
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelsLocked(context.Background())
-	p := s.channelPrefLocked(id)
-	p.Recent = slices.DeleteFunc(p.Recent, func(x channel.Conversation) bool { return x.MachineID == machine && x.SessionID == session })
+	p := c.prefsForUpdate(id)
+	p.Recent = slices.DeleteFunc(slices.Clone(p.Recent), func(x channel.Conversation) bool { return x.MachineID == machine && x.SessionID == session })
 	p.Recent = append([]channel.Conversation{{MachineID: machine, SessionID: session, At: time.Now().UTC()}}, p.Recent...)
 	if len(p.Recent) > channelRecentKeep {
 		p.Recent = p.Recent[:channelRecentKeep]
 	}
-	s.saveChannelsLocked()
+	_ = s.saveChannelsLocked(id, p) // Recent is bookkeeping for a message that already went through.
 	c.mu.Unlock()
 }
 

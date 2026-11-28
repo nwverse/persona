@@ -443,9 +443,11 @@ func TestChannelReceiveOldStartCannotBindNewGeneration(t *testing.T) {
 			if !threads {
 				s.chans.mu.Lock()
 				s.loadChannelsLocked(context.Background())
-				s.channelPrefLocked("examplechat").Target = &channel.Target{Kind: channel.TargetNew}
-				s.saveChannelsLocked()
+				err := s.saveChannelsLocked("examplechat", channelPrefs{Target: &channel.Target{Kind: channel.TargetNew}})
 				s.chans.mu.Unlock()
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			var release sync.Once
 			defer release.Do(func() { close(h.release) })

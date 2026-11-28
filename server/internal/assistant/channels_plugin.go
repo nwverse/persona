@@ -158,31 +158,27 @@ func (s *Service) channelCommandInGeneration(ctx context.Context, id string, m c
 			_ = s.channelTell(ctx, id, m.ID, t, channel.OutNote)
 		}
 	}
-	setTarget := func(t channel.Target) {
-		c := &s.chans
-		c.mu.Lock()
-		if c.generation[id] != generation {
-			c.mu.Unlock()
-			return
-		}
-		s.loadChannelsLocked(ctx)
-		s.channelPrefLocked(id).Target = &t
-		s.saveChannelsLocked()
-		c.mu.Unlock()
-	}
 	switch strings.ToLower(name) {
 	case "/help", "/帮助":
 		reply(i18n.T(l, "assistant-channels_plugin.help"))
 	case "/main", "/主对话":
-		setTarget(channel.Target{Kind: channel.TargetMain})
+		if err := s.setChannelTarget(ctx, id, channel.Target{Kind: channel.TargetMain}, generation); err != nil {
+			reply(i18n.T(l, "http-status.unavailable"))
+			return true, ""
+		}
 		reply(i18n.T(l, "assistant-channels_plugin.now_to_main"))
 	case "/new", "/新对话":
 		// In a thread it starts the thread over; the channel's target stays where it is.
 		keys := s.channelRoutingKeys(ctx, id, m, s.integrationsV2On(ctx))
+		var err error
 		if keys.primary != "" {
-			s.unbindChannelThread(id, keys, generation)
+			err = s.unbindChannelThread(id, keys, generation)
 		} else {
-			setTarget(channel.Target{Kind: channel.TargetNew})
+			err = s.setChannelTarget(ctx, id, channel.Target{Kind: channel.TargetNew}, generation)
+		}
+		if err != nil {
+			reply(i18n.T(l, "http-status.unavailable"))
+			return true, ""
 		}
 		if rest == "" {
 			if keys.primary != "" {
@@ -423,16 +419,9 @@ func (s *Service) channelForwardInGeneration(ctx context.Context, id string, m c
 				return nil
 			}
 		} else if !rt.main { // /new: the chat goes on in it
-			c := &s.chans
-			c.mu.Lock()
-			if c.generation[id] != generation {
-				c.mu.Unlock()
-				return nil
-			}
-			s.loadChannelsLocked(ctx)
-			s.channelPrefLocked(id).Target = &channel.Target{Kind: channel.TargetConversation, MachineID: sess.MachineID, SessionID: sess.SessionID}
-			s.saveChannelsLocked()
-			c.mu.Unlock()
+			_ = s.setChannelTarget(ctx, id, channel.Target{
+				Kind: channel.TargetConversation, MachineID: sess.MachineID, SessionID: sess.SessionID,
+			}, generation) // Follow the turn even if the new target could not be saved.
 		}
 		run.MachineID, run.SessionID, run.Probe = sess.MachineID, sess.SessionID, ""
 	} else {
