@@ -89,6 +89,7 @@ DOMAINS = [
     "command_input_mock",  # an Antigravity command waiting at a prompt (#14527), MOCK_COMMAND_INPUT
     "recording_minutes_debates_mock",  # disagreements in meeting minutes (#16728), POST /mock/recording_minutes_debates
     "orca_chat_launchers_mock",  # the server's Orca chat launchers in New Agent (#17047), MOCK_ORCA_CHAT_LAUNCHERS
+    "orca_chat_starts_mock",  # the server's "Start new Agents as Orca chats" switch (#17650), MOCK_ORCA_CHAT_STARTS
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
