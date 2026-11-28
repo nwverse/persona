@@ -108,7 +108,7 @@ func TestRoutesClosedToExtensionTokens(t *testing.T) {
 
 // voiceHub is a hub whose manager B owns mb and knows the token of an extension granted voiceScopes: it answers
 // extensions.authorize as the manager does (extmgr scopeOpens), by the route's scope in extwire.RouteScopes.
-func voiceHub(t *testing.T) (*Hub, string, *guardManager) {
+func voiceHub(t *testing.T) (*Hub, string, *guardManager, *guardManager) {
 	t.Helper()
 	h, srv, _ := newBusHub(t)
 	h.cfg.Machines = []MachineConfig{{ID: "mb", Name: "mb", Kind: "local"}}
@@ -132,14 +132,14 @@ func voiceHub(t *testing.T) (*Hub, string, *guardManager) {
 			return map[string]any{"ok": true}, nil
 		}
 	}
-	connectGuardManager(t, h, srv.URL, assistantwire.AssistantID, answer(false))
+	a := connectGuardManager(t, h, srv.URL, assistantwire.AssistantID, answer(false))
 	b := connectGuardManager(t, h, srv.URL, "m-0b0b0b", answer(true))
 	if _, err := h.moveMachine(context.Background(), "mb", "m-0b0b0b"); err != nil {
 		t.Fatal(err)
 	}
 	b.report(t, devicewire.State{Machine: proto.Machine{ID: "mb", Name: "mb"}})
 	eventually(t, 5*time.Second, "mb", func() bool { return h.localMachine("mb") != nil })
-	return h, srv.URL, b
+	return h, srv.URL, a, b
 }
 
 // The voice program's requests with a token of voiceScopes: every route it calls lets it in, the routes closed to
@@ -147,7 +147,7 @@ func voiceHub(t *testing.T) (*Hub, string, *guardManager) {
 // extension's, not the owner's: no conversation of a space, no private card, a meeting's room by its session row, and
 // a message that is not the owner's own input.
 func TestVoiceProgramOnAnExtensionsToken(t *testing.T) {
-	h, url, b := voiceHub(t)
+	h, url, a, b := voiceHub(t)
 	const room = "0a1b2c3d-0000-4000-8000-000000000001"
 	h.takeFleetSessions(assistantwire.FleetSessions{MachineID: "mb", Sessions: []proto.Session{
 		{MachineID: "mb", SessionID: "b1", Title: "B-SESSION", Cwd: "/work/project"},
@@ -192,6 +192,24 @@ func TestVoiceProgramOnAnExtensionsToken(t *testing.T) {
 			if got := reached(b); len(got) != before {
 				t.Errorf("%s %s reached the manager: %v", c.method, c.path, got[before:])
 			}
+		}
+	})
+	t.Run("the triage's switches are its own manager's", func(t *testing.T) {
+		beforeA, beforeB := len(reached(a)), len(reached(b))
+		if code, body := extDoAs(t, url, "voice-token", "GET", "/api/v1/agents/triage", ""); code != http.StatusOK {
+			t.Fatalf("triage: %d %s", code, clip(body, 200))
+		}
+		if got := reached(b)[beforeB:]; len(got) != 1 || !strings.Contains(got[0], "/api/v1/agents/triage") {
+			t.Errorf("B got %v, want the one request", got)
+		}
+		// Naming the other manager is refused, and nothing of it reaches that manager.
+		for _, path := range []string{"/api/v1/agents/triage?manager=" + assistantwire.AssistantID} {
+			if code, body := extDoAs(t, url, "voice-token", "GET", path, ""); code != http.StatusForbidden || !strings.Contains(body, codeOtherManager) {
+				t.Errorf("%s: %d %s, want 403 %s", path, code, clip(body, 200), codeOtherManager)
+			}
+		}
+		if got := reached(a)[beforeA:]; len(got) != 0 {
+			t.Errorf("A was reached: %v", got)
 		}
 	})
 	t.Run("a space's conversation and a private card are not its to see or act on", func(t *testing.T) {
