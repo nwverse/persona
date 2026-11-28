@@ -199,6 +199,11 @@ data class Machine(
     @WireStrict @SerialName("link_switch") val linkSwitch: MachineLinkSwitch? = null,
     /** The default for new sessions among [engineHosts]. Older hubs describe it with [engine]. */
     @SerialName("engine_default") val engineDefault: String? = null,
+    /**
+     * "Start new Agents as Orca chats" (#17650, docs/integrations/engines.md "Orca chats as New Agent's default"): the
+     * switch, sent only while Orca is in [engineHosts], where it applies; null elsewhere and from older hubs (no switch).
+     */
+    @SerialName("orca_chat_starts") val orcaChatStarts: Boolean? = null,
 ) {
     val displayName: String get() = name.ifEmpty { id }
     val pending: Boolean get() = trust == "pending"
