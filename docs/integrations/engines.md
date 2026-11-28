@@ -29,7 +29,7 @@ and that the web edits the set, sends a pick inside it as the set with a new def
   `node.info` (for "Detected"). An engine that is not installed or not running does not slow the others down.
 - **Hosts do not hold each other up.** Each host refreshes in parallel with its own timeout, and its events refresh only itself. A host that is down
   (unreachable, `not_running`) clears only its own sessions; the others are listed and driven as usual. This is the same mechanism as herdr-both
-  (`docs/plans/plan-orca-support.md` "Side-by-side engines").
+  (`docs/integrations/herdr-core.md` "Combined engine").
 - **Default engine**: new sessions, offline sessions without a remembered terminal host and the mode menus go to the default engine; renaming a space goes to the
   enabled host that lists it, the default one first (`spaceOrganizer` in `node/rename.go`: space ids carry no host kind). Per-pane
   operations (reading the screen, sending, keys, closing) still go to the host the pane belongs to. Changing only the default resets nothing; changing
@@ -72,7 +72,7 @@ and that the web edits the set, sends a pick inside it as the set with a new def
   every host, herdr's refresh ran Orca's process scan whenever an Orca pane was due for a look (p95 174 ms on the fakes, 1.6 ms now), and
   Orca's poll asked herdr about every herdr pane due for one.
 
-"Engine" below means this choice. APIs, storage, and node switching: `docs/protocol/protocol.md` ("Engines"); design / trade-offs: `docs/plans/plan-orca-support.md`.
+"Engine" below means this choice. APIs, storage, and node switching: `docs/protocol/protocol.md` ("Engines"); design: "The host layer" below, `docs/integrations/herdr-core.md` and `docs/integrations/orca.md`.
 
 ## Engines
 
@@ -105,6 +105,59 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 - Agents immediately shows new-engine sessions; old-engine sessions become Not running, with history retained.
 - Live terminal / phone takeover disconnects; reopen in a new-engine session.
 - No running Claude in any engine is closed or modified.
+
+## The host layer
+
+Audience: contributors adding or changing an engine. Every terminal engine is a **host** behind one interface
+(`server/internal/host/host.go`); herdr was moved behind it first, without changing its behaviour (2026-11-01), then Orca,
+Herdr App, botmux, Tern, Rex and tmux's approvals came in as more hosts. How each one is driven: herdr-core in
+[herdr-core.md](herdr-core.md), Orca in [orca.md](orca.md), Tern, Rex and T3 Code below.
+
+### Two concepts
+
+- **Host**: where the terminal runs, such as herdr or Orca. The host lists panes, reads screens, sends input, and opens and closes panes.
+- **Agent**: what runs in the pane, such as Claude Code, Codex, or TRAE CLI. The Agent determines transcript location, session-ID recognition,
+  state detection, and dialog appearance. "Codex in Orca" and "TRAE CLI in herdr" are combinations from the two tables, hosts and Agents.
+
+### Host interface
+
+`server/internal/host` holds the interfaces, `PaneRef` and the kind-keyed host `Registry`; each host's implementation is in
+`server/internal/node/host<kind>*.go` (herdr: `hostherdr.go`, the only node file that talks to the herdr client). Every host implements the core,
+`Host`: its kind and version, a snapshot of spaces, slots and panes, its agent panes and one pane's agent, a screen read (visible, recent,
+recent-unwrapped; plain or ANSI), text, Persona-wide key names (each host translates them), a prompt submitted the host's way (`ErrNoAgent` when
+no supported Agent is in front: the node then types the text and Enter itself), a pane's foreground processes, and the environment variable that
+names a pane (`HERDR_PANE_ID`, `ORCA_PANE_KEY`…). Everything else is an optional capability, asked for with a Go interface assertion, so a host
+that lacks one is refused as `unsupported` and the apps hide what it cannot do (`host.go` lists them: `Watcher` for pushed changes,
+`Launcher` / `EnvLauncher` to start sessions, `Organizer` to rename and close, `Splitter` and `SlotCloser`, `Worktreer`, `ForegroundNamer`,
+`PlainScreen`, `Scrollbacker`, `QuickScreen`, `TextTyper`, `Streamer` / `Controller` for the live terminal, and more).
+
+- **Pane reference `PaneRef`**: host kind + host-local ID. Stored and transmitted as `<kind>:<id>`; herdr panes have no prefix (herdr IDs already
+  contain colons, such as `w1:p2`). A prefix not in `host.Kinds` (the fixed known kinds, independent of local registrations) is treated as herdr. A
+  known kind with no local host reports "no <kind> host on this machine" on lookup and never sends to herdr, so the hub's database,
+  `proto.Session` and the hook's pane values needed no migration. The node always stores this string (`n.panes`, `Agent.PaneID`), and
+  `Registry.Pane` resolves host and ID at call time.
+- **Session model**: the node keeps `map[string]host.Agent` (`PaneID` is a `PaneRef` string); panes in a host's `Agent` and `Created` already use
+  that host's `PaneRef`.
+- **Key names**: the apps' herdr notation (`shift+tab`, `ctrl+c`, `enter`…) is Persona's; herdr forwards it unchanged, Orca converts it to bytes
+  (`shift+tab` → `\x1b[Z`).
+- **Errors**: hosts mark their errors with `ErrNoAgent`, `ErrNotDelivered`, `ErrDialogOpen`, `ErrAttachBusy`, `ErrTakenOver` and the like using
+  `host.Mark` (tested with `errors.Is`), keeping the text. A missing capability is `ErrUnsupported` from the node, with text beginning
+  `unsupported` (the hub falls back to screen reads on that prefix) and a code the hub words in the reader's language ("Refusals in the reader's
+  language" below).
+- **Listing**: a snapshot from each enabled host, in parallel with each host's own timeout; a host that does not answer keeps its last Agents, and
+  only a total failure counts as one ("Host sets" above).
+
+### Shared layer above hosts
+
+| Shared layer | Responsibility |
+| --- | --- |
+| Session recognition | Prefer a session ID supplied by the host; otherwise scan claude / codex process environments, find the pane via each host's `PaneEnv()`, then read `sessions/<pid>.json` (Codex uses thread names, TRAE CLI uses an owner file). `personad hook` reads pane variables for every host |
+| State detection | Use host-reported state when available; otherwise infer from the screen (as for TRAE CLI), keep corrections such as `codexTurnOver`, then let the hub map to unified states (`docs/protocol/agent-states.md`) |
+| Pre-send checks | If the host reads colored screens: full draft / gray-text detection and extra Enter (`checkPane`, `ensureSubmitted`); plain text only (`host.PlainScreen`): dialogs, and drafts where the host hands back the input box (Orca) |
+| Capability reporting | Each session carries what its host and runtime can do, and the terminal browser gets each host's `abilities` (#17053); the apps hide what is not offered |
+
+Space ids carry no host kind, so a session's row names its host (`space_kind`), and a space rename goes to the enabled host that lists it
+(`spaceOrganizer` in `node/rename.go`).
 
 ## Capabilities by engine
 
@@ -195,8 +248,7 @@ running, until a message opens it in Orca again (never in a terminal). An answer
 New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
 chats): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
 Agent's default launcher opens a terminal unless the computer starts new Agents as Orca chats ("Orca chats as New Agent's default"
-below). See `docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and
-starts.
+below). See `docs/integrations/orca.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
