@@ -289,7 +289,6 @@ func (s *Service) refreshLauncherKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.invalidateLauncherListCache("")
 	s.pushNodeLaunchers(ctx, "", list, keys) // the computers pull the new value
 	refreshed := make([]map[string]string, 0, len(uses))
 	for _, u := range uses {

@@ -99,11 +99,6 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	cfg := s.settings(ctx)
-	// Keep the explicit bot write-approval route; supervising read-only approvals
-	// use the same accountable internal route as every other internal source.
-	if src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
-		return false
-	}
 	to, home := s.internalReviewer(ctx, ix)
 	if to == "" || home == "" {
 		// Legacy node questions outside the five manager-owned sources keep
