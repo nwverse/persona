@@ -40,6 +40,24 @@ func (m *memBlockerQueueStore) TaskPlansQueued(_ context.Context, _ time.Time) (
 	return out, nil
 }
 
+func (m *memBlockerQueueStore) TaskPlansQueuedForTodo(_ context.Context, todoID string) ([]db.TaskPlanRow, error) {
+	m.planMu.Lock()
+	defer m.planMu.Unlock()
+	var rows []db.TaskPlanRow
+	for _, row := range m.plans {
+		if row.State != planStarted {
+			continue
+		}
+		for _, task := range planFromRow(row).Tasks {
+			if task.TodoID == todoID && task.Queue != nil {
+				rows = append(rows, row)
+				break
+			}
+		}
+	}
+	return rows, nil
+}
+
 func (m *memBlockerQueueStore) UpsertTodoBlocker(ctx context.Context, r db.TodoBlockerRow) (*db.TodoBlockerRow, error) {
 	return m.b.UpsertTodoBlocker(ctx, r)
 }

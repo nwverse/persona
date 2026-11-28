@@ -68,6 +68,22 @@ func (s *Service) checkTodoStartReadiness(ctx context.Context, task PlanTask) er
 
 func (s *Service) readinessPlan(ctx context.Context, todo Todo) (PlanTask, error) {
 	if todo.PlanID == "" {
+		if store, ok := s.store().(interface {
+			TaskPlansQueuedForTodo(context.Context, string) ([]db.TaskPlanRow, error)
+		}); ok {
+			rows, err := store.TaskPlansQueuedForTodo(ctx, todo.ID)
+			if err != nil {
+				return PlanTask{}, err
+			}
+			if len(rows) == 1 {
+				for _, task := range planFromRow(rows[0]).Tasks {
+					if task.TodoID == todo.ID && task.Queue != nil {
+						return task, nil
+					}
+				}
+			}
+			return PlanTask{}, nil
+		}
 		waiting, err := s.queuedTodoTasks(ctx)
 		if task := waiting[todo.ID]; task != nil {
 			return *task, nil
