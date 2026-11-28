@@ -209,12 +209,12 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             spaceMenu = { shown ->
                 val session = shown.members.first().session
                 val markAll = markAllSeenBatch(shown.members)
-                val worktree = worktrees?.targetOf(shown.members.map { it.session })
+                val worktreeAction = worktrees?.let { w -> w.targetOf(shown.members.map { it.session })?.let { w.newWorktreeAction(it) } }
                 AgentSpaceMenu(session, shown.preferenceKey in page.preferences.pins.spaces, shown.preferenceKey in page.preferences.mutes.spaces,
                     operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
                     onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
                     onMarkRead = markAll.takeIf { it.unread.isNotEmpty() }?.let { batch -> { confirmRead = batch } },
-                    extra = listOfNotNull(worktree?.let { worktrees.newWorktreeAction(it) }))
+                    extra = listOfNotNull(worktreeAction))
             },
             sessionMenu = rowMenu, title = route.title,
             onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
