@@ -23,7 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Orca's structured sessions (docs/plans/plan-orca-support.md "Structured sessions"): Orca's own chats around Claude
+// Orca's structured sessions (docs/integrations/orca.md "Structured sessions"): Orca's own chats around Claude
 // Code, Codex and its other providers, with no terminal, so not the Orca host's (hostorca.go lists terminals). While
 // the machine's engine is Orca the node runs a bridge for them in its own process: a runtime (runtimes.go) on one end
 // of a pipe into the runtime host, Orca's agentSession.* on the other. The bridge lists every local chat (worktree.ps,
@@ -963,7 +963,8 @@ func (b *orcaBridge) request(ctx context.Context, method string, params json.Raw
 		}
 		err = b.seen(ctx, orca)
 	default:
-		return nil, &rpc.Error{Code: "unsupported", Message: "unsupported: " + method}
+		// The words stay what they were; the hub words it by its reason (apierr's bridgeReasonKeys, #17057).
+		return nil, &rpc.Error{Code: "unsupported", Message: "unsupported: " + method, Data: json.RawMessage(`{"reason":"orca_unsupported"}`)}
 	}
 	if err != nil {
 		return nil, orcaWriteErr(err)

@@ -285,6 +285,8 @@
   "section_awaiting_review": "Delivered · awaiting review",
   "section_pr": "Waiting for merge",
   "section_other": "Other open",
+  "section_todo": "To do",
+  "section_can_wait": "Can wait",
   "section_shelved": "Inactive",
   "section_done": "Done",
   "shelved_hint": "No progress for 48 hours and nothing running. Not counted as open; nothing was deleted.",

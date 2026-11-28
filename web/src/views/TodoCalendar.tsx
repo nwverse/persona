@@ -5,6 +5,7 @@
 // useDrag below), saved at once. What goes where: lib/todo-calendar.ts.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { t } from "../i18n";
+import { repoGatePRLook } from "../features/todos/repo-gate";
 import {
   calendarDays,
   calendarEntries,
@@ -556,6 +557,7 @@ export function TodoCalendar({
   mode,
   anchor,
   showDone,
+  todosV2,
   selectedId,
   onMode,
   onAnchor,
@@ -570,6 +572,7 @@ export function TodoCalendar({
   mode: CalendarMode;
   anchor: number;
   showDone: boolean;
+  todosV2?: boolean;
   selectedId?: string;
   onMode: (mode: CalendarMode, day?: number) => void;
   onAnchor: (day: number) => void;
@@ -590,7 +593,10 @@ export function TodoCalendar({
   // A to-do dropped somewhere is drawn there at once, and back where it was if saving it fails.
   const [moves, setMoves] = useState<Record<string, DuePatch>>({});
   const shownTodos = useMemo(() => (Object.keys(moves).length ? todos.map((td) => (moves[td.id] ? movedTodo(td, moves[td.id]) : td)) : todos), [todos, moves]);
-  const entries = useMemo(() => calendarEntries(shownTodos, { lookup, showDone, from, to, now }), [shownTodos, lookup, showDone, from, to, now]);
+  const entries = useMemo(
+    () => calendarEntries(shownTodos, { lookup, showDone, from, to, now, repoGateLook: todosV2 ? repoGatePRLook : undefined }),
+    [shownTodos, lookup, showDone, from, to, now, todosV2],
+  );
   const download = () => {
     const hub = getState().mesh.find(h => h.self)?.hub_id || here();
     downloadDeadlines(entries, from, hub);

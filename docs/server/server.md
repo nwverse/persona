@@ -234,7 +234,7 @@ Publishing and approving are separate actions. A reader may retrieve a published
 | `internal/rpc` | Bidirectional hub↔node JSON-lines RPC |
 | `internal/transcript` | Claude Code JSONL → `proto.Item`, incremental reading and pagination |
 | `internal/herdr` | Herdr socket API client (CLI fallback) and event subscription |
-| `internal/herdrcore` | JSON-RPC client and events for herdr-core (hc behind Herdr desktop), `docs/plans/plan-orca-support.md`, “herdr-core host” |
+| `internal/herdrcore` | JSON-RPC client and events for herdr-core (hc behind Herdr desktop), `docs/integrations/herdr-core.md`, “herdr-core host” |
 | `internal/node` | Sessions, launch, send, screen sampling, hook / MCP Unix sockets, `runtime.sock` (`runtimes.go`, `docs/integrations/runtimes.md`) |
 | `internal/hub` | HTTP / WebSocket, machine connections, interaction queue, phone-tool forwarding, APNs |
 | `internal/assistant` | personad assistant for Persona tab; separate process connected through bus, hub child by default; `docs/assistant/assistant.md`, “Process” |
@@ -362,15 +362,15 @@ App hop guarded by UI tests: `ScreenTruthTests.testWhatNeedsTheUserShowsUnderThe
 
 ## Connecting to herdr-core
 
-Each machine's node uses one engine (`node/engine.go`): herdr default, herdr-core (`node/hostherdrcore.go`), or Orca (`node/hostorca.go` below). User chooses per machine in app; hub sends `engine.use` on connection (`docs/protocol/protocol.md`, “Engines”). Herdr mode is unchanged and does not touch herdr-core, except `node.info` checks availability once. Selected but stopped herdr-core returns No Terminal immediately, without dialing / logging. Socket, methods, mapping, and first-phase omissions: `docs/plans/plan-orca-support.md` (“herdr-core host”).
+Each machine's node uses one engine (`node/engine.go`): herdr default, herdr-core (`node/hostherdrcore.go`), or Orca (`node/hostorca.go` below). User chooses per machine in app; hub sends `engine.use` on connection (`docs/protocol/protocol.md`, “Engines”). Herdr mode is unchanged and does not touch herdr-core, except `node.info` checks availability once. Selected but stopped herdr-core returns No Terminal immediately, without dialing / logging. Socket, methods, mapping, and first-phase omissions: `docs/integrations/herdr-core.md` (“herdr-core host”).
 Integration: `go test -tags hclive -run HerdrCoreLive ./internal/node/ -v`, own isolated herdr-core plus read-only default-instance listing.
 
 ## Connecting to Orca
 
 For Orca machines, node controls terminals through desktop runtime Unix socket (`internal/orcart` client, `node/hostorca.go` host). Read `orca-runtime.json` for socket / token; Orca changes token on every launch, so reread on connection failure / unauthorized; `status.get` checks protocol version first.
 No socket push: node polls `terminal.list` + `worktree.ps` each second, mapping Claude panes via `ORCA_PANE_KEY` in process environment.
-Stopped Orca returns No Terminal immediately, no log. Mapping / first-phase omissions: `docs/plans/plan-orca-support.md` (“Orca source”).
-Read-only integration: `go test -tags orcalive -run OrcaLive ./internal/node/ -v`.
+Stopped Orca returns No Terminal immediately, no log. Mapping / first-phase omissions: `docs/integrations/orca.md` (“Orca source”).
+Read-only integration: `go test -tags orcalive -run OrcaLive ./internal/node/ -v`; writes against an isolated Orca server: `-tags orcaiso` (`docs/operations/testing.md`, "Isolated Orca runtime (#17058)").
 
 ## Deployment
 

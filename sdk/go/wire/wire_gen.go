@@ -816,9 +816,12 @@ type QuotaItem struct {
 }
 
 type UsageItem struct {
-	ID    string   `json:"id"`
-	Name  string   `json:"name"`
-	Hosts []string `json:"hosts,omitempty"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Hosts         []string `json:"hosts,omitempty"`
+	Direct        bool     `json:"direct,omitempty"`
+	RemoteAddress string   `json:"remote_address,omitempty"`
+	RemoteKey     string   `json:"remote_key,omitempty"`
 }
 
 type ProviderItem struct {
@@ -1648,6 +1651,9 @@ type SecretsResolveParams struct {
 	Contribution string        `json:"contribution"`
 	Reference    string        `json:"reference"`
 	Purpose      SecretPurpose `json:"purpose"`
+	// The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask the
+	// user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them.
+	Quiet bool `json:"quiet,omitempty"`
 }
 
 // SecretsResolveResult: what secrets.resolve answers: the value, at most 16 KB. Errors: not_found, not_signed_in,

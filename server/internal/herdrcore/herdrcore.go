@@ -1,6 +1,6 @@
 // Package herdrcore talks to herdr-core (`hc`), the terminal runtime behind the Herdr desktop app: JSON-RPC 2.0, one
 // message per line on its unix socket. It is a different program from classic herdr (internal/herdr): its own socket,
-// methods (terminal.*), and environment (HC_TERMINAL_ID). See docs/plans/plan-orca-support.md "herdr-core host".
+// methods (terminal.*), and environment (HC_TERMINAL_ID). See docs/integrations/herdr-core.md "herdr-core host".
 //
 // herdr-core being absent (not installed, not running) is normal: calls fail fast with ErrNoSocket and log at most
 // one line per episode.

@@ -33,7 +33,7 @@ func (h *Manager) StoreSecret(ctx context.Context, expected extension.SecretProv
 		// every spelling of its references (title-based ones too), is asked for again at its next use, and still
 		// answers while the provider cannot be asked (secret_kept.go).
 		ps.keptProviderStored(ctx, prov.Extension)
-		ps.forgetSecretWords(prov.Extension)
+		ps.staleWords(ctx, prov.Extension)
 		action := "secret_stored"
 		if err != nil {
 			action = "secret_store_failed"

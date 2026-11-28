@@ -70,6 +70,9 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string,
 		return nil, host.Mark(refusal(proto.CodeDirectoryUntypable, i18n.T(i18n.Default, "rpc-errors.directory_untypable"), nil), host.ErrNotDelivered)
 	}
 	trees, _, _, err := h.c.Worktrees(ctx, "")
+	if err != nil && orcaUnreachable(err) {
+		return nil, host.Mark(orcaMissing(err), host.ErrNotDelivered) // Orca's words for a start (orcaengine.go)
+	}
 	if err != nil {
 		return nil, orcaErr(err)
 	}
@@ -176,7 +179,8 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 				}
 			}
 		}
-		return nil, host.Mark(refusal("orca_workspace_unavailable", "The selected Orca workspace is unavailable or does not contain this directory", nil), host.ErrNotDelivered)
+		// English, as it always was for a hub that does not word the code (apierr does, #17057)
+		return nil, host.Mark(refusal("orca_workspace_unavailable", i18n.T(i18n.En, "rpc-errors.orca_workspace_unavailable"), nil), host.ErrNotDelivered)
 	}
 
 	// 2. Search all local worktrees for the deepest enclosing worktree.
@@ -247,7 +251,7 @@ func (h *orcaHost) resolveWorktree(ctx context.Context, trees []orcart.Worktree,
 	}
 
 	return nil, host.Mark(
-		refusal("orca_not_registered", "Orca 当前没有任何打开的项目，请先在电脑上打开一个项目再新建 Agent。", nil),
+		refusal("orca_not_registered", i18n.T(i18n.From(ctx), "rpc-errors.orca_not_registered"), nil),
 		host.ErrNotDelivered,
 	)
 }
