@@ -77,6 +77,10 @@ export interface IntegrationsProps {
   twoCol?: boolean;
   /** The page's top bar already provides Back (phone), so subviews omit their own Back button. */
   headerBack?: boolean;
+  /** Parent `?integration=` sub-route recorded when drilling down (for example upgrade or scoped push-source detail). */
+  parentSub?: string | null;
+  /** Step back to `parentSub` via browser history when mounted inside Settings. */
+  onBackParent?: () => void;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
   /** Report whether an open extension plugin_page needs the wide page container. */
@@ -174,6 +178,7 @@ function PushSourceDetailPane({
   item,
   manager,
   onBack,
+  backLabel,
   reloadKey,
   onReload,
 }: {
@@ -181,6 +186,7 @@ function PushSourceDetailPane({
   item: IntegrationItem | null;
   manager?: string;
   onBack?: () => void;
+  backLabel?: string;
   reloadKey: number;
   onReload: () => void;
 }) {
@@ -190,7 +196,7 @@ function PushSourceDetailPane({
       <div className="mb-3 flex items-center gap-2">
         {onBack && (
           <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-            {t("settings-integrations.back")}
+            {backLabel ?? t("settings-integrations.back")}
           </Button>
         )}
         <OwnerMark manager={manager} />
@@ -312,12 +318,30 @@ function IntegrationsForManager({
   onOpen,
   twoCol = false,
   headerBack = false,
+  parentSub = null,
+  onBackParent,
   onSettings,
   onPageWide,
 }: IntegrationsProps & { picked: string | null }) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
-  const go = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next));
-  const drillDown = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next), true);
+  const [drillOrigin, setDrillOrigin] = useState<{ child: string; parent: string } | null>(null);
+  const go = (next: IntegrationsRoute) => {
+    setDrillOrigin(null);
+    onOpen(formatIntegrationsSub(next));
+  };
+  const drillDown = (next: IntegrationsRoute) => {
+    const childSub = formatIntegrationsSub(next);
+    if (open && childSub && open !== childSub) {
+      setDrillOrigin({ child: childSub, parent: open });
+    }
+    onOpen(childSub, true);
+  };
+  const returnParent = parentSub ?? (drillOrigin && drillOrigin.child === open ? drillOrigin.parent : null);
+  const stepBackTo = (target: string) => {
+    setDrillOrigin(null);
+    if (onBackParent && parentSub === target) onBackParent();
+    else onOpen(target);
+  };
 
   const owner = otherManager(picked ?? undefined);
   const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
@@ -508,6 +532,7 @@ function IntegrationsForManager({
     );
   }
   if (route.kind === "item") {
+    const upgradeOrigin = returnParent && parseIntegrationsSub(returnParent).kind === "extension" ? returnParent : null;
     return (
       <Suspense fallback={<Loading />}>
         <MarketItem
@@ -518,7 +543,13 @@ function IntegrationsForManager({
           onBack={
             headerBack
               ? undefined
-              : () => go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" })
+              : () => {
+                  if (upgradeOrigin) {
+                    stepBackTo(upgradeOrigin);
+                    return;
+                  }
+                  go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" });
+                }
           }
           onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
         />
@@ -585,7 +616,10 @@ function IntegrationsForManager({
         data-integration-id={item.id}
         data-integration-sub-alert={item.subscriptionAlert?.state}
         aria-current={selected || undefined}
-        onClick={() => onOpen(item.sub)}
+        onClick={() => {
+          setDrillOrigin(null);
+          onOpen(item.sub);
+        }}
         className={cx(
           "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
           selected ? "bg-accent-tint" : "hover:bg-hover",
@@ -837,12 +871,27 @@ function IntegrationsForManager({
     </>
   );
 
+  const backFromDetail = () => {
+    if (returnParent) {
+      stepBackTo(returnParent);
+      return;
+    }
+    setDrillOrigin(null);
+    onOpen(null);
+  };
+  const pushSourceBackLabel = returnParent
+    ? (parseIntegrationsSub(returnParent).kind === "sources"
+      ? t("subscriptions.view_graph")
+      : t("settings-extensionview.back"))
+    : t("settings-integrations.back");
+
   const detailPane = sourceDetailState ? (
     <PushSourceDetailPane
       state={sourceDetailState}
       item={resolvedSourceItem}
       manager={effectiveManager}
-      onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+      onBack={headerBack || twoCol ? undefined : backFromDetail}
+      backLabel={pushSourceBackLabel}
       reloadKey={sourcesReload}
       onReload={() => setSourcesReload((n) => n + 1)}
     />
@@ -851,10 +900,10 @@ function IntegrationsForManager({
       <IntegrationDetail
         target={resolvedTarget}
         integrationsV2={true}
-        onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+        onBack={headerBack || twoCol ? undefined : backFromDetail}
         onUninstalled={() => onOpen(null)}
         onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
-        onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
+        onUpgrade={(market, extId, manager) => drillDown({ kind: "item", market, id: extId, manager })}
         onSettings={onSettings}
         onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
         onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}

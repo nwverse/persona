@@ -59,12 +59,14 @@ vi.mock("./IntegrationDetail", () => ({
     onUpgrade,
     onPage,
     onSettings,
+    onOpenSources,
   }: {
     target: { kind: string; id: string; channelId?: string; connectorId?: string | null; manager?: string };
     onBack?: () => void;
     onUpgrade?: (market: string, id: string, manager?: string) => void;
     onPage?: (extId: string, uiId: string, manager?: string) => void;
     onSettings?: (url: string) => void;
+    onOpenSources?: (state?: string, manager?: string) => void;
   }) => (
     <div
       data-mock-integration-detail
@@ -87,6 +89,15 @@ vi.mock("./IntegrationDetail", () => ({
       {onPage && (
         <button type="button" data-mock-detail-page onClick={() => onPage(target.id, "dashboard", target.manager)}>
           Open page
+        </button>
+      )}
+      {onOpenSources && (
+        <button
+          type="button"
+          data-mock-detail-sources
+          onClick={() => onOpenSources(JSON.stringify({ p: "source", id: "sub_push_iphone" }), target.manager)}
+        >
+          Sources
         </button>
       )}
       {onSettings && (
@@ -1479,6 +1490,138 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     await flush();
     expect(location.pathname + location.search).toBe("/settings?tab=knowledge");
     expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
+  });
+
+  it("returns from MarketItem to extension detail after default-assistant Upgrade, while catalog-opened items return to MarketCatalog", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    stubFullHubFetch();
+
+    const waitPop = (go: () => void) => act(async () => {
+      const done = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
+      go();
+      await done;
+    });
+
+    // 1. Default assistant: open ext:larkx -> click Upgrade -> MarketItem Back returns to ext:larkx (not -market).
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx");
+    expect(host.querySelector("[data-mock-market-item]")?.getAttribute("data-id")).toBe("larkx");
+
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+    expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+
+    // 2. Non-default assistant: ext:larkx@work -> Upgrade -> Back returns to ext:larkx@work.
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx%40work");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx@work");
+
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx@work");
+
+    // 3. Phone: default assistant ext:larkx -> Upgrade -> header Back returns to ext:larkx.
+    state.phone = true;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx");
+    await waitPop(() => host.querySelector<HTMLButtonElement>("header button")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+
+    // 4. MarketCatalog -> open item -> Back still returns to MarketCatalog.
+    state.phone = false;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-market");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-market-open]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/demo-ext");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market");
+    expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
+  });
+
+  it("returns to the parent integration detail when backing out of a drilled push source on narrow desktop (<740px)", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = false;
+    state.phone = false;
+    state.features = ["channels", "extension_manager", "connectors", "lark", "source_subscriptions", "inbox_sources"];
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(600);
+
+    const waitPop = (go: () => void) => act(async () => {
+      const done = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
+      go();
+      await done;
+    });
+
+    // Narrow desktop: list -> ext:larkx -> drill into push source -> Back returns to ext:larkx (not list).
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-sources]")!.click());
+    await flush();
+    const pushPane = host.querySelector<HTMLElement>('[data-integration-kind="source"]')!;
+    expect(pushPane).not.toBeNull();
+    const pushBackBtn = pushPane.querySelector<HTMLButtonElement>("button")!;
+    expect(pushBackBtn.textContent).toContain(t("settings-extensionview.back"));
+
+    await waitPop(() => pushBackBtn.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+    expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+
+    // Back from ext:larkx returns cleanly to the Integrations list.
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-detail-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBeNull();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+
+    // Direct push-source open from the list on narrow desktop still returns to the list.
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-id="sub_push_iphone"]')!.click());
+    await flush();
+    const directPushPane = host.querySelector<HTMLElement>('[data-integration-kind="source"]')!;
+    const directBackBtn = directPushPane.querySelector<HTMLButtonElement>("button")!;
+    expect(directBackBtn.textContent).toContain(t("settings-integrations.back"));
+    await waitPop(() => directBackBtn.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBeNull();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
   });
 });
 
