@@ -58,6 +58,7 @@
   "interrupted": "Interrupted by a model service error",
   "stopped": "Stopped along with its conversation",
   "stopped_turn": "Stopped with its conversation before it had any output",
+  "check_agy_unlinked": "The agy terminal pane isn't linked to its conversation.",
   "check_no_reply": "Couldn’t read the agent’s reply",
   "check_side_turn": "The last reply didn’t report on this task",
   "done": "Done",

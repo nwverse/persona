@@ -40,10 +40,12 @@ struct SettingsView: View {
         SplitNavigation(path: Bindable(model).settingsPath, destinations: SettingsDestinations()) {
             List {
                 if search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    assistantSection
-                    deviceSection
+                    if !NativeTemplateStore.shared.shortSettings { assistantSection }
+                    if !NativeTemplateStore.shared.shortSettings { deviceSection }
                     hubSection
-                    advancedSection
+                    templatesSection
+                    if !NativeTemplateStore.shared.shortSettings { advancedSection }
+                    else { moreSettingsSection }
                 } else {
                     Section {
                         ForEach(searchResults) { entry in
@@ -170,6 +172,29 @@ struct SettingsView: View {
         } footer: {
             Text(SettingsAssistantHeading.commonGroupsFooter)
         }
+    }
+
+    private var templatesSection: some View {
+        Section {
+            SettingsListLink(value: SettingsPage.templates) {
+                SettingsRow(title: String(localized: "Templates"), symbol: Theme.Icon.style, tint: Theme.accent,
+                            value: NativeTemplateStore.shared.enabled ? NativeTemplateStore.shared.templateName : nil)
+            }
+            .settingsListRow(SettingsPage.templates)
+            .accessibilityIdentifier("settings-templates")
+            .bareListRow()
+        } footer: { Text("Import a shared template, preview its changes and apply the native Agent console. Default restores Persona.") }
+    }
+
+    private var moreSettingsSection: some View {
+        Section {
+            SettingsListLink(value: SettingsPage.advanced) {
+                SettingsRow(title: String(localized: "More Settings"), symbol: Theme.Icon.options, tint: Theme.accent)
+            }
+            .settingsListRow(SettingsPage.advanced)
+            .accessibilityIdentifier("settings-more")
+            .bareListRow()
+        } footer: { Text("All other categories remain available here and through Settings search.") }
     }
 
     // MARK: End of Settings home's rows
@@ -353,6 +378,8 @@ enum SettingsPage: Hashable {
     case models, agents, appearance, about, pairing, computers
     /// Settings › Advanced (#13395): the rows Settings home leaves out (`SettingsCatalog.advanced`).
     case advanced
+    /// Settings › Templates (#17129): shared JSON/link preview and the opt-in native Agent console.
+    case templates
     /// A module's page, by its settings entry's id (`ModuleSlot.settings`): Live Screen is the screen-share module's.
     case module(String)
     /// Settings › About › Export Diagnostics (Developing Persona, #9460).
@@ -461,6 +488,7 @@ private struct SettingsDestinations: ViewModifier {
         switch page {
         case .models: ModelConfigurationView()
         case .advanced: SettingsAdvancedPage()
+        case .templates: NativeTemplatesView()
         case .agents: SettingsAgentView()
         case .appearance: AppearanceSettingsPage()
         case .about: SettingsAboutPage()

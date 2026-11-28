@@ -879,7 +879,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		defer unlock()
 	}
 	assignmentAt := time.Now().UTC()
-	raw, err := json.Marshal(params)
+	ctx, wireParams := agyRelayWireParams(ctx, device, method, params)
+	raw, err := json.Marshal(wireParams)
 	if err != nil {
 		return beforeNodeWrite(method, err)
 	}

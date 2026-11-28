@@ -15,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -903,6 +904,8 @@ type taskDoneCheck struct {
 	// reasonKey: the i18n key of the hub's own reason, when it decided without the model (the todo's check says it in
 	// the user's language, task_check.go); "" for the judge's.
 	reasonKey string
+	// A supervisor can look up candidates for these panes when it receives the notice.
+	unlinked []unlinkedPane
 }
 
 // autoDoneSkip says why the hub would not judge t now: "" when it would. work is when one of its agents last started
@@ -925,7 +928,7 @@ func autoDoneSkip(t Todo, work time.Time, worked bool) string {
 
 // taskReplies are the last replies of t's active agents: the whole last answer read from the agent's transcript, or
 // the session list's clipped last_text when that cannot be read.
-func (s *Service) taskReplies(ctx context.Context, t Todo) (out []taskDoneReply, sideTurnBlocked bool) {
+func (s *Service) taskReplies(ctx context.Context, t Todo) (out []taskDoneReply, sideTurnBlocked bool, unlinked []unlinkedPane) {
 	for _, a := range t.Agents {
 		if a.ReleasedAt != nil || a.DismissedAt != nil {
 			continue
@@ -937,7 +940,11 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []taskDoneReply,
 		resolved, sid, listed := s.resolveTaskSession(ctx, m.ID, a.SessionID)
 		earlier, items, read := s.lastTwoTurns(ctx, m.ID, sid)
 		if read && taskTurnAwaitingAnswer(items) {
-			return nil, false // one unfinished agent invalidates the whole task's completion evidence
+			return nil, false, nil // one unfinished agent invalidates the whole task's completion evidence
+		}
+		if listed && isUnlinkedAgyPane(resolved, items) {
+			unlinked = append(unlinked, unlinkedPane{MachineID: a.MachineID, SessionID: a.SessionID, LinkedAt: a.LinkedAt})
+			continue // the list's preview can predate the loss of the pane's binding
 		}
 		ask, text := turnExchange(items)
 		text = s.taskAnswer(ctx, m.ID, a.SessionID, items, text)
@@ -983,7 +990,7 @@ func (s *Service) taskReplies(ctx context.Context, t Todo) (out []taskDoneReply,
 		}
 		out = append(out, r)
 	}
-	return out, sideTurnBlocked
+	return out, sideTurnBlocked, unlinked
 }
 
 // lastTurn reads the latest exchange, not necessarily a user request about the task.
@@ -1145,8 +1152,13 @@ func (s *Service) judgeTaskDone(ctx context.Context, t Todo) (taskDoneCheck, err
 		}
 		return c, nil
 	}
-	replies, sideTurnBlocked := s.taskReplies(ctx, t)
+	replies, sideTurnBlocked, unlinked := s.taskReplies(ctx, t)
 	if c, ok := taskDoneWithoutModel(replies, sideTurnBlocked); ok {
+		if c.reasonKey == checkReasonNoReply && len(unlinked) > 0 {
+			c.reasonKey = checkReasonAgyUnlinked
+			c.Reason = i18n.T(s.lang(ctx), c.reasonKey)
+			c.unlinked = unlinked
+		}
 		if sideTurnBlocked {
 			s.logf("task %s: side-conversation reply without current task completion evidence: left open", t.ID)
 		}
@@ -1590,6 +1602,9 @@ func (s *Service) doneCheckRoute() {
 				applied = true
 			}
 		}
+		if c.reasonKey == checkReasonAgyUnlinked {
+			c.Reason = i18n.T(s.requestLang(r), c.reasonKey)
+		}
 		if !in.Apply {
 			apierr.WriteJSON(w, c)
 			return
@@ -1623,6 +1638,9 @@ func (s *Service) advanceFromLastReplies(ctx context.Context, t Todo) {
 		var replyAt time.Time
 		resolved, sid, listed := s.resolveTaskSession(ctx, m.ID, a.SessionID)
 		if items, read := s.lastTurnItems(ctx, m.ID, sid); read {
+			if listed && isUnlinkedAgyPane(resolved, items) {
+				continue
+			}
 			_, text = turnExchange(items)
 			for i := len(items) - 1; i >= 0; i-- {
 				if it := items[i]; it.Role == "assistant" && it.Kind == proto.KindText && strings.TrimSpace(it.Text) == text {

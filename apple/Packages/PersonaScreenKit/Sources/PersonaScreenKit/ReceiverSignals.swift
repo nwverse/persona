@@ -22,6 +22,7 @@ public struct ReceiverSignals: Sendable {
     public static let burstBytes = 32_000
     static let burstMinSpanMicros: UInt64 = 5_000
     static let baselineMicros: UInt64 = 10_000_000
+    static let maxBursts = 256
 
     private var baseline: [(at: UInt64, delay: Int64)] = []
     /// Each frame's arrival, queueing in ms, whether it was late, its bytes and whether it came in a keyframe's wake, over
@@ -45,6 +46,7 @@ public struct ReceiverSignals: Sendable {
                                refinement: Bool, keyframe: Bool = false, fps: Int) {
         if bytes >= Self.burstBytes, let first = firstByteMicros, arrivalMicros > first,
            arrivalMicros - first >= Self.burstMinSpanMicros {
+            if bursts.count >= Self.maxBursts { bursts.removeFirst() }
             bursts.append(Double(bytes) * 8 * 1000 / Double(arrivalMicros - first))
         }
         guard !refinement else { return }
@@ -61,13 +63,15 @@ public struct ReceiverSignals: Sendable {
             wakeUntil = wakeUntil.map { max($0, end) } ?? end
         }
         let wake = keyframe || wakeUntil.map { arrivalMicros <= $0 } ?? false
-        queue.append((arrivalMicros, ms, ms > 2 * interval, bytes, wake))
-        arrivals.append((arrivalMicros, bytes))
+        let safeBytes = max(bytes, 0)
+        queue.append((arrivalMicros, ms, ms > 2 * interval, safeBytes, wake))
+        arrivals.append((arrivalMicros, safeBytes))
         prune(arrivalMicros)
     }
 
     /// A picture took `ms` to decode.
     public mutating func decoded(ms: Double, at now: UInt64) {
+        guard ms.isFinite, ms >= 0 else { return }
         decodes.append((now, ms))
         prune(now)
     }
@@ -148,12 +152,19 @@ public struct ReceiverSignals: Sendable {
     }
 
     static func percentile(_ values: [Double], _ p: Double) -> Double? {
-        guard !values.isEmpty else { return nil }
-        let s = values.sorted()
-        return s[min(s.count - 1, Int((Double(s.count - 1) * p).rounded()))]
+        guard p.isFinite else { return nil }
+        let finite = values.filter(\.isFinite)
+        guard !finite.isEmpty else { return nil }
+        let s = finite.sorted()
+        let clamped = min(max(p, 0), 1)
+        let idx = min(s.count - 1, max(0, Int((Double(s.count - 1) * clamped).rounded())))
+        return s[idx]
     }
 
-    static func mean(_ values: [Double]) -> Double? { values.isEmpty ? nil : values.reduce(0, +) / Double(values.count) }
+    static func mean(_ values: [Double]) -> Double? {
+        let finite = values.filter(\.isFinite)
+        return finite.isEmpty ? nil : finite.reduce(0, +) / Double(finite.count)
+    }
 }
 
 /// The phone's view of the stream for one tier decision (`TierPolicy.tick`), from `ReceiverSignals.take`.
