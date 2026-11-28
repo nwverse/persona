@@ -425,11 +425,53 @@ and `SideSessionsShotsTest` (the control, the ⋯ row and the sheet in Glass, Br
 - **Origin filters and botmux visibility** (#10242). **Lark groups** shows botmux topics and **Terminal** shows terminal panes (herdr, Herdr App, Orca, Tern and Rex). An Orca chat (Orca's own conversation, no terminal) carries the **Desktop app** source mark, as on the web, and is in neither filter (#17054). A row's host badge names the engine ("Orca · #1"), not its id. By to-do, Agents opened by hand in herdr or Orca (its terminals and its chats; not started through Persona) have their own **Opened by hand** section before **No to-do** (`isOpenedByHand`; herdr's only before #17054). Android shows botmux sessions by default. Web Settings › Agents controls visibility for each paired hub. Android reads the value on reconnect and Agents refresh. Turning it off excludes that hub’s botmux rows and counts from Running, All and History. The Lark groups filter disappears when its count reaches zero, and an active selection returns to All. A phone with the old hide preference can migrate it once, only if the hub has no saved value. An unavailable endpoint retains the local choice for that pairing and retries on the next refresh. The per-machine control determines which sessions reach the hub in the first place.
 - **Origin label on session rows** (#3132, same as iOS / web #2698, placement per #3043): botmux sessions are labeled **Lark group**, herdr and Tern panes **Terminal**; other hosts and Persona's own chats get no label. The label sits at the top right, under the time, right-aligned, at the time's font size; the title starts at the line start and is not squeezed. The compact list has only one line, so the label goes before the time. When a Lark group has an https `external_url`, tapping the label opens that thread (through the shell's link handling, inside the App). Colors come from the design system's origin colors (`PersonaPalette.sourceFeishu` / `sourceTerminal`, same as iOS `Theme.sourceFeishu` / `sourceTerminal`; Brief uses ink only). Screenshot `AgentsSourceShotsTest`.
 - **Three kinds of empty state** (iOS `ChatsView`): no search results is "Nothing found for “xx”", without **New session**; no sessions at all is "**Start your first coding session** / **No sessions on this computer**" + **New session**; an empty quick filter is "No XX sessions" + **Show all**.
+- **Orca isn't running** (#17037): a card "Orca isn't running on this computer" titled with the computer, under herdr's, for an online computer whose engine set holds Orca and whose node says it is installed and stopped (`Engines.orcaStopped`, `OrcaNotice` in `HerdrNotice.kt`); no button, it says to open Orca there. herdr's card follows the engine set too (`usesHerdr`: herdr enabled beside an Orca default still shows it). Shots: `OrcaNoticeShotsTest`, and the engine picker's Orca rows `EngineOrcaShotsTest` (three styles × light / dark). See `docs/integrations/engines.md` ("When Orca is not running").
 - **Why herdr didn't start**: under the "herdr isn't running on this computer" card, a red line "Didn't start: reason" stays (known node errors turned into plain words, same as iOS `HerdrFailure.says`) until the next start or until herdr is read as running; long-press copies the hub's original text and the HTTP status.
 - **Subscription usage**: the top of the machine monitoring page (overview) lists every account from `GET /api/v1/usage/windows` (of every paired hub group, see "Multiple hubs") in one card per account type (#13173): each account, the soonest weekly reset first, with a bar per window (5h, then 7d, then the rest; turns the warning color from 80%; a tick where an even pace would be), the reset countdown, the sample time, whether usage is running fast / slow, a mark when the gateway can't be read, and, where the hub sends `protect_percent` for a window, a caution notch with a "Protect N%" flag and a hatched zone from it to the end of the bar. Under the accounts, one reset chart per card: a shared axis (now, 6h, 12h, 1d, 3d, 5d, 7d; the first day takes 45% of the width), a row per account in the list's order with a 5h and a 7d capsule from now to its reset (`JResetChart`, geometry in `core/domain` `usage/UsageGroups.kt`). One switch per account type under the cards keeps a type off this phone's list; it is a display filter kept on the phone (the hub's own `usage.hidden_providers` is written from the admin page only, which a phone's device credentials cannot reach). When the hub has no data (or an old hub lacks this endpoint) the whole section is hidden; while the page is in the foreground it reads once a minute, and a failed read keeps the last answer, aged by its `stale_at` (#1905). The logic is in `UsageWindows.kt` in `feature:machines` and `UsageGroups.kt` in `core:domain`, with the same rules as the web's `lib/usage-windows.ts`.
 - **What this computer can do**: after the computer card and the engine, the machine page reads the node self-check (`GET /machines/{id}/doctor`) and shows each feature as **Ready** / **Partly working** / **Broken** / **Off**, with **Check again**; when files Persona generated are stale or missing there is **Fix** (after confirming, `POST …/doctor/fix`); "See all checks" expands every item. Node too old, hub too old, offline and insufficient device permission each get one sentence; when the node is too old and can be redeployed there is **Redeploy**. The logic is in `NodeHealth.kt`, with the same rules as the web's `lib/node-health.ts`.
 - **Browser (ego lite)**: when the hub's ego plugin is on (the machine has `browser`), a Mac's machine page has the **Let the assistant use this browser** toggle, install / uninstall, the first-time setup steps (open ego lite, import data from other browsers, finish setup, check again) and, once ready, its status (imports, usage stats), same as iOS `BrowserSection`. While a task is running or first-time setup is in progress it reads every 2 seconds. The phone has no live view of that Mac (the iOS "VNC" button); first-time setup is done on the Mac.
-- **Not done yet**: "Control computer" (Cua) and "Browser sign-in" (importing cookies) on the machine page, "New worktree…".
+- **Not done yet**: "Control computer" (Cua) and "Browser sign-in" (importing cookies) on the machine page, and herdr's "New worktree…" (Orca's worktrees are created, renamed and deleted from the Agents list: "Orca worktrees: create, rename and delete (#17054)").
+
+## Orca worktrees: create, rename and delete (#17054)
+
+Who it serves: people who run Agents in Orca worktrees on their computers (Agents, not Assistant). The same flows as the
+web's `NewWorktree.tsx`, `worktree-actions-context.ts` and `WorktreeActionsMenu.tsx`, on the hub routes the web uses
+(docs/protocol/protocol.md "Orca worktree composer and removal"); herdr's and Paseo's worktree actions are not on
+Android yet.
+
+- **Where**: By repository, an Orca worktree's line has its actions on a long press (Glass) or its heading's ⋯ (Brief and
+  Board), and a repository drawn as one Orca worktree adds them under its own actions; an Orca space's ⋯ (the list's
+  heading and the space page) offers **New worktree…**, as the web's space menu. A line or space is an Orca worktree when
+  every Orca session in it runs in the same one (`Session.orcaWorktreeId`: the terminal's `workspace_id`, a chat's
+  `space_id`) and the hub's workspace catalog lists it (`AgentsWorkspaceCatalog.orcaRows`, read with the repository rows
+  every 60 s while the page is shown, also for Orca computers without Paseo; they never join the repository grouping).
+- **The menu** (`OrcaWorktreeUi.kt`): New child worktree…, Rename worktree…, Copy worktree name, Copy folder path, and
+  Delete worktree… (Check status once a deletion was sent and not confirmed). `WorktreeGates.resolve` gates them as the
+  web's `resolveWorktreeAction`: the catalog row found exactly once at the same folder, the computer online, Orca enabled
+  there and not reported unavailable, and full-device access (`GET /api/v1/auth/tokens`, asked once per computer;
+  limited or unreadable reads as read-only). The main checkout and a worktree with children are never deleted. Items
+  that cannot run stay, disabled, and the sheet's note says why.
+- **New worktree** (`NewWorktreeSheet`, `WorktreeCreation`): `worktree/prepare` with the composer probe. Where Orca has
+  the composer: base branch, an optional name, a GitHub issue or pull request (`worktree/source`), and under Advanced the
+  branch name, the parent (this worktree, none, or another of the computer's), a note and a sparse checkout with **New
+  sparse preset** (`worktree/preset`); only what the computer advertised is ever sent (`WorktreeForms.body`, the web's
+  `creationBody`). Otherwise the basic branch-and-path form (the path follows the branch until edited; a generated name
+  where the computer offers it), and **Use basic branch and path** after a composer that could not be read.
+  `worktree/create` carries an `X-Persona-Op-Id`: a pending or uncertain create locks the form and **Check result** reads
+  its receipt (`/api/v1/ops/{id}`) or replays the same request under the same id, never a new one; only a refusal that
+  reached nothing (a failed receipt, or none and `delivered: "none"`) frees the form, and the next create takes a new id.
+  The session outlives the sheet (`WorktreeActionsRegistry`, per pairing, for the process). Starting an Agent in the new
+  worktree is New Agent's (its Workspace section lists it).
+- **Rename** (`RenameWorktreeDialog`): `worktree/rename`, the display name only; a `pending` or `unknown` answer says the
+  rename is not confirmed. An Orca space's **Rename space** stays the space's rename (pins and to-dos follow it).
+- **Delete** (`DeleteWorktreeDialog`, `WorktreeMutation`): the preview first (`worktree/delete` with `preview`), checked
+  to be this very worktree on the computer's own Orca; what goes, the changed files to discard on purpose
+  (**Discard these uncommitted changes**, `force`) and **Also delete the local branch if merged** (`delete_branch`).
+  Once sent the token is spent: a lost or unclear answer leaves the worktree as uncertain, and the only way on is **Check
+  status** (`reconcile` with the same token), from the dialog or the menu; the deletion is never sent again.
+- Tests: `OrcaWorktreesTest`, `WorktreeMutationTest`, `WorktreeCreationTest`, `AgentsWorkspaceCatalogTest`, and
+  `WorktreeManagementTest` in `core:hub`; screenshots `OrcaWorktreeShotsTest` (every style, light and dark, in
+  `build/orca-worktree-shots/`).
 
 ## Settings navigation and search (#5233)
 

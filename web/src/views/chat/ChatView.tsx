@@ -197,6 +197,7 @@ const ModelFallbackCard = lazy(() => import("./ModelFallbackCard").then((m) => (
 // a conversation that holds one (#10357). Until they are in it shows as the owner's bubble alone, so it never blinks out.
 const SessionReviewMenuItem = lazyPage(() => import("./SessionReviewMenuItem").then((m) => m.SessionReviewMenuItem));
 const UndeliveredBubble = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.UndeliveredBubble));
+const DeliveryBanner = lazyPage(() => import("./UndeliveredBubbles").then((m) => m.DeliveryBanner));
 const BackgroundActivity = lazyDialog(() => import("./BackgroundActivity").then((m) => m.default));
 
 const NO_FEED: FeedItem[] = [];
@@ -1803,9 +1804,10 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const hasOwnPendingInteraction = (session?.pending_interactions ?? 0) > 0 ||
     interactions.some((ix) => ix.machine_id === mid && ix.session_id === sid);
   const waitingOnUser = !detached && (state === "needs_you" || hasOwnPendingInteraction);
+  const stateUnknown = !detached && state === "unknown" && !turnFailure;
   const allLines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, needsYou: waitingOnUser })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, waitingOnUser],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, needsYou: waitingOnUser, statusUnknown: stateUnknown })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, waitingOnUser, stateUnknown],
   );
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
@@ -2300,7 +2302,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     await deliver(resolved.payload, uuid());
     return true;
   }, [deliver, mid, sid]);
-  const emptyAction = canCompose && !working && !waitingOnUser && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
+  const emptyAction = canCompose && !working && !waitingOnUser && !stateUnknown && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
@@ -2771,7 +2773,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         </Suspense>
       )}
       <div className="relative min-h-0 flex-1">
-        {(tr.notLive || refreshFailed) && <NotLivePill error={refreshFailed} onReload={() => { tr.reload(); onRefresh?.(); }} lower={Boolean(picked && !search.open)} />}
         <div ref={scrollRef} onScroll={onScroll} data-chat-scroll data-chat-context-window={detached || undefined} className="relative h-full overflow-y-auto [overflow-anchor:none]">
           <ChatActionsContext.Provider value={actions}>
           <div data-chat-content className="mx-auto flex w-full max-w-[880px] flex-col gap-3.5 px-5 pt-7 pb-10 sm:px-8">
@@ -2935,6 +2936,18 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         )}
         {(away || detached) && !jumpInDock && <JumpPill label={jumpLabel(newSince)} onClick={toEnd} />}
         {picked && !search.open && <ReturnPill onClick={backToOrigin} />}
+        {(tr.notLive || refreshFailed) && (
+          <NotLivePill
+            error={refreshFailed}
+            reloading={Boolean(tr.reloading)}
+            onReload={() => {
+              if (tr.reloading) return;
+              tr.reload();
+              onRefresh?.();
+            }}
+            lower={Boolean(picked && !search.open)}
+          />
+        )}
       </div>
 
       <div
@@ -3021,6 +3034,13 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             compactingToResend={compactingToResend || Boolean(isAssistant && session?.compaction?.state === "running")}
             onDismiss={dismissBanner}
           />
+        )}
+        {/* a logical conversation's input that has not gone in (#17431): which one waits for its receipt and how long,
+            what waits behind it, and the expired ones with Resend / Ignore. Never an idle chat that swallowed a message */}
+        {!detached && keptUndelivered.some((m) => m.reason) && (
+          <PageBoundary page="undelivered">
+            <Suspense fallback={null}><DeliveryBanner mid={mid} sid={sid} list={keptUndelivered} /></Suspense>
+          </PageBoundary>
         )}
         {/* the goal it works toward, right over the composer as cindy's goal indicator (#5421) */}
         {session?.goal && !assistant && <Suspense fallback={null}><GoalBar goal={session.goal} /></Suspense>}
@@ -3183,13 +3203,19 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
 }
 
 /** Over the chat's top edge when the page keeps getting its items by asking for them, not by push (lib/stale-page.ts). */
-function NotLivePill({ onReload, lower, error }: { onReload: () => void; /** The search's return pill is at the same edge: under it. */ lower?: boolean; error?: string }) {
+export function NotLivePill({ onReload, lower, error, reloading = false }: { onReload: () => void; /** The search's return pill is at the same edge: under it. */ lower?: boolean; error?: string; reloading?: boolean }) {
   return (
-    <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-10 -translate-x-1/2" : "absolute top-3 left-1/2 z-10 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
+    <div role="status" data-testid="chat-not-live" className={lower ? "absolute top-14 left-1/2 z-20 -translate-x-1/2" : "absolute top-3 left-1/2 z-20 -translate-x-1/2"} style={{ animation: "fade-up 150ms ease-out both" }}>
       <div className="flex h-8 items-center gap-2 rounded-full border border-line bg-surface px-3 text-label leading-none whitespace-nowrap text-ink-2 shadow-raised">
         <span title={error}>{t(error ? "chat-chatview.refresh_failed" : "chat-chatview.not_live")}</span>
-        <button type="button" onClick={onReload} className="touch-hit font-medium text-accent-ink hover:underline">
-          {t("chat-chatview.not_live_reload")}
+        <button
+          type="button"
+          disabled={reloading}
+          aria-busy={reloading || undefined}
+          onClick={onReload}
+          className="touch-hit inline-flex cursor-pointer items-center gap-1.5 font-medium text-accent-ink hover:underline disabled:cursor-wait disabled:opacity-60 disabled:no-underline"
+        >
+          {reloading ? t("chat-chatview.not_live_reloading") : t("chat-chatview.not_live_reload")}
         </button>
       </div>
     </div>

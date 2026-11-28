@@ -963,7 +963,8 @@ func (b *orcaBridge) request(ctx context.Context, method string, params json.Raw
 		}
 		err = b.seen(ctx, orca)
 	default:
-		return nil, &rpc.Error{Code: "unsupported", Message: "unsupported: " + method}
+		// The words stay what they were; the hub words it by its reason (apierr's bridgeReasonKeys, #17057).
+		return nil, &rpc.Error{Code: "unsupported", Message: "unsupported: " + method, Data: json.RawMessage(`{"reason":"orca_unsupported"}`)}
 	}
 	if err != nil {
 		return nil, orcaWriteErr(err)

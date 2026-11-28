@@ -44,6 +44,7 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.canAnswerInteraction
 import persona.core.domain.sort.*
 import persona.core.domain.answer.firstBySession
+import persona.core.domain.engines.Engines
 import persona.core.domain.answer.rowLine
 import persona.core.domain.answer.askingLine
 import persona.core.domain.showsStarCard
@@ -188,6 +189,9 @@ internal fun AgentsScreen(
     val startingHerdr by (model.herdr?.starting ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
     val herdrFailures by (model.herdr?.failures ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, HerdrFailure>()) }).collectAsStateWithLifecycle()
     val operations by model.operationState.collectAsStateWithLifecycle()
+    // Orca's worktree create, rename and delete (#17054), resolved against the catalog's Orca rows.
+    val orcaRows by model.orcaWorkspaces.collectAsStateWithLifecycle()
+    val worktrees = rememberOrcaWorktreeActions(LocalAgentCreationService.current, page.machines, orcaRows, model::refreshWorkspaceCatalog)
     val archives = model.archives
     val archiveState by (archives?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow(AgentArchiveSnapshot()) }).collectAsStateWithLifecycle()
     val showArchivesState = rememberSaveable { mutableStateOf(false) }
@@ -395,6 +399,8 @@ internal fun AgentsScreen(
         // A whole project on a to-do (#1616, iOS SpaceTodoMenu): only a herdr space the hub can name, on a hub that knows projects.
         val todoSpace = session.todoSpaceName?.takeIf { model.tasks?.spacesSupported == true }
         val linked = todoSpace?.let { todos.forSpace(session.machineId, it) }
+        // An Orca space is its worktree: New worktree… from it, as the web's space menu (#17054).
+        val worktreeAction = worktrees?.let { w -> w.targetOf(space.members.map { it.session })?.let { w.newWorktreeAction(it) } }
         AgentSpaceMenu(session, space.preferenceKey in page.preferences.pins.spaces, space.preferenceKey in page.preferences.mutes.spaces,
             operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
             onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
@@ -403,7 +409,7 @@ internal fun AgentsScreen(
             todo = todoSpace?.let { name ->
                 SpaceTodoActions(linked != null, onLink = { pickingTodoForSpace = session.machineId to name },
                     onUnlink = linked?.let { todo -> { model.unlinkSpace(todo.id, session.machineId, name) } })
-            })
+            }, extra = listOfNotNull(worktreeAction))
     }
     // A repository header's long press on Glass (iOS `repoMenu`): the actions of the one space its agents are in and its
     // to-do; agents in several spaces, Mark all as read.
@@ -431,7 +437,13 @@ internal fun AgentsScreen(
             listOfNotNull(JAction(stringResource(R.string.agents_mark_all_read), PhIcons.Check, onClick = { confirmRead = markAll })
                 .takeIf { markAll.unread.isNotEmpty() })
         }
-        actions + listOfNotNull(workspaceCopyPathAction(repo.workspace))
+        // A repository drawn as one Orca worktree carries that worktree's actions (#17054).
+        val worktree = worktrees?.let { w -> w.targetOf(repo.rows.map { it.session })?.let { w.menuActions(it, section = true) } }
+        actions + listOfNotNull(workspaceCopyPathAction(repo.workspace)) + worktree.orEmpty()
+    }
+    // Why that worktree's actions are off, under the repository's actions.
+    val repoNote: @Composable (AgentListGroup) -> String? = { repo ->
+        worktrees?.let { w -> w.targetOf(repo.rows.map { it.session })?.let { w.note(it) } }
     }
     // "By machine" shows a herdr tab's agents as a group (#2320), as the web's sidebar; the other groupings list one agent a row
     val tabs = page.preferences.grouping == AgentGrouping.MachineSpace
@@ -609,6 +621,11 @@ internal fun AgentsScreen(
                         failure = herdrFailures[machine.id])
                 }
             }
+            if (page.preferences.range != AgentRange.History) {
+                items(page.machines.filter { Engines.orcaStopped(it) && groups.stateFor(it.id, connection) == ConnectionState.Online &&
+                    (page.settings.machineFilter.isEmpty() || page.settings.machineFilter == it.id) },
+                    key = { "orca:${it.id}" }) { machine -> OrcaNotice(names[machine.id] ?: machine.displayName) }
+            }
             if (page.preferences.range != AgentRange.History && needsYou.isNotEmpty()) {
                 item(NeedsYouListKey) {
                     JSectionHeader(
@@ -774,7 +791,7 @@ internal fun AgentsScreen(
                                 group.folded, { model.fold(group) }, Modifier.repoCard(slot.first, slot.last, spaced = false),
                                 onLongClick = if (actions.isEmpty()) null else ({ sheet = true }),
                                 actionsLabel = stringResource(R.string.agents_repo_actions))
-                            if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
+                            if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle, note = repoNote(group))
                         } else if (slot != null && group.repo == RepoLevel.Repository) {
                             val actions = repoActions(group)
                             var sheet by remember { mutableStateOf(false) }
@@ -784,9 +801,14 @@ internal fun AgentsScreen(
                                 main = group.worktree?.main == true,
                                 offline = group.worktree?.offline == true,
                                 pinned = group.worktree?.pinned == true)
-                            if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
+                            if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle, note = repoNote(group))
                         } else if (slot != null && group.repo != null) {
                             val line = group.worktree
+                            // An Orca worktree's long press is its actions (#17054, the web's worktree menu).
+                            val worktree = worktrees?.let { w -> w.targetOf(group.rows.map { it.session })?.let { w to it } }
+                            var sheet by remember { mutableStateOf(false) }
+                            if (sheet && worktree != null) JActionSheet(worktree.first.menuActions(worktree.second), { sheet = false },
+                                title = groupTitle, note = worktree.first.note(worktree.second))
                             AgentWorktreeLine(groupTitle, main = group.repo == RepoLevel.MainCheckout, folded = group.folded,
                                 onToggle = { model.fold(group) }, modifier = Modifier.repoCard(slot.first, slot.last), level = slot.level,
                                 branch = line?.branch, detached = line?.detached == true, tally = line?.tally?.let { tally ->
@@ -794,7 +816,8 @@ internal fun AgentsScreen(
                                         WorktreeTally.Idle -> stringResource(persona.core.designsystem.R.string.designsystem_worktree_idle)
                                         is WorktreeTally.Agents -> pluralStringResource(persona.core.designsystem.R.plurals.designsystem_tab_agents, tally.count, tally.count)
                                     }
-                                }, quiet = entry.quiet, offline = line?.offline == true, pinned = line?.pinned == true)
+                                }, quiet = entry.quiet, offline = line?.offline == true, pinned = line?.pinned == true,
+                                onLongClick = worktree?.let { { sheet = true } }, actionsLabel = stringResource(R.string.agents_worktree_actions))
                         } else if (entry.space) AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
                             quiet = entry.quiet, sessions = group.sectionCount, counts = group.headingCounts,
                             waiting = group.waitingInBackground, flags = buildList {
@@ -824,6 +847,13 @@ internal fun AgentsScreen(
                                         HeadingAction(PersonaIcons.moreMenu, stringResource(R.string.agents_repo_actions), { sheet = true })
                                         if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
                                     }
+                                }
+                                if (group.repo != null && worktrees != null) worktrees.targetOf(group.rows.map { it.session })?.let { worktree ->
+                                    // By repository in Brief and Board: an Orca worktree's heading has its actions (#17054).
+                                    var sheet by remember { mutableStateOf(false) }
+                                    HeadingAction(PersonaIcons.moreMenu, stringResource(R.string.agents_worktree_actions), { sheet = true })
+                                    if (sheet) JActionSheet(worktrees.menuActions(worktree), { sheet = false }, title = groupTitle,
+                                        note = worktrees.note(worktree))
                                 }
                                 if (space != null) spaceMenu(space, true)
                             }, icon = group.repo?.icon, kind = group.repo?.kind ?: stringResource(R.string.agents_kind_space),
@@ -1052,6 +1082,7 @@ internal fun AgentsScreen(
         everySession, everyMachine, requests, delivery, requestHistory, commandInputErrors, now, names, groupings,
         homeChrome, requestsInMenu, creation, takeoverClient, takeoverCoordinator, feedback, resources,
         open = { open(it) }, reachable = ::reachable)
+    OrcaWorktreeDialogs(worktrees)
 }
 
 

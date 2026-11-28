@@ -343,6 +343,20 @@ selected host. They offer typed model IDs for native `omp` only when that respon
 `"supports_start_model": true`. An older node can start `omp` with its own default. Older clients ignore the
 optional field. A registered runtime called `omp` still supplies its own list of supported models.
 
+### Orca refusals in the reader's language (#17057)
+
+A node since #17057 adds a code and data to the refusals and errors on its Orca paths (the codes and reasons are in
+`docs/integrations/engines.md`, "Refusals in the reader's language"), and a hub since then words them in each request's
+language. The node's own words are unchanged: what was Chinese is the catalog's zh-Hans text, what was English
+(`unsupported: <engine> cannot do this`, `tab <id> is not running`, Orca's Codex launch settings) stays English.
+
+| Pair | What happens |
+| --- | --- |
+| New hub, new node | The summary is in the request's language; the engine's or Orca's own words are the detail. |
+| New hub, older node | Codes the older node already sent (`orca_not_registered`, `runtime_session`, `codex_launch_preferences` without a reason…) are worded by their code; a refusal without the new data reason keeps its words. |
+| Older hub, new node | The node's words reach the client as before. Errors that had no code (a tab, pane or terminal the engine would not open, close or split; a tab name; Run Agent Here's checks; `unsupported`) now carry one, so an older hub answers them 409 with the node's words instead of 502 with its generic summary. |
+| Older clients | Fields are additive. iOS's rename alert, which looks for an English `unsupported` or `is not running` in the message, shows the hub's sentence after "Couldn't rename:" instead; the web's worktree dialog also reads the code (`unsupported`, reason `engine_unsupported`). |
+
 ## Start-defaults field convergence (#11719)
 
 The rule fields of `GET`/`PUT /api/v1/assistant/start-defaults` and of the nested `start_defaults` in `PUT /api/v1/assistant` converge on new names in #11719. This is extension-facing JSON, and the same structure is persisted in the Postgres settings, so dual-read must cover both live requests and already-stored policies.

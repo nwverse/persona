@@ -13,9 +13,15 @@ type channelAdmissionKey struct {
 	generation      uint64
 }
 
+type channelAdmissionSlot struct {
+	key  channelAdmissionKey
+	prev chan struct{}
+}
+
 type channelAdmission struct {
-	key        channelAdmissionKey
-	prev, done chan struct{}
+	slots [2]channelAdmissionSlot
+	count int
+	done  chan struct{}
 }
 
 // admitChannelMessage claims the message, captures its binding generation and reserves its position atomically.
@@ -50,15 +56,23 @@ func (s *Service) admitChannelMessage(ctx context.Context, id string, m channel.
 		}
 		thread = channelRouteKey(s.channelPrefLocked(id).ThreadMode.Effective(v.Capabilities.Threads), m)
 	}
-	a := &channelAdmission{key: channelAdmissionKey{channel: id, thread: thread, generation: c.generation[id]}}
+	keys := channelThreadAliases(thread, m)
+	a := &channelAdmission{done: make(chan struct{})}
 	// An empty thread is this channel's ordinary route. Its replies fold into the latest
 	// receipt too, even when the earlier message's send RPC takes longer.
 	if c.receiving == nil {
 		c.receiving = map[channelAdmissionKey]chan struct{}{}
 	}
-	a.prev = c.receiving[a.key]
-	a.done = make(chan struct{})
-	c.receiving[a.key] = a.done
+	// A dual-key topic keeps its place in either routing mode and behind messages that supplied just one key.
+	for i, thread := range [...]string{keys.primary, keys.alternate} {
+		if i == 1 && thread == "" {
+			break
+		}
+		key := channelAdmissionKey{channel: id, thread: thread, generation: c.generation[id]}
+		a.slots[i] = channelAdmissionSlot{key: key, prev: c.receiving[key]}
+		a.count++
+		c.receiving[key] = a.done
+	}
 	next := append(seen, m.ID)
 	if len(next) > channelSeenKeep {
 		next = next[len(next)-channelSeenKeep:]
@@ -70,10 +84,12 @@ func (s *Service) admitChannelMessage(ctx context.Context, id string, m channel.
 		} else {
 			delete(c.st.Seen, id)
 		}
-		if a.prev == nil {
-			delete(c.receiving, a.key)
-		} else {
-			c.receiving[a.key] = a.prev
+		for _, slot := range a.slots[:a.count] {
+			if slot.prev == nil {
+				delete(c.receiving, slot.key)
+			} else {
+				c.receiving[slot.key] = slot.prev
+			}
 		}
 		return nil, err
 	}
@@ -86,16 +102,21 @@ func (a *channelAdmission) run(s *Service, m channel.Message, action string) {
 	defer func() {
 		c := &s.chans
 		c.mu.Lock()
-		if c.receiving[a.key] == a.done {
-			delete(c.receiving, a.key)
+		for _, slot := range a.slots[:a.count] {
+			if c.receiving[slot.key] == a.done {
+				delete(c.receiving, slot.key)
+			}
 		}
 		close(a.done)
 		c.mu.Unlock()
 	}()
-	if a.prev != nil {
-		<-a.prev
+	for _, slot := range a.slots[:a.count] {
+		if slot.prev != nil {
+			<-slot.prev
+		}
 	}
-	s.channelReceiveInGeneration(a.key.channel, m, action, a.key.generation)
+	key := a.slots[0].key
+	s.channelReceiveInGeneration(key.channel, m, action, key.generation)
 }
 
 func (s *Service) channelGeneration(id string) uint64 {

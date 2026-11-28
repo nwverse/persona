@@ -1810,6 +1810,11 @@ answer reached Persona through the Inbox alone, and none of the Inbox's routes l
 
 ## Messages that could not go in (#10194)
 
+A logical (segmented) conversation's own delivery queue uses the same row field and bubbles: each of its inputs that
+has not gone in is listed with why (`reason`), an attempt whose receipt stays unknown expires after a bounded deadline
+instead of fencing the queue, and its owner picks Retry or Delete (#17431, docs/operations/logical-input-reconciliation.md
+"Delivery deadline").
+
 The owner's own message must never vanish. When the owner writes to one of the assistant's conversations while it
 cannot take the message (its process did not start, as a cold start killed on a loaded computer, #10192; its computer is
 away), nothing was typed. The hub used to answer the app with the failure and forget the message; a replay of the app's

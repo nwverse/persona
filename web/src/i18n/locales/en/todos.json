@@ -271,6 +271,7 @@
   "ask_answer": "Answer in chat",
   "ask_answer_hint": "Nothing is recommended, so answer it in the conversation it came from.",
   "ask_failed": "Not done: {error}",
+  "ask_resend": "Send again",
   "ask_held": "With the next briefing",
   "ask_held_hint": "This decision can wait, so nothing was pushed for it. It comes with your next briefing, and you can answer it here any time.",
   "summary_triage": "{open} open · {parked} parked · {shelved} inactive · {done} done · {cancelled} cancelled",

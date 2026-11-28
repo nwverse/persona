@@ -311,12 +311,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 		}
 	}
-	// A bare accept must not hide a result that does not settle the task from the owner's Needs-you list (#12026): a
-	// non-done closeout, a blocker only the owner can clear, an inconclusive / partial result, or uncovered scope in a
-	// multi-scope brief (#13169). user_check (the owner passes the result themselves) and a "cannot be done" outcome
-	// are deliberate closures the guards let through. A withdrawn needs_user is exactly a task the owner was asked
-	// about: its supervisor took that back and decided it itself, so the owner-blocker words in the agent's own replies
-	// do not refuse it.
+	// A bare accept still needs to settle any outstanding owner instruction or request. A declared contract with
+	// checked criteria supplies the scope of its review. Legacy tasks keep the wording and scope guards (#12026, #13169).
+	// user_check, outcome cannot and an explicit needs_user withdrawal have their own closure rules.
 	if verdict == reviewAccepted && t.DoneAt == nil && !a.UserCheck {
 		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
 			return "", errors.New("bare accepted refused: " + why + ". Ask the Agent to address it and report, revise " +
@@ -324,12 +321,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		}
 	}
 	if verdict == reviewAccepted && !a.UserCheck && a.Outcome != outcomeCannot && !withdraw {
-		evidence := s.acceptGuardEvidence(ctx, t, note, strings.TrimSpace(a.Reason), checks)
-		if matched, _ := acceptGuardBlock(evidence); matched != "" {
-			return "", errors.New(acceptGuardRefusal(matched))
-		}
-		if uncovered := s.acceptGuardUncoveredScopes(ctx, t, note, strings.TrimSpace(a.Reason), checks, a.AlsoDone); len(uncovered) > 0 {
-			return "", errors.New(acceptScopeGuardRefusal(uncovered))
+		if err := s.bareAcceptGuardError(ctx, t, note, strings.TrimSpace(a.Reason), checks, a.AlsoDone); err != nil {
+			return "", err
 		}
 	}
 	// An explicit main acceptance records its verdict even for a legacy task without a ledger: accepted prerequisites

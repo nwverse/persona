@@ -39,6 +39,8 @@ export interface LarkGatewaySummary {
 export interface IntegrationItem {
   key: string;
   kind: "builtin" | "extension" | "source";
+  /** True when an `extension` item ships built into Persona (`extension.source === "builtin"`). */
+  builtinExtension?: boolean;
   id: string;
   name: string;
   description?: string;
@@ -261,11 +263,13 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     const subtitle = errorNote || needs || primaryChannel?.account?.name || primaryConnector?.account || ext.description;
     const alertTone: "red" | "orange" | undefined = errorNote ? "red" : needs ? "orange" : undefined;
 
+    const builtinExtension = ext.source === "builtin";
     const sub = formatIntegrationsSub({ kind: "extension", id: ext.id, manager: extManager }) ?? `ext:${ext.id}`;
     return attachSubscriptions(
       {
         key: `ext:${extManager ?? ""}:${ext.id}`,
         kind: "extension",
+        ...(builtinExtension ? { builtinExtension: true } : {}),
         id: ext.id,
         name: ext.name,
         description: ext.description,
@@ -299,11 +303,11 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
   claimedConnectors.add("mail");
   if (input.hasMail) {
     const mailSubs = claimSubscriptions((s) => !isPushSubscription(s) && s.connector === "mail");
-    const accounts = input.mailAccounts ?? null;
+    const accounts = input.mailAccounts;
     const hasError = accounts?.some((a) => a.status === "error") || mailConnector?.status === "error";
     const connected = (accounts && accounts.length > 0 && !hasError) || mailConnector?.status === "ok";
-    const tone: IntegrationTone = hasError ? "red" : connected ? "green" : "idle";
-    const statusText = accounts
+    const tone: IntegrationTone = accounts === null ? "idle" : hasError ? "red" : connected ? "green" : "idle";
+    const statusText = accounts === null ? t("settings-connectors.status_unknown") : accounts
       ? (accounts.length > 0 ? mailSummary([...accounts]) : t("settings-integrations.status_not_configured"))
       : (mailConnector ? connectorSummary(mailConnector) : t("settings-integrations.status_not_configured"));
     const sub = formatIntegrationsSub({ kind: "builtin", id: "mail", manager: owner }) ?? "builtin:mail";
@@ -320,7 +324,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
           tone,
           statusText,
           subtitle: t("settings-integrations.mail_description"),
-          alertTone: hasError ? "red" : undefined,
+          alertTone: tone === "red" ? "red" : undefined,
           connector: mailConnector,
           sub,
           target: {
@@ -356,7 +360,7 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
         ? channelStateText(feishuChannel)
         : larkcliConnector
           ? connectorSummary(larkcliConnector)
-          : t("settings-integrations.status_not_configured");
+          : t("settings-connectors.status_unknown");
     const name = bot?.bot_name || feishuChannel?.name || t("settings-feishubot.title");
     const description = t("settings-integrations.feishu_bot_description");
     const subtitle = (feishuChannel?.state === "error" && feishuChannel.error)
@@ -401,11 +405,11 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
   if (input.hasLark) {
     claimedConnectors.add("lark");
     const larkSubs = claimSubscriptions((s) => !isPushSubscription(s) && s.connector === "lark");
-    const ls = input.larkStatus ?? null;
-    const tone: IntegrationTone = ls
+    const ls = input.larkStatus;
+    const tone: IntegrationTone = ls === null ? "idle" : ls
       ? (ls.error ? "red" : ls.connected ? "green" : "idle")
       : (larkConnector ? connectorTone(larkConnector) : "idle");
-    const statusText = ls
+    const statusText = ls === null ? t("settings-connectors.status_unknown") : ls
       ? (ls.error ? t("settings-integrations.status_error") : ls.connected ? t("settings-integrations.status_connected") : t("settings-integrations.status_not_configured"))
       : (larkConnector ? connectorSummary(larkConnector) : t("settings-integrations.status_not_configured"));
     const sub = formatIntegrationsSub({ kind: "builtin", id: "lark", manager: owner }) ?? "builtin:lark";
@@ -559,7 +563,10 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     });
   }
 
-  return [...builtinItems, ...pushSourceItems, ...extensionItems];
+  const builtinExtensionItems = extensionItems.filter((it) => it.builtinExtension);
+  const installedExtensionItems = extensionItems.filter((it) => !it.builtinExtension);
+
+  return [...builtinItems, ...builtinExtensionItems, ...pushSourceItems, ...installedExtensionItems];
 }
 
 /** Filters items by the active capability filter chip. */

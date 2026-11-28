@@ -9,7 +9,7 @@ import { defaultManager, pinManagerAt } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { ago, safeWebURL } from "../../lib/format";
 import {
-  addMarket, agreeLabel, canUninstall, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, previewFromMarket,
+  addMarket, agreeLabel, canUninstall, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, newerIncompatibleHint, previewFromMarket,
   previewVersion, renameConsent, refreshMarket, removeMarket, setMarketToken, specLabel, uninstallExtension, upgradePreview, upgradingFrom, wantsGitHubToken,
   GITHUB_TOKEN_URL, isGitHubMarket, type Catalog, type CatalogItem, type Market, type MarketPreview,
 } from "../../lib/extension-market";
@@ -73,12 +73,14 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 const askKey = (q: string, market: string) => `${market}\n${q}`;
 
 export function MarketCatalog({
+  manager,
   onBack,
   backLabel,
   onOpen,
   onMarkets,
   onManageMarkets,
 }: {
+  manager?: string;
   onBack?: () => void;
   /** Back button label when opened outside legacy Extensions (for example Settings › Integrations). */
   backLabel?: string;
@@ -103,7 +105,7 @@ export function MarketCatalog({
     const n = ++seq.current;
     const asked = askKey(q, market);
     setLoading(true);
-    getCatalog(q, market, refresh)
+    getCatalog(q, market, refresh, manager)
       .then((c) => n === seq.current && (setData(c), setAnswered(asked), setError("")))
       .catch((e) => n === seq.current && setError(errorText(e)))
       .finally(() => n === seq.current && setLoading(false));
@@ -113,7 +115,7 @@ export function MarketCatalog({
     const timer = setTimeout(() => load(), q ? 250 : 0);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, market]);
+  }, [q, market, manager]);
 
   const markets = data?.markets ?? [];
   const updating = !error && (loading || (data !== null && answered !== askKey(q, market)));
@@ -234,6 +236,7 @@ export function MarketCatalog({
         )}
         {!error && data?.extensions.map((it, i) => {
           const st = itemState(it);
+          const incompatible = newerIncompatibleHint(it);
           return (
             <button
               key={`${it.market}/${it.id}`}
@@ -257,6 +260,20 @@ export function MarketCatalog({
                     <Pill key={tag}>{tag}</Pill>
                   ))}
                 </div>
+                {incompatible && (
+                  <div
+                    data-incompatible-hint
+                    title={incompatible.reason || undefined}
+                    className="mt-1.5 flex min-w-0 items-center gap-1.5 text-submeta text-orange"
+                  >
+                    <Icon name="info" size={12} className="shrink-0" />
+                    <span className="truncate">
+                      {incompatible.reason
+                        ? t("settings-extensionmarket.newer_incompatible_inline", { version: incompatible.version, reason: incompatible.reason })
+                        : t("settings-extensionmarket.newer_incompatible_title", { version: incompatible.version })}
+                    </span>
+                  </div>
+                )}
               </div>
               <span className="flex shrink-0 flex-col items-end gap-1">
                 <Pill tone={STATE_TONE[st.tone]}>{st.label}</Pill>
@@ -361,6 +378,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
   // What a request about the operation got back: one the manager no longer has is let go (lib), and the page says so.
   const opFailed = (e: unknown) => (opGone(e) ? toast(t("settings-extensionmarket.op_gone"), "info") : toast(errorText(e), "error"));
   const st = it ? itemState(it) : null;
+  const incompatible = it ? newerIncompatibleHint(it) : null;
   const contributes = Object.entries(it?.contributes ?? {});
   const home = safeWebURL(it?.homepage, true) ?? "";
 
@@ -377,7 +395,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
           {loading && !it && <Spinner />}
           {st && <Pill tone={STATE_TONE[st.tone]}>{st.label}</Pill>}
         </div>
-        {(it?.description || it?.tags?.length || it?.problem || error || managerName) && (
+        {(it?.description || it?.tags?.length || it?.problem || incompatible || error || managerName) && (
           <div className="flex flex-col gap-2 border-t border-line px-4 py-3">
             {it?.description && <p className={BODY}>{it.description}</p>}
             {!!it?.tags?.length && (
@@ -388,6 +406,23 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
               </div>
             )}
             {it?.problem && <p className="text-[12px] text-orange">{it.problem}</p>}
+            {incompatible && (
+              <div
+                role="note"
+                data-incompatible-notice
+                className="flex items-start gap-2 rounded-control bg-orange-tint px-3 py-2 text-label leading-relaxed"
+              >
+                <Icon name="info" size={14} className="mt-0.5 shrink-0 text-orange" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium text-orange">
+                    {t("settings-extensionmarket.newer_incompatible_title", { version: incompatible.version })}
+                  </p>
+                  {incompatible.reason && (
+                    <p className="mt-0.5 break-words text-ink-2">{incompatible.reason}</p>
+                  )}
+                </div>
+              </div>
+            )}
             {managerName && <p className="text-[12px] text-ink-2" data-for-manager>{t("settings-extensionmarket.for_manager", { name: managerName })}</p>}
             {error && <p className="text-[12px] break-words text-red">{error}</p>}
           </div>

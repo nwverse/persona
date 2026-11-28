@@ -55,16 +55,20 @@ vi.mock("../../lib/store", async (original) => ({
 vi.mock("./IntegrationDetail", () => ({
   IntegrationDetail: ({
     target,
+    prefill,
     onBack,
     onUpgrade,
     onPage,
     onSettings,
+    onOpenSources,
   }: {
     target: { kind: string; id: string; channelId?: string; connectorId?: string | null; manager?: string };
+    prefill?: Record<string, unknown>;
     onBack?: () => void;
     onUpgrade?: (market: string, id: string, manager?: string) => void;
     onPage?: (extId: string, uiId: string, manager?: string) => void;
     onSettings?: (url: string) => void;
+    onOpenSources?: (state?: string, manager?: string) => void;
   }) => (
     <div
       data-mock-integration-detail
@@ -73,6 +77,7 @@ vi.mock("./IntegrationDetail", () => ({
       data-channel-id={target.channelId ?? ""}
       data-connector-id={target.connectorId ?? ""}
       data-manager={target.manager ?? ""}
+      data-prefill={prefill && JSON.stringify(prefill)}
     >
       {onBack && (
         <button type="button" data-mock-detail-back onClick={onBack}>
@@ -87,6 +92,15 @@ vi.mock("./IntegrationDetail", () => ({
       {onPage && (
         <button type="button" data-mock-detail-page onClick={() => onPage(target.id, "dashboard", target.manager)}>
           Open page
+        </button>
+      )}
+      {onOpenSources && (
+        <button
+          type="button"
+          data-mock-detail-sources
+          onClick={() => onOpenSources(JSON.stringify({ p: "source", id: "sub_push_iphone" }), target.manager)}
+        >
+          Sources
         </button>
       )}
       {onSettings && (
@@ -105,12 +119,14 @@ vi.mock("./IntegrationDetail", () => ({
 
 vi.mock("./ExtensionMarket", () => ({
   MarketCatalog: ({
+    manager,
     onBack,
     backLabel,
     onOpen,
     onMarkets,
     onManageMarkets,
   }: {
+    manager?: string;
     onBack?: () => void;
     backLabel?: string;
     onOpen: (it: { market: string; id: string }) => void;
@@ -119,7 +135,7 @@ vi.mock("./ExtensionMarket", () => ({
   }) => {
     const manage = onManageMarkets ?? onMarkets;
     return (
-      <div data-mock-market-catalog data-back-label={backLabel ?? ""}>
+      <div data-mock-market-catalog data-back-label={backLabel ?? ""} data-manager={manager}>
         {onBack && <button type="button" data-mock-market-back onClick={onBack}>Back</button>}
         <button type="button" data-mock-market-open onClick={() => onOpen({ market: "official", id: "demo-ext" })}>Open item</button>
         {manage && <button type="button" data-mock-markets-open onClick={manage}>Manage markets</button>}
@@ -194,7 +210,7 @@ import type { SourcesGraph } from "../../lib/sources-graph";
 import { subscriptionSourceState, type HubSubscription } from "../../lib/subscriptions";
 import { navigate } from "../../lib/router";
 import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
-import { resetRoster } from "../../lib/managers";
+import { loadRoster, resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
 import { Integrations } from "./Integrations";
 import {
@@ -657,6 +673,65 @@ describe("buildIntegrationCatalog deduplication and capability classification", 
     expect(filterIntegrationItems(items, "channels").map((it) => it.id)).not.toContain("sub_push_iphone");
     expect(isIntegrationRowSelected(pushItem.sub, pushItem, null)).toBe(true);
   });
+
+  it("distinguishes source=builtin extensions from user-installed extensions while preserving extension target boundaries", () => {
+    const builtinExtensions: HubExtension[] = [
+      {
+        id: "imessage",
+        name: "信息（iMessage）",
+        kind: "plugin",
+        status: "running",
+        enabled: true,
+        source: "builtin",
+        description: "Read Messages on your Mac.",
+        contributes: { connectors: ["imessage"] },
+      },
+      {
+        id: "voice",
+        name: "Voice",
+        kind: "plugin",
+        status: "running",
+        enabled: true,
+        source: "builtin",
+        description: "Built-in voice capabilities.",
+        contributes: { voice: ["voice"] },
+      },
+    ];
+    const items = buildIntegrationCatalog({
+      extensions: [...SAMPLE_EXTENSIONS, ...builtinExtensions],
+      channels: SAMPLE_CHANNELS,
+      connectors: [
+        ...SAMPLE_CONNECTORS,
+        { id: "imessage", name: "信息", status: "ok", capabilities: ["inbox", "archive"] },
+      ],
+      hasMail: true,
+      hasLark: false,
+      hasFeishuBot: false,
+      mailAccounts: [{ id: "m1", email: "me@example.com", status: "ok" }],
+    });
+
+    const imessage = items.find((it) => it.id === "imessage")!;
+    const voice = items.find((it) => it.id === "voice")!;
+    const larkx = items.find((it) => it.id === "larkx")!;
+
+    // Built-in extensions keep kind="extension" and target.kind="extension" (do not collapse into kind="builtin").
+    expect(imessage.kind).toBe("extension");
+    expect(imessage.builtinExtension).toBe(true);
+    expect(imessage.target).toEqual({
+      kind: "extension",
+      id: "imessage",
+      name: "信息（iMessage）",
+      connectorId: "imessage",
+    });
+    expect(voice.kind).toBe("extension");
+    expect(voice.builtinExtension).toBe(true);
+    expect(voice.target?.kind).toBe("extension");
+    expect(larkx.builtinExtension).toBeUndefined();
+    // Deduplicated: imessage connector was claimed by the imessage built-in extension.
+    expect(items.filter((it) => it.id === "imessage")).toHaveLength(1);
+    // Ordering places built-in extensions before user-installed extensions.
+    expect(items.indexOf(imessage)).toBeLessThan(items.indexOf(larkx));
+  });
 });
 
 describe("Integrations unified list view", () => {
@@ -879,6 +954,54 @@ describe("Integrations unified list view", () => {
     expect(host.querySelector('[data-integration-id="mail"]')).not.toBeNull();
   });
 
+  it("hides the Feishu bot and its channel when the hub turns off module.lark, with the gateway still available", async () => {
+    stubFullHubFetch();
+    state.features.push("modules", "module.mail");
+    const draw = () => act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await draw();
+    await flush();
+
+    expect(host.querySelector('[data-integration-id="feishu-bot"], [data-integration-id="feishu"], [data-integration-id="larkcli"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="lark"]')?.textContent).toContain(t("settings-integrations.status_connected"));
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/bots/feishu"))).toBe(false);
+
+    state.features.push("module.lark");
+    await draw();
+    expect(host.querySelector('[data-integration-id="feishu-bot"]')).not.toBeNull();
+  });
+
+  it("reports each partial catalog failure, keeps the bot entry, and clears the warning after a successful reload", async () => {
+    state.features.push("source_subscriptions");
+    stubFullHubFetch({ channels: [], connectors: [] });
+    const mockFetch = vi.mocked(fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    const errors: Record<string, string> = {
+      "/api/v1/mail/accounts": "Mail account read failed",
+      "/api/v1/lark/status": "Gateway status read failed",
+      "/api/v1/bots/feishu": "Bot status read failed",
+      "/api/v1/subscriptions": "Subscription list read failed",
+    };
+    let failing = false;
+    mockFetch.mockImplementation((url, init) => failing && errors[String(url)]
+      ? Promise.resolve(json({ error: errors[String(url)] }, 500))
+      : fallback(url, init));
+    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await flush();
+
+    const refresh = host.querySelector<HTMLButtonElement>(`[aria-label="${t("settings-integrations.refresh")}"]`)!;
+    failing = true;
+    await act(async () => refresh.click());
+    const alert = host.querySelector('[role="alert"]')?.textContent ?? "";
+    for (const error of Object.values(errors)) expect(alert).toContain(error);
+    expect(host.querySelector('[data-integration-id="feishu-bot"]')).not.toBeNull();
+    expect(host.querySelector('[data-integration-id="mail"]')?.textContent).toContain(t("settings-connectors.status_unknown"));
+
+    failing = false;
+    await act(async () => refresh.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="mail"]')?.textContent).not.toContain(t("settings-connectors.status_unknown"));
+  });
+
   it.each(["en", "zh-Hans", "ja"])("renders localized labels, compact Market entry, and single-row narrow capability chips in %s", async (lang) => {
     stubFullHubFetch();
     try {
@@ -909,9 +1032,86 @@ describe("Integrations unified list view", () => {
       await initI18n("zh-Hans");
     }
   });
+
+  it("renders source=builtin extensions in their own Built-in extensions group with Built-in pill, separate from Installed extensions", async () => {
+    const extensionsWithBuiltins: HubExtension[] = [
+      ...SAMPLE_EXTENSIONS,
+      {
+        id: "imessage",
+        name: "信息（iMessage）",
+        kind: "plugin",
+        status: "running",
+        enabled: true,
+        source: "builtin",
+        description: "Read Messages on your Mac.",
+        contributes: { connectors: ["imessage"] },
+      },
+      {
+        id: "cua",
+        name: "Computer Use",
+        kind: "plugin",
+        status: "stopped",
+        enabled: false,
+        source: "builtin",
+        description: "Operate a desktop.",
+        contributes: { tools: ["cua"] },
+      },
+    ];
+    stubFullHubFetch({
+      extensions: extensionsWithBuiltins,
+      connectors: [
+        ...SAMPLE_CONNECTORS,
+        { id: "imessage", name: "信息", status: "ok", capabilities: ["inbox", "archive"] },
+      ],
+    });
+    for (const lang of ["en", "zh-Hans", "ja"]) {
+      await initI18n(lang);
+      await act(async () => {
+        root.render(<Integrations open={null} twoCol={false} onOpen={() => {}} />);
+      });
+      await flush();
+
+      const builtinExtGroup = host.querySelector<HTMLElement>('[data-settings-group="builtin-extensions"]')!;
+      const installedExtGroup = host.querySelector<HTMLElement>('[data-settings-group="extensions"]')!;
+      expect(builtinExtGroup).not.toBeNull();
+      expect(installedExtGroup).not.toBeNull();
+      expect(builtinExtGroup.querySelector("h2")?.textContent).toContain(t("settings-integrations.group_builtin_extensions"));
+      expect(installedExtGroup.querySelector("h2")?.textContent).toContain(t("settings-integrations.group_extensions"));
+
+      const imessageRow = builtinExtGroup.querySelector<HTMLButtonElement>('[data-integration-id="imessage"]')!;
+      const cuaRow = builtinExtGroup.querySelector<HTMLButtonElement>('[data-integration-id="cua"]')!;
+      expect(imessageRow).not.toBeNull();
+      expect(imessageRow.dataset.integrationKind).toBe("extension");
+      expect(imessageRow.dataset.integrationSource).toBe("builtin");
+      expect(imessageRow.textContent).toContain(t("settings-integrations.builtin_badge"));
+      expect(cuaRow).not.toBeNull();
+      expect(cuaRow.dataset.integrationSource).toBe("builtin");
+
+      // Built-in extensions are NOT placed under "Installed extensions", while user-installed ones remain there.
+      expect(installedExtGroup.querySelector('[data-integration-id="imessage"]')).toBeNull();
+      expect(installedExtGroup.querySelector('[data-integration-id="cua"]')).toBeNull();
+      const larkxRow = installedExtGroup.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!;
+      expect(larkxRow).not.toBeNull();
+      expect(larkxRow.dataset.integrationSource).toBe("installed");
+      expect(larkxRow.textContent).not.toContain(t("settings-integrations.builtin_badge"));
+    }
+    await initI18n("zh-Hans");
+  });
 });
 
 describe("Settings navigation collapse and bidirectional redirects under integrations_v2", () => {
+  it("passes the extension prefill through the legacy URL redirect to Integrations", async () => {
+    stubFullHubFetch();
+    const proposal = JSON.stringify({ display_alias: "From a link" });
+    history.replaceState(null, "", "/settings/extensions/larkx?set=" + encodeURIComponent(proposal));
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const search = new URLSearchParams(location.search);
+    expect(search.get("tab")).toBe("integrations");
+    expect(search.get("set")).toBe(proposal);
+    expect(host.querySelector('[data-mock-integration-detail][data-id="larkx"]')?.getAttribute("data-prefill")).toBe(proposal);
+  });
+
   it("keeps legacy Channels/Connectors/Extensions tabs untouched when integrations_v2 is off and redirects /settings/integrations/*", async () => {
     state.integrationsV2 = false;
     stubFullHubFetch();
@@ -1072,11 +1272,14 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
 
     // Both sidebars are outside the measured host. The 1080px, 1200px and 1280px layouts leave 552px, 672px and 752px.
+    const detail = host.querySelector("[data-mock-integration-detail]");
+    expect(detail).not.toBeNull();
     for (const width of [552, 672, 739, 740, 752, 912]) {
       hostWidth = width;
       await act(async () => resized());
       expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(width >= 740);
       expect(!!host.querySelector("[data-integrations-detail-scroll]")).toBe(width >= 740);
+      expect(host.querySelector("[data-mock-integration-detail]")).toBe(detail);
     }
     hostWidth = 560;
 
@@ -1174,6 +1377,8 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       const pushExtUI = pushDetail.querySelector<HTMLElement>('[data-mock-extension-ui][data-extension="-subscriptions"]')!;
       expect(pushExtUI).not.toBeNull();
       expect(pushExtUI.dataset.state).toBe(subscriptionSourceState("sub_push_iphone"));
+      await act(async () => vi.dynamicImportSettled());
+      expect(pushDetail.querySelector("[data-external-source-settings]")).toBeNull();
       expect(host.querySelector('[data-integration-id="sub_push_iphone"]')?.getAttribute("aria-current")).toBe("true");
       // Split-pane compact header still keeps both view switch and Market button.
       expect(host.querySelector("[data-integrations-list-header] [data-integrations-view-switch]")).not.toBeNull();
@@ -1196,6 +1401,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       // SourcesGraph renders source nodes AND InboxForwardSetting switch is mounted untouched.
       expect(host.textContent).toContain("My iPhone Notifications");
       expect(host.textContent).toContain("Team Wiki Updates");
+      expect(host.querySelector("[data-integrations-sources-view] [data-external-source-settings]")).not.toBeNull();
       const forwardSwitch = host.querySelector<HTMLButtonElement>(
         `[role="switch"][aria-label="${t("settings-assistantsettings.inbox_todo_forward")}"]`,
       )!;
@@ -1356,6 +1562,138 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(location.pathname + location.search).toBe("/settings?tab=knowledge");
     expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
   });
+
+  it("returns from MarketItem to extension detail after default-assistant Upgrade, while catalog-opened items return to MarketCatalog", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    stubFullHubFetch();
+
+    const waitPop = (go: () => void) => act(async () => {
+      const done = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
+      go();
+      await done;
+    });
+
+    // 1. Default assistant: open ext:larkx -> click Upgrade -> MarketItem Back returns to ext:larkx (not -market).
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx");
+    expect(host.querySelector("[data-mock-market-item]")?.getAttribute("data-id")).toBe("larkx");
+
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+    expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+
+    // 2. Non-default assistant: ext:larkx@work -> Upgrade -> Back returns to ext:larkx@work.
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx%40work");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx@work");
+
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx@work");
+
+    // 3. Phone: default assistant ext:larkx -> Upgrade -> header Back returns to ext:larkx.
+    state.phone = true;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=ext%3Alarkx");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx");
+    await waitPop(() => host.querySelector<HTMLButtonElement>("header button")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+
+    // 4. MarketCatalog -> open item -> Back still returns to MarketCatalog.
+    state.phone = false;
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-market");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-market-open]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/demo-ext");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market");
+    expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
+  });
+
+  it("returns to the parent integration detail when backing out of a drilled push source on narrow desktop (<740px)", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = false;
+    state.phone = false;
+    state.features = ["channels", "extension_manager", "connectors", "lark", "source_subscriptions", "inbox_sources"];
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(600);
+
+    const waitPop = (go: () => void) => act(async () => {
+      const done = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
+      go();
+      await done;
+    });
+
+    // Narrow desktop: list -> ext:larkx -> drill into push source -> Back returns to ext:larkx (not list).
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-sources]")!.click());
+    await flush();
+    const pushPane = host.querySelector<HTMLElement>('[data-integration-kind="source"]')!;
+    expect(pushPane).not.toBeNull();
+    const pushBackBtn = pushPane.querySelector<HTMLButtonElement>("button")!;
+    expect(pushBackBtn.textContent).toContain(t("settings-extensionview.back"));
+
+    await waitPop(() => pushBackBtn.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+    expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
+
+    // Back from ext:larkx returns cleanly to the Integrations list.
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-detail-back]")!.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBeNull();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+
+    // Direct push-source open from the list on narrow desktop still returns to the list.
+    await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-id="sub_push_iphone"]')!.click());
+    await flush();
+    const directPushPane = host.querySelector<HTMLElement>('[data-integration-kind="source"]')!;
+    const directBackBtn = directPushPane.querySelector<HTMLButtonElement>("button")!;
+    expect(directBackBtn.textContent).toContain(t("settings-integrations.back"));
+    await waitPop(() => directBackBtn.click());
+    await flush();
+    expect(new URLSearchParams(location.search).get("integration")).toBeNull();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+  });
 });
 
 describe("assistant isolation across integration routes", () => {
@@ -1396,8 +1734,12 @@ describe("assistant isolation across integration routes", () => {
     chooseManager("work");
     const onOpen = vi.fn();
     await act(async () => root.render(<Integrations open="-sources" onOpen={onOpen} />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await act(async () => root.render(<Integrations open="-market" onOpen={onOpen} />));
+    await flush();
+    expect(host.querySelector("[data-mock-market-catalog]")?.getAttribute("data-manager")).toBe("work");
     await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
@@ -1427,5 +1769,45 @@ describe("assistant isolation across integration routes", () => {
     await act(async () => root.render(<Integrations open="-sources@work/source" onOpen={onOpen} />));
     await act(async () => root.render(<Integrations open="-sources/source" onOpen={onOpen} />));
     expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work", null]);
+  });
+
+  it("hides the ambiguous view switcher on cross-assistant -sources@other deep links and never silently switches the global assistant", async () => {
+    // Sidebar is on default assistant (chosenManager() === null), deep-linked to -sources@work.
+    await act(async () => loadRoster());
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources%40work");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+
+    // Ambiguous "Integrations | Data flow" segmented toggle is hidden on cross-assistant deep links.
+    expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
+    const crossNav = host.querySelector<HTMLElement>("[data-integrations-cross-assistant-nav]")!;
+    expect(crossNav).not.toBeNull();
+    const backBtn = crossNav.querySelector<HTMLButtonElement>('[data-testid="integrations-cross-assistant-back"]')!;
+    const switchBtn = crossNav.querySelector<HTMLButtonElement>('[data-testid="integrations-switch-assistant"]')!;
+    expect(backBtn).not.toBeNull();
+    expect(switchBtn).not.toBeNull();
+    expect(switchBtn.textContent).toContain(t("settings-integrations.switch_assistant_integrations", { name: "Work" }));
+
+    // Returning via Back opens the current assistant's list WITHOUT mutating global chosenManager.
+    await act(async () => backBtn.click());
+    await flush();
+    expect(chosenManager()).toBeNull();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+
+    // Re-open -sources@work and explicitly click "Switch to Work": now global assistant switches intentionally.
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources%40work");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const explicitSwitch = host.querySelector<HTMLButtonElement>('[data-testid="integrations-switch-assistant"]')!;
+    await act(async () => explicitSwitch.click());
+    await flush();
+    expect(chosenManager()).toBe("work");
+    expect(new URLSearchParams(location.search).get("integration")).toBeNull();
+    // Once the switched assistant's state arrives, Settings renders Work's Integrations list.
+    state.assistant = "work";
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
   });
 });
