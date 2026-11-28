@@ -96,11 +96,12 @@ export function ChannelLink({ id, manager, onOpen }: { id: string; manager?: str
 
 /** `openBeside`: the channel open beside the list (Settings' two columns): its row is marked current, and every row puts
  *  its state under its name, so the narrow column shows the name whole. */
-export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null }) {
+export function ChannelList({ onOpen, onMarketItem, openBeside, manager }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null; manager?: string }) {
   // the current assistant's channels (docs/assistant/managers.md "The current assistant"), asked of it by name (none for
   // the default); a row opens its copy (`<id>@<manager>`)
-  const picked = useChosenManager();
-  const owner = otherManager(picked ?? undefined);
+  const chosen = useChosenManager();
+  const picked = manager ?? chosen;
+  const owner = manager ?? otherManager(chosen ?? undefined);
   const [list, setList] = useState<Channel[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -196,7 +197,7 @@ export function ChannelBindingBlock({ ctl, showAccountMark = true }: { ctl: Chan
 
   return (
     <>
-      {canBind(d) && <BindSteps c={d} onDone={ctl.load} />}
+      {canBind(d) && <BindSteps c={d} bind={ctl.bind} onDone={ctl.load} />}
       {isBound(d) && (
         <Group title={t("settings-channels.binding")} footer={t("settings-channels.binding_footer")}>
           <Row label={t("settings-channels.bound_account")}>
@@ -521,8 +522,9 @@ export function TargetPicker({ open, current, onClose, onPick }: { open: boolean
  * Binding `c` a step at a time. The Lark bot's page reuses it to create the bot's app by scanning (#5818), with its own
  * `title`, `footer` and `startLabel` for the first button; everything after the first press is the same steps.
  */
-export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }: {
+export function BindSteps({ c, bind, onDone, title, footer: startFooter, startLabel }: {
   c: Pick<Channel, "id" | "name" | "bind">;
+  bind?: ChannelController["bind"];
   onDone: () => Promise<void>;
   title?: string;
   footer?: string;
@@ -541,7 +543,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
   const send = useCallback(async (step: string, vals: Record<string, string>, quiet = false): Promise<boolean> => {
     if (!quiet) setBusy(true);
     try {
-      const p = await bindChannel(c.id, step, vals);
+      const p = await (bind ? bind(step, vals) : bindChannel(c.id, step, vals));
       if (!live.current) return false;
       if (p.done) {
         setPrompt(null);
@@ -561,7 +563,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
       if (!quiet && live.current) setBusy(false);
     }
     return false;
-  }, [c.id, c.name, onDone]);
+  }, [bind, c.id, c.name, onDone]);
 
   // A QR code or a code on screen: ask again every interval until it is scanned / sent.
   useStepPolling(isPolled(prompt) ? prompt : null, (step) => send(step, {}, true), 3);

@@ -19,6 +19,7 @@ import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
 import { FEATURES } from "./FeishuBot";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
 import { Integrations } from "./Integrations";
+import { decodeIntegrationsRoute } from "./integrations-route";
 
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
@@ -761,7 +762,7 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
 
   it("keeps an unsaved channel routing field through refresh and switching between one and two columns", async () => {
     const onOpen = vi.fn();
-    const draw = (wide: boolean) => act(async () => root.render(<Integrations open="ext:larkx" twoCol={wide} onOpen={onOpen} />));
+    const draw = (wide: boolean) => act(async () => root.render(<Integrations route={decodeIntegrationsRoute("integrations", "ext:larkx")} twoCol={wide} onOpen={onOpen} onBack={() => {}} />));
     await draw(true);
     await act(async () => vi.dynamicImportSettled());
 
@@ -980,7 +981,7 @@ describe("manager-owned integration links", () => {
     expect(requests).toContainEqual(expect.objectContaining({ url: `/api/v1${path}`, method: "GET", manager: null }));
     if (id === "feishu-bot") {
       const toggle = host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-feishubot.enable")}"]`)!;
-      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/channels/feishu", method: "GET", manager: null }));
+      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/channels/feishu", method: "GET", manager: "assistant" }));
       await act(async () => toggle.click());
       expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/bots/feishu", method: "PUT", manager: null }));
     }
@@ -1014,7 +1015,7 @@ describe("manager-owned integration links", () => {
   it.each([
     ["github", "saved-repositories-shortcut", "settings/persona#repositories"],
     ...(installedMailbox ? [["mail", "knowledge-scope-shortcut", "settings/knowledge#knowledge-items"]] : []),
-  ])("opens %s settings with the owner's assistant already selected", async (id, row, destination) => {
+  ])("carries the owner to %s settings while keeping the sidebar selection", async (id, row, destination) => {
     const onSettings = vi.fn(() => chosenManager());
     await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "builtin", id, manager: "work" }} onSettings={onSettings} />));
     await flush();
@@ -1023,8 +1024,8 @@ describe("manager-owned integration links", () => {
       expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/assistant/repositories", manager: "work" }));
     }
     act(() => host.querySelector<HTMLButtonElement>(`[data-settings-row="${row}"]`)!.click());
-    expect(onSettings).toHaveBeenCalledWith(destination);
-    expect(onSettings).toHaveReturnedWith("work");
+    expect(onSettings).toHaveBeenCalledWith(destination, "work");
+    expect(chosenManager()).toBeNull();
   });
 });
 

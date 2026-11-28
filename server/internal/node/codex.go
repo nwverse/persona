@@ -3,6 +3,7 @@ package node
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -77,7 +80,7 @@ var rolloutCaches = struct {
 	byHome map[string]*rolloutCache
 }{byHome: map[string]*rolloutCache{}}
 
-var rolloutIDRe = lazyre.New(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})*\.jsonl$`)
+var rolloutIDRe = lazyre.New(`([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})*\.jsonl(?:\.zst)?$`)
 
 // rolloutFile is a rollout's path and the thread id its name ends in.
 type rolloutFile struct {
@@ -89,6 +92,7 @@ type rolloutFile struct {
 // what rolloutIDRe captures, without a regular expression. rollouts reads it for every rollout on disk once a minute,
 // where rolloutIDRe took most of each refresh's CPU time.
 func rolloutID(path string) string {
+	path = strings.TrimSuffix(path, ".zst")
 	const ext, idLen = ".jsonl", 36
 	if len(path) < idLen+len(ext) || !strings.HasSuffix(path, ext) {
 		return ""
@@ -213,7 +217,7 @@ func rolloutsIn(home string, pass *codexListPass) ([]codexRollout, bool) {
 		day := now.AddDate(0, 0, -d)
 		dir := filepath.Join(home, "sessions", day.Format("2006"), day.Format("01"), day.Format("02"))
 		recent[dir] = true
-		paths, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl"))
+		paths, _ := filepath.Glob(filepath.Join(dir, "rollout-*.jsonl*"))
 		for _, p := range paths {
 			if id := rolloutID(p); id != "" {
 				files = append(files, rolloutFile{path: p, id: id})
@@ -222,8 +226,8 @@ func rolloutsIn(home string, pass *codexListPass) ([]codexRollout, bool) {
 	}
 	if now.Sub(c.olderAt) > time.Minute {
 		look := newMissLook(home) // before listing: a rollout written meanwhile moves a directory past this stamp
-		all, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
-		archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl"))
+		all, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl*"))
+		archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl*"))
 		all = append(all, archived...)
 		c.older = c.older[:0]
 		for _, p := range all {
@@ -292,9 +296,9 @@ func rolloutSegments(home string) []codexRollout {
 // allRolloutPaths is every rollout file of a home on disk, whenever it was written, archived ones too: what a token
 // usage backfill reaching further back than rollouts' two weeks reads.
 func allRolloutPaths(home string) []string {
-	paths, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl"))
-	archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl"))
-	return append(paths, archived...)
+	paths, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*.jsonl*"))
+	archived, _ := filepath.Glob(filepath.Join(home, "archived_sessions", "rollout-*.jsonl*"))
+	return slices.DeleteFunc(append(paths, archived...), func(path string) bool { return rolloutID(path) == "" })
 }
 
 // pruneMetas keeps the session_meta of the rollouts just listed (recent and older), so a deleted or moved rollout
@@ -311,6 +315,17 @@ func (c *rolloutCache) pruneMetas(recent []rolloutFile) {
 	c.metas = metas
 }
 
+func codexRolloutReader(f *os.File) (io.Reader, func(), error) {
+	if !strings.HasSuffix(f.Name(), ".zst") {
+		return f, func() {}, nil
+	}
+	decoder, err := zstd.NewReader(f)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return decoder, decoder.Close, nil
+}
+
 // readRolloutMeta reads a rollout's first line (session_meta, tens of KB of instructions); whole says that line was all
 // written, and only then is what it says worth keeping. Codex 0.167 creates the file empty and writes the line 8–19 ms
 // later: a meta read in between and kept left the thread without a directory for good, and a start in that directory
@@ -321,7 +336,12 @@ func readRolloutMeta(path string) (m rolloutMeta, whole bool) {
 		return rolloutMeta{}, false
 	}
 	defer f.Close()
-	r := bufio.NewReaderSize(f, 256<<10)
+	reader, closeReader, err := codexRolloutReader(f)
+	if err != nil {
+		return rolloutMeta{}, false
+	}
+	defer closeReader()
+	r := bufio.NewReaderSize(reader, 256<<10)
 	line, err := r.ReadBytes('\n')
 	whole = err == nil
 	var l struct {
@@ -499,14 +519,14 @@ func rolloutPathIn(home, id string, pass *codexListPass) string {
 	if pass.homeUnavailable(home) {
 		return ""
 	}
-	matches, _ := rolloutGlob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl"))
-	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadIDIn(home, path, pass) != id })
+	matches, _ := rolloutGlob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+id+"*.jsonl*"))
+	matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutID(path) == "" || rolloutThreadIDIn(home, path, pass) != id })
 	if pass.homeUnavailable(home) {
 		return ""
 	}
 	if len(matches) == 0 {
-		matches, _ = rolloutGlob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl"))
-		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutThreadIDIn(home, path, pass) != id })
+		matches, _ = rolloutGlob(filepath.Join(home, "archived_sessions", "rollout-*-"+id+"*.jsonl*"))
+		matches = slices.DeleteFunc(matches, func(path string) bool { return rolloutID(path) == "" || rolloutThreadIDIn(home, path, pass) != id })
 		if pass.homeUnavailable(home) {
 			return ""
 		}
@@ -683,7 +703,7 @@ func (l *missLook) recentNames() string {
 	if !ok {
 		var paths []string
 		for _, dir := range l.dirs {
-			found, _ := rolloutGlob(filepath.Join(dir, "rollout-*.jsonl"))
+			found, _ := rolloutGlob(filepath.Join(dir, "rollout-*.jsonl*"))
 			paths = append(paths, found...)
 		}
 		names = rolloutNames(paths)

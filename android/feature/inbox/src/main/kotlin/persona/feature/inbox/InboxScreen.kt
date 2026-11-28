@@ -33,6 +33,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import persona.core.inbox.*
+import persona.core.moduleapi.HubModule
+import persona.core.moduleapi.ModuleRegistry
 
 /** [onOpenCard]: the app opens a request card outside any session on Agents (#5610); without it, Agents opens. */
 @Composable
@@ -204,6 +206,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     var composeDraft by remember { mutableStateOf<MailDraft?>(null) }
     val mailTransport by repository.mailTransport.collectAsStateWithLifecycle()
     val mailAccess = LocalMailAccess.current
+    val larkFeatures = LocalLarkFeatures.current
+    val hubFeatures = LocalHubFeatures.current
+    val sourceVisibility = inboxSourceVisibility(
+        larkOffered = larkFeatures.chats || ModuleRegistry.isActive(HubModule.Lark, hubFeatures),
+        mailOffered = mailAccess == MailAccess.Live,
+        stored = snapshot.storedSources,
+    )
 
     val haptics = rememberHaptics()
     // Tap-driven row motion only (#9600). A hub refresh changes the rows with the flag clear.
@@ -665,7 +674,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     )
                     empty == InboxBar.Empty.NoMatch -> JEmptyState(stringResource(R.string.inbox_empty_search_title), stringResource(R.string.inbox_empty_search_text, query.trim()), icon = PhIcons.MagnifyingGlass)
                     snapshot.records.isEmpty() && snapshot.interactions.isEmpty() -> JEmptyState(stringResource(R.string.inbox_empty_title),
-                        stringResource(R.string.inbox_empty_text), icon = PhIcons.Tray)
+                        stringResource(inboxEmptyText(sourceVisibility)), icon = PhIcons.Tray)
                     else -> JEmptyState(stringResource(R.string.inbox_empty_caught_up_title), stringResource(R.string.inbox_empty_caught_up_text), icon = PhIcons.CheckCircle)
                 }
             } }
