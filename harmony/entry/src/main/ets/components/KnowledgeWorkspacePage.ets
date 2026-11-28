@@ -96,26 +96,26 @@ struct KnowledgeLibraryRow {
     return PhoneStyle.settingsExampleLineHeight(ordinary,largest,this.environment.fontScale);
   }
   @Builder badge(value:string,tone:string,bold:boolean=false) {
-    Text(value).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(bold ? FontWeight.Bold : FontWeight.Medium)
+    Text(value).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontWeight(bold ? FontWeight.Bold : FontWeight.Medium)
       .lineHeight(this.rowLineHeight(14.33,21.67))
       .maxLines(1).fontColor(knowledgeInk(tone,nativeEnvironment.dark)).padding({left:6,right:6,top:2,bottom:2})
-      .borderRadius(18).backgroundColor(knowledgeWash(tone,nativeEnvironment.dark)).flexShrink(0)
+      .borderRadius(Tokens.radiusCapsule).backgroundColor(knowledgeWash(tone,nativeEnvironment.dark)).flexShrink(0)
   }
   build() {
     Row({space:12}) {
       Stack() {
-        Rect().width(36).height(36).radius(10).fill(knowledgeWash(this.priority(),nativeEnvironment.dark))
+        Rect().width(36).height(36).radius(Tokens.radiusControl).fill(knowledgeWash(this.priority(),nativeEnvironment.dark))
         SymbolGlyph(this.symbol).fontSize('16vp').fontWeight(FontWeight.Medium).fontColor([knowledgeInk(this.priority(),nativeEnvironment.dark)])
       }.width(36).height(36).flexShrink(0)
       Column({space:4}) {
         Flex({direction:FlexDirection.Row,alignItems:ItemAlign.Baseline,space:{main:LengthMetrics.vp(6)}}) {
-          Text(this.row.title || this.row.id).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).lineHeight(this.rowLineHeight(20.33,27.67))
+          Text(this.row.title || this.row.id).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).lineHeight(this.rowLineHeight(20.33,27.67))
             .fontWeight(600).fontColor(Colors.ink).layoutWeight(1).maxLines(2)
           if (this.dateLabel())
-            Text(this.dateLabel()).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).lineHeight(this.rowLineHeight(14.33,21.67))
-              .fontColor(nativeEnvironment.dark ? '#6696969C' : '#6675757C').flexShrink(0).maxLines(1)
+            Text(this.dateLabel()).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).lineHeight(this.rowLineHeight(14.33,21.67))
+              .fontColor(Colors.mutedInk).flexShrink(0).maxLines(1)
         }.width('100%')
-        if (this.entry.summary) Text(this.entry.summary).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary).maxLines(2)
+        if (this.entry.summary) Text(this.entry.summary).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(Colors.secondary).maxLines(2)
           .lineHeight(this.rowLineHeight(18,25.33))
           .lineSpacing(LengthMetrics.vp(PhoneStyle.formSize(2,0.67,this.environment.fontScale)),{onlyBetweenLines:true})
           .textOverflow({overflow:TextOverflow.Ellipsis})
@@ -124,7 +124,7 @@ struct KnowledgeLibraryRow {
           if (this.entry.duration) this.badge(tr(this.entry.duration==='long' ? 'knowledge_project_long' : 'knowledge_project_short'),this.entry.duration==='long' ? 'blue' : 'neutral')
           if (this.entry.relevance>0) this.badge(tr('kb_relevance_value').replace('{n}',String(this.entry.relevance)),knowledgeRelevanceTone(this.entry.relevance))
           ForEach(this.fittedTags,(tag:string)=>{
-            Text('#'+tag).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).lineHeight(this.rowLineHeight(14.33,21.67)).fontColor(Colors.secondary).maxLines(1)
+            Text('#'+tag).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).lineHeight(this.rowLineHeight(14.33,21.67)).fontColor(Colors.secondary).maxLines(1)
           },(tag:string)=>tag)
         }.width('100%').padding({top:1}).onAreaChange((_previous:Area,area:Area)=>{ const width=Number(area.width);if (this.badgesWidth!==width) this.badgesWidth=width; })
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -146,10 +146,10 @@ struct RecordingProfileCard {
   build() {
     Stack({alignContent:Alignment.TopStart}) {
       if (this.environment.dark) {
-        Rect().width('100%').height(this.measuredHeight).radius(29).fill(0xff1c1c1e)
+        Rect().width('100%').height(this.measuredHeight).radius(Tokens.radiusPanel).fill(Colors.surface)
           .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
       } else {
-        Rect().width('100%').height(this.measuredHeight).radius(29).fill(Color.White)
+        Rect().width('100%').height(this.measuredHeight).radius(Tokens.radiusPanel).fill(Colors.surface)
           .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
       }
       Column() { this.content() }.width('100%').alignItems(HorizontalAlign.Start)
@@ -158,8 +158,8 @@ struct RecordingProfileCard {
           const height=Number(next.height);
           if (Number.isFinite(height) && this.measuredHeight!==height) this.measuredHeight=height;
         })
-    }.width('100%').borderRadius(29)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
+    }.width('100%').borderRadius(Tokens.radiusPanel)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
       .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('knowledge.summary')
   }
 }
@@ -591,8 +591,8 @@ export struct KnowledgeWorkspacePage {
     Search({value:this.workspace.query,placeholder:tr(meetings ? 'phone_record_search' : 'kb_search_profiles')}).maxFontScale(Tokens.interfaceFontMaxScale)
       .height(this.landingMenu ? PhoneStyle.formSize(44,58,this.environment.fontScale) : Math.max(44,Math.ceil(28*Math.min(this.environment.fontScale,Tokens.interfaceScaleFor(17)))+10))
       .margin({top:this.landingMenu ? 0 : 8,bottom:this.landingMenu ? 0 : 8}).textFont({size:17})
-      .borderRadius(27).backgroundColor(meetings ? Colors.control : Colors.surface)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:27})
+      .borderRadius(Tokens.radiusCapsule).backgroundColor(meetings ? Colors.control : Colors.surface)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusCapsule})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onChange((value:string) => this.workspace.setQuery(value)).id('knowledge.search')
   }
@@ -733,8 +733,8 @@ export struct KnowledgeWorkspacePage {
                   ForEach(this.projectRows(section), (binding: BoundRow<ResourceRow>) => {
                     ListItem() { this.libraryRow(binding.value) }
                   }, (binding: BoundRow<ResourceRow>) => binding.key)
-                }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:68,endMargin:20}).backgroundColor(Colors.surface).borderRadius(29)
-                  .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
+                }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:68,endMargin:20}).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+                  .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
                   .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
               }
             }
@@ -758,8 +758,8 @@ export struct KnowledgeWorkspacePage {
             ListItemGroup() {
               this.sectionEntries()
             }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:this.workspace.query.trim() ? 56 : 68,endMargin:this.workspace.query.trim() ? 0 : 20})
-              .backgroundColor(Colors.surface).borderRadius(this.workspace.query.trim() ? 14 : 29)
-              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:this.workspace.query.trim() ? 14 : 29})
+              .backgroundColor(Colors.surface).borderRadius(this.workspace.query.trim() ? Tokens.radiusCard : Tokens.radiusPanel)
+              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:this.workspace.query.trim() ? Tokens.radiusCard : Tokens.radiusPanel})
               .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
           }
         }
@@ -808,9 +808,9 @@ export struct KnowledgeWorkspacePage {
   @Builder meetingPeople() {
     Row({space:16}) {
       Column({space:4}) {
-        Text(tr('you').slice(0,1)).width(40).height(40).fontSize(Tokens.interfaceFontVp(17,nativeEnvironment.fontScale))
-          .fontWeight(FontWeight.Medium).textAlign(TextAlign.Center).backgroundColor(Colors.control).borderRadius(20).fontColor(Colors.ink)
-        Text(tr('you')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.ink)
+        Text(tr('you').slice(0,1)).width(40).height(40).fontSize(Tokens.interfaceFontVp(Tokens.typeHeading,nativeEnvironment.fontScale))
+          .fontWeight(FontWeight.Medium).textAlign(TextAlign.Center).backgroundColor(Colors.control).borderRadius(Tokens.radiusCapsule).fontColor(Colors.ink)
+        Text(tr('you')).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.ink)
           .lineHeight(String(this.recordingMetric(15.7,23))+'vp')
       }
       if (this.roomRole()==='off') {
@@ -818,8 +818,8 @@ export struct KnowledgeWorkspacePage {
           Column({space:4}) {
             Stack() {
               SymbolGlyph($r('sys.symbol.person_badge_plus')).fontSize(Tokens.interfaceFontVp(19,nativeEnvironment.fontScale)).fontColor([Colors.link])
-            }.width(40).height(40).border({width:1,radius:20,color:Colors.link,style:BorderStyle.Dashed})
-            Text(tr('phone_meeting_invite')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.link)
+            }.width(40).height(40).border({width:1,radius:Tokens.radiusCapsule,color:Colors.link,style:BorderStyle.Dashed})
+            Text(tr('phone_meeting_invite')).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.link)
               .lineHeight(String(this.recordingMetric(15.7,23))+'vp')
           }
         }.padding(0).backgroundColor(Color.Transparent).accessibilityText(tr('phone_meeting_invite'))
@@ -827,10 +827,10 @@ export struct KnowledgeWorkspacePage {
       } else {
         Button({type:ButtonType.Normal}) {
           Column({space:4}) {
-            Image(this.look.avatarUri || $r('app.media.phone_persona_face')).width(40).height(40).objectFit(ImageFit.Cover).borderRadius(20)
-            Text(tr('persona')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.ink)
+            Image(this.look.avatarUri || $r('app.media.phone_persona_face')).width(40).height(40).objectFit(ImageFit.Cover).borderRadius(Tokens.radiusCapsule)
+            Text(tr('persona')).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.ink)
               .lineHeight(String(this.recordingMetric(15.7,23))+'vp')
-            Text(tr(meetingRoleLabel(this.roomRole()))).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+            Text(tr(meetingRoleLabel(this.roomRole()))).fontSize(Tokens.typeLabel).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel)).fontColor(Colors.secondary)
               .lineHeight(String(this.recordingMetric(14.3,21.7))+'vp').id('recordings.invite.detail')
           }
         }.padding(0).backgroundColor(Color.Transparent).accessibilitySelected(true)
@@ -848,21 +848,21 @@ export struct KnowledgeWorkspacePage {
             Button({type:ButtonType.Normal}) {
               Row({space:12}) {
                 PhoneOutlineIcon({name:'calendarAgenda',iconScale:this.recordingMetric(1,1.33),color:Colors.link})
-                Text(tr('phone_meeting_calendar')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontColor(Colors.link).layoutWeight(1)
+                Text(tr('phone_meeting_calendar')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).fontColor(Colors.link).layoutWeight(1)
                 if (this.calendarState==='loading') LoadingProgress().width(18).height(18)
               }.width('100%')
             }.width('100%').constraintSize({minHeight:this.recordingMetric(52.3,59.3)}).padding({left:20,right:20,top:8,bottom:8})
               .backgroundColor(Color.Transparent).onClick(() => this.readMeetingCalendar()).id('recordings.calendar')
             if (this.calendarState && !['loading','ready'].includes(this.calendarState))
-              Text(tr(this.calendarState)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary).width('100%').padding({left:15,right:15,bottom:9})
+              Text(tr(this.calendarState)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.secondary).width('100%').padding({left:15,right:15,bottom:9})
             ForEach(this.calendarEvents,(event:MeetingOccurrence) => {
               Button({type:ButtonType.Normal}) {
-                Text(this.clockTime(event.start)+'  '+event.title).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.ink).width('100%')
+                Text(this.clockTime(event.start)+'  '+event.title).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(Colors.ink).width('100%')
               }.width('100%').constraintSize({minHeight:44}).padding({left:15,right:15}).backgroundColor(Color.Transparent)
                 .onClick(() => { this.setMeetingKind('meeting'); this.meetingTitle=event.title; this.selectedCalendarEvent=event.id; this.calendarEvents=[]; this.calendarState=''; })
             },(event:MeetingOccurrence) => event.key())
-          }.width('100%').borderRadius(24).backgroundColor(Colors.surface)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:24})
+          }.width('100%').borderRadius(Tokens.radiusPanel).backgroundColor(Colors.surface)
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
         }
         ListItem() {
@@ -880,16 +880,16 @@ export struct KnowledgeWorkspacePage {
               Row() {
                 ForEach(['meeting','note'],(kind:string) => {
                   Button({type:ButtonType.Capsule}) {
-                    Text(tr(kind==='meeting' ? 'phone_record_meeting' : 'phone_record_note')).fontSize('13vp')
+                    Text(tr(kind==='meeting' ? 'phone_record_meeting' : 'phone_record_note')).fontSize(Tokens.typeCaption)
                       .fontWeight(this.meetingKind===kind ? FontWeight.Bold : FontWeight.Normal).fontColor(Colors.ink)
-                      .width('100%').height(29).textAlign(TextAlign.Center).borderRadius(15)
+                      .width('100%').height(29).textAlign(TextAlign.Center).borderRadius(Tokens.radiusCapsule)
                       .backgroundColor(this.meetingKind===kind ? Colors.surface : Color.Transparent)
                       .animation(Motion.state(this.environment.reduceMotion))
                   }.layoutWeight(1).height(32).padding({left:1.5,right:1.5}).responseRegion({x:0,y:-6,width:'100%',height:44})
                     .backgroundColor(Color.Transparent)
                     .accessibilitySelected(this.meetingKind===kind).onClick(() => { Haptics.selection(); this.setMeetingKind(kind); }).id('recordings.kind.'+kind)
                 },(kind:string) => kind)
-              }.width('100%').height(32).borderRadius(16).backgroundColor(Colors.control)
+              }.width('100%').height(32).borderRadius(Tokens.radiusCapsule).backgroundColor(Colors.control)
             }.width('100%').constraintSize({minHeight:60}).padding({left:20,right:20})
             if (this.meetingKind==='meeting' && this.canInvite()) {
               this.meetingFormDivider()
@@ -898,7 +898,7 @@ export struct KnowledgeWorkspacePage {
             if (this.meetingKind==='note') {
               this.meetingFormDivider()
               Row() {
-                Text(tr('meeting_note_without_minutes')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+                Text(tr('meeting_note_without_minutes')).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.secondary)
                   .layoutWeight(1)
               }.width('100%').constraintSize({minHeight:this.recordingMetric(51.3,58.3)}).padding({left:20,right:20,top:7,bottom:7})
                 .accessibilityGroup(true).id('recordings.kind.detail')
@@ -912,12 +912,12 @@ export struct KnowledgeWorkspacePage {
               } else Column() { this.transcriptionLine() }.width('100%').accessibilityGroup(true)
                 .accessibilityText(tr('meeting_transcription_label')+' · '+(this.hubUnavailable() ? tr('meeting_hub_unavailable') : this.sourceName(false)))
                 .id('recordings.transcription')
-          }.width('100%').alignItems(HorizontalAlign.Start).borderRadius(24).backgroundColor(Colors.surface)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:24})
+          }.width('100%').alignItems(HorizontalAlign.Start).borderRadius(Tokens.radiusPanel).backgroundColor(Colors.surface)
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
         }.margin({top:35})
         ListItem() {
-          Text(this.modePrivacy(this.pickedHub())).id('recordings.privacy').width('100%').fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
+          Text(this.modePrivacy(this.pickedHub())).id('recordings.privacy').width('100%').fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
             .lineHeight(String(this.recordingMetric(15.7,22.5))+'vp').fontColor(Colors.secondary).padding({left:20,right:20,top:7,bottom:7})
         }
         if (this.visibleLocal().length) ListItem() { PhoneSectionTitle({text:tr('phone_record_local'),trailing:String(this.visibleLocal().length)}) }.margin({top:18})
@@ -927,7 +927,7 @@ export struct KnowledgeWorkspacePage {
               SymbolGlyph($r('sys.symbol.mic')).fontSize('19vp').fontColor([Colors.danger])
               Column({space:3}) {
                 Text(entry.title || this.localDate(entry.startedAt)).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(2)
-                Text(this.clock(entry.duration) + ' · ' + this.localDate(entry.startedAt)).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+                Text(this.clock(entry.duration) + ' · ' + this.localDate(entry.startedAt)).fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.secondary)
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
             }.width('100%').padding(14).borderRadius(PhoneStyle.cardRadius).backgroundColor(Colors.surface)
@@ -939,10 +939,10 @@ export struct KnowledgeWorkspacePage {
         if (!this.workspace.query.trim()) ListItem() {
           Row({space:12}) {
             PhoneOutlineIcon({name:'books',iconScale:this.recordingMetric(1,1.33),color:Colors.link})
-            Text(tr('phone_all_meetings')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontColor(Colors.ink).layoutWeight(1)
+            Text(tr('phone_all_meetings')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeHeading)).fontColor(Colors.ink).layoutWeight(1)
             SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
-          }.width('100%').padding({left:20,right:20,top:6,bottom:6}).constraintSize({minHeight:this.recordingMetric(52.3,59.3)}).backgroundColor(Colors.surface).borderRadius(24)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:24})
+          }.width('100%').padding({left:20,right:20,top:6,bottom:6}).constraintSize({minHeight:this.recordingMetric(52.3,59.3)}).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
             .onClick(() => { Haptics.tap(); this.onAllMeetings(); }).id('recordings.all')
         }.margin({top:18})
@@ -978,7 +978,7 @@ export struct KnowledgeWorkspacePage {
           .width('100%')
           .padding({left:16,right:16,top:12,bottom:12})
           .backgroundColor(Colors.surface)
-          .borderRadius(14)
+          .borderRadius(Tokens.radiusCard)
           .id('recordings.module.off')
       }
     }.width('100%').height('100%').padding({left:this.knowledgeSidePadding(),right:this.knowledgeSidePadding(),top:4,bottom:14}).backgroundColor(Colors.grouped).id('recordings.home')
@@ -1152,16 +1152,16 @@ export struct KnowledgeWorkspacePage {
     if (this.removedFacts && this.removedFactsOwner===this.factsOwner() && !Wire.text(Wire.object(this.workspace.detail,'meta'),'pinned')) {
       Row({space:12}) {
         Stack() { SymbolGlyph(Symbols.check).fontSize('11vp').fontColor([Color.White]) }
-          .width(20).height(20).borderRadius(10).backgroundColor(Colors.positive)
-        Text(tr('recording_facts_deleted')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium)
+          .width(20).height(20).borderRadius(Tokens.radiusCapsule).backgroundColor(Colors.positive)
+        Text(tr('recording_facts_deleted')).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontWeight(FontWeight.Medium)
           .fontColor(Colors.ink).maxLines(3).flexShrink(1)
         Button({type:ButtonType.Normal}) {
-          Text(tr('ks_undo')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.link)
+          Text(tr('ks_undo')).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontWeight(FontWeight.Medium).fontColor(Colors.link)
         }.height(32).padding(0).backgroundColor(Color.Transparent).enabled(!this.workspace.busy)
           .accessibilityText(tr('ks_undo')).onClick(() => { this.undoFacts().catch(() => {}); }).id('knowledge.facts.undo')
       }.constraintSize({maxWidth:'94%',minHeight:44}).margin({top:8}).padding({left:16,right:16,top:4,bottom:4})
-        .backgroundColor(Colors.surface).borderRadius(28)
-        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:28})
+        .backgroundColor(Colors.surface).borderRadius(Tokens.radiusCapsule)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:Tokens.radiusCapsule})
         .shadow(PhoneStyle.floatingElevation(this.environment.dark)).hitTestBehavior(HitTestMode.Transparent).id('knowledge.facts.undo_notice')
     }
   }
@@ -1172,11 +1172,11 @@ export struct KnowledgeWorkspacePage {
         Button({type:ButtonType.Circle}) { SymbolGlyph($r('sys.symbol.xmark')).fontSize('16vp').fontColor([Colors.ink]) }
           .height(44).width(44).padding(0).backgroundColor(Colors.control)
           .accessibilityText(tr('close')).enabled(!this.workspace.busy).onClick(() => this.facts.close()).id('knowledge.facts.cancel')
-        Text(tr('phone_kb_confirmed')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600)
+        Text(tr('phone_kb_confirmed')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600)
           .fontColor(Colors.ink).textAlign(TextAlign.Center).layoutWeight(1).maxLines(2)
         Button({type:ButtonType.Capsule}) {
           if (this.workspace.busy) LoadingProgress().width(19).height(19).color(Colors.link)
-          else Text(tr('save')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600).fontColor(this.factsChanged() ? Colors.link : Colors.secondary)
+          else Text(tr('save')).fontSize(Tokens.typeHeading).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600).fontColor(this.factsChanged() ? Colors.link : Colors.secondary)
         }.height(44).constraintSize({minWidth:50}).padding({left:9,right:9}).backgroundColor(Colors.control)
           .enabled(this.workspace.supportsExpectedPinned && !this.workspace.busy && !['pending','unknown'].includes(this.workspace.writeState) && this.factsChanged())
           .onClick(() => this.submitFacts()).id('knowledge.facts.save')
@@ -1185,16 +1185,16 @@ export struct KnowledgeWorkspacePage {
         Column({space:8}) {
           TextArea({text:this.facts.text}).accessibilityText(tr('phone_kb_confirmed'))
             .width('100%').height(this.recordingMetric(170,214)).padding({left:20,right:20,top:15,bottom:15})
-            .fontSize(Tokens.interfaceFontVp(17,nativeEnvironment.fontScale)).fontColor(Colors.ink).backgroundColor(Colors.surface).borderRadius(25)
+            .fontSize(Tokens.interfaceFontVp(Tokens.typeBody,nativeEnvironment.fontScale)).fontColor(Colors.ink).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
             .enabled(!this.workspace.busy).onChange((v:string) => this.facts.edit(v)).id('knowledge.facts.text').onAppear(() => this.focusEmptyFacts())
           Text(tr('recording_facts_instruction').replace('{name}',this.workspace.selected.title || this.workspace.selected.id))
-            .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%')
+            .fontSize(Tokens.typeCaption).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption)).fontColor(Colors.secondary).width('100%')
             .padding({left:20,right:20,bottom:9}).id('knowledge.facts.instruction')
           if (this.facts.conflict) {
-            Text(tr('phone_facts_changed')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.needs).width('100%')
-            Text(this.facts.baseline || tr('empty')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.ink)
-              .width('100%').padding(16).backgroundColor(Colors.surface).borderRadius(16).copyOption(CopyOptions.LocalDevice).id('knowledge.facts.latest')
-          } else if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.danger).width('100%')
+            Text(tr('phone_facts_changed')).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(Colors.needs).width('100%')
+            Text(this.facts.baseline || tr('empty')).fontSize(Tokens.typeSecondary).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary)).fontColor(Colors.ink)
+              .width('100%').padding(16).backgroundColor(Colors.surface).borderRadius(Tokens.radiusCard).copyOption(CopyOptions.LocalDevice).id('knowledge.facts.latest')
+          } else if (this.workspace.error) Text(tr(this.workspace.error)).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor(Colors.danger).width('100%')
           if (this.facts.baseline) Button(tr('recording_facts_delete'),{type:ButtonType.Capsule})
             .width('100%').constraintSize({minHeight:52}).fontColor(Colors.danger).backgroundColor(Colors.surface)
             .enabled(!this.workspace.busy).onClick(() => { this.deleteFacts().catch(() => {}); }).id('knowledge.facts.delete')
@@ -1230,7 +1230,7 @@ export struct KnowledgeWorkspacePage {
         Text(this.recordingToolsTitle()).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.ink).layoutWeight(1)
         SymbolGlyph(this.recordingTools ? Symbols.down : Symbols.expand).fontSize('14vp').fontColor([Colors.secondary])
       }.width('100%')
-    }.width('100%').constraintSize({minHeight:44}).margin({top:16}).padding(12).backgroundColor(Colors.surface).borderRadius(15)
+    }.width('100%').constraintSize({minHeight:44}).margin({top:16}).padding(12).backgroundColor(Colors.surface).borderRadius(Tokens.radiusCard)
       .accessibilityDescription(tr(this.recordingTools ? 'control_expanded' : 'control_collapsed')).onClick(() => this.recordingTools=!this.recordingTools).id('knowledge.recording.tools')
   }
   @Builder recordingToolContents() {
@@ -1258,8 +1258,8 @@ export struct KnowledgeWorkspacePage {
         Column() {
           Row({space:12}) {
             Stack() { SymbolGlyph($r('sys.symbol.waveform_circle')).fontSize('22vp').fontColor([Colors.secondary]) }
-              .width(48).height(48).backgroundColor(Colors.control).borderRadius(13).id('knowledge.recording.avatar')
-            Text(this.workspace.selected.title || this.workspace.selected.id).fontSize(22).maxFontScale(Tokens.interfaceScaleFor(22)).fontWeight(600).fontColor(Colors.ink).layoutWeight(1).maxLines(3)
+              .width(48).height(48).backgroundColor(Colors.control).borderRadius(Tokens.radiusCard).id('knowledge.recording.avatar')
+            Text(this.workspace.selected.title || this.workspace.selected.id).fontSize(Tokens.typeTitle).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeTitle)).fontWeight(600).fontColor(Colors.ink).layoutWeight(1).maxLines(3)
           }.width('100%')
           if (this.workspace.selected.detail) Text(this.workspace.selected.detail).fontSize(Tokens.body)
             .maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontColor(Colors.ink).opacity(0.85).lineHeight(String(this.recordingMetric(20.3,28.35))+'vp').width('100%').margin({top:12}).id('knowledge.recording.intro')
@@ -1305,8 +1305,8 @@ export struct KnowledgeWorkspacePage {
           }.width('100%').constraintSize({minHeight:this.recordingMetric(52.3,59.3)})
             .padding({left:20,right:20,top:0,bottom:0}).backgroundColor(Color.Transparent)
             .onClick(() => this.openFacts()).id('knowledge.facts.open')
-        }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(29)
-          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
+        }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
           .shadow(PhoneStyle.cardElevation(this.environment.dark))
           .bindSheet(this.facts.open,this.recordingFactsEditor(),{height:this.facts.baseline ? SheetSize.MEDIUM : SheetSize.LARGE,
             detents:this.facts.baseline ? [SheetSize.MEDIUM,SheetSize.LARGE] : [SheetSize.LARGE,SheetSize.MEDIUM],
@@ -1323,9 +1323,9 @@ export struct KnowledgeWorkspacePage {
         if (Wire.text(this.workspace.detail,'path')) {
           if (Wire.text(this.workspace.detail,'summary')) Blank().height(17.3)
           this.recordingHeading('directory')
-          Text(Wire.text(this.workspace.detail,'path')).fontFamily('monospace').fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%')
-            .padding({left:20,right:20,top:15,bottom:15}).backgroundColor(Colors.surface).borderRadius(29)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
+          Text(Wire.text(this.workspace.detail,'path')).fontFamily('monospace').fontSize(Tokens.typeCode).maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCode)).fontColor(Colors.secondary).width('100%')
+            .padding({left:20,right:20,top:15,bottom:15}).backgroundColor(Colors.surface).borderRadius(Tokens.radiusPanel)
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:Tokens.radiusPanel})
             .shadow(PhoneStyle.cardElevation(this.environment.dark)).copyOption(CopyOptions.LocalDevice).id('knowledge.recording.directory')
           this.recordingFootnote('recording_detail_folder_access')
         }
