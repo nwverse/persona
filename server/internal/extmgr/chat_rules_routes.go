@@ -67,6 +67,11 @@ func viewOfChatRule(u connector.UserRule) chatRuleView {
 // chatRuleState is what a ledger row says of the rule it could give: can: one can be made from it; exists: one is in
 // force for its chat (id is that rule's, for DELETE); reason: why none can be made, one of connector.NoChat… A client
 // that does not know the field loses only the button.
+// chatRuleUpdateReply is the typed response returned when a chat rule TTL or turn limit is updated.
+type chatRuleUpdateReply struct {
+	Rule chatRuleView `json:"rule"`
+}
+
 type chatRuleState struct {
 	Can    bool   `json:"can"`
 	Exists bool   `json:"exists"`
@@ -307,7 +312,7 @@ func (h *Manager) chatRuleRoutes(api *http.ServeMux) {
 				detail["row"] = rule.Row
 			}
 			h.auditConnector(r.Context(), rule.Rule.Connector, auditConnectorChatRuleAdded, detail)
-			writeJSON(w, map[string]any{"rule": viewOfChatRule(rule)})
+			writeJSON(w, chatRuleUpdateReply{Rule: viewOfChatRule(rule)})
 		}
 	}
 	api.HandleFunc("PATCH /api/v1/connectors/sent/chat-rules/{id}", updateRuleHandler)
