@@ -1646,26 +1646,32 @@ func (s *Service) finishExpiredPending(expected *pending) {
 // finished tells everyone an interaction, already out of the pending set, is over.
 func (s *Service) finished(p *pending) {
 	s.taskPlanApproval()
-	go s.urgentCardDone(p.ix.ID) // a call about it stops ringing (urgent_call_loop.go)
 	s.fleet.mu.Lock()
-	done := assistantwire.FleetResolved{ID: p.ix.ID, CreatedAt: p.ix.CreatedAt, AnsweredBy: p.answeredBy}
+	ix := p.ix
+	done := assistantwire.FleetResolved{ID: ix.ID, CreatedAt: ix.CreatedAt, AnsweredBy: p.answeredBy}
 	if done.AnsweredBy != "" {
 		done.Reason, done.Answers = p.answeredReason, p.answeredWith
 	}
 	var how *proto.Resolution
-	if p.expired && p.ix.ToolName == "ask_user" { // the assistant's question becomes a to-do (ask_todo.go): its card says so
+	if p.expired && ix.ToolName == "ask_user" { // the assistant's question becomes a to-do (ask_todo.go): its card says so
 		how = &proto.Resolution{Dismiss: true, Reason: proto.DismissedExpired}
 	}
+	resyncScreen := p.expired && p.local == nil && !ix.NoHandBack &&
+		(ix.Kind == proto.IxPermission || ix.Kind == proto.IxQuestion && ix.ToolName == "AskUserQuestion")
 	s.fleet.mu.Unlock()
-	if how != nil && s.askLaterSpokeOf(p.ix.ID) {
+	go s.urgentCardDone(ix.ID) // a call about it stops ringing (urgent_call_loop.go)
+	if how != nil && s.askLaterSpokeOf(ix.ID) {
 		// Asked without waiting, and the owner wrote in the conversation meanwhile: it makes no to-do (ask_later.go).
 		how.Reason = proto.DismissedInChat
 	}
-	s.channelsEnded(p.ix, how)
+	s.channelsEnded(ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.tellResolved(done)
-	s.publishSessions(p.ix.MachineID)
-	s.cardStateChanged(p.ix)
+	s.publishSessions(ix.MachineID)
+	s.cardStateChanged(ix)
+	if resyncScreen {
+		s.syncScreenAfterHookExpiry(ix.MachineID, ix.SessionID)
+	}
 }
 
 // The hub treats omissions from a reconnect inventory as resolutions. Order the read and the

@@ -1,7 +1,7 @@
 // Popover-only pure helpers for subscription usage cards and the reset timeline (#13173, #13870, #13964).
 // Kept in a separate module so UsagePopover's lazy chunk owns them instead of the cold first screen.
 import { t as tr } from "../i18n";
-import { canonicalUsageProvider, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { canonicalUsageProvider, isHistoricalCodexReading, windowMinutes, type UsageAccount, type UsageWindow } from "./usage-windows";
 
 const PLAN_ACRONYMS = new Set(["api", "ai", "vip", "gpt", "llm", "mcp", "sso", "cli", "ide"]);
 
@@ -98,6 +98,7 @@ export interface ProviderGroup {
   provider: string;
   /** Sorted by `sortForCard`. */
   accounts: UsageAccount[];
+  historicalReadings: UsageAccount[];
   /** The newest `sampled_at` of the group, "" when none reads as a time. */
   sampledAt: string;
 }
@@ -110,8 +111,14 @@ export function groupByProvider(accounts: UsageAccount[]): ProviderGroup[] {
     by.set(provider, [...(by.get(provider) ?? []), a]);
   }
   return [...by].map(([provider, list]) => {
-    const newest = list.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
-    return { provider, accounts: sortForCard(list), sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
+    const historicalReadings: UsageAccount[] = [];
+    const counted: UsageAccount[] = [];
+    for (const a of list) {
+      if (isHistoricalCodexReading(a)) historicalReadings.push(a);
+      else counted.push(a);
+    }
+    const newest = counted.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
+    return { provider, accounts: sortForCard(counted), historicalReadings, sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
   });
 }
 
