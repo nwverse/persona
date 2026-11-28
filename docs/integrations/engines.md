@@ -193,8 +193,9 @@ and the rest read from Orca's own journal. A chat shows before its first message
 running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card.
 New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
 chats): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
-Agent's default launcher still opens a terminal. See `docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the
-closed chats, the cards, the controls and starts.
+Agent's default launcher opens a terminal unless the computer starts new Agents as Orca chats ("Orca chats as New Agent's default"
+below). See `docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and
+starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
@@ -251,6 +252,39 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - Available only when both herdr and herdr-core are detected (can preselect offline, effective on reconnect; if only one exists,
   it works normally while the other list is empty).
 - Orca next to herdr goes through "Host sets" above; there are no more combination options.
+
+### Orca chats as New Agent's default
+
+Who it serves: Agents users who prefer Orca's chat view to a terminal (#17650). A computer whose engine set includes Orca has a
+switch under its Engine, **Start new Agents as Orca chats**, off by default (web: the machine page's Engine section; Android: the
+computer's Engine page; iOS follows in #17056). The manager keeps it per computer in settings (`machine_orca_chat_starts`), answers
+`GET` / `PUT /api/v1/machines/{mid}/orca-chat-starts`, and sends it on the machine as `orca_chat_starts` only while Orca is in the set
+(`docs/protocol/protocol.md`, "Engines"); the clients show the switch exactly where it is sent. Taking Orca out of the set keeps the
+switch's value but stops it applying.
+
+With it on, the manager (`server/internal/assistant/orca_chat_default.go`, in `agents.start_params`, the step every New Agent start an
+app makes goes through) sends a start to the computer's Orca chat launcher of the same provider (`orca-claude` / `orca-codex`,
+"Starting a chat" in `docs/plans/plan-orca-support.md`) when all of these hold:
+
+- the person kept New Agent's default: no launcher, preset or model picked, and no host but Orca;
+- that default runs the plain Claude Code or Codex CLI (`claude` / `codex`). A wrapper or a provider kept in Persona stays in a
+  terminal: Orca's chat runs the plain CLI, so it would answer on another model or account;
+- the computer's Orca offers that chat launcher now (Orca running, able to start chats, the provider installed there, the launcher
+  neither hidden nor out of the computer's scope), and the computer's default host is not an engine runtime (Paseo, Cindy);
+- the chat takes the start: not plan mode (an Orca chat promises no read-only start), a permission mode Orca takes for the provider
+  (Codex's chats take no Accept edits), and none of the options only a terminal takes (a faster speed, ultracode, a goal, model aliases).
+
+The chat runs the default's model when Orca's chats of that provider list it, with its effort when that model lists it; otherwise
+Orca's own, and the start's note says so. A start in a folder no Orca worktree holds (and no Git repository Orca can add) is refused
+as an explicit Orca chat start is (`orca_start_folder`); picking a terminal launcher starts it there.
+
+Never routed: the assistant's starts (`agent_start`, `dispatch_start`, `task_plan`, reviewers, follow-ups, which never go through
+`agents.start_params`; an Orca chat carries none of Persona's launcher, hooks or MCP config that a supervised task needs), resumes,
+and any start that names a launcher. New Agent says where a start will go: `GET /api/v1/machines/{mid}/launchers` carries
+`default_opens` (the chat, the permission modes with which a default start opens there, and whether the default's model goes with
+it), worked out by the same rule; web and Android show one line under the start while the form keeps the default
+(`web/src/lib/orca-chat.ts`, Android `NewAgentState.opensAsOrcaChat`), and the line goes as soon as the person picks a launcher,
+a preset, a model, plan mode or another host.
 
 ## Task workspaces (#4786)
 
