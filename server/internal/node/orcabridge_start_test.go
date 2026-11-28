@@ -12,9 +12,9 @@ import (
 // orcaStartHubID is the id the hub names for a chat New Agent starts (a session id as the hub makes them).
 const orcaStartHubID = "0d000000-0000-4000-8000-00000000c0de"
 
-// orcaStartNode is orcaBridgeNode on an Orca that starts chats (agent.launch's chat surface) and found Claude Code
+// orcaChatStartNode is orcaBridgeNode on an Orca that starts chats (agent.launch's chat surface) and found Claude Code
 // and Codex installed (and an agent it does not run as a chat), whose launches the fake takes.
-func orcaStartNode(t *testing.T) (*Node, *orcaChats) {
+func orcaChatStartNode(t *testing.T) (*Node, *orcaChats) {
 	t.Helper()
 	o := newOrcaChats(t)
 	o.f.SetStatus(map[string]any{"capabilities": append(append([]string{}, orcaControlsCaps...), orcart.CapChatLaunch)})
@@ -56,7 +56,7 @@ func orcaLaunchersOf(t *testing.T, n *Node) map[string]proto.Launcher {
 // Code's choices, Codex's with the permission modes Orca takes for it and the models its chats list (the efforts
 // Persona can send). Every open chat names its provider's launcher, so its model picker lists Orca's models.
 func TestOrcaBridgeOffersChatLaunchers(t *testing.T) {
-	n, _ := orcaStartNode(t)
+	n, _ := orcaChatStartNode(t)
 	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
 	ls := orcaLaunchersOf(t, n)
 	claude, codex := ls["orca-claude"], ls["orca-codex"]
@@ -100,7 +100,7 @@ func TestOrcaBridgeOffersNoLaunchersWithoutChatStarts(t *testing.T) {
 // words; the chat is "persona-<the hub's id>" in Orca and the hub's id in Persona, listed at once and started by
 // Persona. A start asked for again (its answer lost) finds that chat and launches nothing.
 func TestOrcaBridgeStartsAChat(t *testing.T) {
-	n, o := orcaStartNode(t)
+	n, o := orcaChatStartNode(t)
 	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
 	start := func() (proto.Session, error) {
 		raw, err := nodeCall(t, n, "session.start", map[string]any{"cwd": "/w/app/server", "prompt": "Fix the flaky test",
@@ -151,7 +151,7 @@ func TestOrcaBridgeStartsAChat(t *testing.T) {
 // A start whose chat Orca already has (made before the node restarted, the hub asking again) launches nothing and
 // answers with that chat.
 func TestOrcaBridgeStartFindsTheChatAgain(t *testing.T) {
-	n, o := orcaStartNode(t)
+	n, o := orcaChatStartNode(t)
 	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
 	o.f.Handle("agentSession.history", func(p map[string]any) any {
 		return map[string]any{"ok": true, "page": map[string]any{"fence": 1, "working": false, "epoch": "ep-9", "items": []any{},
@@ -170,7 +170,7 @@ func TestOrcaBridgeStartFindsTheChatAgain(t *testing.T) {
 // A folder no Orca worktree holds (and no Git repository to add) is refused in the user's words, with nothing
 // started in an unrelated workspace; so is a permission mode Orca does not take for the provider.
 func TestOrcaBridgeStartRefusals(t *testing.T) {
-	n, o := orcaStartNode(t)
+	n, o := orcaChatStartNode(t)
 	waitFor(t, "the launchers", func() bool { return len(orcaLaunchersOf(t, n)) == 2 })
 	_, err := nodeCall(t, n, "session.start", map[string]any{"cwd": t.TempDir(), "prompt": "hi", "launcher": "orca-claude",
 		"session_id": orcaStartHubID})
