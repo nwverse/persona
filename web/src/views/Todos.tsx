@@ -151,7 +151,7 @@ import { TodoCausalTraceSection } from "../features/todos/TodoCausalTraceSection
 import { boardAttention, boardSectionMap, consumeBoardDirectionGroups, consumeBoardStatusGroups, isBoardOpen } from "../features/todos/board-consumer";
 import { loadOlderClosed } from "../features/todos/closed-history";
 import { pref, setPref, useTodoPreference } from "../features/todos/preferences";
-import { formatRowRepoGate, repoGatePRLook, repoGateTone, shouldShowRowRepoGate, type RepoGateTone } from "../features/todos/repo-gate";
+import { formatRowRepoGate, repoGatePRLabel, repoGatePRLook, repoGateReasonLabel, repoGateTone, shouldShowRowRepoGate, type RepoGateTone } from "../features/todos/repo-gate";
 import { useRestoredTodos } from "../lib/todo-restore";
 import { stepsWords } from "../lib/todo-steps";
 import { useOwnerNeeds, useTodoBoard, useTodoLookup, useTodoMinute } from "../lib/todo-owner-needs";
@@ -162,7 +162,7 @@ import { parkedLine, progressLine, reviewState } from "../lib/supervision";
 import { prLink } from "./TodoStageBar";
 import { projectChoices, projectNames, useTodoProjects } from "../lib/todo-projects";
 import { useFolded } from "../lib/use-folded";
-import { stateName } from "../lib/state-labels";
+import { stateName, waitSummary } from "../lib/state-labels";
 import { Empty, Segmented, Tag } from "./assistant/parts";
 import { OfflineState, useShownOffline } from "./ManagerParts";
 import { TodoCalendar, type CalendarSlot } from "./TodoCalendar";
@@ -4418,6 +4418,7 @@ function TodoActiveBlockersStrip({
   onToggleAddPR,
   cancellingId = null,
   onCancelBlocker,
+  embedded = false,
 }: {
   blockers: readonly TodoActiveBlocker[];
   canAddPR?: boolean;
@@ -4425,12 +4426,17 @@ function TodoActiveBlockersStrip({
   onToggleAddPR?: () => void;
   cancellingId?: string | null;
   onCancelBlocker?: (blockerId: string) => void;
+  embedded?: boolean;
 }) {
   return (
     <section
       data-testid="todo-active-blockers"
       aria-label={t("todos.active_blockers_region")}
-      className="mt-3 rounded-control border border-orange/30 bg-orange-tint/40 px-3 py-2 text-meta text-ink-2"
+      className={
+        embedded
+          ? "text-meta text-ink-2"
+          : "mt-3 rounded-control border border-orange/30 bg-orange-tint/40 px-3 py-2 text-meta text-ink-2"
+      }
     >
       <div className="mb-1.5 flex items-center justify-between gap-2 text-label font-semibold text-orange">
         <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -4514,6 +4520,324 @@ function TodoActiveBlockersStrip({
   );
 }
 
+/**
+ * Unified progressive focus banner under todos_v2 (#17696): merges active wait state, active blockers,
+ * target repo gate, and merge-train status into one grounded card instead of stacking up to four banners.
+ */
+function TodoDetailFocusBanner({
+  todo,
+  mergeTrainBadge,
+  canAddPR,
+  addingPROpen,
+  onToggleAddPR,
+  cancellingBlockerId,
+  onCancelBlocker,
+}: {
+  todo: Todo;
+  mergeTrainBadge?: MergeTrainTodoBadge;
+  canAddPR: boolean;
+  addingPROpen: boolean;
+  onToggleAddPR: () => void;
+  cancellingBlockerId: string | null;
+  onCancelBlocker: (blockerId: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [todo.id]);
+
+  const blockers = todo.active_blockers && todo.active_blockers.length > 0 ? todo.active_blockers : undefined;
+  const repoGate = todo.repo_gate;
+  const hasWait = todo.wait != null;
+
+  type FocusEntry = {
+    key: "repo_gate" | "mergetrain" | "blockers" | "wait";
+    priority: number;
+    chip: string;
+    render: () => ReactNode;
+  };
+
+  const entries: FocusEntry[] = [];
+
+  if (repoGate) {
+    const tone = repoGateTone(repoGate.state);
+    const isBlocked = tone === "red";
+    const toneText: Record<RepoGateTone, string> = {
+      green: "text-green",
+      red: "text-red",
+      orange: "text-orange",
+      muted: "text-ink-3",
+    };
+    const headline =
+      repoGate.state === "reference_only"
+        ? t("todos.repo_gate_detail_reference_only", { count: repoGate.reference_count })
+        : repoGate.state === "ready"
+          ? t("todos.repo_gate_detail_ready", { ready: repoGate.ready_count, total: repoGate.target_count })
+          : repoGate.blocking_repo?.trim()
+            ? t("todos.repo_gate_detail_blocked", {
+                ready: repoGate.ready_count,
+                total: repoGate.target_count,
+                repo: repoGate.blocking_repo.trim(),
+              })
+            : t("todos.repo_gate_detail_pending", { ready: repoGate.ready_count, total: repoGate.target_count });
+    const reasonText = repoGateReasonLabel(repoGate);
+    const blockingPR = safeWebURL(repoGate.blocking_pr);
+    entries.push({
+      key: "repo_gate",
+      priority: isBlocked ? 0 : 5,
+      chip: formatRowRepoGate(repoGate),
+      render: () => (
+        <div
+          data-testid="todo-detail-repo-gate"
+          data-gate-state={repoGate.state}
+          className="flex flex-wrap items-center justify-between gap-2 text-submeta"
+        >
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className={cx("inline-flex items-center gap-1.5 font-medium", toneText[tone])}>
+              <Icon name={tone === "green" ? "check" : "alertCircle"} size={13} className="shrink-0" />
+              <span className="tabular-nums">{headline}</span>
+            </span>
+            {repoGate.state !== "reference_only" && repoGate.state !== "ready" && reasonText && (
+              <span data-testid="todo-detail-repo-gate-reason" className="text-ink-2">
+                · {reasonText}
+              </span>
+            )}
+            {repoGate.state !== "reference_only" && repoGate.reference_count > 0 && (
+              <span data-testid="todo-detail-repo-gate-refs" className="text-ink-3 tabular-nums">
+                · {t("todos.repo_gate_detail_refs_note", { count: repoGate.reference_count })}
+              </span>
+            )}
+          </div>
+          {blockingPR && (
+            <a
+              href={blockingPR}
+              target="_blank"
+              rel="noreferrer noopener"
+              data-testid="todo-detail-repo-gate-pr"
+              className="touch-hit inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
+            >
+              <span>{repoGatePRLabel(blockingPR)}</span>
+              <Icon name="external" size={11} />
+            </a>
+          )}
+        </div>
+      ),
+    });
+  }
+
+  if (mergeTrainBadge) {
+    const aheadUrl = safeHttpUrl(mergeTrainBadge.ahead_pr_url);
+    const badgeText = mergeTrainBadgeText(mergeTrainBadge);
+    entries.push({
+      key: "mergetrain",
+      priority: mergeTrainBadge.state === "escalated" ? 1 : 4,
+      chip: `${t("todos.mergetrain_detail_title")} · ${badgeText}`,
+      render: () => (
+        <div
+          data-testid="todo-detail-mergetrain"
+          data-mergetrain-state={mergeTrainBadge.state}
+          data-mergetrain-position={mergeTrainBadge.position}
+          className="flex flex-wrap items-center justify-between gap-2 text-submeta text-ink-2"
+        >
+          <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+            <span className="font-medium text-ink">{t("todos.mergetrain_detail_title")}</span>
+            <span
+              className={cx(
+                "rounded-chip px-1.5 py-0.5 text-xs font-medium whitespace-nowrap tabular-nums",
+                mergeTrainBadge.state === "escalated" ? "bg-orange-tint text-attention" : "bg-surface text-ink shadow-hairline",
+              )}
+            >
+              {badgeText}
+            </span>
+            {mergeTrainBadge.repo_key && (
+              <span className="truncate text-ink-3">{mergeTrainBadge.repo_key}</span>
+            )}
+          </span>
+          {aheadUrl && (
+            <a
+              href={aheadUrl}
+              target="_blank"
+              rel="noreferrer noopener"
+              data-testid="todo-detail-mergetrain-ahead"
+              className="inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
+            >
+              <span>{t("todos.mergetrain_ahead_pr")}</span>
+              <Icon name="external" size={11} stroke={2} className="shrink-0" />
+            </a>
+          )}
+        </div>
+      ),
+    });
+  }
+
+  if (blockers) {
+    entries.push({
+      key: "blockers",
+      priority: 2,
+      chip: t("todos.active_blockers_title", { count: blockers.length }),
+      render: () => (
+        <TodoActiveBlockersStrip
+          embedded
+          blockers={blockers}
+          canAddPR={canAddPR}
+          addingPROpen={addingPROpen}
+          onToggleAddPR={onToggleAddPR}
+          cancellingId={cancellingBlockerId}
+          onCancelBlocker={onCancelBlocker}
+        />
+      ),
+    });
+  }
+
+  if (hasWait && todo.wait) {
+    entries.push({
+      key: "wait",
+      priority: 3,
+      chip: waitSummary(todo.wait),
+      render: () => (
+        <div className="select-text">
+          <TaskWaitInfo todo={todo} expanded />
+        </div>
+      ),
+    });
+  }
+
+  if (entries.length === 0) return null;
+
+  entries.sort((a, b) => a.priority - b.priority);
+  const [primary, ...secondary] = entries;
+  const blockersHidden = secondary.some((e) => e.key === "blockers") && !expanded;
+
+  return (
+    <section
+      data-testid="todo-detail-focus-banner"
+      data-focus-count={entries.length}
+      aria-label={t("todos.detail_focus_region")}
+      className="mt-3 rounded-control border border-line bg-inset px-3 py-2.5 text-meta text-ink-2"
+    >
+      <div>{primary.render()}</div>
+      {secondary.length > 0 && (
+        <>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-line/70 pt-2">
+            {secondary.map((item) => (
+              <span
+                key={item.key}
+                data-testid={`todo-detail-focus-chip-${item.key}`}
+                className="max-w-52 truncate rounded-chip bg-surface px-1.5 py-0.5 text-submeta text-ink-2 shadow-hairline"
+              >
+                {item.chip}
+              </span>
+            ))}
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
+              {canAddPR && blockersHidden && (
+                <Button
+                  tone="quiet"
+                  size="sm"
+                  icon="plus"
+                  expanded={addingPROpen}
+                  testId="todo-add-pr-blocker-btn"
+                  onClick={onToggleAddPR}
+                  className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+                >
+                  {t("todos.active_blocker_add_pr")}
+                </Button>
+              )}
+              <button
+                type="button"
+                data-testid="todo-detail-focus-more"
+                aria-expanded={expanded}
+                onClick={() => setExpanded((v) => !v)}
+                className="touch-hit inline-flex h-6 shrink-0 items-center gap-1 rounded-chip px-1.5 text-submeta font-medium whitespace-nowrap text-accent-ink hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent"
+              >
+                <span>
+                  {expanded
+                    ? t("todos.detail_focus_less")
+                    : t("todos.detail_focus_more", { count: secondary.length })}
+                </span>
+                <Icon
+                  name="chevron"
+                  size={10}
+                  stroke={2.2}
+                  className={cx("shrink-0 transition-transform", expanded ? "" : "-rotate-90")}
+                />
+              </button>
+            </div>
+          </div>
+          {expanded && (
+            <div data-testid="todo-detail-focus-extra" className="mt-2 flex flex-col gap-2 border-t border-line/70 pt-2">
+              {secondary.map((item) => (
+                <div key={item.key}>{item.render()}</div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Uniform compact disclosure row for secondary audit/traceback sections under todos_v2 (#17696). */
+function DetailAuditDisclosure({
+  testId,
+  toggleTestId,
+  title,
+  summary,
+  count,
+  expanded,
+  onToggle,
+  right,
+  children,
+}: {
+  testId: string;
+  toggleTestId: string;
+  title: string;
+  summary?: string;
+  count?: number;
+  expanded: boolean;
+  onToggle: () => void;
+  right?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      data-testid={testId}
+      aria-label={title}
+      className="rounded-control border border-line bg-canvas"
+    >
+      <div className="flex items-center justify-between gap-2 px-3 py-2">
+        <button
+          type="button"
+          data-testid={toggleTestId}
+          aria-expanded={expanded}
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-label font-medium text-ink-2 transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent"
+        >
+          <Icon
+            name="chevron"
+            size={11}
+            stroke={2.2}
+            className={cx("shrink-0 text-ink-3 transition-transform", expanded ? "" : "-rotate-90")}
+          />
+          <span className="shrink-0 whitespace-nowrap">{title}</span>
+          {count !== undefined && (
+            <span className="shrink-0 rounded-chip bg-field px-1.5 py-0.5 text-submeta text-ink-3 tabular-nums">
+              {count}
+            </span>
+          )}
+          {summary && (
+            <span className="min-w-0 truncate text-submeta font-normal text-ink-3">
+              · {summary}
+            </span>
+          )}
+        </button>
+        {right && <div className="flex shrink-0 items-center gap-1">{right}</div>}
+      </div>
+      {expanded && <div className="border-t border-line px-3 py-2.5">{children}</div>}
+    </section>
+  );
+}
+
 function TodoDetail({
   todo,
   owner,
@@ -4581,8 +4905,8 @@ function TodoDetail({
   const allSessions = useAgentSessions();
   const spacesSupported = useStore((s) => s.spacesSupported);
   const [repositoryCount, setRepositoryCount] = useState(0);
-  // Under todos_v2 (#14851), all right-pane sections including participated history start expanded by default.
-  const [releasedOpenV2, setReleasedOpenV2] = useState(true);
+  // Under todos_v2 (#17696), participated history starts collapsed as a secondary audit disclosure row.
+  const [releasedOpenV2, setReleasedOpenV2] = useState(false);
   const releasedVisible = todosV2 === true ? releasedOpenV2 : showReleased;
   // Single-item direction and parent-goal pickers strictly gated behind todos_v2 (#15653, #16100).
   const [directionPickerOpen, setDirectionPickerOpen] = useState(false);
@@ -4827,23 +5151,38 @@ function TodoDetail({
       hasChildSummary ||
       canChangeParent ||
       canChangeDirection);
-  const ownershipMetaItems: ReactNode[] = [];
+  const overviewItems: ReactNode[] = [];
   if (showOwnershipStrip) {
     if (isWorkGoalV2) {
-      ownershipMetaItems.push(
+      overviewItems.push(
+        <span key="status" className="inline-flex shrink-0 items-center gap-1.5">
+          <StatusMark state={dotState} size="sm" />
+          <span data-testid="todo-detail-summary-status" className="font-semibold text-ink">
+            {steps?.label ?? statusLabel}
+          </span>
+        </span>,
+      );
+      overviewItems.push(
         <span
           key="template"
           data-testid="todo-detail-template-badge"
-          className="inline-flex shrink-0 items-center gap-1 font-semibold text-accent-ink"
+          className="inline-flex shrink-0 items-center gap-1 font-medium text-accent-ink"
         >
           <Icon name="target" size={12} stroke={2} />
           <span>{t("todos.detail_template_work_goal")}</span>
         </span>,
       );
+      if (activeAgents.length > 0) {
+        overviewItems.push(
+          <span key="agents" className="shrink-0 whitespace-nowrap tabular-nums">
+            {t("todos.agent_count", { count: activeAgents.length })}
+          </span>,
+        );
+      }
     }
     if (effectiveDirectionId) {
       const dirLabel = resolvedDirectionLabel || effectiveDirectionId;
-      ownershipMetaItems.push(
+      overviewItems.push(
         <span
           key="direction"
           data-testid="todo-detail-direction"
@@ -4857,7 +5196,7 @@ function TodoDetail({
       );
     }
     if (todo.part_of) {
-      ownershipMetaItems.push(
+      overviewItems.push(
         parentTodo ? (
           <button
             key="parent"
@@ -4876,8 +5215,34 @@ function TodoDetail({
         ),
       );
     }
+    if (todo.child_summary && todo.child_summary.total > 0) {
+      overviewItems.push(
+        <span key="child-summary" data-testid="todo-detail-child-summary" className="inline-flex shrink-0 items-center gap-1.5 tabular-nums">
+          <span>{t("todos.detail_subtasks_section", { done: todo.child_summary.done, total: todo.child_summary.total })}</span>
+          {todo.child_summary.working > 0 && (
+            <span className="text-ink-3">{t("todos.child_summary_working", { count: todo.child_summary.working })}</span>
+          )}
+          {todo.child_summary.needs_you > 0 && (
+            <span className="font-medium text-attention">{t("todos.goal_blocked", { count: todo.child_summary.needs_you })}</span>
+          )}
+        </span>,
+      );
+    } else if (childTodos.length > 0) {
+      overviewItems.push(
+        <span key="subtasks" data-testid="todo-detail-summary-subtasks" className="shrink-0 whitespace-nowrap tabular-nums">
+          {t("todos.detail_subtasks_section", { done: doneChildCount, total: childTodos.length })}
+        </span>,
+      );
+    }
+    if (isWorkGoalV2 && repositoryCount > 0) {
+      overviewItems.push(
+        <span key="repos" data-testid="todo-detail-summary-repos" className="shrink-0 whitespace-nowrap tabular-nums">
+          {t("todos.slim_repo_count", { count: repositoryCount })}
+        </span>,
+      );
+    }
     if (todo.priority === "high" || todo.priority === "low") {
-      ownershipMetaItems.push(
+      overviewItems.push(
         <span
           key="priority"
           data-testid="todo-detail-priority-subtle"
@@ -4889,23 +5254,62 @@ function TodoDetail({
       );
     }
   }
+  const showOverviewPrimaryAgent =
+    isWorkGoalV2 && open && workGoalActions?.primaryAction === "open_agent" && Boolean(workGoalActions.activeAgent);
+  const v2MetaItems: ReactNode[] = [];
+  if (todosV2 === true) {
+    if (!isWorkGoalV2) {
+      v2MetaItems.push(
+        <span key="status" className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-label font-semibold", toneClass)}>
+          <StatusMark state={dotState} size="sm" />
+          <span data-testid="todo-detail-status">{steps?.label ?? statusLabel}</span>
+        </span>,
+      );
+      if (activeAgents.length > 0) {
+        v2MetaItems.push(
+          <span key="agents">{t("todos.agent_count", { count: activeAgents.length })}</span>,
+        );
+      }
+    }
+    if (steps?.tail) {
+      v2MetaItems.push(<span key="steps-tail" data-testid="todo-detail-steps-next">{steps.tail}</span>);
+    }
+    if (responsible) {
+      v2MetaItems.push(
+        <span
+          key="responsible"
+          data-testid="todo-detail-responsible"
+          data-kind={responsible.kind}
+          title={t("todos.responsible_label", { name: responsible.name })}
+          className="inline-flex min-w-0 items-center gap-1 text-ink-2"
+        >
+          <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={12} stroke={2} className="shrink-0 text-ink-3" />
+          <span className="truncate">{responsible.name}</span>
+        </span>,
+      );
+    }
+    if (steps?.after) {
+      v2MetaItems.push(<span key="steps-after" data-testid="todo-detail-steps">{steps.after}</span>);
+    }
+    v2MetaItems.push(<span key="created">{t("todos.created_at", { time: clock(todo.created_at) })}</span>);
+  }
 
   return (
     // a page's reading width (DESIGN_SYSTEM 2.5 "Widths", as the inbox's detail): a wide window centers it (audit item 75)
     <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col p-6 sm:p-8" data-testid="todo-detail">
-      {/* Unified Ownership & Hierarchy Strip under todos_v2 (#14777, #14851, #16939) */}
+      {/* Single consolidated top overview strip under todos_v2 (#17696) */}
       {showOwnershipStrip && (
         <>
           <div
             data-testid="todo-detail-ownership"
             aria-label={t("todos.detail_ownership_region")}
-            className="mb-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-control bg-inset px-3 py-1.5 text-label text-ink-2 shadow-hairline"
+            className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-control border border-line bg-inset px-3 py-2 text-label text-ink-2"
           >
-            {ownershipMetaItems.flatMap((node, index) =>
+            {overviewItems.flatMap((node, index) =>
               index === 0 ? [node] : [<span key={`sep-${index}`} className="text-ink-3" aria-hidden>·</span>, node],
             )}
-            {(canChangeParent || canChangeDirection) && (
-              <div className={cx("flex shrink-0 items-center gap-1.5", ownershipMetaItems.length > 0 && "ml-auto")}>
+            {(canChangeParent || canChangeDirection || showOverviewPrimaryAgent) && (
+              <div className={cx("flex shrink-0 flex-wrap items-center gap-1.5", overviewItems.length > 0 && "ml-auto")}>
                 {canChangeParent && (
                   <Button
                     tone="quiet"
@@ -4938,6 +5342,17 @@ function TodoDetail({
                     {t("todos.detail_change_direction")}
                   </Button>
                 )}
+                {showOverviewPrimaryAgent && workGoalActions?.activeAgent && (
+                  <Button
+                    tone={instead || canRetry ? "secondary" : "accent"}
+                    icon="terminal"
+                    testId="todo-summary-open-active-agent"
+                    onClick={() => openFromPage({ name: "session", mid: workGoalActions.activeAgent!.machineId, sid: workGoalActions.activeAgent!.sessionId })}
+                    className="h-6 shrink-0 px-2.5 text-label whitespace-nowrap"
+                  >
+                    {t("todos.detail_open_active_agent")}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -4967,122 +5382,6 @@ function TodoDetail({
           )}
         </>
       )}
-      {isWorkGoalV2 && (
-          <div
-            data-testid="todo-detail-status-summary"
-            aria-label={t("todos.detail_status_summary_region")}
-            className="mb-3 flex flex-wrap items-center justify-between gap-2.5 rounded-control border border-line bg-inset px-3 py-2 text-meta text-ink-2"
-          >
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <StatusMark state={dotState} size="sm" />
-              <span data-testid="todo-detail-summary-status" className="font-semibold text-ink">
-                {steps?.label ?? statusLabel}
-              </span>
-              {activeAgents.length > 0 && (
-                <>
-                  <span className="text-ink-3" aria-hidden>·</span>
-                  <span>{t("todos.agent_count", { count: activeAgents.length })}</span>
-                </>
-              )}
-              {todosV2 && todo.child_summary && todo.child_summary.total > 0 ? (
-                <>
-                  <span className="text-ink-3" aria-hidden>·</span>
-                  <span data-testid="todo-detail-child-summary" className="inline-flex items-center gap-1.5 tabular-nums">
-                    <span>{t("todos.detail_subtasks_section", { done: todo.child_summary.done, total: todo.child_summary.total })}</span>
-                    {todo.child_summary.working > 0 && (
-                      <span className="text-ink-3">{t("todos.child_summary_working", { count: todo.child_summary.working })}</span>
-                    )}
-                    {todo.child_summary.needs_you > 0 && (
-                      <span className="font-medium text-attention">{t("todos.goal_blocked", { count: todo.child_summary.needs_you })}</span>
-                    )}
-                  </span>
-                </>
-              ) : childTodos.length > 0 && (
-                <>
-                  <span className="text-ink-3" aria-hidden>·</span>
-                  <span data-testid="todo-detail-summary-subtasks">
-                    {t("todos.detail_subtasks_section", { done: doneChildCount, total: childTodos.length })}
-                  </span>
-                </>
-              )}
-              {repositoryCount > 0 && (
-                <>
-                  <span className="text-ink-3" aria-hidden>·</span>
-                  <span data-testid="todo-detail-summary-repos">
-                    {t("todos.slim_repo_count", { count: repositoryCount })}
-                  </span>
-                </>
-              )}
-            </div>
-            {open && workGoalActions?.primaryAction === "open_agent" && workGoalActions.activeAgent && (
-              <Button
-                tone={instead || canRetry ? "secondary" : "accent"}
-                icon="terminal"
-                testId="todo-summary-open-active-agent"
-                onClick={() => openFromPage({ name: "session", mid: workGoalActions.activeAgent!.machineId, sid: workGoalActions.activeAgent!.sessionId })}
-                className="h-7 shrink-0 px-2.5 text-label whitespace-nowrap"
-              >
-                {t("todos.detail_open_active_agent")}
-              </Button>
-            )}
-          </div>
-      )}
-
-      {todosV2 && !isWorkGoalV2 && todo.child_summary && todo.child_summary.total > 0 && (
-        <div
-          data-testid="todo-detail-child-summary"
-          className="mb-3 flex flex-wrap items-center gap-2 rounded-control border border-line bg-inset px-3 py-1.5 text-submeta text-ink-2 tabular-nums"
-        >
-          <span className="font-medium text-ink">
-            {t("todos.detail_subtasks_section", { done: todo.child_summary.done, total: todo.child_summary.total })}
-          </span>
-          {todo.child_summary.working > 0 && (
-            <span className="text-ink-3">{t("todos.child_summary_working", { count: todo.child_summary.working })}</span>
-          )}
-          {todo.child_summary.needs_you > 0 && (
-            <span className="font-medium text-attention">{t("todos.goal_blocked", { count: todo.child_summary.needs_you })}</span>
-          )}
-        </div>
-      )}
-
-      {todosV2 && mergeTrainBadge && (() => {
-        const aheadUrl = safeHttpUrl(mergeTrainBadge.ahead_pr_url);
-        return (
-          <div
-            data-testid="todo-detail-mergetrain"
-            data-mergetrain-state={mergeTrainBadge.state}
-            data-mergetrain-position={mergeTrainBadge.position}
-            className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-control border border-line bg-inset px-3 py-1.5 text-submeta text-ink-2"
-          >
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              <span className="font-medium text-ink">{t("todos.mergetrain_detail_title")}</span>
-              <span
-                className={cx(
-                  "rounded-chip px-1.5 py-0.5 text-xs font-medium whitespace-nowrap tabular-nums",
-                  mergeTrainBadge.state === "escalated" ? "bg-orange-tint text-attention" : "bg-surface text-ink shadow-hairline",
-                )}
-              >
-                {mergeTrainBadgeText(mergeTrainBadge)}
-              </span>
-              {mergeTrainBadge.repo_key && (
-                <span className="truncate text-ink-3">{mergeTrainBadge.repo_key}</span>
-              )}
-            </span>
-            {aheadUrl && (
-              <a
-                href={aheadUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                data-testid="todo-detail-mergetrain-ahead"
-                className="inline-flex shrink-0 items-center gap-1 font-medium whitespace-nowrap text-accent-ink hover:underline"
-              >
-                <span>{t("todos.mergetrain_ahead_pr")}</span>
-                <Icon name="external" size={11} stroke={2} className="shrink-0" />
-              </a>
-            )}
-          </div>
-        );
-      })()}
 
       {/* Title Row with ⋯ menu */}
       <div className="flex items-center justify-between gap-3">
@@ -5120,102 +5419,106 @@ function TodoDetail({
         )}
       </div>
 
-      {/* Meta Line */}
-      <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
-        <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
-          <StatusMark state={dotState} size="sm" />
-          <span data-testid="todo-detail-status">{steps?.label ?? statusLabel}</span>
-        </span>
-        {steps?.tail && (
-          <>
-            <span className="text-ink-3">·</span>
-            <span data-testid="todo-detail-steps-next">{steps.tail}</span>
-          </>
-        )}
-        <span className="text-ink-3">·</span>
-        <span>{t("todos.agent_count", { count: activeAgents.length })}</span>
-        {responsible && (
-          <>
-            <span className="text-ink-3">·</span>
-            <span
-              data-testid="todo-detail-responsible"
-              data-kind={responsible.kind}
-              title={t("todos.responsible_label", { name: responsible.name })}
-              className="inline-flex min-w-0 items-center gap-1 text-ink-2"
-            >
-              <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={12} stroke={2} className="shrink-0 text-ink-3" />
-              <span className="truncate">{responsible.name}</span>
-            </span>
-          </>
-        )}
-        {steps?.after && (
-          <>
-            <span className="text-ink-3">·</span>
-            <span data-testid="todo-detail-steps">{steps.after}</span>
-          </>
-        )}
-        <span className="text-ink-3">·</span>
-        <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
-        {todosV2 === true && (
-          <>
-            <span className="text-ink-3" aria-hidden>·</span>
-            <div
-              role="radiogroup"
-              aria-label={t("todos.detail_item_type_label")}
-              data-testid="todo-detail-item-type"
-              className="inline-flex h-6 shrink-0 items-center gap-0.5 rounded-control bg-inset p-0.5 shadow-hairline"
-            >
-              {(["task", "personal"] as const).map((nextType) => {
-                const active = currentItemType === nextType;
-                return (
-                  <button
-                    key={nextType}
-                    type="button"
-                    role="radio"
-                    aria-checked={active}
-                    data-item-type={nextType}
-                    disabled={itemTypeBusy}
-                    onClick={() => void switchItemType(nextType)}
-                    className={cx(
-                      "touch-hit h-5 rounded-chip px-2 text-submeta whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50",
-                      active ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-3 hover:text-ink-2",
-                    )}
-                  >
-                    {nextType === "task" ? t("todos.item_type_task") : t("todos.item_type_personal")}
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-        {canUnsee && (
-          <Button
-            tone="quiet"
-            size="sm"
-            icon="undo"
-            busy={unseeing}
-            disabled={unseeing}
-            testId="todo-unsee-btn"
-            onClick={() => void handleUnsee()}
-            className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+      {/* Meta Line: under todos_v2 work goals, status and agent count live solely in the top overview strip (#17696) */}
+      {todosV2 === true ? (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 text-meta text-ink-2" data-testid="todo-detail-meta">
+          {v2MetaItems.flatMap((node, index) =>
+            index === 0 ? [node] : [<span key={`meta-sep-${index}`} className="text-ink-3" aria-hidden>·</span>, node],
+          )}
+          <span className="text-ink-3" aria-hidden>·</span>
+          <div
+            role="radiogroup"
+            aria-label={t("todos.detail_item_type_label")}
+            data-testid="todo-detail-item-type"
+            className="inline-flex h-6 shrink-0 items-center gap-0.5 rounded-control bg-inset p-0.5 shadow-hairline"
           >
-            {t("todos.detail_mark_unread")}
-          </Button>
-        )}
-        {canAddPRBlocker && !hasActiveBlockers && (
-          <Button
-            tone="quiet"
-            size="sm"
-            icon="plus"
-            expanded={prBlockerOpen}
-            testId="todo-add-pr-blocker-btn"
-            onClick={toggleAddPRBlocker}
-            className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
-          >
-            {t("todos.active_blocker_add_pr")}
-          </Button>
-        )}
-      </div>
+            {(["task", "personal"] as const).map((nextType) => {
+              const active = currentItemType === nextType;
+              return (
+                <button
+                  key={nextType}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  data-item-type={nextType}
+                  disabled={itemTypeBusy}
+                  onClick={() => void switchItemType(nextType)}
+                  className={cx(
+                    "touch-hit h-5 rounded-chip px-2 text-submeta whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-50",
+                    active ? "bg-surface font-medium text-ink shadow-btn" : "text-ink-3 hover:text-ink-2",
+                  )}
+                >
+                  {nextType === "task" ? t("todos.item_type_task") : t("todos.item_type_personal")}
+                </button>
+              );
+            })}
+          </div>
+          {canUnsee && (
+            <Button
+              tone="quiet"
+              size="sm"
+              icon="undo"
+              busy={unseeing}
+              disabled={unseeing}
+              testId="todo-unsee-btn"
+              onClick={() => void handleUnsee()}
+              className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+            >
+              {t("todos.detail_mark_unread")}
+            </Button>
+          )}
+          {canAddPRBlocker && !hasActiveBlockers && (
+            <Button
+              tone="quiet"
+              size="sm"
+              icon="plus"
+              expanded={prBlockerOpen}
+              testId="todo-add-pr-blocker-btn"
+              onClick={toggleAddPRBlocker}
+              className="h-6 shrink-0 border border-line bg-surface px-2 text-label whitespace-nowrap text-ink-2 hover:bg-hover"
+            >
+              {t("todos.active_blocker_add_pr")}
+            </Button>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
+          <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
+            <StatusMark state={dotState} size="sm" />
+            <span data-testid="todo-detail-status">{steps?.label ?? statusLabel}</span>
+          </span>
+          {steps?.tail && (
+            <>
+              <span className="text-ink-3">·</span>
+              <span data-testid="todo-detail-steps-next">{steps.tail}</span>
+            </>
+          )}
+          <span className="text-ink-3">·</span>
+          <span>{t("todos.agent_count", { count: activeAgents.length })}</span>
+          {responsible && (
+            <>
+              <span className="text-ink-3">·</span>
+              <span
+                data-testid="todo-detail-responsible"
+                data-kind={responsible.kind}
+                title={t("todos.responsible_label", { name: responsible.name })}
+                className="inline-flex min-w-0 items-center gap-1 text-ink-2"
+              >
+                <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={12} stroke={2} className="shrink-0 text-ink-3" />
+                <span className="truncate">{responsible.name}</span>
+              </span>
+            </>
+          )}
+          {steps?.after && (
+            <>
+              <span className="text-ink-3">·</span>
+              <span data-testid="todo-detail-steps">{steps.after}</span>
+            </>
+          )}
+          <span className="text-ink-3">·</span>
+          <span>{t("todos.created_at", { time: clock(todo.created_at) })}</span>
+        </div>
+      )}
       {isCancelled(todo) && cancellationReason(todo) && (
         <p className="mt-2 text-xs leading-[1.6] text-ink-3" data-testid="todo-detail-cancelled-reason">
           {t("todos.cancelled_reason", { reason: cancellationReason(todo) })}
@@ -5237,14 +5540,15 @@ function TodoDetail({
       {reviewState(todo) === "user_check" ? <VerificationReport todo={todo} lookup={lookup} /> : <TodoAskPanel todo={todo} />}
       <HeldForBriefing todo={todo} />
 
-      {/* Active persistent blocker edges projected by the server under todos_v2 (#16135, #16138, #16199) */}
-      {todosV2 === true && hasActiveBlockers && (
-        <TodoActiveBlockersStrip
-          blockers={todo.active_blockers!}
+      {/* Single progressive focus banner unifying wait, active blockers, repo gate, and merge train under todos_v2 (#17696) */}
+      {todosV2 === true && (
+        <TodoDetailFocusBanner
+          todo={todo}
+          mergeTrainBadge={mergeTrainBadge}
           canAddPR={open}
           addingPROpen={prBlockerOpen}
           onToggleAddPR={toggleAddPRBlocker}
-          cancellingId={cancellingBlockerId}
+          cancellingBlockerId={cancellingBlockerId}
           onCancelBlocker={(blockerId) => void handleCancelBlocker(blockerId)}
         />
       )}
@@ -5275,7 +5579,7 @@ function TodoDetail({
           <TaskBriefPanel todo={todo} />
         </Suspense>
       )}
-      {todo.wait != null && <div className="mt-2 select-text"><TaskWaitInfo todo={todo} expanded /></div>}
+      {todosV2 !== true && todo.wait != null && <div className="mt-2 select-text"><TaskWaitInfo todo={todo} expanded /></div>}
       {reviewState(todo) !== "user_check" && <ReviewChecklist todo={todo} lookup={lookup} />}
       {todo.brief && (
         <Suspense fallback={null}>
@@ -5311,6 +5615,7 @@ function TodoDetail({
         <TodoRepositoryBindings key={`${owner}:${todo.manager ?? defaultManager()}:${todo.id}`} manager={todo.manager ?? defaultManager()} owner={owner} todoId={todo.id}
           prStatus={todo.pr_status} otherPRs={todo.other_prs} legacyPRs={legacyPR ? [legacyPR] : []} version={todo.updated_at} todosV2={todosV2}
           repoGate={todosV2 ? todo.repo_gate : undefined}
+          hideRepoGateBanner={todosV2 === true}
           onRepositoriesCount={todosV2 === true ? setRepositoryCount : undefined} />
       </ExternalSourcesEntry>
       {todosV2 === true && childTodos.length > 0 && (() => {
@@ -5417,13 +5722,15 @@ function TodoDetail({
         </Suspense>
       </PageBoundary>
 
-      <ResponsibleSection todo={todo} machines={machines} />
+      {todosV2 !== true && (
+        <>
+          <ResponsibleSection todo={todo} machines={machines} />
 
-      <ThreadSection todo={todo} />
+          <ThreadSection todo={todo} />
 
-      <DecisionsSection todo={todo} lookup={lookup} />
-
-      <TodoCausalTraceSection todoId={todo.id} enabled={todosV2 === true} />
+          <DecisionsSection todo={todo} lookup={lookup} />
+        </>
+      )}
 
       {/* Spaces Section */}
       {spacesSupported !== false && todo.spaces && todo.spaces.length > 0 && (
@@ -5585,8 +5892,9 @@ function TodoDetail({
           <div className="mt-4">
             <button
               type="button"
+              aria-expanded={releasedVisible}
               onClick={todosV2 === true ? () => setReleasedOpenV2((v) => !v) : onToggleReleased}
-              className="flex items-center gap-1 text-[12px] text-ink-3 hover:text-ink-2"
+              className="flex items-center gap-1 text-[12px] text-ink-3 hover:text-ink-2 focus-visible:outline-2 focus-visible:outline-accent"
             >
               <Icon
                 name="chevron"
@@ -5618,6 +5926,20 @@ function TodoDetail({
           </div>
         )}
       </div>
+
+      {/* Secondary audit & traceback sections: collapsed by default with count/summary under todos_v2 (#17696) */}
+      {todosV2 === true && (
+        <div
+          data-testid="todo-detail-audit-group"
+          aria-label={t("todos.detail_audit_group")}
+          className="mt-6 flex flex-col gap-2"
+        >
+          <DecisionsSection todo={todo} lookup={lookup} defaultCollapsed />
+          <ResponsibleSection todo={todo} machines={machines} defaultCollapsed />
+          <ThreadSection todo={todo} defaultCollapsed />
+          <TodoCausalTraceSection todoId={todo.id} enabled compact />
+        </div>
+      )}
 
       {/* Bottom Action Bar. A done to-do can't be handed over (the hub refuses, #1856): Reopen next to it comes first. A
           failed start is open: Retry (or Hand to agent, which reopens it first) and Complete, which closes it for good as
@@ -5716,13 +6038,23 @@ function TodoDetail({
  * The external responsible party (long-running session or person) when one is recorded on the to-do (#12712).
  * Renders nothing when unset so to-dos without a responsible party stay unchanged.
  */
-function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[] }) {
+function ResponsibleSection({
+  todo,
+  machines,
+  defaultCollapsed = false,
+}: {
+  todo: Todo;
+  machines: Machine[];
+  defaultCollapsed?: boolean;
+}) {
   const responsible = responsibleOf(todo);
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(!defaultCollapsed);
 
   useEffect(() => {
     setBusy(false);
-  }, [todo.id]);
+    setExpanded(!defaultCollapsed);
+  }, [todo.id, defaultCollapsed]);
 
   if (!responsible) return null;
 
@@ -5745,43 +6077,65 @@ function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[
     }
   };
 
+  const body = (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
+          <span className="shrink-0 text-ink-3">
+            <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={14} />
+          </span>
+          <span data-testid="todo-responsible-name" className="truncate">
+            {responsible.name}
+          </span>
+          <span
+            data-testid="todo-responsible-kind"
+            className="shrink-0 whitespace-nowrap rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-3"
+          >
+            {t(`todos.responsible_kind_${responsible.kind}`)}
+          </span>
+        </div>
+        {hint && (
+          <div data-testid="todo-responsible-hint" className="mt-0.5 truncate pl-5.5 text-xs text-ink-3">
+            {hint}
+          </div>
+        )}
+      </div>
+      <Button
+        tone="quiet"
+        busy={busy}
+        disabled={busy}
+        title={t("todos.responsible_clear_label", { name: responsible.name })}
+        className="shrink-0 whitespace-nowrap px-2 py-1 text-xs text-ink-3 hover:bg-red-tint/50 hover:text-red"
+        onClick={() => void clear()}
+      >
+        {t("todos.responsible_clear")}
+      </Button>
+    </div>
+  );
+
+  if (defaultCollapsed) {
+    return (
+      <DetailAuditDisclosure
+        testId="todo-responsible-section"
+        toggleTestId="todo-responsible-toggle"
+        title={t("todos.responsible_section")}
+        count={1}
+        summary={responsible.name}
+        expanded={expanded}
+        onToggle={() => setExpanded((v) => !v)}
+      >
+        {body}
+      </DetailAuditDisclosure>
+    );
+  }
+
   return (
     <div className="mt-6" data-testid="todo-responsible-section">
       <div className="mb-2 text-xs font-medium tracking-[0.04em] text-ink-3 uppercase">
         {t("todos.responsible_section")}
       </div>
-      <div className="flex items-center justify-between gap-3 rounded-control border border-line bg-canvas p-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
-            <span className="shrink-0 text-ink-3">
-              <Icon name={responsible.kind === "person" ? "person" : "terminal"} size={14} />
-            </span>
-            <span data-testid="todo-responsible-name" className="truncate">
-              {responsible.name}
-            </span>
-            <span
-              data-testid="todo-responsible-kind"
-              className="shrink-0 whitespace-nowrap rounded bg-hover px-1.5 py-0.5 text-xs font-normal text-ink-3"
-            >
-              {t(`todos.responsible_kind_${responsible.kind}`)}
-            </span>
-          </div>
-          {hint && (
-            <div data-testid="todo-responsible-hint" className="mt-0.5 truncate pl-5.5 text-xs text-ink-3">
-              {hint}
-            </div>
-          )}
-        </div>
-        <Button
-          tone="quiet"
-          busy={busy}
-          disabled={busy}
-          title={t("todos.responsible_clear_label", { name: responsible.name })}
-          className="shrink-0 whitespace-nowrap px-2 py-1 text-xs text-ink-3 hover:bg-red-tint/50 hover:text-red"
-          onClick={() => void clear()}
-        >
-          {t("todos.responsible_clear")}
-        </Button>
+      <div className="rounded-control border border-line bg-canvas p-3">
+        {body}
       </div>
     </div>
   );
@@ -5795,17 +6149,19 @@ function ResponsibleSection({ todo, machines }: { todo: Todo; machines: Machine[
  * with a route-level 404: the section then goes away without a word, as the decisions do. It shows only when the hub says it
  * has to-do threads (feature `todo_threads`): an older hub never sends a thread, so an "unbound" note there would be false.
  */
-function ThreadSection({ todo }: { todo: Todo }) {
+function ThreadSection({ todo, defaultCollapsed = false }: { todo: Todo; defaultCollapsed?: boolean }) {
   const thread = boundThread(todo);
   const threadsOn = useStore((s) => todoThreadsOn(s.features));
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [unsupported, setUnsupported] = useState(false);
+  const [expanded, setExpanded] = useState(!defaultCollapsed);
 
   useEffect(() => {
     setConfirm(false);
     setBusy(false);
-  }, [todo.id]);
+    setExpanded(!defaultCollapsed);
+  }, [todo.id, defaultCollapsed]);
 
   const unbind = async () => {
     if (busy) return;
@@ -5828,6 +6184,61 @@ function ThreadSection({ todo }: { todo: Todo }) {
   };
 
   if (!threadsOn || unsupported) return null;
+
+  const dialog = thread && (
+    <Dialog open={confirm} onClose={() => !busy && setConfirm(false)} title={t("todos.thread_unbind_title")}>
+      <div className="py-2 text-[13.5px] text-ink-2">{t("todos.thread_unbind_confirm", { name: threadName(thread) })}</div>
+      <div className="mt-4 flex justify-end gap-2">
+        <Button tone="secondary" disabled={busy} onClick={() => setConfirm(false)}>
+          {t("common.cancel")}
+        </Button>
+        <Button tone="danger" busy={busy} onClick={() => void unbind()}>
+          {t("todos.thread_unbind")}
+        </Button>
+      </div>
+    </Dialog>
+  );
+
+  if (defaultCollapsed) {
+    return (
+      <>
+        <DetailAuditDisclosure
+          testId="todo-thread"
+          toggleTestId="todo-thread-toggle"
+          title={t("todos.thread_section")}
+          count={thread ? 1 : 0}
+          summary={thread ? threadName(thread) : undefined}
+          expanded={expanded}
+          onToggle={() => setExpanded((v) => !v)}
+        >
+          {thread ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2 text-meta font-semibold text-ink">
+                <span className="shrink-0 text-ink-3">
+                  <Icon name="chat" size={14} />
+                </span>
+                <span data-testid="todo-thread-line" title={threadLine(thread)} className="truncate">
+                  {threadLine(thread)}
+                </span>
+              </div>
+              <Button
+                tone="quiet"
+                title={t("todos.thread_unbind_label", { name: threadName(thread) })}
+                className="shrink-0 whitespace-nowrap px-2 py-1 text-label text-ink-3 hover:bg-red-tint/50 hover:text-red"
+                onClick={() => setConfirm(true)}
+              >
+                {t("todos.thread_unbind")}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-submeta leading-relaxed text-ink-3">{t("todos.thread_empty")}</p>
+          )}
+        </DetailAuditDisclosure>
+        {dialog}
+      </>
+    );
+  }
+
   return (
     <div className="mt-6" data-testid="todo-thread">
       <div className="mb-2 text-[11.5px] font-medium tracking-[0.04em] text-ink-3 uppercase">{t("todos.thread_section")}</div>
@@ -5855,19 +6266,7 @@ function ThreadSection({ todo }: { todo: Todo }) {
           {t("todos.thread_empty")}
         </div>
       )}
-      {thread && (
-        <Dialog open={confirm} onClose={() => !busy && setConfirm(false)} title={t("todos.thread_unbind_title")}>
-          <div className="py-2 text-[13.5px] text-ink-2">{t("todos.thread_unbind_confirm", { name: threadName(thread) })}</div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button tone="secondary" disabled={busy} onClick={() => setConfirm(false)}>
-              {t("common.cancel")}
-            </Button>
-            <Button tone="danger" busy={busy} onClick={() => void unbind()}>
-              {t("todos.thread_unbind")}
-            </Button>
-          </div>
-        </Dialog>
-      )}
+      {dialog}
     </div>
   );
 }
@@ -5882,12 +6281,21 @@ function ThreadSection({ todo }: { todo: Todo }) {
  * opens it whole (#6447, `shownDecisions`). Nothing is stored: each to-do opens with the first five, and one just
  * recorded or revised shows the whole list so it is in view.
  */
-function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typeof makeSessionLookup> }) {
+function DecisionsSection({
+  todo,
+  lookup,
+  defaultCollapsed = false,
+}: {
+  todo: Todo;
+  lookup: ReturnType<typeof makeSessionLookup>;
+  defaultCollapsed?: boolean;
+}) {
   const [all, setAll] = useState<TodoDecision[] | null>(null);
   const [failed, setFailed] = useState("");
   const [unsupported, setUnsupported] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [view, setView] = useState<DecisionsView>("first");
+  const [expanded, setExpanded] = useState(!defaultCollapsed);
   const [form, setForm] = useState<{ supersedes?: TodoDecision } | null>(null);
   const [linking, setLinking] = useState<TodoDecision | null>(null);
   const menu = useMenu();
@@ -5918,8 +6326,9 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
     setFailed("");
     setShowAll(false);
     setView("first");
+    setExpanded(!defaultCollapsed);
     setForm(null);
-  }, [todo.id]);
+  }, [todo.id, defaultCollapsed]);
 
   if (unsupported) return null;
   const effective = (all ?? []).filter((d) => !d.superseded_by);
@@ -5939,32 +6348,8 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
     }
   };
 
-  return (
-    <div className="mt-6" data-testid="todo-decisions">
-      <div className="relative mb-2 flex items-center justify-between gap-3">
-        <span className="text-[11.5px] font-medium tracking-[0.04em] text-ink-3 uppercase">{t("todos.decisions_section", { count: effective.length })}</span>
-        <div className="flex shrink-0 items-center gap-1">
-          {replaced > 0 && !folded && (
-            <Button tone="quiet" className="whitespace-nowrap px-2 py-1 text-[12px]" onClick={() => setShowAll((v) => !v)}>
-              {showAll ? t("todos.show_effective") : t("todos.show_history", { count: replaced })}
-            </Button>
-          )}
-          <Button tone="quiet" icon="plus" className="whitespace-nowrap px-2 py-1 text-[12px]" onClick={() => setForm({})}>
-            {t("todos.add_decision")}
-          </Button>
-          {/* the Agents title row's fold-all button and meaning: Collapse all while any is shown, Expand all once folded */}
-          {all !== null && listed.length > 0 && (
-            <FoldAllButton
-              label={folded ? t("todos.decisions_expand") : t("todos.decisions_fold")}
-              expand={folded}
-              onClick={() => setView(folded ? "all" : "folded")}
-              className={SESSION_LIST_STYLE.foldButton}
-              testId="todo-decisions-fold"
-            />
-          )}
-        </div>
-      </div>
-
+  const listContent = (
+    <>
       {failed && all === null ? (
         <div className="flex items-center justify-between gap-3 rounded-control border border-dashed border-line p-4 text-[12.5px] text-ink-3">
           <span className="min-w-0 truncate">{t("todos.decisions_failed", { error: failed })}</span>
@@ -5972,7 +6357,7 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
             {t("todos.retry")}
           </Button>
         </div>
-      ) : all === null || folded ? null : shown.length === 0 ? (
+      ) : all === null || (!defaultCollapsed && folded) ? null : shown.length === 0 ? (
         <div className="rounded-control border border-dashed border-line p-4 text-[12.5px] leading-[1.6] text-ink-3">
           {t("todos.decisions_empty")}
         </div>
@@ -6043,12 +6428,16 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
           })}
         </ol>
       )}
-      {!folded && listed.length > DECISIONS_FIRST && (
+      {(!folded || defaultCollapsed) && listed.length > DECISIONS_FIRST && (
         <Button tone="quiet" testId="todo-decisions-more" expanded={view === "all"} className="mt-1.5 whitespace-nowrap px-2 py-1 text-xs" onClick={() => setView(view === "first" ? "all" : "first")}>
           {view === "first" ? t("todos.decisions_show_all", { count: listed.length }) : t("todos.decisions_show_first", { count: DECISIONS_FIRST })}
         </Button>
       )}
+    </>
+  );
 
+  const overlays = (
+    <>
       {menu.anchor && linking && (
         <Menu
           anchor={menu.anchor}
@@ -6075,10 +6464,71 @@ function DecisionsSection({ todo, lookup }: { todo: Todo; lookup: ReturnType<typ
         onClose={() => setForm(null)}
         onSaved={async () => {
           // the one just recorded or revised is last: show them all so it is in view
+          setExpanded(true);
           setView("all");
           await load();
         }}
       />
+    </>
+  );
+
+  if (defaultCollapsed) {
+    return (
+      <>
+        <DetailAuditDisclosure
+          testId="todo-decisions"
+          toggleTestId="todo-decisions-toggle"
+          title={t("todos.decisions_section", { count: effective.length })}
+          expanded={expanded}
+          onToggle={() => setExpanded((v) => !v)}
+          right={
+            <>
+              {replaced > 0 && expanded && (
+                <Button tone="quiet" size="sm" className="h-6 px-2 text-submeta whitespace-nowrap" onClick={() => setShowAll((v) => !v)}>
+                  {showAll ? t("todos.show_effective") : t("todos.show_history", { count: replaced })}
+                </Button>
+              )}
+              <Button tone="quiet" size="sm" icon="plus" className="h-6 px-2 text-submeta whitespace-nowrap" onClick={() => setForm({})}>
+                {t("todos.add_decision")}
+              </Button>
+            </>
+          }
+        >
+          {listContent}
+        </DetailAuditDisclosure>
+        {overlays}
+      </>
+    );
+  }
+
+  return (
+    <div className="mt-6" data-testid="todo-decisions">
+      <div className="relative mb-2 flex items-center justify-between gap-3">
+        <span className="text-[11.5px] font-medium tracking-[0.04em] text-ink-3 uppercase">{t("todos.decisions_section", { count: effective.length })}</span>
+        <div className="flex shrink-0 items-center gap-1">
+          {replaced > 0 && !folded && (
+            <Button tone="quiet" className="whitespace-nowrap px-2 py-1 text-[12px]" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? t("todos.show_effective") : t("todos.show_history", { count: replaced })}
+            </Button>
+          )}
+          <Button tone="quiet" icon="plus" className="whitespace-nowrap px-2 py-1 text-[12px]" onClick={() => setForm({})}>
+            {t("todos.add_decision")}
+          </Button>
+          {/* the Agents title row's fold-all button and meaning: Collapse all while any is shown, Expand all once folded */}
+          {all !== null && listed.length > 0 && (
+            <FoldAllButton
+              label={folded ? t("todos.decisions_expand") : t("todos.decisions_fold")}
+              expand={folded}
+              onClick={() => setView(folded ? "all" : "folded")}
+              className={SESSION_LIST_STYLE.foldButton}
+              testId="todo-decisions-fold"
+            />
+          )}
+        </div>
+      </div>
+
+      {listContent}
+      {overlays}
     </div>
   );
 }

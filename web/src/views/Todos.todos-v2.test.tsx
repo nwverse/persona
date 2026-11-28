@@ -863,7 +863,7 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
     expect(host.querySelector("[data-testid=todo-detail-ownership]")).toBeNull();
   });
 
-  it("keeps all sections expanded by default, renders subtle priority & status summary strip, and dynamic CTA for work goals under todos_v2=true", async () => {
+  it("converges top overview strip, deduplicates meta row, keeps primary workspace expanded, and default-collapses secondary audit sections under todos_v2=true", async () => {
     api.mockImplementation(async (path: string) => {
       if (path.includes("/kb")) return { items: kbProjects };
       if (path.startsWith("/todos/work_goal_active/decisions")) {
@@ -873,8 +873,8 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
               id: "d1",
               todo_id: "work_goal_active",
               question: "Keep sections expanded by default?",
-              choice: "Yes, expand all sections",
-              reason: "Avoid hiding schedule, notes, and decisions behind toggles",
+              choice: "Yes, expand primary workspace",
+              reason: "Keep primary execution open and fold audit sections",
               source: "manual",
               source_machine: "",
               source_session: "",
@@ -898,35 +898,58 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
       conversations: [{ machine_id: "m1", session_id: "dir-platform", title: "Platform Direction" }],
     });
 
-    // Ownership strip shows template badge, readable direction name, clickable parent goal link, and subtle secondary priority
-    const ownership = host.querySelector("[data-testid=todo-detail-ownership]");
+    // Single consolidated top overview strip holds status, work-goal badge, agent count, direction, parent link, subtle priority, and primary CTA
+    const ownership = host.querySelector<HTMLElement>("[data-testid=todo-detail-ownership]")!;
     expect(ownership).toBeTruthy();
-    expect(host.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
-    expect(host.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Platform Direction");
-    const parentLink = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-link]")!;
+    expect(host.querySelector("[data-testid=todo-detail-status-summary]")).toBeNull();
+    expect(ownership.className).toContain("bg-inset");
+    expect(ownership.className).toContain("border-line");
+    expect(ownership.className).toContain("rounded-control");
+    expect(ownership.querySelector("[data-testid=todo-detail-summary-status]")?.textContent).toBeTruthy();
+    expect(ownership.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
+    expect(ownership.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Platform Direction");
+    const parentLink = ownership.querySelector<HTMLButtonElement>("[data-testid=todo-detail-parent-link]")!;
     expect(parentLink.textContent).toContain("Ship Todos V2");
-    const subtlePriority = host.querySelector<HTMLElement>("[data-testid=todo-detail-priority-subtle]")!;
+    const subtlePriority = ownership.querySelector<HTMLElement>("[data-testid=todo-detail-priority-subtle]")!;
     expect(subtlePriority).toBeTruthy();
     expect(subtlePriority.textContent).toContain(t("todos.priority_high"));
     expect(subtlePriority.className).toContain("text-ink-3");
-
-    // Concise status summary strip uses semantic tokens and surfaces active Agent primary CTA
-    const statusSummary = host.querySelector<HTMLElement>("[data-testid=todo-detail-status-summary]")!;
-    expect(statusSummary).toBeTruthy();
-    expect(statusSummary.className).toContain("bg-inset");
-    expect(statusSummary.className).toContain("border-line");
-    expect(statusSummary.className).toContain("rounded-control");
-    expect(host.querySelector("[data-testid=todo-detail-summary-status]")?.textContent).toBeTruthy();
-    const summaryOpenAgentBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-summary-open-active-agent]")!;
+    const summaryOpenAgentBtn = ownership.querySelector<HTMLButtonElement>("[data-testid=todo-summary-open-active-agent]")!;
     expect(summaryOpenAgentBtn.textContent).toBe(t("todos.detail_open_active_agent"));
 
-    // Schedule & reminder fields, priority selector (muted), long notes, decisions, and participated history are ALL expanded by default
+    // Meta row beneath title does not repeat status badge or agent count for work goals
+    const metaRow = host.querySelector<HTMLElement>("[data-testid=todo-detail-meta]")!;
+    expect(metaRow).toBeTruthy();
+    expect(metaRow.querySelector("[data-testid=todo-detail-status]")).toBeNull();
+    expect(metaRow.textContent).not.toContain(t("todos.agent_count", { count: 1 }));
+
+    // Primary workspace (plan fields with muted priority, notes, active agents) stays expanded by default
     expect(host.querySelector("[data-testid=todo-detail-personal-fields-toggle]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-plan]")).toBeTruthy();
     expect(host.querySelector("[data-testid=todo-plan-priority]")?.className).toContain("text-ink-3");
     expect(host.querySelector("[data-testid=todo-detail-notes-collapsed]")).toBeNull();
     expect(host.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(longNotes);
+
+    // Secondary audit sections (decisions & participated history) start collapsed with counts and expand on click
+    const decisionsToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-decisions-toggle]")!;
+    expect(decisionsToggle).toBeTruthy();
+    expect(decisionsToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(decisionsToggle.textContent).toContain(t("todos.decisions_section", { count: 1 }));
+    expect(host.querySelector("[data-testid=todo-decisions]")?.textContent).not.toContain("Keep sections expanded by default?");
+    await act(async () => decisionsToggle.click());
+    await flush();
+    expect(decisionsToggle.getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector("[data-testid=todo-decisions]")?.textContent).toContain("Keep sections expanded by default?");
+
+    expect(host.querySelector("[data-testid=todo-detail]")?.textContent).not.toContain("Earlier planner");
+    const releasedToggle = [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((b) =>
+      b.textContent?.includes(t("todos.released_section", { count: 1 })),
+    )!;
+    expect(releasedToggle).toBeTruthy();
+    expect(releasedToggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => releasedToggle.click());
+    await flush();
+    expect(releasedToggle.getAttribute("aria-expanded")).toBe("true");
     expect(host.querySelector("[data-testid=todo-detail]")?.textContent).toContain("Earlier planner");
 
     // Dynamic footer action bar: Open active Agent primary CTA + safe Open PR link + demoted Add Agent button
@@ -966,6 +989,97 @@ describe("TodoDetail dual template, default-expanded sections & status summary u
     expect(host.querySelector("[data-testid=todo-detail-subtasks]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-open-active-agent]")).toBeNull();
     expect(host.querySelector("[data-testid=todo-add-agent]")).toBeNull();
+  });
+
+  it("unifies wait, active blockers, repo gate, and merge-train into one progressive focus banner and default-collapses responsible & thread under todos_v2=true", async () => {
+    const complexTodo: Todo = {
+      id: "complex_focus",
+      title: "Roll out multi-repo release",
+      origin: "conv-main",
+      pr_url: "https://github.com/nwverse/persona/pull/17696",
+      responsible: { kind: "person", name: "Alex Reviewer" },
+      thread: { channel: "feishu", chat_id: "oc_1", thread_id: "omt_1", title: "Release coordination" },
+      wait: { kind: "person_reply", waiting_on: "Alex Reviewer", wake_condition: "When sign-off arrives" },
+      active_blockers: [
+        { id: "blk_1", kind: "external_pr", target_ref: "https://github.com/nwverse/persona/pull/17000", state: "active" },
+      ],
+      repo_gate: {
+        state: "blocked_ci",
+        target_count: 2,
+        ready_count: 1,
+        reference_count: 0,
+        blocking_repo: "nwverse/persona",
+        blocking_pr: "https://github.com/nwverse/persona/pull/17696",
+        reason: "ci_failed",
+      },
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("parked", "external_wait", "parked", 0),
+    };
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/mergetrain") {
+        return {
+          repos: [],
+          by_todo: {
+            complex_focus: {
+              repo_key: "nwverse/persona",
+              position: 2,
+              ahead_pr_url: "https://github.com/nwverse/persona/pull/17690",
+              state: "queued",
+            },
+          },
+        };
+      }
+      if (path.includes("/repositories")) return { revision: 1, repositories: [] };
+      return {};
+    });
+
+    seed({ features: ["todo_view", "todo_threads"] });
+    await render({ todos: [complexTodo], todosV2: true, selectedId: "complex_focus" });
+    // Ensure todo_threads feature is set after render helper
+    seed({ features: ["todo_view", "todo_threads"] });
+    await act(async () => root.render(<TodosView selectedId="complex_focus" />));
+    await flush();
+
+    // Only ONE focus banner container exists; highest-priority blocked repo_gate renders immediately, others progressively fold
+    expect(host.querySelectorAll("[data-testid=todo-detail-focus-banner]")).toHaveLength(1);
+    const focus = host.querySelector<HTMLElement>("[data-testid=todo-detail-focus-banner]")!;
+    expect(focus.getAttribute("data-focus-count")).toBe("4");
+    expect(focus.querySelector("[data-testid=todo-detail-repo-gate]")).toBeTruthy();
+    // No duplicate repo gate inside repositories section
+    expect(host.querySelectorAll("[data-testid=todo-detail-repo-gate]")).toHaveLength(1);
+    // Secondary signals start collapsed behind one aria-expanded toggle
+    const moreBtn = focus.querySelector<HTMLButtonElement>("[data-testid=todo-detail-focus-more]")!;
+    expect(moreBtn.getAttribute("aria-expanded")).toBe("false");
+    expect(focus.querySelector("[data-testid=todo-detail-focus-extra]")).toBeNull();
+
+    // Expanding reveals blockers, wait info, and merge train inside the same unified focus banner
+    await act(async () => moreBtn.click());
+    await flush();
+    expect(moreBtn.getAttribute("aria-expanded")).toBe("true");
+    expect(focus.querySelector("[data-testid=todo-active-blockers]")).toBeTruthy();
+    expect(focus.querySelector("[data-testid=todo-detail-mergetrain]")).toBeTruthy();
+    expect(focus.querySelector("[data-task-wait-info]")).toBeTruthy();
+
+    // Responsible and Thread sections start collapsed with counts/summaries and expand on click
+    const respToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-responsible-toggle]")!;
+    expect(respToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(respToggle.textContent).toContain("Alex Reviewer");
+    expect(host.querySelector("[data-testid=todo-responsible-name]")).toBeNull();
+    await act(async () => respToggle.click());
+    await flush();
+    expect(respToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector("[data-testid=todo-responsible-name]")?.textContent).toBe("Alex Reviewer");
+
+    const threadToggle = host.querySelector<HTMLButtonElement>("[data-testid=todo-thread-toggle]")!;
+    expect(threadToggle.getAttribute("aria-expanded")).toBe("false");
+    expect(threadToggle.textContent).toContain("Release coordination");
+    expect(host.querySelector("[data-testid=todo-thread-line]")).toBeNull();
+    await act(async () => threadToggle.click());
+    await flush();
+    expect(threadToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(host.querySelector("[data-testid=todo-thread-line]")?.textContent).toContain("Release coordination");
   });
 });
 
