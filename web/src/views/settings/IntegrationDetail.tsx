@@ -4,14 +4,14 @@
 // for both built-in services and installed extensions. Strictly gated by integrations_v2.
 import { useMailboxEnabled } from "../../lib/mail";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { hubServes, moduleFeature } from "../../core/module-host";
 import { formatList, t } from "../../i18n";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { ago } from "../../lib/format";
 import { api, enc, errorText } from "../../lib/api";
 import { canBind, isBound, settingsTarget, type ChannelDetail } from "../../lib/channels";
 import {
-  connectorBrand, connectorState, connectorTone, listConnectors,
-  type ConnectorTone, type HubConnector,
+  connectorBrand, connectorState, connectorTone, type ConnectorTone,
 } from "../../lib/connectors";
 import { getAuth, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
 import { operations, operationsListed, opOf, watchOperations } from "../../lib/extension-operations";
@@ -25,7 +25,7 @@ import {
   setExtensionEnabled, setupSecret, stateLine, valueAt,
   type ExtensionField, type ExtensionSecret, type HubExtensionDetail, type Json, type JsonObject,
 } from "../../lib/extensions";
-import { chooseManager, defaultManager, ownerHeaders, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, ownerHeaders, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { navigate } from "../../lib/router";
@@ -71,6 +71,8 @@ export interface IntegrationDetailProps {
   target: IntegrationTarget;
   /** Back action; omit when the top bar (phone) or desktop split-pane list already provides navigation. */
   onBack?: () => void;
+  /** Way back from a disabled integration that has no row in the split-pane catalog. */
+  onUnavailableBack?: () => void;
   /** Called after an extension is uninstalled so callers can close the detail pane even when `onBack` is omitted. */
   onUninstalled?: () => void;
   /** Open a declarative UI page contributed by an extension. */
@@ -249,11 +251,34 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
   const effectiveManager = props.target.manager ?? otherManager(picked ?? undefined);
   const storeEnabled = useStore((s) => isIntegrationsV2Active(s.assistant, effectiveManager, picked));
   const mailEnabled = useMailboxEnabled();
+  const larkModule = useStore((s) => hubServes(moduleFeature("lark"), s));
   const enabled = props.integrationsV2 ?? storeEnabled;
 
   if (!enabled) return <>{props.fallback ?? null}</>;
 
-  if (props.target.kind === "builtin" && props.target.id === "mail" && !mailEnabled) return null;
+  const { target } = props;
+  if (target.kind === "builtin") {
+    const mailOff = !mailEnabled && target.id === "mail";
+    const feishuOff = !larkModule && (
+      target.id === "feishu-bot" || target.id === "feishu" || target.channelId === "feishu" ||
+      target.id === "larkcli" || target.connectorId === "larkcli"
+    );
+    if (mailOff || feishuOff) {
+      const back = props.onBack ?? props.onUnavailableBack;
+      return (
+        <div data-integration-detail={target.id} data-integration-kind="builtin">
+          {back && (
+            <Button tone="quiet" icon="chevronLeft" onClick={back} className="-ml-2 mb-3">
+              {t("settings-integrations.back")}
+            </Button>
+          )}
+          <Group title={t(mailOff ? "settings-connectors.mail" : "settings-feishubot.title")}>
+            <SettingsHint>{t(mailOff ? "settings-integrations.mail_module_off" : "settings-integrations.feishu_module_off")}</SettingsHint>
+          </Group>
+        </div>
+      );
+    }
+  }
 
   if (props.target.kind === "extension") {
     return (
@@ -307,6 +332,14 @@ function LastChannelEvent({ detail }: { detail: ChannelDetail | null }) {
     : null;
 }
 
+function ConnectorReadError({ error }: { error: string }) {
+  return (
+    <Group>
+      <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error })}</SettingsHint>
+    </Group>
+  );
+}
+
 function BuiltinMark({ id, channel }: { id: string; channel?: ReturnType<typeof useChannelController>["detail"] }) {
   if (channel) return <ChannelMark c={channel} size={44} />;
   const brand = connectorBrand(id === "feishu-bot" ? "lark" : id);
@@ -344,24 +377,8 @@ function FeishuBotBuiltinDetail({
   useLayoutEffect(() => pinManagerAt(["/bots", "/connectors/larkcli"], otherManager(manager)), [manager]);
 
   const channelCtl = useChannelController(channelId, manager);
-  const [larkcli, setLarkcli] = useState<HubConnector | null>(null);
-  const [connectorLoading, setConnectorLoading] = useState(false);
-
-  const loadLarkcli = useCallback(async () => {
-    setConnectorLoading(true);
-    try {
-      const list = await listConnectors();
-      setLarkcli(list.find((x) => x.id === "larkcli" && sameManager(x.manager, manager)) ?? null);
-    } catch {
-      setLarkcli(null);
-    } finally {
-      setConnectorLoading(false);
-    }
-  }, [manager]);
-
-  useEffect(() => {
-    void loadLarkcli();
-  }, [loadLarkcli]);
+  const { connectors: [larkcli], load: loadLarkcli, loading: connectorLoading, error: connectorError, onSaved } =
+    useDetailConnectors(["larkcli"], manager);
 
   const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
 
@@ -420,9 +437,10 @@ function FeishuBotBuiltinDetail({
 
       {/* 1. Account & Connection */}
       <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
+        {connectorError && <ConnectorReadError error={connectorError} />}
         <FeishuBotConnectionPanel
           ctl={feishuCtl}
-          larkcli={larkcli}
+          larkcli={larkcli ?? null}
           onOpenConnector={(id) => onOpenConnector?.(id, manager)}
         />
       </SectionBlock>
@@ -438,7 +456,7 @@ function FeishuBotBuiltinDetail({
       <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
         {showInboxSection && larkcli && (
           <>
-            <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={setLarkcli} />
+            <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={onSaved} />
             <SubscriptionsEntry
               pick={(l) => l.connector === "larkcli"}
               scope={{ c: "larkcli" }}
@@ -485,9 +503,10 @@ function BuiltinIntegrationDetail({
 
   const channelCtl = useChannelController(channelId, manager);
 
-  const { connectors, load: loadConnector, loading: connectorLoading, error: connectorError, onSaved } =
+  const { connectors, loaded: connectorsLoaded, load: loadConnector, loading: connectorLoading, error: connectorReadError, onSaved } =
     useDetailConnectors(connectorId ? [connectorId] : [], manager);
   const connector = connectors[0];
+  const connectorError = connectorReadError || (connectorsLoaded && !connector ? t("settings-hubconnector.not_on_hub") : "");
   const [reloadKey, setReloadKey] = useState(0);
   const [mailHasAccounts, setMailHasAccounts] = useState(false);
 
@@ -586,15 +605,9 @@ function BuiltinIntegrationDetail({
           {isLarkGateway && <Feishu reloadKey={reloadKey} manager={manager} />}
           {connectorId && (
             <>
-              {connector ? (
-                <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />
-              ) : connectorError ? (
-                <Group>
-                  <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error: connectorError })}</SettingsHint>
-                </Group>
-              ) : (
-                <Group><div className="px-4 py-3"><Loading /></div></Group>
-              )}
+              {connectorError && <ConnectorReadError error={connectorError} />}
+              {connector && <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />}
+              {!connector && !connectorError && <Group><div className="px-4 py-3"><Loading /></div></Group>}
             </>
           )}
           {channelId && <ChannelBindingBlock ctl={channelCtl} />}
@@ -751,7 +764,7 @@ function ExtensionIntegrationDetail({
     }
     return [...ids];
   }, [target.connectorId, detail?.contributes?.connectors]);
-  const { connectors, loading: connectorsLoading, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
+  const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
   useLayoutEffect(() => {
     const ids = new Set([...connectorIds, ...connectors.map((c) => c.id)]);
     const prefixes = [`/extensions/${enc(id)}`, `/plugins/${enc(id)}`];
@@ -967,6 +980,7 @@ function ExtensionIntegrationDetail({
     !!p && (
       !!p.auth ||
       connectors.length > 0 ||
+      !!connectorError ||
       hasBinding(channelCtl.detail) ||
       isGitHub ||
       (editable && sections.connection.length > 0)
@@ -1094,6 +1108,7 @@ function ExtensionIntegrationDetail({
           {hasConnectionSection && (
             <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
               {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
+              {connectorError && <ConnectorReadError error={connectorError} />}
               {connectors.map((c) => (
                 <ConnectorConnectionBlock
                   key={`${c.manager ?? ""}:${c.id}`}

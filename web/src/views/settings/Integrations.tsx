@@ -3,6 +3,7 @@
 // into one deduplicated list with capability filter chips, subscription health alerts, Extension Market access,
 // inline IntegrationDetail (#14868) mounting, and a lazy-loaded Data Flow view (#15423).
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { hubServes, moduleFeature } from "../../core/module-host";
 import { loadMailAccounts, useMailboxEnabled } from "../../lib/mail";
 import { t } from "../../i18n";
 import type { MailAccount } from "../../lib/agent-settings";
@@ -327,6 +328,8 @@ function IntegrationsForManager({
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   const hasMail = useMailboxEnabled();
   const hasLark = useLarkOn();
+  const larkModule = useStore((s) => hubServes(moduleFeature("lark"), s));
+  const announcesLarkModule = useStore((s) => s.features.includes(moduleFeature("lark")));
   const hasSubscriptions = useSubscriptionsShown();
   const hasInboxSources = useInboxSourcesShown();
 
@@ -349,17 +352,26 @@ function IntegrationsForManager({
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
+  const [subscriptionError, setSubscriptionError] = useState("");
   const [sourcesReload, setSourcesReload] = useState(0);
 
   const seq = useRef(0);
+  const subscriptionSeq = useRef(0);
   const loadSubscriptionsOnly = useCallback(async () => {
+    const mine = ++subscriptionSeq.current;
     if (!hasSubscriptions && !hasInboxSources) {
       setSubscriptions([]);
+      setSubscriptionError("");
       return;
     }
-    const mine = seq.current;
-    const list = await listSubscriptions(owner).catch(() => null);
-    if (mine === seq.current && list) setSubscriptions(list);
+    try {
+      const list = await listSubscriptions(owner);
+      if (mine !== subscriptionSeq.current) return;
+      setSubscriptions(list);
+      setSubscriptionError("");
+    } catch (error) {
+      if (mine === subscriptionSeq.current) setSubscriptionError(errorText(error));
+    }
   }, [hasSubscriptions, hasInboxSources, owner]);
 
   const loadAll = useCallback(async () => {
@@ -382,20 +394,29 @@ function IntegrationsForManager({
         : applyExtensions([], false),
       hasChannels ? listChannels(owner).then(publish(setChannels), report) : setChannels([]),
       hasConnectors ? listConnectors().then(publish(setConnectors), report) : setConnectors([]),
-      hasMail ? loadMailAccounts(owner).catch(() => null).then(publish(setMailAccounts)) : setMailAccounts(null),
-      hasLark ? api<LarkGatewaySummary>("/lark/status").catch(() => null).then(publish(setLarkStatus)) : setLarkStatus(null),
-      botStatus().catch(() => null).then(publish(setFeishuBotStatus)),
+      hasMail ? loadMailAccounts(owner).then(publish(setMailAccounts), (error) => {
+        report(error);
+        publish(setMailAccounts)(null);
+      }) : setMailAccounts(undefined),
+      hasLark ? api<LarkGatewaySummary>("/lark/status").then(publish(setLarkStatus), (error) => {
+        report(error);
+        publish(setLarkStatus)(null);
+      }) : setLarkStatus(undefined),
+      larkModule ? botStatus().then(publish(setFeishuBotStatus), report) : setFeishuBotStatus(null),
       loadSubscriptionsOnly(),
     ]);
 
     if (mine !== seq.current) return;
     setLoaded(true);
     setLoading(false);
-  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, loadSubscriptionsOnly, owner]);
+  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, larkModule, loadSubscriptionsOnly, owner]);
 
   useEffect(() => {
     void loadAll();
-    return () => { seq.current++; };
+    return () => {
+      seq.current++;
+      subscriptionSeq.current++;
+    };
   }, [loadAll]);
 
   // Refresh subscriptions when a subscription state changes on the hub (at most once per second).
@@ -449,18 +470,18 @@ function IntegrationsForManager({
     () =>
       buildIntegrationCatalog({
         extensions: ownExtensions,
-        channels,
-        connectors: ownConnectors,
+        channels: larkModule ? channels : channels.filter((c) => c.id !== "feishu"),
+        connectors: larkModule ? ownConnectors : ownConnectors.filter((c) => c.id !== "larkcli"),
         subscriptions,
         hasMail: hasMail && mailAccounts !== undefined,
         hasLark: hasLark && larkStatus !== undefined,
-        hasFeishuBot: feishuBotStatus !== null,
+        hasFeishuBot: larkModule && (announcesLarkModule || feishuBotStatus !== null),
         mailAccounts,
         larkStatus,
         feishuBotStatus,
         ownerManager: owner,
       }),
-    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, mailAccounts, larkStatus, feishuBotStatus, owner],
+    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, larkModule, announcesLarkModule, mailAccounts, larkStatus, feishuBotStatus, owner],
   );
 
   const counts = useMemo(
@@ -718,12 +739,13 @@ function IntegrationsForManager({
     </div>
   );
 
+  const loadErrors = subscriptionError ? [...partialErrors, subscriptionError] : partialErrors;
   const listBody = (
     <>
-      {partialErrors.length > 0 && (
+      {loadErrors.length > 0 && (
         <div className="mb-4">
           <Group>
-            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: partialErrors.join(" · ") })}</SettingsHint>
+            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint>
           </Group>
         </div>
       )}
@@ -831,6 +853,7 @@ function IntegrationsForManager({
         target={resolvedTarget}
         integrationsV2={true}
         onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+        onUnavailableBack={headerBack ? undefined : () => onOpen(null)}
         onUninstalled={() => onOpen(null)}
         onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
         onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}

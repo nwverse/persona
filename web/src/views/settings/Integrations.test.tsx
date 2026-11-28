@@ -879,6 +879,54 @@ describe("Integrations unified list view", () => {
     expect(host.querySelector('[data-integration-id="mail"]')).not.toBeNull();
   });
 
+  it("hides the Feishu bot and its channel when the hub turns off module.lark, with the gateway still available", async () => {
+    stubFullHubFetch();
+    state.features.push("modules", "module.mail");
+    const draw = () => act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await draw();
+    await flush();
+
+    expect(host.querySelector('[data-integration-id="feishu-bot"], [data-integration-id="feishu"], [data-integration-id="larkcli"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="lark"]')?.textContent).toContain(t("settings-integrations.status_connected"));
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith("/bots/feishu"))).toBe(false);
+
+    state.features.push("module.lark");
+    await draw();
+    expect(host.querySelector('[data-integration-id="feishu-bot"]')).not.toBeNull();
+  });
+
+  it("reports each partial catalog failure, keeps the bot entry, and clears the warning after a successful reload", async () => {
+    state.features.push("source_subscriptions");
+    stubFullHubFetch({ channels: [], connectors: [] });
+    const mockFetch = vi.mocked(fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    const errors: Record<string, string> = {
+      "/api/v1/mail/accounts": "Mail account read failed",
+      "/api/v1/lark/status": "Gateway status read failed",
+      "/api/v1/bots/feishu": "Bot status read failed",
+      "/api/v1/subscriptions": "Subscription list read failed",
+    };
+    let failing = false;
+    mockFetch.mockImplementation((url, init) => failing && errors[String(url)]
+      ? Promise.resolve(json({ error: errors[String(url)] }, 500))
+      : fallback(url, init));
+    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await flush();
+
+    const refresh = host.querySelector<HTMLButtonElement>(`[aria-label="${t("settings-integrations.refresh")}"]`)!;
+    failing = true;
+    await act(async () => refresh.click());
+    const alert = host.querySelector('[role="alert"]')?.textContent ?? "";
+    for (const error of Object.values(errors)) expect(alert).toContain(error);
+    expect(host.querySelector('[data-integration-id="feishu-bot"]')).not.toBeNull();
+    expect(host.querySelector('[data-integration-id="mail"]')?.textContent).toContain(t("settings-connectors.status_unknown"));
+
+    failing = false;
+    await act(async () => refresh.click());
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="mail"]')?.textContent).not.toContain(t("settings-connectors.status_unknown"));
+  });
+
   it.each(["en", "zh-Hans", "ja"])("renders localized labels, compact Market entry, and single-row narrow capability chips in %s", async (lang) => {
     stubFullHubFetch();
     try {

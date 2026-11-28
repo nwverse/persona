@@ -35,14 +35,13 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
   onSettings?: (url: string) => void;
 }) {
   const d = ctl.detail;
+  const loadError = ctl.error && (
+    <Group>
+      <SettingsHint alert>{t("settings-integrations.channel_unavailable", { error: ctl.error })}</SettingsHint>
+    </Group>
+  );
   if (!d) {
-    if (ctl.error) {
-      return (
-        <Group>
-          <SettingsHint alert>{t("settings-integrations.channel_unavailable", { error: ctl.error })}</SettingsHint>
-        </Group>
-      );
-    }
+    if (loadError) return loadError;
     if (ctl.loading) {
       return (
         <Group>
@@ -74,6 +73,7 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
   );
   return (
     <>
+      {loadError}
       {controls}
       {d.read_only && settingsUrl && openSettings && (
         <Group footer={t("settings-channels.settings_elsewhere")}>

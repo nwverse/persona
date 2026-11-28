@@ -31,6 +31,8 @@
   "status_error": "エラー",
   "status_receiving": "受信中",
   "status_off": "オフ",
+  "mail_module_off": "ハブのマシンでメールがオフになっています。",
+  "feishu_module_off": "ハブのマシンで Lark ボットがオフになっています。",
   "sub_alert_failing": "購読の取得に失敗",
   "sub_alert_needs_recipe": "購読ルールの更新が必要",
   "sub_alert_rate_limited": "レート制限中",

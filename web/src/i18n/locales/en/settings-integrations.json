@@ -32,6 +32,8 @@
   "status_error": "Error",
   "status_receiving": "Receiving",
   "status_off": "Off",
+  "mail_module_off": "Mail is turned off on the hub machine.",
+  "feishu_module_off": "The Lark bot is turned off on the hub machine.",
   "sub_alert_failing": "Subscription failing",
   "sub_alert_needs_recipe": "Update subscription rules",
   "sub_alert_rate_limited": "Rate limited",

@@ -4,6 +4,7 @@ import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { connectModuleHub } from "../../core/module-host";
 import { t } from "../../i18n";
 import { ago } from "../../lib/format";
 import { channelStateText, type ChannelDetail } from "../../lib/channels";
@@ -14,7 +15,7 @@ import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
 import { chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
-import { applyCompleteSessions } from "../../lib/store";
+import { applyCompleteSessions, getState, subscribe } from "../../lib/store";
 import { FEATURES } from "./FeishuBot";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
 import { Integrations } from "./Integrations";
@@ -239,6 +240,7 @@ beforeEach(() => {
   resetManagerChoice();
   setRoster(ROSTER);
   setStoreAssistant(true);
+  connectModuleHub(getState, subscribe);
 
   vi.stubGlobal("fetch", vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
@@ -412,6 +414,31 @@ describe("integrations_v2 gating & legacy isolation", () => {
 });
 
 describe("Built-in services", () => {
+  it.each([
+    ["mail", "mail_module_off"],
+    ["feishu-bot", "feishu_module_off"],
+    ["feishu", "feishu_module_off"],
+    ["larkcli", "feishu_module_off"],
+  ])("shows a quiet closed state and a way back on a direct link to %s", async (id, message) => {
+    applyCompleteSessions([SEED_SESSION], [], { features: ["modules", "lark"] });
+    const onBack = vi.fn();
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "builtin", id }} onBack={onBack} />));
+
+    expect(host.textContent).toContain(t(`settings-integrations.${message}`));
+    expect(host.querySelector('[role="alert"], [role="switch"]')).toBeNull();
+    expect(requests).toHaveLength(0);
+    act(() => host.querySelector("button")!.click());
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the Lark extension gateway usable while the Feishu bot module is off", async () => {
+    applyCompleteSessions([SEED_SESSION], [], { features: ["modules", "lark"] });
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "builtin", id: "lark" }} />));
+    expect(section("connection")?.textContent).toContain("Team Lark");
+    expect(requests.some((r) => r.url.endsWith("/lark/status"))).toBe(true);
+    expect(requests.some((r) => r.url.includes("/bots/") || r.url.includes("/channels/feishu"))).toBe(false);
+  });
+
   it.skipIf(!installedMailbox)("renders Mail with Account & Connection accounts and Inbox & Sync switch", async () => {
     await preloadMailbox("Settings");
     await preloadMailbox("InboxSwitch");
@@ -984,6 +1011,36 @@ describe("integration detail parity", () => {
   const refresh = () => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!.click();
   const unloadWarns = () => !window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   const input = (name: string) => host.querySelector<HTMLInputElement>(`#extension-field-${name}`)!;
+
+  it.each(["feishu-bot", "github", "larkx"])("marks retained connector and channel details when a refresh fails for %s", async (id) => {
+    currentConnectors.push({ id: "larkcli", name: "Lark CLI", status: "ok", capabilities: ["inbox", "login"] });
+    const target = id === "larkx" ? extension : { kind: "builtin", id } as const;
+    await act(async () => root.render(<IntegrationDetail target={target} />));
+    await flush();
+    const mockFetch = vi.mocked(window.fetch);
+    const fallback = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation((url, init) => {
+      const path = String(url);
+      if (/\/connectors(\?|$)/.test(path)) {
+        return Promise.resolve(new Response(JSON.stringify({ error: "Connector read failed" }), { status: 500 }));
+      }
+      if (path === "/api/v1/channels/larkx_chat" || path === "/api/v1/channels/feishu") {
+        return Promise.resolve(new Response(JSON.stringify({ error: "Channel read failed" }), { status: 500 }));
+      }
+      return fallback(url, init);
+    });
+    await act(async () => refresh());
+    expect(section("connection")?.querySelector('[role="alert"]')?.textContent).toContain("Connector read failed");
+    if (id !== "github") {
+      expect(section("channel")?.querySelector('[role="alert"]')?.textContent).toContain("Channel read failed");
+    }
+    if (id === "larkx") expect(section("channel")?.querySelector("[data-channel-routing]")).not.toBeNull();
+    mockFetch.mockImplementation(fallback);
+    await act(async () => refresh());
+    expect(section("connection")?.querySelector('[role="alert"]')).toBeNull();
+    expect(section("channel")?.querySelector('[role="alert"]') ?? null).toBeNull();
+  });
+
   function finish(kind: ExtensionOperation["kind"], manager?: string) {
     const now = new Date().toISOString();
     track({ id: `operation-${kind}`, kind, extension: extension.id, state: "succeeded", started_at: now,
