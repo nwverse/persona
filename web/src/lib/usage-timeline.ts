@@ -3,6 +3,7 @@
 import { providerTitle, sortedWindows, timelinePosition, type ProviderGroup } from "./usage-popover";
 import {
   canonicalUsageProvider,
+  isHistoricalCodexReading,
   protectReserve,
   remainingPercent,
   windowMinutes,
@@ -106,6 +107,7 @@ export function accountTimelineLanes(account: UsageAccount, now: number): Timeli
     models: TimelineLaneModel[];
     paused: boolean;
   }
+  if (isHistoricalCodexReading(account)) return [];
   const byKind = new Map<string, Bucket>();
   for (const w of sortedWindows(account)) {
     const at = w.resets_at ? Date.parse(w.resets_at) : NaN;
