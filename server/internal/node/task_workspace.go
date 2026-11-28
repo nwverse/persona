@@ -15,6 +15,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
@@ -33,6 +34,7 @@ type workspaceExecutor struct {
 	locks            []*os.File
 	mirrorRepos      []string
 	mirrorTTLSeconds int
+	coldFetchTimeout time.Duration
 }
 
 var errWorkspaceSymlink = errors.New("symbolic link")
@@ -133,11 +135,15 @@ func (e *workspaceExecutor) claimDir(path string) error {
 // Each command is bounded, noninteractive, and stores no raw stderr or URL in an
 // error. The inherited locks outlive a crashed Node while Git is still running.
 func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string) (string, error) {
+	return e.gitWithTimeout(ctx, taskworkspace.GitTimeout, dir, args...)
+}
+
+func (e *workspaceExecutor) gitWithTimeout(ctx context.Context, timeout time.Duration, dir string, args ...string) (string, error) {
 	e.journal.InFlight = true
 	if err := e.save(); err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir, "--no-pager", "-c", "core.hooksPath=" + filepath.Join(filepath.Dir(e.path), "hooks"), "-c", "core.quotepath=off", "-c", "core.fsmonitor=false", "-c", "gc.auto=0"}, args...)...)
 	cmd.Env = taskworkspace.GitEnv(os.Environ())
@@ -145,17 +151,33 @@ func (e *workspaceExecutor) git(ctx context.Context, dir string, args ...string)
 		cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1", "GIT_ALLOW_PROTOCOL=")
 	}
 	cmd.WaitDelay = time.Second
+	if len(args) > 0 && args[0] == "fetch" {
+		// Stop the remote helper and pack writer along with Git when a fetch expires.
+		cmd.SysProcAttr = osproc.GroupAttr()
+		cmd.Cancel = func() error {
+			if err := osproc.StopGroup(cmd.Process.Pid, true); err != nil {
+				return cmd.Process.Kill()
+			}
+			return nil
+		}
+	}
 	workspaceInheritLocks(cmd, e.locks)
 	var out workspaceOutput
 	cmd.Stdout = &out
 	cmd.Stderr = io.Discard
 	err := cmd.Run()
+	if err != nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	e.journal.InFlight = false
 	if saveErr := e.save(); saveErr != nil {
 		return "", saveErr
 	}
 	if out.overflow {
-		return "", errors.New("output limit")
+		if err == nil {
+			err = errors.New("output limit")
+		}
+		return "", err
 	}
 	return strings.TrimSpace(out.String()), err
 }

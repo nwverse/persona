@@ -1145,6 +1145,15 @@ func (s *Service) releaseTakenTodo(id string) {
 // (node's claudeStartWait, #1396).
 var taskStartTimeout = 5 * time.Minute
 
+func (t PlanTask) planStartTimeout() time.Duration {
+	// The preview already counts the repositories a backend workspace may
+	// have to fetch before the launcher can start.
+	if w := t.WorkspaceResolved; w != nil && len(w.Repositories) != 0 {
+		return taskStartTimeout + taskworkspace.PrepareTimeout(len(w.Repositories))
+	}
+	return taskStartTimeout
+}
+
 // taskFailTimeout bounds recording a failed start (the todo, the plan, the receipt), after the start's own time.
 const taskFailTimeout = 30 * time.Second
 
@@ -1253,7 +1262,7 @@ func (s *Service) parkActiveTodoBlockers(ctx context.Context, planID string, i i
 // runPlanTaskStart is the shared start body; its caller owns the idle reservation through every return path.
 func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTask, retry bool) {
 	t.planID, t.planIndex = planID, i
-	ctx, cancel := context.WithTimeout(context.Background(), taskStartTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), t.planStartTimeout())
 	defer cancel()
 	if t.RequestGate != "" {
 		queued := t.Queue

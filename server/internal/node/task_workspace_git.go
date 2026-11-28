@@ -1,6 +1,7 @@
 package node
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/url"
@@ -10,11 +11,27 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	repository "github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 )
+
+func (e *workspaceExecutor) sourceFetchTimeout(transport string, createdCommonDir bool) time.Duration {
+	if createdCommonDir && !filepath.IsAbs(transport) && !strings.HasPrefix(transport, "file://") {
+		return cmp.Or(e.coldFetchTimeout, taskworkspace.ColdFetchTimeout)
+	}
+	return taskworkspace.GitTimeout
+}
+
+func workspaceFetchErrorCode(err error, fallback string) string {
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &timeout) && timeout.Timeout() {
+		return "source_fetch_timeout"
+	}
+	return fallback
+}
 
 func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instance) string {
 	if r.Input.Local != nil {
@@ -90,7 +107,8 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	if len(advertised) == 64 {
 		objectFormat = "sha256"
 	}
-	if !e.owned(r.CommonDir) {
+	createdCommonDir := !e.owned(r.CommonDir)
+	if createdCommonDir {
 		if err = e.claimDir(r.CommonDir); err != nil {
 			return "path_conflict"
 		}
@@ -108,11 +126,12 @@ func (e *workspaceExecutor) source(ctx context.Context, r *taskworkspace.Instanc
 	}
 	// Fetch the selected ref explicitly; FETCH_HEAD then identifies its actual
 	// remote object even if other refs in this store are stale.
-	if _, err = e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+	timeout := e.sourceFetchTimeout(transport, createdCommonDir)
+	if _, err = e.gitWithTimeout(ctx, timeout, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", "origin", resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		if ref.Kind == "commit" {
-			return "ref_not_found"
+			return workspaceFetchErrorCode(err, "ref_not_found")
 		}
-		return "source_fetch_failed"
+		return workspaceFetchErrorCode(err, "source_fetch_failed")
 	}
 	r.ResolvedRef = resolvedRef
 	commit, err := workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
@@ -204,12 +223,12 @@ func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspa
 	var commit string
 	if ref.Kind == "commit" {
 		if _, err := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", info.Path, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-			return true, "source_fetch_failed"
+			return true, workspaceFetchErrorCode(err, "source_fetch_failed")
 		}
 		commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", advertised+"^{commit}")
 		if err != nil {
 			if _, fetchErr := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", info.Path, advertised); fetchErr != nil {
-				return true, "ref_not_found"
+				return true, workspaceFetchErrorCode(fetchErr, "ref_not_found")
 			}
 			commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", advertised+"^{commit}")
 			if err != nil {
@@ -218,7 +237,7 @@ func (e *workspaceExecutor) sourceFromMirror(ctx context.Context, r *taskworkspa
 		}
 	} else {
 		if _, err := e.git(ctx, r.CommonDir, "fetch", "--no-recurse-submodules", "--tags", info.Path, resolvedRef, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
-			return true, "source_fetch_failed"
+			return true, workspaceFetchErrorCode(err, "source_fetch_failed")
 		}
 		commit, err = workspaceReadGit(ctx, r.CommonDir, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
 		if err != nil {

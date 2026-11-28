@@ -7302,6 +7302,10 @@ The manager checks the capability before adopting preparation. New automatic iso
 node path when the probe advertises `local_git` and `start`. A peer without that support uses the
 existing engine path for ordinary dispatch. After an operation is saved, failure or disconnect keeps that
 operation for recovery. Explicit backend preparation requires the capabilities for its selected sources.
+Each direct network fetch into a fresh private bare repository has a ten-minute limit. Incremental
+fetches, local mirror copies and ordinary Git operations keep their two-minute limit. The manager's
+prepare deadline accounts for sequential repositories in the plan. A fetch that exceeds its deadline
+returns the retryable problem code `source_fetch_timeout` in the existing error object.
 A cancel or cleanup can reach the Node before prepare. Under the workspace and root locks, the
 Node records a durable cancelled or removed receipt only when both the root and private storage
 show that it owns no resources. A late prepare for that operation returns its recorded state.
