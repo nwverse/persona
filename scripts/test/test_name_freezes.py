@@ -84,7 +84,8 @@ class FormatTests(unittest.TestCase):
 
     def test_the_committed_lists_read_cleanly(self):
         paths = sorted(LISTS.glob("*.txt"))
-        self.assertEqual([p.name for p in paths], ["assistantwire_routes.txt", "extwire_route_scopes.txt",
+        self.assertEqual([p.name for p in paths], ["assistant_new_calls.txt", "assistant_run_loops.txt",
+                                                   "assistantwire_routes.txt", "extwire_route_scopes.txt",
                                                    "node_handle_method.txt", "prompts_assistant.txt",
                                                    "proto_features.txt"])
         for path in paths:
@@ -93,7 +94,7 @@ class FormatTests(unittest.TestCase):
                 entries, problems = self.format.read(text)
                 self.assertEqual(problems, [])
                 self.assertTrue(text.startswith("# "), "a list starts with what it is")
-                self.assertGreater(len(entries), 50)
+                self.assertGreater(len(entries), 30)  # the shortest, Service.Run's loops, has 35 and more
 
 
 class OpenPRTests(unittest.TestCase):
@@ -508,6 +509,10 @@ class GoNamesTests(unittest.TestCase):
              "server/internal/archguard/testdata/central_lists/prompts_assistant.txt"),
             ("extwire_route_scopes", "server/internal/extwire/scopes.go",
              "server/internal/archguard/testdata/central_lists/extwire_route_scopes.txt"),
+            ("assistant_new_calls", "server/internal/assistant/service.go",
+             "server/internal/archguard/testdata/central_lists/assistant_new_calls.txt"),
+            ("assistant_run_loops", "server/internal/assistant/schedule.go",
+             "server/internal/archguard/testdata/central_lists/assistant_run_loops.txt"),
             ("node_handle_method", "server/internal/node/node.go",
              "server/internal/archguard/testdata/central_lists/node_handle_method.txt"),
             ("proto_features", "server/internal/proto/proto.go",

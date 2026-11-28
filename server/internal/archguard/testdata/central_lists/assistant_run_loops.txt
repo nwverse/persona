@@ -1,0 +1,47 @@
+# The go statements server/internal/assistant/schedule.go's Service.Run may have, each by what it calls (s.xLoop),
+# frozen (#16163): server/internal/archguard/central_lists_test.go fails on any other. A domain in package assistant
+# starts its loop from an init() in its own file, func init() { registerLoop(seam.NewLoopName("x"), (*Service).xLoop) }
+# (server/internal/assistant/front_doors.go; docs/server/architecture.md "Registering a domain's entries"); a module
+# in a subpackage registers it through Kernel.Loop. Delete a line once the test's notice names it; add none.
+s.a2aLoop
+s.acceptLoop
+s.admissionQueueLoop
+s.attentionLoop
+s.captureLoop
+s.channelLoop
+s.delayedWaitsRecoveryLoop
+s.externalInboxLoop
+s.failedStartBatchRecoveryLoop
+s.healthLoop
+s.healthReminders
+s.healthTellLoop
+s.historyLoop
+s.instructionsLoop
+s.kbHistoryLoop
+s.kbLoop
+s.leaderReportsLoop
+s.memoryDreamLoop
+s.memoryMergeLoop
+s.nudgeLoop
+s.pagesLoop
+s.placementFallbackLoop
+s.remindLoop
+s.replyLoop
+s.repoMirrorSyncLoop
+s.resourceLoop
+s.searchLoop
+s.sourceReportLoop
+s.superviseLoop
+s.taskCloseLoop
+s.transcriptionReadyLoop
+s.undeliveredLoop
+s.urgentLoop
+s.viewActionLoop
+s.workLoop
+
+# Pending: the names the PRs open when this freeze landed were adding, each with its PRs
+# (python3 scripts/test/name_freezes.py pending --write, 2026-11-26; drafts idle more than 14 days left out).
+# A name stays when its PR merges; a rerun of --write drops one whose PRs have all closed. No PR opened later gets a
+# line here.
+s.partnerLoop #13379
+s.projectReviewLoop #12071

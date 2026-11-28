@@ -1803,6 +1803,8 @@ func (s *Service) Run(ctx context.Context) {
 	go s.undeliveredLoop(ctx)    // the owner's messages that could not go in (undelivered.go)
 	go s.captureLoop(ctx)        // sorting and filing quick captures (capture_sort.go)
 	go s.healthTellLoop(ctx)
+	// The loops registered through the kernel: the domains' own (registerLoop, front_doors.go) and the modules'.
+	s.kernel.StartLoops(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
 	s.stopIdleArchiveAuditRetry()

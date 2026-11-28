@@ -3,7 +3,8 @@
 // that their own constructors validate, so a registration mistake is a defect raised at the line that made it, while
 // New runs, never a wrong route or a nil branch found by a request (docs/server/architecture.md "Registering a
 // domain's entries", "Validated and sealed"). Route handlers registered here run under the kernel's one catch site,
-// dispatch.go; bus methods (bus.go) and hooks (hooks.go) run where the central lines they replaced ran.
+// dispatch.go; bus methods (bus.go), hooks (hooks.go) and loops (loops.go) run where the central lines they replaced
+// ran.
 //
 // It sits under package kernel, which hosts the built-in feature modules (internal/modapi). Those can be left out or
 // switched off; the modules registered here are part of Persona Core and always register.
