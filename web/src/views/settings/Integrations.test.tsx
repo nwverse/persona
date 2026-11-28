@@ -1946,4 +1946,49 @@ describe("assistant isolation across integration routes", () => {
     await flush();
     expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
   });
+
+  it("adds a same-assistant Data Flow entry in single-pane standalone source detail without leaking global defaults or switching sidebar assistant", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = false;
+    state.phone = false;
+    stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
+    const measure = vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(600);
+    await act(async () => loadRoster());
+
+    try {
+      const pushState = subscriptionSourceState("sub_push_iphone");
+      history.replaceState(null, "", `/settings?tab=integrations&manager=work&integration=${encodeURIComponent(`-sources@work/${pushState}`)}`);
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      await flush();
+
+      const pushPane = host.querySelector<HTMLElement>('[data-integration-kind="source"]')!;
+      expect(pushPane).not.toBeNull();
+      // Single-source scope preserves #17677 boundary (no provider global defaults).
+      expect(pushPane.querySelector("[data-external-source-settings]")).toBeNull();
+
+      const dataFlowRow = pushPane.querySelector<HTMLButtonElement>('[data-settings-row="source-data-flow-entry"]')!;
+      expect(dataFlowRow).not.toBeNull();
+      expect(dataFlowRow.textContent).toContain(t("settings-integrations.view_sources"));
+
+      // Clicking opens the same assistant's Data Flow view without changing the sidebar's selected assistant.
+      await act(async () => dataFlowRow.click());
+      await flush();
+      expect(location.search).toContain("manager=work");
+      expect(location.search).toContain("integration=-sources%40work");
+      expect(host.querySelector("[data-integrations-sources-view]")).not.toBeNull();
+      expect(chosenManager()).toBeNull();
+
+      // In desktop split-pane (>=740px), the list header already owns the view switcher so the duplicate row is omitted.
+      measure.mockReturnValue(920);
+      state.twoCol = true;
+      await act(async () => root.render(null));
+      history.replaceState(null, "", `/settings?tab=integrations&integration=${encodeURIComponent(`-sources/${pushState}`)}`);
+      await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+      await flush();
+      expect(host.querySelector("[data-integrations-split]")).not.toBeNull();
+      expect(host.querySelector('[data-settings-row="source-data-flow-entry"]')).toBeNull();
+    } finally {
+      measure.mockRestore();
+    }
+  });
 });

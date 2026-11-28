@@ -2451,6 +2451,16 @@ Settings and keeps them scoped to the named assistant and hub credential. A fail
 assistant while readable sections remain usable. Older hubs or assistants that lack the announcement use the legacy
 catalog, and existing settings endpoints still handle edits.
 
+Built-in services, standalone channels and connectors, installed or built-in extensions, and standalone push or
+subscription sources all compose through one capability-section detail shell (`web/src/views/settings/integrations/DetailShell.tsx`),
+mounted stably by `(manager, kind, id)` across the 740 px split breakpoint so drafts and open disclosures stay intact.
+Sections appear in canonical capability order (`connection`, `conversation_and_push`, `inbox_and_sync`, `external_sources`,
+`extension_configuration`, `information_access`, and `lifecycle`), placing Feishu Bot's `ConnectorExternalSourceSettings`
+after **Inbox & sync** to match extensions. Single-pane standalone source details include a same-assistant **Data flow**
+entry when Inbox Sources is available while preserving single-source scope. Settings host navigation metadata for the
+Integrations entry (`web/src/views/settings/integrations-registration.ts`) keeps its label, search keywords, visibility,
+route resolution, legacy 4-tab compatibility mapping, and lazy boundary self-contained for future registry adoption.
+
 Channel and extension editors keep their configuration in tab memory under the bound hub credential, assistant, resource
 kind, and ID (#17762). The split breakpoint and legacy Extensions entry read the same drafts. Saves run in order for a
 resource, and a refresh requested during a write reads again after it. The channel form checks the document revision

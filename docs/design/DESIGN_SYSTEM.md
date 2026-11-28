@@ -4932,3 +4932,11 @@ Back from a source returns to the list, detail, or Data Flow page that opened it
 detail without a visited parent returns to the same assistant's directory. Conflicting assistant
 names in a link show an unavailable page with Back. Browsing a linked assistant keeps the sidebar
 selection. The explicit switch action changes it.
+
+All integration kinds — built-in services, standalone channels and connectors, extensions, and
+standalone push or subscription sources — share one capability-composed detail shell mounted by
+`(manager, kind, id)` so crossing the 740 px split breakpoint changes only layout, scroll container,
+and Back placement without losing drafts. Capability sections mount in one canonical order:
+Account & connection, Chat & delivery, Inbox & sync, External sources, Extension settings,
+Information access, and Extension management. Single-pane standalone source details provide a
+same-assistant **Data flow** row when the split-pane view switcher is not visible.
