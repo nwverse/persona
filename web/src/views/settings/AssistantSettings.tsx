@@ -56,6 +56,8 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   notes_effective?: string;
   /** "Notify main chat tasks in the main chat only" (#1731): on by default; tasks opened from now on follow it. */
   main_tasks_quiet?: boolean;
+  /** Show non-private approvals from other Assistant chats in the main chat too; on by default for new cards. */
+  approval_mirror_main?: boolean;
   /** "Start what I asked for in the chat right away" (#2559): on by default; tasks the user asked for start without the plan card's "Start". */
   start_requested_tasks?: boolean;
   workspace_naming_version?: string;
@@ -411,6 +413,21 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     }
   };
 
+  const [mirrorBusy, setMirrorBusy] = useState(false);
+  const setApprovalMirror = async (on: boolean) => {
+    setMirrorBusy(true);
+    setInfo((i) => (i ? { ...i, approval_mirror_main: on } : i));
+    try {
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: { approval_mirror_main: on } });
+      setInfo((i) => (i ? { ...i, approval_mirror_main: r.approval_mirror_main ?? on } : i));
+    } catch (e) {
+      setInfo((i) => (i ? { ...i, approval_mirror_main: !on } : i));
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally {
+      setMirrorBusy(false);
+    }
+  };
+
   const [lessonsBusy, setLessonsBusy] = useState(false);
   // "Learn from finished tasks" (#12295): shown as chosen at once, taken back with the reason when the hub refuses.
   const setTaskLessons = async (on: boolean) => {
@@ -728,6 +745,14 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
           </select>
         </Row>
       </Group>
+
+      {typeof info?.approval_mirror_main === "boolean" && (
+        <Group anchor="approval-routing">
+          <Row label={t("settings-assistantsettings.approval_mirror_main")} hint={t("settings-assistantsettings.approval_mirror_main_hint")} wrapHint stackOnNarrow anchor="approval-mirror-main">
+            <Switch on={info.approval_mirror_main} onChange={(on) => void setApprovalMirror(on)} disabled={mirrorBusy || info.manager !== manager} label={t("settings-assistantsettings.approval_mirror_main")} />
+          </Row>
+        </Group>
+      )}
 
       <PageBoundary page="outbound-messages">
         <Suspense fallback={<Loading />}>

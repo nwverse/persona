@@ -276,6 +276,12 @@ func TestCardLedgerReportGoesToTheMainConversationWithoutAPush(t *testing.T) {
 	if len(kept) != 1 {
 		t.Fatalf("%d kept for the main conversation, want the one report: %+v", len(kept), kept)
 	}
+	if !kept[0].Internal {
+		t.Error("the card ledger report is not marked internal")
+	}
+	if shown, _ := s.queuedRelays(); len(shown["conv1"]) != 0 {
+		t.Fatalf("the card ledger report is shown above the composer: %v", shown["conv1"])
+	}
 	if !strings.Contains(kept[0].Text, "Card ledger for "+yesterday.Format(time.DateOnly)) ||
 		!strings.Contains(kept[0].Text, "None of the six (each one a bug): 2 — agent_permission×2.") ||
 		!strings.Contains(kept[0].Text, "1 goals and direction: 1 — decision×1\n") {

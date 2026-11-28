@@ -788,7 +788,7 @@ function PreviewView({ mid, sid, cwd, port, path, machineName, onPath, onGone }:
             }}
             onChange={(e) => setAddress(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape") {
+              if (e.key === "Escape" && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
                 e.preventDefault();
                 e.stopPropagation();
                 e.currentTarget.blur();
@@ -979,7 +979,23 @@ function PreviewBar({ bar, onClose, send }: { bar: Bar; onClose: () => void; sen
         <Icon name="info" size={13} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{d.kind === "beforeunload" ? t("preview.leave") : d.message}</span>
         {d.kind === "prompt" && (
-          <input autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => e.key === "Enter" && answerIt(true)} className="h-7 min-w-0 flex-1 rounded-[6px] bg-field px-2 text-[12.5px] text-ink outline-none" />
+          <input
+            autoFocus
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                answerIt(true);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                answerIt(false);
+              }
+            }}
+            className="h-7 min-w-0 flex-1 rounded-[6px] bg-field px-2 text-[12.5px] text-ink outline-none"
+          />
         )}
         {d.kind !== "alert" && (
           <Button tone="quiet" onClick={() => answerIt(false)}>

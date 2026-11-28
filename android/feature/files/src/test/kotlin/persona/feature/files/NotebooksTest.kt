@@ -68,6 +68,61 @@ class NotebooksTest {
         val text = (1..5).joinToString("\n")
         assertEquals("1\n2\n… 还有 3 行没有显示", Notebooks.capLines(text, more, 2))
         assertEquals(text, Notebooks.capLines(text, more, 10))
+        // Exact line count with a trailing newline must not claim a hidden line.
+        assertEquals("1\n2\n", Notebooks.capLines("1\n2\n", more, 2))
+        assertEquals("1\n2\n… 还有 1 行没有显示", Notebooks.capLines("1\n2\n3\n", more, 2))
+        assertEquals("1\n2\n… 还有 2 行没有显示", Notebooks.capLines("1\n2\n3\n4\n", more, 2))
+        assertEquals("1\n2\n… 还有 1 行没有显示", Notebooks.capLines("1\n2\n\n", more, 2))
+        assertEquals("1\r\n2\r\n", Notebooks.capLines("1\r\n2\r\n", more, 2))
+        assertEquals("1\r\n2\r\n… 还有 1 行没有显示", Notebooks.capLines("1\r\n2\r\n3\r\n", more, 2))
+    }
+
+    @Test fun capsMergedConsecutiveStreamChunksAtMaxOutputLines() {
+        val total = Notebooks.MAX_OUTPUT_LINES + 5
+        val singleLineChunks = (1..total).joinToString(",") {
+            """{"output_type":"stream","name":"stdout","text":"line $it\n"}"""
+        }
+        val nb = Notebooks.parse("""{"nbformat":4,"cells":[{"cell_type":"code","source":"","outputs":[$singleLineChunks]}]}""", more)
+        val merged = nb.cells.single().outputs.single() as Output.Stream
+        assertEquals(false, merged.stderr)
+        val lines = merged.text.split('\n')
+        assertEquals(Notebooks.MAX_OUTPUT_LINES + 1, lines.size)
+        assertEquals("line 1", lines.first())
+        assertEquals("line ${Notebooks.MAX_OUTPUT_LINES}", lines[Notebooks.MAX_OUTPUT_LINES - 1])
+        assertEquals("… 还有 5 行没有显示", lines.last())
+
+        // A long stream chunk followed by another same-stream chunk must merge before capping (no trailing lines after notice),
+        // while alternating stdout -> stderr -> stdout stays separate and split ANSI sequences strip cleanly across chunks.
+        val firstChunk = (1..(Notebooks.MAX_OUTPUT_LINES + 2)).joinToString("") { "a$it\\n" }
+        val secondChunk = (1..3).joinToString("") { "b$it\\n" }
+        val multi = Notebooks.parse(
+            """{"nbformat":4,"cells":[{"cell_type":"code","source":"","outputs":[
+                {"output_type":"stream","name":"stdout","text":"$firstChunk"},
+                {"output_type":"stream","name":"stdout","text":"$secondChunk"},
+                {"output_type":"stream","name":"stderr","text":"err1\nerr2\n"},
+                {"output_type":"stream","name":"stdout","text":"\u001b[3"},
+                {"output_type":"stream","name":"stdout","text":"1mred\u001b[0m\n"}
+            ]}]}""",
+            more,
+        )
+        val outputs = multi.cells.single().outputs
+        assertEquals(3, outputs.size)
+        val stdout = outputs[0] as Output.Stream
+        assertEquals(false, stdout.stderr)
+        assertTrue(stdout.text.endsWith("… 还有 5 行没有显示"))
+        assertEquals(Output.Stream(true, "err1\nerr2\n"), outputs[1])
+        assertEquals(Output.Stream(false, "red\n"), outputs[2])
+
+        // Exact MAX_OUTPUT_LINES with trailing newline must remain uncapped.
+        val exact = (1..Notebooks.MAX_OUTPUT_LINES).joinToString("") { "x$it\\n" }
+        val exactNb = Notebooks.parse(
+            """{"nbformat":4,"cells":[{"cell_type":"code","source":"","outputs":[
+                {"output_type":"stream","name":"stdout","text":"$exact"}
+            ]}]}""",
+            more,
+        )
+        val exactOut = exactNb.cells.single().outputs.single() as Output.Stream
+        assertTrue(!exactOut.text.contains("还有"))
     }
 
     @Test fun stripsAnsi() {

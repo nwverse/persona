@@ -1108,3 +1108,632 @@ func TestPassiveStreamDialErrorStaleHubReturns401WithoutClobberingNode(t *testin
 		t.Fatalf("stale Hub A clobbered Hub B seen metadata: from=%q lastSeen=%v", gotFrom, gotSeen)
 	}
 }
+
+// A lagging POST /pair from Hub A must not roll back s.cfg, close Hub B's streams, clear Hub B's
+// attention, or clobber Hub B's lastSeen/from if Hub B paired after Hub A's Update released link.json.
+func TestPassivePairDoesNotRevertConcurrentRepairOrClobberState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "link.json")
+	if _, err := SetMode(path, ModePassive, "127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	invA, err := PairListen(path, "", []string{"127.0.0.1:18663"}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, codeA, err := ParseConnectorLink(invA.Link)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var repMu sync.Mutex
+	var reports int
+	s := &passive{
+		o:       Options{Path: path, Version: "test-version", Logf: func(string, ...any) {}},
+		rep:     &reporter{out: func(Status) { repMu.Lock(); reports++; repMu.Unlock() }},
+		lim:     newAuthLimiter(),
+		streams: map[*pstream]struct{}{},
+		stopped: make(chan struct{}),
+	}
+	serve := func(method, target, remoteAddr, token string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var rd io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rd = bytes.NewReader(b)
+		}
+		req := httptest.NewRequest(method, target, rd)
+		req.RemoteAddr = remoteAddr
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		return rec
+	}
+
+	var hubBStreamClosed atomic.Bool
+	var hubBSeen time.Time
+	var reportsAfterHubB int
+	var hookRan atomic.Bool
+	s.testAfterPairUpdate = func() {
+		if !hookRan.CompareAndSwap(false, true) {
+			return
+		}
+		invB, err := PairListen(path, "", []string{"127.0.0.1:18663"}, time.Now())
+		if err != nil {
+			t.Errorf("PairListen B: %v", err)
+			return
+		}
+		_, _, codeB, err := ParseConnectorLink(invB.Link)
+		if err != nil {
+			t.Errorf("ParseConnectorLink B: %v", err)
+			return
+		}
+		if rec := serve(http.MethodPost, ConnectorPairPath, "127.0.0.2:43211", "", map[string]string{
+			"code": codeB, "token": tokenB, "machine": "workstation-b", "hub_id": "hub-b", "hub_name": "Hub B",
+		}); rec.Code != http.StatusOK {
+			t.Errorf("pair hub B: %d %s", rec.Code, rec.Body.String())
+			return
+		}
+		if rec := serve(http.MethodPost, ConnectorAttentionPath, "127.0.0.2:43211", tokenB, map[string]any{
+			"rev": "rev-hub-b", "needs_you": 1,
+		}); rec.Code != http.StatusNoContent {
+			t.Errorf("hub B attention: %d %s", rec.Code, rec.Body.String())
+			return
+		}
+		s.mu.Lock()
+		s.streams[&pstream{
+			token: hashHex(tokenB),
+			since: time.Now(),
+			from:  "127.0.0.2",
+			end:   func(websocket.StatusCode, string) { hubBStreamClosed.Store(true) },
+		}] = struct{}{}
+		hubBSeen = s.lastSeen
+		s.mu.Unlock()
+		repMu.Lock()
+		reportsAfterHubB = reports
+		repMu.Unlock()
+	}
+
+	if rec := serve(http.MethodPost, ConnectorPairPath, "127.0.0.1:43210", "", map[string]string{
+		"code": codeA, "token": tokenA, "machine": "workstation-a", "hub_id": "hub-a", "hub_name": "Hub A",
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("pair hub A: %d %s", rec.Code, rec.Body.String())
+	}
+	if !hookRan.Load() {
+		t.Fatal("testAfterPairUpdate hook did not run")
+	}
+
+	if got := s.config(); got.TokenSHA256 != hashHex(tokenB) || got.HubID != "hub-b" {
+		t.Fatalf("lagging Hub A pair rolled back s.cfg: %+v", got)
+	}
+	if hubBStreamClosed.Load() {
+		t.Fatal("lagging Hub A pair closed Hub B's active stream")
+	}
+	s.mu.Lock()
+	gotFrom, gotSeen, gotAttn := s.from, s.lastSeen, s.attention
+	s.mu.Unlock()
+	if gotFrom != "127.0.0.2" || !gotSeen.Equal(hubBSeen) {
+		t.Fatalf("lagging Hub A pair clobbered Hub B seen metadata: from=%q seen=%v (want 127.0.0.2 / %v)", gotFrom, gotSeen, hubBSeen)
+	}
+	if gotAttn == nil || gotAttn.Rev != "rev-hub-b" {
+		t.Fatalf("lagging Hub A pair wiped Hub B attention: %+v", gotAttn)
+	}
+	repMu.Lock()
+	gotReports := reports
+	repMu.Unlock()
+	if gotReports != reportsAfterHubB {
+		t.Fatalf("lagging Hub A pair emitted %d spurious Status reports", gotReports-reportsAfterHubB)
+	}
+
+	recB := serve(http.MethodGet, ConnectorInfoPath, "127.0.0.2:43211", tokenB, nil)
+	if recB.Code != http.StatusOK {
+		t.Fatalf("Hub B /info rejected after lagging Hub A pair: %d %s", recB.Code, recB.Body.String())
+	}
+	var infoB ConnectorInfo
+	if err := json.Unmarshal(recB.Body.Bytes(), &infoB); err != nil || infoB.AttentionRev != "rev-hub-b" {
+		t.Fatalf("Hub B /info = %+v (err=%v), want attention_rev=rev-hub-b", infoB, err)
+	}
+	if recA := serve(http.MethodGet, ConnectorInfoPath, "127.0.0.1:43210", tokenA, nil); recA.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked Hub A /info admitted after lagging pair: %d %s", recA.Code, recA.Body.String())
+	}
+}
+
+// A lagging POST /pair must preserve a concurrently issued invite code and must not undo a
+// concurrent unpair or switch to active mode.
+func TestPassivePairPreservesConcurrentInviteUnpairAndModeSwitch(t *testing.T) {
+	setup := func(t *testing.T) (string, string, *passive) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "link.json")
+		if _, err := SetMode(path, ModePassive, "127.0.0.1:0"); err != nil {
+			t.Fatal(err)
+		}
+		invA, err := PairListen(path, "", []string{"127.0.0.1:18663"}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, codeA, err := ParseConnectorLink(invA.Link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := &passive{
+			o:       Options{Path: path, Version: "test-version", Logf: func(string, ...any) {}},
+			rep:     &reporter{},
+			lim:     newAuthLimiter(),
+			streams: map[*pstream]struct{}{},
+			stopped: make(chan struct{}),
+		}
+		return path, codeA, s
+	}
+	doPairA := func(t *testing.T, s *passive, codeA string) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{
+			"code": codeA, "token": tokenA, "machine": "workstation-a", "hub_id": "hub-a", "hub_name": "Hub A",
+		})
+		req := httptest.NewRequest(http.MethodPost, ConnectorPairPath, bytes.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:43210"
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("pair hub A: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	t.Run("preserves_concurrent_invite_code", func(t *testing.T) {
+		path, codeA, s := setup(t)
+		var wantCodeSHA string
+		s.testAfterPairUpdate = func() {
+			invNext, err := PairListen(path, "", []string{"127.0.0.1:18663"}, time.Now())
+			if err != nil {
+				t.Errorf("PairListen next: %v", err)
+				return
+			}
+			_, _, codeNext, err := ParseConnectorLink(invNext.Link)
+			if err != nil {
+				t.Errorf("ParseConnectorLink next: %v", err)
+				return
+			}
+			wantCodeSHA = hashHex(codeNext)
+		}
+		doPairA(t, s, codeA)
+		got := s.config()
+		if !got.Paired() || got.TokenSHA256 != hashHex(tokenA) {
+			t.Fatalf("Hub A not paired: %+v", got)
+		}
+		if got.Code == nil || got.Code.SHA256 != wantCodeSHA {
+			t.Fatalf("concurrent invite code was clobbered by pair(): %+v (want %s)", got.Code, wantCodeSHA)
+		}
+		s.mu.Lock()
+		gotFrom := s.from
+		s.mu.Unlock()
+		if gotFrom != "127.0.0.1" {
+			t.Fatalf("Hub A last-seen source = %q, want 127.0.0.1", gotFrom)
+		}
+	})
+
+	t.Run("does_not_undo_concurrent_unpair", func(t *testing.T) {
+		path, codeA, s := setup(t)
+		s.mu.Lock()
+		s.from = "127.0.0.9"
+		s.mu.Unlock()
+		s.testAfterPairUpdate = func() {
+			if err := Update(path, func(c *Config) error {
+				if c.Passive != nil {
+					c.Passive.TokenSHA256, c.Passive.HubID, c.Passive.HubName, c.Passive.PairedAt = "", "", "", nil
+				}
+				return nil
+			}); err != nil {
+				t.Errorf("unpair update: %v", err)
+			}
+		}
+		doPairA(t, s, codeA)
+		if got := s.config(); got.Paired() {
+			t.Fatalf("lagging pair() undid concurrent unpair: %+v", got)
+		}
+		s.mu.Lock()
+		gotFrom := s.from
+		s.mu.Unlock()
+		if gotFrom != "127.0.0.9" {
+			t.Fatalf("lagging pair() overwrote s.from after concurrent unpair: got %q, want 127.0.0.9", gotFrom)
+		}
+		req := httptest.NewRequest(http.MethodGet, ConnectorInfoPath, nil)
+		req.RemoteAddr = "127.0.0.1:43210"
+		req.Header.Set("Authorization", "Bearer "+tokenA)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("unpaired Hub A /info got %d, want 401", rec.Code)
+		}
+	})
+
+	t.Run("does_not_reauthorize_after_mode_switch", func(t *testing.T) {
+		path, codeA, s := setup(t)
+		var reports atomic.Int32
+		s.rep = &reporter{out: func(Status) { reports.Add(1) }}
+		s.mu.Lock()
+		s.cfg = Passive{Listen: "127.0.0.1:0", HubID: "hub-prev", Machine: "workstation-prev", TokenSHA256: hashHex(tokenB)}
+		s.attention = &Attention{Rev: "rev-prev", NeedsYou: 1}
+		s.mu.Unlock()
+		s.testAfterPairUpdate = func() {
+			if _, err := SetMode(path, ModeActive, ""); err != nil {
+				t.Errorf("SetMode active: %v", err)
+			}
+		}
+		doPairA(t, s, codeA)
+		if got := s.config(); !samePassive(got, Passive{}) {
+			t.Fatalf("lagging pair() left s.cfg populated after switch to active mode: %+v", got)
+		}
+		s.mu.Lock()
+		gotAttn := s.attention
+		s.mu.Unlock()
+		if gotAttn != nil {
+			t.Fatalf("lagging pair() left s.attention populated after switch to active mode: %+v", gotAttn)
+		}
+		if reports.Load() == 0 {
+			t.Fatal("clearing s.cfg after switch to active mode did not emit a Status report")
+		}
+		for _, tok := range []string{tokenA, tokenB} {
+			req := httptest.NewRequest(http.MethodGet, ConnectorInfoPath, nil)
+			req.RemoteAddr = "127.0.0.1:43210"
+			req.Header.Set("Authorization", "Bearer "+tok)
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("active-mode passive /info got %d, want 401", rec.Code)
+			}
+		}
+	})
+
+	t.Run("does_not_reauthorize_after_config_deleted", func(t *testing.T) {
+		path, codeA, s := setup(t)
+		var reports atomic.Int32
+		s.rep = &reporter{out: func(Status) { reports.Add(1) }}
+		s.mu.Lock()
+		s.cfg = Passive{Listen: "127.0.0.1:0", HubID: "hub-prev", Machine: "workstation-prev", TokenSHA256: hashHex(tokenB)}
+		s.attention = &Attention{Rev: "rev-prev", NeedsYou: 1}
+		s.mu.Unlock()
+		s.testAfterPairUpdate = func() {
+			if err := os.Remove(path); err != nil {
+				t.Errorf("remove link.json: %v", err)
+			}
+		}
+		doPairA(t, s, codeA)
+		if got := s.config(); !samePassive(got, Passive{}) {
+			t.Fatalf("lagging pair() left s.cfg populated after link.json removal: %+v", got)
+		}
+		s.mu.Lock()
+		gotAttn := s.attention
+		s.mu.Unlock()
+		if gotAttn != nil {
+			t.Fatalf("lagging pair() left s.attention populated after link.json removal: %+v", gotAttn)
+		}
+		if reports.Load() == 0 {
+			t.Fatal("clearing s.cfg after link.json removal did not emit a Status report")
+		}
+		for _, tok := range []string{tokenA, tokenB} {
+			req := httptest.NewRequest(http.MethodGet, ConnectorInfoPath, nil)
+			req.RemoteAddr = "127.0.0.1:43210"
+			req.Header.Set("Authorization", "Bearer "+tok)
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("deleted-config passive /info got %d, want 401", rec.Code)
+			}
+		}
+	})
+}
+
+// A transient non-ErrNotExist Read error during syncFromDisk after pair()'s Update must still
+// revoke the previous hub and activate the new pairing when s.cfg still holds the pre-pair state,
+// while never rolling back a concurrent newer pairing that already updated s.cfg in memory.
+func TestPassivePairTransientReadErrorFallback(t *testing.T) {
+	const tokenC = "hub-c-credential-at-least-32-chars-0123456789"
+
+	newServer := func(t *testing.T) (string, *passive, *[]string, *sync.Mutex) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "link.json")
+		if _, err := SetMode(path, ModePassive, "127.0.0.1:0"); err != nil {
+			t.Fatal(err)
+		}
+		var logMu sync.Mutex
+		var logs []string
+		s := &passive{
+			o: Options{
+				Path:    path,
+				Version: "test-version",
+				Logf: func(format string, args ...any) {
+					logMu.Lock()
+					logs = append(logs, fmt.Sprintf(format, args...))
+					logMu.Unlock()
+				},
+			},
+			rep:     &reporter{},
+			lim:     newAuthLimiter(),
+			streams: map[*pstream]struct{}{},
+			stopped: make(chan struct{}),
+		}
+		return path, s, &logs, &logMu
+	}
+	serve := func(t *testing.T, s *passive, method, target, remoteAddr, token string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var rd io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rd = bytes.NewReader(b)
+		}
+		req := httptest.NewRequest(method, target, rd)
+		req.RemoteAddr = remoteAddr
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		return rec
+	}
+	issueCode := func(t *testing.T, path string) string {
+		t.Helper()
+		inv, err := PairListen(path, "", []string{"127.0.0.1:18663"}, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, code, err := ParseConnectorLink(inv.Link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return code
+	}
+	hasLog := func(logs *[]string, mu *sync.Mutex, substr string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, line := range *logs {
+			if strings.Contains(line, substr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("revokes_previous_hub_and_activates_new_hub", func(t *testing.T) {
+		path, s, logs, logMu := newServer(t)
+		codeA := issueCode(t, path)
+		if rec := serve(t, s, http.MethodPost, ConnectorPairPath, "127.0.0.1:43210", "", map[string]string{
+			"code": codeA, "token": tokenA, "machine": "workstation-a", "hub_id": "hub-a", "hub_name": "Hub A",
+		}); rec.Code != http.StatusOK {
+			t.Fatalf("pair hub A: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := serve(t, s, http.MethodPost, ConnectorAttentionPath, "127.0.0.1:43210", tokenA, map[string]any{
+			"rev": "rev-hub-a", "needs_you": 2,
+		}); rec.Code != http.StatusNoContent {
+			t.Fatalf("hub A attention: %d %s", rec.Code, rec.Body.String())
+		}
+		var closedCode atomic.Int32
+		s.mu.Lock()
+		s.streams[&pstream{
+			token: hashHex(tokenA),
+			since: time.Now(),
+			from:  "127.0.0.1",
+			end:   func(code websocket.StatusCode, _ string) { closedCode.Store(int32(code)) },
+		}] = struct{}{}
+		s.mu.Unlock()
+
+		codeB := issueCode(t, path)
+		s.testAfterPairUpdate = func() {
+			s.testReadConfig = func(string) (*Config, error) {
+				return nil, errors.New("transient read failure")
+			}
+		}
+		if rec := serve(t, s, http.MethodPost, ConnectorPairPath, "127.0.0.2:43211", "", map[string]string{
+			"code": codeB, "token": tokenB, "machine": "workstation-b", "hub_id": "hub-b", "hub_name": "Hub B",
+		}); rec.Code != http.StatusOK {
+			t.Fatalf("pair hub B: %d %s", rec.Code, rec.Body.String())
+		}
+
+		if !hasLog(logs, logMu, "passive: reload after pair: transient read failure") {
+			t.Fatalf("expected reload error log, got %v", *logs)
+		}
+		if got := websocket.StatusCode(closedCode.Load()); got != closeCredential {
+			t.Fatalf("Hub A stream closed with %v, want %v", got, closeCredential)
+		}
+		if got := s.config(); got.TokenSHA256 != hashHex(tokenB) || got.HubID != "hub-b" {
+			t.Fatalf("s.cfg = %+v, want Hub B", got)
+		}
+		s.mu.Lock()
+		gotFrom, gotAttn := s.from, s.attention
+		s.mu.Unlock()
+		if gotFrom != "127.0.0.2" || gotAttn != nil {
+			t.Fatalf("after fallback: from=%q attn=%+v, want 127.0.0.2 / nil", gotFrom, gotAttn)
+		}
+		if recB := serve(t, s, http.MethodGet, ConnectorInfoPath, "127.0.0.2:43211", tokenB, nil); recB.Code != http.StatusOK {
+			t.Fatalf("newly paired Hub B /info got %d %s, want 200", recB.Code, recB.Body.String())
+		}
+		if recA := serve(t, s, http.MethodGet, ConnectorInfoPath, "127.0.0.1:43210", tokenA, nil); recA.Code != http.StatusUnauthorized {
+			t.Fatalf("revoked Hub A /info got %d %s, want 401", recA.Code, recA.Body.String())
+		}
+	})
+
+	t.Run("activates_first_pairing_from_unpaired", func(t *testing.T) {
+		path, s, logs, logMu := newServer(t)
+		codeA := issueCode(t, path)
+		s.testAfterPairUpdate = func() {
+			s.testReadConfig = func(string) (*Config, error) {
+				return nil, errors.New("transient read failure")
+			}
+		}
+		if rec := serve(t, s, http.MethodPost, ConnectorPairPath, "127.0.0.1:43210", "", map[string]string{
+			"code": codeA, "token": tokenA, "machine": "workstation-a", "hub_id": "hub-a", "hub_name": "Hub A",
+		}); rec.Code != http.StatusOK {
+			t.Fatalf("pair hub A: %d %s", rec.Code, rec.Body.String())
+		}
+		if !hasLog(logs, logMu, "passive: reload after pair: transient read failure") {
+			t.Fatalf("expected reload error log, got %v", *logs)
+		}
+		if got := s.config(); !got.Paired() || got.TokenSHA256 != hashHex(tokenA) {
+			t.Fatalf("s.cfg = %+v, want Hub A", got)
+		}
+		if recA := serve(t, s, http.MethodGet, ConnectorInfoPath, "127.0.0.1:43210", tokenA, nil); recA.Code != http.StatusOK {
+			t.Fatalf("Hub A /info got %d %s, want 200", recA.Code, recA.Body.String())
+		}
+	})
+
+	t.Run("does_not_roll_back_concurrent_hub_c", func(t *testing.T) {
+		path, s, logs, logMu := newServer(t)
+		codeA := issueCode(t, path)
+		if rec := serve(t, s, http.MethodPost, ConnectorPairPath, "127.0.0.1:43210", "", map[string]string{
+			"code": codeA, "token": tokenA, "machine": "workstation-a", "hub_id": "hub-a", "hub_name": "Hub A",
+		}); rec.Code != http.StatusOK {
+			t.Fatalf("pair hub A: %d %s", rec.Code, rec.Body.String())
+		}
+
+		codeB := issueCode(t, path)
+		var hubCStreamClosed atomic.Bool
+		var hookRan atomic.Bool
+		s.testAfterPairUpdate = func() {
+			if !hookRan.CompareAndSwap(false, true) {
+				return
+			}
+			// Hub C pairs cleanly while Hub B's pair is between Update and syncFromDisk.
+			codeC := issueCode(t, path)
+			if rec := serve(t, s, http.MethodPost, ConnectorPairPath, "127.0.0.3:43212", "", map[string]string{
+				"code": codeC, "token": tokenC, "machine": "workstation-c", "hub_id": "hub-c", "hub_name": "Hub C",
+			}); rec.Code != http.StatusOK {
+				t.Errorf("pair hub C: %d %s", rec.Code, rec.Body.String())
+				return
+			}
+			if rec := serve(t, s, http.MethodPost, ConnectorAttentionPath, "127.0.0.3:43212", tokenC, map[string]any{
+				"rev": "rev-hub-c", "needs_you": 1,
+			}); rec.Code != http.StatusNoContent {
+				t.Errorf("hub C attention: %d %s", rec.Code, rec.Body.String())
+				return
+			}
+			s.mu.Lock()
+			s.streams[&pstream{
+				token: hashHex(tokenC),
+				since: time.Now(),
+				from:  "127.0.0.3",
+				end:   func(websocket.StatusCode, string) { hubCStreamClosed.Store(true) },
+			}] = struct{}{}
+			s.mu.Unlock()
+			// Now Hub B's syncFromDisk hits a transient disk read failure.
+			s.testReadConfig = func(string) (*Config, error) {
+				return nil, errors.New("transient read failure")
+			}
+		}
+
+		if rec := serve(t, s, http.MethodPost, ConnectorPairPath, "127.0.0.2:43211", "", map[string]string{
+			"code": codeB, "token": tokenB, "machine": "workstation-b", "hub_id": "hub-b", "hub_name": "Hub B",
+		}); rec.Code != http.StatusOK {
+			t.Fatalf("pair hub B: %d %s", rec.Code, rec.Body.String())
+		}
+		if !hookRan.Load() {
+			t.Fatal("testAfterPairUpdate hook did not run")
+		}
+		if !hasLog(logs, logMu, "passive: reload after pair: transient read failure") {
+			t.Fatalf("expected reload error log, got %v", *logs)
+		}
+		if got := s.config(); got.TokenSHA256 != hashHex(tokenC) || got.HubID != "hub-c" {
+			t.Fatalf("Hub B transient-read fallback rolled back Hub C: %+v", got)
+		}
+		if hubCStreamClosed.Load() {
+			t.Fatal("Hub B transient-read fallback closed Hub C's active stream")
+		}
+		s.mu.Lock()
+		gotFrom, gotAttn := s.from, s.attention
+		s.mu.Unlock()
+		if gotFrom != "127.0.0.3" || gotAttn == nil || gotAttn.Rev != "rev-hub-c" {
+			t.Fatalf("Hub C state clobbered: from=%q attn=%+v", gotFrom, gotAttn)
+		}
+		if recC := serve(t, s, http.MethodGet, ConnectorInfoPath, "127.0.0.3:43212", tokenC, nil); recC.Code != http.StatusOK {
+			t.Fatalf("Hub C /info got %d %s, want 200", recC.Code, recC.Body.String())
+		}
+		if recB := serve(t, s, http.MethodGet, ConnectorInfoPath, "127.0.0.2:43211", tokenB, nil); recB.Code != http.StatusUnauthorized {
+			t.Fatalf("stale Hub B /info got %d %s, want 401", recB.Code, recB.Body.String())
+		}
+		if recA := serve(t, s, http.MethodGet, ConnectorInfoPath, "127.0.0.1:43210", tokenA, nil); recA.Code != http.StatusUnauthorized {
+			t.Fatalf("revoked Hub A /info got %d %s, want 401", recA.Code, recA.Body.String())
+		}
+	})
+}
+
+// When serve() calls syncFromDisk with a non-empty expectedListen, switching out of passive mode,
+// deleting link.json, or changing the listen address must leave s.cfg and active streams untouched
+// so serve() exits and ends streams with closeStopping (1001) instead of closeCredential (4002).
+func TestPassivePairSyncFromDiskExpectedListenLeavesStreamsForStopping(t *testing.T) {
+	const listenAddr = "127.0.0.1:18663"
+	seed := func(t *testing.T) (string, *passive, *atomic.Bool) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "link.json")
+		if _, err := SetMode(path, ModePassive, listenAddr); err != nil {
+			t.Fatal(err)
+		}
+		var streamEnded atomic.Bool
+		cfg := Passive{Listen: listenAddr, HubID: "hub-a", Machine: "workstation-a", TokenSHA256: hashHex(tokenA)}
+		s := &passive{
+			o:         Options{Path: path, Version: "test-version", Logf: func(string, ...any) {}},
+			rep:       &reporter{},
+			lim:       newAuthLimiter(),
+			cfg:       cfg,
+			attention: &Attention{Rev: "rev-a", NeedsYou: 1},
+			streams: map[*pstream]struct{}{
+				{
+					token: hashHex(tokenA),
+					since: time.Now(),
+					from:  "127.0.0.1",
+					end:   func(websocket.StatusCode, string) { streamEnded.Store(true) },
+				}: {},
+			},
+			stopped: make(chan struct{}),
+		}
+		return path, s, &streamEnded
+	}
+	assertUntouched := func(t *testing.T, s *passive, streamEnded *atomic.Bool) {
+		t.Helper()
+		if streamEnded.Load() {
+			t.Fatal("syncFromDisk with expectedListen closed active stream prematurely")
+		}
+		if got := s.config(); got.TokenSHA256 != hashHex(tokenA) || got.HubID != "hub-a" {
+			t.Fatalf("syncFromDisk with expectedListen mutated s.cfg: %+v", got)
+		}
+		s.mu.Lock()
+		gotAttn := s.attention
+		s.mu.Unlock()
+		if gotAttn == nil || gotAttn.Rev != "rev-a" {
+			t.Fatalf("syncFromDisk with expectedListen cleared s.attention: %+v", gotAttn)
+		}
+	}
+
+	t.Run("mode_switched_to_active", func(t *testing.T) {
+		path, s, streamEnded := seed(t)
+		if _, err := SetMode(path, ModeActive, ""); err != nil {
+			t.Fatal(err)
+		}
+		modeOK, addr, err := s.syncFromDisk(nil, listenAddr)
+		if err != nil || modeOK || addr != "" {
+			t.Fatalf("syncFromDisk = (%v, %q, %v), want (false, \"\", nil)", modeOK, addr, err)
+		}
+		assertUntouched(t, s, streamEnded)
+	})
+
+	t.Run("config_deleted", func(t *testing.T) {
+		path, s, streamEnded := seed(t)
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		modeOK, addr, err := s.syncFromDisk(nil, listenAddr)
+		if !errors.Is(err, os.ErrNotExist) || modeOK || addr != "" {
+			t.Fatalf("syncFromDisk = (%v, %q, %v), want (false, \"\", ErrNotExist)", modeOK, addr, err)
+		}
+		assertUntouched(t, s, streamEnded)
+	})
+
+	t.Run("listen_addr_moved", func(t *testing.T) {
+		path, s, streamEnded := seed(t)
+		if _, err := SetMode(path, ModePassive, "127.0.0.1:18664"); err != nil {
+			t.Fatal(err)
+		}
+		modeOK, addr, err := s.syncFromDisk(nil, listenAddr)
+		if err != nil || !modeOK || addr != "127.0.0.1:18664" {
+			t.Fatalf("syncFromDisk = (%v, %q, %v), want (true, 127.0.0.1:18664, nil)", modeOK, addr, err)
+		}
+		assertUntouched(t, s, streamEnded)
+	})
+}

@@ -76,6 +76,7 @@ extensions.call:{id} /api/v1/extensions/{id}/
 -                    DELETE /api/v1/connectors/sent/chat-rules/{id}
 -                    DELETE /api/v1/connectors/{id}/archive
 -                    DELETE /api/v1/connectors/{id}/data
+-                    DELETE /api/v1/execution/channels/{name}
 -                    DELETE /api/v1/extensions/-/operations/{op}
 -                    DELETE /api/v1/extensions/{id}/-/dev
 -                    DELETE /api/v1/extensions/{id}/-/handoff-rules/{rule}
@@ -98,6 +99,7 @@ inbox.write          DELETE /api/v1/inbox/policies/{id}
 -                    DELETE /api/v1/machines/{mid}/held-starts/{op}
 -                    DELETE /api/v1/machines/{mid}/launchers/{name}/models/custom
 -                    DELETE /api/v1/managers/{id}
+-                    DELETE /api/v1/model-profiles
 -                    DELETE /api/v1/model-profiles/{id}
 push.grading         DELETE /api/v1/push/grading/layer
 -                    DELETE /api/v1/push/web/{device}
@@ -166,6 +168,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversations/{id}/always
 spaces               GET /api/v1/assistant/conversations/{id}/categories
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
+-                    GET /api/v1/assistant/conversations/{id}/model/last-good
 -                    GET /api/v1/assistant/conversations/{id}/segments
 -                    GET /api/v1/assistant/conversations/{id}/switch/{operation}
 -                    GET /api/v1/assistant/directions/offers
@@ -239,6 +242,8 @@ decisions.raise      GET /api/v1/decisions/{id}
 -                    GET /api/v1/devices/{id}/prefs
 -                    GET /api/v1/devices/{id}/sessions
 -                    GET /api/v1/endpoints
+-                    GET /api/v1/execution/catalog
+-                    GET /api/v1/execution/channels
 -                    GET /api/v1/extensions
 -                    GET /api/v1/extensions/-/audit
 -                    GET /api/v1/extensions/-/catalog/{mid}/{id}/icon
@@ -515,6 +520,8 @@ agents.control       POST /api/v1/agents/sessions/{id}/read
 assistant.ask        POST /api/v1/assistant/conversations
 -                    POST /api/v1/assistant/conversations/{id}/archive
 -                    POST /api/v1/assistant/conversations/{id}/compact
+-                    POST /api/v1/assistant/conversations/{id}/inputs/resolve
+-                    POST /api/v1/assistant/conversations/{id}/model/restore
 -                    POST /api/v1/assistant/conversations/{id}/route
 assistant.ask        POST /api/v1/assistant/conversations/{id}/stop
 -                    POST /api/v1/assistant/conversations/{id}/switch
@@ -599,6 +606,8 @@ decisions.raise      POST /api/v1/decisions/{id}/withdraw
 -                    POST /api/v1/devices/{id}/lock-tests
 -                    POST /api/v1/devices/{id}/lock-tests/{test_id}/receipt
 -                    POST /api/v1/error-reports
+-                    POST /api/v1/execution/channels/rollback
+-                    POST /api/v1/execution/validate
 -                    POST /api/v1/extensions/-/dev
 -                    POST /api/v1/extensions/-/install
 -                    POST /api/v1/extensions/-/operations/{op}/retry
@@ -725,6 +734,7 @@ agents.control       POST /api/v1/interactions/{id}/resolve
 -                    POST /api/v1/managers/{id}/code
 -                    POST /api/v1/managers/{id}/machines
 -                    POST /api/v1/managers/{id}/sources
+-                    POST /api/v1/model-profiles/deactivate
 -                    POST /api/v1/model-profiles/rollback
 -                    POST /api/v1/model-profiles/{id}/apply
 notify               POST /api/v1/notify
@@ -872,6 +882,7 @@ spaces               PUT /api/v1/assistant/tracks/{slug}/space-md
 -                    PUT /api/v1/connectors/{id}/settings
 -                    PUT /api/v1/devices/{id}/prefs
 -                    PUT /api/v1/devices/{id}/widgets
+-                    PUT /api/v1/execution/channels/{name}
 -                    PUT /api/v1/extensions/-/upgrades
 -                    PUT /api/v1/extensions/{id}/-/auto-upgrade
 -                    PUT /api/v1/extensions/{id}/-/config

@@ -18,6 +18,7 @@ import {
   kindOf,
   LIST_KINDS,
   recordingKindTag,
+  recordingPaused,
   linkGroups,
   markParts,
   parseLogLine,
@@ -63,6 +64,20 @@ describe("the meetings list (#8871)", () => {
     expect(recordingKindTag(e("m", { kind: "recordings", recording_kind: "meeting" }))).toBeNull();
     expect(recordingKindTag(e("old", { kind: "recordings" }))).toBeNull(); // a hub before #8870
     expect(recordingKindTag(e("imported", { kind: "meetings", recording_kind: "note" }))).toBeNull();
+  });
+
+  it("decodes paused into a closed set (#15214)", () => {
+    expect(recordingPaused("module_off")).toBe("module_off");
+    expect(recordingPaused("future_reason")).toBe("unknown");
+    expect(recordingPaused("quota")).toBe("unknown");
+    expect(recordingPaused("MODULE_OFF")).toBe("unknown");
+    expect(recordingPaused(" module_off ")).toBe("unknown");
+    expect(recordingPaused("")).toBeNull();
+    expect(recordingPaused(undefined)).toBeNull();
+    expect(recordingPaused(null)).toBeNull();
+    expect(recordingPaused(7)).toBeNull();
+    expect(recordingPaused(true)).toBeNull();
+    expect(recordingPaused({})).toBeNull();
   });
 
   it("orders meetings newest first, sorted ones open and the rest folded", () => {

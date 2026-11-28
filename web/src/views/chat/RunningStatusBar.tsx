@@ -23,6 +23,7 @@ import { parseRetryAPIError } from "../../lib/api-errors";
 import type { RunStep } from "../../lib/run-step";
 import { useStore } from "../../lib/store";
 import { compactTokens } from "../../lib/tokens";
+import { timeOrNaN } from "../../lib/times";
 import { toolDisplayName } from "../../lib/turns";
 import type { SessionLive } from "../../lib/types";
 import { TICKING_DURATION, workDuration } from "../../lib/work-groups";
@@ -140,7 +141,7 @@ function Disconnected() {
 /** The bar of an agent that only waits in the background (#6045): still, timed from when it began. */
 export function WaitingView({ wait, offline }: { wait: WaitLine; offline?: boolean }) {
   const now = useNow(1000, !offline);
-  const since = wait.since ? Date.parse(wait.since) : NaN;
+  const since = timeOrNaN(wait.since);
   // what it waits on: the header's title line says the state ("Waiting in the background"), once (#3956); the state's name
   // only stands in when the wait has no words of its own
   const words = [wait.what || stateName("bg_waiting"), wait.more > 0 ? t("chat-runningstatusbar.more_waits", { count: wait.more }) : ""].filter(Boolean).join(" · ");
@@ -267,7 +268,7 @@ export function RunningStatusView({ live, working, done: finished, startedAt, cl
   const usage = !retry && Boolean(kept.subtasks);
   // a real background command has its own optional clock; there is no turn-clock or mount-time fallback for it
   const task = retry ? null : kept.command;
-  const commandStart = task?.since ? Date.parse(task.since) : NaN;
+  const commandStart = timeOrNaN(task?.since);
   // The hub can serialize Go's zero time as 0001-01-01: that is an absent start, not a gigantic elapsed time.
   const commandTimed = Number.isFinite(commandStart) && commandStart > 0;
   // the turn's own work, measured: an Agent's, not the Persona conversation's, not background work's
@@ -386,6 +387,6 @@ function useElapsed(live: SessionLive | null, startedAt: string | undefined, now
   if (live?.elapsed_s === undefined) base.current = null;
   else if (base.current?.s !== live.elapsed_s) base.current = { s: live.elapsed_s, at: Date.now() };
   if (base.current) return base.current.s + Math.max(0, Math.floor((now - base.current.at) / 1000));
-  const from = startedAt ? Date.parse(startedAt) : NaN;
+  const from = timeOrNaN(startedAt);
   return Math.max(0, Math.floor((now - (Number.isNaN(from) ? mounted.current : from)) / 1000));
 }

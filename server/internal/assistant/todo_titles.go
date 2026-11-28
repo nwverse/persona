@@ -152,23 +152,27 @@ func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string 
 	language := answerLanguage(locale)
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	// Reasoning models think first: a small max_tokens comes back empty (agents_start.go's tab names).
-	text, err := s.purposeModel("todo.title").Complete(cctx,
-		prompts.RenderTodoTitle(prompts.TodoTitle{Language: language, Max: max}),
-		prompts.RenderTodoTitleInput(cutRunes(prompt, 1500), language), 200)
+	// Reasoning models think first: a small max_tokens comes back empty (agents_start.go's tab names). Thinking is
+	// switched off for this short naming call, and a cut-off chain-of-thought line is dropped before it can replace
+	// the title (title_guard.go).
+	r, err := s.purposeModel("todo.title").Chat(cctx, ai.Request{
+		System:          prompts.RenderTodoTitle(prompts.TodoTitle{Language: language, Max: max}),
+		Messages:        []ai.Message{{Role: ai.RoleUser, Content: prompts.RenderTodoTitleInput(cutRunes(prompt, 1500), language)}},
+		MaxTokens:       200,
+		DisableThinking: true,
+	})
 	if err != nil {
 		if !ai.IsPaused(err) {
 			s.logf("todo title: %v", err)
 		}
 		return ""
 	}
-	line := ""
-	for l := range strings.SplitSeq(text, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			line = l
-			break
-		}
+	text := stripTitleThinking(r.Text)
+	if titleReplyIsThinkingLeak(text) {
+		s.logf("todo title: dropped thinking leakage %q", clip(oneLine(r.Text), 80))
+		return ""
 	}
+	line := firstTitleLine(text)
 	line = strings.Trim(line, "「」『』《》\"'“”`* ")
 	return cleanTodoTitle(line, max)
 }

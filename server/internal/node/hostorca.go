@@ -33,7 +33,8 @@ import (
 type orcaHost struct {
 	c *orcart.Client
 	// scan lists the agent processes in front in Orca's terminals, by pane key (scanOrcaProcs).
-	scan func() (map[string][]orcaProc, error)
+	scan              func() (map[string][]orcaProc, error)
+	inspectCloseShell func(context.Context, orcaTerminalOwner, int) (orcaShell, bool)
 
 	mu       sync.Mutex
 	terms    map[string]orcart.Terminal // pane key -> terminal, from the last terminal.list
@@ -57,8 +58,9 @@ type orcaHost struct {
 	// made are the terminals this host created, by the pane key creation gave them (the node's name for the pane):
 	// Orca re-keys one its UI does not adopt (orphaned, a new tabId and leafId, the same handle and incarnation,
 	// #5547), and it is still found by its handle under that key. rekeyed: such a key -> the pane key Orca gives it now.
-	made    map[string]orcart.Terminal
-	rekeyed map[string]string
+	made      map[string]orcart.Terminal
+	rekeyed   map[string]string
+	agentTabs map[string]orcaStartTerminal
 }
 
 // track remembers a terminal this host created (h.mu held), to find it by handle if Orca re-keys it.
@@ -66,6 +68,7 @@ func (h *orcaHost) track(t orcart.Terminal) {
 	if h.made == nil {
 		h.made = map[string]orcart.Terminal{}
 	}
+	delete(h.agentTabs, t.PaneKey())
 	h.made[t.PaneKey()] = t
 }
 
@@ -116,7 +119,9 @@ var (
 	_ shellOpener      = (*orcaHost)(nil)
 )
 
-func newOrcaHost(c *orcart.Client) *orcaHost { return &orcaHost{c: c, scan: orcaScan} }
+func newOrcaHost(c *orcart.Client) *orcaHost {
+	return &orcaHost{c: c, scan: orcaScan, inspectCloseShell: inspectOrcaCloseShell}
+}
 
 // orcaScan is how a new Orca host lists agent processes (tests swap in a fake process table).
 var orcaScan = scanOrcaProcs
@@ -232,6 +237,7 @@ func (h *orcaHost) listTerminals(ctx context.Context, fresh bool) ([]orcart.Term
 	for key := range made {
 		if !listed[key] {
 			delete(h.made, key) // gone
+			delete(h.agentTabs, key)
 		}
 	}
 	h.failErr, h.terms, h.rekeyed = nil, byPane, rekeyed
@@ -394,6 +400,11 @@ func (v *orcaView) layout() *host.Layout {
 	}
 	for _, t := range v.terms {
 		a := v.agent(t)
+		// listTerminals only includes an orphan when it can map it back to
+		// a terminal this host created. Keep its identity for the saved receipt.
+		if t.Connected {
+			a.Tokens = map[string]string{orcaHandleToken: t.Handle, orcaIncarnationToken: t.IncarnationID}
+		}
 		l.Panes = append(l.Panes, a)
 		if a.Agent != "" {
 			l.Agents = append(l.Agents, a)

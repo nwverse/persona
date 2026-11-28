@@ -131,6 +131,15 @@ it("a send refused because a dialog has the terminal lights the terminal button"
   act(() => setOutbox("mac/s1", [{ id: "m1", text: "go on", images: [], at: Date.now(), state: "failed", error: "x", code: "dialog_open" }]));
   await settle();
   expect(dot()).not.toBeNull();
+  const openTerminal = [...host.querySelectorAll<HTMLButtonElement>('[role="alert"] button')].find((b) => b.textContent === "Open terminal");
+  expect(openTerminal).toBeDefined();
+});
+
+it("a dialog refusal offers no current-session shortcut when the chat has no terminal", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ capabilities: { read: true, terminal: false } as Session["capabilities"] }));
+  act(() => setOutbox("mac/s1", [{ id: "m1", text: "go on", images: [], at: Date.now(), state: "failed", code: "dialog_open" }]));
+  await settle();
+  expect(host.querySelector('[role="alert"]')?.textContent).not.toContain("Open terminal");
 });
 
 it("an offline agent, or a chat that cannot show a terminal, offers none in the panel", async () => {

@@ -559,7 +559,7 @@ internal class AgentsViewModel(
         viewModelScope.launch {
             var previous = emptyList<Interaction>()
             interactions.pending.collect { pending ->
-                val removed = previous.filter { old -> old.secret != true && pending.none { it.id == old.id && it.sessionKey == old.sessionKey } }
+                val removed = previous.filter { old -> !old.isDisplayMirror && old.secret != true && pending.none { it.id == old.id && it.sessionKey == old.sessionKey } }
                 _requestHistory.update { history ->
                     (removed.asReversed() + history).distinctBy { it.sessionKey to it.id }
                         .filter { old -> pending.none { it.id == old.id && it.sessionKey == old.sessionKey } }.take(50)
@@ -1134,7 +1134,7 @@ internal class AgentsViewModel(
                 val outcome = resolution.ownerApprovalPhrase?.let { phrase ->
                     interactions.replyOwnerApproval(latest, phrase)
                     ResolveOutcome()
-                } ?: interactions.resolveOutcome(interaction.id, resolution,
+                } ?: interactions.resolveOccurrence(latest, resolution,
                     handoffCard = (latest.isSecretHandoff || latest.secretRun?.delivery == "env") && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution

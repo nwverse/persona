@@ -1278,9 +1278,10 @@ nonisolated struct APIClient: Sendable {
         var via: MessageVia?
         var waitForEffort: Bool?
         var approvalReplyTo: String?
+        var approvalReplyCreatedAt: String?
         enum CodingKeys: String, CodingKey {
             case text, images, launcher, model, via, clientMsgID = "client_msg_id", clearDraft = "clear_draft", todoID = "todo_id"
-            case waitForEffort = "wait_for_effort", approvalReplyTo = "approval_reply_to"
+            case waitForEffort = "wait_for_effort", approvalReplyTo = "approval_reply_to", approvalReplyCreatedAt = "approval_reply_created_at"
         }
     }
     /// launcher / model switch what a headless (assistant) conversation runs on from this message on. clientMsgID
@@ -1335,7 +1336,7 @@ nonisolated struct APIClient: Sendable {
         }
         let eventID = opID.uuidString.lowercased()
         let data = try await post(sp(ix.sessionKey) + "/messages",
-                                  body: SendBody(text: phrase, clientMsgID: eventID, approvalReplyTo: ix.id),
+                                  body: SendBody(text: phrase, clientMsgID: eventID, approvalReplyTo: ix.id, approvalReplyCreatedAt: ix.createdAtWire),
                                   timeout: 100, opID: opID)
         let reply = try JSON.decoder.decode(SendReply.self, from: data)
         guard reply.approvalReply == true, reply.interactionID == ix.id else {
@@ -2441,10 +2442,12 @@ nonisolated struct APIClient: Sendable {
     @discardableResult
     /// opID: one per answer (the same on every retry of it), so a retry through a hub restart presses nothing twice.
     /// `handoffCard`: a hand-off or explicit env card's own approval, which says so on this request alone.
+    /// `occurrence`: the exact creation timestamp on the card whose button was pressed; the hub must not rebind an answer to a replacement.
     /// `secretRunEnv` selects the env feature; otherwise the hand-off feature is used.
-    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
-        let headers = handoffCard ? ["X-Persona-Features": secretRunEnv ? "secret_run_env" : SecretHandoff.feature] : [:]
-        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(id)/resolve", body: r, opID: opID,
+    func resolve(_ id: String, _ r: Resolution, opID: UUID = UUID(), occurrence: String? = nil, handoffCard: Bool = false, secretRunEnv: Bool = false) async throws -> ResolveResult {
+        var headers = occurrence.map { ["X-Persona-Interaction-Created-At": $0] } ?? [:]
+        if handoffCard { headers["X-Persona-Features"] = secretRunEnv ? "secret_run_env" : SecretHandoff.feature }
+        return try JSON.decoder.decode(ResolveResult.self, from: try await post("/api/v1/interactions/\(Self.pathPart(id))/resolve", body: r, opID: opID,
                                                                                  extraHeaders: headers))
     }
 

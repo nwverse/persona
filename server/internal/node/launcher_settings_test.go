@@ -250,3 +250,53 @@ func TestManagedSettingsWithoutPersonasFile(t *testing.T) {
 		t.Errorf("settings that say null: %v", env)
 	}
 }
+
+// A managed launcher's start gets its own settings file (#17035): the launcher's gateway and the model this start
+// runs, with the per-start aliases on top. The shared "<launcher>-env-settings.json" is never changed by a start, so
+// one conversation's alias cannot reach another's, and two starts never share a file.
+func TestModelAliasSettingsForAManagedLauncher(t *testing.T) {
+	home := t.TempDir()
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	n.setManaged([]proto.ManagedLauncher{{Name: "m", BaseURL: "https://gw.example.com", Model: "gateway-model", APIKey: "secret"}})
+	l, ok := n.managedLauncher("m")
+	if !ok {
+		t.Fatal("the managed launcher is gone")
+	}
+	shared, err := n.mergeManagedSettings("m", l, "", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The start that brings no alias of its own still runs on the launcher's gateway and model: it cannot use the
+	// shared file itself, since another start's alias must not be in it.
+	provided, selected, err := n.claudeModelAliasSettings(t.Context(), "m", home, shared, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "gateway-model" {
+		t.Fatalf("selected %q, want the gateway's model", selected)
+	}
+	s := readSettings(t, provided)
+	env, _ := s["env"].(map[string]any)
+	if s["model"] != "gateway-model" || env["ANTHROPIC_MODEL"] != "gateway-model" ||
+		env["ANTHROPIC_BASE_URL"] != "https://gw.example.com" || env["ANTHROPIC_API_KEY"] != "secret" {
+		t.Fatalf("the launcher's gateway and model are missing: %v", s)
+	}
+	// A second start with its own alias gets another private file; neither it nor the shared file changes what the
+	// first start wrote.
+	aliased, selected, err := n.claudeModelAliasSettings(t.Context(), "m", home, shared,
+		proto.ModelAliases{"sonnet_model": "vendor/sonnet"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "gateway-model" || aliased == provided {
+		t.Fatalf("second start: settings %q (first %q), selected %q; want its own file", aliased, provided, selected)
+	}
+	if env, _ := readSettings(t, aliased)["env"].(map[string]any); env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "vendor/sonnet" {
+		t.Fatalf("the per-start alias is missing: %v", env)
+	}
+	for name, path := range map[string]string{"the shared settings": shared, "the first start": provided} {
+		if env, _ := readSettings(t, path)["env"].(map[string]any); env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "vendor/sonnet" {
+			t.Errorf("a per-start alias reached %s: %v", name, env)
+		}
+	}
+}
