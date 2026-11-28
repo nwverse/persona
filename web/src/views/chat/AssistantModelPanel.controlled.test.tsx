@@ -553,7 +553,7 @@ describe("AssistantModelPanel default fallback compatibility", () => {
 
     await mount({ chat: makeChat({ session }) });
     await flush();
-    expect(mocks.api).toHaveBeenCalledWith("/execution/catalog", { query: { machine: "example-machine" } });
+    expect(mocks.api).toHaveBeenCalledWith("/execution/catalog?machine=example-machine");
 
     expect(mocks.useStore).toHaveBeenCalled();
     expect(mocks.useChosenManager).toHaveBeenCalled();
