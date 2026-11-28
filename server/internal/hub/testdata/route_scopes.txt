@@ -189,6 +189,8 @@ assistant.entries.read GET /api/v1/assistant/entries
 -                    GET /api/v1/assistant/health/intake/changes
 -                    GET /api/v1/assistant/health/items
 -                    GET /api/v1/assistant/history
+-                    GET /api/v1/assistant/integrations
+-                    GET /api/v1/assistant/integrations/{kind}/{id}
 leaders.read         GET /api/v1/assistant/leaders
 machines.read        GET /api/v1/assistant/machine-resources
 -                    GET /api/v1/assistant/memory

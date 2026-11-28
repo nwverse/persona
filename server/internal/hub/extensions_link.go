@@ -802,29 +802,30 @@ func (h *Hub) authorizeExtension(ctx context.Context, tok string, r *http.Reques
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	// The token is one manager's extension's: each is asked, the default first, until one knows it.
-	var a extwire.Authorized
-	manager := ""
 	sure = true
 	asked := time.Now()
+	query := extwire.Authorize{Hash: hashToken(tok), Pattern: pattern, Method: method, Path: path}
 	for _, id := range h.listManagers(ctx) {
-		var err error
-		a, err = buswire.Call(ctx, h.managerCaller(id), extwire.AuthorizeMethod, extwire.Authorize{
-			Hash: hashToken(tok), Pattern: pattern, Method: method, Path: path,
-		})
-		if err == nil && a.Extension != "" {
-			manager = id
-			break
+		c := h.busConnOf(id)
+		if c == nil { // the default manager, listed first, may be off the bus
+			continue
 		}
-		if err != nil && !errors.Is(err, errBusOffline) { // (the default manager, listed first, may be off the bus)
-			sure = false
+		a, err := buswire.Call(ctx, c, extwire.AuthorizeMethod, query)
+		if err != nil {
+			sure = sure && errors.Is(err, errBusOffline)
+			continue
 		}
+		if a.Extension == "" {
+			continue
+		}
+		p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
+			Manager: id, extHash: query.Hash, extAt: asked}
+		if a.OK {
+			p.extAuthConn, p.extOwner = c, a.Owner
+		}
+		return p, true, a.OK, a.Scope, true
 	}
-	if a.Extension == "" {
-		return principal{}, false, false, "", sure
-	}
-	p = principal{ID: "extension:" + a.Extension, Name: a.Name, Role: roleExtension, Extension: a.Extension, Scopes: a.Scopes,
-		Manager: manager, extHash: hashToken(tok), extAt: asked}
-	return p, true, a.OK, a.Scope, true
+	return principal{}, false, false, "", sure
 }
 
 // tokenHash says whether s is a hash as hashToken makes one.
