@@ -7,7 +7,7 @@ import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "..
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, apiBlob, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "../lib/api";
-import { ago, clock, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
+import { ago, clock, safeWebURL, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
 import { foldedState } from "../lib/child-sessions";
 import { sessionCard } from "../lib/folded-rows";
 import { byTime } from "../lib/times";
@@ -3147,9 +3147,7 @@ function mergeTrainBadgeText(badge: MergeTrainTodoBadge): string {
 }
 
 function safeHttpUrl(raw?: string): string | undefined {
-  const s = raw?.trim();
-  if (!s) return undefined;
-  return /^https?:\/\//i.test(s) ? s : undefined;
+  return safeWebURL(raw);
 }
 
 const TodoListItem = memo(function TodoListItem({
@@ -4268,16 +4266,10 @@ function activeBlockerKindLabel(kind: string): string {
   }
 }
 
-function activeBlockerLink(raw: string): { url: string; label: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("https://")) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:") return null;
+export function activeBlockerLink(raw: string): { url: string; label: string } | null {
+  const safe = safeWebURL(raw, true);
+  if (!safe) return null;
+  const u = new URL(safe);
   const ghPr = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(u.pathname);
   if (ghPr) return { url: u.href, label: `${ghPr[1]}/${ghPr[2]}#${ghPr[3]}` };
   const ghIssue = /^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/.exec(u.pathname);
@@ -4288,17 +4280,8 @@ function activeBlockerLink(raw: string): { url: string; label: string } | null {
   return { url: u.href, label: path ? `${u.host}${path}` : u.host };
 }
 
-function validateExternalPRUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:" || !u.hostname) return null;
-  return u.href;
+export function validateExternalPRUrl(raw: string): string | null {
+  return safeWebURL(raw, true) ?? null;
 }
 
 /** Compact inline form to add an external PR blocker edge under todos_v2 (#16199). */
