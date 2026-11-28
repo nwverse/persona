@@ -133,6 +133,7 @@ func (s *Service) nudgeLoop(ctx context.Context) {
 			cctx, cancel := context.WithTimeout(ctx, time.Minute)
 			s.larkModule().NudgeTick(cctx)
 			s.larkModule().HandoffTick(cctx)
+			s.larkModule().GuestTick(cctx)
 			cancel()
 		}
 	}
@@ -631,4 +632,14 @@ func (h larkHost) RaiseHandoffDecision(ctx context.Context, handoff string, req 
 // WithdrawHandoffDecision takes back a confirmation nobody answered.
 func (h larkHost) WithdrawHandoffDecision(ctx context.Context, id string) {
 	h.s.WithdrawHandoffDecision(ctx, id)
+}
+
+// StartGroupGuest starts the guest that answers one chat and thread (bot_guest.go).
+func (h larkHost) StartGroupGuest(ctx context.Context, group, text, launcher string, tools []string) (string, string, error) {
+	return h.s.StartGroupGuest(ctx, group, text, launcher, tools)
+}
+
+// SendGroupGuest sends a later question into the conversation that already answers the group.
+func (h larkHost) SendGroupGuest(ctx context.Context, machine, session, turn, text string) error {
+	return h.s.SendGroupGuest(ctx, machine, session, turn, text)
 }

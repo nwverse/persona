@@ -3841,10 +3841,25 @@ function SeenButton({ onClick }: { onClick: () => void }) {
 const PLAN_FIELD = "rounded-control border border-line bg-canvas px-2 py-1 text-[12.5px] text-ink outline-none focus:border-accent";
 
 /** "YYYY-MM-DD", "HH:MM" and "YYYY-MM-DDTHH:MM" of a moment in local time, as date / time inputs take them. */
-function localParts(ms: number): { day: string; time: string } {
+export function localParts(ms: number): { day: string; time: string } {
   const d = new Date(ms);
+  if (!Number.isFinite(d.getTime())) return { day: "", time: "" };
+  const y = d.getFullYear();
+  if (y < 0 || y > 9999) return { day: "", time: "" };
   const p = (n: number) => String(n).padStart(2, "0");
-  return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+  return { day: `${String(y).padStart(4, "0")}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+}
+
+const LOCAL_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
+/** Validates a 4-digit calendar YYYY-MM-DD string, rejecting rollover dates (e.g. 2026-02-30) and out-of-range years. */
+export function validDay(day: string): boolean {
+  const ms = parseDayKey(day);
+  if (ms === undefined) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return false;
+  const d = new Date(ms);
+  return d.getFullYear() === Number(m[1]) && d.getMonth() + 1 === Number(m[2]) && d.getDate() === Number(m[3]);
 }
 
 /**
@@ -3854,8 +3869,26 @@ function localParts(ms: number): { day: string; time: string } {
  * changes save when the field is left or on Enter; a change made without typing (a pick in the browser's picker) saves
  * at once. What was typed shows until the save is through.
  */
+export function safeISO(raw: string): string | undefined {
+  const s = raw.trim();
+  const m = LOCAL_DATETIME_RE.exec(s);
+  if (!m) return undefined;
+  const y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]), hh = Number(m[4]), mi = Number(m[5]), ss = Number(m[6] ?? "0");
+  if (hh > 23 || mi > 59 || ss > 59) return undefined;
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime()) || d.getFullYear() !== y || d.getMonth() + 1 !== mo || d.getDate() !== da) return undefined;
+  return d.toISOString();
+}
+
 function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (value: string) => Promise<void> } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
   const [draft, setDraft] = useState<string>();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   // the change comes from the keyboard: it waits to be committed
   const typed = useRef(false);
   // the value on its way to the hub: Enter, then the field left before the save is through, sends it once
@@ -3871,8 +3904,8 @@ function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (va
       await onCommit(next);
     } finally {
       if (saving.current === next) saving.current = undefined;
+      if (mountedRef.current) setDraft((d) => (d === next ? undefined : d));
     }
-    setDraft((d) => (d === next ? undefined : d));
   };
   return (
     <input
@@ -3907,10 +3940,11 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
     }
   };
   const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
-  const due = Number.isNaN(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
+  const due = !Number.isFinite(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
   const remindAt = todo.remind_at ? Date.parse(todo.remind_at) : NaN;
-  const remind = Number.isNaN(remindAt) ? "" : `${localParts(remindAt).day}T${localParts(remindAt).time}`;
-  const moment = (day: string, time: string) => new Date(`${day}T${time}`).toISOString();
+  const remindParts = Number.isFinite(remindAt) ? localParts(remindAt) : undefined;
+  const remind = remindParts?.day ? `${remindParts.day}T${remindParts.time}` : "";
+  const moment = (day: string, time: string) => safeISO(`${day}T${time}`);
   return (
     <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2.5 text-[12.5px] text-ink-2" data-testid="todo-plan" aria-busy={busy}>
       <span className="inline-flex items-center gap-1.5">
@@ -3920,7 +3954,14 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           type="date"
           aria-label={t("todos.due_label")}
           value={due.day}
-          onCommit={(day) => save(!day ? { due_at: null } : due.time ? { due_at: moment(day, due.time) } : { due_date: day })}
+          onCommit={async (day) => {
+            if (!day) return save({ due_at: null });
+            if (!validDay(day)) return;
+            if (!due.time) return save({ due_date: day });
+            const iso = moment(day, due.time);
+            if (!iso) return;
+            return save({ due_at: iso });
+          }}
           data-testid="todo-plan-due"
         />
         {due.day && (
@@ -3928,7 +3969,12 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
             type="time"
             aria-label={t("todos.due_time")}
             value={due.time}
-            onCommit={(time) => save(time ? { due_at: moment(due.day, time) } : { due_date: due.day })}
+            onCommit={async (time) => {
+              if (!time) return save({ due_date: due.day });
+              const iso = moment(due.day, time);
+              if (!iso) return;
+              return save({ due_at: iso });
+            }}
             data-testid="todo-plan-due-time"
           />
         )}
@@ -3940,7 +3986,12 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           type="datetime-local"
           aria-label={t("todos.remind_label")}
           value={remind}
-          onCommit={(v) => save({ remind_at: v ? new Date(v).toISOString() : null })}
+          onCommit={async (v) => {
+            if (!v) return save({ remind_at: null });
+            const iso = safeISO(v);
+            if (!iso) return;
+            return save({ remind_at: iso });
+          }}
           data-testid="todo-plan-remind"
         />
       </span>
@@ -6513,6 +6564,22 @@ export function HandoverDialog({
   const [tab, setTab] = useState<"new" | "existing">("new");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(true);
+  const sessionGenRef = useRef(0);
+  const inFlightGenRef = useRef(-1);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionGenRef.current += 1;
+      inFlightGenRef.current = -1;
+    };
+  }, []);
+  useEffect(() => {
+    sessionGenRef.current += 1;
+    inFlightGenRef.current = -1;
+    setBusy(false);
+  }, [open, todo.id]);
   const phone = useMedia(SHEET_QUERY);
   const pickLabel = useId();
 
@@ -6597,10 +6664,14 @@ export function HandoverDialog({
   };
 
   const submitNew = async () => {
-    if (!machine) return;
+    const gen = sessionGenRef.current;
+    if (!machine || inFlightGenRef.current === gen) return;
+    inFlightGenRef.current = gen;
     setBusy(true);
+    let succeeded = false;
     try {
       await reopenFailed();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
       // has answered (#1856).
@@ -6616,20 +6687,28 @@ export function HandoverDialog({
         todoId: todo.id,
         ...inline,
       });
+      succeeded = true;
       onClose();
     } catch (e) {
-      toast(t("todos.launch_failed", { error: errorText(e) }), "error");
+      if (mountedRef.current && sessionGenRef.current === gen) toast(t("todos.launch_failed", { error: errorText(e) }), "error");
     } finally {
-      setBusy(false);
+      if (!succeeded) {
+        if (inFlightGenRef.current === gen) inFlightGenRef.current = -1;
+        if (mountedRef.current && sessionGenRef.current === gen) setBusy(false);
+      }
     }
   };
 
   const submitExisting = async () => {
+    const gen = sessionGenRef.current;
     const s = eligibleSessions.find((x) => `${x.machine_id}/${x.session_id}` === selectedKey);
-    if (!s) return;
+    if (!s || inFlightGenRef.current === gen) return;
+    inFlightGenRef.current = gen;
     setBusy(true);
+    let succeeded = false;
     try {
       await reopenFailed();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       const clientMsgId = uuid();
       await api(`/sessions/${enc(s.machine_id)}/${enc(s.session_id)}/messages`, {
@@ -6642,13 +6721,18 @@ export function HandoverDialog({
       });
       await refreshTodos();
       await refresh();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
+      succeeded = true;
       toast(t("todos.sent"), "ok");
       onClose();
       openFromPage({ name: "session", mid: s.machine_id, sid: s.session_id });
     } catch (e) {
-      toast(t("todos.send_failed", { error: errorText(e) }), "error");
+      if (mountedRef.current && sessionGenRef.current === gen) toast(t("todos.send_failed", { error: errorText(e) }), "error");
     } finally {
-      setBusy(false);
+      if (!succeeded) {
+        if (inFlightGenRef.current === gen) inFlightGenRef.current = -1;
+        if (mountedRef.current && sessionGenRef.current === gen) setBusy(false);
+      }
     }
   };
 
