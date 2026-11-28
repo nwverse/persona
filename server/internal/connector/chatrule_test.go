@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -137,6 +140,22 @@ func narrow(t *testing.T, connectorID, action, target string, u UserRule) {
 			t.Errorf("%s %s %s: Lark rule that is not one conversation's messages: %+v", connectorID, action, target, r)
 		}
 	}
+	if connectorID == "club" {
+		if len(r.Match) != 1 {
+			t.Errorf("%s %s %s: club rule must match exactly one field: %+v", connectorID, action, target, r)
+		}
+		if sk, ok := r.Match["session_key"].(string); ok {
+			if r.Action != "club_agent_send" || !clubSessionKeyOK(sk) || strings.ContainsAny(sk, "*?[\\") {
+				t.Errorf("%s %s %s: club session rule with loose session_key: %+v", connectorID, action, target, r)
+			}
+		} else if acc, ok := r.Match["account_id"].(string); ok {
+			if r.Action != "club_agent_start" || !clubAccountIDOK(acc) || strings.ContainsAny(acc, "*?[\\:") {
+				t.Errorf("%s %s %s: club account rule with loose account_id: %+v", connectorID, action, target, r)
+			}
+		} else {
+			t.Errorf("%s %s %s: club rule with unknown match fields: %+v", connectorID, action, target, r)
+		}
+	}
 	if err := u.Validate(); err != nil {
 		t.Errorf("%s %s %s: %v", connectorID, action, target, err)
 	}
@@ -152,6 +171,10 @@ func FuzzChatRuleForIsNeverBroader(f *testing.F) {
 		{"lark", larkSend, larkTarget}, {"lark", "POST /conversations/*/messages", `{"conversation":"*"}`},
 		{"lark", "POST /conversations/oc_1/messages/om_1/replies", `{"conversation":"oc_1"}`}, {"github", "github_comment", ghTarget},
 		{"github", "github_comment", `{"ref":"a/*#1"}`}, {"github", "github_review", ghTarget}, {"mail", "mail_send", `{}`}, {"*", "*", `{}`},
+		{"club", "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1"}`},
+		{"club", "club_agent_interrupt", `{"session_key":"agent:cue:*:sess_1"}`},
+		{"club", "club_agent_start", `{"account_id":"acc_1"}`},
+		{"club", "club_agent_start", `{"account_id":"acc_*"}`},
 	} {
 		f.Add(s[0], s[1], s[2])
 	}
@@ -596,5 +619,363 @@ func TestSentSaysWhenAUserRuleLetItThrough(t *testing.T) {
 	var fromFile Rule
 	if err := json.Unmarshal([]byte(`{"connector":"github","action":"github_comment","decision":"allow","fromUser":true,"user_rule":true}`), &fromFile); err != nil || fromFile.fromUser {
 		t.Errorf("a rule of a file cannot say it is the user's: %+v, %v", fromFile, err)
+	}
+}
+
+type clubTestConn struct {
+	*fake
+	confirmAlways []string
+}
+
+func (c clubTestConn) Manifest() Manifest {
+	m := c.fake.Manifest()
+	m.ConfirmAlways = c.confirmAlways
+	return m
+}
+
+func (c clubTestConn) Actions() []proto.Tool {
+	return []proto.Tool{
+		{Name: "club_agent_send"},
+		{Name: "club_agent_interrupt"},
+		{Name: "club_agent_start"},
+	}
+}
+
+func (c clubTestConn) Describe(_ context.Context, name string, args json.RawMessage) (Action, string, error) {
+	return Action{Name: name, Visible: "Personal Agent"}, name + " " + string(args), nil
+}
+
+func (c clubTestConn) Do(_ context.Context, name string, args json.RawMessage) (string, error) {
+	return "done", nil
+}
+
+func TestClubChatRuleForAndValidation(t *testing.T) {
+	sendRule, err := ChatRuleFor("club", "club_agent_send", json.RawMessage(`{"session_key":"agent:cue:a0123456789ab:sess_1"}`))
+	if err != nil || sendRule.ID() != "club:session:agent:cue:a0123456789ab:sess_1" || sendRule.Chat() != "session:agent:cue:a0123456789ab:sess_1" || sendRule.Validate() != nil {
+		t.Fatalf("club_agent_send rule: %+v, %v", sendRule, err)
+	}
+	intRule, err := ChatRuleFor("club", "club_agent_interrupt", json.RawMessage(`{"session_key":"agent:cue:a0123456789ab:sess_1"}`))
+	if err != nil || intRule.ID() != sendRule.ID() || !reflect.DeepEqual(intRule.Rule, sendRule.Rule) {
+		t.Fatalf("club_agent_interrupt rule: %+v, %v", intRule, err)
+	}
+	startRule, err := ChatRuleFor("club", "club_agent_start", json.RawMessage(`{"account_id":"a0123456789ab"}`))
+	if err != nil || startRule.ID() != "club:account:a0123456789ab" || startRule.Chat() != "account:a0123456789ab" || startRule.Validate() != nil {
+		t.Fatalf("club_agent_start rule: %+v, %v", startRule, err)
+	}
+	accFromSend, err := ClubAccountRuleFor("club_agent_send", json.RawMessage(`{"session_key":"agent:cue:a0123456789ab:sess_1"}`))
+	if err != nil || accFromSend.ID() != "club:account:a0123456789ab" {
+		t.Fatalf("ClubAccountRuleFor send: %+v, %v", accFromSend, err)
+	}
+
+	// Strict session_key and account_id charset validation: reject empty, wildcards, whitespace, control characters, slashes, dots, overlong.
+	badKeys := []string{
+		"", "*", "?", "agent:cue:*:sess_1", "agent:cue:acc?:sess_1", "agent:cue:acc[1]:sess_1", `agent:cue:acc\1:sess_1`,
+		"agent:cue:acc 1:sess_1", "agent:cue:acc\t1:sess_1", "agent:cue:acc\n1:sess_1", "agent:cue:acc\x001:sess_1",
+		"agent:cue:acc\x1f1:sess_1", "agent:cue:acc\x7f1:sess_1", "agent/cue/acc/sess", ".", "..", "agent:..:acc:sess",
+		"agent::acc:sess", "agent:cue:acc:", ":agent:cue:acc:sess", strings.Repeat("a", 201),
+	}
+	for _, bad := range badKeys {
+		target, _ := json.Marshal(map[string]string{"session_key": bad})
+		if _, err := ChatRuleFor("club", "club_agent_send", target); err == nil {
+			t.Errorf("ChatRuleFor accepted bad session_key %q", bad)
+		}
+		u := UserRule{Rule: Rule{Connector: "club", Action: "club_agent_send", Match: map[string]any{"session_key": bad}, Decision: Allow}}
+		if u.Validate() == nil {
+			t.Errorf("Validate accepted bad session_key %q", bad)
+		}
+	}
+	badAccounts := append(slices.Clone(badKeys), "acc:1", "agent:cue:acc:sess")
+	for _, bad := range badAccounts {
+		target, _ := json.Marshal(map[string]string{"account_id": bad})
+		if _, err := ChatRuleFor("club", "club_agent_start", target); err == nil {
+			t.Errorf("ChatRuleFor accepted bad account_id %q", bad)
+		}
+		u := UserRule{Rule: Rule{Connector: "club", Action: "club_agent_start", Match: map[string]any{"account_id": bad}, Decision: Allow}}
+		if u.Validate() == nil {
+			t.Errorf("Validate accepted bad account_id %q", bad)
+		}
+	}
+
+	// ClubAccountRuleFor on session tools requires strict 4-segment session_key.
+	for _, badSK := range []string{"sess_only", "agent:cue:acc1", "agent:cue:acc1:s1:extra", "other:cue:acc1:s1", "agent::acc1:s1"} {
+		target, _ := json.Marshal(map[string]string{"session_key": badSK})
+		if _, err := ClubAccountRuleFor("club_agent_send", target); err == nil {
+			t.Errorf("ClubAccountRuleFor accepted malformed 4-segment session_key %q", badSK)
+		}
+	}
+
+	// TTL and max_uses validation.
+	t0 := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	validBounded := sendRule
+	validBounded.At = t0
+	validBounded.ExpiresAt = t0.Add(30 * time.Minute)
+	validBounded.MaxUses = 5
+	validBounded.UsedCount = 2
+	if err := validBounded.Validate(); err != nil {
+		t.Fatalf("valid bounded rule failed Validate: %v", err)
+	}
+	for name, fn := range map[string]func(UserRule) UserRule{
+		"negative max_uses":    func(u UserRule) UserRule { u.MaxUses = -1; return u },
+		"negative used_count":  func(u UserRule) UserRule { u.UsedCount = -1; return u },
+		"expires_at before at": func(u UserRule) UserRule { u.ExpiresAt = t0.Add(-time.Second); return u },
+		"expires_at equal at":  func(u UserRule) UserRule { u.ExpiresAt = t0; return u },
+	} {
+		if err := fn(validBounded).Validate(); err == nil {
+			t.Errorf("%s: expected Validate error", name)
+		}
+	}
+}
+
+func TestClubSessionAndAccountGateMatchingAndRedLines(t *testing.T) {
+	ctx := context.Background()
+	sessRule, err := ClubSessionRule("agent:cue:acc_1:sess_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accRule, err := ClubAccountRule("acc_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newReg := func(hand []Rule, confirmAlways []string, user []UserRule) (*Registry, *[]Sent) {
+		r := NewRegistry(hand)
+		conn := clubTestConn{fake: &fake{id: "club", status: Status{State: StateOK}}, confirmAlways: confirmAlways}
+		if err := r.Add(conn); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.SetUserRules(user); err != nil {
+			t.Fatal(err)
+		}
+		var sent []Sent
+		r.SetSent(func(_ context.Context, s Sent) { sent = append(sent, s) })
+		return r, &sent
+	}
+
+	// 1. club:session:<session_key> matching
+	r, sent := newReg(nil, nil, []UserRule{sessRule})
+	for _, tc := range []struct {
+		name, tool, args, want string
+	}{
+		{"matching send", "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1","text":"hi"}`, "ran"},
+		{"matching interrupt", "club_agent_interrupt", `{"session_key":"agent:cue:acc_1:sess_1","then":"stop"}`, "ran"},
+		{"other session", "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_2","text":"hi"}`, "ran after a card"},
+		{"start not covered by session rule", "club_agent_start", `{"account_id":"acc_1","session_key":"agent:cue:acc_1:sess_1","text":"hi"}`, "ran after a card"},
+		{"missing session_key", "club_agent_send", `{"text":"hi"}`, "ran after a card"},
+		{"non-string session_key", "club_agent_send", `{"session_key":123,"text":"hi"}`, "ran after a card"},
+		{"case-variant SESSION_KEY", "club_agent_send", `{"SESSION_KEY":"agent:cue:acc_1:sess_1","text":"hi"}`, "ran after a card"},
+		{"conflicting account_id", "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1","account_id":"other","text":"hi"}`, "ran after a card"},
+	} {
+		if got := outcome(ctx, r, tc.tool, tc.args, true); got != tc.want {
+			t.Errorf("session rule / %s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if len(*sent) < 2 || (*sent)[0].Through.Kind != ThroughRule || !(*sent)[0].Through.UserRule || (*sent)[1].Through.Kind != ThroughRule || !(*sent)[1].Through.UserRule {
+		t.Fatalf("session rule ledger audit mismatch: %+v", *sent)
+	}
+
+	// 2. club:account:<account_id> matching & strict 4-segment session_key fail-closed validation
+	r, sent = newReg(nil, nil, []UserRule{accRule})
+	for _, tc := range []struct {
+		name, tool, args, want string
+	}{
+		{"start matching account_id", "club_agent_start", `{"account_id":"acc_2","text":"start"}`, "ran"},
+		{"send matching 4-segment account_id", "club_agent_send", `{"session_key":"agent:cue:acc_2:sess_9","text":"go"}`, "ran"},
+		{"interrupt matching 4-segment account_id", "club_agent_interrupt", `{"session_key":"agent:grok_bot:acc_2:sess_9"}`, "ran"},
+		{"start other account_id", "club_agent_start", `{"account_id":"acc_1","text":"start"}`, "ran after a card"},
+		{"start missing account_id", "club_agent_start", `{"text":"start"}`, "ran after a card"},
+		{"start with conflicting session_key", "club_agent_start", `{"account_id":"acc_2","session_key":"agent:cue:acc_1:s1","text":"start"}`, "ran after a card"},
+		{"send other account in 3rd segment", "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_9","text":"go"}`, "ran after a card"},
+		{"send 1-segment session_key fail-closed", "club_agent_send", `{"session_key":"acc_2","text":"go"}`, "ran after a card"},
+		{"send 3-segment session_key fail-closed", "club_agent_send", `{"session_key":"agent:cue:acc_2","text":"go"}`, "ran after a card"},
+		{"send 5-segment session_key fail-closed", "club_agent_send", `{"session_key":"agent:cue:acc_2:sess_9:extra","text":"go"}`, "ran after a card"},
+		{"send wrong prefix fail-closed", "club_agent_send", `{"session_key":"bot:cue:acc_2:sess_9","text":"go"}`, "ran after a card"},
+		{"send empty provider fail-closed", "club_agent_send", `{"session_key":"agent::acc_2:sess_9","text":"go"}`, "ran after a card"},
+		{"send empty session fail-closed", "club_agent_send", `{"session_key":"agent:cue:acc_2:","text":"go"}`, "ran after a card"},
+		{"send wildcard in session fail-closed", "club_agent_send", `{"session_key":"agent:cue:acc_2:*","text":"go"}`, "ran after a card"},
+		{"send conflicting explicit account_id fail-closed", "club_agent_send", `{"session_key":"agent:cue:acc_2:sess_9","account_id":"acc_1","text":"go"}`, "ran after a card"},
+	} {
+		if got := outcome(ctx, r, tc.tool, tc.args, true); got != tc.want {
+			t.Errorf("account rule / %s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	for i := range 3 {
+		if (*sent)[i].Through.Kind != ThroughRule || !(*sent)[i].Through.UserRule {
+			t.Errorf("account rule ledger entry %d missing ThroughRule/UserRule: %+v", i, (*sent)[i].Through)
+		}
+	}
+
+	// 3. Red line: Hand-written deny and confirm rules always override UserRule (both session and account).
+	for _, tc := range []struct {
+		name string
+		hand []Rule
+		tool string
+		args string
+		want string
+	}{
+		{
+			"hand-written deny all club",
+			[]Rule{{Connector: "club", Action: "*", Decision: Deny}},
+			"club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1","text":"hi"}`, "refused",
+		},
+		{
+			"hand-written confirm all club",
+			[]Rule{{Connector: "club", Action: "*", Decision: Confirm}},
+			"club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1","text":"hi"}`, "ran after a card",
+		},
+		{
+			"hand-written deny specific account overrides account bypass on start and send",
+			[]Rule{{Connector: "club", Action: "*", Match: map[string]any{"account_id": "acc_2"}, Decision: Deny}},
+			"club_agent_send", `{"session_key":"agent:cue:acc_2:sess_9","text":"hi"}`, "refused",
+		},
+		{
+			"hand-written confirm interrupt overrides account bypass",
+			[]Rule{{Connector: "club", Action: "club_agent_interrupt", Decision: Confirm}},
+			"club_agent_interrupt", `{"session_key":"agent:cue:acc_2:sess_9"}`, "ran after a card",
+		},
+	} {
+		r, _ := newReg(tc.hand, nil, []UserRule{sessRule, accRule})
+		if got := outcome(ctx, r, tc.tool, tc.args, true); got != tc.want {
+			t.Errorf("hand-written priority / %s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+
+	// 4. Red line: ConfirmAlways and ConfirmEach clamp Allow back to Confirm.
+	rAlwaysConfirm, _ := newReg(nil, []string{"club_agent_*"}, []UserRule{sessRule, accRule})
+	if got := outcome(ctx, rAlwaysConfirm, "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1","text":"hi"}`, true); got != "ran after a card" {
+		t.Errorf("ConfirmAlways on session rule: got %q, want ran after a card", got)
+	}
+	if got := outcome(ctx, rAlwaysConfirm, "club_agent_start", `{"account_id":"acc_2","text":"hi"}`, true); got != "ran after a card" {
+		t.Errorf("ConfirmAlways on account rule: got %q, want ran after a card", got)
+	}
+	rNormal, _ := newReg(nil, nil, []UserRule{sessRule, accRule})
+	if got := outcome(ConfirmEach(ctx), rNormal, "club_agent_send", `{"session_key":"agent:cue:acc_1:sess_1","text":"hi"}`, true); got != "ran after a card" {
+		t.Errorf("ConfirmEach on session rule: got %q, want ran after a card", got)
+	}
+	if got := outcome(ConfirmEach(ctx), rNormal, "club_agent_start", `{"account_id":"acc_2","text":"hi"}`, true); got != "ran after a card" {
+		t.Errorf("ConfirmEach on account rule: got %q, want ran after a card", got)
+	}
+
+	// 5. Red line: repeatedField always returns Deny even when a matching UserRule is active.
+	for _, dupArgs := range []string{
+		`{"session_key":"agent:cue:acc_1:sess_1","SESSION_KEY":"agent:cue:acc_1:sess_1","text":"hi"}`,
+		`{"session_key":"agent:cue:acc_2:sess_9","Session_Key":"agent:cue:acc_9:sess_9","text":"hi"}`,
+		`{"account_id":"acc_2","ACCOUNT_ID":"acc_9","text":"hi"}`,
+	} {
+		res := rNormal.Call(ctx, "club_agent_send", json.RawMessage(dupArgs), func(context.Context, string, json.RawMessage) bool { return true })
+		if !res.IsError || res.ErrorKind != proto.ToolErrorDeclined {
+			t.Errorf("repeatedField %s: expected declined error, got %+v", dupArgs, res)
+		}
+	}
+}
+
+func TestClubUserRuleTTLAndMaxUsesAtomic(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	var clockMu sync.Mutex
+	curNow := now
+	oldNow := userRuleNow
+	userRuleNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return curNow
+	}
+	setNow := func(t time.Time) {
+		clockMu.Lock()
+		curNow = t
+		clockMu.Unlock()
+	}
+	defer func() { userRuleNow = oldNow }()
+
+	// 1. TTL expiration fallback to Confirm.
+	rule, err := ClubSessionRule("agent:cue:acc_1:sess_ttl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule.At = now
+	rule.ExpiresAt = now.Add(10 * time.Minute)
+
+	r := NewRegistry(nil)
+	_ = r.Add(clubTestConn{fake: &fake{id: "club", status: Status{State: StateOK}}})
+	if err := r.SetUserRules([]UserRule{rule}); err != nil {
+		t.Fatal(err)
+	}
+	args := `{"session_key":"agent:cue:acc_1:sess_ttl","text":"ping"}`
+	if got := outcome(ctx, r, "club_agent_send", args, true); got != "ran" {
+		t.Fatalf("before expiry: got %q, want ran", got)
+	}
+	// Re-applying SetUserRules on a TTL-only rule after use must keep it valid and active until ExpiresAt.
+	if err := r.SetUserRules([]UserRule{rule}); err != nil {
+		t.Fatalf("reapply TTL-only rule: %v", err)
+	}
+	if got := outcome(ctx, r, "club_agent_send", args, true); got != "ran" {
+		t.Fatalf("before expiry after reapply: got %q, want ran", got)
+	}
+	setNow(now.Add(10 * time.Minute)) // exact boundary: expired
+	if got := outcome(ctx, r, "club_agent_send", args, true); got != "ran after a card" {
+		t.Fatalf("at expiry: got %q, want ran after a card", got)
+	}
+	setNow(now.Add(15 * time.Minute))
+	if got := outcome(ctx, r, "club_agent_send", args, true); got != "ran after a card" {
+		t.Fatalf("after expiry: got %q, want ran after a card", got)
+	}
+
+	// 2. MaxUses atomic consumption, ConfirmAlways/ConfirmEach non-consumption, and concurrent race test.
+	setNow(now)
+	limited, _ := ClubSessionRule("agent:cue:acc_1:sess_turns")
+	limited.At = now
+	limited.ExpiresAt = now.Add(time.Hour)
+	limited.MaxUses = 5
+
+	var usedEvents []int
+	var usedMu sync.Mutex
+	r.SetUserRuleUsed(func(_ context.Context, id string, used int) {
+		usedMu.Lock()
+		if id == limited.ID() {
+			usedEvents = append(usedEvents, used)
+		}
+		usedMu.Unlock()
+	})
+	if err := r.SetUserRules([]UserRule{limited}); err != nil {
+		t.Fatal(err)
+	}
+	turnArgs := `{"session_key":"agent:cue:acc_1:sess_turns","text":"turn"}`
+
+	// ConfirmEach must clamp to Confirm and NOT consume a turn.
+	if got := outcome(ConfirmEach(ctx), r, "club_agent_send", turnArgs, true); got != "ran after a card" || r.UserRuleUsedCount(limited.ID()) != 0 {
+		t.Fatalf("ConfirmEach consumed a turn: got %q, used=%d", got, r.UserRuleUsedCount(limited.ID()))
+	}
+
+	// 20 concurrent calls racing against MaxUses=5: exactly 5 must run unasked, 15 must ask on a card.
+	var unasked, carded atomic.Int32
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch outcome(ctx, r, "club_agent_send", turnArgs, true) {
+			case "ran":
+				unasked.Add(1)
+			case "ran after a card":
+				carded.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if unasked.Load() != 5 || carded.Load() != 15 || r.UserRuleUsedCount(limited.ID()) != 5 {
+		t.Fatalf("concurrent MaxUses=5: unasked=%d carded=%d used=%d (want 5, 15, 5)", unasked.Load(), carded.Load(), r.UserRuleUsedCount(limited.ID()))
+	}
+	usedMu.Lock()
+	if len(usedEvents) != 5 {
+		t.Fatalf("usedEvents count=%d, want 5: %v", len(usedEvents), usedEvents)
+	}
+	usedMu.Unlock()
+
+	// Re-applying SetUserRules with another rule must not reset the exhausted counter.
+	other, _ := ClubAccountRule("acc_other")
+	if err := r.SetUserRules([]UserRule{limited, other}); err != nil {
+		t.Fatal(err)
+	}
+	if got := outcome(ctx, r, "club_agent_send", turnArgs, true); got != "ran after a card" {
+		t.Fatalf("exhausted rule after SetUserRules reapply: got %q, want ran after a card", got)
 	}
 }

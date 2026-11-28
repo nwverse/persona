@@ -33,6 +33,8 @@ type Rule struct {
 	// fromUser marks a rule the user made from the ledger (SetUserRules), so a write it let through is told apart from one a
 	// hand-written rule did (LetThrough.UserRule). Not in the JSON: no file can say it.
 	fromUser bool
+	ruleID   string
+	use      *userRuleUse
 }
 
 // Lark is the connector id whose rules are the assistant's Feishu writes (an extension's gated command, lark-cli). Those run on
@@ -69,8 +71,12 @@ func ValidateRules(rules []Rule) error {
 // built-in rules after them.
 func LarkRules(rules []Rule, larkGate []proto.LarkRule) []proto.LarkRule {
 	var out []proto.LarkRule
+	now := userRuleNow()
 	for _, r := range rules {
 		if r.Connector != Lark {
+			continue
+		}
+		if r.Decision == Allow && !r.use.available(now) {
 			continue
 		}
 		if lr, ok := larkRule(r); ok {
@@ -84,8 +90,12 @@ func LarkRules(rules []Rule, larkGate []proto.LarkRule) []proto.LarkRule {
 // plugin's command gate whose calls go to that connector's service (docs/extensions/extensions.md "Assistant"): the user's say first.
 func GateRules(rules []Rule, id string) []proto.LarkRule {
 	var out []proto.LarkRule
+	now := userRuleNow()
 	for _, r := range rules {
 		if r.Connector != id {
+			continue
+		}
+		if r.Decision == Allow && !r.use.available(now) {
 			continue
 		}
 		if lr, ok := larkRule(r); ok {
@@ -117,35 +127,166 @@ func larkRule(r Rule) (proto.LarkRule, bool) {
 // Match reads a name whatever its capitals, so a field spelled in other capitals cannot slip past it (matchFieldsAny);
 // an Allow reads the exact names.
 func Decide(rules []Rule, m Manifest, id, name string, args json.RawMessage) string {
-	d, _ := decide(rules, m, id, name, args)
+	d, _, _ := decide(rules, m, id, name, args, false)
 	return d
 }
 
 // decide is Decide and the rule that said so: nil when no rule did (Confirm because none matched, or because
-// ConfirmAlways turned an Allow into one; Deny because args give a field more than once).
-func decide(rules []Rule, m Manifest, id, name string, args json.RawMessage) (string, *Rule) {
+// ConfirmAlways turned an Allow into one; Deny because args give a field more than once). When consume is true, a
+// matching Allow rule with a turn limit atomically consumes one turn; if it is already exhausted or expired, decide
+// continues to the remaining rules.
+func decide(rules []Rule, m Manifest, id, name string, args json.RawMessage, consume bool) (string, *Rule, int) {
 	if _, repeated := repeatedField(args); repeated {
-		return Deny, nil
+		return Deny, nil, 0
 	}
 	var fields map[string]any
 	_ = json.Unmarshal(args, &fields)
+	now := userRuleNow()
 	for _, r := range rules {
-		if !matches(r.Connector, id) || !matches(r.Action, name) {
+		if !matchRule(r, id, name, fields) {
 			continue
 		}
-		hit := matchFields(r.Match, fields)
-		if r.Decision != Allow {
-			hit = matchFieldsAny(r.Match, fields)
-		}
-		if !hit {
+		if r.Decision == Allow && !r.use.available(now) {
 			continue
 		}
 		if r.Decision == Allow && m.AlwaysConfirms(name) {
-			return Confirm, nil
+			return Confirm, nil, 0
 		}
-		return r.Decision, &r
+		var used int
+		if r.Decision == Allow && consume && r.use != nil {
+			var ok bool
+			used, ok = r.use.tryConsume(now)
+			if !ok {
+				continue
+			}
+		}
+		return r.Decision, &r, used
 	}
-	return Confirm, nil
+	return Confirm, nil, 0
+}
+
+// matchRule reports whether rule r matches a call to action name on connector id with top-level argument fields.
+func matchRule(r Rule, id, name string, fields map[string]any) bool {
+	if r.Decision == Allow && r.Connector == clubConnector {
+		if kind, val, ok := clubRuleOf(r); ok {
+			if id != clubConnector {
+				return false
+			}
+			return matchClubRule(kind, val, name, fields)
+		}
+	}
+	if !matches(r.Connector, id) || !matches(r.Action, name) {
+		return false
+	}
+	if r.Decision != Allow {
+		if matchFieldsAny(r.Match, fields) {
+			return true
+		}
+		if id == clubConnector && isClubSessionAction(name) {
+			if withAcc := clubFieldsWithSessionAccount(fields); withAcc != nil {
+				return matchFieldsAny(r.Match, withAcc)
+			}
+		}
+		return false
+	}
+	return matchFields(r.Match, fields)
+}
+
+func matchClubRule(kind, val, name string, fields map[string]any) bool {
+	switch kind {
+	case "session":
+		if !isClubSessionAction(name) {
+			return false
+		}
+		got, ok := fields["session_key"].(string)
+		if !ok || !clubSessionKeyOK(got) || got != val {
+			return false
+		}
+		if rawAcc, hasAcc := fields["account_id"]; hasAcc {
+			acc, ok := rawAcc.(string)
+			if !ok || !clubAccountIDOK(acc) {
+				return false
+			}
+			_, skAcc, _, ok := parseClubSessionKey(got)
+			if !ok || acc != skAcc {
+				return false
+			}
+		}
+		return true
+	case "account":
+		switch {
+		case name == clubAgentStart:
+			gotAcc, ok := fields["account_id"].(string)
+			if !ok || !clubAccountIDOK(gotAcc) || gotAcc != val {
+				return false
+			}
+			if rawSK, hasSK := fields["session_key"]; hasSK {
+				sk, ok := rawSK.(string)
+				if !ok {
+					return false
+				}
+				_, skAcc, _, ok := parseClubSessionKey(sk)
+				if !ok || skAcc != val {
+					return false
+				}
+			}
+			return true
+		case isClubSessionAction(name):
+			gotSK, ok := fields["session_key"].(string)
+			if !ok {
+				return false
+			}
+			_, skAcc, _, ok := parseClubSessionKey(gotSK)
+			if !ok || skAcc != val {
+				return false
+			}
+			if rawAcc, hasAcc := fields["account_id"]; hasAcc {
+				gotAcc, ok := rawAcc.(string)
+				if !ok || gotAcc != val {
+					return false
+				}
+			}
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func clubFieldsWithSessionAccount(fields map[string]any) map[string]any {
+	accFold := strings.Map(foldRune, "account_id")
+	skFold := strings.Map(foldRune, "session_key")
+	var sk string
+	for k, v := range fields {
+		folded := strings.Map(foldRune, k)
+		if folded == accFold {
+			return nil
+		}
+		if folded == skFold {
+			s, ok := v.(string)
+			if !ok {
+				return nil
+			}
+			sk = s
+		}
+	}
+	_, acc, _, ok := parseClubSessionKey(sk)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]any, len(fields)+1)
+	for k, v := range fields {
+		out[k] = v
+	}
+	out["account_id"] = acc
+	return out
+}
+
+// HasRepeatedField reports whether args contain any duplicate top-level JSON field (including case-folded duplicates).
+func HasRepeatedField(args json.RawMessage) bool {
+	_, repeated := repeatedField(args)
+	return repeated
 }
 
 // repeatedField is the first top-level field args give more than once, as it was first written, and whether there is one.
@@ -207,7 +348,16 @@ func ConfirmEach(ctx context.Context) context.Context {
 	return context.WithValue(ctx, confirmEachKey{}, true)
 }
 
-func confirmsEach(ctx context.Context) bool { v, _ := ctx.Value(confirmEachKey{}).(bool); return v }
+func confirmsEach(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(confirmEachKey{}).(bool)
+	return v
+}
+
+// ConfirmsEach reports whether ctx marks a call whose writes must be confirmed every time, whatever a rule allows.
+func ConfirmsEach(ctx context.Context) bool { return confirmsEach(ctx) }
 
 // cardMost is the most of Describe's words the card shows (a program's could be any length): more than a Telegram
 // message or a long comment, and the card says when it was cut.
@@ -227,10 +377,14 @@ func card(summary string) string {
 // guarded auto-confirm policy and the extension returns a valid short-lived credential, lets it through with an
 // AutoConfirmApproval — Allow says nothing. A nil result means run it, with the very args the card was made from;
 // how it was let through comes with it.
-func gate(ctx context.Context, rules []Rule, autoConfirm []AutoConfirmPolicy, c Connector, a Actions, name string, args json.RawMessage, ask Ask) (*proto.ToolResult, LetThrough, *AutoConfirmApproval) {
-	d, rule := decide(rules, c.Manifest(), c.ID(), name, args)
-	if d == Allow && confirmsEach(ctx) {
+func gate(ctx context.Context, rules []Rule, autoConfirm []AutoConfirmPolicy, c Connector, a Actions, name string, args json.RawMessage, ask Ask, onUsed func(ctx context.Context, id string, used int)) (*proto.ToolResult, LetThrough, *AutoConfirmApproval) {
+	each := confirmsEach(ctx)
+	d, rule, used := decide(rules, c.Manifest(), c.ID(), name, args, !each)
+	if d == Allow && each {
 		d = Confirm
+	}
+	if d == Allow && rule != nil && rule.use != nil && used > 0 && onUsed != nil && rule.use.id != "" {
+		onUsed(ctx, rule.use.id, used)
 	}
 	var through LetThrough
 	switch d {

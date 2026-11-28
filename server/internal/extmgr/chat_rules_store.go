@@ -110,6 +110,34 @@ func (s *settingRuleStore) Add(ctx context.Context, rule connector.UserRule) err
 	return s.write(ctx, append(list, rule))
 }
 
+// Put upserts a rule by its ID: replacing an existing rule of that chat in place (for example when updating TTL,
+// max_uses or used_count, or renewing an expired/exhausted rule) or appending it when new.
+func (s *settingRuleStore) Put(ctx context.Context, rule connector.UserRule) error {
+	if err := rule.Validate(); err != nil {
+		return fmt.Errorf("not a rule of one chat: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.read(ctx)
+	if err != nil {
+		return err
+	}
+	if i := slices.IndexFunc(list, func(u connector.UserRule) bool { return u.ID() == rule.ID() }); i >= 0 {
+		list = slices.Clone(list)
+		list[i] = rule
+		for j := len(list) - 1; j > i; j-- {
+			if list[j].ID() == rule.ID() {
+				list = slices.Delete(list, j, j+1)
+			}
+		}
+		return s.write(ctx, list)
+	}
+	if len(list) >= chatRulesMost {
+		return errChatRulesFull
+	}
+	return s.write(ctx, append(list, rule))
+}
+
 // Remove drops the rule with id, and says whether there was one. Every rule of that chat goes, however it got in.
 func (s *settingRuleStore) Remove(ctx context.Context, id string) (bool, error) {
 	s.mu.Lock()
