@@ -196,7 +196,7 @@ export function ChannelBindingBlock({ ctl, showAccountMark = true }: { ctl: Chan
 
   return (
     <>
-      {canBind(d) && <BindSteps c={d} onDone={ctl.load} />}
+      {canBind(d) && <BindSteps c={d} bind={ctl.bind} onDone={ctl.load} />}
       {isBound(d) && (
         <Group title={t("settings-channels.binding")} footer={t("settings-channels.binding_footer")}>
           <Row label={t("settings-channels.bound_account")}>
@@ -521,8 +521,9 @@ export function TargetPicker({ open, current, onClose, onPick }: { open: boolean
  * Binding `c` a step at a time. The Lark bot's page reuses it to create the bot's app by scanning (#5818), with its own
  * `title`, `footer` and `startLabel` for the first button; everything after the first press is the same steps.
  */
-export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }: {
+export function BindSteps({ c, bind, onDone, title, footer: startFooter, startLabel }: {
   c: Pick<Channel, "id" | "name" | "bind">;
+  bind?: ChannelController["bind"];
   onDone: () => Promise<void>;
   title?: string;
   footer?: string;
@@ -541,7 +542,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
   const send = useCallback(async (step: string, vals: Record<string, string>, quiet = false): Promise<boolean> => {
     if (!quiet) setBusy(true);
     try {
-      const p = await bindChannel(c.id, step, vals);
+      const p = await (bind ? bind(step, vals) : bindChannel(c.id, step, vals));
       if (!live.current) return false;
       if (p.done) {
         setPrompt(null);
@@ -561,7 +562,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
       if (!quiet && live.current) setBusy(false);
     }
     return false;
-  }, [c.id, c.name, onDone]);
+  }, [bind, c.id, c.name, onDone]);
 
   // A QR code or a code on screen: ask again every interval until it is scanned / sent.
   useStepPolling(isPolled(prompt) ? prompt : null, (step) => send(step, {}, true), 3);
