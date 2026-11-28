@@ -469,6 +469,7 @@ describe("Integrations server detail", () => {
   async function open(sub: string, manager = "assistant") {
     const route = decodeIntegrationsRoute("integrations", sub, new URLSearchParams({ manager }));
     await act(async () => root.render(<Integrations route={route} onOpen={() => {}} onBack={() => {}} twoCol />));
+    await act(async () => vi.dynamicImportSettled());
     await flush();
   }
 
