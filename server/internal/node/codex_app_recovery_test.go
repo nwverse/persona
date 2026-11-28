@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -432,7 +433,7 @@ func TestCodexAppAutomaticResumeProvenanceAndConsumption(t *testing.T) {
 	n, f, cwd, _ := codexAppRecoveryNode(t, false)
 	listSessions(t, n)
 
-	// Idle unowned App thread with completed turn authorizes supervised resume_automatic once.
+	// A completed turn on an idle, unowned App thread supplies the initial stop cause.
 	got := resumeFile(f, cwd)
 	if _, err := request(t, n, "session.start", map[string]any{
 		"resume_session_id": startThread, "prompt": "Un-draft the MR", "resume_automatic": true,
@@ -442,20 +443,88 @@ func TestCodexAppAutomaticResumeProvenanceAndConsumption(t *testing.T) {
 	if file := got(); !strings.Contains(strings.Join(file.Argv, " "), "resume "+startThread) || file.Prompt != "Un-draft the MR" {
 		t.Fatalf("unexpected start file: %+v", file)
 	}
-	// Eligibility was consumed into n.state: once the pane exits without a new system stop cause,
-	// automatic resume must fail closed (and an explicit StopUser also refuses automatic resume).
+	if state, ok := n.state.get(startThread); !ok || state.StopCause != proto.StopUnknown {
+		t.Fatalf("state after successful resume: present=%t, stop cause=%s", ok, state.StopCause)
+	}
+	// The saved unknown stop survives the pane's exit and supersedes the completed rollout.
 	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
-	_ = n.refreshHosts(context.Background())
-	if _, err := request(t, n, "session.start", map[string]any{
-		"resume_session_id": startThread, "prompt": "Second automatic resume", "resume_automatic": true,
-	}); refusalCode(err) != "resume_not_allowed" {
-		t.Fatalf("consumed stop cause allowed second automatic resume: %v", err)
+	if err := n.refreshHosts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if cause := n.effectiveStopCause(startThread); cause != proto.StopUnknown {
+		t.Fatalf("effective stop cause after pane exit = %s, want unknown", cause)
+	}
+	row := requireCodexSession(t, listSessions(t, n), startThread)
+	if row.Capabilities.StopCause == proto.StopTaskCompleted {
+		t.Fatal("listing restored task_completed from the rollout after resume")
 	}
 	n.state.stopped(startThread, proto.StopUser)
 	if _, err := request(t, n, "session.start", map[string]any{
 		"resume_session_id": startThread, "prompt": "After user stop", "resume_automatic": true,
 	}); refusalCode(err) != "resume_not_allowed" {
 		t.Fatalf("user-stopped App thread allowed automatic resume: %v", err)
+	}
+}
+
+type uncertainAppResumeHost struct {
+	*fakeTakeoverLauncherHost
+	workspaceAttempts int
+	startErr          error
+}
+
+func (h *uncertainAppResumeHost) CreateSpace(context.Context, string, string) (*host.Created, error) {
+	h.workspaceAttempts++
+	return nil, h.startErr
+}
+
+func TestCodexAppAutomaticResumeSettlesAfterConsumingSavedStop(t *testing.T) {
+	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
+	cases := []struct {
+		name      string
+		savedStop bool
+	}{
+		// Consuming the old cause lets uncertainResumes hold the retry until the start is observed or resumeSettle expires.
+		{name: "saved stop", savedStop: true},
+		// After CreateSpace returns an uncertain error, resumeCodexThread records an unknown stop cause that takes precedence over the rollout.
+		{name: "derived from rollout"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n := remoteTestNode(t)
+			h := &uncertainAppResumeHost{
+				fakeTakeoverLauncherHost: &fakeTakeoverLauncherHost{kind: host.Herdr},
+				startErr:                 errors.New("workspace creation reply lost"),
+			}
+			n.hosts = host.NewRegistry(h)
+			mkdir(t, n.dir)
+			cwd := t.TempDir()
+			thread := newUUID()
+			path := writeCodexAppFinishedRollout(t, n.codexHome(), thread, cwd, 4*time.Hour)
+			n.registerCodex(n.codexHome(), thread, path)
+			if tc.savedStop {
+				n.state.put(thread, sessionState{Cwd: cwd, Launcher: "codex", StopCause: proto.StopTaskCompleted})
+			} else if _, ok := n.state.get(thread); ok {
+				t.Fatal("rollout thread already has saved state before resume")
+			}
+			if cause := n.effectiveStopCause(thread); cause != proto.StopTaskCompleted {
+				t.Fatalf("initial stop cause = %s, want task_completed", cause)
+			}
+
+			resume := map[string]any{"resume_session_id": thread, "resume_automatic": true, "prompt": "Continue the task"}
+			_, err := request(t, n, "session.start", resume)
+			if err == nil || !strings.Contains(err.Error(), h.startErr.Error()) || startFailedForSure(err) || h.workspaceAttempts != 1 {
+				t.Fatalf("first resume = %v, workspace attempts = %d, want one uncertain start", err, h.workspaceAttempts)
+			}
+			if cause := n.effectiveStopCause(thread); cause != proto.StopUnknown {
+				t.Errorf("stop cause after uncertain start = %s, want unknown", cause)
+			}
+			if _, err := request(t, n, "session.start", resume); refusalCode(err) != "resume_not_allowed" {
+				t.Errorf("second resume = %v, want resume_not_allowed", err)
+			}
+			if h.workspaceAttempts != 1 {
+				t.Errorf("second resume reached workspace creation: total attempts = %d", h.workspaceAttempts)
+			}
+		})
 	}
 }
 

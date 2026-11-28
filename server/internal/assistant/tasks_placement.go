@@ -65,6 +65,13 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 			placementOf(ctx).hit(alt.ID, "leader_work_machine", nil)
 			return false
 		}
+		if t.scratchWorkspace() {
+			if !alt.ScratchWorkspace {
+				placementOf(ctx).hit(alt.ID, "scratch_unsupported", nil)
+				return false
+			}
+			return true
+		}
 		return s.taskDirectoryExists(ctx, alt.ID, rehome(t.Cwd, m, alt))
 	})
 	t.noteWhy(note)
@@ -78,7 +85,11 @@ func (s *Service) healthyPlace(ctx context.Context, t *PlanTask) bool {
 		t.Reroute = &reroute
 		t.Reroute.ToMachine = firstNonEmpty(alt.Name, alt.ID)
 		t.Reroute.Reason = note
-		t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
+		if t.scratchWorkspace() {
+			t.Machine, t.Cwd, t.WorkspaceResolved = alt.ID, "", nil
+		} else {
+			t.Machine, t.Cwd = alt.ID, rehome(t.Cwd, m, alt)
+		}
 	}
 	return moved
 }
@@ -407,6 +418,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	}()
 	if err != nil {
 		return "", "", err
+	}
+	if t.Parent != "" && params["host"] == nil && s.taskWorktreeKind(ctx, t) == proto.EngineOrca {
+		params["host"] = proto.EngineOrca
 	}
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,

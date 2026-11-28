@@ -144,5 +144,7 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSSiriUsageDescription</key>
+	<string>Persona uses Siri so you can call Persona by saying “Call Persona using Persona”. Siri passes the call to Persona, which calls the assistant on your hub; Persona shares nothing else with Siri.</string>
 </dict>
 </plist>

@@ -27,7 +27,7 @@ const (
 	sigInterrupted   = "interrupted"    // the model service cut its turn off
 	sigFailed        = "failed"         // its agent did not start
 	sigStarted       = "started"        // its agent started after the supervisor's retry (start_remedy.go)
-	sigPRConflict    = "pr_conflict"    // the task's current open PR has merge conflicts at this head
+	sigPRConflict    = "pr_conflict"    // a followed open delivery PR of the task has merge conflicts at this head
 	sigDraftPR       = "draft_pr"       // an own linked PR is still draft, not waiting for upstream review
 	sigPREvent       = "pr_event"       // a PR CI failure, review, or discussion comment fell back from direct Agent routing
 	sigReport        = "report"         // its agent reported to the supervisor (report_to_supervisor, agent_control.go)
@@ -45,7 +45,10 @@ const (
 	// answered the decision it raised (checkDecided), which did not go to the Agent.
 	sigCheck = "check"
 	// sigTodoReady: an open, unstarted dependent to-do has all of its after prerequisites satisfied (todo_after_ready.go, #12606).
-	sigTodoReady = "todo_ready"
+	sigTodoReady         = "todo_ready"
+	sigBlockersUnblocked = "blockers_unblocked" // the last persistent blocker on an open to-do cleared
+	sigMergeTrainTurn    = "mergetrain_turn"    // a PR advanced to the head of its repository's merge train
+	sigWriteConflict     = "write_conflict"     // two dispatched tasks declared overlapping write scopes
 	// sigPRMerged: an unparked open supervised task's delivery PR merged with no other delivery PR open (pr_merge_wake.go, #13100).
 	sigPRMerged = "pr_merged"
 	// sigParentCloseout: an open parent to-do with no active Agent has all part_of children done (todo_parent_closeout.go, #13100).
@@ -96,8 +99,11 @@ type superviseSignal struct {
 	// PendingPredecessors: keys of earlier stretches of this id replaced before their delivery or queue acknowledgment.
 	// An ACK removes exactly its own Key; a still-present predecessor's dedup reservation is not delivery proof.
 	PendingPredecessors []string
-	PRURL               string // the followed PR, revalidated before delivery
-	PREventID           string `json:"pr_event_id,omitempty"` // names a review or comment, including during owner decisions
+	PRURL               string              // the followed PR, revalidated before delivery
+	PREventID           string              `json:"pr_event_id,omitempty"` // names a review or comment, including during owner decisions
+	BlockerPRs          []string            `json:"blocker_prs,omitempty"`
+	MergeTrainTurn      *mergeTrainTurnWake `json:"merge_train_turn,omitempty"`
+	WriteConflict       *writeConflictWake  `json:"write_conflict,omitempty"`
 	// Unreachable: this decision exists because its assigned task leader Agent or Assistant supervisor could not be
 	// reached, not because the worker waits for the user. It stays a decision even when the worker is not needs_user.
 	// Recipient distinguishes an unreachable Assistant supervisor from the existing task-leader-Agent escalation.
@@ -115,7 +121,9 @@ type superviseSignal struct {
 	Generation  time.Time `json:"generation,omitzero"`
 	failedClaim string
 	Detail, Ask string
-	Minutes     int
+	// Unlinked identifies the unreadable panes. Candidate conversations are resolved only for the final recipient.
+	Unlinked []unlinkedPane `json:"unlinked,omitempty"`
+	Minutes  int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
 	SourcePermission proto.SourcePermission
 	Report           string
@@ -211,10 +219,31 @@ func (g superviseSignal) userLevel() bool {
 	return false
 }
 
+// prConflictURL returns the PR URL carried by a sigPRConflict signal, falling back to the prefix before "@" in Key
+// for signals queued without PRURL before multi-PR conflict tracking (#15611).
+func (g superviseSignal) prConflictURL() string {
+	if g.PRURL != "" {
+		return g.PRURL
+	}
+	if url, _, ok := strings.Cut(g.Key, "@"); ok && url != "" {
+		return url
+	}
+	return ""
+}
+
 // id names what a newer signal replaces while it waits: the task's signal of that kind (a report: of that kind of
 // report, so a progress report does not push out a question).
 func (g superviseSignal) id() string {
+	if g.Kind == sigMergeTrainTurn && g.MergeTrainTurn != nil {
+		return g.Todo + "|" + g.Kind + "@" + g.MergeTrainTurn.RepoKey
+	}
+	if g.Kind == sigWriteConflict && g.WriteConflict != nil {
+		return g.Todo + "|" + g.Kind + "@" + g.WriteConflict.PeerTodo
+	}
 	if g.Kind == sigDraftPR {
+		return g.Todo + "|" + g.Kind + "@" + g.PRURL
+	}
+	if g.Kind == sigPRConflict && g.PRURL != "" {
 		return g.Todo + "|" + g.Kind + "@" + g.PRURL
 	}
 	if g.Kind == sigPRMerged {
@@ -249,6 +278,14 @@ func (g superviseSignal) id() string {
 	return g.Todo + "|" + g.Kind
 }
 
+func (g superviseSignal) todoV2Wake() bool {
+	switch g.Kind {
+	case sigBlockersUnblocked, sigMergeTrainTurn, sigWriteConflict:
+		return true
+	}
+	return false
+}
+
 // urgent: a signal that waits on a decision goes out sooner than the rest.
 func (g superviseSignal) urgent() bool {
 	switch g.Kind {
@@ -266,7 +303,7 @@ func (g superviseSignal) urgent() bool {
 	case sigCheck: // the owner answered: what they chose is acted on soon
 		return g.Report == checkDecidedReport
 	}
-	return false
+	return g.todoV2Wake()
 }
 
 // immediate signals need a decision and wait only for gathering, never the shared spacing or routine cooldown.
@@ -1428,9 +1465,6 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 					s.logf("todos_v2 restart recovery checkpoint %s: %v", t.ID, err)
 				}
 			}
-		}
-		if todosV2 {
-			s.refreshTodoRuntimeChangedFiles(ctx, t, agents)
 		}
 		if todosV2 && ((t.Check != nil && t.Check.Verdict == verdictDone) || (t.Supervision != nil && t.Supervision.Progress != nil && t.Supervision.Progress.Kind == "done")) {
 			if err := s.ResetSupervisedTaskRecovery(ctx, t.ID); err != nil {

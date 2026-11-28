@@ -292,6 +292,8 @@ internal fun MachineManagement.inGroup(names: GroupNames): MachineManagement {
         override suspend fun herdr(machineId: String) = source.herdr(names.rawMachine(machineId))
         override suspend fun startHerdr(machineId: String) = source.startHerdr(names.rawMachine(machineId))
         override suspend fun setEngine(machineId: String, engine: String) = names.machine(source.setEngine(names.rawMachine(machineId), engine))
+        override suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String) =
+            names.machine(source.setEngineHosts(names.rawMachine(machineId), hosts, default))
         override suspend fun botmux(machineId: String) = source.botmux(names.rawMachine(machineId))
         override suspend fun setBotmux(machineId: String, on: Boolean) = source.setBotmux(names.rawMachine(machineId), on)
         override suspend fun claudeSettings(machineId: String) = source.claudeSettings(names.rawMachine(machineId))
@@ -517,6 +519,8 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
             source.workspaceCatalog(names.rawMachine(machineId)).let { catalog ->
                 catalog.copy(workspaces = catalog.workspaces.map { it.copy(machineId = names.machineId(it.machineId)) })
             }
+        // Worktree actions name the hub's own machine id; their answers carry none.
+        override val worktrees = source.worktrees?.let { actions -> routedWorktreeManagement { machine -> actions to names.rawMachine(machine) } }
     }
 }
 

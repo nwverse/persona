@@ -1,6 +1,7 @@
 {
   "input_draft": "电脑上的输入框中还有未发送的内容",
   "dialog_open": "电脑上当前有一个打开的对话框，请先处理后再发送",
+  "dialog_open_named": "电脑上开着对话框「{dialog}」，先处理它再发",
   "delivery_unknown": "无法确认消息是否已送达，请先检查对话记录再决定是否重发",
   "delivery_failed": "已确认发送失败",
   "not_confirmed": "页面关闭前未能确认送达，重试不会重复发送",

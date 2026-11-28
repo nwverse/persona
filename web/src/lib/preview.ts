@@ -229,11 +229,23 @@ export function keyMessage(
 
 // ── addresses ─────────────────────────────────────────
 
-/** An address the page wanted to open elsewhere, when it may be opened in a new tab here (http / https only). */
+function hasCtrlOrSpace(url: string): boolean {
+  for (let i = 0; i < url.length; i++) {
+    const c = url.charCodeAt(i);
+    if (c <= 0x20 || c === 0x7f) return true;
+  }
+  return /\s/.test(url);
+}
+
+/** An address the page wanted to open elsewhere, when it may be opened in a new tab here (credential-free http / https only). */
 export function safeExternal(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed || hasCtrlOrSpace(trimmed) || !/^https?:\/\//i.test(trimmed)) return null;
+  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return null;
   try {
-    const u = new URL(url);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.href : null;
+    const u = new URL(trimmed);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== "" && u.username === "" && u.password === "" ? u.href : null;
   } catch {
     return null;
   }

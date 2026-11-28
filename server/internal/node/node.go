@@ -61,6 +61,7 @@ type Node struct {
 	memoryMergeRetry map[string]time.Time
 
 	memoryMu     sync.Mutex
+	scratchMu    sync.Mutex
 	Version      string
 	skillImports assistantskills.Importer
 	updater      *nodeupdate.Manager // resident-owned, shared across attach connections
@@ -305,6 +306,7 @@ type Node struct {
 	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
 	agyIdlePolicy     *assistantwire.AgyIdleCompaction
 	agyIdleSessions   map[string]*agyIdleState
+	agyAttemptSeq     uint64
 	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
 	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
@@ -424,6 +426,8 @@ type Node struct {
 
 	// claudeV is claude's version as last asked (agentplugin.go).
 	claudeV claudeVersionCache
+	// engRep: the engines node.info said last, Orca's row as told since (orcaengine.go).
+	engRep engineReport
 	// resumeSignIn: launchers' sign-in per profile as last asked for a resume (assistant_resume_signin.go).
 	resumeSignIn resumeSignInCache
 
@@ -620,8 +624,28 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	n.fsw.start(ctx, func(c fsChanged) { _ = n.peer.Notify(methodFsChanged, c) })
 	defer n.fsw.close()
+	// Bind n.runtimes and n.runtimeHost before starting any background goroutine or adopting
+	// assistants so unlocked reads of n.runtimes / n.runtimeHost never race with attach(), and
+	// listen before exposing a standalone RuntimeHost so Listen failure leaves n.runtimeHost nil.
+	var ownRuntimeHost *RuntimeHost
+	if n.runtimeHost != nil {
+		n.runtimes = n.runtimeHost.reg
+	} else {
+		if n.runtimes == nil {
+			n.runtimes = newRuntimeRegistry()
+		}
+		rh := n.newRuntimeHost()
+		if err := rh.Listen(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
+			n.logger.Printf("runtime socket: %v", err)
+		} else {
+			ownRuntimeHost = rh
+			n.runtimeHost = rh
+			defer rh.setAgyBridge(false)
+		}
+	}
 	n.cdirs.report = func(dirs []string) { _ = n.peer.Notify("claude.dirs", map[string]any{"dirs": dirs}) }
 	go n.watchClaudePlugin(ctx) // claudeplugin.go
+	go n.watchOrcaEngine(ctx)   // orcaengine.go
 	n.codices.report = func(cfg proto.CodexConfig) { _ = n.peer.Notify("codex.inventory", cfg) }
 	go n.runCodex(ctx)
 	var adopted []*assistantProc
@@ -629,17 +653,14 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		adopted = n.keeper.adopt(n)
 	}
 	n.startState(ctx, adopted)
-	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach sets (clicall.go mcpAssistantOf).
-	if rh := n.runtimeHost; rh != nil { // a resident node's: runtimes stay connected across hub connections
+	// The runtimes before the hook socket: its MCP requests read n.runtimes, which attach uses (clicall.go mcpAssistantOf).
+	if ownRuntimeHost != nil {
+		ownRuntimeHost.attach(n)
+		defer ownRuntimeHost.detach(n)
+	} else if n.runtimeHost != nil { // a resident node's: runtimes stay connected across hub connections
+		rh := n.runtimeHost
 		rh.attach(n)
 		defer rh.detach(n)
-	} else if rh, err := n.listenRuntimeSocket(ctx); err != nil { // runtimes (runtimes.go): beside the engine, whichever it is
-		n.logger.Printf("runtime socket: %v", err)
-	} else {
-		defer func() {
-			rh.setAgyBridge(false)
-			rh.detach(n)
-		}()
 	}
 	ln, err := n.listenHookSocket(ctx)
 	if err != nil {
@@ -2135,7 +2156,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			if err == nil && id != "" {
 				n.expectFirstLine(id, opts.ClientMsgID, p.Text, len(p.Images), at)
 			}
-			return map[string]any{"session_id": id}, err
+			return n.assistantSendResult(id), err
 		}
 		var once struct {
 			OnceID string `json:"once_id"`
@@ -2169,11 +2190,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 					n.recordSegmentInput(id, opts.ClientMsgID)
 				}
 			}
-			return round.answer(map[string]any{"session_id": id}), err
+			return round.answer(n.assistantSendResult(id)), err
 		}
 		if p.NewSessionID == "" || opts.ClientMsgID == "" {
 			id, err := send()
-			return round.answer(map[string]any{"session_id": id}), err
+			return round.answer(n.assistantSendResult(id)), err
 		}
 		// A start under a given id with its first message's client_msg_id (a meeting's room, its follow-up, Just me's
 		// new main chat): sent once, and its transcript item carries the id, as a session.send's (echo.go).
@@ -2187,7 +2208,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err == nil && id == "" {
 			id = p.NewSessionID // the same start asked again while it went: that conversation
 		}
-		return map[string]any{"session_id": id}, err
+		return n.assistantSendResult(id), err
 	case "assistant.guest_prepare": // a guest conversation's directory (assistant_guest.go)
 		return n.assistantGuestPrepare(params)
 	case "assistant.guest_delete": // a meeting's room, at its transcript's cut (assistant_guest.go)
@@ -2409,12 +2430,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "codex.answer": // the phone's answer to a Codex question or approval card (codexask.go)
 		var a struct {
 			ID         string           `json:"id"`
+			CreatedAt  time.Time        `json:"created_at"`
 			Resolution proto.Resolution `json:"resolution"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil {
 			return nil, err
 		}
-		return ok(n.codexAnswer(ctx, p.SessionID, a.ID, a.Resolution))
+		return ok(n.codexAnswerAt(ctx, p.SessionID, a.ID, a.CreatedAt, a.Resolution))
 	case "assistant.permissions.reset":
 		restart, err := n.resetAssistantPermissions(ctx, p.SessionID)
 		return map[string]any{"ok": err == nil, "restart_required": restart}, err
@@ -2429,11 +2451,24 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 		over := n.turnOver(p.SessionID) // before the key: the Escape itself may end a turn
+		var qPath string
+		var qStat os.FileInfo
+		if !over {
+			if qPath = n.transcriptPath(p.SessionID); qPath != "" {
+				qStat, _ = os.Stat(qPath)
+			}
+		}
 		err := n.keys(ctx, p.SessionID, []string{"esc"}, "")
 		if err == nil && over && n.backgroundRuns(p.SessionID) {
 			// The Escape went to an idle prompt and the background work goes on: said, not claimed as an interruption
 			// (#10828). The key is pressed whatever this finds, so a turn that does run is never left running.
 			err = refusal(proto.CodeTurnOverBackground, i18n.T(i18n.From(ctx), "rpc-errors."+proto.CodeTurnOverBackground), nil)
+		} else if err == nil && !over && qPath != "" {
+			n.forgetMeta(qPath)
+			n.notifySessionsSoon()
+			if qStat != nil {
+				n.watchQueueSettle(qPath, qStat.Size(), qStat.ModTime())
+			}
 		}
 		return ok(err)
 	case "session.screen.before":
@@ -2453,6 +2488,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		res := map[string]any{"text": text, "status": status}
 		if rev := dialogRev(text, p.Lines, p.Source, p.Format); rev != "" {
 			res["dialog_rev"] = rev
+		}
+		if ms := n.screenRefresh(p.SessionID); ms > 0 {
+			res["refresh_ms"] = ms // a client polling a screen that cannot stream may read it this often (#17048)
 		}
 		return res, err
 	case "terminal.watch":
@@ -2718,11 +2756,11 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			limit = 80
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
-			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
+			page, more, span := f.RangeSpan(p.FromSeq, p.ThroughSeq, 1000)
 			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, false, f)
 			n.ttft.annotate(p.SessionID, page, false)
-			return map[string]any{"items": items(page), "more": more}, nil
+			return withSpan(map[string]any{"items": items(page), "more": more}, span, true), nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
@@ -3171,6 +3209,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"sent": true}, nil
 	case "workspace.close":
+		if p.Host == host.Orca {
+			return n.closeOrcaTaskSpace(ctx, p.TaskID, p.WorkspaceID)
+		}
 		return n.closeTaskSpace(ctx, p.TaskID, p.WorkspaceID)
 	case "assistant.cache_clear":
 		n.forgetCacheWarm(p.SessionID)
@@ -3238,7 +3279,7 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			}
 			return map[string]any{"session_id": id, "source_kind": "codex_app_server", "source_thread_id": src.thread, "transcript_path": "", "cwd": "", "model": model, "launcher": "", "git_branch": "", "version": "", "permission_mode": "", "effort": effort, "context_tokens": 0, "output_tokens": 0, "compactions": 0, "turns": 0, "history_unavailable": true, "stop_cause": n.effectiveStopCause(id)}, nil
 		}
-		return nil, err
+		return nil, n.readErr(id, err)
 	}
 	n.refresh(id, f)
 	m := f.Meta()
@@ -3262,12 +3303,13 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			mode = tuiMode(screen) // shift+tab in the terminal shows up in the transcript only with the next prompt
 		}
 	}
+	path := f.Where()
 	cwd := m.Cwd // an agent's latest directory
 	if n.isAssistantSession(id) {
-		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
+		cwd = n.assistantCwd(id, path, cwd) // a conversation's own, where it started (#2368)
 	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": path, "cwd": cwd, "model": model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,
@@ -3352,7 +3394,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		Version:            n.Version,
 		System:             n.system(ctx),
 		Engine:             n.engine(),
-		Engines:            n.engines(ctx, hv),
+		Engines:            n.engRep.said(n.engines(ctx, hv)),
 		EngineHosts:        &choice, // this node takes sets in engine.use (the hub then sends it hosts and default)
 		MachineUID:         n.uid,
 		BuiltinPrograms:    builtinProgramsInfo(),

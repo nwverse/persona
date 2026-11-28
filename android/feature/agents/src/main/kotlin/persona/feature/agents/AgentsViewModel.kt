@@ -150,17 +150,28 @@ internal class AgentsViewModel(
     private val workspaceRefresh = MutableStateFlow(0)
 
     /** Called by the visible screen's lifecycle: hidden pages cancel reads and have no polling timer. */
-    suspend fun watchWorkspaceCatalog(service: AgentCreationService?) {
+    suspend fun watchWorkspaceCatalog(service: AgentCreationService?, repositoryRows: Boolean = true) {
         if (service == null) return
+        fun hosts(machine: persona.core.contracts.Machine) = machine.engineHosts ?: listOf(machine.engine)
+        // The space page reads only the Orca rows ([repositoryRows] false): it has no repository grouping.
         combine(repository.machines.map { machines ->
-            machines.filter { "paseo" in (it.engineHosts ?: listOf(it.engine)) }.map { it.id to it.online }
-        }.distinctUntilChanged(), workspaceRefresh) { machines, _ -> machines }.collectLatest { machines ->
+            val paseo = if (repositoryRows) machines.filter { "paseo" in hosts(it) } else emptyList()
+            // Orca computers too, for their worktrees' actions (#17054); they add no repository rows.
+            paseo.map { it.id to it.online } to
+                machines.filter { ORCA_KIND in hosts(it) && it !in paseo && service.worktrees != null }.map { it.id to it.online }
+        }.distinctUntilChanged(), workspaceRefresh) { machines, _ -> machines }.collectLatest { (machines, orca) ->
             while (true) {
-                workspaceCatalog.refresh(service, machines)
+                workspaceCatalog.refresh(service, machines, orca)
                 kotlinx.coroutines.delay(60_000)
             }
         }
     }
+
+    /** The computers' Orca worktrees from the catalog (#17054), for the worktree actions; never part of the list's grouping. */
+    internal val orcaWorkspaces get() = workspaceCatalog.orcaRows
+
+    /** Reads the workspace catalog again now (a worktree was created, renamed or removed). */
+    fun refreshWorkspaceCatalog() { workspaceRefresh.update { it + 1 } }
     // Editors need the latest settings before the background list projection catches up.
     val listSettings = settings.asStateFlow()
     private val groupListCounts = MutableStateFlow<Map<String, GroupListCounts>>(emptyMap())
@@ -559,7 +570,7 @@ internal class AgentsViewModel(
         viewModelScope.launch {
             var previous = emptyList<Interaction>()
             interactions.pending.collect { pending ->
-                val removed = previous.filter { old -> old.secret != true && pending.none { it.id == old.id && it.sessionKey == old.sessionKey } }
+                val removed = previous.filter { old -> !old.isDisplayMirror && old.secret != true && pending.none { it.id == old.id && it.sessionKey == old.sessionKey } }
                 _requestHistory.update { history ->
                     (removed.asReversed() + history).distinctBy { it.sessionKey to it.id }
                         .filter { old -> pending.none { it.id == old.id && it.sessionKey == old.sessionKey } }.take(50)
@@ -1134,7 +1145,7 @@ internal class AgentsViewModel(
                 val outcome = resolution.ownerApprovalPhrase?.let { phrase ->
                     interactions.replyOwnerApproval(latest, phrase)
                     ResolveOutcome()
-                } ?: interactions.resolveOutcome(interaction.id, resolution,
+                } ?: interactions.resolveOccurrence(latest, resolution,
                     handoffCard = (latest.isSecretHandoff || latest.secretRun?.delivery == "env") && resolution.allow == true)
                 _delivery.update { it + (interaction.id to RequestDelivery.Sent) }
                 val effective = if (outcome.already) outcome.resolution else resolution

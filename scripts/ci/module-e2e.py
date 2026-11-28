@@ -231,9 +231,10 @@ WEB = {
             {"name": "Knowledge › Meetings recording", "hubs": ["test"], "page": "/kb/meetings",
              "ready": {"text": r"^Meetings$"}, "text": r"Module gate sample recording",
              "opens": {"selector": "main :text('A made-up sample line')"},
-             # Off, both stay (#13430, #15530): the default panel's read-only detail (RecordingReadOnlyDetail.tsx) shows
-             # what is stored and no control of the module's. The second is core-only-smoke's seeded meeting
-             # (KEPT_RECORDING: "Kept recording", with minutes). The controls are the module's English labels
+             # Off, all stored recordings stay (#13430, #15530, #15214): the default panel's read-only detail
+             # (RecordingReadOnlyDetail.tsx) shows what is stored and no control of the module's. The seeded meetings
+             # are core-only-smoke's KEPT_RECORDING ("Kept recording", with minutes and a photo) and KEPT_PENDING
+             # ("Kept recording, minutes pending", paused with module_off). The controls are the module's English labels
              # (web/src/i18n/locales/en: recording.rename, recording.minutes_make, recording.minutes_regenerate,
              # recording-handoff.title, recording.private_label, recording.asks_title).
              "off": {
@@ -243,14 +244,19 @@ WEB = {
                       "shows": [{"name": "its transcript", "selector": "main :text('A made-up sample line')"}]},
                      {"name": "a stored meeting with minutes", "text": r"^Kept recording$",
                       "shows": [{"name": "its minutes", "selector": "main :text('wombat checklist')"},
-                                {"name": "its transcript", "selector": "main :text('quokka transcript')"}]},
+                                {"name": "its transcript", "selector": "main :text('quokka transcript')"},
+                                {"name": "its photo caption", "selector": "main :text('Plan')"}]},
+                     {"name": "a stored meeting paused while off", "text": r"^Kept recording, minutes pending$",
+                      "shows": [{"name": "its transcript", "selector": "main :text('Its minutes were never written')"},
+                                {"name": "the paused note", "selector": "main [data-recording-paused='module_off']"}]},
                  ],
                  "hides": [{"name": "rename", "selector": "main button:has-text('Rename')"},
                            {"name": "make minutes", "selector": "main button:has-text('Make minutes')"},
                            {"name": "regenerate", "selector": "main button:has-text('Regenerate')"},
                            {"name": "hand to an Agent", "selector": "main button:has-text('Hand to Agent')"},
                            {"name": "private mark", "selector": "main :text('Private meeting')"},
-                           {"name": "questions asked in the meeting", "selector": "main :text('Questions in the meeting')"}],
+                           {"name": "questions asked in the meeting", "selector": "main :text('Questions in the meeting')"},
+                           {"name": "error retry", "selector": "main button:has-text('Retry')"}],
              }},
         ],
         "chunks": [r"/assets/RecordingDetail-[\w-]+\.js", r"/src/modules/recording/"],

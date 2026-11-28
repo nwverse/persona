@@ -8,12 +8,36 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+// A companion snapshot can advance for a delivery marker while retaining the previous words.
+type agyPreview struct {
+	text string
+	at   time.Time
+}
+
+// nextAgyPreviews remembers when the text last changed, only for rows still in this snapshot.
+func nextAgyPreviews(previous map[string]agyPreview, rows []proto.Session) map[string]agyPreview {
+	current := make(map[string]agyPreview, len(rows))
+	for i := range rows {
+		row := &rows[i]
+		if row.LastText == "" {
+			continue
+		}
+		preview := agyPreview{row.LastText, row.UpdatedAt}
+		if old := previous[row.SessionID]; old.text == preview.text && old.at.Before(preview.at) {
+			preview.at = old.at
+		}
+		current[row.SessionID] = preview
+	}
+	return current
+}
+
 type agyTurnEvidence struct {
 	inputDigest string
 	inputAt     time.Time
 	inputSeq    int
 	lastSeq     int
 	replyAt     time.Time
+	lastTextAt  time.Time
 	finalSeq    int
 	lastText    string
 }
@@ -46,6 +70,10 @@ func summarizeAgyTurn(steps []agyStep) agyTurnEvidence {
 	}
 	if reply != nil {
 		out.lastText = snippet(agyAssistantText(reply.Content))
+		out.lastTextAt, _ = time.Parse(time.RFC3339Nano, reply.CreatedAt)
+		if edited, err := time.Parse(time.RFC3339Nano, reply.UpdatedAt); err == nil && edited.After(out.lastTextAt) {
+			out.lastTextAt = edited
+		}
 	}
 	if input != nil && input.Index != nil {
 		out.inputAt, _ = time.Parse(time.RFC3339Nano, input.CreatedAt)

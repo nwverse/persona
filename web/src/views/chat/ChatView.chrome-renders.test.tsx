@@ -742,3 +742,56 @@ it("a stop the hub lost track of is not reported as done, and can be pressed aga
   expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
   expect(host.querySelector(`button[aria-label="${t("chat-composer.interrupt")}"]`)).toBeTruthy();
 });
+
+it("does not interrupt a working turn or close TitleEditor when Escape cancels an IME composition", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />);
+  // Open TitleEditor via double-click on the chat title.
+  act(() => {
+    host.querySelector<HTMLElement>("h1[data-chat-title]")!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
+  const titleInput = host.querySelector<HTMLInputElement>("input[data-chat-title-input]");
+  expect(titleInput).toBeTruthy();
+
+  // 1. IME Escape (isComposing: true) inside TitleEditor bubbles to window: must neither close TitleEditor nor interrupt.
+  await act(async () => {
+    titleInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("input[data-chat-title-input]")).toBeTruthy();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 2. Safari IME Escape (keyCode: 229) inside TitleEditor must neither close TitleEditor nor interrupt.
+  const safariTitle = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  Object.defineProperty(safariTitle, "keyCode", { value: 229 });
+  await act(async () => {
+    titleInput!.dispatchEvent(safariTitle);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("input[data-chat-title-input]")).toBeTruthy();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 3. Normal Escape closes TitleEditor without interrupting.
+  await act(async () => {
+    titleInput!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(host.querySelector("input[data-chat-title-input]")).toBeNull();
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 4. IME Escape (isComposing and Safari keyCode 229) on window while working must not interrupt.
+  const safariWindow = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+  Object.defineProperty(safariWindow, "keyCode", { value: 229 });
+  await act(async () => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true, cancelable: true }));
+    document.body.dispatchEvent(safariWindow);
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(0);
+
+  // 5. Real Escape while working still interrupts.
+  await act(async () => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(posted("/sessions/mac/s1/interrupt")).toHaveLength(1);
+});

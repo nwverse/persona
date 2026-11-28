@@ -424,13 +424,14 @@ func TestGatewayAccountsKeepsEachSourcesListAndMarksAFailedReadStale(t *testing.
 
 func TestUsageGatewayAccountsOverTheDevicesMethod(t *testing.T) {
 	h := newTestDevices(t)
-	out, handled, err := h.Request(context.Background(), devicewire.MethodUsageGatewayAccounts, json.RawMessage(`{}`))
-	if err != nil || !handled {
-		t.Fatalf("%v %v", handled, err)
-	}
-	b, _ := json.Marshal(out)
-	if string(b) != `{"sources":[],"accounts":[]}` {
-		t.Errorf("no sources: %s", b)
+	for _, params := range []json.RawMessage{nil, json.RawMessage(`{}`), json.RawMessage(`false`), json.RawMessage(`{"future_field":true}`)} {
+		out, handled, err := h.Request(t.Context(), devicewire.MethodUsageGatewayAccounts, params)
+		if err != nil || !handled {
+			t.Fatalf("params %s: handled %v, err %v", params, handled, err)
+		}
+		if raw, err := json.Marshal(out); err != nil || string(raw) != `{"sources":[],"accounts":[]}` {
+			t.Fatalf("params %s: no sources: %s, err %v", params, raw, err)
+		}
 	}
 }
 

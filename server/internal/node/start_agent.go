@@ -217,11 +217,17 @@ func (n *Node) startOtherAgent(ctx context.Context, launch host.Launcher, cwd, l
 				continue
 			}
 		}
-		if kind == traexAgent && resume != "" {
-			previous, _ := n.state.get(id)
-			model, effort = previous.Model, previous.ModelEffort
+		st := sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, StartedAt: time.Now().UTC()}
+		if resume != "" {
+			if previous, ok := n.state.get(id); ok {
+				if kind == traexAgent {
+					model, effort = previous.Model, previous.ModelEffort
+					st.Model, st.ModelEffort = model, effort
+				}
+				st.Cwd = keepSpaceCwd(previous.Cwd, st.Cwd)
+			}
 		}
-		n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, StartedAt: time.Now().UTC()})
+		n.putAgentState(ctx, launch, id, st)
 		if effort != "" {
 			n.noteModes(id, "", effort)
 		}

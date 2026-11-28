@@ -1885,7 +1885,11 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
     "tags": ["notes"],
     "packages": [
       {"platforms": ["linux-amd64", "linux-arm64"], "url": "dist/example-notes-1.2.0-linux.tar.gz", "sha256": "<64 hex chars>", "size": 123456},
-      {"url": "release:v1.2.0/example-notes-1.2.0.tar.gz", "sha256": "<64 hex chars>"}]}]}
+      {"url": "release:v1.2.0/example-notes-1.2.0.tar.gz", "sha256": "<64 hex chars>"}],
+    "releases": [
+      {"manifest": {"manifest_version": 1, "id": "example-notes", "name": "Example Notes", "version": "1.3.0",
+                    "engines": {"persona": ">=202611270000"}, "…": "…"},
+       "packages": [{"url": "release:v1.3.0/example-notes-1.3.0.tar.gz", "sha256": "<64 hex chars>"}]}]}]}
 ```
 
 - `manifest` is the extension's whole `persona-extension.json`: its permissions and contributions can be seen without downloading. The manifest in the downloaded package must match it (id, version, permission summary), otherwise it is not installed.
@@ -1898,7 +1902,11 @@ sent only as `Authorization: Bearer` to the marketplace's own origin (for a GitH
 - `downloads` (optional integer, #4780) is the package download count at the publisher's snapshot. The official publisher reports GHCR **Total downloads** across all versions of that package, not Persona installs or unique users. Explicit zero is retained; absent or negative counts are unknown, not zero in the UI. Top-level `downloads_updated_at` is the RFC 3339 snapshot timestamp (official publication uses UTC seconds); an invalid timestamp is omitted.
 - `packages` are searched in order for the first whose `platforms` includes this hub (`GOOS-GOARCH`); one without `platforms` counts as usable anywhere. `url` is a path relative to the index (for GitHub and git marketplaces, a path in the repo; git marketplaces cannot escape the repo through links),
   an HTTPS address, an immutable `oci:<registry>/<repository>@sha256:<64 lowercase hex>` reference, or for GitHub marketplaces `release:<tag>/<asset name>` (downloads the Release asset through the API; private repos work too). `sha256` is required and checked after download; on mismatch it is not installed.
-- Broken entries (invalid manifest, no packages, non-https address, the same id twice) are dropped with a warning and the rest work as usual; a whole index whose `market_version` is not 1 or that has no `name` is rejected.
+- `releases` (optional) adds up to 16 alternatives to the entry's top-level `manifest` and `packages`. Each alternative has a full `manifest` with the same extension ID and its own valid `packages`. An omitted release `l10n` inherits the top-level translations. A mismatched ID, invalid package declaration or excess release count rejects the entry.
+- The hub selects the highest semantic version that passes strict manifest validation and supports its build. It gives priority to versions that have a package for its platform. If no compatible version has a matching package, the highest compatible version is shown with the platform problem. Equal versions with equal platform support follow array order, with the top-level release considered last. Catalog display, install previews, bundle dependencies and automatic upgrades use the selected release.
+- If strict manifest parsing fails, the hub may extract bounded display metadata only from well-formed catalog JSON with a safe ID and version, and only when a valid `engines.persona` excludes the hub's positive build number. Compatible manifests, manifests without a range and development hubs (build zero) always require strict parsing. A malformed top-level manifest drops the entry; a strictly rejected alternative with matching ID and valid packages is skipped with a warning. When every valid release is blocked by the hub build, the highest version stays visible with a localized compatibility problem and has no installable package.
+- This is still `market_version: 1`. Earlier hubs ignore `releases` and use the top-level manifest and packages. Keep that version and its immutable archives compatible with the older hubs the marketplace supports. Include every alternative in the exact payload bytes covered by the existing signature.
+- Broken entries (invalid manifest, no packages, invalid package address, the same id twice) are dropped with a warning and the rest work as usual; a whole index whose `market_version` is not 1 or that has no `name` is rejected.
 - **What a failed read says** (#5597): an address that answers with something other than a catalog is reported as not an extension marketplace, never as "`market_version` 0": a web page (a repository's file page), JSON without `market_version` (a GitHub API or raw link to another file; a proxy's or sign-in page's own answer, whose `message` / `error` text is quoted), with the next step (`github:owner/repo`, the catalog file's own address, or the hub machine's network). A `market_version` above 1 asks for a newer hub. HTTP refusals say not found, sign-in or token needed, or rate limited with when to try again. All of it comes from the hub's catalogs (`extension-market_read`) in English, Chinese and Japanese. A market keeps the error and warnings of its last read with its record, in the language they were written in, and the market list renders them in the owner's language each time (`i18n.MarketText`); text a hub before #5597 stored stays as written until the next read.
   Limits: 4 MB per index, 500 extensions, 32 marketplaces per hub.
 
@@ -1934,6 +1942,8 @@ A GitHub marketplace can commit installable archives alongside its catalog: no R
 `CatalogItem`: `market`, `market_name`, `id`, `name` and `description` (in the request's language, from the entry's `l10n`), `version`, `publisher`, `homepage`, `tags`, `contributes` (extension point → id),
 `permissions` (a few human-readable lines, same as before install), `problem` (why it cannot be installed: no package for this hub's platform, needs a newer hub, bad marketplace signature, a source extension this hub can't run, see "Source runtime"), `installed` (installed version),
 `installed_source`, `from_this_market`, `upgradable`, and optional `icon_url`, `downloads`, `downloads_updated_at` (#4780).
+
+When a higher version needs a newer hub, the catalog also returns `latest_incompatible_version` and `latest_incompatible_reason` in the request's language. The active release and its `problem` describe what the hub can install today.
 
 The same three optional metadata fields appear on installed `ExtensionView` (`GET /api/v1/extensions`) and `ExtensionDetail`
 (`GET /api/v1/extensions/{id}/-/`), resolved from that installation's exact `market:<market id>/<extension id>` origin.
@@ -2017,6 +2027,8 @@ The only catalog file is `persona-extensions.json`. The official catalog embeds 
 ```
 
 The signature covers **the exact UTF-8 bytes of the JSON-decoded `payload` string**. Do not trim it, regenerate the index JSON or sign the outer JSON literal. Outer formatting may change; payload whitespace, newlines and non-ASCII text may not. Exact duplicate keys are rejected in every object; known protocol struct fields also reject noncanonical case and Unicode-fold aliases. Arbitrary maps such as configuration properties retain distinct `Foo` and `foo` keys. Signature objects use only `alg`, `key_id` and `sig`; unknown signature fields, malformed envelopes and invalid UTF-8 are refused. No adjacent signature file is fetched.
+
+The same key checks cover every release's manifest, packages and translation field. After verification, the hub binds its selected manifest, parsed projection, packages, translations and release list to the entry used for previews. A restart verifies the saved envelope and selects again for the current hub build.
 
 Only the official marketplace requires signature verification, using the compiled-in key rather than catalog-supplied keys. GitHub, git and direct HTTPS catalog aliases, token-bearing reads, manual re-registration and cached catalogs all use that gate. A failed signature blocks installation and upgrades, including the last good catalog and every bundle member. Only a catalog that was actually read counts: a missing envelope, a malformed one, a bad signature or another signer marks the market `invalid`. A read that gets no catalog (404, 401, another HTTP status, a timeout or network failure) records the error and changes nothing else: the last verified catalog and its `signed` state stay, and installs keep using it. The two are typed failures (`extension.ErrCatalogUnavailable`, `extension.ErrCatalogUnverified`), never told apart by message text; the refresh endpoint answers `market_unreachable` for the first and `market_signature` for the second, and a later network failure does not lift a quarantine. An official market cannot move to an unofficial address to bypass verification. Preview-time source and signing-key snapshots are checked again at commit.
 
@@ -2140,6 +2152,8 @@ understands. So before every automatic upgrade the hub keeps a snapshot of the e
 `upgrade` (when there is a new version: `{id, name, market, from, to, state, added_permissions?, detail?, rename_from?, rename_to?}`; `id` is the installed extension, and for a version that changes the ID `rename_to` is the ID its market lists it under, which the apps open and `personad extension upgrades` prints in its `install market:<market>/<id>` hint (#2511),
 where `state` is `available` installs at the next check / `waiting_idle` waiting for idle / `needs_permission` waiting for you to confirm / `off` switch is off, or the extension is disabled / `skipped` was rolled back / `failed` did not install / `incompatible` cannot be installed),
 and `upgrade_note` (`{kind: upgraded | rolled_back | needs_permission | failed, from, to, detail?, at}`).
+
+Automatic upgrades consider the selected release first. When it is already installed or older than the installed version, a newer release that needs an updated hub can appear as `incompatible` with a localized reason.
 
 **Endpoints** (full-access devices; only present when `features` includes `extension_auto_upgrade`):
 

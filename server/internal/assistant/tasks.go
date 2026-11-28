@@ -71,6 +71,7 @@ type PlanTask struct {
 	// at Start, and once more at admission from the folder that actually runs, saved with the admitted Cwd; never what
 	// a tool call or an edit says.
 	Repo              string                 `json:"repo,omitempty"`
+	WriteScope        *planWriteScope        `json:"write_scope,omitempty"` // the structured task_plan declaration, kept through owner approval
 	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
 	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
 	// Hub-owned identity for the default branch's preview, before a todo exists.
@@ -154,13 +155,14 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal               string   `json:"goal,omitempty"`
-	OutOfBounds        []string `json:"out_of_bounds,omitempty"`
-	Continues          string   `json:"continues,omitempty"`
-	ContinuesWhy       string   `json:"continues_why,omitempty"`
-	HandoffID          string   `json:"handoff_id,omitempty"`
-	HandoffOperationID string   `json:"handoff_operation_id,omitempty"`
-	ScopeRevision      string   `json:"scope_revision,omitempty"`
+	Goal               string             `json:"goal,omitempty"`
+	OutOfBounds        []string           `json:"out_of_bounds,omitempty"`
+	Continues          string             `json:"continues,omitempty"`
+	ContinuesWhy       string             `json:"continues_why,omitempty"`
+	HandoffID          string             `json:"handoff_id,omitempty"`
+	HandoffOperationID string             `json:"handoff_operation_id,omitempty"`
+	ScopeRevision      string             `json:"scope_revision,omitempty"`
+	DistinctFrom       []TaskDistinctFrom `json:"distinct_from,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
@@ -364,7 +366,7 @@ type tasksState struct {
 	// receipt is due when the task settles after working since the last one.
 	working      map[string]time.Time
 	receipted    map[string]time.Time
-	stageReplies map[SessionRef][2]string // task id and last snippet; unchanged list rows do not repeat stage work
+	stageReplies map[SessionRef][3]string // task id, last snippet and turn time; a new turn must recheck its evidence
 	// awaitingAnswer remembers a stopped status whose transcript still ends in a tool.
 	awaitingAnswer map[SessionRef]bool
 	// limitLooks: when a task agent's usage-limit wait is looked at again (taskTurnEndedAfter), one look per agent
@@ -412,8 +414,9 @@ type tasksState struct {
 	// planEdits: a plan's lock, by its id, while one of its started tasks changes (patchPlanTask; kept only while held or
 	// waited on, as a card's). The tasks are one blob that movePlan writes whole, so two tasks changing at once (their
 	// starts failing together) would each write back the other's old fields.
-	planEdits cardLocks
-	reviews   cardLocks
+	planEdits   cardLocks
+	reviews     cardLocks
+	writeScopes map[string]plannedWriteAssignment // by open task ID, guarded by mu
 	// trustMu serializes the read-modify-writes of tasks.trust (trustKinds, forgetTrust), so that two plans
 	// remembered at once, or a forget racing a remember, do not drop each other's kinds.
 	trustMu sync.Mutex
@@ -1051,6 +1054,9 @@ func (s *Service) aliasTaskWorktreeStatus(machine, srcDir, aliasDir string) {
 func (s *Service) resolveTaskRepo(ctx context.Context, t *PlanTask) {
 	dir := taskRunDir(*t)
 	t.Repo, t.repoOf = "", t.Machine+"\x00"+proto.NodeClean(dir)
+	if t.scratchWorkspace() {
+		return
+	}
 	st := t.cwdStatus
 	if st == nil || (!statusNames(*st, t.cwdStatusOf, t.repoOf) && (t.cwdStatusResolved == "" || t.cwdStatusResolved != t.repoOf)) {
 		ctx, cancel := context.WithTimeout(ctx, repoLookup)
