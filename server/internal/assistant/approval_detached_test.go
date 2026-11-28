@@ -19,6 +19,18 @@ type detachedTestResult struct {
 	err error
 }
 
+type relayWriteFailStore struct {
+	*fleetMem
+	fail atomic.Bool
+}
+
+func (s *relayWriteFailStore) PutSetting(ctx context.Context, key string, value any) error {
+	if key == relayKey && s.fail.Load() {
+		return errors.New("synthetic relay queue write failure")
+	}
+	return s.fleetMem.PutSetting(ctx, key, value)
+}
+
 // Detached transport fixtures exercise owner-only approval; internal command
 // routing has separate source and supervisor lifecycle regressions.
 func detachedTestCard(id string) proto.Interaction {
