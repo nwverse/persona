@@ -1072,11 +1072,14 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     expect(host.querySelector("[data-mock-detail-back]")).toBeNull();
 
     // Both sidebars are outside the measured host. The 1080px, 1200px and 1280px layouts leave 552px, 672px and 752px.
+    const detail = host.querySelector("[data-mock-integration-detail]");
+    expect(detail).not.toBeNull();
     for (const width of [552, 672, 739, 740, 752, 912]) {
       hostWidth = width;
       await act(async () => resized());
       expect(splitRegion.hasAttribute("data-integrations-split-host")).toBe(width >= 740);
       expect(!!host.querySelector("[data-integrations-detail-scroll]")).toBe(width >= 740);
+      expect(host.querySelector("[data-mock-integration-detail]")).toBe(detail);
     }
     hostWidth = 560;
 

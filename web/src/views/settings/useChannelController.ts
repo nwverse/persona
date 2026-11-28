@@ -113,12 +113,11 @@ export function useChannelController(channelId: string | null, manager?: string)
       const next = await save();
       if (next) forgetChannels();
       if (!current() || (next && next.id !== channelId)) return null;
-      if (next && n !== seq.current) {
-        // A refresh raced the write. Re-read its committed result without publishing the stale response.
-        void load();
-        return { snapshot: null };
+      if (next) {
+        // The response acknowledges a committed write. A read that overlapped it may have seen an older snapshot.
+        setDetail(next);
+        if (n !== seq.current) void load();
       }
-      if (next) setDetail(next);
       return { snapshot: next };
     } catch (error) {
       if (current()) throw error;

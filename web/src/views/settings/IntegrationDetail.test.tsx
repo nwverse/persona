@@ -17,6 +17,7 @@ import { setRoster } from "../../lib/managers";
 import { applyCompleteSessions } from "../../lib/store";
 import { FEATURES } from "./FeishuBot";
 import { IntegrationDetail, isIntegrationsV2Active, partitionExtensionFields } from "./IntegrationDetail";
+import { Integrations } from "./Integrations";
 
 vi.mock("../../ui/atoms", async (original) => ({
   ...(await original<typeof import("../../ui/atoms")>()),
@@ -676,14 +677,28 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     expect(onSettings).toHaveBeenCalledWith("settings/plugins/other");
   });
 
-  it("locks channel controls during a routing save and keeps the refreshed route after a late reply", async () => {
+  it("acknowledges a routing save and reconciles with a fresh read while an older refresh is pending", async () => {
     const fetchNow = fetch;
     let finishPut!: () => void;
+    let finishOldRead!: () => void;
+    let finishReconcile!: () => void;
+    let delayNextRead = false;
+    let delayReconcile = false;
     vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).endsWith("/channels/larkx_chat") && init?.method === "PUT") {
+      if (!String(input).endsWith("/channels/larkx_chat")) return fetchNow(input, init);
+      if (init?.method === "PUT") {
         return new Promise((resolve) => {
           finishPut = () => resolve(ok({ ...COMPOSITE_CHANNEL, thread_mode: "per_topic" }));
         });
+      }
+      if (delayNextRead) {
+        delayNextRead = false;
+        const stale = { ...currentChannels.larkx_chat };
+        return new Promise((resolve) => { finishOldRead = () => resolve(ok(stale)); });
+      }
+      if (delayReconcile) {
+        delayReconcile = false;
+        return new Promise((resolve) => { finishReconcile = () => resolve(ok(currentChannels.larkx_chat)); });
       }
       return fetchNow(input, init);
     });
@@ -694,18 +709,55 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
       (b) => b.textContent?.includes(label),
     )!;
     const enable = delivery.querySelector<HTMLButtonElement>('[role="switch"]')!;
-    await act(async () => option(t("settings-integrations.thread_mode_topic_title")).click());
+    const topic = t("settings-integrations.thread_mode_topic_title");
+    await act(async () => option(topic).click());
     expect(enable.disabled).toBe(true);
-    currentChannels.larkx_chat.thread_mode = "per_group_and_topic";
+    delayNextRead = true;
     const refresh = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("settings-integrations.refresh")}"]`)!;
     await act(async () => refresh.click());
-    await flush();
+    expect(option(topic).getAttribute("aria-checked")).toBe("true");
+
+    currentChannels.larkx_chat.thread_mode = "per_group_and_topic";
     const groupTopic = t("settings-integrations.thread_mode_group_topic_title");
-    expect(option(groupTopic).getAttribute("aria-checked")).toBe("true");
+    delayReconcile = true;
     await act(async () => finishPut());
-    await flush();
+
+    expect(delivery.textContent).toContain(t("settings-integrations.routing_saved"));
+    expect(option(topic).getAttribute("aria-checked")).toBe("true");
+    await act(async () => finishOldRead());
+    expect(option(topic).getAttribute("aria-checked")).toBe("true");
+    await act(async () => finishReconcile());
     expect(option(groupTopic).getAttribute("aria-checked")).toBe("true");
+    expect(delivery.textContent).not.toContain(t("settings-configuration.error_configuration_conflict"));
     expect(delivery.querySelector<HTMLButtonElement>('[role="switch"]')!.disabled).toBe(false);
+  });
+
+  it("keeps an unsaved channel routing field through refresh and switching between one and two columns", async () => {
+    const onOpen = vi.fn();
+    const draw = (wide: boolean) => act(async () => root.render(<Integrations open="ext:larkx" twoCol={wide} onOpen={onOpen} />));
+    await draw(true);
+    await act(async () => vi.dynamicImportSettled());
+
+    const field = () => host.querySelector<HTMLElement>('[data-configuration-field="thread_idle_hours"]')!;
+    const input = () => field().querySelector<HTMLInputElement>("input")!;
+    await act(async () => setInputValue(input(), "48"));
+    currentChannels.larkx_chat = { ...currentChannels.larkx_chat, thread_mode: "per_topic", thread_idle_hours: 24 };
+    const refresh = host.querySelector<HTMLButtonElement>(`[data-integration-detail] button[aria-label="${t("settings-integrations.refresh")}"]`)!;
+    await act(async () => refresh.click());
+
+    expect(input().value).toBe("48");
+    expect(section("channel")?.querySelector('[role="radio"][aria-checked="true"]')?.textContent)
+      .toContain(t("settings-integrations.thread_mode_topic_title"));
+    for (const wide of [false, true]) {
+      await draw(wide);
+      expect(input().value).toBe("48");
+      expect(!!host.querySelector("[data-integrations-split]")).toBe(wide);
+    }
+    const save = [...field().querySelectorAll("button")].find((b) => b.textContent === t("settings-configuration.save"))!;
+    await act(async () => save.click());
+    expect(requests.filter((r) => r.url.endsWith("/channels/larkx_chat") && r.method === "PUT").map((r) => r.body))
+      .toEqual([{ thread_idle_hours: 48 }]);
+    expect(currentChannels.larkx_chat).toMatchObject({ thread_idle_hours: 48, thread_mode: "per_topic" });
   });
 
   it("saves thread_mode and thread_idle_hours via PUT /api/v1/channels/{id} and sends test messages", async () => {

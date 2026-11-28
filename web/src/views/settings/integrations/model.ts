@@ -225,12 +225,13 @@ export function channelRoutingDocument(d: ChannelDetail, saved = false): Configu
  */
 export function channelRoutingSource(
   channelId: string,
-  reloadKey: number,
   getDetail: () => ChannelDetail,
   updateRouting: (body: Pick<ChannelUpdateBody, "thread_mode" | "thread_idle_hours">) => Promise<ChannelDetail | null>,
+  subscribe: ConfigurationSource["subscribe"],
 ): ConfigurationSource {
   return {
-    key: `integration:channel-routing:${channelId}:${reloadKey}`,
+    key: `integration:channel-routing:${channelId}`,
+    subscribe,
     read: async () => channelRoutingDocument(getDetail()),
     update: async (update) => {
       const current = getDetail();

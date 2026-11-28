@@ -841,42 +841,40 @@ function IntegrationsForManager({
     </Suspense>
   ) : null;
 
-  if (detailPane && !twoCol) {
-    return detailPane;
-  }
-
-  if (compactList && detailPane) {
+  if (detailPane) {
     return (
       <div
-        className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-        data-integrations-split=""
+        className={compactList ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden" : undefined}
+        data-integrations-split={compactList ? "" : undefined}
       >
-        <div
-          data-integrations-list
-          className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
-        >
+        {compactList && (
           <div
-            data-integrations-list-header
-            className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+            data-integrations-list
+            className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
           >
-            {listHeader}
-            {viewSwitch}
-            {filterBar}
+            <div
+              data-integrations-list-header
+              className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+            >
+              {listHeader}
+              {viewSwitch}
+              {filterBar}
+            </div>
+            <div
+              ref={listScrollRef}
+              data-integrations-list-scroll
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
+            >
+              {listBody}
+            </div>
           </div>
-          <div
-            ref={listScrollRef}
-            data-integrations-list-scroll
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
-          >
-            {listBody}
-          </div>
-        </div>
+        )}
         <div
           ref={detailScrollRef}
-          data-integrations-detail-scroll
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+          data-integrations-detail-scroll={compactList ? "" : undefined}
+          className={compactList ? "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain" : undefined}
         >
-          <div className="mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8">
+          <div className={compactList ? "mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8" : undefined}>
             {detailPane}
           </div>
         </div>
