@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -247,8 +248,9 @@ func TestQuietRemindNeverConstructsOwnerNotification(t *testing.T) {
 func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 	for _, terminal := range []string{"answer", "cancel", "expire"} {
 		t.Run(terminal, func(t *testing.T) {
+			ctx := t.Context()
 			e := newRouteEnv(t, nil, true)
-			if _, err := e.s.toolAskUser(context.Background(), "mac", "worker-1", json.RawMessage(`{"decision_scope":"internal","wait":false,"questions":[{"question":"Which shard after restart?","options":[{"label":"Affected"},{"label":"All"}]}]}`)); err != nil {
+			if _, err := e.s.toolAskUser(ctx, "mac", "worker-1", json.RawMessage(`{"decision_scope":"internal","wait":false,"questions":[{"question":"Which shard after restart?","options":[{"label":"Affected"},{"label":"All"}]}]}`)); err != nil {
 				t.Fatal(err)
 			}
 			qs := e.s.pendingQuestions()
@@ -258,39 +260,52 @@ func TestInternalAsyncQuestionRestoresFromDurableRecord(t *testing.T) {
 			ix := qs[0]
 			t.Cleanup(func() { _ = e.s.resolve(ix.ID, proto.Resolution{Cancel: true}) })
 			e.noticeWith("lead1", "interaction_id="+ix.ID)
-			// Restart from a durable snapshot, not two live managers writing the same fake store.
+			// Observing the send does not mean the durable queue head has left yet.
+			waitFor(t, "original supervisor wake durably dequeued", func() bool {
+				var state relayState
+				if found, err := e.st.Setting(ctx, relayKey, &state); err != nil || !found {
+					t.Fatalf("read persisted relay queue: found=%t, err=%v", found, err)
+				}
+				return !slices.ContainsFunc(state.Queue["lead1"], func(msg relayMsg) bool { return msg.Card == ix.ID })
+			})
+			// Use a separate store containing the settings and the pending interaction at restart.
 			restarted := newFleetMem()
-			values, err := e.st.SettingsPrefix(context.Background(), "")
+			values, err := e.st.SettingsPrefix(ctx, "")
 			if err != nil {
 				t.Fatal(err)
 			}
 			for key, raw := range values {
 				restarted.setRawSetting(key, raw)
 			}
-			rec, err := e.st.InteractionRecord(context.Background(), ix.ID)
+			rec, err := e.st.InteractionRecord(ctx, ix.ID)
 			if err != nil || rec == nil || rec.Status != "pending" || !rec.Interaction.Resumable {
 				t.Fatalf("source question was not durable: %+v, %v", rec, err)
 			}
-			if err := restarted.InsertInteraction(context.Background(), rec.Interaction); err != nil {
+			if err := restarted.InsertInteraction(ctx, rec.Interaction); err != nil {
 				t.Fatal(err)
 			}
-			next := newRouteEnv(t, restarted, true)
-			next.s.loadAskLater(context.Background())
-			next.s.publish(context.Background())
+			next := &routeEnv{fleetTest: newFleetTestOn(t, &restoreMem{restarted})}
+			noDirectionsTimers(next.s)
+			next.f.withMachine()
+			next.f.known["conv1"], next.f.known["lead1"] = true, true
+			next.d.add("server", "Server")
+			for _, machine := range []string{"server", "mac"} {
+				list, _ := e.d.Sessions(machine)
+				next.d.setSessions(machine, list)
+				next.f.setSessions(machine, list...)
+			}
+			// fleetMem keeps to-dos in memory. Seed the existing task and its worker links before
+			// recovery, when a real manager can already read them from the database.
+			putTodo(next.s, todoNow(e.s, e.todo.ID))
+			next.s.restoreInteractions(ctx)
+			next.s.loadAskLater(ctx)
+			next.s.publish(ctx)
 			waitFor(t, "durable internal question restored", func() bool {
+				qs := next.s.pendingQuestions()
 				p, ok := next.s.pendingIx(ix.ID)
-				return ok && next.s.internalCard(p)
+				return len(qs) == 1 && qs[0].ID == ix.ID && qs[0].Resumable && ok && next.s.internalCard(p)
 			})
-			// Run the normal recovery tick: the durable queue may still contain the pre-crash relay head.
-			waitFor(t, "restored supervisor awakened", func() bool {
-				next.s.drainHeldRelays(context.Background(), time.Now())
-				for _, notice := range next.f.noticesTo("lead1") {
-					if strings.Contains(notice, "interaction_id="+ix.ID) {
-						return true
-					}
-				}
-				return false
-			})
+			next.noticeWith("lead1", "interaction_id="+ix.ID)
 			r := proto.Resolution{Answers: map[string]string{"Which shard after restart?": "Affected"}, AnsweredBy: proto.AnsweredByAssistant}
 			if terminal == "cancel" {
 				r = proto.Resolution{Cancel: true}
