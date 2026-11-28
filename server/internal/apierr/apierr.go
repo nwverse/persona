@@ -520,6 +520,10 @@ var openElsewhereKeys = map[string]string{
 var notDeliveredKeys = map[string]string{
 	"terminal_refused":  "rpc-errors.not_delivered",
 	"terminal_finished": "rpc-errors.not_delivered_finished",
+	// botmux's 403 on a send as the owner (node/sendsafe.go botmuxOwnerRefusedError).
+	"botmux_owner_unresolved": "rpc-errors.not_delivered_botmux_owner_unresolved",
+	"botmux_owner_mismatch":   "rpc-errors.not_delivered_botmux_owner_mismatch",
+	"botmux_owner_refused":    "rpc-errors.not_delivered_botmux_owner_refused",
 }
 
 func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {

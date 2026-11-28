@@ -3837,6 +3837,20 @@ shared display preference. Saving uses the acknowledged server value with local
 pending feedback and recoverable errors. The per-computer switch still controls
 inventory, and hidden rows remain usable for to-do attribution and dispatch.
 
+While it is on, **BotMux Owner Union ID** sits under it (lazy-loaded
+`views/settings/BotmuxOwnerField.tsx`, so neither the field nor its words reach
+the first screen): a text field with Save and Clear, saved as the hub-wide
+`botmux_owner_union_id` and checked as a union_id (`on_…`) before it is sent.
+Filled in, the computers' botmux sends go as the bot's owner; empty, they go the
+usual way. A union_id found in the computers' bots.json
+(`GET /api/v1/agents/botmux-owner-candidates`) is offered as **Use suggestion**,
+which only fills the field; nothing changes until Save. A hub without the field
+shows neither. Under the composer, `botmux_external_trigger_reason:
+"owner_unset"` reads as one quiet line saying no BotMux Owner Union ID is set
+(`AgentStatusLine`); botmux's 403 refusals arrive as the hub's worded send
+error. The botmux chip's decoded / raw modes do not depend on it
+([protocol.md](../protocol/protocol.md), "BotMux messages").
+
 ### herdr tab names in Agents
 
 **Use the herdr tab name as the session name** in Settings › Agents defaults

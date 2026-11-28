@@ -7230,10 +7230,32 @@ replies also appear in `fold.botmux`).
 **Version probe and sending (`botmux_external_trigger`).** The node probes capabilities through the read-only `GET /api/sessions/:id/turns` endpoint
 and caches the result per botmux instance (invalidated on dashboard restart, token rotation, or CLI binary upgrade). Session listing starts a
 background probe when capabilities are unknown or expired, keeping the last known result for that instance until the probe succeeds. It never probes with a real
-message and never retries a delivered turn. When `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` with
-`target.kind: "turn"`, `botId`, and `sessionId` (omitting `envelope.payload` and `envelope.rawText`), and verifies the echoed `actor: "owner"` in the
-response. On older botmux instances (below 3.59.23, `404` or `ownerActor` absent), sends use the external-event trigger and the session row sets
-`botmux_external_trigger: true` so clients show a one-line upgrade notice (`3.59.23+`) in the composer.
+message and never retries a delivered turn. Whether a send goes as the bot's owner depends on the **BotMux Owner Union ID** (Settings › Agents,
+`botmux_owner_union_id` in "Agents display settings", handed to every node with `node.configure`):
+
+| BotMux Owner Union ID | `capabilities` | `POST /api/trigger` | Session row |
+| --- | --- | --- | --- |
+| empty | any | the external-event trigger, no `actor` | `botmux_external_trigger: true`, `botmux_external_trigger_reason: "owner_unset"` once probed with `ownerActor` |
+| `on_…` | `ownerActor` and `ownerUnionId` | top-level `actor: "owner"` and `actorUnionId: "<on_…>"` | — |
+| `on_…` | `ownerActor` only | top-level `actor: "owner"` (no `actorUnionId`: that botmux would refuse the unknown field) | — |
+| any | neither (below 3.59.23, or `404`) | the external-event trigger | `botmux_external_trigger: true`, `botmux_external_trigger_reason: "upgrade"` |
+
+An owner send carries `target.kind: "turn"`, `botId` and `sessionId` (omitting `envelope.payload` and `envelope.rawText`) and verifies the echoed
+`actor: "owner"` in the response; an instance that does not echo it is never resent to and is treated as without `ownerActor` until re-probed.
+Clients show the reason as a one-line composer notice: `owner_unset` says no BotMux Owner Union ID is set and messages go the usual way; `upgrade`
+(or no reason, from an older node) recommends botmux `3.59.23+`. Decoding and the botmux display chip do not depend on the setting.
+
+botmux answers an owner it will not take with `403 {"ok":false,"error":"owner_unresolved"}` (several `allowedUsers` and no `ownerUnionId`) or
+`owner_mismatch` (the `actorUnionId` is not the bot's owner). Neither is a stale dashboard token: the node does not refresh the token or retry, and
+refuses the send with `not_delivered`, `delivered: "none"` and `reason` `botmux_owner_unresolved`, `botmux_owner_mismatch` (or
+`botmux_owner_refused` for another `owner_…` code), which the hub words as `rpc-errors.not_delivered_<reason>` in the viewer's language instead of
+the generic "the terminal didn't accept this message". A `403` without an `owner_…` code is still a stale token, refreshed and tried once more.
+
+**BotMux Owner Union ID suggestions.** `botmux.owner_candidates` (manager → node, no params) reads the bots.json botmux loads (`BOTS_CONFIG`, else
+`~/.botmux/bots.json`, at most 8 MiB) without changing it and answers `{candidates: [{union_id, bots, sole}]}`: each bot's `ownerUnionId` and the
+`on_…` entries of its `allowedUsers`, deduplicated, with how many bots name each id and how many name it as their only person (`ownerUnionId`, or
+an `allowedUsers` of just that id), at most 8, those first. Only fields that are union_ids are decoded and returned: never secrets, tokens, open_ids,
+e-mail addresses or the path. A node without botmux answers an empty list; an older node, an unknown-method error.
 
 **Wrapper fallback rules** (checked against botmux 3.59.6 through 3.59.20):
 
@@ -7285,15 +7307,16 @@ in-flight command remains unknown until its execution can be established; it is 
 ## Agents display settings
 
 The default manager keeps the paired hub's `agents.show_botmux`,
-`agents.use_herdr_tab_name`, `agents.sort_by_activity` and `agents.show_filter` booleans in its
-existing settings store, following the Agents triage route's ownership and role
+`agents.use_herdr_tab_name`, `agents.sort_by_activity` and `agents.show_filter` booleans and the
+`agents.botmux_owner_union_id` string in its existing settings store, following the Agents triage route's ownership and role
 checks. These are authenticated routes relayed by the hub; clients do not select
 another manager for this shared preference.
 
 | Method | Path | Response / request |
 | --- | --- | --- |
-| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false, sort_by_activity: false, show_filter: false}`. `configured` reports whether `show_botmux` was saved. `sort_by_activity` and `show_filter` are the effective values: the saved choice (either way), else `agents.sort_by_activity` / `agents.show_filter` in the manager's `manager.json` (see [config.md](../operations/config.md)), else `false`; an older hub omits them and a client then hides the switches. Authenticated answer-only devices may read. |
-| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send exactly one of `{show_botmux: boolean}`, `{use_herdr_tab_name: boolean}`, `{sort_by_activity: boolean}` or `{show_filter: boolean}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. Returns the current settings, including when another writer won. |
+| GET | `/api/v1/agents/display-settings` | Defaults to `{show_botmux: true, configured: false, use_herdr_tab_name: false, sort_by_activity: false, show_filter: false, botmux_owner_union_id: ""}`. `botmux_owner_union_id` is the BotMux Owner Union ID (`""` for none; absent from an older hub, where clients hide the field). `configured` reports whether `show_botmux` was saved. `sort_by_activity` and `show_filter` are the effective values: the saved choice (either way), else `agents.sort_by_activity` / `agents.show_filter` in the manager's `manager.json` (see [config.md](../operations/config.md)), else `false`; an older hub omits them and a client then hides the switches. Authenticated answer-only devices may read. |
+| PUT | `/api/v1/agents/display-settings` | Full access only (403 otherwise). Send exactly one of `{show_botmux: boolean}`, `{use_herdr_tab_name: boolean}`, `{sort_by_activity: boolean}`, `{show_filter: boolean}` or `{botmux_owner_union_id: string}`. For `show_botmux`, optional `only_if_unset: true` uses an atomic insert without updating an existing key. `botmux_owner_union_id` is trimmed and must match `^on_[A-Za-z0-9_-]+$` (at most 128 bytes) or be `""` to clear it (400 otherwise); a save hands it to every computer online with `node.configure {"botmux_owner_union_id"}`, and each new connection gets it too (another manager's computers read it from the default manager through `agents.display.get` and get it when they next connect; a failed read hands nothing, so a node keeps what it has). Returns the current settings, including when another writer won. |
+| GET | `/api/v1/agents/botmux-owner-candidates` | Full access only (403 otherwise). `{candidates: [{union_id, bots, sole, machines}]}`: what the computers online found in their botmux's bots.json (`botmux.owner_candidates`, read-only), merged and sorted with ids bots name as their only person first, at most 8; a computer that does not answer within 3 s, or whose node predates the method, adds nothing. Suggestions only: nothing is saved until a client PUTs `botmux_owner_union_id`. |
 
 Invalid or missing booleans return 400; unavailable storage or failed reads/writes
 return 503, never a default presented as a successful save. The conditional

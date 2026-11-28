@@ -1529,6 +1529,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// PendingInteractionSessions: session IDs on this machine currently holding pending hub interaction cards
 			// (ask_user / approval), so idle auto-compaction does not compact sessions waiting on the user.
 			PendingInteractionSessions *[]string `json:"pending_interaction_sessions"`
+			// BotmuxOwnerUnionID: the BotMux Owner Union ID of Settings › Agents (hostbotmux_owner.go), "" for none;
+			// nil (an older hub, a call that says nothing of it) leaves it as it is.
+			BotmuxOwnerUnionID *string `json:"botmux_owner_union_id"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -1546,7 +1549,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
-		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil) { // partial updates leave the directories
+		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil && c.BotmuxOwnerUnionID == nil) { // partial updates leave the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {
@@ -1567,6 +1570,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.Botmux != nil {
 			n.useBotmux(*c.Botmux, false)
+		}
+		if c.BotmuxOwnerUnionID != nil {
+			n.setBotmuxOwner(*c.BotmuxOwnerUnionID)
 		}
 		if c.ClaudeStartDir != nil {
 			d := strings.TrimSpace(*c.ClaudeStartDir)
