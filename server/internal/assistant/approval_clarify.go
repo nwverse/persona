@@ -254,6 +254,39 @@ func (s *Service) startPreparedTimer(p *pending) {
 	}
 }
 
+// startRecoveredWaitingTimer arms the durable decision deadline for a detached
+// approval reconstructed directly into its clarified, released waiting phase
+// after a manager restart. startPreparedTimer owns only the initial
+// pre-clarification window and returns early once clarified; in a live card
+// detachPreparedGen arms this deadline after persisting the extended ExpiresAt.
+// Recovery reconstructs that same state without running detach, so it arms the
+// remaining time itself. The absolute deadline is never extended here.
+func (s *Service) startRecoveredWaitingTimer(p *pending) {
+	s.fleet.mu.Lock()
+	a := p.prepared
+	if a == nil || a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p || !a.waiting {
+		s.fleet.mu.Unlock()
+		return
+	}
+	if !p.ix.ExpiresAt.IsZero() {
+		a.decisionDeadline = p.ix.ExpiresAt
+	}
+	if a.decisionDeadline.IsZero() {
+		s.fleet.mu.Unlock()
+		return
+	}
+	if a.decisionTimer != nil {
+		a.decisionTimer.Stop()
+	}
+	a.decisionGen++
+	gen := a.decisionGen
+	wait := max(0, time.Until(a.decisionDeadline))
+	a.decisionTimer = time.AfterFunc(wait, func() {
+		s.expirePreparedGen(p, gen)
+	})
+	s.fleet.mu.Unlock()
+}
+
 func (s *Service) expirePrepared(p *pending) {
 	s.fleet.mu.Lock()
 	var gen uint64

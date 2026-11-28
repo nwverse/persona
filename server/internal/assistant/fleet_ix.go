@@ -583,10 +583,12 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 				s.fleet.mu.Unlock()
 				return proto.Resolution{}, fmt.Errorf("%w: %s", errInteractionIDReused, ix.ID)
 			}
-			if p.prepared == nil && recovered != nil {
+			if p.prepared == nil && recovered != nil && !unfinishedDetachedJournal(*recovered) {
 				// A restored process has no executable operation. Close a journaled
 				// occurrence before its replay can attach an ordinary waiter and
 				// before an owner answer can turn recovery into an execution Allow.
+				// An unanswered digest-bound detachable approval is the exception:
+				// it stays pending and reconnects to its exact-input continuation.
 				s.fleet.mu.Unlock()
 				releaseAdmission()
 				if err := s.finishRecoveredApproval(*recovered); err != nil {
@@ -612,18 +614,27 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 				p.ix.NoHandBack = true
 				upgradedNoHandBack = true
 			}
-			if p.prepared != nil {
-				// The reconnecting hook is now the caller whose lifetime governs the
-				// initial wait. The disconnected context must not expire a card its
-				// resumable request has already reclaimed.
-				p.prepared.caller = ctx
-			} else if prepared != nil && !p.claimed {
-				// A card restored from Postgres after a manager restart has p.prepared == nil
-				// until its still-running hook reconnects with the prepared coordinator (#12918).
-				p.prepared = prepared
-				p.ix.CanClarify = true
-				if p.prepared.decisionDeadline.IsZero() {
-					p.prepared.decisionDeadline = p.ix.ExpiresAt
+			// A restart-recovered detachable card is already in its released,
+			// unanswered waiting phase and owns a gen-guarded deadline timer. A
+			// reconnecting replay keeps that coordinator: replacing it would orphan
+			// its timer generation, and rebinding its caller would attach the
+			// replay request's lifetime to a card whose original caller returned.
+			recoveredWaiting := p.prepared != nil && p.prepared.waiting
+			if !recoveredWaiting {
+				if p.prepared != nil {
+					// The reconnecting hook is now the caller whose lifetime governs the
+					// initial wait. The disconnected context must not expire a card its
+					// resumable request has already reclaimed.
+					p.prepared.caller = ctx
+				} else if prepared != nil && !p.claimed {
+					// A card restored from Postgres after a manager restart has p.prepared == nil
+					// until its still-running hook reconnects with the prepared coordinator (#12918).
+					p.prepared = prepared
+					p.ix.CanClarify = true
+					if p.prepared.decisionDeadline.IsZero() {
+						p.prepared.decisionDeadline = p.ix.ExpiresAt
+					}
+					recoveredWaiting = prepared.waiting
 				}
 			}
 			if p.graceEnded {
@@ -658,6 +669,11 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 			}
 			if restartPrepared {
 				s.startPreparedTimer(p)
+			}
+			if recoveredWaiting {
+				// The coordinator was reconstructed directly into its clarified,
+				// released phase, which startPreparedTimer does not arm.
+				s.startRecoveredWaitingTimer(p)
 			}
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
@@ -2529,6 +2545,19 @@ func (s *Service) restoreInteractionSnapshots(ctx context.Context, store Store, 
 	var back, retry []proto.Interaction
 	for _, ix := range snapshot {
 		releaseAdmission := s.lockInteractionAdmission(ix.ID)
+		var pendingJournal *approvalJournalEntry
+		if ix.Detachable && ix.Resumable {
+			entry, found, readErr := s.approvalJournalRecord(ctx, ix)
+			if readErr != nil {
+				retry = append(retry, ix)
+				s.logf("read restored approval journal %s: %v", ix.ID, readErr)
+				releaseAdmission()
+				continue
+			}
+			if found && unfinishedDetachedJournal(entry) {
+				pendingJournal = &entry
+			}
+		}
 		s.fleet.mu.Lock()
 		m := s.ixMapLocked()
 		if m[ix.ID] != nil {
@@ -2546,14 +2575,31 @@ func (s *Service) restoreInteractionSnapshots(ctx context.Context, store Store, 
 			releaseAdmission()
 			continue
 		}
+		var restoredWaiting *pending
 		if rec != nil && rec.Status == "pending" && sameDurableApprovalOccurrence(ix, rec.Interaction) {
-			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
+			card := ix
+			waiting := pendingJournal != nil && rec.Interaction.Detachable && rec.Interaction.Resumable &&
+				approvalJournalMatches(*pendingJournal, rec.Interaction)
+			if waiting {
+				// Reconnect the complete exact call and its persisted decision
+				// deadline. A list/tombstone interaction must never become the card.
+				card = rec.Interaction
+			}
+			p := &pending{ix: card, done: make(chan proto.Resolution, 1)} // not told: whether it rang is not kept
 			m[ix.ID] = p
-			s.orphanLocked(p)
-			back = append(back, ix)
+			if waiting {
+				p.prepared = s.recoveredDetachedApprovalState(card)
+				restoredWaiting = p
+			} else {
+				s.orphanLocked(p)
+			}
+			back = append(back, card)
 		}
 		s.fleet.mu.Unlock()
 		releaseAdmission()
+		if restoredWaiting != nil {
+			s.startRecoveredWaitingTimer(restoredWaiting)
+		}
 	}
 	var unrouted []proto.Interaction
 	for _, ix := range back {
