@@ -486,6 +486,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.todoReadyTold(ctx, holds)
 		s.prMergeWakeTold(ctx, holds)
 		s.parentCloseoutTold(ctx, holds)
+		s.topicFollowupsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // said the same within the window: told
 		s.finishFailedStartBatches(ctx, to, nil, holds, now)
 		b.mu.Lock()
@@ -541,6 +542,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 		s.todoReadyTold(ctx, kept)
 		s.prMergeWakeTold(ctx, kept)
 		s.parentCloseoutTold(ctx, kept)
+		s.topicFollowupsTold(ctx, holds)
 		s.turnsTold(ctx, holds) // and how a turn ended: kept went, the rest of them was said the same within the window
 		s.finishFailedStartBatches(ctx, to, kept, settled, now)
 	}()
@@ -669,7 +671,7 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // supervisionSignalNeedsRevalidation reports whether an untried signal must stay in pending for delivery-time
 // revalidation rather than being persisted into a rendered queued relay.
 func supervisionSignalNeedsRevalidation(g superviseSignal) bool {
-	return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
+	return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply || g.Kind == sigTopicFollowup ||
 		g.Kind == sigNeedsUserExternalInfo && g.PREventID != "" ||
 		g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 }
@@ -826,6 +828,8 @@ func (s *Service) digestEntryChecked(ctx context.Context, g superviseSignal, web
 		return s.prMergedDigestEntry(ctx, g, web)
 	case sigParentCloseout:
 		return s.parentCloseoutDigestEntry(ctx, g, web)
+	case sigTopicFollowup:
+		return s.topicFollowupDigestEntry(ctx, g, web)
 	case sigCardlessWait:
 		// P1-1: an unreadable acceptance book is not evidence of no card — restore and retry before any claim logic.
 		if s.cardlessDigestShouldRetry(g) {
@@ -904,6 +908,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 		return e, ok
 	}
 	switch g.Kind {
+	case sigTopicFollowup:
+		e, ok, _ := s.topicFollowupDigestEntry(ctx, g, web)
+		return e, ok
 	case sigTodoReady:
 		e, ok, _ := s.todoReadyDigestEntry(ctx, g, web)
 		return e, ok

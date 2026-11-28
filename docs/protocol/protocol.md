@@ -5501,6 +5501,14 @@ The assistant's dedicated one-way events `kb.changed {kind,id,what}` and `kb.for
   observation time; no conversation bodies or credentials). It is manager-internal, read-only, bounded, and fails closed
   on missing source identity; older managers not implementing it leave the wait parked. It does not send, mark read,
   record an owner decision or guarantee Agent delivery.
+  `connectors.lark_topic` reuses that configured reader for human activity in an already linked task topic (#9763):
+  `connectorwire.LarkTopicWatch` (chat/topic, cutoff and optional previously checked app/account identity) returns
+  `connectorwire.LarkTopicObservation` (echoed scope and cutoff, checked identity, human message identity/time receipts,
+  observation time; no bodies). Only an initial empty identity binds the configured signed-in source; later reads
+  require the same identity before and after pagination. The bounded newest-first scan stops at the saved cutoff;
+  a legacy first look establishes a baseline rather than replaying history. This manager-internal read cannot send,
+  mark read, record a decision, or authorize task work. The existing binding's internal checkpoint and Agent/supervisor
+  handoff are documented in `docs/assistant/todos.md` ("Replies in the thread").
   When `app.call` carries `timeout_ms` (how long the assistant waits this time), the hub also stops at that time (for example, one model call).
   The same day the knowledge base moved into the assistant (`assistantwire/kb.go`): `app.call`'s `kb.status`, `kb.prompt`, `kb.dirs`, `kb.search`, `kb.list`, `kb.get`, `kb.update` were removed, and the knowledge base sources were added:
   `connectors.archives {}` → `{archives:[{id,poll_ms?,sources?,media?}],items:[id]}`, `connectors.changes {id,cursor,limit}` → `{batches,next,more?}`,

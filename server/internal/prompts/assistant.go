@@ -927,6 +927,12 @@ type InboxToAgent struct {
 // RenderInboxToAgent is that note.
 func RenderInboxToAgent(d InboxToAgent) string { return render("assistant/inbox_to_agent", d) }
 
+type TopicFollowup struct {
+	URL, Message, Sender, At, Delivery string
+}
+
+func RenderTopicFollowup(d TopicFollowup) string { return render("assistant/topic_followup", d) }
+
 // SuperviseParked is what a task was parked for (task_review parked), as its parked_due entry repeats it: the reason,
 // what kind of thing it waits on, until when (local), how many times in a row it was parked with no agent turn in
 // between, and how many more times it can be.

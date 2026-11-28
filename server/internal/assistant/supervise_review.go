@@ -1159,16 +1159,16 @@ func pickTaskAgent(agents []proto.Session) proto.Session {
 // (routedFromAssistant); an agent closed after a stretch of work is resumed first (that can take minutes: it goes on in
 // the background). What it says about it: "sent to the agent" or "being sent".
 func (s *Service) sendToTask(ctx context.Context, t Todo, text string) (string, error) {
-	return s.sendTaskInput(ctx, t, text, false, nil, true)
+	return s.sendTaskInput(ctx, t, text, false, nil, true, nil)
 }
 
 // sendToTaskAs is sendToTask; with wait, a closed agent's resume and send is waited for too (up to 5 minutes), so the
 // caller learns whether the text reached it (inboxToAgent, #7346). It is a relay, not rework, and never resumes a stopped Agent.
 func (s *Service) sendToTaskAs(ctx context.Context, t Todo, text string, wait bool) (string, error) {
-	return s.sendTaskInput(ctx, t, text, wait, nil, false)
+	return s.sendTaskInput(ctx, t, text, wait, nil, false, nil)
 }
 
-func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait bool, event *taskInboxEvent, rework bool) (string, error) {
+func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait bool, event *taskInboxEvent, rework bool, beforeSend func(context.Context) error) (string, error) {
 	agents := s.taskAgents(ctx, t)
 	if len(agents) == 0 {
 		return "", errors.New("the task has no agent")
@@ -1214,6 +1214,11 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 		if cur.DoneAt != nil || cur.ReopenedAt != nil && (t.ReopenedAt == nil || !cur.ReopenedAt.Equal(*t.ReopenedAt)) {
 			return db.ErrTodoCompleted
 		}
+		if beforeSend != nil {
+			if err := beforeSend(ctx); err != nil {
+				return err
+			}
+		}
 		if event != nil {
 			if !event.Retried {
 				event.Machine, event.Session = c.MachineID, c.SessionID
@@ -1237,6 +1242,13 @@ func (s *Service) sendTaskInput(ctx context.Context, t Todo, text string, wait b
 			return nil
 		}
 		return err
+	}
+	if beforeSend != nil {
+		// A bounded source sweep must keep its deadline even if the session needs to resume.
+		if err := send(ctx); err != nil {
+			return "", err
+		}
+		return "sent to the agent", nil
 	}
 	if c.Status == proto.StatusOffline && wait {
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
