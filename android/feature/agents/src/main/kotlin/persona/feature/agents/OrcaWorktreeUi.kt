@@ -52,7 +52,7 @@ import persona.core.designsystem.JSpinner
 import persona.core.designsystem.JTextButton
 import persona.core.designsystem.JTextField
 import persona.core.designsystem.LocalAppFeedback
-import persona.core.designsystem.PersonaIcons
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.UiText

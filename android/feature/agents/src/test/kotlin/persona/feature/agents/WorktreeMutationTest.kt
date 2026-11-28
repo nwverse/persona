@@ -36,7 +36,7 @@ class WorktreeMutationTest {
         // Without full-device access nothing is sent, and the reason is said.
         access = WorktreeAccess.ReadOnly
         mutation.rename("Third")
-        assertEquals(3, api.calls.size)
+        assertEquals(2, api.calls.size)
         assertEquals(R.string.agents_worktree_read_only, (mutation.state.value.error as UiText.Res).id)
     }
 

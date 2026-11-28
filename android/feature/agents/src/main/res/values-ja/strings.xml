@@ -788,7 +788,6 @@
     <string name="agents_worktree_done">完了</string>
     <string name="agents_worktree_repo_on_branch">%1$s · 現在のブランチ %2$s</string>
     <string name="agents_worktree_repo_detached">%1$s · どのブランチにも属していません</string>
-    <string name="agents_worktree_branch">ブランチ</string>
     <string name="agents_worktree_branch_placeholder">新しいブランチ名、または既存のローカルブランチ</string>
     <string name="agents_worktree_path">チェックアウト先</string>
     <string name="agents_worktree_path_hint">ブランチ名に合わせて自動入力されます。編集すると止まり、空にすると再び合わせます</string>

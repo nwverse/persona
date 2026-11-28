@@ -818,7 +818,6 @@
     <string name="agents_worktree_done">Done</string>
     <string name="agents_worktree_repo_on_branch">%1$s · On branch %2$s</string>
     <string name="agents_worktree_repo_detached">%1$s · Not on any branch</string>
-    <string name="agents_worktree_branch">Branch</string>
     <string name="agents_worktree_branch_placeholder">New branch name, or an existing local branch</string>
     <string name="agents_worktree_path">Checkout path</string>
     <string name="agents_worktree_path_hint">Follows the branch name until you edit it; clear it to follow again</string>

@@ -106,7 +106,7 @@ internal class WorktreeMutation(
     private fun matches(info: WorktreeDeletionPreview): Boolean =
         info.workspaceId == target.workspaceId && info.kind == target.kind && info.hostId == "local" && info.instanceId.isNotBlank() &&
             !info.closeOnly && info.previewToken.isNotBlank() && info.path == target.cwd && info.branch != null &&
-            info.folder != null && info.dirty != null && info.dirty >= 0
+            info.folder != null && (info.dirty ?: -1) >= 0
 
     /**
      * Deletes what the preview showed. Uncommitted changes are deleted only with [discardChanges]; the branch only with
