@@ -133,6 +133,7 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 	}
 	var p struct {
 		SessionID       string                           `json:"session_id"`
+		Cwd             string                           `json:"cwd"`
 		RecoveryID      string                           `json:"recovery_id"`
 		RecoveryOnly    bool                             `json:"recovery_only"`
 		PrepareRecovery bool                             `json:"prepare_recovery"`
@@ -140,13 +141,19 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 		Ack             []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
-	case assistantwire.MethodDecisionRaise:
-		var p struct {
-			Decision assistantwire.OutsideDecisionRequest `json:"decision"`
-			Source   string                               `json:"source"`
-		}
+	case assistantwire.DecisionRaiseMethod.Name:
+		var p assistantwire.OutsideDecisionRaiseParams
 		if err := json.Unmarshal(params, &p); err != nil {
-			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: err.Error()}, true, nil
+			// The legacy decoder ignored cwd and used its original shape in JSON type errors.
+			type legacyRaiseJSON = struct {
+				Decision assistantwire.OutsideDecisionRequest `json:"decision"`
+				Source   string                               `json:"source"`
+			}
+			var legacy legacyRaiseJSON
+			if err := json.Unmarshal(params, &legacy); err != nil {
+				return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: err.Error()}, true, nil
+			}
+			p.Decision, p.Source = legacy.Decision, legacy.Source
 		}
 		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: p.Source}
 		rec, inserted, err := s.raiseOutsideDecision(ctx, caller, p.Decision)
@@ -154,20 +161,18 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 			return outsideErrorReply(err), true, nil
 		}
 		return outsideReply(rec, inserted), true, nil
-	case assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
-		var p struct {
-			ID string `json:"id"`
-		}
+	case assistantwire.DecisionGetMethod.Name, assistantwire.DecisionWithdrawMethod.Name:
+		var p assistantwire.OutsideDecisionIDParams
 		if err := json.Unmarshal(params, &p); err != nil || p.ID == "" {
 			return assistantwire.OutsideDecisionReply{Code: "invalid_decision", Error: "a decision id is required"}, true, nil
 		}
 		caller := &outsideCaller{key: "node:" + machine, kind: "script", name: machine}
 		var rec *outsideDecision
 		var err error
-		if method == assistantwire.MethodDecisionGet {
-			rec, err = s.outsideForCaller(ctx, caller, p.ID)
+		if method == assistantwire.DecisionGetMethod.Name {
+			rec, err = s.outsideForCaller(ctx, caller, string(p.ID))
 		} else {
-			rec, err = s.withdrawOutsideDecision(ctx, caller, p.ID)
+			rec, err = s.withdrawOutsideDecision(ctx, caller, string(p.ID))
 		}
 		if err != nil {
 			return outsideErrorReply(err), true, nil
@@ -202,7 +207,7 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 		if !s.assistantCaller(ctx, machine, p.SessionID) {
 			return ContextResult{}, true, nil
 		}
-		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery, Query: p.Query}), true, nil
+		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Cwd: p.Cwd, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery, Query: p.Query}), true, nil
 	}
 	return nil, false, nil
 }

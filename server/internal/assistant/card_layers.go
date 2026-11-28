@@ -235,7 +235,12 @@ func ownCardSource(ix proto.Interaction) string {
 	case secretOrForm(ix):
 		return cardSecretForm
 	case ix.ToolName == "ask_user":
+		if src := questionOwnerSource(ix); src != "" {
+			return src
+		}
 		return cardAskUser
+	case hubCardSource(ix) != "":
+		return hubCardSource(ix)
 	case ix.Kind == proto.IxPermission:
 		return cardToolPermission
 	}
@@ -288,6 +293,9 @@ func (s *Service) inputCardSourceWithWhy(ix proto.Interaction, escalated bool, w
 		return v.(string)
 	}
 	if ix.ToolName == "ask_user" { // ask_user with wait false (ask_later.go) does not go through ask
+		if src := questionOwnerSource(ix); src != "" {
+			return src
+		}
 		return cardAskUser
 	}
 	if src := hubCardSource(ix); src != "" { // before the form check: persona_settings may carry fields
@@ -669,7 +677,7 @@ func (s *Service) reportCardLedger(ctx context.Context, now time.Time) {
 		if main == "" {
 			return // nobody to tell yet: tried again on the next tick
 		}
-		if _, ok := s.keepRelayLater(main, relayMsg{From: cardLedgerFrom, FromTitle: cardLedgerTitle, Tool: cardLedgerFrom, Text: text, At: now.UTC()}); !ok {
+		if _, ok := s.keepRelayLater(main, relayMsg{From: cardLedgerFrom, FromTitle: cardLedgerTitle, Tool: cardLedgerFrom, Text: text, At: now.UTC(), Internal: true}); !ok {
 			return // the relay state could not be saved: tried again on the next tick
 		}
 		s.publish(ctx) // shown waiting above the main conversation's composer

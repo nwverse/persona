@@ -112,8 +112,8 @@ func (s *Service) updateOwnerWork(ctx context.Context, id string, change func(*S
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
 	}
-	s.todos.writing.Lock()
-	defer s.todos.writing.Unlock()
+	// Only the ledger lock: this writes the private owner-work evidence, not a to-do row (as noteTaskFollowup).
+	// Taking todos.writing here would invert editTodo's reopen order (writeMu then writing) and deadlock.
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()

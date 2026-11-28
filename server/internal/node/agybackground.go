@@ -26,6 +26,7 @@ var (
 	agyTaskEnd       = lazyre.New(`(?i)\bTask id "([^"\n]+)" (?:was )?(finished|failed|canceled|cancelled|killed|stopped)\b`)
 	agyTaskMessage   = lazyre.New(`(?m)^[ \t]*\[Message\] timestamp=(\S+) sender=(\S+) priority=\S+ content=([\s\S]*)`)
 	agyCronIteration = lazyre.New(`\(iteration [0-9]+\)$`)
+	agyTaskHeartbeat = lazyre.New(`(?i)^(?:\[Notice\]\s+)?Task(?:\s+id\s+"[^"\n]+")?\s+is\s+still\s+running\b`)
 	agyServerRestart = lazyre.New(`(?i)^(?:\[Notice\]\s+)?All your subagents and background tasks have been stopped due to server restart\b`)
 	agyTaskListRow   = lazyre.New("^- .* \\(`([^`\\s]+)`\\)$")
 )
@@ -179,7 +180,7 @@ func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root) ag
 						message := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[3]), "</SYSTEM_MESSAGE>"))
 						if agyCronIteration.MatchString(message) {
 							record.oneShot = false
-						} else if !strings.Contains(strings.ToLower(message), "still running") {
+						} else if !agyTaskHeartbeat.MatchString(message) {
 							record.finish(proto.WorkflowCompleted, at, false)
 						}
 					}
@@ -481,21 +482,21 @@ func agyPaneBackgroundFromRows(params json.RawMessage) map[string][]proto.Backgr
 }
 
 // agyPaneRuntimeRow reads the companion row and its pane inventory from the same list update.
-func (b *runtimeRegistry) agyPaneRuntimeRow(id string) (proto.Session, bool) {
+func (b *runtimeRegistry) agyPaneRuntimeRow(id string) (proto.Session, agyPreview, bool) {
 	h := b.ownerOf(id)
 	if h == nil {
-		return proto.Session{}, false
+		return proto.Session{}, agyPreview{}, false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.hello.Runtime != agyRuntimeID || h.daemon != "" {
-		return proto.Session{}, false
+		return proto.Session{}, agyPreview{}, false
 	}
 	row, ok := h.rowLocked(id)
 	if tasks := h.agyPaneBackground[id]; len(row.Background) == 0 && len(tasks) > 0 {
 		row.Background = tasks
 	}
-	return row, ok
+	return row, h.agyPreviews[id], ok
 }
 
 // Runtime task metadata cannot grant access to node-local files. Join the log

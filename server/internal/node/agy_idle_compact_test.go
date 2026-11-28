@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -521,5 +522,422 @@ func TestAgyTranscriptMapsCompactToDividerNotices(t *testing.T) {
 	usage := extractAgyUsage(steps)
 	if usage.turns != 2 || usage.compactions != 1 || usage.contextTokens != 0 {
 		t.Fatalf("extractAgyUsage = %+v", usage)
+	}
+}
+
+func TestAgyIdleAutoCompactMultiCompanionIsolationAndCleanup(t *testing.T) {
+	base := time.Date(2026, 11, 27, 14, 0, 0, 0, time.UTC)
+
+	n, host1, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+
+	hello2 := assistantRuntimeHello()
+	hello2["runtime"], hello2["name"], hello2["launcher"], hello2["agent"] = "agy-alt", "Antigravity Alt", "agy-alt", "agy"
+	host2 := dialRuntime(t, n, hello2)
+
+	latchedID := runtimeCompactTestID
+	failedID := "agy-66666666-7777-8888-9999-aaaaaaaaaaaa"
+	otherID := "agy-77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+	failoverID := "agy-88888888-9999-aaaa-bbbb-cccccccccccc"
+	cwd1 := filepath.Join(n.home, "proj1")
+	cwd2 := filepath.Join(n.home, "proj2")
+	n.state.put(latchedID, sessionState{Launcher: "agy", Cwd: cwd1})
+	n.state.put(failedID, sessionState{Launcher: "agy", Cwd: cwd1})
+	n.state.put(otherID, sessionState{Launcher: "agy-alt", Cwd: cwd2})
+	n.state.put(failoverID, sessionState{Launcher: "agy", Cwd: cwd1})
+
+	// Fail compaction for failedID so it enters the 5-minute retry cooldown.
+	host1.mu.Lock()
+	host1.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.send" {
+			var p struct {
+				SessionID string `json:"session_id"`
+				Text      string `json:"text"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if p.SessionID == failedID && p.Text == "/compact" {
+				return nil, &rpc.Error{Code: "compact_failed", Message: "temporary failure"}
+			}
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	host1.mu.Unlock()
+
+	pushAgyRow(t, n, host1,
+		proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 2, ContextTokens: 240_000, UpdatedAt: base},
+		proto.Session{SessionID: failedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base},
+		proto.Session{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base},
+	)
+	pushAgyRow(t, n, host2,
+		proto.Session{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 1, ContextTokens: 100_000, UpdatedAt: base},
+	)
+
+	// Sweep compacts latchedID and failoverID (both stay >= 200k -> latched) and fails failedID (5m cooldown).
+	clock.set(base.Add(12 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "host1 received initial /compact attempts", func() bool {
+		return len(host1.got("session.send")) == 3
+	})
+	// Wait until failedID's failed attempt has recorded its 5-minute cooldown in agyIdleSessions.
+	waitFor(t, "failedID recorded failure cooldown", func() bool {
+		n.agyIdleMu.Lock()
+		defer n.agyIdleMu.Unlock()
+		st := n.agyIdleSessions[failedID]
+		return st != nil && !st.attempted && !st.lastAttempt.IsZero()
+	})
+	// Settle latchedID and failoverID without shrinking tokens (staying >= 200k keeps attempted=true).
+	pushAgyRow(t, n, host1,
+		proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base},
+		proto.Session{SessionID: failedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base},
+		proto.Session{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 2, ContextTokens: 240_000, UpdatedAt: base},
+	)
+	waitFor(t, "host1 compactions settled", func() bool {
+		return !n.runtimes.compacting(latchedID) && !n.runtimes.compacting(failoverID)
+	})
+
+	// 1. Companion 2 pushes its own list -> MUST NOT wipe companion 1's latch or 5-minute retry cooldown.
+	//    Push a second serial runtime.sessions on host2 as an OnEvent barrier so the first observeAgySessions finishes.
+	pushAgyRow(t, n, host2,
+		proto.Session{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 2, ContextTokens: 120_000, UpdatedAt: clock.get()},
+	)
+	pushAgyRow(t, n, host2,
+		proto.Session{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 3, ContextTokens: 120_000, UpdatedAt: clock.get()},
+	)
+	clock.set(base.Add(14 * time.Minute)) // only 2m since failedID failed (< 5m cooldown)
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(latchedID), proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+		t.Fatal("companion 2 session list wiped companion 1 attempted latch")
+	}
+	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(failedID), proto.Session{SessionID: failedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+		t.Fatal("companion 2 session list wiped companion 1 failure cooldown")
+	}
+	if sends := host1.got("session.send"); len(sends) != 3 {
+		t.Fatalf("companion 1 sessions unexpectedly re-compacted after companion 2 push: got %d sends", len(sends))
+	}
+
+	// 2. Non-owner companion 2 also listing host1's latchedID (offline with ContextTokens=0) must NOT reset host1's latch.
+	if err := host2.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 4, ContextTokens: 120_000, UpdatedAt: clock.get()},
+		{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusOffline, Rev: 1, ContextTokens: 0, UpdatedAt: clock.get()},
+		{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusOffline, Rev: 2, ContextTokens: 240_000, UpdatedAt: base},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// Serial OnEvent barrier on host2: observing rev 5 guarantees rev 4's observeAgySessions has completed.
+	if err := host2.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 5, ContextTokens: 120_000, UpdatedAt: clock.get()},
+		{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusOffline, Rev: 1, ContextTokens: 0, UpdatedAt: clock.get()},
+		{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusOffline, Rev: 2, ContextTokens: 240_000, UpdatedAt: base},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "host2 rev 5 observed", func() bool {
+		got, _, ok := n.runtimes.rowOf(otherID)
+		return ok && got.Rev == 5
+	})
+	if owner := n.runtimes.ownerOf(latchedID); owner == nil || owner.id() != "agy" {
+		t.Fatalf("expected host1 (agy) to remain owner of latchedID, got %v", owner)
+	}
+	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(latchedID), proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+		t.Fatal("non-owner companion reporting 0 tokens wiped owner attempted latch")
+	}
+
+	// 3. Ownership failover: host1 stops listing failoverID (and failedID), while host2 already lists failoverID.
+	//    failedID (no longer owned by anyone) is pruned; failoverID (now owned by host2) keeps its attempted latch.
+	pushAgyRow(t, n, host1,
+		proto.Session{SessionID: latchedID, Cwd: cwd1, Status: proto.StatusDone, Rev: 4, ContextTokens: 240_000, UpdatedAt: base},
+	)
+	waitFor(t, "failoverID transferred to host2 and failedID pruned", func() bool {
+		if n.runtimes.ownerOf(failoverID) == nil || n.runtimes.ownerOf(failoverID).id() != "agy-alt" || n.runtimes.ownerOf(failedID) != nil {
+			return false
+		}
+		n.agyIdleMu.Lock()
+		_, failedKept := n.agyIdleSessions[failedID]
+		n.agyIdleMu.Unlock()
+		return !failedKept
+	})
+	n.agyIdleMu.Lock()
+	_, failoverKept := n.agyIdleSessions[failoverID]
+	n.agyIdleMu.Unlock()
+	if !failoverKept {
+		t.Fatal("session handed off to another AGY companion lost its agyIdleSessions latch")
+	}
+	// host2 promotes failoverID to live (StatusDone, still >= 200k tokens): latch must still hold.
+	if err := host2.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 6, ContextTokens: 120_000, UpdatedAt: clock.get()},
+		{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// Serial OnEvent barrier on host2: observing rev 4 guarantees rev 3's observeAgySessions has completed.
+	if err := host2.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{
+		{SessionID: otherID, Cwd: cwd2, Status: proto.StatusDone, Rev: 7, ContextTokens: 120_000, UpdatedAt: clock.get()},
+		{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 4, ContextTokens: 240_000, UpdatedAt: base},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "failoverID live on host2", func() bool {
+		got, _, ok := n.runtimes.rowOf(failoverID)
+		return ok && got.Status == proto.StatusDone && got.Rev == 4
+	})
+	if _, ready := n.agyIdleReady(n.runtimes.ownerOf(failoverID), proto.Session{SessionID: failoverID, Cwd: cwd1, Status: proto.StatusDone, Rev: 4, ContextTokens: 240_000, UpdatedAt: base}, n.agyIdleCompactionPolicy(), clock.get()); ready {
+		t.Fatal("failover session unexpectedly re-compacted after ownership transfer")
+	}
+
+	// 4. Disconnecting host2 cleans up host2's unowned sessions on the next sweep (no memory leak).
+	_ = host2.conn.Close()
+	waitFor(t, "host2 disconnected", func() bool {
+		return n.runtimes.ownerOf(otherID) == nil && n.runtimes.ownerOf(failoverID) == nil
+	})
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	n.agyIdleMu.Lock()
+	_, otherKept := n.agyIdleSessions[otherID]
+	_, failoverStillKept := n.agyIdleSessions[failoverID]
+	_, latchedStillKept := n.agyIdleSessions[latchedID]
+	n.agyIdleMu.Unlock()
+	if otherKept || failoverStillKept {
+		t.Fatalf("disconnected companion sessions leaked after sweep: other=%v failover=%v", otherKept, failoverStillKept)
+	}
+	if !latchedStillKept {
+		t.Fatal("connected companion session was unexpectedly pruned during sweep")
+	}
+}
+
+func TestAgyIdleAutoCompactFailoverWindowReconnectStaleSnapshotAndClockRollback(t *testing.T) {
+	base := time.Date(2026, 11, 27, 15, 0, 0, 0, time.UTC)
+
+	n, host1, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	cwd := filepath.Join(n.home, "proj")
+	s1 := runtimeCompactTestID
+	n.state.put(s1, sessionState{Launcher: "agy", Cwd: cwd})
+	pushAgyRow(t, n, host1, proto.Session{
+		SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 2, ContextTokens: 240_000, UpdatedAt: base,
+	})
+	// Serial OnEvent barrier on host1 so rev 2's observeAgySessions finishes before direct state writes.
+	pushAgyRow(t, n, host1, proto.Session{
+		SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base,
+	})
+	h1 := n.runtimes.ownerOf(s1)
+	if h1 == nil {
+		t.Fatal("expected host1 to own s1")
+	}
+
+	// 1. Clock rollback: safeIdleSince in the future relative to now clamps to now (NOT older row.UpdatedAt),
+	//    so rollback never triggers an instant false compaction.
+	n.agyIdleMu.Lock()
+	n.agyIdleSessions[s1] = &agyIdleState{
+		host:          h1,
+		safeIdleSince: base.Add(30 * time.Minute),
+		lastRowTime:   base,
+		lastTokens:    240_000,
+	}
+	n.agyIdleMu.Unlock()
+	clock.set(base.Add(25 * time.Minute))
+	rowS1 := proto.Session{SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 3, ContextTokens: 240_000, UpdatedAt: base}
+	if _, ready := n.agyIdleReady(h1, rowS1, n.agyIdleCompactionPolicy(), clock.get()); ready {
+		t.Fatal("clock rollback fell back to older row.UpdatedAt and triggered instant compaction")
+	}
+	n.agyIdleMu.Lock()
+	gotSince := n.agyIdleSessions[s1].safeIdleSince
+	n.agyIdleMu.Unlock()
+	if !gotSince.Equal(clock.get()) {
+		t.Fatalf("safeIdleSince after rollback = %v, want %v", gotSince, clock.get())
+	}
+
+	// 2. Stale snapshot / non-owner companion must NOT revert st.host, send /compact, or poison cooldown.
+	hello2 := assistantRuntimeHello()
+	hello2["runtime"], hello2["name"], hello2["launcher"], hello2["agent"] = "agy-alt", "Antigravity Alt", "agy-alt", "agy"
+	host2 := dialRuntime(t, n, hello2)
+	pushAgyRow(t, n, host2, proto.Session{
+		SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 4, ContextTokens: 240_000, UpdatedAt: base,
+	})
+	// Serial OnEvent barrier on host2 so rev 4's observeAgySessions finishes before direct state writes.
+	pushAgyRow(t, n, host2, proto.Session{
+		SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 5, ContextTokens: 240_000, UpdatedAt: base,
+	})
+	h2 := n.runtimes.ownerOf(s1)
+	if h2 == nil || h2 == h1 || h2.id() != "agy-alt" {
+		t.Fatalf("expected host2 (agy-alt) to take over s1, got %v", h2)
+	}
+	// Advance past idle threshold so h1's stale row would look ready if ownership weren't checked.
+	clock.set(base.Add(40 * time.Minute))
+	n.agyIdleMu.Lock()
+	n.agyIdleSessions[s1] = &agyIdleState{
+		host:          h2,
+		safeIdleSince: base.Add(25 * time.Minute),
+		lastRowTime:   base,
+		lastTokens:    240_000,
+	}
+	n.agyIdleMu.Unlock()
+	// Stale snapshot claiming h1 owns s1 must not revert st.host from h2 back to h1.
+	n.pruneStaleAgyIdleStates([]agyRuntimeSnapshot{{host: h1, row: rowS1}})
+	n.agyIdleMu.Lock()
+	ownerAfterStaleSnap := n.agyIdleSessions[s1].host
+	n.agyIdleMu.Unlock()
+	if ownerAfterStaleSnap != h2 {
+		t.Fatalf("stale snapshot reverted st.host to %v, want h2 (%v)", ownerAfterStaleSnap, h2)
+	}
+	// Non-owner h1 still has rowS1 in h1.sessions, so h1.row(s1) is true; runAgyIdleCompaction must refuse it.
+	n.runAgyIdleCompaction(t.Context(), h1, s1, 240_000, 15*time.Minute)
+	if sends := host1.got("session.send"); len(sends) != 0 {
+		t.Fatalf("non-owner companion unexpectedly received /compact: %s", sends)
+	}
+	n.agyIdleMu.Lock()
+	stAfterNonOwner := *n.agyIdleSessions[s1]
+	n.agyIdleMu.Unlock()
+	if stAfterNonOwner.host != h2 || stAfterNonOwner.attempted || !stAfterNonOwner.lastAttempt.IsZero() {
+		t.Fatalf("non-owner runAgyIdleCompaction mutated state: %+v", stAfterNonOwner)
+	}
+
+	// 3. Reconnect while replacement companion has said hello (!sessionsListed) must preserve attempted latch.
+	s2 := "agy-99999999-aaaa-bbbb-cccc-dddddddddddd"
+	n.state.put(s2, sessionState{Launcher: "agy-alt", Cwd: cwd})
+	hello3 := assistantRuntimeHello()
+	hello3["runtime"], hello3["name"], hello3["launcher"], hello3["agent"], hello3["instance"] = "agy-reconn", "Antigravity Reconn", "agy-reconn", "agy", "inst-1"
+	host3Old := dialRuntime(t, n, hello3)
+	pushAgyRow(t, n, host3Old, proto.Session{
+		SessionID: s2, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base,
+	})
+	h3Old := n.runtimes.ownerOf(s2)
+	n.markAgyIdleAttempt(h3Old, s2, clock.get())
+	// Replacement connection says hello with the same runtime+instance -> supersedes host3Old before pushing sessions.
+	host3New := dialRuntime(t, n, hello3)
+	waitFor(t, "host3Old removed while host3New has not listed sessions yet", func() bool {
+		return n.runtimes.ownerOf(s2) == nil && runtimeConnClosed(h3Old)
+	})
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	n.agyIdleMu.Lock()
+	stReconn := n.agyIdleSessions[s2]
+	n.agyIdleMu.Unlock()
+	if stReconn == nil || !stReconn.attempted {
+		t.Fatalf("sweep wiped attempted latch while reconnecting companion had not listed sessions yet: %+v", stReconn)
+	}
+	// Once host3New pushes an empty list (sessionsListed=true) without s2, sweep prunes s2 cleanly.
+	if err := host3New.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "host3New listed sessions", func() bool {
+		return !n.runtimes.hasUnlistedAgyRuntime("agy-reconn")
+	})
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	n.agyIdleMu.Lock()
+	_, s2StillKept := n.agyIdleSessions[s2]
+	n.agyIdleMu.Unlock()
+	if s2StillKept {
+		t.Fatal("stale session was not pruned after reconnecting companion listed sessions without it")
+	}
+
+	// 4. Failover window between peer.Close() and reg.remove(h): ownerOf is still non-nil -> latch must NOT be pruned.
+	s3 := "agy-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	c1, c2 := net.Pipe()
+	closedPeer := rpc.New("closed", c1)
+	go func() { _ = closedPeer.Serve(t.Context(), c1) }()
+	_ = c2.Close()
+	<-closedPeer.Done()
+	hClosed := n.runtimes.add(closedPeer)
+	hClosed.mu.Lock()
+	hClosed.hello = runtimeHello{Runtime: "agy-closing", Agent: agyAgent}
+	hClosed.ready = true
+	hClosed.mu.Unlock()
+	n.runtimes.setSessionList(hClosed, []proto.Session{{SessionID: s3, Cwd: cwd, Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000}}, nil)
+	n.markAgyIdleAttempt(hClosed, s3, clock.get())
+	// Sweep while hClosed.peer is closed but reg.remove(hClosed) has not run yet (ownerOf(s3) == hClosed).
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	n.agyIdleMu.Lock()
+	stClosing := n.agyIdleSessions[s3]
+	n.agyIdleMu.Unlock()
+	if stClosing == nil || !stClosing.attempted {
+		t.Fatalf("sweep wiped latch during peer.Close()->reg.remove failover window: %+v", stClosing)
+	}
+	// Also verify closed hClosed cannot execute runAgyIdleCompaction.
+	n.runAgyIdleCompaction(t.Context(), hClosed, s3, 240_000, 15*time.Minute)
+	n.runtimes.remove(hClosed)
+	// After remove(hClosed), s3 is truly unowned -> sweep prunes it.
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	n.agyIdleMu.Lock()
+	_, s3StillKept := n.agyIdleSessions[s3]
+	n.agyIdleMu.Unlock()
+	if s3StillKept {
+		t.Fatal("truly unowned session after remove(hClosed) was not pruned")
+	}
+
+	// 5. Nil-host orphan entry in agyIdleSessions is pruned consistently when unowned.
+	orphanID := "agy-bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	n.agyIdleMu.Lock()
+	n.agyIdleSessions[orphanID] = &agyIdleState{host: nil, attempted: true}
+	n.agyIdleMu.Unlock()
+	n.pruneStaleAgyIdleStates(nil)
+	n.agyIdleMu.Lock()
+	_, orphanKept := n.agyIdleSessions[orphanID]
+	n.agyIdleMu.Unlock()
+	if orphanKept {
+		t.Fatal("nil-host orphan entry was not pruned by pruneStaleAgyIdleStates")
+	}
+
+	// 6. Unlock/relock TOCTOU generation & pointer guard prevents deleting updated or ABA-recreated state.
+	toctouID := "agy-cccccccc-dddd-eeee-ffff-000000000000"
+	orig := &agyIdleState{host: h1, gen: 1}
+	n.agyIdleMu.Lock()
+	n.agyIdleSessions[toctouID] = orig
+	n.agyIdleMu.Unlock()
+	staleCand := agyIdlePruneCandidate{id: toctouID, host: h1, state: orig, gen: orig.gen}
+	// Same pointer mutated (gen bumped by markAgyIdleAttempt) must NOT be deleted by stale candidate.
+	n.markAgyIdleAttempt(h1, toctouID, clock.get())
+	n.deleteAgyIdleCandidates([]agyIdlePruneCandidate{staleCand})
+	n.agyIdleMu.Lock()
+	afterGenBump := n.agyIdleSessions[toctouID]
+	n.agyIdleMu.Unlock()
+	if afterGenBump != orig || !afterGenBump.attempted {
+		t.Fatalf("stale prune candidate deleted gen-bumped entry: %+v", afterGenBump)
+	}
+	// ABA pointer replacement with the same host and same gen=1 must NOT be deleted by stale candidate.
+	recreated := &agyIdleState{host: h1, gen: 1, attempted: true}
+	n.agyIdleMu.Lock()
+	n.agyIdleSessions[toctouID] = recreated
+	n.agyIdleMu.Unlock()
+	n.deleteAgyIdleCandidates([]agyIdlePruneCandidate{staleCand})
+	n.agyIdleMu.Lock()
+	afterABA := n.agyIdleSessions[toctouID]
+	n.agyIdleMu.Unlock()
+	if afterABA != recreated {
+		t.Fatalf("stale prune candidate deleted ABA-replaced entry: %+v", afterABA)
+	}
+	// Exact pointer + gen match deletes cleanly.
+	n.deleteAgyIdleCandidates([]agyIdlePruneCandidate{{id: toctouID, host: h1, state: recreated, gen: recreated.gen}})
+	n.agyIdleMu.Lock()
+	_, afterExact := n.agyIdleSessions[toctouID]
+	n.agyIdleMu.Unlock()
+	if afterExact {
+		t.Fatal("exact candidate failed to delete entry")
+	}
+
+	// 7. Stale-owner failure callback uses attemptToken so:
+	//    (a) even after h2 already updated st.host before h1's failure fires, h1's attempted=true is rolled back
+	//        cleanly with zero cooldown (preventing permanent lockout); and
+	//    (b) if h2 already started a new attempt (new attemptToken), h1's late failure is a strict no-op.
+	n.agyIdleMu.Lock()
+	n.agyIdleSessions[s1] = &agyIdleState{host: h1, gen: 1}
+	n.agyIdleMu.Unlock()
+	tok1, prevAtt1, prevLast1 := n.markAgyIdleAttempt(h1, s1, clock.get())
+	// h2 (current owner) updates st.host to h2 before h1's failure callback runs.
+	n.updateAgyIdleState(h2, proto.Session{SessionID: s1, Cwd: cwd, Status: proto.StatusDone, Rev: 5, ContextTokens: 240_000, UpdatedAt: base}, true, 200_000, clock.get())
+	n.recordAgyIdleFailure(h1, s1, clock.get(), tok1, prevAtt1, prevLast1)
+	n.agyIdleMu.Lock()
+	stRestored := *n.agyIdleSessions[s1]
+	n.agyIdleMu.Unlock()
+	if stRestored.host != h2 || stRestored.attempted || !stRestored.lastAttempt.IsZero() || stRestored.attemptToken != 0 {
+		t.Fatalf("stale-owner failure after host takeover did not roll back cleanly: %+v", stRestored)
+	}
+
+	tokOld, prevAttOld, prevLastOld := n.markAgyIdleAttempt(h1, s1, clock.get())
+	tNew := clock.get().Add(time.Minute)
+	tokNew, _, _ := n.markAgyIdleAttempt(h2, s1, tNew)
+	n.recordAgyIdleFailure(h1, s1, tNew.Add(time.Second), tokOld, prevAttOld, prevLastOld)
+	n.agyIdleMu.Lock()
+	stNewAttempt := *n.agyIdleSessions[s1]
+	n.agyIdleMu.Unlock()
+	if stNewAttempt.host != h2 || !stNewAttempt.attempted || !stNewAttempt.lastAttempt.Equal(tNew) || stNewAttempt.attemptToken != tokNew {
+		t.Fatalf("stale-owner late failure clobbered newer owner attempt: %+v", stNewAttempt)
 	}
 }

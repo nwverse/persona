@@ -262,7 +262,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 		// (or another topic), nor the other way round.
 		if o.Channel == r.Channel && o.MachineID == r.MachineID && o.SessionID == r.SessionID && !c.answering[o.ID] && !o.Recalled &&
 			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" &&
-			o.Ext[readChatKey] == "" && r.Ext[readChatKey] == "" { // a /read is answered under its own message, alone
+			o.Ext[assistantwire.FeishuReadChatKey] == "" && r.Ext[assistantwire.FeishuReadChatKey] == "" { // a /read is answered under its own message, alone
 			folded = append(folded, o)
 			r.Fold(o)
 			continue

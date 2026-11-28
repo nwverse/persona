@@ -1,23 +1,55 @@
-// Enlarged image stage shown above the elevated single live Composer (#17095): FLIP-animates both the clicked
-// thumbnail and the live composer container, dynamically tracks the growing composer's height, supports multi-image
-// navigation and drag-and-drop, and launches ImageEditor while keeping the expanded view alive underneath.
-import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type RefObject } from "react";
+// Enlarged image stage shown above the elevated single live Composer (#17095, #17173): FLIP-animates both the
+// clicked thumbnail and the live composer container, dynamically tracks the growing composer's height, supports
+// multi-image navigation and drag-and-drop, and integrates inline Box, Pen, and Crop editing with non-destructive
+// auto-commit and latest-wins async encoding directly above the live Composer.
+import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type HTMLAttributes, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { t } from "../../i18n";
 import { useCloseOnBack } from "../../lib/back-close";
 import type { DraftImage } from "../../lib/drafts";
-import type { EditedImage, EditState } from "../../lib/image-edit";
-import { lazyPage } from "../../lib/lazy-page";
-import { NARROW, useMedia } from "../../lib/viewport";
-import { cx } from "../../ui/atoms";
+import {
+  handleCursor,
+  IMAGE_EDIT,
+  isFramedAsIs,
+  resetFrame,
+  reshape,
+  turnLeft,
+  type EditedImage,
+  type EditState,
+  type Ink,
+  type Size,
+} from "../../lib/image-edit";
+import { NARROW, PHONE, useMedia } from "../../lib/viewport";
+import { cx, Spinner, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-
-const ImageEditor = lazyPage(() => import("./ImageEditor").then((m) => m.ImageEditor));
+import {
+  BarIcon,
+  EditorMenu,
+  IconAction,
+  InkSwatches,
+  LineSample,
+  renderEditedImage,
+  shapeName,
+  ToolButton,
+  useFitsWords,
+  useImageEditorCore,
+  widthName,
+  type EditorMenuState,
+  type EditorTool,
+} from "./image-editor-shared";
 
 export interface ComposerImageStageItem {
   id: string;
   name: string;
   url: string;
   edited?: EditedImage;
+}
+
+export interface ComposerImageStageHandle {
+  /** Returns a Promise awaiting all in-flight image encodes (resolving false on duplicate concurrent send flush), or null when idle. */
+  flush: () => Promise<boolean> | null;
+  /** Flushes any in-flight encode before switching to `id`. */
+  select: (id: string) => void;
 }
 
 export interface ComposerImageStageProps {
@@ -27,6 +59,7 @@ export interface ComposerImageStageProps {
   compact: boolean;
   composerRef: RefObject<HTMLDivElement | null>;
   slotRef: RefObject<HTMLDivElement | null>;
+  handleRef?: RefObject<ComposerImageStageHandle | null>;
   innerOverlayOpen: boolean;
   dragging: boolean;
   drag: Pick<HTMLAttributes<HTMLDivElement>, "onDragOver" | "onDragLeave" | "onDrop">;
@@ -58,6 +91,11 @@ function hasExternalOverlay(): boolean {
   return Boolean(document.querySelector("[role=dialog],[role=menu]"));
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], [contenteditable='']") || target.isContentEditable);
+}
+
 function findTileRect(composer: HTMLElement | null, id: string): DOMRect | null {
   if (!composer) return null;
   for (const el of composer.querySelectorAll<HTMLElement>("[data-attachment-id]")) {
@@ -76,6 +114,7 @@ export function ComposerImageStage({
   compact,
   composerRef,
   slotRef,
+  handleRef,
   innerOverlayOpen,
   dragging,
   drag,
@@ -89,22 +128,259 @@ export function ComposerImageStage({
   const headerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const cropRowRef = useRef<HTMLDivElement>(null);
+
+  const [tool, setTool] = useState<EditorTool | null>(null);
+  const [ink, setInk] = useState<Ink>("red");
+  const [lineWidth, setLineWidth] = useState<number>(IMAGE_EDIT.defaultLineWidth);
+  const [menu, setMenu] = useState<EditorMenuState>(null);
+  const [menuHost, setMenuHost] = useState<HTMLDivElement | null>(null);
+  const [localEdits, setLocalEdits] = useState<Record<string, EditState>>({});
+  const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const narrow = useMedia(NARROW);
+  const phone = useMedia(PHONE);
   const index = Math.max(0, attachments.findIndex((a) => a.id === activeId));
   const active = attachments[index] ?? null;
-  const editing = editingId ? attachments.find((a) => a.id === editingId) ?? null : null;
-  const modalOpen = innerOverlayOpen || Boolean(editing);
   const many = attachments.length > 1;
+  const activeSource = active ? active.edited?.source ?? active.url : "";
+  const activeStart = active ? localEdits[active.id] ?? active.edited : undefined;
+  const pendingActive = Boolean(active && pendingIds.has(active.id));
+  const editActive = Boolean(active && !closing && tool !== null);
+  const showCanvas = Boolean(active && !closing && (tool !== null || pendingActive));
+
+  const decodedCache = useRef(new Map<string, HTMLImageElement>());
+  const reqSeq = useRef(0);
+  const latestReqById = useRef(new Map<string, number>());
+  const inFlightById = useRef(new Map<string, { reqId: number; promise: Promise<void> }>());
+  const pendingSelectRef = useRef<string | null>(null);
+  const flushingSendRef = useRef(false);
+  const aliveRef = useRef(true);
+  const suppressBackdropClickRef = useRef(false);
+
+  // Close open tool menus whenever active image changes or stage begins closing.
+  const [menuKey, setMenuKey] = useState(`${activeId}:${closing}`);
+  const nextMenuKey = `${activeId}:${closing}`;
+  if (menuKey !== nextMenuKey) {
+    setMenuKey(nextMenuKey);
+    if (menu) setMenu(null);
+  }
 
   useEffect(() => {
-    void ImageEditor.preload().catch(() => {});
+    aliveRef.current = true;
+    const cache = decodedCache.current;
+    return () => {
+      aliveRef.current = false;
+      cache.clear();
+    };
   }, []);
 
+  // Drop cached per-attachment tracking entries when attachments are removed.
+  useEffect(() => {
+    const liveIds = new Set(attachments.map((a) => a.id));
+    for (const id of latestReqById.current.keys()) {
+      if (!liveIds.has(id)) latestReqById.current.delete(id);
+    }
+    setLocalEdits((prev) => {
+      let changed = false;
+      const next: Record<string, EditState> = {};
+      for (const [id, state] of Object.entries(prev)) {
+        if (liveIds.has(id)) next[id] = state;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [attachments]);
+
+  const handleCommit = useCallback(
+    (nextState: EditState, imgEl: HTMLImageElement, natural: Size) => {
+      const target = latest.current.active;
+      if (!target) return;
+      const targetId = target.id;
+      const targetSrc = target.edited?.source ?? target.url;
+      const targetName = target.name;
+      setLocalEdits((prev) => ({ ...prev, [targetId]: nextState }));
+
+      const reqId = ++reqSeq.current;
+      latestReqById.current.set(targetId, reqId);
+
+      const promise = (async () => {
+        try {
+          const res = await renderEditedImage(imgEl, targetSrc, nextState.edits, natural, targetName);
+          if (!aliveRef.current || latestReqById.current.get(targetId) !== reqId) return;
+          if (!res.ok) {
+            toast(t(res.reason === "too_large" ? "chat-imageeditor.too_large" : "chat-imageeditor.save_failed"), "error");
+            return;
+          }
+          latest.current.onUpdateAttachment(targetId, res.image, nextState);
+        } catch {
+          if (!aliveRef.current || latestReqById.current.get(targetId) !== reqId) return;
+          toast(t("chat-imageeditor.save_failed"), "error");
+        } finally {
+          if (inFlightById.current.get(targetId)?.reqId === reqId) {
+            inFlightById.current.delete(targetId);
+            if (aliveRef.current) {
+              setPendingIds((prev) => {
+                if (!prev.has(targetId)) return prev;
+                const next = new Set(prev);
+                next.delete(targetId);
+                return next;
+              });
+            }
+          }
+        }
+      })();
+
+      inFlightById.current.set(targetId, { reqId, promise });
+      setPendingIds((prev) => {
+        if (prev.has(targetId)) return prev;
+        const next = new Set(prev);
+        next.add(targetId);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const editor = useImageEditorCore({
+    src: activeSource,
+    stateKey: active?.id ?? "",
+    start: activeStart,
+    tool: editActive ? tool : null,
+    ink,
+    lineWidth,
+    disabled: closing,
+    canvasActive: showCanvas,
+    decodedCache,
+    onCommit: handleCommit,
+    onDecodeError: () => {
+      toast(t("chat-imageeditor.unreadable"), "error");
+      setTool(null);
+    },
+    onDragStart: () => {
+      suppressBackdropClickRef.current = true;
+    },
+  });
+
+  const cropWords = useFitsWords(cropRowRef, `${tool ?? ""}${editor.edits.shape}${phone}`);
+
+  const flushAll = useCallback((): Promise<void> | null => {
+    if (inFlightById.current.size === 0) return null;
+    return (async () => {
+      while (inFlightById.current.size > 0) {
+        await Promise.allSettled([...inFlightById.current.values()].map((entry) => entry.promise));
+      }
+    })();
+  }, []);
+
+  const flushForSend = useCallback((): Promise<boolean> | null => {
+    const pending = flushAll();
+    if (!pending) return null;
+    if (flushingSendRef.current) return Promise.resolve(false);
+    flushingSendRef.current = true;
+    return pending
+      .then(() => true)
+      .finally(() => {
+        flushingSendRef.current = false;
+      });
+  }, [flushAll]);
+
+  const selectWithFlush = useCallback(
+    (id: string) => {
+      const pending = flushAll();
+      if (!pending) {
+        pendingSelectRef.current = null;
+        latest.current.onSelect(id);
+        return;
+      }
+      pendingSelectRef.current = id;
+      void pending.then(() => {
+        if (!aliveRef.current || pendingSelectRef.current !== id) return;
+        pendingSelectRef.current = null;
+        if (latest.current.attachments.some((a) => a.id === id)) {
+          latest.current.onSelect(id);
+        }
+      });
+    },
+    [flushAll],
+  );
+
+  const closeWithFlush = useCallback(() => {
+    pendingSelectRef.current = null;
+    const pending = flushAll();
+    if (!pending) {
+      latest.current.onClose();
+      return;
+    }
+    void pending.then(() => {
+      if (aliveRef.current) latest.current.onClose();
+    });
+  }, [flushAll]);
+
+  const exitTool = useCallback(() => {
+    setMenu(null);
+    editor.cancelDrag();
+    setTool(null);
+  }, [editor.cancelDrag]);
+
+  const toggleTool = (next: EditorTool) => {
+    setMenu(null);
+    editor.cancelDrag();
+    setTool((cur) => (cur === next ? null : next));
+  };
+
+  useImperativeHandle(
+    handleRef,
+    () => ({
+      flush: flushForSend,
+      select: selectWithFlush,
+    }),
+    [flushForSend, selectWithFlush],
+  );
+
   // Latest callbacks/state for event listeners without re-binding on every render.
-  const latest = useRef({ active, attachments, index, closing, modalOpen, onSelect, onClose, onCloseComplete });
-  latest.current = { active, attachments, index, closing, modalOpen, onSelect, onClose, onCloseComplete };
+  const latest = useRef({
+    active,
+    attachments,
+    index,
+    closing,
+    modalOpen: innerOverlayOpen,
+    menuOpen: menu !== null,
+    tool,
+    draggingEdit: editor.dragging,
+    canUndo: editor.history.past.length > 0 && Boolean(editor.img),
+    canRedo: editor.history.future.length > 0 && Boolean(editor.img),
+    exitTool,
+    stepBack: editor.stepBack,
+    stepForward: editor.stepForward,
+    selectWithFlush,
+    closeWithFlush,
+    onSelect,
+    onUpdateAttachment,
+    onClose,
+    onCloseComplete,
+  });
+  latest.current = {
+    active,
+    attachments,
+    index,
+    closing,
+    modalOpen: innerOverlayOpen,
+    menuOpen: menu !== null,
+    tool,
+    draggingEdit: editor.dragging,
+    canUndo: editor.history.past.length > 0 && Boolean(editor.img),
+    canRedo: editor.history.future.length > 0 && Boolean(editor.img),
+    exitTool,
+    stepBack: editor.stepBack,
+    stepForward: editor.stepForward,
+    selectWithFlush,
+    closeWithFlush,
+    onSelect,
+    onUpdateAttachment,
+    onClose,
+    onCloseComplete,
+  };
 
   // Track running Web Animations and open origin thumbnail rect captured before elevating the composer.
   const openAnims = useRef<Animation[]>([]);
@@ -128,7 +404,7 @@ export function ComposerImageStage({
   };
 
   // Back gesture on narrow screens collapses the stage instead of leaving the conversation.
-  useCloseOnBack(!closing, onClose, narrow);
+  useCloseOnBack(!closing, closeWithFlush, narrow);
 
   // Sync the elevated composer's width when viewport crosses the compact breakpoint.
   useLayoutEffect(() => {
@@ -272,12 +548,12 @@ export function ComposerImageStage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Multi-image switch / post-edit refresh animation.
+  // Multi-image switch animation in preview mode.
   useLayoutEffect(() => {
     if (!active || closing) return;
     const prev = prevShown.current;
     prevShown.current = { id: active.id, url: active.url, index };
-    if (!prev) return;
+    if (!prev || tool !== null) return;
     const img = imgRef.current;
     if (!canAnimate(img)) return;
     if (prev.id !== active.id) {
@@ -289,16 +565,8 @@ export function ComposerImageStage({
         ],
         { duration: SWITCH_MS, easing: STAGE_EASE },
       );
-    } else if (prev.url !== active.url) {
-      img.animate(
-        [
-          { transform: "scale(0.985)", opacity: 0.8 },
-          { transform: "scale(1)", opacity: 1 },
-        ],
-        { duration: 180, easing: STAGE_EASE },
-      );
     }
-  }, [active, index, closing]);
+  }, [active, index, closing, tool]);
 
   // Collapse choreography: smoothly animate the live composer back onto its docked slot and fold the image away.
   useLayoutEffect(() => {
@@ -409,28 +677,43 @@ export function ComposerImageStage({
     };
   }, [closing, active, composerRef, slotRef]);
 
-  // Handle Esc (yielding to popovers/dialogs/IME, beating ChatView's window listener and SidePanel) and Left/Right navigation.
+  // Keyboard choreography:
+  // - Esc: sub-menu -> composer inner overlays -> deactivate active inline tool -> collapse stage (never reaching ChatView)
+  // - Cmd/Ctrl+Z / Shift+Z / Ctrl+Y and ArrowLeft/ArrowRight: strictly yield to editable inputs; outside inputs, undo/redo or switch images.
   const handleKeyDown = useCallback((e: KeyboardEvent | React.KeyboardEvent) => {
     const cur = latest.current;
     const native = "nativeEvent" in e ? e.nativeEvent : e;
     if (cur.closing || e.defaultPrevented || native.isComposing || native.keyCode === 229) return;
-    if (cur.modalOpen || hasExternalOverlay()) return;
+    if (cur.modalOpen || cur.menuOpen || hasExternalOverlay()) return;
 
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      cur.onClose();
+      if (cur.tool !== null) cur.exitTool();
+      else cur.closeWithFlush();
       return;
     }
 
-    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && cur.attachments.length > 1) {
-      const target = e.target instanceof HTMLElement ? e.target : null;
-      if (target && (target.closest("input, textarea, select, [contenteditable='true']") || target.isContentEditable)) return;
+    if (isEditableTarget(e.target)) return;
+
+    const key = e.key.toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && (key === "z" || (e.ctrlKey && !e.metaKey && key === "y"))) {
+      if (cur.tool !== null || cur.canUndo || cur.canRedo) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (cur.draggingEdit) return;
+        if (key === "y" || e.shiftKey) cur.stepForward();
+        else cur.stepBack();
+      }
+      return;
+    }
+
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && cur.attachments.length > 1 && !cur.draggingEdit) {
       const delta = e.key === "ArrowLeft" ? -1 : 1;
       const next = cur.attachments[cur.index + delta];
       if (!next) return;
       e.preventDefault();
-      cur.onSelect(next.id);
+      cur.selectWithFlush(next.id);
     }
   }, []);
 
@@ -444,21 +727,26 @@ export function ComposerImageStage({
 
   const step = (delta: number) => {
     const next = attachments[index + delta];
-    if (next) onSelect(next.id);
+    if (next) selectWithFlush(next.id);
   };
 
   const handleBackdropPointerDown = (e: React.PointerEvent) => {
-    hadOverlayAtDown.current = modalOpen || hasExternalOverlay();
+    if (e.target === e.currentTarget) {
+      suppressBackdropClickRef.current = false;
+    }
+    hadOverlayAtDown.current = innerOverlayOpen || menu !== null || hasExternalOverlay();
     didSwipe.current = false;
-    if (e.pointerType !== "mouse" && many) {
+    if (e.pointerType !== "mouse" && many && !editActive) {
       swipeStart.current = { x: e.clientX, y: e.clientY };
+    } else {
+      swipeStart.current = null;
     }
   };
 
   const handleBackdropPointerUp = (e: React.PointerEvent) => {
     const start = swipeStart.current;
     swipeStart.current = null;
-    if (!start || !many || closing) return;
+    if (!start || !many || closing || editActive) return;
     const dx = e.clientX - start.x;
     const dy = e.clientY - start.y;
     if (Math.abs(dx) > 48 && Math.abs(dy) < 72) {
@@ -469,6 +757,10 @@ export function ComposerImageStage({
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (closing || e.target !== e.currentTarget) return;
+    if (suppressBackdropClickRef.current || editor.dragging) {
+      suppressBackdropClickRef.current = false;
+      return;
+    }
     if (didSwipe.current) {
       didSwipe.current = false;
       return;
@@ -477,8 +769,95 @@ export function ComposerImageStage({
       hadOverlayAtDown.current = false;
       return;
     }
-    onClose();
+    closeWithFlush();
   };
+
+  const editOff = !editor.img || closing;
+  const showSideNav = many && !closing && !(editActive && narrow);
+
+  const toolButtons = active && (
+    <div
+      role="toolbar"
+      aria-label={t("chat-composeroverlays.image_tools_label")}
+      className="flex shrink-0 items-center gap-1 rounded-full p-1"
+      style={{ backgroundColor: "rgba(255,255,255,0.1)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.12)" }}
+    >
+      <ToolButton
+        testId="composer-image-tool-box"
+        icon="square"
+        label={t("chat-imageeditor.box")}
+        words={!phone}
+        active={tool === "box"}
+        disabled={closing}
+        compact
+        keepFocus
+        onClick={() => toggleTool("box")}
+      />
+      <ToolButton
+        testId="composer-image-tool-pen"
+        icon="write"
+        label={t("chat-imageeditor.pen")}
+        words={!phone}
+        active={tool === "pen"}
+        disabled={closing}
+        compact
+        keepFocus
+        onClick={() => toggleTool("pen")}
+      />
+      <ToolButton
+        testId="composer-image-tool-crop"
+        icon="crop"
+        label={t("chat-imageeditor.crop")}
+        words={!phone}
+        active={tool === "crop"}
+        disabled={closing}
+        compact
+        keepFocus
+        onClick={() => toggleTool("crop")}
+      />
+    </div>
+  );
+
+  const historyAndClose = (
+    <div className="flex shrink-0 items-center gap-1 justify-self-end">
+      {active && (
+        <>
+          <BarIcon
+            testId="composer-image-undo"
+            icon="undo"
+            label={t("chat-imageeditor.undo")}
+            disabled={editOff || !editor.history.past.length}
+            keepFocus
+            compact={phone}
+            onClick={editor.stepBack}
+          />
+          <BarIcon
+            testId="composer-image-redo"
+            icon="redo"
+            label={t("chat-imageeditor.redo")}
+            disabled={editOff || !editor.history.future.length}
+            keepFocus
+            compact={phone}
+            onClick={editor.stepForward}
+          />
+        </>
+      )}
+      <button
+        type="button"
+        data-testid="composer-image-close"
+        aria-label={t("chat-composeroverlays.image_close")}
+        title={t("chat-composeroverlays.image_close")}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={closeWithFlush}
+        className={cx(
+          "touch-hit flex shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/25",
+          phone ? "size-8" : "size-9",
+        )}
+      >
+        <Icon name="x" size={15} stroke={2.2} />
+      </button>
+    </div>
+  );
 
   return (
     <div
@@ -486,7 +865,8 @@ export function ComposerImageStage({
       role="region"
       aria-label={t("chat-composeroverlays.image_stage_label")}
       data-composer-image-stage={closing ? "closing" : "open"}
-      className={cx("fixed inset-x-0 flex flex-col select-none", closing && "pointer-events-none")}
+      data-composer-image-tool={editActive ? tool : "preview"}
+      className={cx("dark fixed inset-x-0 flex flex-col select-none text-white", closing && "pointer-events-none")}
       style={{ top: "var(--kb-top)", height: "var(--kb-h)", zIndex: 35 }}
       onKeyDown={handleKeyDown}
       {...drag}
@@ -497,17 +877,17 @@ export function ComposerImageStage({
         data-testid="composer-image-backdrop"
         onPointerDown={handleBackdropPointerDown}
         onClick={handleBackdropClick}
-        className={cx(
-          "absolute inset-0 backdrop-blur-md",
-          dragging && "ring-2 ring-inset ring-accent",
-        )}
+        className={cx("absolute inset-0 backdrop-blur-md", dragging && "ring-2 ring-inset ring-accent")}
         style={{ backgroundColor: "rgba(0,0,0,0.8)" }}
       />
 
-      {/* Top toolbar: image name, counter, Annotate, Close */}
+      {/* Top toolbar: image name + counter, inline edit tools (Box/Pen/Crop), Undo/Redo, and Close */}
       <div
         ref={headerRef}
-        className="relative z-10 flex shrink-0 items-center justify-between gap-2 px-3 pb-2 sm:px-5"
+        className={cx(
+          "relative z-10 shrink-0 items-center gap-2 px-3 pb-2 sm:px-5",
+          phone ? "flex justify-between" : "grid grid-cols-[1fr_auto_1fr]",
+        )}
         style={{ paddingTop: "max(12px, env(safe-area-inset-top))" }}
       >
         <div className="flex min-w-0 items-center gap-2">
@@ -527,30 +907,17 @@ export function ComposerImageStage({
           )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
-          {active && (
-            <button
-              type="button"
-              data-testid="composer-image-annotate"
-              onClick={() => setEditingId(active.id)}
-              className="touch-hit flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white/15 px-3 text-meta font-medium whitespace-nowrap text-white transition-colors hover:bg-white/25"
-            >
-              <Icon name="pencil" size={14} stroke={2} className="shrink-0" />
-              <span>{t("chat-composeroverlays.image_annotate")}</span>
-            </button>
-          )}
-          <button
-            type="button"
-            data-testid="composer-image-close"
-            aria-label={t("chat-composeroverlays.image_close")}
-            title={t("chat-composeroverlays.image_close")}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onClose}
-            className="touch-hit flex size-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-white transition-colors hover:bg-white/25"
-          >
-            <Icon name="x" size={15} stroke={2.2} />
-          </button>
-        </div>
+        {phone ? (
+          <div className="flex shrink-0 items-center gap-1">
+            {toolButtons}
+            {historyAndClose}
+          </div>
+        ) : (
+          <>
+            {toolButtons}
+            {historyAndClose}
+          </>
+        )}
       </div>
 
       {/* Upper enlarged image stage, dynamically padded above the live composer */}
@@ -563,15 +930,16 @@ export function ComposerImageStage({
           swipeStart.current = null;
         }}
         onClick={handleBackdropClick}
-        className="relative z-10 flex min-h-0 flex-1 items-center justify-center px-4 pt-1 sm:px-16"
+        className="relative z-10 flex min-h-0 flex-1 flex-col items-center justify-center px-4 pt-1 sm:px-16"
         style={{ paddingBottom: "calc(var(--composer-stage-h, 152px) + max(12px, env(safe-area-inset-bottom)) + 16px)" }}
       >
         <div
+          ref={editor.areaRef}
           onPointerDown={handleBackdropPointerDown}
           onClick={handleBackdropClick}
-          className="relative flex size-full min-h-0 items-center justify-center"
+          className="relative flex size-full min-h-0 flex-1 items-center justify-center"
         >
-          {active && (
+          {active && !editActive && (
             <img
               ref={imgRef}
               data-testid="composer-image-preview"
@@ -580,11 +948,36 @@ export function ComposerImageStage({
               draggable={false}
               onLoad={playOpenImageFlip}
               className="max-h-full max-w-full rounded-card object-contain shadow-overlay"
-              style={{ boxShadow: "0 0 0 1px rgba(255,255,255,0.12), var(--shadow-overlay)" }}
+              style={{
+                boxShadow: "0 0 0 1px rgba(255,255,255,0.12), var(--shadow-overlay)",
+                ...(pendingActive && editor.img ? { opacity: 0 } : {}),
+              }}
             />
           )}
 
-          {many && !closing && (
+          {showCanvas && (
+            <canvas
+              ref={editor.canvasRef}
+              data-testid={editActive ? "composer-image-canvas" : undefined}
+              className={cx("absolute inset-0 size-full", !editActive && "pointer-events-none", editActive && tool !== "crop" && "cursor-crosshair")}
+              style={{
+                touchAction: editActive ? "none" : undefined,
+                cursor: editActive && tool === "crop" ? (editor.cropping ? handleCursor(editor.cropping.handle) : editor.cursor) : undefined,
+              }}
+              onPointerDown={editActive ? editor.onPointerDown : undefined}
+              onPointerMove={editActive ? editor.onPointerMove : undefined}
+              onPointerUp={editActive ? editor.onPointerUp : undefined}
+              onPointerCancel={editActive ? editor.onPointerCancel : undefined}
+            />
+          )}
+
+          {editActive && !editor.img && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <Spinner />
+            </div>
+          )}
+
+          {showSideNav && (
             <>
               <button
                 type="button"
@@ -615,21 +1008,96 @@ export function ComposerImageStage({
             </>
           )}
         </div>
-      </div>
-      {editing && (
-        <Suspense fallback={null}>
-          <ImageEditor
-            src={editing.edited?.source ?? editing.url}
-            start={editing.edited}
-            onCancel={() => setEditingId(null)}
-            onDone={(img, state) => {
-              const id = editing.id;
-              setEditingId(null);
-              onUpdateAttachment(id, img, state);
+
+        {/* Contextual sub-bar strictly between the image canvas and the elevated composer */}
+        {editActive && (
+          <div
+            role="toolbar"
+            aria-label={t("chat-composeroverlays.image_tool_options_label")}
+            data-testid="composer-image-subbar"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-2 flex max-w-full shrink-0 items-center justify-center gap-2 rounded-full px-3 py-1.5 shadow-overlay backdrop-blur-md"
+            style={{
+              backgroundColor: "rgba(24,24,27,0.84)",
+              boxShadow: "0 0 0 1px rgba(255,255,255,0.14), var(--shadow-overlay)",
             }}
-          />
-        </Suspense>
-      )}
+          >
+            {tool === "crop" ? (
+              <div ref={cropRowRef} className="flex min-w-0 items-center gap-2 overflow-hidden">
+                <ToolButton
+                  testId="composer-image-rotate"
+                  icon="rotateLeft"
+                  label={t("chat-imageeditor.rotate")}
+                  words={cropWords}
+                  disabled={editOff}
+                  compact
+                  keepFocus
+                  onClick={() => editor.change(turnLeft)}
+                />
+                <ToolButton
+                  testId="composer-image-ratio"
+                  icon="ratio"
+                  label={t("chat-imageeditor.aspect_ratio")}
+                  text={shapeName(editor.edits.shape)}
+                  words={cropWords}
+                  disabled={editOff}
+                  compact
+                  menu={menu?.kind === "shape"}
+                  onClick={(el) => setMenu((m) => (m?.kind === "shape" ? null : { kind: "shape", anchor: el }))}
+                />
+                <ToolButton
+                  testId="composer-image-reset"
+                  label={t("chat-imageeditor.reset")}
+                  words
+                  disabled={editOff || isFramedAsIs(editor.edits)}
+                  compact
+                  keepFocus
+                  onClick={() => editor.change(resetFrame)}
+                />
+              </div>
+            ) : (
+              <>
+                <div className={cx("flex items-center", phone ? "gap-2" : "gap-3")}>
+                  <InkSwatches ink={ink} onSelect={setInk} compact={phone} keepFocus />
+                </div>
+                <span aria-hidden className="shrink-0" style={{ width: 1, height: 18, backgroundColor: "rgba(255,255,255,0.18)" }} />
+                <IconAction
+                  testId="composer-image-width"
+                  icon={<LineSample width={lineWidth} />}
+                  label={t("chat-imageeditor.line_width")}
+                  value={widthName(lineWidth)}
+                  menu={menu?.kind === "width"}
+                  disabled={editOff}
+                  compact
+                  onClick={(el) => setMenu((m) => (m?.kind === "width" ? null : { kind: "width", anchor: el }))}
+                />
+                <IconAction
+                  testId="composer-image-clear"
+                  icon="trash"
+                  label={t("chat-imageeditor.clear")}
+                  disabled={editOff || !editor.edits.marks.length}
+                  compact
+                  keepFocus
+                  onClick={() => editor.change((e) => ({ ...e, marks: [] }))}
+                />
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Dark portal container without stacking-context z-index so Menu (fixed z-50) always renders above stage (z-35) and elevated composer (z-36). */}
+      {createPortal(<div ref={setMenuHost} className="dark" />, document.body)}
+      <EditorMenu
+        menu={menu}
+        lineWidth={lineWidth}
+        shape={editor.edits.shape}
+        container={menuHost}
+        side="top"
+        onSelectWidth={setLineWidth}
+        onSelectShape={(s) => editor.change((e) => reshape(e, s, editor.natural))}
+        onClose={() => setMenu(null)}
+      />
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { updateTodo, type Todo } from "../../lib/todos";
 import { briefBody } from "../../lib/brief-rows";
 import { acceptBrief, failedKey, handledLater, type BriefBody, type BriefRow, type FeedItem } from "../../lib/feed";
-import { shortDuration } from "../../lib/format";
+import { safeWebURL, shortDuration } from "../../lib/format";
 import { formatDate, t } from "../../i18n";
 import { Button, cx, toast } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
@@ -40,9 +40,9 @@ function More({ n, text = "assistant-brief.more" }: { n: number; text?: string }
   return n > 0 ? <div className="py-1 text-label text-ink-2">{t(text, { n })}</div> : null;
 }
 
-/** A link the hub gave, if it is a web address: anything else is not drawn as one. */
+/** A link the hub gave, if it is a safe web address: anything else is not drawn as one. */
 function webLink(link?: string): string | undefined {
-  return link && /^https?:\/\//i.test(link) ? link : undefined;
+  return safeWebURL(link);
 }
 
 /** Opens the chat a waiting or later row came from in the app (#12055), as iOS and Android do (#2320): an Agent's as the

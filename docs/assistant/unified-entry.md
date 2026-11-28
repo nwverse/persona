@@ -836,7 +836,21 @@ estimate unless given an override. The learned minutes run the same one-shot rev
 - `task_plan.continues` (with `continues_why`) continues earlier work on the **same original to-do id**: a retry on another computer, a rework round, or a replacement Agent. It keeps the original brief, criteria and clock; its prompt is task-specific and does not replace that brief. The replacement prompt supplies the goal, authorization boundaries and new information; the manager adds the effective criteria once. For an owner-authorized change, call `task_scope` first and pass its `scope_revision` with `continues`. A stale revision is refused at planning, and the manager rechecks the planned revision at Start and before dispatch. Replan a refused continuation from the current brief. At Start, still-active prior Agents on that to-do are stopped and released, and a closed to-do is reopened before the replacement starts. The original request, scope log and to-do survive a failed start. No successor to-do is created, so there is no `superseded_by` link and no second card. Unauthorized takeovers, an unreachable prior Agent that cannot be stopped, and an open legacy successor duplicate are refused rather than worked around.
 - Explicit `agent_supervise` adoption of a stopped or replacement Agent after a closed card creates a new to-do linked to the old one: the old card exposes `superseded_by`, the new card exposes `continues`, and both navigate to each other in the clients. Reusing an existing Agent link does not duplicate the card. For these adoption chains, a to-do's `lineage` is the chain, oldest first: to-do id, title, Agent, machine, session, `started`, `ended`, `why` it stopped, `continues`, `superseded_by`. The to-do that joined the brief last carries the work: the clock, result and briefing go by it, so closing a superseded to-do ends nothing.
 
-Without `continues`, when `task_plan`'s "Possible duplicates" fires, the answer tells the assistant to plan again with `continues` or say why the work is different.
+**Repository-linked duplicates.** A new task with neither `continues` nor `todo_id` is refused when a GitHub issue/PR
+or GitLab issue/MR URL in its `title`, `goal` or `prompt` matches an explicit repository link of an open to-do.
+The comparison uses canonical URLs, including provider, host, repository, link kind and number; comment anchors and
+tracking queries do not change that identity. Issue/PR URLs with credentials or invalid query parameters are refused
+before canonicalization, including for continuations and reused to-dos; errors never repeat the unsafe URL.
+Closed to-dos do not block planning. Notes, legacy PR metadata, bare
+numbers, similar titles and Agent activity are not evidence for this refusal, and admission reads do not import links.
+The refusal names the existing to-do and link: use `continues` with `continues_why`, or `todo_id`, for the same work.
+For separate work, supply `distinct_from: [{"todo_id": "<existing to-do>", "reason": "<why this is different work>"}]`
+for every conflicting to-do. Each entry needs a unique to-do ID and a nonempty reason; declarations do not replace
+continuation/reuse authorization. The reasons are kept in the new task's brief, including after restart.
+Task leaders use the same check and may explain separate worker scopes with `distinct_from`.
+The manager checks before saving a plan and again at Start, before creating any to-do or dispatching any Agent, so a
+waiting card cannot bypass newly added associations or a conflicting prompt edit. An unavailable association store
+refuses admission rather than assuming no match. Other "Possible duplicates" hints remain advisory.
 
 **Scope changes are events.** After a task started, `done_when` and `expect_minutes` change in one way: `task_scope
 {todo_id, change, why, done_when?, expect_minutes?}`, from the task's supervisor only (the main conversation also for a
@@ -1136,6 +1150,15 @@ apps (`docs/apple/ios.md` "Suggested standing rule and held decisions") and the 
 
 #### Asks go to the supervisor first (#3589)
 
+Internal execution questions from `ask_user` declare `decision_scope: "internal"`. An owner decision instead carries
+`why_owner` (the existing decision reasons) or `owner_action` (`personal_unlock`, `login`, `second_factor`,
+`experience_check`, or `spending`). An unclassified call is rejected before publishing a card. A personal unlock stays
+in the owner's own app: question cards never collect passwords or private keys. These rights are kept in the original
+tool input, including `wait: false`, so restart does not change who may answer. Internal expiry authorizes nothing,
+takes no recommended default and creates no owner decision. Internal held-card reminders emit only the work event and
+supervisor signal; they never construct an owner notification. Ordinary owned-Agent sensitive delegation uses the same
+reviewer gate; isolated-track boundaries still require the owner and external connector writes keep their own gates.
+
 With leaders configured (`assistant.leaders` not empty), a supervised task's questions, permissions and plans go to its
 supervisor first. Without leaders, a supervised task's parsed terminal dialogs (#11195) and non-six-class agent
 permissions and questions go to its supervising conversation (the main conversation) through the same active `ask` route
@@ -1150,11 +1173,20 @@ permissions and questions go to its supervising conversation (the main conversat
   question, or `allow` for Yes/No), kept as the assistant's answer and the task's decision; a dialog that trusts a
   folder, accepts Bypass Permissions, may delete files (`Risk: delete`) or acts in the owner's name is the owner's
   (`userScreen`), and only an explicit `ask_escalate` rings the owner about it. Unparsed screens and password or private
-  input keep their existing owner route. The conversations' own cards stay the user's: a card of the main
-  conversation, the background supervisor or a leader (`supervisorConversation`) goes up no ladder, and the route that
-  hands other cards of none of the owner's six kinds to a supervisor or the main conversation (`handNonOwnerCard`,
-  `card_nonowner_route.go`) leaves it alone too. Handed on, such a card waited where no turn was started for it, no
-  timeout moved it and `ask_escalate`, which takes a task, could not hand it up (#15360). The card is shown on the apps
+  input keep their existing owner route. Internal cards raised by a direction lead now go to the main conversation. The main
+  conversation's own internal cards use an independent background reviewer; if none is registered, the manager starts
+  that reviewer through the existing audited conversation lifecycle. Failure to obtain a reviewer closes the request
+  unanswered. This does not grant a new task supervisor or authorize the source to answer its own card.
+  An extension source label is not maintenance authority: routing and execution use the same explicit operation
+  predicate. Unknown operations retain their owner gate. Before Assistant setup, manual node questions keep their
+  existing interaction; manager-owned internal questions never use that fallback.
+  `handNonOwnerCard` uses the active durable relay queue for internal questions, permissions and maintenance approvals:
+  a busy or offline recipient is retried, delivery and failure are work events, and `interaction_answer` attributes the
+  decision to the assistant. Sensitive delegation approvals are bound to the exact proposal, track and decision
+  authority. Source membership is checked again after approval, and the target is looked up again before sending;
+  a changed or unavailable boundary cannot reuse an internal approval. The interaction's expiry is never extended.
+  Restart rebuilds its route and wake-up;
+  stale relay generations cannot act on the rebuilt route. The card is shown on the apps
   marked `delegating` and rings nothing: no push, no bot card, no Persona Link notification. A card the supervisor
   holds (any kind but a question) is not the owner's: the apps count no session that waits only on such cards in Needs
   you (the hub's `supervisor_held` count) and offer no buttons to answer it (2026-11-23, D11 of
@@ -1202,9 +1234,9 @@ permissions and questions go to its supervising conversation (the main conversat
   decision; the last rung needing the user does not hand it to them. No timeout hands a card to the user, with the
   hub's push tiering on or off: past its last rung a card goes back to the task's supervisor and stays there
   (parked), the entry saying it came back; the supervisor is reminded each `askHoldFor`, at most `askRemindMax` (3)
-  times, the card stays on the apps marked `delegating`, and only `ask_escalate` hands it to the user. With the push
-  grading switch on (`docs/server/server.md`) the first reminder also leaves the owner a held P1 notice for the Needs
-  you list and the briefing; with it off nothing goes to the owner (a P1 would push).
+  times, the card stays on the apps marked `delegating`, and only `ask_escalate` hands it to the user. A reminder
+  records its work event and wakes the supervisor only. It constructs no owner notice, regardless of push grading
+  or attention settings.
   `ask_escalate` takes `why_owner` and `p0`: with the switch on only `irreversible`, `visible_to_others`,
   `only_owner_knows` or `p0` push, the rest go to the Needs you list and the briefing without a push, bot card or
   channel message.
@@ -1679,7 +1711,7 @@ Agents started manually in Agents have no to-do, or a to-do with empty `origin`,
   - **Today**: first main-chat display each day calls `POST …/today` (`TasksStore.loadToday`), placing the card at midnight: completed tasks, waiting tasks, working count,
     Lark meetings (Prepare sends a message for you), chats mentioning you (Review); if the App already has reminder permission, also include reminders due today (no permission prompt for this).
   - **Direct-start tasks**: Persona profile's Proactive work section lists remembered kinds, with swipe-left deletion.
-- **Message cards link to tasks** (hub): first, PR/issue URLs in the item's connector link, title, preview and context are matched against open to-dos' PR URL, title and notes (`server/internal/assistant/inbox_task_links.go`, #5578). Comment fragments and query parameters are ignored; host, repository, PR/issue kind and number must agree (on github.com the kind is left out: one number is one issue or pull request there). Within a GitHub item's repository (#6507) a task also names the item when it writes `owner/repo#N`, when it writes a bare `#N` and belongs to that repository by #6424's rule (it names `owner/repo` or its Agent works in the repository's directory), or when the PR is one its Agents named before the current one (kept as `prs` next to `pr` in `assistant.todo_stages`, at most 20); an issue no task names links through a pull request of its repository whose own Inbox item says it closes the issue (`Closes`/`Fixes`/`Resolves #N`), without a request to GitHub. Only a unique task is linked, and an existing link is kept while its task is open; a closed task's link moves to the one open task that continues it (#6423), on handled items too, which raise no signal (#6546). This step needs neither a model nor the AI twin. Linking old content does not bypass the twin's age limit when it is later enabled. With the twin enabled, an unmatched or ambiguous item still goes to the Inbox's judge (`inbox/judge.md`), which sees active tasks and may return `task_id` (only an ID shown to it), with `evidence` copied verbatim (at least 4 characters, white space and case folded) from that task's title or notes; an answer without such evidence links nothing (#6424).
+- **Message cards link to tasks** (hub): first, PR/issue URLs in the item's connector link, title, preview and context are matched against open to-dos' saved repository links (including task-owned closeout and structured work-artifact PRs, #9725), legacy PR URL, title and notes (`server/internal/assistant/inbox_task_links.go`, #5578). Comment fragments and query parameters are ignored; host, repository, PR/issue kind and number must agree (on github.com the kind is left out: one number is one issue or pull request there). Within a GitHub item's repository (#6507) a task also names the item when it writes `owner/repo#N`, when it writes a bare `#N` and belongs to that repository by #6424's rule (it names `owner/repo` or its Agent works in the repository's directory), or when the PR is one its Agents named before the current one (kept as `prs` next to `pr` in `assistant.todo_stages`, at most 20); an issue no task names links through a pull request of its repository whose own Inbox item says it closes the issue (`Closes`/`Fixes`/`Resolves #N`), without a request to GitHub. Only a unique task is linked, and an existing link is kept while its task is open; a closed task's link moves to the one open task that continues it (#6423), on handled items too, which raise no signal (#6546). This step needs neither a model nor the AI twin. Linking old content does not bypass the twin's age limit when it is later enabled. With the twin enabled, an unmatched or ambiguous item still goes to the Inbox's judge (`inbox/judge.md`), which sees active tasks and may return `task_id` (only an ID shown to it), with `evidence` copied verbatim (at least 4 characters, white space and case folded) from that task's title or notes; an answer without such evidence links nothing (#6424).
   Before the judge, the candidates are narrowed deterministically (`inbox_task_scope.go`): a GitHub item (its `repo` tag or an `owner/repo#N` thread) is offered only tasks whose title, notes or PR URL name that `owner/repo`, or whose Agent's working directory or space has a directory named after the repository (`repo` or `repo-…`); with none, the judge is not called and the item stays unlinked. A chat-thread item (`…:chat:<id>:thread:<id>`, its `chat` tag) is offered only the tasks that name its thread or chat id when any does, and every task otherwise. On every pass, an existing link of an open GitHub item to an open task that does not name its repository is cleared and persisted (logged, nothing sent); a link to a closed task is left alone.
   The AI twin's first message includes that task's progress (`inbox/agent.md`), so the draft states actual progress. Draft submission
   (`inbox_draft`) inserts a `message` entry into the chat that started the task. The App renders `MessageCard`: original message, attached task (live), draft (Edit inline), Send (Inbox sending; send by ID if the item is not local), Later (collapse for now).

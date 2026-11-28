@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -711,7 +712,6 @@ func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoP
 	if coord == nil {
 		return mergeTrainOutcome{}
 	}
-
 	trackKey := t.ID + "|" + normURL
 	blockerID := mergeTrainBlockerID(t.ID, normURL)
 	st := s.todoBlockerDB()
@@ -745,11 +745,15 @@ func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoP
 			}
 		}
 	}
-	if outcome.Escalate && status.State == "open" && status.Conflicts && status.URL == t.PRURL &&
-		status.HeadOID != "" && t.Supervision != nil && !parkWaitsOnPR(t.Supervision.parking(), status.URL) {
+	if outcome.Escalate && status.State == "open" && status.Conflicts &&
+		(status.URL == t.PRURL || slices.Contains(t.PRs, status.URL)) &&
+		status.HeadOID != "" && t.Supervision != nil &&
+		!s.isReferencePRLink(ctx, t.ID, status.URL) &&
+		!t.Supervision.externalPRConflictWoke(status.URL, status.HeadOID) {
 		s.signal(superviseSignal{
 			Todo:   t.ID,
 			Kind:   sigPRConflict,
+			PRURL:  status.URL,
 			Key:    status.URL + "@" + status.HeadOID,
 			Detail: outcome.Detail,
 		})

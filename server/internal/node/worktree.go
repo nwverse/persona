@@ -310,7 +310,7 @@ func within(p, dir string) bool {
 	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
 }
 
-// worktreeCreate makes the checkout and, unless openWorkspace is false for a herdr task, opens it as a workspace of the host.
+// worktreeCreate makes the checkout and, unless a grouped task requests checkout only, opens it as a workspace of the host.
 func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch, path, parentWorkspace string, openWorkspace *bool) (proto.WorktreeCreateResult, error) {
 	var res proto.WorktreeCreateResult
 	branch = strings.TrimSpace(branch)
@@ -319,7 +319,7 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 			return res, err
 		}
 		if openWorkspace != nil && !*openWorkspace {
-			return res, errors.New("open_workspace=false is supported only on herdr")
+			return res, errors.New("open_workspace=false is supported only on classic herdr or Orca")
 		}
 		return n.runtimeWorktreeCreate(ctx, rt, workspace, cwd, branch, path, parentWorkspace)
 	}
@@ -344,8 +344,8 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 		parent = workspace
 	}
 	if checkoutOnly {
-		if _, ok := h.(*herdrHost); !ok {
-			return res, errors.New("open_workspace=false is supported only on herdr")
+		if h.Kind() != host.Herdr && h.Kind() != host.Orca {
+			return res, errors.New("open_workspace=false requires classic herdr or Orca")
 		}
 		// Older herdr versions have no checkout-only RPC. Use the node's existing Git fallback for every
 		// source workspace, then open the Agent's tab in the task workspace instead of opening a new one.
@@ -398,7 +398,7 @@ func (n *Node) worktreeCreate(ctx context.Context, kind, workspace, cwd, branch,
 		_ = n.refreshHosts(ctx, h)           // the new workspace is in the layout the terminal page lists
 	}
 	res = proto.WorktreeCreateResult{WorkspaceID: created.SpaceID, TabID: created.SlotID, Path: dest, Branch: branch}
-	if h.Kind() == host.Orca {
+	if h.Kind() == host.Orca && !checkoutOnly {
 		res.ParentWorkspaceID = parent
 	}
 	if created.Path != "" {

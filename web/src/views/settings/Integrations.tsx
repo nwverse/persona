@@ -3,9 +3,9 @@
 // into one deduplicated list with capability filter chips, subscription health alerts, Extension Market access,
 // inline IntegrationDetail (#14868) mounting, and a lazy-loaded Data Flow view (#15423).
 import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { hubServes, moduleFeature } from "../../core/module-host";
 import { loadMailAccounts, useMailboxEnabled } from "../../lib/mail";
 import { t } from "../../i18n";
-import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import type { MailAccount } from "../../lib/agent-settings";
 import { api, enc, errorText } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
@@ -17,11 +17,12 @@ import { hubHasExt } from "../../lib/extension-api";
 import { onAuthChange, withAuth } from "../../lib/extension-auth";
 import { watchOperations } from "../../lib/extension-operations";
 import { EXTENSIONS_CHANGED } from "../../lib/extension-prompts";
-import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail } from "../../lib/extensions";
+import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail, type JsonObject } from "../../lib/extensions";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
-import { chooseManager, defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { managerOf, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useLarkOn, useStore } from "../../lib/store";
 import {
@@ -72,11 +73,16 @@ const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((
 
 export interface IntegrationsProps {
   open: string | null;
+  prefill?: JsonObject;
   onOpen: (sub: string | null, drillDown?: boolean) => void;
   /** Desktop split-pane layout (when the Settings host has room): list stays beside the open integration detail. */
   twoCol?: boolean;
   /** The page's top bar already provides Back (phone), so subviews omit their own Back button. */
   headerBack?: boolean;
+  /** Parent `?integration=` sub-route recorded when drilling down (for example upgrade or scoped push-source detail). */
+  parentSub?: string | null;
+  /** Step back to `parentSub` via browser history when mounted inside Settings. */
+  onBackParent?: () => void;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
   /** Report whether an open extension plugin_page needs the wide page container. */
@@ -174,6 +180,7 @@ function PushSourceDetailPane({
   item,
   manager,
   onBack,
+  backLabel,
   reloadKey,
   onReload,
 }: {
@@ -181,6 +188,7 @@ function PushSourceDetailPane({
   item: IntegrationItem | null;
   manager?: string;
   onBack?: () => void;
+  backLabel?: string;
   reloadKey: number;
   onReload: () => void;
 }) {
@@ -190,7 +198,7 @@ function PushSourceDetailPane({
       <div className="mb-3 flex items-center gap-2">
         {onBack && (
           <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
-            {t("settings-integrations.back")}
+            {backLabel ?? t("settings-integrations.back")}
           </Button>
         )}
         <OwnerMark manager={manager} />
@@ -224,7 +232,6 @@ function PushSourceDetailPane({
       <Suspense fallback={<Loading />}>
         <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
       </Suspense>
-      {item?.kind === "source" && <ExternalSourceSettingsEntry provider="subscription" channel="" manager={manager} />}
     </div>
   );
 }
@@ -309,18 +316,38 @@ export function Integrations(props: IntegrationsProps) {
 function IntegrationsForManager({
   picked,
   open,
+  prefill,
   onOpen,
   twoCol = false,
   headerBack = false,
+  parentSub = null,
+  onBackParent,
   onSettings,
   onPageWide,
 }: IntegrationsProps & { picked: string | null }) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
-  const go = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next));
-  const drillDown = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next), true);
+  const [drillOrigin, setDrillOrigin] = useState<{ child: string; parent: string } | null>(null);
+  const go = (next: IntegrationsRoute) => {
+    setDrillOrigin(null);
+    onOpen(formatIntegrationsSub(next));
+  };
+  const drillDown = (next: IntegrationsRoute) => {
+    const childSub = formatIntegrationsSub(next);
+    if (open && childSub && open !== childSub) {
+      setDrillOrigin({ child: childSub, parent: open });
+    }
+    onOpen(childSub, true);
+  };
+  const returnParent = parentSub ?? (drillOrigin && drillOrigin.child === open ? drillOrigin.parent : null);
+  const stepBackTo = (target: string) => {
+    setDrillOrigin(null);
+    if (onBackParent && parentSub === target) onBackParent();
+    else onOpen(target);
+  };
 
   const owner = otherManager(picked ?? undefined);
   const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
+  const roster = useRoster();
   const scope = useScope();
   const offline = useShownOffline();
 
@@ -329,6 +356,8 @@ function IntegrationsForManager({
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   const hasMail = useMailboxEnabled();
   const hasLark = useLarkOn();
+  const larkModule = useStore((s) => hubServes(moduleFeature("lark"), s));
+  const announcesLarkModule = useStore((s) => s.features.includes(moduleFeature("lark")));
   const hasSubscriptions = useSubscriptionsShown();
   const hasInboxSources = useInboxSourcesShown();
 
@@ -351,17 +380,26 @@ function IntegrationsForManager({
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
+  const [subscriptionError, setSubscriptionError] = useState("");
   const [sourcesReload, setSourcesReload] = useState(0);
 
   const seq = useRef(0);
+  const subscriptionSeq = useRef(0);
   const loadSubscriptionsOnly = useCallback(async () => {
+    const mine = ++subscriptionSeq.current;
     if (!hasSubscriptions && !hasInboxSources) {
       setSubscriptions([]);
+      setSubscriptionError("");
       return;
     }
-    const mine = seq.current;
-    const list = await listSubscriptions(owner).catch(() => null);
-    if (mine === seq.current && list) setSubscriptions(list);
+    try {
+      const list = await listSubscriptions(owner);
+      if (mine !== subscriptionSeq.current) return;
+      setSubscriptions(list);
+      setSubscriptionError("");
+    } catch (error) {
+      if (mine === subscriptionSeq.current) setSubscriptionError(errorText(error));
+    }
   }, [hasSubscriptions, hasInboxSources, owner]);
 
   const loadAll = useCallback(async () => {
@@ -384,20 +422,29 @@ function IntegrationsForManager({
         : applyExtensions([], false),
       hasChannels ? listChannels(owner).then(publish(setChannels), report) : setChannels([]),
       hasConnectors ? listConnectors().then(publish(setConnectors), report) : setConnectors([]),
-      hasMail ? loadMailAccounts(owner).catch(() => null).then(publish(setMailAccounts)) : setMailAccounts(null),
-      hasLark ? api<LarkGatewaySummary>("/lark/status").catch(() => null).then(publish(setLarkStatus)) : setLarkStatus(null),
-      botStatus().catch(() => null).then(publish(setFeishuBotStatus)),
+      hasMail ? loadMailAccounts(owner).then(publish(setMailAccounts), (error) => {
+        report(error);
+        publish(setMailAccounts)(null);
+      }) : setMailAccounts(undefined),
+      hasLark ? api<LarkGatewaySummary>("/lark/status").then(publish(setLarkStatus), (error) => {
+        report(error);
+        publish(setLarkStatus)(null);
+      }) : setLarkStatus(undefined),
+      larkModule ? botStatus().then(publish(setFeishuBotStatus), report) : setFeishuBotStatus(null),
       loadSubscriptionsOnly(),
     ]);
 
     if (mine !== seq.current) return;
     setLoaded(true);
     setLoading(false);
-  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, loadSubscriptionsOnly, owner]);
+  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, larkModule, loadSubscriptionsOnly, owner]);
 
   useEffect(() => {
     void loadAll();
-    return () => { seq.current++; };
+    return () => {
+      seq.current++;
+      subscriptionSeq.current++;
+    };
   }, [loadAll]);
 
   // Refresh subscriptions when a subscription state changes on the hub (at most once per second).
@@ -451,18 +498,18 @@ function IntegrationsForManager({
     () =>
       buildIntegrationCatalog({
         extensions: ownExtensions,
-        channels,
-        connectors: ownConnectors,
+        channels: larkModule ? channels : channels.filter((c) => c.id !== "feishu"),
+        connectors: larkModule ? ownConnectors : ownConnectors.filter((c) => c.id !== "larkcli"),
         subscriptions,
         hasMail: hasMail && mailAccounts !== undefined,
         hasLark: hasLark && larkStatus !== undefined,
-        hasFeishuBot: feishuBotStatus !== null,
+        hasFeishuBot: larkModule && (announcesLarkModule || feishuBotStatus !== null),
         mailAccounts,
         larkStatus,
         feishuBotStatus,
         ownerManager: owner,
       }),
-    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, mailAccounts, larkStatus, feishuBotStatus, owner],
+    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, larkModule, announcesLarkModule, mailAccounts, larkStatus, feishuBotStatus, owner],
   );
 
   const counts = useMemo(
@@ -477,8 +524,9 @@ function IntegrationsForManager({
 
   const filtered = useMemo(() => filterIntegrationItems(items, filter), [items, filter]);
   const builtins = useMemo(() => filtered.filter((it) => it.kind === "builtin"), [filtered]);
+  const builtinExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && it.builtinExtension), [filtered]);
   const pushSources = useMemo(() => filtered.filter((it) => it.kind === "source"), [filtered]);
-  const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension"), [filtered]);
+  const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && !it.builtinExtension), [filtered]);
 
   const isSourcesView = route.kind === "sources" && !route.state;
   const sourceDetailState = route.kind === "sources" && route.state ? route.state : null;
@@ -498,6 +546,8 @@ function IntegrationsForManager({
     return (
       <Suspense fallback={<Loading />}>
         <MarketCatalog
+          key={effectiveManager}
+          manager={effectiveManager}
           backLabel={t("settings-integrations.back")}
           onBack={headerBack ? undefined : () => onOpen(null)}
           onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
@@ -507,6 +557,7 @@ function IntegrationsForManager({
     );
   }
   if (route.kind === "item") {
+    const upgradeOrigin = returnParent && parseIntegrationsSub(returnParent).kind === "extension" ? returnParent : null;
     return (
       <Suspense fallback={<Loading />}>
         <MarketItem
@@ -517,7 +568,13 @@ function IntegrationsForManager({
           onBack={
             headerBack
               ? undefined
-              : () => go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" })
+              : () => {
+                  if (upgradeOrigin) {
+                    stepBackTo(upgradeOrigin);
+                    return;
+                  }
+                  go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" });
+                }
           }
           onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
         />
@@ -580,10 +637,14 @@ function IntegrationsForManager({
         type="button"
         data-integration-row={item.key}
         data-integration-kind={item.kind}
+        data-integration-source={item.extension?.source}
         data-integration-id={item.id}
         data-integration-sub-alert={item.subscriptionAlert?.state}
         aria-current={selected || undefined}
-        onClick={() => onOpen(item.sub)}
+        onClick={() => {
+          setDrillOrigin(null);
+          onOpen(item.sub);
+        }}
         className={cx(
           "flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors",
           selected ? "bg-accent-tint" : "hover:bg-hover",
@@ -593,6 +654,9 @@ function IntegrationsForManager({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
             <span className="max-w-full truncate text-meta font-medium text-ink">{item.name}</span>
+            {!compactList && item.builtinExtension && (
+              <Pill>{t("settings-integrations.builtin_badge")}</Pill>
+            )}
             {!compactList &&
               item.capabilities.map((cap) => (
                 <Pill key={cap}>{t(CAP_LABEL_KEY[cap])}</Pill>
@@ -648,6 +712,9 @@ function IntegrationsForManager({
     </div>
   );
 
+  const crossAssistantSources = isSourcesView && !sameManager(effectiveManager, owner);
+  const targetAssistantName = (effectiveManager && managerOf(roster, effectiveManager)?.name) || effectiveManager || "";
+
   const viewSwitch = hasInboxSources ? (
     <div className={cx(compactList ? "mb-2" : "mb-3 flex")} data-integrations-view-switch>
       <Segmented
@@ -660,10 +727,7 @@ function IntegrationsForManager({
         ]}
         onChange={(v) => {
           if (v === "sources") go({ kind: "sources", manager: otherManager(effectiveManager) });
-          else {
-            chooseManager(effectiveManager ?? null);
-            go({ kind: "list" });
-          }
+          else go({ kind: "list" });
         }}
       />
     </div>
@@ -675,8 +739,38 @@ function IntegrationsForManager({
     return (
       <div data-integrations-sources-view>
         {listHeader}
-        {!headerBack && viewSwitch}
-        <SourcesFlowPane manager={effectiveManager} reloadKey={sourcesReload}
+        {!headerBack &&
+          (crossAssistantSources ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2" data-integrations-cross-assistant-nav>
+              <Button
+                tone="quiet"
+                icon="chevronLeft"
+                testId="integrations-cross-assistant-back"
+                onClick={() => go({ kind: "list" })}
+                className="-ml-2"
+              >
+                {t("settings-integrations.back")}
+              </Button>
+              {targetAssistantName && (
+                <Button
+                  tone="secondary"
+                  size="sm"
+                  testId="integrations-switch-assistant"
+                  onClick={() => {
+                    chooseManager(otherManager(effectiveManager) ?? null);
+                    go({ kind: "list" });
+                  }}
+                >
+                  {t("settings-integrations.switch_assistant_integrations", { name: targetAssistantName })}
+                </Button>
+              )}
+            </div>
+          ) : (
+            viewSwitch
+          ))}
+        <SourcesFlowPane
+          manager={effectiveManager}
+          reloadKey={sourcesReload}
           onOpenSource={headerBack ? (page) => drillDown({ kind: "sources", state: page, manager: effectiveManager }) : undefined}
         />
       </div>
@@ -720,12 +814,13 @@ function IntegrationsForManager({
     </div>
   );
 
+  const loadErrors = subscriptionError ? [...partialErrors, subscriptionError] : partialErrors;
   const listBody = (
     <>
-      {partialErrors.length > 0 && (
+      {loadErrors.length > 0 && (
         <div className="mb-4">
           <Group>
-            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: partialErrors.join(" · ") })}</SettingsHint>
+            <SettingsHint alert>{t("settings-integrations.list_partial_error", { error: loadErrors.join(" · ") })}</SettingsHint>
           </Group>
         </div>
       )}
@@ -784,6 +879,20 @@ function IntegrationsForManager({
         </Group>
       )}
 
+      {builtinExtensions.length > 0 && (
+        <Group
+          anchor={builtins.length === 0 ? "integrations" : "builtin-extensions"}
+          title={
+            <span className="flex items-center gap-2">
+              {t("settings-integrations.group_builtin_extensions")}
+              <span className="font-normal">{t("settings-integrations.count", { count: builtinExtensions.length })}</span>
+            </span>
+          }
+        >
+          {builtinExtensions.map((item) => renderRow(item))}
+        </Group>
+      )}
+
       {pushSources.length > 0 && (
         <Group
           anchor="push-sources"
@@ -800,7 +909,7 @@ function IntegrationsForManager({
 
       {installedExtensions.length > 0 && (
         <Group
-          anchor={builtins.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
+          anchor={builtins.length === 0 && builtinExtensions.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
           title={
             <span className="flex items-center gap-2">
               {t("settings-integrations.group_extensions")}
@@ -818,24 +927,41 @@ function IntegrationsForManager({
     </>
   );
 
+  const backFromDetail = () => {
+    if (returnParent) {
+      stepBackTo(returnParent);
+      return;
+    }
+    setDrillOrigin(null);
+    onOpen(null);
+  };
+  const pushSourceBackLabel = returnParent
+    ? (parseIntegrationsSub(returnParent).kind === "sources"
+      ? t("subscriptions.view_graph")
+      : t("settings-extensionview.back"))
+    : t("settings-integrations.back");
+
   const detailPane = sourceDetailState ? (
     <PushSourceDetailPane
       state={sourceDetailState}
       item={resolvedSourceItem}
       manager={effectiveManager}
-      onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+      onBack={headerBack || twoCol ? undefined : backFromDetail}
+      backLabel={pushSourceBackLabel}
       reloadKey={sourcesReload}
       onReload={() => setSourcesReload((n) => n + 1)}
     />
   ) : showDetail && resolvedTarget ? (
     <Suspense fallback={<Loading />}>
       <IntegrationDetail
-        target={resolvedTarget}
+        target={{ ...resolvedTarget, manager: effectiveManager }}
+        prefill={prefill}
         integrationsV2={true}
-        onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+        onBack={headerBack || twoCol ? undefined : backFromDetail}
+        onUnavailableBack={headerBack ? undefined : backFromDetail}
         onUninstalled={() => onOpen(null)}
         onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
-        onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
+        onUpgrade={(market, extId, manager) => drillDown({ kind: "item", market, id: extId, manager })}
         onSettings={onSettings}
         onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
         onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
@@ -843,42 +969,40 @@ function IntegrationsForManager({
     </Suspense>
   ) : null;
 
-  if (detailPane && !twoCol) {
-    return detailPane;
-  }
-
-  if (compactList && detailPane) {
+  if (detailPane) {
     return (
       <div
-        className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
-        data-integrations-split=""
+        className={compactList ? "flex h-full min-h-0 min-w-0 flex-1 overflow-hidden" : undefined}
+        data-integrations-split={compactList ? "" : undefined}
       >
-        <div
-          data-integrations-list
-          className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
-        >
+        {compactList && (
           <div
-            data-integrations-list-header
-            className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+            data-integrations-list
+            className="flex h-full min-h-0 w-[300px] shrink-0 flex-col border-r border-line"
           >
-            {listHeader}
-            {viewSwitch}
-            {filterBar}
+            <div
+              data-integrations-list-header
+              className="shrink-0 border-b border-line px-3 pt-4 pb-3"
+            >
+              {listHeader}
+              {viewSwitch}
+              {filterBar}
+            </div>
+            <div
+              ref={listScrollRef}
+              data-integrations-list-scroll
+              className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
+            >
+              {listBody}
+            </div>
           </div>
-          <div
-            ref={listScrollRef}
-            data-integrations-list-scroll
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pt-3 pb-8"
-          >
-            {listBody}
-          </div>
-        </div>
+        )}
         <div
           ref={detailScrollRef}
-          data-integrations-detail-scroll
-          className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"
+          data-integrations-detail-scroll={compactList ? "" : undefined}
+          className={compactList ? "min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain" : undefined}
         >
-          <div className="mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8">
+          <div className={compactList ? "mx-auto max-w-[820px] px-6 pt-4 pb-12 sm:px-8" : undefined}>
             {detailPane}
           </div>
         </div>

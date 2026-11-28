@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
+import { base64File, releaseAttachments } from "../../lib/attachments";
 import { useCloseOnBack } from "../../lib/back-close";
+import { addFiles, MAX_FILES } from "../../lib/composer-files";
+import type { Attachment } from "../../lib/composer-images";
 import { setCommentImages, type CommentImagePicker, type DraftImage } from "../../lib/drafts";
 import { composerEntryDrop, parseEntry } from "../../lib/entry-drag";
 import { uuid } from "../../lib/format";
@@ -26,7 +29,101 @@ export async function fitDraftImage(file: File, limits: ImageLimits): Promise<Dr
 
 export async function readImage(file: File, limits: ImageLimits) {
   const image = await fitDraftImage(file, limits);
-  return image && { ...image, id: uuid(), url: URL.createObjectURL(file) };
+  return image && { ...image, id: uuid(), url: URL.createObjectURL(file), original: file };
+}
+
+type ImageOverflow = "count" | "bytes";
+interface ImageTarget {
+  draftKey: string;
+  machineId?: string;
+  uploadDest?: string;
+  limits: () => ImageLimits;
+}
+
+export function showImageRoomError(why: ImageOverflow, limits: ImageLimits) {
+  toast(why === "count" ? t("chat-composeroverlays.too_many_images", { max: limits.per_message }) : t("chat-composeroverlays.images_too_large"), "error");
+}
+
+// Pictures past the message limits (#12973) can ride as files on the session's computer.
+function spillImageFiles({ draftKey, machineId, uploadDest, limits }: ImageTarget, files: File[], why: ImageOverflow) {
+  if (!files.length) return;
+  if (!machineId) { showImageRoomError(why, limits()); return; }
+  const { tooMany } = addFiles(draftKey, machineId, files, uploadDest);
+  const went = files.length - tooMany;
+  if (went > 0) toast(why === "count" ? t("chat-composeroverlays.images_as_files", { max: limits().per_message, count: went }) : t("chat-composeroverlays.images_bytes_as_files", { count: went }));
+  if (tooMany) toast(t("chat-composeroverlays.too_many_files", { max: MAX_FILES }), "error");
+}
+
+// A burst of forwarded pictures gets one notice per limit and conversation.
+const forwarded = new WeakMap<ImageTarget, Record<ImageOverflow, File[]>>();
+export function spillDraftImage(target: ImageTarget, { name, mime, data }: DraftImage, why: ImageOverflow, current: () => boolean) {
+  let batch = forwarded.get(target);
+  if (!batch) {
+    const pending: Record<ImageOverflow, File[]> = { count: [], bytes: [] };
+    forwarded.set(target, pending);
+    queueMicrotask(() => {
+      forwarded.delete(target);
+      if (!current()) return;
+      spillImageFiles(target, pending.count, "count");
+      spillImageFiles(target, pending.bytes, "bytes");
+    });
+    batch = pending;
+  }
+  batch[why].push(base64File(name, mime, data));
+}
+
+export async function addPickedFiles(picked: File[], target: ImageTarget, {
+  current, reading, roomForImage, attach,
+}: {
+  current: () => boolean;
+  reading: { current: number };
+  roomForImage: (size: number) => "ok" | ImageOverflow;
+  attach: (image: Attachment) => void;
+}) {
+  const { draftKey, machineId, uploadDest, limits } = target;
+  const spill = { count: [] as File[], bytes: [] as File[] };
+  const others: File[] = [];
+  for (const file of picked) {
+    if (!current()) return;
+    if (!file.type.startsWith("image/")) {
+      if (machineId) others.push(file);
+      else toast(t("chat-composeroverlays.images_only"), "error");
+      continue;
+    }
+    if (roomForImage(0) === "count") {
+      spill.count.push(file);
+      continue;
+    }
+    reading.current++;
+    let image: Attachment | null;
+    try {
+      image = await readImage(file, limits());
+    } finally {
+      reading.current--;
+    }
+    if (!current()) {
+      if (image) releaseAttachments([image]);
+      return;
+    }
+    if (!image) {
+      if (machineId) others.push(file);
+      else toast(t("chat-composeroverlays.image_unreadable", { name: file.name }), "error");
+      continue;
+    }
+    const room = roomForImage(image.data.length);
+    if (room === "ok") attach(image);
+    else {
+      releaseAttachments([image]);
+      spill[room].push(file);
+    }
+  }
+  spillImageFiles(target, spill.count, "count");
+  spillImageFiles(target, spill.bytes, "bytes");
+  if (machineId && others.length) {
+    const result = addFiles(draftKey, machineId, others, uploadDest);
+    if (result.tooMany) toast(t("chat-composeroverlays.too_many_files", { max: MAX_FILES }), "error");
+    if (result.tooBig.length) toast(t("chat-composer.file_too_large"), "error");
+  }
 }
 
 export function resolveEntryDrop(raw: string, target: { mid?: string; cwd?: string }, onPaste: (path: string) => void) {
@@ -65,7 +162,7 @@ export async function runCommentImagePicker({
   for (const file of files) {
     if (!current(id)) return;
     if (!file.type.startsWith("image/")) {
-      toast(t("chat-composer.images_only"), "error");
+      toast(t("chat-composeroverlays.images_only"), "error");
       continue;
     }
     const room = roomForImage(0);
@@ -88,7 +185,7 @@ export async function runCommentImagePicker({
     }
     if (!current(id)) return;
     if (!image) {
-      toast(t("chat-composer.image_unreadable", { name: file.name }), "error");
+      toast(t("chat-composeroverlays.image_unreadable", { name: file.name }), "error");
       continue;
     }
     const fittedRoom = roomForImage(image.data.length);
@@ -124,21 +221,31 @@ type PasteProps = {
 type ImageStageOverlayProps = { imageStage: ComposerImageStageProps };
 type ConfirmOverlayProps = {
   confirm: {
-    title: string;
+    word: string;
     message: string;
-    confirmLabel: string;
-    tone?: "primary" | "danger";
     onConfirm: () => void;
   };
   onClose: () => void;
 };
 
 /** Conditional composer extras share one chunk and one first-screen loader. */
-export function ComposerOverlay(props: ExpandedProps | SuggestionProps | PasteProps | ImageStageOverlayProps | ConfirmOverlayProps) {
+export function ComposerOverlay(props: ExpandedProps | SuggestionProps | PasteProps | ImageStageOverlayProps | ConfirmOverlayProps | { dropHint: true }) {
+  if ("dropHint" in props) return <DropHint />;
   if ("imageStage" in props) return <ComposerImageStage {...props.imageStage} />;
   if ("confirm" in props) return <ConfirmDialog {...props} />;
   if ("pastedBlocks" in props) return <PastedBlocks {...props} />;
   return "value" in props ? <ExpandedComposer {...props} /> : <SuggestionPill {...props} />;
+}
+
+function DropHint() {
+  return (
+    <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[14px] bg-surface/80 backdrop-blur-[2px]">
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-surface px-3 py-1 text-xs font-medium text-accent shadow-card">
+        <Icon name="image" size={14} />
+        {t("chat-composeroverlays.drop_here")}
+      </span>
+    </div>
+  );
 }
 
 function ConfirmDialog({ confirm, onClose }: ConfirmOverlayProps) {
@@ -146,7 +253,7 @@ function ConfirmDialog({ confirm, onClose }: ConfirmOverlayProps) {
     <Dialog
       open
       onClose={onClose}
-      title={confirm.title}
+      title={t("chat-composer.confirm_run_title", { word: confirm.word })}
       width={400}
       footer={
         <>
@@ -154,14 +261,14 @@ function ConfirmDialog({ confirm, onClose }: ConfirmOverlayProps) {
             {t("chat-composer.confirm_cancel")}
           </Button>
           <Button
-            tone={confirm.tone ?? "primary"}
+            tone="danger"
             onClick={() => {
               const fn = confirm.onConfirm;
               onClose();
               fn();
             }}
           >
-            {confirm.confirmLabel}
+            {t("chat-composer.confirm_ok")}
           </Button>
         </>
       }

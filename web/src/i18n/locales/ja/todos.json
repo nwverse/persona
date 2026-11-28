@@ -252,6 +252,7 @@
   "calendar_today": "今日",
   "calendar_previous": "前へ",
   "calendar_next": "次へ",
+  "calendar_download": "期限をダウンロード",
   "calendar_show_done": "完了を表示",
   "calendar_all_day": "終日",
   "calendar_move_failed": "日時を変更できませんでした：{error}",
@@ -267,6 +268,7 @@
   "ask_answer": "チャットで答える",
   "ask_answer_hint": "おすすめがないので、元の会話で答えてください。",
   "ask_failed": "できませんでした：{error}",
+  "ask_resend": "もう一度送信",
   "ask_held": "次のブリーフィングで届きます",
   "ask_held_hint": "この決定は急がないため、通知は送っていません。次のブリーフィングで届き、ここでいつでも回答できます。",
   "summary_triage": "未完了{open} · 保留中{parked} · 動きなし{shelved} · 完了{done} · キャンセル{cancelled}",
@@ -501,5 +503,10 @@
   "grouping_v2_request": "依頼別",
   "detail_direction_inherited_hint": "「{name}」から継承",
   "detail_direction_inherited_picker_hint": "現在は「{name}」から継承しています。適用で明示的に固定するか、別の方向を選択・解除できます。",
-  "detail_subtask_direction_mismatch": "方向：{direction}"
+  "detail_subtask_direction_mismatch": "方向：{direction}",
+  "direction_uncategorized": "未分類",
+  "done_direction_filter_label": "方向別に完了したToDoを絞り込む",
+  "direction_done_count": "完了 {count}",
+  "direction_review_done_label": "「{direction}」の完了 {count} 件を振り返る",
+  "detail_subtasks_done_toggle": "完了したサブタスク · {count}"
 }

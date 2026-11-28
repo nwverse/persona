@@ -439,6 +439,10 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				executableEnv = executableEnv || larkExecutableAssignment(word, remote, extraPATH)
 			}
 		}
+		// zsh's `=cmd` expansion names the command it runs (`=sh` is `sh`, `=env` is `env`, `=ex` is the gate):
+		// unwrapCommand, shellScriptIndex, gateOf and isLarkCLI must all read the resolved name, not its `=` spelling,
+		// or a shell, wrapper or gate behind it stays ordinary and its carried write reaches the gate without a card.
+		words = append([]string{strings.TrimPrefix(words[0], "=")}, words[1:]...)
 		var parsed bool
 		words, parsed = unwrapCommand(words)
 		if !parsed {
@@ -470,6 +474,11 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			v.other = true
 			merge(classifyLarkDepth(strings.Join(words[1:], " "), gates, cwd, risk, extraPATH, depth+1, relax))
 		case codeBuiltinRuns(name, words) && (gateNamed(gates, s.Text) || gateNamedFields(gates, words)):
+			v.other, v.unknown = true, true
+		case name == "trap" && (gateNamed(gates, strings.Join(words[1:], " ")) || gateNamedFields(gates, words) || larkCLIRe.MatchString(strings.Join(words[1:], " "))):
+			// The action runs later, but it is code this command carries: its gated call must be confirmed now.
+			// gateNamedFields also sees a gate name packed inside a wrapper's quoted action (`sh -c "ex POST …"`),
+			// which gateNamed stops at the wrapper word.
 			v.other, v.unknown = true, true
 		case isLarkCLI(name):
 			// As for gated calls (parseGateCall): literal assignments earlier in the command resolve; what stays a
@@ -596,8 +605,10 @@ func codeBuiltinRuns(name string, words []string) bool {
 		return false
 	}
 	for i := 1; i < len(words); i++ {
+		// A `--` only ends emulate's own options: the shell name and its -c still follow it (zsh's
+		// `emulate -- zsh -c CODE` runs CODE), so keep scanning rather than treating it as a stop.
 		if words[i] == "--" {
-			return false
+			continue
 		}
 		if words[i] == "-c" || strings.HasPrefix(words[i], "-") && !strings.HasPrefix(words[i], "--") &&
 			strings.Contains(words[i][1:], "c") {
@@ -763,6 +774,8 @@ func safeRedirect(r string) bool {
 
 // gateOf is the gate whose command or script name is, -1 for none.
 func gateOf(gates []proto.CommandGate, name string) int {
+	// zsh's `=cmd` runs the resolved command (`=ex …` is the gate); classify the word by what it names.
+	name = strings.TrimPrefix(name, "=")
 	for i, g := range gates {
 		if g.Command != "" && name == g.Command || g.Script != "" && (name == g.Script || strings.HasSuffix(name, "/"+g.Script)) {
 			return i

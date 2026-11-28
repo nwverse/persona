@@ -7,7 +7,7 @@ import { formatNumber, t } from "../../i18n";
 import { enc, errorText } from "../../lib/api";
 import { defaultManager, pinManagerAt } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import {
   addMarket, agreeLabel, canUninstall, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, previewFromMarket,
   previewVersion, renameConsent, refreshMarket, removeMarket, setMarketToken, specLabel, uninstallExtension, upgradePreview, upgradingFrom, wantsGitHubToken,
@@ -73,12 +73,14 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 const askKey = (q: string, market: string) => `${market}\n${q}`;
 
 export function MarketCatalog({
+  manager,
   onBack,
   backLabel,
   onOpen,
   onMarkets,
   onManageMarkets,
 }: {
+  manager?: string;
   onBack?: () => void;
   /** Back button label when opened outside legacy Extensions (for example Settings › Integrations). */
   backLabel?: string;
@@ -103,7 +105,7 @@ export function MarketCatalog({
     const n = ++seq.current;
     const asked = askKey(q, market);
     setLoading(true);
-    getCatalog(q, market, refresh)
+    getCatalog(q, market, refresh, manager)
       .then((c) => n === seq.current && (setData(c), setAnswered(asked), setError("")))
       .catch((e) => n === seq.current && setError(errorText(e)))
       .finally(() => n === seq.current && setLoading(false));
@@ -113,7 +115,7 @@ export function MarketCatalog({
     const timer = setTimeout(() => load(), q ? 250 : 0);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, market]);
+  }, [q, market, manager]);
 
   const markets = data?.markets ?? [];
   const updating = !error && (loading || (data !== null && answered !== askKey(q, market)));
@@ -362,12 +364,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
   const opFailed = (e: unknown) => (opGone(e) ? toast(t("settings-extensionmarket.op_gone"), "info") : toast(errorText(e), "error"));
   const st = it ? itemState(it) : null;
   const contributes = Object.entries(it?.contributes ?? {});
-  let home = "";
-  try {
-    home = it?.homepage && new URL(it.homepage).protocol === "https:" ? it.homepage : "";
-  } catch {
-    home = "";
-  }
+  const home = safeWebURL(it?.homepage, true) ?? "";
 
   return (
     <>

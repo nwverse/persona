@@ -68,7 +68,8 @@ func getChannelListByID(t *testing.T, s *Service) map[string]channel.View {
 }
 
 func boundThreadFor(s *Service, channelID, key string) string {
-	if t := s.channelThreadOf(context.Background(), channelID, key); t != nil {
+	ctx := context.Background()
+	if t := s.channelThreadOf(ctx, channelID, channelThreadKeys{primary: key}, s.integrationsV2On(ctx)); t != nil {
 		return t.SessionID
 	}
 	return ""
@@ -96,6 +97,96 @@ func featureValue(features []channel.Feature, id string) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+func TestIntegrationsV2DualTopicRollback(t *testing.T) {
+	for _, startOn := range []bool{false, true} {
+		t.Run(fmt.Sprintf("start_v2=%t", startOn), func(t *testing.T) {
+			ctx := context.Background()
+			s, f, _ := threadsChannelService(t, true)
+			st := s.store().(*memStore)
+			const legacy = "oc_group:omt_topic"
+			topic := channelTopicRouteKey("oc_group", "omt_topic")
+			now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+			s.chans.mu.Lock()
+			s.chans.now = func() time.Time { return now }
+			s.chans.mu.Unlock()
+			receive := func(id, text, thread string, structured bool) {
+				t.Helper()
+				m := channel.Message{ID: id, Text: text, Thread: thread}
+				if structured {
+					m.ChatID, m.ChatKind, m.TopicID = "oc_group", channel.ChatKindTopic, "omt_topic"
+				}
+				raw, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := s.ChannelReceive(ctx, ChannelReceive{Channel: "examplechat", Message: raw}); err != nil {
+					t.Fatal(err)
+				}
+				waitAdmissionDrained(t, s)
+			}
+
+			setIntegrationsV2ViaHTTP(t, s, startOn, false)
+			rec := channelAPIRequest(t, s, http.MethodPut, "/api/v1/channels/examplechat", "full", `{"thread_mode":"per_topic","thread_idle_hours":2}`)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("seed routing mode: %d %s", rec.Code, rec.Body.String())
+			}
+			// Seed the single-key state left by an older routing version.
+			key := legacy
+			if startOn {
+				receive("seed", "old structured topic", "", true)
+				key = topic
+			} else {
+				receive("seed", "old legacy thread", legacy, false)
+			}
+			session := boundThread(s, key)
+			if session == "" || f.sent() != 1 {
+				t.Fatalf("seed route: session=%q starts=%d, want one bound conversation", session, f.sent())
+			}
+			registerAssistantSession(f, session)
+
+			// Lark topic messages carry both keys on every delivery.
+			for i, v2 := range []bool{startOn, !startOn, startOn} {
+				if i > 0 {
+					setIntegrationsV2ViaHTTP(t, s, v2, !v2)
+				}
+				s.chans.mu.Lock()
+				now = now.Add(45 * time.Minute)
+				s.chans.mu.Unlock()
+				receive(fmt.Sprintf("topic_%d", i), "follow-up in the same topic", legacy, true)
+				f.mu.Lock()
+				sends := len(f.sentOnce)
+				f.mu.Unlock()
+				if f.sent() != 1 || sends != i+1 || lastSendOnceSession(f) != session {
+					t.Fatalf("v2=%t: starts=%d sends=%d session=%q, want one start and %d sends to %q",
+						v2, f.sent(), sends, lastSendOnceSession(f), i+1, session)
+				}
+			}
+			var stored map[string]*channelPrefs
+			if found, err := st.Setting(ctx, channelsKey, &stored); !found || err != nil {
+				t.Fatalf("read stored bindings: found=%t err=%v", found, err)
+			}
+			for _, key := range []string{legacy, topic} {
+				got := stored["examplechat"].Threads[key]
+				if got == nil || got.SessionID != session || !got.At.Equal(now) {
+					t.Fatalf("stored binding %q = %+v, want %q at %v", key, got, session, now)
+				}
+			}
+
+			// A plugin can send /new using only its current routing format.
+			resetThread := legacy
+			if startOn {
+				resetThread = ""
+			}
+			receive("reset", "/new", resetThread, startOn)
+			setIntegrationsV2ViaHTTP(t, s, !startOn, startOn)
+			receive("after_reset", "start fresh", legacy, true)
+			if f.sent() != 2 {
+				t.Fatalf("/new followed by rollback started %d conversations total, want 2", f.sent())
+			}
+		})
+	}
 }
 
 // TestIntegrationsV2CombinedRollbackSuite exercises the full combined integrations_v2 lifecycle in one
@@ -676,7 +767,7 @@ func TestIntegrationsV2LegacyClientPartialChannelUpdatePreservesRoutingConfig(t 
 		t.Fatalf("seed PUT: %d %s", rec.Code, rec.Body.String())
 	}
 	routeKey := channelGroupRouteKey("oc_keep_me")
-	if !s.bindChannelThread("examplechat", routeKey, "server", "c1") {
+	if !s.bindChannelThread("examplechat", channelThreadKeys{primary: routeKey}, "server", "c1") {
 		t.Fatal("failed to bind channel thread")
 	}
 

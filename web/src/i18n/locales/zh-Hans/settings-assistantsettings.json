@@ -30,6 +30,8 @@
   "notifications_title": "通知",
   "notifications_footer": "开启后，从主对话派发的任务不会单独推送通知，也不会显示在灵动岛或任务角标中；当任务完成、需要你回复或发生错误时，Persona 会在主对话中告知你。此设置仅对之后派发的任务生效。",
   "quiet_tasks": "主对话派发的任务仅在主对话中通知",
+  "approval_mirror_main": "在主对话里显示审批",
+  "approval_mirror_main_hint": "其他助手对话里需要修改内容的审批也会显示在主对话，只读请求仍留在原对话。在任意一处允许或拒绝，处理的都是同一个请求。私密对话仍保持私密。",
   "start_title": "任务启动",
   "start_requested": "直接启动我在对话中交代的任务",
   "trust_title": "已记住的自动开始规则",

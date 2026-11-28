@@ -3,7 +3,7 @@
 // the hub cut (G002), plans and questions instead of raw JSON (G017), and the photos sent with a message (G026).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Item } from "../../lib/types";
 import type { ToolStep } from "../../lib/work-groups";
 
@@ -20,6 +20,7 @@ vi.mock("../../lib/panel", async (original) => ({
   ...(await original<typeof import("../../lib/panel")>()),
   openPanel: (p: unknown) => panels.opened.push(p),
 }));
+import { loadPages } from "../../lib/lazy-page";
 import { ActionRow } from "./ActionRow";
 import { forgetExpanded } from "./expanded";
 import { Answer, UserBubble } from "./SegmentView";
@@ -130,6 +131,10 @@ describe("a cut reply (G002)", () => {
 });
 
 describe("plans and questions (G017)", () => {
+  // StepDetail is a chunk of its own (StepDetail.lazy.test.tsx): in before these draw it synchronously.
+  beforeAll(async () => {
+    await loadPages();
+  });
   it("draws a plan as Markdown, not JSON", () => {
     render(step(use("ExitPlanMode", { plan: "## 计划\n\n- 第一步" }), result("User has approved your plan.")));
     openRow();

@@ -1081,3 +1081,135 @@ func TestCardStateChangedRefreshesTodoViewsAndDirectionTree(t *testing.T) {
 	e.s.finished(&pending{ix: ix})
 	checkArmed("finished(resolved)", true)
 }
+
+func TestDirectionTreeEffectiveDirectionsTodosV2(t *testing.T) {
+	e := treeEnv(t)
+	now := time.Now().UTC()
+
+	// 1. Undirected umbrella parent with unanimous children under conv_lead_a (plus an undirected sibling).
+	umbrellaA := e.task("Umbrella goal A", nil)
+	umbrellaAChild1 := e.task("Umbrella A child 1", func(td *Todo) {
+		td.PartOf = umbrellaA
+		td.DirectionID = "conv_lead_a"
+	})
+	umbrellaAChild2 := e.task("Umbrella A child 2 (undirected sibling)", func(td *Todo) {
+		td.PartOf = umbrellaA
+	})
+
+	// 2. Directed parent with undirected child (part_of ancestor inheritance).
+	directedParentB := e.task("Directed parent B", func(td *Todo) {
+		td.DirectionID = "conv_lead_b"
+	})
+	inheritedChildB := e.task("Undirected child of B", func(td *Todo) {
+		td.PartOf = directedParentB
+	})
+
+	// 3. Undirected umbrella parent with conflicting children (conv_lead_a vs conv_lead_b) -> stays in secretary.
+	conflictUmbrella := e.task("Conflicting umbrella", nil)
+	conflictChildA := e.task("Conflict child A", func(td *Todo) {
+		td.PartOf = conflictUmbrella
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+	})
+	conflictChildB := e.task("Conflict child B", func(td *Todo) {
+		td.PartOf = conflictUmbrella
+		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
+	})
+
+	// 4. Explicit direction_id pointing to an ended/unknown (non-leader) direction stays in secretary even when
+	// supervisor, origin, and children belong to current leader conv_lead_a.
+	endedExplicit := e.task("Explicit ended direction", func(td *Todo) {
+		td.DirectionID = "conv_lead_ended"
+		td.Origin = "conv_lead_a"
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+	})
+	endedExplicitChild := e.task("Child of ended explicit", func(td *Todo) {
+		td.PartOf = endedExplicit
+		td.Supervision = &Supervision{Supervisor: "conv_lead_a"}
+	})
+
+	// 5. Worker task under a closed task-leader agent keeps existing taskOwner behavior (resolving to conv_lead_b),
+	// and an undirected umbrella parent above that orphan worker inherits conv_lead_b.
+	closedLead := e.task("Closed leader task", func(td *Todo) {
+		td.Supervision = &Supervision{Supervisor: "conv_lead_b"}
+		td.DoneAt = &now
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-lead-old", Source: sourceLeader}}
+	})
+	workerUmbrella := e.task("Umbrella above orphan worker", nil)
+	orphanWorker := e.task("Orphan worker of closed leader", func(td *Todo) {
+		td.PartOf = workerUmbrella
+		td.Supervision = &Supervision{Supervisor: leaderRef("mac", "s-lead-old")}
+		td.Agents = []TodoAgent{{MachineID: "mac", SessionID: "s-w2", Source: sourceWorker, Via: closedLead}}
+	})
+
+	// 6. Cycle in part_of stays safe and lands in secretary.
+	cycleA := e.task("Cycle A", nil)
+	cycleB := e.task("Cycle B", func(td *Todo) { td.PartOf = cycleA })
+	e.s.todos.mu.Lock()
+	e.s.todos.todos[cycleA].PartOf = cycleB
+	e.s.todos.mu.Unlock()
+
+	byID := func(tr directionTree) map[string]string {
+		out := map[string]string{}
+		for _, d := range tr.Directions {
+			group := d.ID
+			if d.Secretary {
+				group = "secretary"
+			}
+			for _, tk := range d.Tasks {
+				out[tk.ID] = group
+			}
+		}
+		return out
+	}
+
+	// Legacy mode (todos_v2 = false): zero behavior change.
+	legacy := byID(e.tree())
+	wantLegacy := map[string]string{
+		umbrellaA:          "secretary",
+		umbrellaAChild1:    "secretary", // DirectionID ignored when todos_v2=false
+		umbrellaAChild2:    "secretary",
+		directedParentB:    "secretary", // DirectionID ignored when todos_v2=false
+		inheritedChildB:    "secretary",
+		conflictUmbrella:   "secretary",
+		conflictChildA:     "conv_lead_a",
+		conflictChildB:     "conv_lead_b",
+		endedExplicit:      "conv_lead_a", // legacy uses taskOwner (supervisor)
+		endedExplicitChild: "conv_lead_a",
+		workerUmbrella:     "secretary",
+		orphanWorker:       "conv_lead_b",
+		cycleA:             "secretary",
+		cycleB:             "secretary",
+	}
+	for id, want := range wantLegacy {
+		if got := legacy[id]; got != want {
+			t.Errorf("todos_v2=false task %s (%s): group = %q, want %q", id, e.s.todos.todos[id].Title, got, want)
+		}
+	}
+
+	// Enable todos_v2 = true: direction tree aligns with resolveEffectiveDirections.
+	on := true
+	setSettings(t, e.s, func(v *Settings) { v.TodosV2 = &on })
+
+	v2 := byID(e.tree())
+	wantV2 := map[string]string{
+		umbrellaA:          "conv_lead_a",
+		umbrellaAChild1:    "conv_lead_a",
+		umbrellaAChild2:    "conv_lead_a",
+		directedParentB:    "conv_lead_b",
+		inheritedChildB:    "conv_lead_b",
+		conflictUmbrella:   "secretary",
+		conflictChildA:     "conv_lead_a",
+		conflictChildB:     "conv_lead_b",
+		endedExplicit:      "secretary",
+		endedExplicitChild: "conv_lead_a",
+		workerUmbrella:     "conv_lead_b",
+		orphanWorker:       "conv_lead_b",
+		cycleA:             "secretary",
+		cycleB:             "secretary",
+	}
+	for id, want := range wantV2 {
+		if got := v2[id]; got != want {
+			t.Errorf("todos_v2=true task %s (%s): group = %q, want %q", id, e.s.todos.todos[id].Title, got, want)
+		}
+	}
+}

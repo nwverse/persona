@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -37,12 +39,26 @@ type SecretError struct {
 	err        error
 }
 
-func (e *SecretError) Error() string { return e.err.Error() }
+// Error is the error's words; one made with only a Code (a test's) is its code.
+func (e *SecretError) Error() string {
+	if e.err == nil {
+		return e.Code
+	}
+	return e.err.Error()
+}
 
 func (e *SecretError) Unwrap() error { return e.err }
 
 // Text is the error in l.
-func (e *SecretError) Text(l i18n.Lang) string { return i18n.Localize(e.err, l) }
+func (e *SecretError) Text(l i18n.Lang) string {
+	if e.err == nil {
+		return e.Code
+	}
+	return i18n.Localize(e.err, l)
+}
+
+// NewSecretError is the SecretError of code with its words (hub-extension_secrets.<code>), for a fake provider.
+func NewSecretError(code string, args i18n.Args) *SecretError { return secretErr(code, args) }
 
 func secretErr(code string, args i18n.Args) *SecretError {
 	return &SecretError{Code: code, err: i18n.Err("hub-extension_secrets."+code, args)}
@@ -125,12 +141,14 @@ func (ps *extensions) secretProvider(reference string) (extension.SecretProvider
 func (ps *extensions) resolveSecret(ctx context.Context, reference string, purpose wire.SecretPurpose, approvedBy string) (string, error) {
 	prov, hp, err := ps.secretProvider(reference)
 	if prov.Extension == "" {
-		ps.kept.forgetReference(reference)
-		return "", err // no provider to record it on
+		ps.forgetReference(ctx, reference) // no provider claims it (secret_kept.go)
+		return "", err                     // no provider to record it on
 	}
 	detail := map[string]any{"reference": reference, "purpose": purpose}
 	fail := func(e *SecretError) (string, error) {
-		ps.kept.forgetReference(reference) // a kept launcher key of it is not trusted any more (secret_kept.go)
+		if revokes(e.Code) {
+			ps.forgetReference(ctx, reference) // gone or refused: a kept launcher key of it is not trusted any more (secret_kept.go)
+		} // one that may pass (not signed in, off, rate limited, a timeout) leaves what is kept
 		detail["code"] = e.Code
 		ps.h.audit(ctx, prov.Extension, "secret_resolve_failed", approvedBy, detail)
 		ps.logf("plugin %s: secrets.resolve for %s %s: %s", prov.Extension, purpose.Kind, purpose.ID, e.Code)
@@ -144,9 +162,8 @@ func (ps *extensions) resolveSecret(ctx context.Context, reference string, purpo
 	}
 	cctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
 	defer cancel()
-	var res wire.SecretsResolveResult
-	err = hp.proc.Call(cctx, "secrets.resolve",
-		wire.SecretsResolveParams{Contribution: prov.Contribution, Reference: reference, Purpose: purpose}, &res)
+	res, err := buswire.Call(cctx, hp.proc, extwire.SecretsResolveMethod,
+		wire.SecretsResolveParams{Contribution: prov.Contribution, Reference: reference, Purpose: purpose})
 	switch {
 	case err != nil:
 		return fail(providerError(prov, err, cctx.Err() != nil && ctx.Err() == nil))
@@ -176,8 +193,9 @@ func (ps *extensions) describeSecret(ctx context.Context, reference string) (Sec
 	}
 	cctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
 	defer cancel()
-	var res wire.SecretsDescribeResult
-	if err := hp.proc.Call(cctx, "secrets.describe", wire.SecretsDescribeParams{Contribution: prov.Contribution, Reference: reference}, &res); err != nil {
+	res, err := buswire.Call(cctx, hp.proc, extwire.SecretsDescribeMethod,
+		wire.SecretsDescribeParams{Contribution: prov.Contribution, Reference: reference})
+	if err != nil {
 		return SecretDescription{}, providerError(prov, err, cctx.Err() != nil && ctx.Err() == nil)
 	}
 	d := SecretDescription{Provider: prov.Extension, ProviderName: prov.Name, Title: providerWords(res.Title, 200),

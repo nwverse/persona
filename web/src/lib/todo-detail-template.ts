@@ -4,6 +4,7 @@
 // All right-pane sections remain expanded by default under todos_v2 (#14851).
 
 import { foldedState } from "./child-sessions";
+import { safeWebURL } from "./format";
 import { makeSessionLookup, responsibleOf, type SessionLookup, type Todo } from "./todos";
 import type { AgentState, Session } from "./types";
 
@@ -30,18 +31,12 @@ export interface WorkGoalActions {
   handOverMode: "hand_over" | "add_agent";
 }
 
-/** Returns a trimmed http(s) URL string, or undefined for missing or unsafe URLs. */
+/** Returns a validated credential-free http(s) URL string, or undefined for missing or unsafe URLs. */
 export function safeDetailHttpUrl(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
   if (!trimmed || /\s/.test(trimmed)) return undefined;
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-    return trimmed;
-  } catch {
-    return undefined;
-  }
+  return safeWebURL(trimmed);
 }
 
 /** Extracts the first safe http(s) PR URL associated with a to-do, if any. */
