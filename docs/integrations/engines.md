@@ -190,8 +190,11 @@ List, state, send text / images, interrupt, close, answer approvals / questions,
 included, only those Orca takes for the chat's provider), thinking and model, rename, rewind the conversation, and mark read; no
 screen reads, keys, or live terminal. A Claude chat reads as its Claude transcript, a Codex chat is listed once as its Codex thread,
 and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
-running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card. See
-`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats, the cards and the controls.
+running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card.
+New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
+chats): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
+Agent's default launcher still opens a terminal. See `docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the
+closed chats, the cards, the controls and starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
