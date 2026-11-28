@@ -158,18 +158,19 @@ internal val Session.todoSpaceName: String?
 /**
  * The actions of a space. [onOpen] adds "Open space" (the list offers it here instead of a separate button);
  * [compact] is the smaller trigger of list headings. A space without a herdr name can only be opened and read.
+ * [extra] goes last (an Orca space's New worktree…, #17054).
  */
 @Composable
 internal fun AgentSpaceMenu(session: Session, pinned: Boolean, muted: Boolean, busy: Boolean,
     onPin: () -> Unit, onMute: () -> Unit, onRename: () -> Unit, onMarkRead: (() -> Unit)? = null,
-    onOpen: (() -> Unit)? = null, compact: Boolean = false, todo: SpaceTodoActions? = null) {
+    onOpen: (() -> Unit)? = null, compact: Boolean = false, todo: SpaceTodoActions? = null, extra: List<JAction> = emptyList()) {
     val named = !session.spaceName.isNullOrBlank()
-    if (!named && onOpen == null && onMarkRead == null && todo == null) return
+    if (!named && onOpen == null && onMarkRead == null && todo == null && extra.isEmpty()) return
     var menu by remember { mutableStateOf(false) }
     val actions = stringResource(R.string.agents_space_actions)
     if (compact) HeadingAction(PersonaIcons.more, actions, onClick = { menu = true })
     else JIconButton(PersonaIcons.more, actions, { menu = true })
-    if (menu) JActionSheet(agentSpaceActions(session, pinned, muted, busy, onPin, onMute, onRename, onMarkRead, onOpen, todo),
+    if (menu) JActionSheet(agentSpaceActions(session, pinned, muted, busy, onPin, onMute, onRename, onMarkRead, onOpen, todo) + extra,
         { menu = false }, title = session.spaceName?.takeIf { it.isNotBlank() } ?: actions)
 }
 

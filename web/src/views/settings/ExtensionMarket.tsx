@@ -73,12 +73,14 @@ function TokenHint({ onFix }: { onFix: () => void }) {
 const askKey = (q: string, market: string) => `${market}\n${q}`;
 
 export function MarketCatalog({
+  manager,
   onBack,
   backLabel,
   onOpen,
   onMarkets,
   onManageMarkets,
 }: {
+  manager?: string;
   onBack?: () => void;
   /** Back button label when opened outside legacy Extensions (for example Settings › Integrations). */
   backLabel?: string;
@@ -103,7 +105,7 @@ export function MarketCatalog({
     const n = ++seq.current;
     const asked = askKey(q, market);
     setLoading(true);
-    getCatalog(q, market, refresh)
+    getCatalog(q, market, refresh, manager)
       .then((c) => n === seq.current && (setData(c), setAnswered(asked), setError("")))
       .catch((e) => n === seq.current && setError(errorText(e)))
       .finally(() => n === seq.current && setLoading(false));
@@ -113,7 +115,7 @@ export function MarketCatalog({
     const timer = setTimeout(() => load(), q ? 250 : 0);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, market]);
+  }, [q, market, manager]);
 
   const markets = data?.markets ?? [];
   const updating = !error && (loading || (data !== null && answered !== askKey(q, market)));
