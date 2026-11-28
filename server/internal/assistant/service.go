@@ -275,6 +275,7 @@ type Service struct {
 	agentNames       agentNamingBook        // agent_naming.go
 	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
 	taskCloseStops   taskCloseStopBook      // tasks_close_stops.go: stopped Agents of completed tasks
+	spawnedDone      spawnedDoneBook        // tasks_spawned_close.go: completed task_spawn sessions on open to-dos
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
@@ -1235,6 +1236,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
 	s.rememberTaskCloseExcerpt(r, text)
 	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
+	s.clearSpawnedDone(r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake

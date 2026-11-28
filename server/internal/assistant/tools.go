@@ -667,6 +667,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["client_msg_id"] = inputID
 		}
 		finish := func(sendCtx context.Context, receipt string) (string, error) {
+			s.clearSpawnedDone(am.ID, c.SessionID)
 			receipt, err := persistInbox(sendCtx, receipt)
 			if err != nil {
 				return receipt, err
