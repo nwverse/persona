@@ -137,6 +137,9 @@ export interface ModelPick {
   launcher: string;
   model?: string;
   effort?: string;
+  /** The four dimensions' runtime and channel (lib/execution.ts); the hub projects them from the launcher, and back. */
+  runtime?: string;
+  channel?: string;
 }
 
 /** Session.pending_switch (#5035). `agent` is set on a switch to the other engine (feature `engine_switch`, #5054):
