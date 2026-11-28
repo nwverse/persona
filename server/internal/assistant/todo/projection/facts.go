@@ -72,9 +72,11 @@ type Facts struct {
 	CompletionModeNow assistantwire.CompletionMode `json:"-"`
 	RuntimeAt         time.Time                    `json:"-"`
 	ObservedWait      bool                         `json:"-"`
-	// RepoGate and ActiveBlockers describe v2 delivery and blocker evidence.
-	RepoGate       *RepoGate       `json:"-"`
-	ActiveBlockers []ActiveBlocker `json:"-"`
+	// RepoGate and ActiveBlockers describe v2 delivery and blocker evidence, as the waits they give the row: RepoGate
+	// the pr_merge wait of the open delivery PR holding the weakest bound repository's gate (RepoGateWait builds it),
+	// ActiveBlockers one wait per persisted blocker (its kind, its display target as WaitingOn, its source as URL).
+	RepoGate       *assistantwire.TodoWait  `json:"-"`
+	ActiveBlockers []assistantwire.TodoWait `json:"-"`
 
 	// Sessions are the to-do's linked runs' sessions as the hub sends them to the apps (state worked out); a linked
 	// run whose session is not among them is offline.
@@ -103,20 +105,6 @@ type Facts struct {
 	// CanWaitSLADisabled disables automatic aging of can_wait decisions into active needs_you.
 	CanWaitSLAHours    int  `json:"-"`
 	CanWaitSLADisabled bool `json:"-"`
-}
-
-// RepoGate is the open delivery PR holding the weakest bound repository's gate.
-type RepoGate struct {
-	Repository string
-	PRURL      string
-	Blocker    assistantwire.TodoWaitPRBlocker
-}
-
-// ActiveBlocker is a persisted blocker with its display target and source.
-type ActiveBlocker struct {
-	Kind   assistantwire.TodoWaitKind
-	Target string
-	URL    string
 }
 
 // Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).

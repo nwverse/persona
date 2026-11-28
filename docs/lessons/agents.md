@@ -1,5 +1,16 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A held Codex rollout needs its engine's pane identity (#17406)
+
+- A no-daemon Codex in herdr-core, Tern or Orca holds its own rollout. Resolve the process's engine-specific pane
+  through `host.PaneRef` before recording ownership; an empty owner rejects even the waiting pane's own thread as
+  another writer's. Exercise both direct held-rollout selection and new-thread filtering, including a different pane
+  that must still be refused. Open-file fixture paths may be canonicalized by the OS; resolve symlinks in assertions.
+
+## Shared Codex app-server snapshots can lag events (#17428)
+
+Keep pending requests and same-turn blocked state across metadata refreshes. When waiting for an interrupt, read the current thread on each poll.
+
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
@@ -496,7 +507,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
 - Codex image generation (`scripts/assets/make_persona.py generate`): `codex exec`'s built-in `image_gen` can create transparent PNGs using Codex's own ChatGPT login,
   but its HTTP client doesn't accept `socks5h://` proxies (chat requests do); use an HTTP CONNECT proxy. `-i` takes multiple values, prompts come from stdin; ChatGPT login supports only some models.
   If generation hangs (over ten minutes per image, all parallel work stopped), measure proxy tunnel throughput before blaming rate limits: on 2026-10-31 the hub machine's outbound bandwidth was only 11 KB/s; opening `ssh -D` on a faster internet machine produced four avatars in 6 minutes (`docs/apple/persona.md`).
-- Orca host (`docs/plans/plan-orca-support.md` ("Orca source")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
+- Orca host (`docs/integrations/orca.md` ("Orca source")): `terminal.send`'s `client` requires `id`; providing only `type` returns `invalid_argument` on every send
   (the first version did this; fake runtime didn't validate parameters, so all tests passed; `orcarttest` now validates Orca's schema). If Orca can't recognize the foreground Agent, it types the "prompt" straight into
   the shell and presses Enter; `accepted:false` exists only with `requireAgentStatus`. Before sending, verify the Agent is foreground using the process table + `terminal.agentStatus`;
   Orca's `agentPrompt` pastes only for Agents it has seen working; newly started claude receives raw text, and multiline input submits at the first newline. Persona sends bracketed paste itself, then Enter separately;
@@ -563,7 +574,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   alongside `herdr remote-client-bridge` and `peers.json`; terminal tabs live in `doc.get("herdr-app")`. It and terminal `herdr server`
   (`~/.config/herdr/herdr.sock`) can't see each other. If "sessions opened locally through App remote aren't found", check herdr-core `terminal.list` first, not only the classic socket.
   When using both on a computer, select engine `herdr-both`: node refreshes both hosts in parallel, isolates events per host (`watcherSignals`), and always creates / resumes sessions through classic herdr
-  (`docs/integrations/engines.md` ("Host sets"), `docs/plans/plan-orca-support.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
+  (`docs/integrations/engines.md` ("Host sets"), `docs/integrations/herdr-core.md` ("Combined engine")). Don't return to "refresh asks every host sequentially": a 2-second herdr-core delay slows herdr too.
 
 ## Starting a headless conversation clean without changing its id (2026-11-14, #7315, Claude Code 2.1.322)
 

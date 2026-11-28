@@ -13,7 +13,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Starting an Orca chat from Persona (#17047, docs/plans/plan-orca-support.md "Structured sessions"). The bridge offers
+// Starting an Orca chat from Persona (#17047, docs/integrations/orca.md "Structured sessions"). The bridge offers
 // a launcher for each provider Orca runs as a chat and found installed ("orca-claude", "orca-codex"…), on an Orca that
 // starts chats (agent.launch's chat surface); none while Orca is not running, and none on a computer whose Orca host is
 // off (the bridge does not run there). A start goes to the deepest local Orca worktree holding the folder (a Git

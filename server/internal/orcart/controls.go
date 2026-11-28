@@ -10,7 +10,7 @@ import (
 
 // A chat's controls beyond sending (#17046): its name (agentSession.rename), going back to before one of the user's
 // messages (agentSession.rewind), and its unread mark (agentSession.acknowledgeAttention). Each is a capability of
-// status.get that an older Orca does not have. Checked on Orca 1.4.277 (docs/plans/plan-orca-support.md "Structured
+// status.get that an older Orca does not have. Checked on Orca 1.4.277 (docs/integrations/orca.md "Structured
 // sessions").
 
 // The capabilities (Status.Capabilities) of a chat's controls: a host without one has no such method.

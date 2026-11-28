@@ -243,6 +243,8 @@ go server/internal/quota core
 go server/internal/recordingcli core
 go server/internal/recordingwire core
 go server/internal/recordinghost core
+go server/internal/recordingspeakers core
+go server/internal/recordingspeakers/recordingspeakersadapt core
 go server/internal/relay core
 go server/internal/relayproto core
 go server/internal/remoteimage core

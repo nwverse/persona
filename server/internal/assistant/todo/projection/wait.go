@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -162,16 +163,24 @@ func buildRuntimeWait(w *assistantwire.TaskWaitState, at time.Time) *assistantwi
 	return out
 }
 
-func buildRepoGateWait(g *RepoGate) *assistantwire.TodoWait {
+// RepoGateWait is Facts.RepoGate for the open delivery PR at prURL holding repository's gate, blocked by blocker ("" when
+// it names none).
+func RepoGateWait(repository, prURL string, blocker assistantwire.TodoWaitPRBlocker) *assistantwire.TodoWait {
 	w := &assistantwire.TodoWait{
 		Kind:      assistantwire.TodoWaitKindPrMerge,
-		WaitingOn: cmp.Or(shortPRLabel(g.PRURL), g.Repository),
-		URL:       g.PRURL,
+		WaitingOn: cmp.Or(shortPRLabel(prURL), repository),
+		URL:       prURL,
 	}
-	if g.Blocker != "" {
-		w.PrBlockers = []assistantwire.TodoWaitPRBlocker{g.Blocker}
+	if blocker != "" {
+		w.PrBlockers = []assistantwire.TodoWaitPRBlocker{blocker}
 	}
 	return w
+}
+
+// copyWait is a row's own copy of a wait the facts carry, so the row never shares the facts' value.
+func copyWait(w assistantwire.TodoWait) *assistantwire.TodoWait {
+	w.PrBlockers = slices.Clone(w.PrBlockers)
+	return &w
 }
 
 func buildPRWait(pr PRStatus) *assistantwire.TodoWait {

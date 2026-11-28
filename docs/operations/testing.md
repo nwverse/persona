@@ -1989,6 +1989,46 @@ with denial reason/already answered), question then approval, two Plan questions
   Codex model-service errors (e.g. Selected model is at capacity, not Persona) log `SERVICE-RETRY` and rerun once;
   each RESULT reports retry count—include in stability reports, not pretend absent.
 
+## Isolated Orca runtime (#17058)
+
+Orca's writes are tested against the fake runtime (`server/internal/orcart/orcarttest`, which checks every request
+against Orca's schema), and the `orcalive` test only reads the Orca that runs on the computer. The `orcaiso` tests
+write to a real Orca without touching the user's: each starts its own headless Orca server with a temporary HOME,
+profile and loopback port, and drives Persona's own Orca host and client against it
+(`server/internal/node/hostorca_iso_test.go`):
+
+- **Start, type, keys, close**: open a terminal for a start in a throwaway Git repository Orca holds (`repo.add`),
+  check that a shell at rest takes no typed text and that a second start in the terminal is refused, start `cat`, type
+  a line and press Enter (the screen shows it twice), ctrl+c back to the shell, and close the terminal.
+- **Split, rename, close tab**: split a pane and close the new one, rename the tab (Orca's tab model has the new name),
+  open a second tab and close it whole, and rename the worktree.
+- **Worktree**: make a worktree through Orca (New worktree…), then remove it as an Agent's worktree is removed
+  (`worktree.rm`, the branch kept).
+- **Refusal**: metadata of another profile, a socket outside the temporary root, no local socket, or a process with
+  another HOME is refused before anything is written (needs no server).
+
+Run them, Linux only, with an Orca server install (the directory holding `orcad/orcad-server.js` and
+`runtimes/node-*/bin/node`; Orca 1.4.277 checked), from `server/`:
+
+```sh
+PERSONA_ORCA_ISO_SERVER=<Orca server install> go test -tags orcaiso -run OrcaIsolated ./internal/node/ -v -timeout 10m
+```
+
+Without the variable the tests skip. Safety:
+
+- The server gets an environment of its own (no `ORCA_*` variable, HOME or XDG directory of yours), binds to
+  `127.0.0.1` with pairing off (`--no-pairing --refuse-public`), and keeps its metadata in the temporary HOME.
+- The client is pinned to that metadata, and the tests refuse to write unless it is under the temporary root and not
+  in your home, every local socket it lists is under the temporary root, a process it names has the temporary HOME,
+  and the runtime that answers is the one it names. The test process points `ORCA_USER_DATA_PATH` there too, and the
+  host's process scan keeps only processes with the temporary HOME, so your agents are never looked at.
+- Run it with the `ORCA_*` variables of the shell it starts from unset when that shell is itself in an Orca terminal
+  (`for v in $(env | grep -o '^ORCA_[A-Z_]*'); do unset $v; done`): the server and git get environments of their own
+  anyway, but nothing else in the test process should see the user's Orca.
+- At the end the tests stop the server they started and every process whose `/proc/<pid>/environ` holds the temporary
+  HOME (the terminal daemon, its shells, what ran in them), each by PID after checking, never by name, and fail if one
+  is left; then they remove the temporary root. A failed run prints the server's log tail.
+
 ## New-user copy guard (`scripts/test/test_onboarding_copy.py`, #287)
 
 Onboarding copy (guide cards, main-chat errors, login, add computer, model wizard, empty states) must not mention hub.json, token (pairing code allowed), jq, personad, TLS, node, herdr,
