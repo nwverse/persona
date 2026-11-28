@@ -1645,6 +1645,7 @@ describe("TodosView detail parent picker, item_type filter & toggle, and undo au
     const taskBtn = typeGroup.querySelector<HTMLButtonElement>('[data-item-type="task"]')!;
     expect(personalBtn.getAttribute("aria-checked")).toBe("true");
     expect(taskBtn.getAttribute("aria-checked")).toBe("false");
+    expect(host.querySelector("[data-testid=todo-detail-template-badge]")).toBeNull();
 
     // Toggle to "task" -> calls PATCH /todos/personal_note with { item_type: "task" } and refreshes
     await act(async () => taskBtn.click());
@@ -1659,6 +1660,7 @@ describe("TodosView detail parent picker, item_type filter & toggle, and undo au
     );
     expect(api).toHaveBeenCalledWith("/todos", expect.anything());
     expect(host.querySelector('[data-testid=todo-detail-item-type] [data-item-type="task"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector("[data-testid=todo-detail-template-badge]")?.textContent).toBe(t("todos.detail_template_work_goal"));
   });
 
   it("exposes Mark unread button on seen/auto-seen todos under todos_v2 and calls DELETE /todos/{id}/seen", async () => {

@@ -28,6 +28,7 @@
   "launcher_swapped": "{launcher} 不在 {machine} 上，改用 {to}（它的默认模型）",
   "launcher_desktop_default": "{launcher} 只用于你在新建 Agent 里发起的会话，这次改用 {to}（它的默认模型）",
   "launcher_desktop_default_model": "{launcher} 只用于你在新建 Agent 里发起的会话，这次改用 {to}，并保留你选择的模型 {model}",
+  "orca_chat_option_dropped": "这次以 {to} 打开；它不提供 {option}，因此使用 Orca 自己的设置",
   "launcher_swapped_model": "{launcher} 不在 {machine} 上，改用 {to}，并保留你选择的模型 {model}",
   "speed_type": "speed 必须是字符串：standard、fast 或 ultrafast。",
   "speed_invalid": "Agent speed {speed} 无效：请使用 standard、fast 或 ultrafast。",
