@@ -477,8 +477,9 @@ function IntegrationsForManager({
 
   const filtered = useMemo(() => filterIntegrationItems(items, filter), [items, filter]);
   const builtins = useMemo(() => filtered.filter((it) => it.kind === "builtin"), [filtered]);
+  const builtinExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && it.builtinExtension), [filtered]);
   const pushSources = useMemo(() => filtered.filter((it) => it.kind === "source"), [filtered]);
-  const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension"), [filtered]);
+  const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension" && !it.builtinExtension), [filtered]);
 
   const isSourcesView = route.kind === "sources" && !route.state;
   const sourceDetailState = route.kind === "sources" && route.state ? route.state : null;
@@ -580,6 +581,7 @@ function IntegrationsForManager({
         type="button"
         data-integration-row={item.key}
         data-integration-kind={item.kind}
+        data-integration-source={item.extension?.source}
         data-integration-id={item.id}
         data-integration-sub-alert={item.subscriptionAlert?.state}
         aria-current={selected || undefined}
@@ -593,6 +595,9 @@ function IntegrationsForManager({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
             <span className="max-w-full truncate text-meta font-medium text-ink">{item.name}</span>
+            {!compactList && item.builtinExtension && (
+              <Pill>{t("settings-integrations.builtin_badge")}</Pill>
+            )}
             {!compactList &&
               item.capabilities.map((cap) => (
                 <Pill key={cap}>{t(CAP_LABEL_KEY[cap])}</Pill>
@@ -784,6 +789,20 @@ function IntegrationsForManager({
         </Group>
       )}
 
+      {builtinExtensions.length > 0 && (
+        <Group
+          anchor={builtins.length === 0 ? "integrations" : "builtin-extensions"}
+          title={
+            <span className="flex items-center gap-2">
+              {t("settings-integrations.group_builtin_extensions")}
+              <span className="font-normal">{t("settings-integrations.count", { count: builtinExtensions.length })}</span>
+            </span>
+          }
+        >
+          {builtinExtensions.map((item) => renderRow(item))}
+        </Group>
+      )}
+
       {pushSources.length > 0 && (
         <Group
           anchor="push-sources"
@@ -800,7 +819,7 @@ function IntegrationsForManager({
 
       {installedExtensions.length > 0 && (
         <Group
-          anchor={builtins.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
+          anchor={builtins.length === 0 && builtinExtensions.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
           title={
             <span className="flex items-center gap-2">
               {t("settings-integrations.group_extensions")}

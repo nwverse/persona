@@ -657,6 +657,65 @@ describe("buildIntegrationCatalog deduplication and capability classification", 
     expect(filterIntegrationItems(items, "channels").map((it) => it.id)).not.toContain("sub_push_iphone");
     expect(isIntegrationRowSelected(pushItem.sub, pushItem, null)).toBe(true);
   });
+
+  it("distinguishes source=builtin extensions from user-installed extensions while preserving extension target boundaries", () => {
+    const builtinExtensions: HubExtension[] = [
+      {
+        id: "imessage",
+        name: "信息（iMessage）",
+        kind: "plugin",
+        status: "running",
+        enabled: true,
+        source: "builtin",
+        description: "Read Messages on your Mac.",
+        contributes: { connectors: ["imessage"] },
+      },
+      {
+        id: "voice",
+        name: "Voice",
+        kind: "plugin",
+        status: "running",
+        enabled: true,
+        source: "builtin",
+        description: "Built-in voice capabilities.",
+        contributes: { voice: ["voice"] },
+      },
+    ];
+    const items = buildIntegrationCatalog({
+      extensions: [...SAMPLE_EXTENSIONS, ...builtinExtensions],
+      channels: SAMPLE_CHANNELS,
+      connectors: [
+        ...SAMPLE_CONNECTORS,
+        { id: "imessage", name: "信息", status: "ok", capabilities: ["inbox", "archive"] },
+      ],
+      hasMail: true,
+      hasLark: false,
+      hasFeishuBot: false,
+      mailAccounts: [{ id: "m1", email: "me@example.com", status: "ok" }],
+    });
+
+    const imessage = items.find((it) => it.id === "imessage")!;
+    const voice = items.find((it) => it.id === "voice")!;
+    const larkx = items.find((it) => it.id === "larkx")!;
+
+    // Built-in extensions keep kind="extension" and target.kind="extension" (do not collapse into kind="builtin").
+    expect(imessage.kind).toBe("extension");
+    expect(imessage.builtinExtension).toBe(true);
+    expect(imessage.target).toEqual({
+      kind: "extension",
+      id: "imessage",
+      name: "信息（iMessage）",
+      connectorId: "imessage",
+    });
+    expect(voice.kind).toBe("extension");
+    expect(voice.builtinExtension).toBe(true);
+    expect(voice.target?.kind).toBe("extension");
+    expect(larkx.builtinExtension).toBeUndefined();
+    // Deduplicated: imessage connector was claimed by the imessage built-in extension.
+    expect(items.filter((it) => it.id === "imessage")).toHaveLength(1);
+    // Ordering places built-in extensions before user-installed extensions.
+    expect(items.indexOf(imessage)).toBeLessThan(items.indexOf(larkx));
+  });
 });
 
 describe("Integrations unified list view", () => {
@@ -908,6 +967,71 @@ describe("Integrations unified list view", () => {
     } finally {
       await initI18n("zh-Hans");
     }
+  });
+
+  it("renders source=builtin extensions in their own Built-in extensions group with Built-in pill, separate from Installed extensions", async () => {
+    const extensionsWithBuiltins: HubExtension[] = [
+      ...SAMPLE_EXTENSIONS,
+      {
+        id: "imessage",
+        name: "信息（iMessage）",
+        kind: "plugin",
+        status: "running",
+        enabled: true,
+        source: "builtin",
+        description: "Read Messages on your Mac.",
+        contributes: { connectors: ["imessage"] },
+      },
+      {
+        id: "cua",
+        name: "Computer Use",
+        kind: "plugin",
+        status: "stopped",
+        enabled: false,
+        source: "builtin",
+        description: "Operate a desktop.",
+        contributes: { tools: ["cua"] },
+      },
+    ];
+    stubFullHubFetch({
+      extensions: extensionsWithBuiltins,
+      connectors: [
+        ...SAMPLE_CONNECTORS,
+        { id: "imessage", name: "信息", status: "ok", capabilities: ["inbox", "archive"] },
+      ],
+    });
+    for (const lang of ["en", "zh-Hans", "ja"]) {
+      await initI18n(lang);
+      await act(async () => {
+        root.render(<Integrations open={null} twoCol={false} onOpen={() => {}} />);
+      });
+      await flush();
+
+      const builtinExtGroup = host.querySelector<HTMLElement>('[data-settings-group="builtin-extensions"]')!;
+      const installedExtGroup = host.querySelector<HTMLElement>('[data-settings-group="extensions"]')!;
+      expect(builtinExtGroup).not.toBeNull();
+      expect(installedExtGroup).not.toBeNull();
+      expect(builtinExtGroup.querySelector("h2")?.textContent).toContain(t("settings-integrations.group_builtin_extensions"));
+      expect(installedExtGroup.querySelector("h2")?.textContent).toContain(t("settings-integrations.group_extensions"));
+
+      const imessageRow = builtinExtGroup.querySelector<HTMLButtonElement>('[data-integration-id="imessage"]')!;
+      const cuaRow = builtinExtGroup.querySelector<HTMLButtonElement>('[data-integration-id="cua"]')!;
+      expect(imessageRow).not.toBeNull();
+      expect(imessageRow.dataset.integrationKind).toBe("extension");
+      expect(imessageRow.dataset.integrationSource).toBe("builtin");
+      expect(imessageRow.textContent).toContain(t("settings-integrations.builtin_badge"));
+      expect(cuaRow).not.toBeNull();
+      expect(cuaRow.dataset.integrationSource).toBe("builtin");
+
+      // Built-in extensions are NOT placed under "Installed extensions", while user-installed ones remain there.
+      expect(installedExtGroup.querySelector('[data-integration-id="imessage"]')).toBeNull();
+      expect(installedExtGroup.querySelector('[data-integration-id="cua"]')).toBeNull();
+      const larkxRow = installedExtGroup.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!;
+      expect(larkxRow).not.toBeNull();
+      expect(larkxRow.dataset.integrationSource).toBe("installed");
+      expect(larkxRow.textContent).not.toContain(t("settings-integrations.builtin_badge"));
+    }
+    await initI18n("zh-Hans");
   });
 });
 

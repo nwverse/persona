@@ -15,6 +15,7 @@
   "cap_data": "Data source",
   "cap_tools": "Tools & appearance",
   "group_builtin": "Built-in services",
+  "group_builtin_extensions": "Built-in extensions",
   "group_push_sources": "Push sources",
   "group_extensions": "Installed extensions",
   "count_one": "1 item",
