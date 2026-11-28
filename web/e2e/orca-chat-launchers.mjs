@@ -85,12 +85,18 @@ try {
       if (!without && !text.includes(g)) fail(`${theme}: no ${g} group in the model panel`);
     }
     ok(`${theme}: ${without ? "no Orca chat group" : "the Orca chat groups"} in the model panel`);
-    if (!without) {
-      const group = panel.locator("[data-panel-launcher]").filter({ hasText: GROUPS[1] }).first();
-      await group.scrollIntoViewIfNeeded();
-      if ((await group.getAttribute("aria-expanded")) === "false") await group.click();
-    }
     await shot("model-panel");
+    if (!without) {
+      // the Codex chat launcher's own models, as the panel lists a launcher's when it is picked in its first column
+      try {
+        await panel.getByText(GROUPS[1], { exact: true }).first().click({ timeout: 8000 });
+      } catch {
+        fail(`${theme}: could not open the ${GROUPS[1]} group`);
+      }
+      await until(async () => ((await panel.textContent()) ?? "").includes("GPT-5.5"), `${theme}: ${GROUPS[1]} shows no models`);
+      ok(`${theme}: ${GROUPS[1]} lists its models`);
+      await shot("model-panel-codex");
+    }
     await ctx.close();
   }
   console.log(`PASS orca chat launchers${without ? " (without)" : ""}`);
