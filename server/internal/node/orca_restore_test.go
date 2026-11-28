@@ -25,7 +25,8 @@ func TestOrcaAfterARebootAPersonaAgentIsShownAsItIs(t *testing.T) {
 	withShellLaunchers(t)
 	forgetOfflineScan()
 	cwd := mkdir(t, filepath.Join(home, "proj"))
-	writeTranscript(t, home, cwd, sidA, time.Now().Add(-time.Hour), finishedTurn(cwd)...)
+	pad := `{"type":"user","message":{"role":"user","content":"` + strings.Repeat("x", 2048) + `"}}` // offline listing skips files under 2 KB
+	writeTranscript(t, home, cwd, sidA, time.Now().Add(-time.Hour), append([]string{pad}, finishedTurn(cwd)...)...)
 	knownProbes(t, "work")
 	n.setManaged([]proto.ManagedLauncher{{Name: "work", BaseURL: "https://gateway.example.com", Model: "glm-5"}})
 	n.bootAt = time.Now()
