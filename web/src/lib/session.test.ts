@@ -82,6 +82,12 @@ describe("session capability contract", () => {
     expect(sessionCanRename(undefined)).toBe(false);
   });
 
+  it("offers rename for other terminal agents only when there is a tab", () => {
+    const terminal: Session = { ...legacy, agent: "gemini" };
+    expect(sessionCanRename({ ...terminal, slot_id: undefined, tab_id: undefined })).toBe(false);
+    expect(sessionCanRename({ ...terminal, slot_id: "tab" })).toBe(true);
+  });
+
   it("quotes the folder in the resume command, and gives only the command without one", () => {
     expect(resumeCommand({ ...legacy, cwd: "/Users/me/My Project" })).toBe("cd '/Users/me/My Project' && claude --resume raw-thread");
     expect(resumeCommand({ ...legacy, cwd: "/tmp/it's; $(rm -rf ~) & x" })).toBe(`cd '/tmp/it'\\''s; $(rm -rf ~) & x' && claude --resume raw-thread`);

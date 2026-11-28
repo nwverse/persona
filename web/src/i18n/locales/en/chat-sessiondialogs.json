@@ -11,6 +11,8 @@
   "rename_hint_unified": "Updates the {engine} tab and, where supported, the CLI session name.",
   "rename_hint_assistant": "Only changes this chat's title in Persona.",
   "rename_hint_agent": "The tab name syncs to {engine}. The session name uses Claude's /rename, so claude --resume on the computer shows it too.",
+  "rename_hint_codex": "The tab name syncs to {engine}. The session name updates the Codex session too.",
+  "rename_hint_tab_only": "Only updates the {engine} tab name.",
   "space_renamed": "Space renamed",
   "rename_space": "Rename space",
   "space_name": "Space name",

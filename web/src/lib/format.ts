@@ -2,7 +2,7 @@ import { parseAgentPhase, type AgentPhase, type AgentView } from "./agent-view-w
 import { inferAgentView } from "./legacy-agent-view";
 import type { AgentState, StatusMarkState, Interaction, Session, SessionCapabilities } from "./types";
 import { formatDate, formatRelative, t } from "../i18n";
-import { normalizeTraeCliName, sessionAgentName } from "./agent-kind";
+import { agentId, normalizeTraeCliName, sessionAgent, sessionAgentName } from "./agent-kind";
 import { usageLimitLabel } from "./usage-limit";
 import { workLine } from "./work";
 import { closeoutLine, closeoutSuffix, shownCloseout } from "./closeout";
@@ -18,10 +18,22 @@ export function sessionCan(s: Session | undefined, operation: keyof SessionCapab
   return s.capabilities?.[operation] === true;
 }
 
-/** Rename (#6294): the node's `capabilities.rename` where it says (a runtime's session, which has no terminal), else as
- *  before: a row that can send and is the user's own Agent or a Persona conversation (no other source). */
-export function sessionCanRename(s: Session | undefined): boolean {
+export function sessionHasRenameTab(s: Session): boolean {
+  return !s.assistant && Boolean(s.slot_id || s.tab_id);
+}
+
+/** Whether the session's own title can be changed. Terminal agents need a supported CLI rename command. */
+export function sessionCanRenameTitle(s: Session | undefined): boolean {
   if (!s) return false;
+  if (s.assistant) return true;
+  if (s.source_kind === "runtime") return s.capabilities?.rename === true;
+  const agent = agentId(sessionAgent(s).agent);
+  return agent === "claude" || agent === "codex";
+}
+
+/** Respect the node's rename capability when present and offer the action only if there's a name to edit. */
+export function sessionCanRename(s: Session | undefined): boolean {
+  if (!s || !(sessionHasRenameTab(s) || sessionCanRenameTitle(s))) return false;
   const said = s.capabilities?.rename;
   if (typeof said === "boolean") return said;
   return sessionCan(s, "send") && (Boolean(s.assistant) || !s.source_kind);

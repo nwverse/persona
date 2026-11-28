@@ -11,6 +11,8 @@
   "rename_hint_unified": "{engine} のタブ名を変更します。CLI がセッション名の変更に対応している場合は、そちらも変更します。",
   "rename_hint_assistant": "Personaでのこのチャットのタイトルだけを変更します。",
   "rename_hint_agent": "タブ名は{engine}に同期されます。セッション名はClaudeの/renameで変更され、コンピューターのclaude --resumeでも表示されます。",
+  "rename_hint_codex": "タブ名は{engine}に同期されます。セッション名はCodexのセッションにも反映されます。",
+  "rename_hint_tab_only": "{engine}のタブ名だけを変更します。",
   "space_renamed": "スペースの名前を変更しました",
   "rename_space": "スペースの名前を変更",
   "space_name": "スペース名",

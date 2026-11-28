@@ -59,7 +59,7 @@ describe("RenameDialog", () => {
   });
 
   it("renames a runtime's session by its title alone, without the herdr / Claude hint (#6294)", async () => {
-    const runtime = { ...session, source_kind: "runtime", agent: "claude", capabilities: { read: true, send: true, rename: true } } as Session;
+    const runtime = { ...session, source_kind: "runtime", agent: "opencode", capabilities: { read: true, send: true, rename: true } } as Session;
     await act(async () => root.render(<RenameDialog session={runtime} open onClose={closed} />));
     expect(document.querySelectorAll("[role=dialog] input")).toHaveLength(1);
     expect(document.querySelector("[role=dialog]")!.textContent).not.toContain("herdr");
@@ -71,6 +71,22 @@ describe("RenameDialog", () => {
   it("keeps the hint for an Agent in a terminal", async () => {
     await act(async () => root.render(<RenameDialog session={session} open onClose={closed} />));
     expect(document.querySelector("[role=dialog]")!.textContent).toContain("herdr");
+  });
+
+  it("shows just the tab field and sends just the tab name for a Gemini terminal", async () => {
+    const terminal = { ...session, agent: "gemini", slot_id: "tab", slot_name: "Old tab" };
+    await act(async () => root.render(<RenameDialog session={terminal} open onClose={closed} />));
+    const dialog = document.querySelector("[role=dialog]")!;
+    expect([...dialog.querySelectorAll("label")].map((label) => label.textContent)).toEqual(["herdr tab name"]);
+    expect(dialog.textContent).toContain("Only updates the herdr tab name.");
+    await type("New tab");
+    await enter();
+    expect(JSON.parse(String(posts("/sessions/m/s/rename")[0].init.body))).toEqual({ tab_name: "New tab" });
+  });
+
+  it("shows no rename dialog for a Gemini terminal without a tab", async () => {
+    await act(async () => root.render(<RenameDialog session={{ ...session, agent: "gemini" }} open onClose={closed} />));
+    expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 
   it("sends again once a failed rename has come back", async () => {

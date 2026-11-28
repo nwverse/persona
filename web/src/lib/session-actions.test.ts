@@ -141,4 +141,16 @@ describe("rename", () => {
   it("ignores empty names", () => {
     expect(renameBody(s(), "", "")).toBeNull();
   });
+
+  it.each(["agy", "gemini", "kimi"])("only sends a tab rename for a terminal %s session", (agent) => {
+    expect(renameBody(s({ agent }), "auth", "New title")).toEqual({ tab_name: "auth" });
+    expect(renameBody(s({ agent }), "login", "New title")).toBeNull();
+    expect(renameBody(s({ agent, slot_id: undefined }), "auth", "New title")).toBeNull();
+  });
+
+  it("keeps title renames for Codex and for runtimes that declare support", () => {
+    expect(renameBody(s({ agent: "codex" }), "auth", "New title")).toEqual({ tab_name: "auth", title: "New title" });
+    expect(renameBody(s({ agent: "opencode", source_kind: "runtime", slot_id: undefined, capabilities: { rename: true } }), "", "New title"))
+      .toEqual({ title: "New title" });
+  });
 });
