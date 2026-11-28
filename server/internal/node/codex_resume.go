@@ -107,7 +107,30 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 	if n.codexEncryptedFailed(id, turn) || desktop && n.codexTurnRunning(src, turn) {
 		return false
 	}
-	return !m.sub && m.cwd != ""
+	return !m.sub && m.cwd != "" && !n.codexWriterLockHeld(src)
+}
+
+// sendCodexSession runs under the send's input lock, which also serializes explicit recovery.
+func (n *Node) sendCodexSession(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	quit := len(images) == 0 && exitCommand(text)
+	if n.codexResumable(ctx, id) {
+		if quit || codexCompactCommand(text, images) {
+			return n.stoppedRefusal(id)
+		}
+		return n.resumeCodexThread(ctx, id, opts.Launcher, text, images, "")
+	}
+	if src, ok := n.takeoverSource(id); ok && !quit && src.path != "" && !n.codexRemoteConnecting(src.home) && !codexArchived(src.home, src.path) {
+		if remote := n.codexSharedRemote(src.home); remote != nil {
+			plan, err := n.prepareCodexTakeover(ctx, id)
+			if err != nil {
+				return err
+			}
+			if _, err := n.commitCodexTakeoverLocked(ctx, id, plan.Token, false, remote); err != nil {
+				return err
+			}
+		}
+	}
+	return n.sendCodex(ctx, id, text, images)
 }
 
 // codexRemoteConnecting: an app-server of home is configured but not connected yet.

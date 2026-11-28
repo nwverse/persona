@@ -189,6 +189,9 @@ struct ChatView: View {
     @Environment(\.sideColumn) private var sideColumn
     /// The page draws this chat's lifted message (`MessageLiftHost`).
     @Environment(\.messageLiftHost) private var liftHost
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
     /// style (#1091). Other platforms retain `ComposerRow` / `PromptComposer` and their mode chips. On the Mac
     /// the card in every style but BeautifulUI's (its prompt bar is already one): the field, and under it Add, the model
@@ -728,6 +731,15 @@ struct ChatView: View {
         .stackSegment()
     }
 
+    #if os(iOS)
+    /// A page opened from a message covers the main chat even while its underlying view stays mounted.
+    private var coveredMainChat: Bool? {
+        guard replySpeechContext != nil, style == .assistant, !backgroundActivity, key == model.assistantMain else { return nil }
+        return link != nil || viewingImages != nil || file != nil || openedKnowledge != nil || linkedTodo != nil
+            || hubSheet != nil || previewing || planOpen || showAssistantModel || readinessRoute != nil || showTodoDetail
+    }
+    #endif
+
     @inline(never) private func applyChatLifecycleTop(_ base: AnyView) -> AnyView {
         base
         .environment(\.openFile, actions.openFile)
@@ -755,6 +767,11 @@ struct ChatView: View {
         .environment(\.openPort, actions.openPort)
         // Web links open in the in-app sheet (Feishu docs in the native reader); local paths open the machine's file viewer.
         .environment(\.openURL, actions.openURL)
+        #if os(iOS)
+        .onChange(of: coveredMainChat, initial: true) { _, covered in
+            if let covered { replySpeechContext?.chatSheetOpen = covered }
+        }
+        #endif
         .sheet(item: $link) { t in LinkSheet(target: t, key: key, choosePreview: { openPort($0.link, name: $0.name) }) }
         .readinessSheets($readinessRoute)
         .onChange(of: showAssistantModel) { _, on in
@@ -923,6 +940,17 @@ struct ChatView: View {
                                             presentation: presentation)
         let feed = projection.feed(allFeed, for: presentation)
         var lines = backgroundActivity ? projection.activity : projection.timeline
+        if NativeTemplateStore.shared.plainMainChat, style == .assistant, !backgroundActivity {
+            // Questions, replies and work needing the owner. Finished patrols and briefings stay in Background activity;
+            // a live supervision round, plans, tasks, live cards and errors remain in the main timeline (#17129).
+            lines = lines.filter { line in
+                switch line.content {
+                case .supervision(_, _, let live, _): live
+                case .feed(let item): ![FeedItem.Kind.brief, .today, .inboxSuggestion].contains(item.kind)
+                default: true
+                }
+            }
+        }
         lines = ModelChanges.mark(lines)
         #if os(iOS)
         // An Agent's long finished answers as several rows: one row many screens tall stuttered whenever it was on
@@ -2846,9 +2874,11 @@ struct ChatView: View {
         HiddenDuringCall(key: key) {
             // Needs You (always visible), In Progress and neutral Wrap Up in one row (#3393, #16165); Finished opens
             // from the tray header instead of staying persistent on the collapsed bar.
-            AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
-            // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
-            if !usesShellComposer { RouteChip(conversation: conversation) }
+            if !NativeTemplateStore.shared.plainMainChat {
+                AssistantActionBar(conversation: conversation, key: key, computer: computerActivity, dock: dock, dockOwn: own)
+                // When using `ShellComposerBar`, task routing lives in `ComposerTopSlot` fused to the composer's top edge.
+                if !usesShellComposer { RouteChip(conversation: conversation) }
+            }
         }
     }
 
@@ -3615,6 +3645,35 @@ struct ChatView: View {
         withAnimation(.smooth(duration: 0.35)) { chrome.collapse = 0 }
     }
 
+    private var compactTitleControl: some View {
+        Button { Haptics.tap(); showChrome() } label: {
+            HStack(spacing: Theme.Space.sm) {
+                // Out of reach: the slim bar says so too (the open header's subtitle explains on a tap).
+                if model.connection.shown != .online {
+                    ProgressView().controlSize(.mini)
+                    Text(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)).lineLimit(1)
+                } else {
+                    if let s = session {
+                        if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
+                        StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
+                    }
+                    Text(compactTitle).lineLimit(1).truncationMode(.tail)
+                }
+            }
+            .animation(Theme.Motion.standard, value: model.connection.shown)
+            .font(Theme.Font.captionStrong)
+            .padding(.horizontal, Theme.Space.m)
+            .scaledFrame(height: Theme.Size.wellXS)
+            .background(Theme.Fill.chip, in: .capsule)
+            .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.connection.shown != .online ? String(localized: "\(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)), show title and tags")
+                            : String(localized: "\(compactTitle), show title and tags"))
+        .accessibilityIdentifier("chat.compactTitle")
+        .titleSaysLink() // the slim bar says Connecting… too: the shell's floating pill does not say it again
+    }
+
     /// The chrome folded away: back, the session's name as the open header says it — tap it for everything again,
     /// where it runs included — and the open header's ⋯.
     private var compactChrome: some View {
@@ -3629,32 +3688,7 @@ struct ChatView: View {
             .modifier(SidebarButtonID(active: backShowsList))
             .noBackWhen(hidesBack)
             Spacer(minLength: 0)
-            Button { Haptics.tap(); showChrome() } label: {
-                HStack(spacing: Theme.Space.sm) {
-                    // Out of reach: the slim bar says so too (the open header's subtitle explains on a tap).
-                    if model.connection.shown != .online {
-                        ProgressView().controlSize(.mini)
-                        Text(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)).lineLimit(1)
-                    } else {
-                        if let s = session {
-                            if !s.assistant { AgentMark(s, side: Theme.Size.markXS) } // its agent before its state (#6390)
-                            StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
-                        }
-                        Text(compactTitle).lineLimit(1).truncationMode(.tail)
-                    }
-                }
-                .animation(Theme.Motion.standard, value: model.connection.shown)
-                .font(Theme.Font.captionStrong)
-                .padding(.horizontal, Theme.Space.m)
-                .scaledFrame(height: Theme.Size.wellXS)
-                .background(Theme.Fill.chip, in: .capsule)
-                .contentShape(.capsule)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(model.connection.shown != .online ? String(localized: "\(ConnectionLabel.text(model.connection.shown, hubRestarting: model.hubUpdate?.restarting == true)), show title and tags")
-                                : String(localized: "\(compactTitle), show title and tags"))
-            .accessibilityIdentifier("chat.compactTitle")
-            .titleSaysLink() // the slim bar says Connecting… too: the shell's floating pill does not say it again
+            titleMenu(compactTitleControl)
             Spacer(minLength: 0)
             // The open header's ⋯ and its menu (#7962, the user's call; #3719 had left this spot empty). As wide as ‹,
             // so the capsule stays in the middle and no narrower; the open ⋯'s square to hit. Drawn bare like ‹: the
@@ -3943,7 +3977,22 @@ struct ChatView: View {
     /// A custom title: tapping it toggles the developer info card (instead of the system scroll-to-top).
     /// While the hub is out of reach the subtitle turns into a spinner and Connecting… (Telegram keeps the name and
     /// swaps the "online" line the same way); a tap then explains the link instead of opening the session info.
-    @ViewBuilder private var titleButton: some View {
+    private var titleButton: some View { titleMenu(sessionTitleControl) }
+
+    @ViewBuilder private func titleMenu<Content: View>(_ control: Content) -> some View {
+        #if os(iOS)
+        if style == .dev, let session {
+            control.contextMenu {
+                AgentActionMenuReader(session: session, currentPane: pane, hosted: host != nil, showsSpace: openSpace != nil,
+                                      sides: sides, handlers: agentMenuHandlers)
+            }
+        } else { control }
+        #else
+        control
+        #endif
+    }
+
+    @ViewBuilder private var sessionTitleControl: some View {
         // Hosted for several agents (a task's): the title's ⌄ switches between them, and has the session's info too.
         // The switch stays while the hub is out of reach (its line then says so, and the menu explains the link).
         if style == .dev, let host, host.agents.count > 1 {
@@ -3970,7 +4019,7 @@ struct ChatView: View {
             }
             .labelOnlyMenu()
             .tint(Color.primary) // a title, not a button: the menu's accent tint would color it blue
-            .accessibilityLabel("\(title), \(host.agents.count) agents, tap to switch")
+            .accessibilityLabel("\(shownTitle), \(host.agents.count) agents, tap to switch")
             .accessibilityIdentifier("chat.title")
             #if DEBUG
             .modifier(UITestSessionProof(session: key.path))
@@ -3986,7 +4035,7 @@ struct ChatView: View {
         let link = model.connection.shown
         return VStack(spacing: Theme.Space.xxs) {
             HStack(spacing: Theme.Space.xs) {
-                Text(title).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
+                Text(shownTitle).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
                 if chevron {
                     ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                 }
@@ -4020,7 +4069,7 @@ struct ChatView: View {
             titleLabel(chevron: false)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(link != .online ? String(localized: "\(title), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(title), view session info"))
+        .accessibilityLabel(link != .online ? String(localized: "\(shownTitle), \(ConnectionLabel.text(link, hubRestarting: model.hubUpdate?.restarting == true)), view connection details") : String(localized: "\(shownTitle), view session info"))
         .accessibilityIdentifier("chat.title")
         #if DEBUG
         .modifier(UITestSessionProof(session: key.path))
@@ -4640,8 +4689,12 @@ struct ChatView: View {
 
     /// The slim bar's words: what the session is, as the open header, the web and Android name it (#3631). Where it runs
     /// is a tap away, on the open header's second line and in Session Info; the pane's name only off the chat.
+    private var shownTitle: String {
+        style == .dev ? model.pendingAgentTitle(key) ?? title : title
+    }
+
     private var compactTitle: String {
-        pane == .chat ? title : title + " · " + pane.title
+        pane == .chat ? shownTitle : shownTitle + " · " + pane.title
     }
 
     /// A hub link asked for one of this chat's messages (AppModel.messageJump): the entry target from now; taken once.
@@ -5737,6 +5790,9 @@ struct Composer: View, Equatable {
     }
 
     @Environment(AppModel.self) private var model
+    #if os(iOS)
+    @Environment(\.replySpeechContext) private var replySpeechContext
+    #endif
     @Environment(\.shellChat) private var shellChat
     @Environment(\.shell) private var shell
     /// The shell's composer (`ShellComposerBar`): the assistant's conversation and, in the shell, an agent's too, in every
@@ -6722,6 +6778,9 @@ struct Composer: View, Equatable {
         // On screen at once; the request runs in the background (a failure turns the bubble into "Resend").
         guard model.sendNow(key, text: message, images: images.map(\.1)) else { return false }
         if raw == text { text = "" }
+        #if os(iOS)
+        if text.isEmpty, key == model.assistantMain { replySpeechContext?.sentDraft() }
+        #endif
         images = []
         held.sentFiles()
         model.composerContexts[key] = nil

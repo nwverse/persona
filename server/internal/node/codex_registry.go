@@ -1130,30 +1130,32 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				if !liveWriter && !pass.desktopAvailable(src.home) {
 					resumable := n.codexResumableIn(context.Background(), id, pass)
 					if resumable {
+						s.Capabilities.Send, s.ReadOnlyReason = true, ""
 						s.Capabilities.Terminal = true
 						s.Capabilities.StopCause = n.codexHistoryStopCause(id, src, m, true)
 					}
 					if takeover := n.codexTakeoverRowIn(id, src, m, false, pass); takeover != nil {
 						s.Capabilities.Takeover = takeover
-						if takeover.CanResume || resumable {
-							s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopRecoverableKey)
-						} else {
+						if !resumable && !takeover.CanResume {
 							s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopContinueOnlyKey)
+						} else if !resumable {
+							s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopRecoverableKey)
 						}
-					} else if resumable {
-						s.ReadOnlyReason = i18n.T(i18n.Default, codexDesktopRecoverableKey)
 					}
 				}
 			} else if !desktopViewOnly {
 				if s.Status == proto.StatusOffline && n.codexResumableIn(context.Background(), id, pass) {
-					// Nothing has it open: a stopped agent, read-only like any (stopped.go, #4754); its terminal page's Resume
-					// brings it back in a new tab (session.start, codex_resume.go).
+					s.Capabilities.Send, s.ReadOnlyReason = true, ""
 					s.Capabilities.Terminal = true
-					s.ReadOnlyReason = stoppedReason
 					s.Capabilities.StopCause = n.stopCause(id)
 				}
 				if !pass.homeUnavailable(src.home) {
-					s.Capabilities.Takeover = n.codexTakeoverRowIn(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking, pass)
+					takeover := n.codexTakeoverRowIn(id, src, m, liveRollouts[id] != "" || s.Status == proto.StatusWorking, pass)
+					s.Capabilities.Takeover = takeover
+					if !s.Capabilities.Send && s.Status == proto.StatusOffline && s.Cwd != "" && takeover != nil && takeover.CanResume && !takeover.Running && !takeover.AppOwned &&
+						src.path != "" && n.codexSharedRemote(src.home) != nil && !n.codexRemoteConnecting(src.home) && !codexArchived(src.home, src.path) {
+						s.Capabilities.Send, s.ReadOnlyReason = true, ""
+					}
 				}
 			}
 		}

@@ -1,4 +1,4 @@
-import PersonaScreenKit
+@testable import PersonaScreenKit
 import XCTest
 
 /// What the phone measures of the stream for the tiers (#6396): queueing above the window's floor (any clock offset),
@@ -189,5 +189,153 @@ final class ReceiverSignalsTests: XCTestCase {
         XCTAssertEqual(s.decodeP95Ms, 5)
         XCTAssertEqual(s.replacedShare, 0)
         XCTAssertFalse(s.burstKbps.isEmpty)
+    }
+
+    func testNonFiniteDecodeNegativeBytesAndUnboundedBurstsAreGuarded() {
+        var r = ReceiverSignals()
+        r.decoded(ms: 4, at: 100_000 + offset)
+        r.decoded(ms: .nan, at: 150_000 + offset)
+        r.decoded(ms: .infinity, at: 200_000 + offset)
+        r.decoded(ms: -.infinity, at: 250_000 + offset)
+        r.decoded(ms: -10, at: 300_000 + offset)
+        r.decoded(ms: 20, at: 350_000 + offset)
+
+        // Negative bytes must not turn deliveredKbps negative.
+        for i in 0..<6 {
+            let at = 100_000 + UInt64(i) * 60_000
+            r.frame(captureMicros: at, arrivalMicros: at + offset, firstByteMicros: nil, bytes: -50_000, refinement: false, fps: 30)
+        }
+        let s = r.take(now: 450_000 + offset)
+        XCTAssertEqual(s.decodeP95Ms, 20)
+        XCTAssertEqual(s.deliveredKbps ?? -1, 0, accuracy: 0.001)
+
+        // Direct percentile/mean guards for non-finite values and out-of-range p.
+        XCTAssertEqual(ReceiverSignals.percentile([.nan, 10, .infinity, 20], 0.5), 20)
+        XCTAssertNil(ReceiverSignals.percentile([.nan, .infinity], 0.5))
+        XCTAssertNil(ReceiverSignals.percentile([1, 2, 3], .nan))
+        XCTAssertNil(ReceiverSignals.percentile([1, 2, 3], .infinity))
+        XCTAssertEqual(ReceiverSignals.percentile([1, 2, 3], -1), 1)
+        XCTAssertEqual(ReceiverSignals.percentile([1, 2, 3], 2), 3)
+        XCTAssertEqual(ReceiverSignals.mean([.nan, 10, .infinity, 30]), 20)
+
+        // Bursts cap at ReceiverSignals.maxBursts (dropping oldest 50 and keeping newest 256) if frame() runs without take().
+        var bursty = ReceiverSignals()
+        let totalBursts = ReceiverSignals.maxBursts + 50
+        for i in 0..<totalBursts {
+            let at = UInt64(i + 1) * 20_000
+            bursty.frame(captureMicros: at, arrivalMicros: at + 10_000, firstByteMicros: at,
+                         bytes: 40_000 + i * 1_000, refinement: true, fps: 30)
+        }
+        let burstValues = bursty.take(now: 10_000_000).burstKbps
+        XCTAssertEqual(burstValues.count, ReceiverSignals.maxBursts)
+        XCTAssertEqual(burstValues.first ?? -1, Double(40_000 + 50 * 1_000) * 8 * 1000 / 10_000, accuracy: 0.001)
+        XCTAssertEqual(burstValues.last ?? -1, Double(40_000 + (totalBursts - 1) * 1_000) * 8 * 1000 / 10_000, accuracy: 0.001)
+    }
+
+    func testReedSolomonBoundsAndRouteEligibilityEdgeCases() throws {
+        // Overflow-safe parity & dimension bounds in encode/invert/reconstruct.
+        XCTAssertThrowsError(try ReedSolomon.encode([], parity: 1)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        XCTAssertThrowsError(try ReedSolomon.encode([[1, 2]], parity: Int.max)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        XCTAssertThrowsError(try ReedSolomon.encode([[1, 2]], parity: -1)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        XCTAssertThrowsError(try ReedSolomon.encode([[1, 2], [3]], parity: 1)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        let k256 = Array(repeating: [UInt8(7)], count: 256)
+        XCTAssertEqual(try ReedSolomon.encode(k256, parity: 0), [])
+        XCTAssertThrowsError(try ReedSolomon.encode(k256, parity: 1)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        XCTAssertEqual(ReedSolomon.inv(0), 0)
+        XCTAssertThrowsError(try ReedSolomon.invert([])) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        XCTAssertThrowsError(try ReedSolomon.invert([[1, 0], [0]])) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        XCTAssertThrowsError(try ReedSolomon.invert([[1, 1], [1, 1]])) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        var emptyShards: [[UInt8]?] = [[1]]
+        XCTAssertThrowsError(try ReedSolomon.reconstruct(&emptyShards, data: 0)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        var tooManyShards: [[UInt8]?] = Array(repeating: [1], count: 257)
+        XCTAssertThrowsError(try ReedSolomon.reconstruct(&tooManyShards, data: 1)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        // Uniform shard-length check runs even when all k data shards are present.
+        var mismatchedPresent: [[UInt8]?] = [[1, 2], [3]]
+        XCTAssertThrowsError(try ReedSolomon.reconstruct(&mismatchedPresent, data: 2)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+        var mismatchedExtraParity: [[UInt8]?] = [[1, 2], nil, [3, 4], [5]]
+        XCTAssertThrowsError(try ReedSolomon.reconstruct(&mismatchedExtraParity, data: 2)) { e in
+            XCTAssertEqual(e as? ReedSolomon.Failure, .badBlock)
+        }
+
+        // /0 prefix and interface-side unspecified/loopback addresses (even with /1) must NEVER match LAN candidates.
+        let defaultRouteWifi = PhoneInterface(
+            name: "en0",
+            via: .wifi,
+            addresses: [
+                .init("0.0.0.0", prefix: 0)!,
+                .init("192.0.2.40", prefix: 0)!,
+                .init("::", prefix: 0)!,
+                .init("0.0.0.0", prefix: 1)!,
+                .init("127.0.0.1", prefix: 1)!,
+                .init("::", prefix: 1)!
+            ]
+        )
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "1.2.3.4", prefix: 24), among: [defaultRouteWifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "198.51.100.1", prefix: 24), among: [defaultRouteWifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "2001:db8::1", prefix: 64), among: [defaultRouteWifi]))
+
+        // Embedded NUL byte must not be truncated by C inet_pton; 0.0.0.0/8, loopback, and IPv4-mapped equivalents are refused.
+        let thisNetV4 = [0, 0, 0, 1].map(String.init).joined(separator: ".")
+        let thisNetV4Mapped = "::ffff:\(thisNetV4)"
+        let wifi = PhoneInterface(
+            name: "en0",
+            via: .wifi,
+            addresses: [
+                .init("192.0.2.40", prefix: 24)!,
+                .init("127.0.0.1", prefix: 8)!,
+                .init("::1", prefix: 128)!,
+                .init(thisNetV4, prefix: 8)!,
+                .init(thisNetV4Mapped, prefix: 96)!
+            ]
+        )
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "192.0.2.10\0.evil.example", prefix: 24), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "127.0.0.2", prefix: 8), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "0.0.0.0", prefix: 24), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: thisNetV4, prefix: 8), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "::1", prefix: 128), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "::ffff:127.0.0.1", prefix: 96), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: "::ffff:0.0.0.0", prefix: 96), among: [wifi]))
+        XCTAssertNil(RouteEligibility.interface(for: .init(kind: "lan", addr: thisNetV4Mapped, prefix: 96), among: [wifi]))
+        XCTAssertEqual(RouteEligibility.interface(for: .init(kind: "lan", addr: "192.0.2.10", prefix: 24), among: [wifi])?.name, "en0")
+
+        // Direct IPBytes.sameNetwork prefix boundary checks (-1, 0, 1, 7, 8, 9, 32, 33, 128, 129, Int.max).
+        let v4a: [UInt8] = [192, 0, 2, 1]
+        let v4b: [UInt8] = [192, 0, 2, 2]
+        let v4c: [UInt8] = [193, 0, 2, 1] // differs in bit 8 (LSB of first octet)
+        XCTAssertFalse(IPBytes.sameNetwork(v4a, v4b, prefix: -1))
+        XCTAssertTrue(IPBytes.sameNetwork(v4a, v4c, prefix: 0))
+        XCTAssertTrue(IPBytes.sameNetwork(v4a, v4c, prefix: 1))
+        XCTAssertTrue(IPBytes.sameNetwork(v4a, v4c, prefix: 7))
+        XCTAssertFalse(IPBytes.sameNetwork(v4a, v4c, prefix: 8))
+        XCTAssertTrue(IPBytes.sameNetwork(v4a, v4b, prefix: 9))
+        XCTAssertTrue(IPBytes.sameNetwork(v4a, v4a, prefix: 32))
+        XCTAssertFalse(IPBytes.sameNetwork(v4a, v4b, prefix: 32))
+        XCTAssertFalse(IPBytes.sameNetwork(v4a, v4a, prefix: 33))
+        XCTAssertFalse(IPBytes.sameNetwork(v4a, v4a, prefix: Int.max))
+        let v6a = Array(repeating: UInt8(0xaa), count: 16)
+        XCTAssertTrue(IPBytes.sameNetwork(v6a, v6a, prefix: 128))
+        XCTAssertFalse(IPBytes.sameNetwork(v6a, v6a, prefix: 129))
     }
 }
