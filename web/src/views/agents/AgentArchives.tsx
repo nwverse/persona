@@ -11,7 +11,7 @@ import { machineWithHub } from "../../lib/mesh";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
 import { useStore } from "../../lib/store";
 import type { Machine, Session } from "../../lib/types";
-import { SessionMark } from "../../ui/AgentMark";
+import { CodingAgentAvatar } from "../../ui/CodingAgentAvatar";
 import { Button, IconButton, Loading, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Empty } from "../assistant/parts";
@@ -148,9 +148,7 @@ function ArchivedRow({ s, now, machine, busy, onRestore }: { s: Session; now: nu
   return (
     <div className="group relative flex items-center gap-2 pr-3 transition-colors hover:bg-hover">
       <a href={href(route)} onClick={(e) => onLinkClick(e, route)} title={[title, s.cwd].filter(Boolean).join("\n")} className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-4 focus-visible:outline-none">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-field">
-          <SessionMark s={s} size={16} />
-        </span>
+        <CodingAgentAvatar session={s} size={36} ring="page" />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-ink">{title}</span>

@@ -27,12 +27,11 @@ import { useLeftDraft } from "../../lib/drafts";
 import { rememberSessionRow, useStore } from "../../lib/store";
 import type { Session } from "../../lib/types";
 import { ultracodeMarkShown } from "../../lib/ultracode";
-import { SessionMark } from "../../ui/AgentMark";
+import { CodingAgentAvatar } from "../../ui/CodingAgentAvatar";
 import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
 import { cx, Menu, useMenu, type MenuItem } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
 import { Icon } from "../../ui/icons";
-import { StatusMark } from "../../ui/StatusMark";
 import { UltraMark } from "../chat/Ultracode";
 import { CURRENT_ROW, type GoFn, type RegFn, type RowMenuFn } from "../SidebarParts";
 import { sidebarRowHover } from "../SidebarRowHover";
@@ -400,13 +399,14 @@ export const AgentChatListRow = memo(function AgentChatListRow({
           active ? CURRENT_ROW : "hover:bg-hover",
         )}
       >
-        {/* Left: Harness Avatar + corner live StatusMark badge */}
-        <span className="relative mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-inset shadow-hairline">
-          <SessionMark s={s} size={17} />
-          <span className="absolute -right-0.5 -bottom-0.5 flex size-3.5 items-center justify-center rounded-full bg-canvas ring-1 ring-canvas">
-            <StatusMark state={stateOf(row)} size="sm" awaiting={awaiting} finished={finished} waiting={backgroundWaiting(row)} />
-          </span>
-        </span>
+        {/* Left: Contact-style model/vendor avatar + top-right live status + bottom-right hosting engine badge */}
+        <CodingAgentAvatar
+          session={row}
+          size={40}
+          ring="canvas"
+          status={{ state: stateOf(row), awaiting, finished, waiting: backgroundWaiting(row) }}
+          className="mt-0.5"
+        />
 
         {/* Center column: Title, evidence snippet or latest message, and metadata chips */}
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">

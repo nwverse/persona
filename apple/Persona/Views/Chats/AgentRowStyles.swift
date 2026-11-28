@@ -89,8 +89,9 @@ struct AgentListDisplayChoice {
     var binding: Binding<AgentListDisplay> { Binding(get: { display }, set: { display = $0 }) }
 }
 
-/// Style A's avatar: the agent's mark in a round well, its state on the corner (`StatusDot`, which breathes for Needs You),
-/// rimmed in the row's background so it reads apart from the well. VoiceOver reads both, as on the rows before.
+/// Style A's avatar: contact-style model/vendor circular avatar (`CodingAgentAvatar`), its hosting engine badge on the
+/// bottom-trailing corner and its live state (`StatusDot`, breathing for Needs You) on the top-trailing corner so
+/// neither overlaps. VoiceOver reads both.
 struct AgentAvatar: View {
     var session: Session
     var dense = false
@@ -99,18 +100,14 @@ struct AgentAvatar: View {
     var muted = false
 
     var body: some View {
-        let side = dense ? Theme.Size.wellS : Theme.Size.wellL
-        AgentMark(session, side: dense ? Theme.Size.markS : Theme.Size.markL)
-            .scaledFrame(width: side, height: side)
-            .background(Theme.Fill.well, in: Circle())
-            .overlay(alignment: .bottomTrailing) {
-                if dot {
-                    StatusDot(state: session.state, size: dense ? Theme.Size.dot : Theme.Size.dotXL, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted))
-                        .padding(Theme.Size.rule)
-                        .background(Theme.card, in: Circle())
-                        .offset(x: Theme.Size.rule, y: Theme.Size.rule)
-                }
-            }
+        let side = dense ? Theme.Size.well : Theme.Size.avatar
+        let status = dot ? CodingAgentAvatar.Status(
+            state: session.state,
+            size: dense ? Theme.Size.dot : Theme.Size.dotXL,
+            waiting: session.waitsInBackground,
+            justFinished: session.showsJustFinished(muted: muted)
+        ) : nil
+        CodingAgentAvatar(session: session, side: side, ringColor: Theme.card, status: status)
     }
 }
 
