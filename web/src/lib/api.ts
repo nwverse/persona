@@ -553,9 +553,11 @@ async function bodyText(res: Response): Promise<string> {
   }
 }
 
-/** The hub itself answered with a sentence for the reader: a JSON body with its own error and a business code. */
+/** The hub itself answered with a sentence for the reader: a to-do write's refusal (it says what reached the Agent,
+ *  `delivered`) with its own error and a business code. Other coded 5xx bodies keep the generic line. */
 function hubWorded(e: ApiError): boolean {
-  return e.isJson && typeof e.body.error === "string" && e.body.error.trim() !== "" && !!e.code && e.code !== "internal";
+  return e.isJson && typeof e.body.error === "string" && e.body.error.trim() !== "" && !!e.code && e.code !== "internal"
+    && typeof e.body.delivered === "string";
 }
 
 export function errorText(e: unknown): string {
