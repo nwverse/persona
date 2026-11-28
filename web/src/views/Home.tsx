@@ -38,9 +38,8 @@ import { heldDelivery, makeSessionLookup, orphanedLine, TODO_TONE_CLASS } from "
 import { todoLook } from "../lib/todo-wait-reason";
 import { BUSY_MOTION, spinStyle } from "../lib/busy-motion";
 import type { AgentState, Interaction, Machine, Session } from "../lib/types";
-import { Button, Collapse, cx, EASE, IconButton, Loading, toast, useNow } from "../ui/atoms";
+import { Button, Collapse, cx, EASE, IconButton, Loading, Tag, toast, useNow } from "../ui/atoms";
 import { RecommendedTag } from "../ui/RecommendedTag";
-import { Tag } from "./assistant/parts";
 import { StatusMark } from "../ui/StatusMark";
 import { Icon } from "../ui/icons";
 import { MarkSeenDialog } from "./AgentMenus";

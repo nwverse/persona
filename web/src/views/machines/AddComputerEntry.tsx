@@ -6,8 +6,7 @@ import { t } from "../../i18n";
 import { canAddComputer } from "../../lib/add-computer";
 import { readinessChanged } from "../../lib/readiness";
 import { useStore } from "../../lib/store";
-import { Button } from "../../ui/atoms";
-import { Empty } from "../assistant/parts";
+import { Button, Empty } from "../../ui/atoms";
 import { HelpDialog } from "../assistant/Readiness";
 import { lazyDialog } from "../LazyOverlay";
 

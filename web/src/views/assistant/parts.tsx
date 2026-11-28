@@ -3,6 +3,10 @@ import { cx, Switch as AtomSwitch } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { SegmentedTrack } from "../../ui/Segmented";
 
+// Empty and Tag live in ui/atoms.tsx, a first-screen file: Home and Add a computer take them from there, since importing
+// them from here put the rest of this file (the settings pages' parts) on every first screen. Re-exported for the rest.
+export { Empty, Tag } from "../../ui/atoms";
+
 export const fieldClass =
   "h-9 rounded-control bg-field px-3 text-[13px] text-ink shadow-inset-field outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
 export const inputClass = `w-full ${fieldClass}`;
@@ -82,30 +86,4 @@ export function IconTile({ icon, tone = "accent" }: { icon: IconName; tone?: "ac
       <Icon name={icon} size={15} />
     </span>
   );
-}
-
-/** An empty page or section: an icon, a line, what to do. */
-export function Empty({ icon, title, children, action }: { icon: IconName; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
-  return (
-    <div className="flex flex-col items-center px-6 py-14 text-center">
-      <span className="mb-3 flex size-11 items-center justify-center rounded-full bg-field text-ink-3">
-        <Icon name={icon} size={19} />
-      </span>
-      <p className="text-[13.5px] font-medium text-ink">{title}</p>
-      {children && <p className="mt-1 max-w-sm text-[12.5px] leading-relaxed text-ink-3">{children}</p>}
-      {action && <div className="mt-4">{action}</div>}
-    </div>
-  );
-}
-
-/** A tag in one of the tones (a memory's kind). */
-export function Tag({ children, tone = "neutral" }: { children: React.ReactNode; tone?: "accent" | "orange" | "green" | "red" | "neutral" }) {
-  const tones = {
-    accent: "bg-accent-tint text-accent-ink",
-    orange: "bg-orange-tint text-orange",
-    green: "bg-green-tint text-green",
-    red: "bg-red-tint text-red",
-    neutral: "bg-field text-ink-2",
-  };
-  return <span className={cx("inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full px-2 text-[11px] font-medium", tones[tone])}>{children}</span>;
 }
