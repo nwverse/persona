@@ -6,6 +6,7 @@
   "view_label": "Integrations view",
   "view_list": "Integrations",
   "view_sources": "Data flow",
+  "source_data_flow_hint": "View this assistant's data flow across Inbox and Knowledge.",
   "switch_assistant_integrations": "Switch to {name}",
   "filter_label": "Filter by capability",
   "filter_all": "All",

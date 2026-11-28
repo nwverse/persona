@@ -176,6 +176,7 @@ function PushSourceDetailPane({
   onBack,
   backLabel,
   onSwitchAssistant,
+  onOpenDataFlow,
   reloadKey,
   onReload,
   projection,
@@ -187,6 +188,7 @@ function PushSourceDetailPane({
   onBack?: () => void;
   backLabel?: string;
   onSwitchAssistant?: () => void;
+  onOpenDataFlow?: () => void;
   reloadKey: number;
   onReload: () => void;
   projection?: ProjectedDetail;
@@ -209,6 +211,18 @@ function PushSourceDetailPane({
         <Suspense fallback={<Loading />}>
           <LazySourcesUI key={`${manager ?? ""}:${state}:${reloadKey}`} title={title} state={state} manager={manager} />
         </Suspense>
+      )}
+      {onOpenDataFlow && (
+        <Group anchor="source-data-flow">
+          <Row
+            anchor="source-data-flow-entry"
+            icon="loop"
+            label={t("settings-integrations.view_sources")}
+            hint={t("settings-integrations.source_data_flow_hint")}
+            wrapHint
+            onClick={onOpenDataFlow}
+          />
+        </Group>
       )}
     </>
   );
@@ -968,6 +982,10 @@ function IntegrationsForManager({
       }
     : undefined;
 
+  const openSourceDataFlow = !compactList && hasInboxSources && parentView?.kind !== "data-flow"
+    ? () => go({ kind: "data-flow" }, detailOwner ?? resourceOwner)
+    : undefined;
+
   const detailPane = waitForProjection ? (
     <>
       {pendingBack && (
@@ -987,6 +1005,7 @@ function IntegrationsForManager({
         onBack={detailBack}
         backLabel={pushSourceBackLabel}
         onSwitchAssistant={switchDetailAssistant}
+        onOpenDataFlow={openSourceDataFlow}
         reloadKey={sourcesReload}
         onReload={() => {
           if (projection) reloadDetail();
