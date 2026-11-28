@@ -256,22 +256,44 @@ func ApplyPlugins(dir string, skills []PluginSkill) (need []string, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	keepNames := make(map[string]bool, len(skills))
+	keepInfos := make([]os.FileInfo, 0, len(skills))
 	for idx, s := range skills {
+		keepNames[s.Name] = true
 		at := filepath.Join(dir, s.Name)
 		if s.Files == nil {
 			if stamp, ok := readPluginStamp(at); !ok || stamp != s.Plugin+" "+s.Digest {
 				need = append(need, s.Name)
+			}
+			if info, err := os.Lstat(at); err == nil {
+				keepInfos = append(keepInfos, info)
 			}
 			continue
 		}
 		if err := stagePluginSkill(dir, s, validatedFiles[idx]); err != nil {
 			return nil, err
 		}
+		if info, err := os.Lstat(at); err == nil {
+			keepInfos = append(keepInfos, info)
+		}
 	}
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && !seenNames[foldPathKey(e.Name())] {
-			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || keepNames[e.Name()] {
+			continue
+		}
+		at := filepath.Join(dir, e.Name())
+		keep := false
+		if info, err := os.Lstat(at); err == nil {
+			for _, ki := range keepInfos {
+				if os.SameFile(info, ki) {
+					keep = true
+					break
+				}
+			}
+		}
+		if !keep {
+			_ = os.RemoveAll(at)
 		}
 	}
 	return need, nil
@@ -311,6 +333,7 @@ func installPlugins(dir, plugins string, mine []string) error {
 	builtins := builtinNames()
 	viewsGuideKey := foldPathKey(viewsGuideName)
 	var want []string
+	wantNames := make(map[string]bool)
 	wantKeys := make(map[string]bool)
 	for _, n := range pluginNames(plugins) {
 		key := foldPathKey(n)
@@ -320,6 +343,7 @@ func installPlugins(dir, plugins string, mine []string) error {
 		if wantKeys[key] {
 			continue
 		}
+		wantNames[n] = true
 		wantKeys[key] = true
 		stamp, _ := readPluginStamp(filepath.Join(plugins, n))
 		want = append(want, n+"="+safeStampValue(stamp))
@@ -343,7 +367,7 @@ func installPlugins(dir, plugins string, mine []string) error {
 			continue
 		}
 		key := foldPathKey(n)
-		if wantKeys[key] || key == viewsGuideKey || (n != workGuideName && containsFolded(builtins, n)) {
+		if wantNames[n] || key == viewsGuideKey || (n != workGuideName && containsFolded(builtins, n)) {
 			continue
 		}
 		at := filepath.Join(dir, n)

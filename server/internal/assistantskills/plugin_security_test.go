@@ -358,6 +358,89 @@ func TestInstallPluginsCaseCollisionTamperedStampAndSymlinkHardening(t *testing.
 	}
 }
 
+func TestInstallPluginsWorkGuideCaseAndCaseVariantRename(t *testing.T) {
+	parent := t.TempDir()
+	assistantDir := filepath.Join(parent, "assistant")
+	pluginsDir := filepath.Join(parent, "plugins")
+	if err := os.MkdirAll(assistantDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Case-variant "PERSONA-WORK" must NOT be installed (only exact workGuideName may override).
+	if _, err := ApplyPlugins(pluginsDir, []PluginSkill{
+		{Name: "PERSONA-WORK", Plugin: "evil", Digest: "d1", Files: map[string][]byte{"SKILL.md": []byte("evil-work\n")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := installPlugins(assistantDir, pluginsDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(assistantDir, "PERSONA-WORK")); !os.IsNotExist(err) {
+		t.Fatalf("case-variant PERSONA-WORK was installed: err=%v", err)
+	}
+
+	// Exact "persona-work" installs and uninstalls cleanly via installPlugins.
+	if _, err := ApplyPlugins(pluginsDir, []PluginSkill{
+		{Name: workGuideName, Plugin: "ext", Digest: "d1", Files: map[string][]byte{"SKILL.md": []byte("plugin-work\n")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := installPlugins(assistantDir, pluginsDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(assistantDir, workGuideName, "SKILL.md")); err != nil || string(b) != "plugin-work\n" {
+		t.Fatalf("exact persona-work plugin was not installed: %q, err=%v", b, err)
+	}
+	if _, err := ApplyPlugins(pluginsDir, []PluginSkill{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := installPlugins(assistantDir, pluginsDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(assistantDir, workGuideName)); !os.IsNotExist(err) {
+		t.Fatalf("exact persona-work plugin copy was not uninstalled: err=%v", err)
+	}
+
+	// Case-variant rename (MySkill -> myskill) must leave ONLY exact "myskill" in both PluginDir and assistantDir.
+	if _, err := ApplyPlugins(pluginsDir, []PluginSkill{
+		{Name: "MySkill", Plugin: "p", Digest: "d1", Files: map[string][]byte{"SKILL.md": []byte("v1\n")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := installPlugins(assistantDir, pluginsDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyPlugins(pluginsDir, []PluginSkill{
+		{Name: "myskill", Plugin: "p", Digest: "d2", Files: map[string][]byte{"SKILL.md": []byte("v2\n")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := installPlugins(assistantDir, pluginsDir, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, checkDir := range []string{pluginsDir, assistantDir} {
+		entries, err := os.ReadDir(checkDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var dirs []string
+		for _, e := range entries {
+			if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+				dirs = append(dirs, e.Name())
+			}
+		}
+		if !slices.Equal(dirs, []string{"myskill"}) {
+			t.Fatalf("%s dirs after MySkill->myskill rename = %v, want [myskill]", checkDir, dirs)
+		}
+		if b, err := os.ReadFile(filepath.Join(checkDir, "myskill", "SKILL.md")); err != nil || string(b) != "v2\n" {
+			t.Fatalf("%s/myskill/SKILL.md = %q, err=%v; want v2", checkDir, b, err)
+		}
+	}
+}
+
 func TestApplyPluginsDoesNotTrustSymlinkedSkillOrStamp(t *testing.T) {
 	parent := t.TempDir()
 	outside := filepath.Join(parent, "outside-skill")
@@ -402,15 +485,24 @@ func TestReferencesScannerHandlesMalformedAndBenignTags(t *testing.T) {
 	reject := []string{
 		`<persona-context kind='skill' ref='abc' bad=>Review</persona-context> hello`,
 		`<persona-context kind=skill ref=abc>Review</persona-context>`,
+		`<persona-context bad= kind="skill" ref="abc">Review</persona-context>`,
+		`<persona-context bad=kind="skill" ref="abc">Review</persona-context>`,
+		`<persona-context bad= kind='skill' ref='abc'>Review</persona-context>`,
+		`<persona-context bad= kind=skill ref=abc>Review</persona-context>`,
+		`<persona-context bad= =kind="skill" ref="abc">Review</persona-context>`,
 		`<persona-context title="x"kind='skill' bad=>Review</persona-context>`,
 		`<persona-context title="x"kind="skill" url="https://example.com/?a=1&b=2">Review</persona-context>`,
+		`<persona-context title="a > b" kind="skill" ref="">Review</persona-context>`,
+		`<persona-context title="a > b" kind="skill" bad=>Review</persona-context>`,
 		`<persona-context kind='skill ref='abc'>Review</persona-context>`,
 		`<persona-context kind="skill ref="abc">Review</persona-context>`,
 		`<persona-context kind='skill>Review</persona-context>`,
+		`<persona-context kind='skill>Review</persona-context> it's a > b`,
 		`<persona-context kind="SKILL" ref="abc">Review</persona-context>`,
 		`<persona-context KIND="skill" ref="abc">Review</persona-context>`,
 		`<persona-context kind='SKILL' bad=>Review</persona-context>`,
 		`<persona-context ns:kind='skill' bad=>Review</persona-context>`,
+		`<persona-context a:b:kind='skill' bad=>Review</persona-context>`,
 	}
 	for _, text := range reject {
 		if _, err := References(text); err == nil {
@@ -418,11 +510,13 @@ func TestReferencesScannerHandlesMalformedAndBenignTags(t *testing.T) {
 		}
 	}
 
-	// Benign non-skill tags with unescaped '&' (causing XML parse failure) and "kind=skill"
-	// inside another attribute's quoted value or a distinct kind value must NOT false-positive.
+	// Benign non-skill tags with unescaped '&' (causing XML parse failure), empty kind, or
+	// "kind=skill" inside another attribute's quoted value must NOT false-positive.
 	benign := []string{
+		`<persona-context kind="" bad=>Review</persona-context> hi`,
 		`<persona-context kind="web" title="fix kind=skill" url="https://example.com/?a=1&b=2">Web</persona-context> hi`,
 		`<persona-context kind="web" title='kind="skill"' url="https://example.com/?a=1&b=2">Web</persona-context> hi`,
+		`<persona-context title="a > b" kind="web" url="https://example.com/?a=1&b=2">Web</persona-context> hi`,
 		`<persona-context kind="skill-doc" url="https://example.com/?a=1&b=2">Doc</persona-context> hi`,
 		`<persona-context kind="skill guide" url="https://example.com/?a=1&b=2">Guide</persona-context> hi`,
 	}
@@ -433,9 +527,13 @@ func TestReferencesScannerHandlesMalformedAndBenignTags(t *testing.T) {
 		}
 	}
 
-	// Valid canonical skill selection continues to parse cleanly.
+	// Valid canonical skill selections (including literal '>' inside quoted attributes and legacy tag) parse cleanly.
 	refs, err := References(`<persona-context kind="skill" title="Review" ref="abc123">Review</persona-context> go`)
 	if err != nil || !slices.Equal(refs, []string{"abc123"}) {
 		t.Fatalf("References(valid) = %v, %v; want [abc123]", refs, err)
+	}
+	refs, err = References(`<persona-context title="a > b" kind="skill" ref="gt1">Review</persona-context><jarvis-context title="x > y" kind="skill" ref="gt2">Legacy</jarvis-context> go`)
+	if err != nil || !slices.Equal(refs, []string{"gt1", "gt2"}) {
+		t.Fatalf("References(title with '>') = %v, %v; want [gt1 gt2]", refs, err)
 	}
 }
