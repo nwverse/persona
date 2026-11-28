@@ -242,7 +242,7 @@ func (s *Service) saveChannelStateLocked() error {
 
 // bindChannelThread notes the conversation only while its accepted binding generation is current.
 // Omitting generation is for seeding an existing binding; receive paths always supply their accepted generation.
-func (s *Service) bindChannelThread(id, thread, machine, session string, generation ...uint64) bool {
+func (s *Service) bindChannelThread(id string, keys channelThreadKeys, machine, session string, generation ...uint64) bool {
 	c := &s.chans
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -255,27 +255,35 @@ func (s *Service) bindChannelThread(id, thread, machine, session string, generat
 		p.Threads = map[string]*channelThread{}
 	}
 	now := c.clock().UTC()
-	p.Threads[thread] = &channelThread{MachineID: machine, SessionID: session, At: now}
+	binding := &channelThread{MachineID: machine, SessionID: session, At: now}
+	p.Threads[keys.primary] = binding
+	// Once both keys have been used, keep them on the same conversation and idle clock.
+	if keys.alternate != "" && p.Threads[keys.alternate] != nil {
+		p.Threads[keys.alternate] = binding
+	}
 	keepFor := max(channelThreadsKeepFor, channelThreadIdleTTL(true, p))
 	pruneChannelThreadsWithTTL(p.Threads, now, keepFor)
 	s.saveChannelsLocked()
 	return true
 }
 
-// unbindChannelThread forgets thread's conversation: its next message starts a new one (/new in the thread).
-func (s *Service) unbindChannelThread(id, thread string, generation ...uint64) {
+// unbindChannelThread forgets both keys for the topic so /new cannot fall back to the old conversation.
+func (s *Service) unbindChannelThread(id string, keys channelThreadKeys, generation uint64) {
 	c := &s.chans
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if len(generation) > 0 && c.generation[id] != generation[0] {
+	if c.generation[id] != generation {
 		return
 	}
 	s.loadChannelsLocked(context.Background())
 	p := s.channelPrefLocked(id)
-	if _, ok := p.Threads[thread]; !ok {
+	if p.Threads[keys.primary] == nil && p.Threads[keys.alternate] == nil {
 		return
 	}
-	delete(p.Threads, thread)
+	delete(p.Threads, keys.primary)
+	if keys.alternate != "" {
+		delete(p.Threads, keys.alternate)
+	}
 	s.saveChannelsLocked()
 }
 
@@ -298,6 +306,14 @@ func channelGroupRouteKey(chatID string) string {
 	return "v2:group:" + chatID
 }
 
+func channelStructuredTopicKey(m channel.Message) string {
+	chatID, topicID := strings.TrimSpace(m.ChatID), strings.TrimSpace(m.TopicID)
+	if m.ChatKind.Known() == channel.ChatKindDirect || chatID == "" || topicID == "" {
+		return ""
+	}
+	return channelTopicRouteKey(chatID, topicID)
+}
+
 // channelRouteKey computes the integrations_v2 conversation routing key for m under mode.
 // Empty string means the message routes to the channel's configured default target.
 func channelRouteKey(mode channel.ThreadMode, m channel.Message) string {
@@ -308,13 +324,11 @@ func channelRouteKey(mode channel.ThreadMode, m channel.Message) string {
 	if kind == channel.ChatKindDirect {
 		return ""
 	}
-	chatID := strings.TrimSpace(m.ChatID)
-	topicID := strings.TrimSpace(m.TopicID)
-	if topicID != "" && chatID != "" {
-		return channelTopicRouteKey(chatID, topicID)
+	if key := channelStructuredTopicKey(m); key != "" {
+		return key
 	}
-	if topicID == "" && kind == channel.ChatKindGroup {
-		if mode == channel.ThreadModePerGroupAndTopic && chatID != "" {
+	if strings.TrimSpace(m.TopicID) == "" && kind == channel.ChatKindGroup {
+		if chatID := strings.TrimSpace(m.ChatID); mode == channel.ThreadModePerGroupAndTopic && chatID != "" {
 			return channelGroupRouteKey(chatID)
 		}
 		return ""
@@ -323,20 +337,47 @@ func channelRouteKey(mode channel.ThreadMode, m channel.Message) string {
 	return strings.TrimSpace(m.Thread)
 }
 
-// channelThreadOf is thread's conversation, nil when it has none (or it went quiet too long ago).
-func (s *Service) channelThreadOf(ctx context.Context, id, thread string) *channelThread {
-	v2 := s.integrationsV2On(ctx)
+type channelThreadKeys struct {
+	primary   string
+	alternate string
+}
+
+// channelThreadAliases pairs the two keys only when the message identifies a topic in both forms
+// and one of them is already the configured route.
+func channelThreadAliases(primary string, m channel.Message) channelThreadKeys {
+	keys := channelThreadKeys{primary: primary}
+	legacy := strings.TrimSpace(m.Thread)
+	if primary == "" || legacy == "" {
+		return keys
+	}
+	topic := channelStructuredTopicKey(m)
+	if topic == "" || topic == legacy {
+		return keys
+	}
+	switch primary {
+	case legacy:
+		keys.alternate = topic
+	case topic:
+		keys.alternate = legacy
+	}
+	return keys
+}
+
+// channelThreadOf returns the live primary binding or, on a miss, the live alternate binding.
+func (s *Service) channelThreadOf(ctx context.Context, id string, keys channelThreadKeys, v2 bool) *channelThread {
 	c := &s.chans
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	s.loadChannelsLocked(ctx)
 	p := s.channelPrefLocked(id)
-	t := p.Threads[thread]
-	if t == nil || c.clock().Sub(t.At) > channelThreadIdleTTL(v2, p) {
-		return nil
+	now, ttl := c.clock(), channelThreadIdleTTL(v2, p)
+	for _, key := range [...]string{keys.primary, keys.alternate} {
+		if t := p.Threads[key]; key != "" && t != nil && now.Sub(t.At) <= ttl {
+			cp := *t
+			return &cp
+		}
 	}
-	cp := *t
-	return &cp
+	return nil
 }
 
 // pruneChannelThreads drops the threads quiet for longer than channelThreadsKeepFor, then the oldest beyond
