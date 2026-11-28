@@ -468,12 +468,17 @@ func TestPrepareBackendWorkspaceUsesEnabledMirrorAndFallsBackCleanly(t *testing.
 		baseHub.devices = []Device{{ID: "dev1", Name: "Dev 1", Online: true}}
 		hub := &repoMirrorTestHub{
 			fakeHub: baseHub,
-			onCall: func(_ context.Context, _ string, method string, raw json.RawMessage) (any, error) {
+			onCall: func(ctx context.Context, _ string, method string, raw json.RawMessage) (any, error) {
 				switch method {
 				case "task.workspace.capabilities":
 					return map[string]any{"capability": taskworkspace.Capability, "start": true}, nil
 				case repository.MethodRepoMirrorEnsure:
 					ensureCalls++
+					deadline, ok := ctx.Deadline()
+					remaining := time.Until(deadline)
+					if !ok || remaining <= repository.MirrorColdFetchTimeout || remaining > repoMirrorCallTimeout {
+						t.Errorf("mirror RPC has %v remaining, want the cold fetch budget plus time for the reply", remaining)
+					}
 					var req repository.MirrorEnsureRequest
 					if err := json.Unmarshal(raw, &req); err != nil {
 						return nil, err
@@ -613,19 +618,11 @@ func TestPrepareWorkspaceDoesNotEnrollLocalOrLinkOnlyRepositories(t *testing.T) 
 	}
 }
 
-func TestTaskPlanContainerAllowsColdRepoMirrorBudget(t *testing.T) {
+func TestTaskPlanContainerUsesOnDemandRepoMirror(t *testing.T) {
 	h := newWorkspaceTestHarness(t, newMemRepoMirrorStore())
-	setHub(h.s, &firstToolsTimingHub{Hub: h.f, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
-		if call.Method != repository.MethodRepoMirrorEnsure {
-			return h.f.DeviceCall(ctx, call)
-		}
-		deadline, ok := ctx.Deadline()
-		remaining := time.Until(deadline)
-		if !ok || remaining <= repository.MirrorColdFetchTimeout || remaining > repoMirrorCallTimeout {
-			t.Errorf("mirror RPC has %v remaining, want the cold fetch budget plus time for the reply", remaining)
-		}
-		return json.Marshal(repository.MirrorInfo{RepoID: "repo_web", Exists: true, Fetched: true})
-	}})
+	h.f.nodes[repository.MethodRepoMirrorEnsure] = func(string, json.RawMessage) (any, error) {
+		return repository.MirrorInfo{RepoID: "repo_web", Exists: true, Fetched: true}, nil
+	}
 
 	ctx := t.Context()
 	args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repository","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web"]}}}]}`
