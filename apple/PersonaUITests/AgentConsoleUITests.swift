@@ -19,10 +19,32 @@ import XCTest
         XCTAssertTrue(segments.buttons.element(boundBy: 1).exists)
         segments.buttons.element(boundBy: 1).tap()
         XCTAssertTrue(segments.buttons.element(boundBy: 1).isSelected)
+        XCTAssertFalse(app.descendants(matching: .any)["feishu-conversations"].exists)
 
         app.tabBars.buttons.element(boundBy: 2).tap()
         XCTAssertTrue(app.buttons["settings-templates"].waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.buttons["settings-more"].exists)
+    }
+
+    /// Against scripts/mock/mock_hub.py with MOCK_PERSONAL_AGENTS=1 (PERSONA_PERSONAL_HUB).
+    func testExternalListsAgentConversationsWithoutFeishuChats() throws {
+        guard let hub = ProcessInfo.processInfo.environment["PERSONA_PERSONAL_HUB"] else {
+            throw XCTSkip("needs scripts/mock/mock_hub.py with MOCK_PERSONAL_AGENTS=1 (PERSONA_PERSONAL_HUB)")
+        }
+        _ = try Data(contentsOf: URL(string: hub + "/mock/personal-agents?reset=1&state=configured")!)
+        let app = XCUIApplication()
+        let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
+        app.launchArguments = ["-pairURL", pair, "-persona.ios.console.enabled", "YES", "-tab", "chats", "-dev.openChat", ""]
+        app.launchPinned()
+
+        let segments = app.segmentedControls.firstMatch
+        XCTAssertTrue(segments.waitForExistence(timeout: 30), app.debugDescription)
+        segments.buttons.element(boundBy: 1).tap()
+        XCTAssertTrue(app.staticTexts["周报助手"].waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["旅行规划"].exists, app.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["feishu-conversations"].exists)
+        app.staticTexts["周报助手"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["周报草稿好了"].waitForExistence(timeout: 15), app.debugDescription)
     }
 
     func testAppliedConsoleSurvivesTerminationAndRelaunch() {
@@ -31,7 +53,7 @@ import XCTest
         app.launch()
         XCTAssertTrue(app.tabBars.buttons.element(boundBy: 0).waitForExistence(timeout: 15), app.debugDescription)
         app.tabBars.buttons.element(boundBy: 1).tap()
-        XCTAssertTrue(app.segmentedControls["Agent conversations"].waitForExistence(timeout: 15), app.debugDescription)
+        XCTAssertTrue(app.segmentedControls.firstMatch.waitForExistence(timeout: 15), app.debugDescription)
         app.terminate()
         app.launchArguments = ["-demo.on", "YES"]
         app.launch()
