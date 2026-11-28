@@ -107,7 +107,7 @@ func cardsToday(t *testing.T, s *Service) map[string]cardCount {
 	got := map[string]cardCount{}
 	for _, r := range s.cardsOn(ctx, time.Now().In(s.location(ctx)).Format(time.DateOnly)) {
 		c := got[r.Source]
-		c.Source, c.Category, c.N = r.Source, r.Category, c.N+r.N
+		c.Source, c.Category, c.N, c.Held = r.Source, r.Category, c.N+r.N, c.Held+r.Held
 		got[r.Source] = c
 	}
 	return got

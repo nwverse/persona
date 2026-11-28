@@ -54,7 +54,7 @@ const (
 	cardConfirmOutbound    = "confirm_outbound"     // health.go confirmOutbound: a conversation hands sensitive words to another Agent
 	cardOutboundWrite      = "outbound_write"       // a connector's write the gate left to the owner (mail_send, a chat message, a comment)
 	cardLeaderNeedsUser    = "leader_needs_user"    // a task waited on the owner (needs_user); before decision rights it was pushed straight to them, kept for the history it counts
-	cardDecision           = "decision"             // todo_ask.go pushDecision: a to-do's decision with a recommendation
+	cardDecision           = "decision"             // todo_ask.go pushDecision: legacy/fallback decision source kept for historical rows
 	cardTodoRemind         = "todo_remind"          // todo_plan.go: a reminder the owner set
 	cardHealthWater        = "health_water"         // health_water.go: the water reminders the owner switched on
 	cardPageAlert          = "page_alert"           // pages_alert.go: a watch page's alert rule newly tripped
@@ -62,7 +62,7 @@ const (
 	cardDayRecap           = "day_recap"            // kb_day.go: the day's recap
 	cardBriefFallback      = "brief_fallback"       // briefing_fallback.go: the briefing itself, when its run failed
 	cardAgentDone          = "agent_done"           // fleet_push.go: a turn finished (the devices' "done" pushes setting)
-	cardAskEscalated       = "ask_escalated"        // ask_route.go: a supervisor's ask_escalate rang an Agent's card to the owner
+	cardAskEscalated       = "ask_escalated"        // ask_route.go: legacy/fallback ask_escalate source kept for historical rows and untagged escalations
 	cardPlanWaiting        = "plan_waiting"         // tasks_plan.go: a plan waits for Start
 	cardPlanMoney          = "plan_money"           // tasks_plan.go: a plan waits for Start: a task spends money
 	cardPlanOutward        = "plan_outward"         // tasks_plan.go: a plan waits for Start: a task speaks outward as the owner
@@ -93,10 +93,30 @@ const (
 	cardCaptureSorted      = "capture_sorted"       // capture_sort.go
 	cardKBHistory          = "kb_history"           // kbhistory_service.go
 	cardUntagged           = "untagged"             // a push no source was named for
+
+	// Per-why_owner decision and ask_escalate sources.
+	cardDecisionDirection        = "decision_direction"         // todo_ask.go pushDecision: why_owner priority or acceptance
+	cardDecisionOwnerKnows       = "decision_owner_knows"       // todo_ask.go pushDecision: why_owner only_owner_knows
+	cardDecisionOutward          = "decision_outward"           // todo_ask.go pushDecision: why_owner visible_to_others
+	cardDecisionIrreversible     = "decision_irreversible"      // todo_ask.go pushDecision: why_owner irreversible
+	cardAskEscalatedDirection    = "ask_escalated_direction"    // ask_route.go: ask_escalate with why_owner priority or acceptance
+	cardAskEscalatedOwnerKnows   = "ask_escalated_owner_knows"  // ask_route.go: ask_escalate with why_owner only_owner_knows
+	cardAskEscalatedOutward      = "ask_escalated_outward"      // ask_route.go: ask_escalate with why_owner visible_to_others
+	cardAskEscalatedIrreversible = "ask_escalated_irreversible" // ask_route.go: ask_escalate with why_owner irreversible
 )
 
 // cardCategories is each source's kind, 1-6, or 0 for none of the six. A source missing here is 0 too.
 var cardCategories = map[string]int{
+	// Fixed decision-rights sources for the existing six owner categories.
+	cardDecisionDirection:        cardCatDirection,
+	cardDecisionOwnerKnows:       cardCatOwnerKnows,
+	cardDecisionOutward:          cardCatOutward,
+	cardDecisionIrreversible:     cardCatIrreversible,
+	cardAskEscalatedDirection:    cardCatDirection,
+	cardAskEscalatedOwnerKnows:   cardCatOwnerKnows,
+	cardAskEscalatedOutward:      cardCatOutward,
+	cardAskEscalatedIrreversible: cardCatIrreversible,
+
 	// 6, only the owner in person: a password, fields or a form are typed by them.
 	cardSecretForm:      cardCatInPerson,
 	cardAgentSecretForm: cardCatInPerson,
@@ -158,6 +178,40 @@ var cardCategories = map[string]int{
 
 // cardCategoryOf is source's kind, 0 for none of the six or a source the table does not know.
 func cardCategoryOf(source string) int { return cardCategories[source] }
+
+// decisionCardSource maps a decision's why_owner to its fixed ledger source constant.
+// Empty or unknown why_owner falls back to legacy cardDecision (kind 1).
+func decisionCardSource(whyOwner string) string {
+	switch strings.TrimSpace(whyOwner) {
+	case whyPriority, whyAcceptance:
+		return cardDecisionDirection
+	case whyOnlyOwnerKnow:
+		return cardDecisionOwnerKnows
+	case whyVisible:
+		return cardDecisionOutward
+	case whyIrreversible:
+		return cardDecisionIrreversible
+	default:
+		return cardDecision
+	}
+}
+
+// escalatedCardSource maps an ask_escalate why_owner to its fixed ledger source constant.
+// Empty or unknown why_owner falls back to legacy cardAskEscalated (kind 1).
+func escalatedCardSource(whyOwner string) string {
+	switch strings.TrimSpace(whyOwner) {
+	case whyPriority, whyAcceptance:
+		return cardAskEscalatedDirection
+	case whyOnlyOwnerKnow:
+		return cardAskEscalatedOwnerKnows
+	case whyVisible:
+		return cardAskEscalatedOutward
+	case whyIrreversible:
+		return cardAskEscalatedIrreversible
+	default:
+		return cardAskEscalated
+	}
+}
 
 type cardSourceKey struct{}
 
@@ -260,23 +314,33 @@ const (
 	cardLedgerKey     = "assistant.card_ledger"
 	cardLedgerToldKey = "assistant.card_ledger_told"
 	cardLedgerDays    = 8
+	heldNotifyTTL     = 5 * time.Minute
 )
 
-// cardCount is how many cards one source pushed for one owner in a day.
+// cardCount is how many cards one source pushed (N) or had held by push grading (Held) for one owner in a day.
 type cardCount struct {
 	Source   string `json:"source"`
 	Category int    `json:"category"`
 	Owner    string `json:"owner,omitempty"`
 	N        int    `json:"n"`
+	Held     int    `json:"held,omitempty"`
+}
+
+// heldNotify remembers a held NotifyRequest result keyed by notification ID for callers (such as recordingHost)
+// whose Notify and NoteCard calls cross a host seam returning only error.
+type heldNotify struct {
+	reason string
+	at     time.Time
 }
 
 // cardLedger is the counts by the owner's local day (2006-01-02). Without a database they are kept in memory only and
 // start again with the manager.
 type cardLedger struct {
-	mu     sync.Mutex
-	loaded bool
-	days   map[string][]cardCount
-	told   string // the last day told to the main conversation (reportCardLedger)
+	mu      sync.Mutex
+	loaded  bool
+	days    map[string][]cardCount
+	told    string // the last day told to the main conversation (reportCardLedger)
+	heldIDs map[string]heldNotify
 }
 
 // noteCard records push n going to the owner: its source (source, else the one on ctx, else untagged), the kind the
@@ -284,6 +348,21 @@ type cardLedger struct {
 // called wherever a push is sent.
 func (s *Service) noteCard(ctx context.Context, source string, n Notification) {
 	s.noteCardOwner(ctx, source, n.SessionID)
+}
+
+// noteCardResult records the outcome of a successful NotifyRequest (err == nil): pushed to the owner's phone when
+// !res.Held (including legacy hubs that omit Held), or held by push grading when res.Held.
+func (s *Service) noteCardResult(ctx context.Context, source string, n Notification, res NotifyResult) {
+	s.noteCardOwnerResult(ctx, source, n.SessionID, res)
+}
+
+// noteCardOwnerResult is noteCardResult with an explicit owner.
+func (s *Service) noteCardOwnerResult(ctx context.Context, source, owner string, res NotifyResult) {
+	if res.Held {
+		s.noteCardHeld(ctx, source, owner, res.Reason)
+		return
+	}
+	s.noteCardOwner(ctx, source, owner)
 }
 
 // supervisingOwner is the owner of an Agent's push n (deliverCard): the conversation supervising the task of the
@@ -307,6 +386,57 @@ func (s *Service) noteCardOwner(ctx context.Context, source, owner string) {
 	s.countCard(ctx, time.Now().In(s.location(ctx)), cardCount{Source: source, Category: cat, Owner: owner, N: 1})
 }
 
+// noteCardHeld records a push held by hub push grading (not pushed to the owner's phone).
+func (s *Service) noteCardHeld(ctx context.Context, source, owner, reason string) {
+	source = cmp.Or(source, cardSourceOf(ctx), cardUntagged)
+	cat := cardCategoryOf(source)
+	if s.logf != nil {
+		s.logf("assistant: card held by push grading: kind %d, source %s, owner %q, reason %q", cat, source, owner, reason)
+	}
+	s.countCard(ctx, time.Now().In(s.location(ctx)), cardCount{Source: source, Category: cat, Owner: owner, Held: 1})
+}
+
+// rememberNotifyHeld caches whether notification id was held by the hub so a follow-up NoteCard call can record
+// it accurately without changing module host interfaces.
+func (s *Service) rememberNotifyHeld(id string, res NotifyResult) {
+	if id == "" {
+		return
+	}
+	b := &s.cards
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !res.Held {
+		delete(b.heldIDs, id)
+		return
+	}
+	now := time.Now()
+	if b.heldIDs == nil {
+		b.heldIDs = map[string]heldNotify{}
+	}
+	for k, v := range b.heldIDs {
+		if now.Sub(v.at) > heldNotifyTTL {
+			delete(b.heldIDs, k)
+		}
+	}
+	b.heldIDs[id] = heldNotify{reason: res.Reason, at: now}
+}
+
+// consumeNotifyHeld pops the held state previously recorded by rememberNotifyHeld for notification id.
+func (s *Service) consumeNotifyHeld(id string) NotifyResult {
+	if id == "" {
+		return NotifyResult{}
+	}
+	b := &s.cards
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	h, ok := b.heldIDs[id]
+	if !ok {
+		return NotifyResult{}
+	}
+	delete(b.heldIDs, id)
+	return NotifyResult{Held: true, Reason: h.reason}
+}
+
 // countCard adds c to the day of at, drops the days past cardLedgerDays and saves.
 func (s *Service) countCard(ctx context.Context, at time.Time, c cardCount) {
 	b := &s.cards
@@ -319,6 +449,7 @@ func (s *Service) countCard(ctx context.Context, at time.Time, c cardCount) {
 	rows := b.days[day]
 	if i := slices.IndexFunc(rows, func(r cardCount) bool { return r.Source == c.Source && r.Owner == c.Owner }); i >= 0 {
 		rows[i].N += c.N
+		rows[i].Held += c.Held
 		rows[i].Category = c.Category // the table may have changed since
 	} else {
 		rows = append(rows, c)
