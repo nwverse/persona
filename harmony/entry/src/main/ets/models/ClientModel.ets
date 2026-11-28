@@ -1148,6 +1148,20 @@ export class ClientModel {
       if (this.owns(generation, scope) && rev === this.agentsDisplayRevision) this.agentsDisplaySaving = false;
     }
   }
+  syncNextSuggestions(assistant: Record<string, Object>): void {
+    const parsed = parseAssistantNextSuggestions(assistant);
+    if (parsed !== null) {
+      this.nextSuggestionsValue = parsed;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+    }
+    const parent = this.directoryParent;
+    if (parsed !== null && parent && parent.scope() === this.scope() && parent.profile.hubId === this.profile.hubId) {
+      parent.nextSuggestionsValue = parsed;
+      parent.nextSuggestionsLoaded = true;
+      if (parent.demo) parent.refreshDemo();
+    }
+  }
   async loadNextSuggestions(): Promise<void> {
     if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsSaving) return;
     const generation = this.generation, scope = this.scope(), repo = this.repository;

@@ -1185,6 +1185,15 @@ export struct InteractionDecisionForm {
           .onAreaChange((_before:Area,after:Area) => {
             const h=Number(after.height); if (h>0 && Math.abs(this.inlineFooterHeight-h)>0.5) this.inlineFooterHeight=h;
           })
+        if (Object.keys(this.ruleSuggestionObject()).length > 0) {
+          RuleSuggestionBar({
+            model: this.model,
+            rawSuggestion: this.ruleSuggestionObject(),
+            cardKey: 'card|' + this.request.id,
+            manager: this.ruleSuggestionManager(),
+            onSettled: () => { this.model.refresh().catch(() => undefined); }
+          })
+        }
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:16,right:16,top:12,bottom:16})
       .backgroundColor(this.panelSurface())

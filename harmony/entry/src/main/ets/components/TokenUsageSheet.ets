@@ -685,7 +685,7 @@ export struct TokenUsageSheet {
                 onPick(bar.id);
               })
               .id(identity + '.bar.' + bar.id)
-            }, (bar: ActivityBarItem) => bar.id + ':' + String(bar.tokens.total))
+            }, (bar: ActivityBarItem) => bar.id + ':' + String(bar.tokens.total) + ':' + ((pickedId || summary.peakId) === bar.id ? '1' : '0'))
           }
           .width('100%')
           .alignItems(VerticalAlign.Bottom)

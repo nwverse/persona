@@ -7,6 +7,7 @@ import { AdminManager, AdminMemory, AdminSnapshot, AdminWorkspace } from '../mod
 import { ResourceRow, Wire } from '../models/Wire';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
+import { Haptics } from '../platform/Haptics';
 
 const LAUNCHER_KINDS: string[] = ['api', 'launcher'];
 const LAUNCHER_APIS: string[] = ['messages', 'responses', 'chat'];
@@ -424,11 +425,12 @@ export struct AdminWorkspacePage {
           SymbolGlyph($r('sys.symbol.wand_and_stars')).fontSize('22vp').fontColor([Colors.ai])
           Text(tr('next_suggestions_title')).layoutWeight(1).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body))
             .fontColor(Colors.ink).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          Toggle({ type: ToggleType.Switch, isOn: this.model.nextSuggestionsValue !== null ? this.model.nextSuggestionsValue === true : Wire.bool(this.workspace.assistantData, 'next_suggestions') })
-            .enabled(!this.workspace.saving && !this.model.nextSuggestionsSaving).accessibilityText(tr('next_suggestions_title')).onChange((on: boolean) => {
-              this.model.setNextSuggestions(on).then((ok: boolean) => {
-                if (ok) this.workspace.refresh().catch(() => undefined);
-              }).catch(() => undefined);
+          Toggle({ type: ToggleType.Switch, isOn: Wire.bool(this.workspace.assistantData, 'next_suggestions') })
+            .enabled(!this.workspace.saving).accessibilityText(tr('next_suggestions_title')).onChange((on: boolean) => {
+              if (on !== Wire.bool(this.workspace.assistantData, 'next_suggestions')) {
+                Haptics.selection();
+                this.workspace.setNextSuggestions(this.workspace.capture('/api/v1/assistant'), on).catch(() => undefined);
+              }
             }).id('admin.assistant.next_suggestions')
         }.width('100%').constraintSize({ minHeight: 48 }).padding({ left: Tokens.inset, right: Tokens.inset }).backgroundColor(Colors.surface).borderRadius(Tokens.inset)
         Text(tr('next_suggestions_note')).fontSize(Tokens.caption).maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))

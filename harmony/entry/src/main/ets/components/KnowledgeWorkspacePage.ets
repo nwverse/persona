@@ -2039,7 +2039,7 @@ export struct KnowledgeWorkspacePage {
                         Span(part.text)
                       }
                     },
-                    (part: TranscriptMatchPart, partIdx: number) => String(partIdx) + ':' + part.text
+                    (part: TranscriptMatchPart, partIdx: number) => String(partIdx) + ':' + (part.hit ? '1' : '0') + ':' + part.text
                   )
                 } else {
                   Span(transcriptRowDisplayText(line, tr('recording_bookmark')))

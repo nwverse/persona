@@ -419,20 +419,31 @@ test('UI wiring, >=44vp touch targets, zero hex literals, and trilingual string 
   assert.match(usageSheet, /rankUsagePlaces\(/);
   assert.match(usageSheet, /token_usage_by_agent/);
   assert.match(usageSheet, /token_usage_by_launcher/);
+  assert.match(usageSheet, /\(bar: ActivityBarItem\) => bar\.id \+ ':' \+ String\(bar\.tokens\.total\) \+ ':' \+ \(\(pickedId \|\| summary\.peakId\) === bar\.id \? '1' : '0'\)/);
 
   const conv = readEts('components/Conversation.ets');
   assert.match(conv, /suggestionChipsBar\(/);
   assert.match(conv, /canDirectSendSuggestion\(/);
 
+  const adminPage = readEts('components/AdminWorkspacePage.ets');
+  assert.match(adminPage, /this\.workspace\.setNextSuggestions\(this\.workspace\.capture\('\/api\/v1\/assistant'\), on\)/);
+  assert.match(adminPage, /if \(on !== Wire\.bool\(this\.workspace\.assistantData, 'next_suggestions'\)\)/);
+
   const cards = readEts('components/AssistantCards.ets');
   const decisionForm = readEts('components/InteractionDecisionForm.ets');
   assert.match(cards, /RuleSuggestionBar\(/);
   assert.match(decisionForm, /RuleSuggestionBar\(/);
+  const agentCardSlice = decisionForm.slice(
+    decisionForm.indexOf('@Builder agentDecisionCard()'),
+    decisionForm.indexOf('@Builder responseFooter()')
+  );
+  assert.match(agentCardSlice, /RuleSuggestionBar\(/);
 
   const kbPage = readEts('components/KnowledgeWorkspacePage.ets');
   assert.match(kbPage, /canPreviewDemoRecordings\(/);
   assert.match(kbPage, /knowledge\.recording\.review_toggle/);
   assert.match(kbPage, /knowledge\.recording\.search/);
+  assert.match(kbPage, /\(part: TranscriptMatchPart, partIdx: number\) => String\(partIdx\) \+ ':' \+ \(part\.hit \? '1' : '0'\) \+ ':' \+ part\.text/);
 
   const requiredKeys = [
     'todo_stage_plan', 'todo_stage_develop', 'todo_stage_review', 'todo_stage_merge',
