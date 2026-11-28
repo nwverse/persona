@@ -1103,6 +1103,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_session_start_speed"))
 		return
 	}
+	if len(p.ModelAliases) != 0 && !m.announces(nodeproto.SessionStartModelAliases) {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("hub-machine.node_no_model_aliases"))
+		return
+	}
 	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))
 	if replay != nil {
 		opID = replay.opID
