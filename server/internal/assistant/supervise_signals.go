@@ -329,6 +329,7 @@ type superviseBook struct {
 	noMainSince, noMainLogged               time.Time
 	holds                                   map[string]supervisionHold
 	holdsLoaded, holdsDirty                 bool
+	pendingHolds                            map[string]pendingSupervisionHold
 	stallsHandled                           map[string]handledStall
 	stallsHandledLoaded, stallsHandledDirty bool
 	sideLinks                               map[string][]string // side conversation → task/conversation links to attach to its user-level supervision push

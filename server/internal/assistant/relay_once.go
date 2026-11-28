@@ -298,7 +298,7 @@ func (s *Service) tryDirectRelay(ctx context.Context, machine, to string, msg *r
 	}
 	msg.DoubtedAt = tried
 	s.noteDoubt(to, *msg, tried)
-	s.releasePushes(context.Background(), to)
+	s.deferSupervisionHold(machine, to, relayMsgID(to, *msg), res.holdAt)
 	if err != nil {
 		return err
 	}
@@ -373,7 +373,7 @@ func (s *Service) tryQueuedRelayText(ctx context.Context, machine, to string, he
 		return msg, 0, errSupervisionConfirmExhausted
 	}
 	s.recordQueuedDoubt(to, &msg)
-	s.releasePushes(context.Background(), to)
+	s.deferSupervisionHold(machine, to, relayMsgID(to, msg), res.holdAt)
 	return msg, relayLookGap, nil
 }
 

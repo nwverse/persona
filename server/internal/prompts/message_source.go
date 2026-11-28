@@ -154,7 +154,7 @@ func ParseRelayQuoteID(text string) string {
 
 // ItemSource prefers explicit fields, then persisted provenance, then existing
 // injected metadata and exact legacy templates. App messages with IDs accept
-// only provenance from an A2A envelope bound to that ID. Item.From is a name.
+// only provenance from a manager-assigned delivery. Item.From is a name.
 func ItemSource(it proto.Item) *proto.MessageSource {
 	if it.Source != nil && it.Source.Kind != "" {
 		return it.Source
@@ -164,6 +164,12 @@ func ItemSource(it proto.Item) *proto.MessageSource {
 		// A2A's envelope binds the persisted source to the delivery ID. The
 		// owner-authored sentinel blocks a pasted envelope from qualifying.
 		if source, found := sourceMetadata(it.Text); found && source != nil && source.Kind == proto.SourceConversation {
+			return source
+		}
+	}
+	if it.Role == "user" && it.Kind == proto.KindText && it.From == "" && strings.HasPrefix(it.ClientMsgID, proto.SegmentOnceIDPrefix+"relay-") {
+		// A logical segment can keep the delivery ID and the on-disk provenance even when the runtime does not echo Source.
+		if source, _ := sourceMetadata(it.Text); source != nil && source.Kind == proto.SourceSupervision {
 			return source
 		}
 	}

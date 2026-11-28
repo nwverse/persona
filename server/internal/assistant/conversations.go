@@ -1041,10 +1041,11 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 		}
 	}
 	s.availInput(machine, to, relayKind(msg), time.Now())
+	var res superviseRoundReply
 	if msg.Tool == superviseTool {
 		if hold {
 			// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
-			err = s.holdPushesFor(ctx, to, msg)
+			res.holdAt, err = s.holdPushesFor(ctx, to, msg)
 		} else {
 			err = s.noteSideSupervisionPush(ctx, to, msg)
 		}
@@ -1066,13 +1067,12 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	// A hand-over of the owner's words into a lead holds its writable plans from before the send (relay_lead_hold.go).
 	handed := s.holdForHandover(to, msg)
-	var res superviseRoundReply
 	if err := s.call(ctx, machine, DeviceAssistantSend, params, &res); err != nil {
 		if msg.Tool == superviseTool && !relayInDoubt(err) { // in doubt, drainRelays lets go once it knows it did not go in
 			s.releasePushes(ctx, to)
 		}
 		handed(err)
-		return superviseRoundReply{}, round, err
+		return res, round, err
 	}
 	if s.isBackground(ctx, to) && res.SessionID != "" && res.SessionID != to {
 		s.registerBackgroundRoundFork(ctx, machine, res.SessionID, to)

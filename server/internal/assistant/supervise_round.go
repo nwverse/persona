@@ -128,6 +128,7 @@ func backgroundKeepsContext(cfg Settings) bool {
 // started from the first turn) or "kept" (it went in as before) with Why, and the transcript's size. A node from before
 // #7315 answers none of them, and so does any node to the same message asked again under its once_id.
 type superviseRoundReply struct {
+	holdAt          time.Time
 	SessionID       string `json:"session_id"`
 	Context         string `json:"context"`
 	Why             string `json:"why"`

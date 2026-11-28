@@ -1035,7 +1035,7 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	}
 	orig := p
 	replay := heldStartReplayOf(r.Context())
-	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
+	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) || strings.HasPrefix(p.ClientMsgID, proto.SegmentOnceIDPrefix) {
 		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
 		return
 	}

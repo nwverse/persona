@@ -231,7 +231,7 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 			if client == "" {
 				client, _ = p["once_id"].(string)
 				if client != "" {
-					client = "segment-once:" + client
+					client = proto.SegmentOnceIDPrefix + client
 					p["client_msg_id"] = client
 				}
 			}

@@ -45,6 +45,37 @@ func TestWithInjected(t *testing.T) {
 	}
 }
 
+func TestWithInjectedLogicalSupervision(t *testing.T) {
+	h := &Hub{}
+	raw := prompts.RenderSupervise(prompts.Supervise{Entries: []prompts.SuperviseEntry{{Kind: "review", Title: "Example task"}}})
+	text := prompts.MessageSourceText(raw, &proto.MessageSource{Kind: proto.SourceSupervision})
+	id := proto.SegmentOnceIDPrefix + "relay-000000000000000000000001"
+	item := proto.Item{Role: "user", Kind: proto.KindText, Text: text, ClientMsgID: id}
+	legacy := item
+	legacy.ClientMsgID = ""
+	user := item
+	user.Text = prompts.ProtectUserMessage(text)
+	rawOnly := item
+	rawOnly.Text = raw
+	ordinaryID := item
+	ordinaryID.ClientMsgID = "example-user-input"
+	got := h.withInjected([]proto.Item{item, legacy, user, rawOnly, ordinaryID})
+
+	for _, it := range got[:2] {
+		if it.Source == nil || it.Source.Kind != proto.SourceSupervision || it.Injected == nil || it.Injected.State != "supervise" || it.Injected.Level != "triage" || it.Text != text {
+			t.Fatalf("supervision input lost its provenance or original text: %+v", it)
+		}
+	}
+	if got[0].ClientMsgID != id {
+		t.Fatal("logical delivery lost its acknowledgement ID")
+	}
+	for _, it := range got[2:] {
+		if it.Source != nil || it.Injected != nil {
+			t.Fatalf("ordinary input classified as supervision: %+v", it)
+		}
+	}
+}
+
 // The manager's note to a conversation an inbox item was handed to (#1194) is one line in the user's language; the
 // same words sent by an app (client_msg_id) stay the user's.
 func TestWithInjectedInboxNote(t *testing.T) {

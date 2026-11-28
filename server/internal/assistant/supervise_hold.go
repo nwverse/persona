@@ -32,6 +32,11 @@ type supervisionHold struct {
 	Stalled []supervisionStallRef `json:"stalled,omitempty"`
 }
 
+type pendingSupervisionHold struct {
+	hold              supervisionHold
+	machine, clientID string
+}
+
 // supervisionEnd carries a turn's hold to the push and channel decisions after the active hold has been cleared.
 type supervisionEnd struct {
 	key      string
@@ -101,6 +106,11 @@ func (s *Service) expireSupervisionHolds(ctx context.Context, now time.Time) boo
 			delete(b.holds, id)
 			b.holdsDirty = true
 			changed = true
+		}
+	}
+	for id, pending := range b.pendingHolds {
+		if !pending.hold.active(now) {
+			delete(b.pendingHolds, id)
 		}
 	}
 	_ = s.saveSupervisionHoldsLocked(ctx)
@@ -250,19 +260,21 @@ func (s *Service) pruneHandledStalls(ctx context.Context, openIDs map[string]boo
 
 // holdPushes records a supervision wake before dispatch so that even its first tool call can see the hold.
 func (s *Service) holdPushes(ctx context.Context, id string) error {
-	return s.holdPushesFor(ctx, id, relayMsg{})
+	_, err := s.holdPushesFor(ctx, id, relayMsg{})
+	return err
 }
 
 // holdPushesFor records a supervision wake and any stalled/no_progress stretches carried by msg.
-func (s *Service) holdPushesFor(ctx context.Context, id string, msg relayMsg) error {
+func (s *Service) holdPushesFor(ctx context.Context, id string, msg relayMsg) (time.Time, error) {
 	b := &s.supervise
 	b.mu.Lock()
 	if err := s.loadSupervisionHoldsLocked(ctx); err != nil {
 		b.mu.Unlock()
-		return err
+		return time.Time{}, err
 	}
 	previous, existed := b.holds[id]
-	b.holds[id] = supervisionHold{At: time.Now().UTC(), Stalled: stallRefsOf(msg)}
+	at := time.Now().UTC()
+	b.holds[id] = supervisionHold{At: at, Stalled: stallRefsOf(msg)}
 	b.holdsDirty = true
 	if err := s.saveSupervisionHoldsLocked(ctx); err != nil {
 		if existed {
@@ -271,12 +283,13 @@ func (s *Service) holdPushesFor(ctx context.Context, id string, msg relayMsg) er
 			delete(b.holds, id)
 		}
 		b.mu.Unlock()
-		return err
+		return time.Time{}, err
 	}
 	delete(b.sideLinks, id)
+	delete(b.pendingHolds, id)
 	b.mu.Unlock()
 	s.publish(ctx)
-	return nil
+	return at, nil
 }
 
 // releasePushes clears the hold when another message takes over the conversation.
@@ -295,6 +308,9 @@ func (s *Service) clearSupervisionHold(ctx context.Context, id string, endedAt t
 		return supervisionHold{}, err
 	}
 	h, held := b.holds[id]
+	if pending, ok := b.pendingHolds[id]; ok && (endedAt.IsZero() || !pending.hold.At.After(endedAt)) {
+		delete(b.pendingHolds, id)
+	}
 	if endedAt.IsZero() {
 		delete(b.sideLinks, id)
 	} else if h.At.After(endedAt) {
