@@ -513,7 +513,7 @@ export struct Conversation {
     const epoch = ++this.readingEpoch;
     this.readingKey = key;
     this.inspectionRevision++; this.inspectingWork = false; this.readingPlan = ''; this.beforePlan = '';
-    this.followEpoch = -1; this.userScrolling = false; this.unseenLatest = false; this.tailMarker = '';
+    this.followEpoch = -1; this.userScrolling = false; this.scrollingByHand = false; this.unseenLatest = false; this.tailMarker = '';
     const position = this.takeReturnAnchor();
     this.relationAnchor = position;
     this.relationLoading = false;
@@ -712,7 +712,9 @@ export struct Conversation {
   }
   private recordReading(start: number): void {
     if (!this.active || this.readingRestoring) return;
-    this.atEnd = this.scroller.isAtEnd();
+    // A growing or newly laid out Agent transcript can be off the bottom before the pending scroll runs.
+    // Only a user gesture or an explicit navigation target detaches it from the latest output.
+    if (this.model.selected.kind !== 'session') this.atEnd = this.scroller.isAtEnd();
     this.updateJumpAvailability();
     const prefix = this.readingPrefix(), index = Math.max(prefix, start), line = this.lines[index - prefix];
     if (!line) return;
@@ -1067,7 +1069,8 @@ export struct Conversation {
   private userScroll(offset: number, source: ScrollSource): void {
     if (!offset || ![ScrollSource.DRAG, ScrollSource.FLING, ScrollSource.OTHER_USER_INPUT,
       ScrollSource.SCROLL_BAR, ScrollSource.SCROLL_BAR_FLING].includes(source)) return;
-    if (!this.userScrolling) { this.readingMotion++; this.userScrolling = true; }
+    this.trackScrollMotion(offset, source);
+    this.userScrolling = true;
     this.relationAnchor = undefined;
     if (offset < 0) this.atEnd = false;
   }
@@ -1124,6 +1127,7 @@ export struct Conversation {
   }
   private finishScroll(): void {
     if (this.userScrolling) this.reachedLatest();
+    this.finishReadingMotion();
     this.userScrolling = false;
     if (this.resumeHistory) this.releaseHistoryRendering();
     if (this.timelinePending) this.syncTimeline();
@@ -2623,7 +2627,8 @@ export struct Conversation {
           if (this.sessionIssue && !this.issueEchoId) ListItem() {
             AgentEventLine({ event: this.sessionIssue!, identity: this.model.target() + this.sessionIssue!.label })
           }.padding({ left: Tokens.page, right: Tokens.page }).id('chat.turn.issue')
-        }.cachedCount(2).width('100%').height('100%').id('chat.transcript')
+        }.cachedCount(2).contentEndOffset(this.transcriptEndInset()).width('100%').height('100%').id('chat.transcript')
+          .onAreaChange((_old: Area, area: Area) => this.transcriptViewportChanged(Number(area.height)))
           .bindSheet(this.questions.shown, this.questionContent(), { title: { title: tr('interaction_question_reopen') }, height: SheetSize.LARGE, keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY, showClose: true, onWillAppear: () => this.presentedQuestion = this.questions.beginPresentation(), onAppear: () => { this.questionLayoutReady = true; this.measureQuestion(); }, onWillDismiss: (action: DismissSheetAction) => this.questions.dismiss(this.presentedQuestion, () => action.dismiss()), onDisappear: () => { this.questionLayoutReady = false; this.questions.endPresentation(this.presentedQuestion); this.presentedQuestion = undefined; } })
           .maintainVisibleContentPosition(!this.atEnd || this.photoOpen)
           .onWillScroll((offset: number, _state: ScrollState, source: ScrollSource) => { this.userScroll(offset, source); this.pullHistory(offset); })
@@ -2632,11 +2637,11 @@ export struct Conversation {
             this.trackHistoryRendering(end);
             this.approachHistory(start);
             this.lastVisibleIndex = end;
-            this.firstVisibleIndex = start; this.recordReading(start); this.rememberTailPosition(); this.updateJumpAvailability();
+            this.firstVisibleIndex = start; this.recordReading(start); this.rememberTailPosition();
           })
+          .onDidScroll(() => { if (this.scrollingByHand) this.recordReading(this.firstVisibleIndex); })
           .onReachEnd(() => this.reachedLatest())
           .onScrollStop(() => this.finishScroll())
-          .onSizeChange(() => this.followReading())
   }
 
   @Computed get edgeScrubMarks(): EdgeScrubMark[] {

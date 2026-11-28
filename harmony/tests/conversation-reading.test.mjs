@@ -213,6 +213,43 @@ test('opening starts at the latest row without fetching a previous visit or wait
   assert.deepEqual(scrolls, ['bottom', 'bottom']);
 });
 
+test('an Agent still follows its latest line after the first list layout and a streamed resize', () => {
+  const View = new Function('ConversationFrame', 'Edge', 'ScrollSource', 'return ' + stripTypeScriptTypes('class View {' +
+    ['recordReading', 'followReading', 'timelinePositionChanged', 'trackScrollMotion', 'userScroll', 'reachedLatest'].map(method).join('\n') + '}')
+  )(Frame, { Bottom: 1 }, { DRAG: 1, SCROLLER: 2 });
+  const frames = [], scrolls = [];
+  let bottom = false;
+  const v = Object.assign(new View(), {
+    model: { selected: { kind: 'session' } }, active: true, atEnd: true, readingEpoch: 1, readingMotion: 0,
+    lines: [{ readingId: 'first' }, { readingId: 'last' }], readingPrefix: () => 2,
+    getUIContext: () => ({ postFrameCallback: f => frames.push(f) }), updateJumpAvailability() {}, showWelcome: () => false,
+    scroller: { isAtEnd: () => bottom, getItemRect: () => ({ y: 0 }), scrollEdge: () => { bottom = true; scrolls.push('bottom'); } }
+  });
+  const layout = () => { while (frames.length) frames.shift().onFrame(); };
+  v.followReading();
+  v.recordReading(2);
+  assert.equal(v.atEnd, true, 'layout before the opening scroll must not cancel following');
+  layout();
+  bottom = false;
+  v.timelinePositionChanged();
+  v.recordReading(3);
+  layout();
+  assert.deepEqual(scrolls, ['bottom', 'bottom']);
+  v.timelinePositionChanged();
+  v.userScroll(-40, 1);
+  bottom = false;
+  v.recordReading(2);
+  layout();
+  assert.equal(v.atEnd, false);
+  assert.deepEqual(scrolls, ['bottom', 'bottom'], 'a drag cancels even an already scheduled follow');
+  bottom = true;
+  v.reachedLatest();
+  v.userScrolling = false;
+  v.timelinePositionChanged();
+  layout();
+  assert.equal(scrolls.length, 3, 'returning to the end resumes following');
+});
+
 test('reopening the same target follows again, a refresh in place preserves manual scrolling', async () => {
   const {v, flush, scrolls} = fixture();
   Object.assign(v, { syncFeed() {}, syncRevision() {}, syncAttachments() {} });
@@ -298,7 +335,7 @@ test('new content follows only the current conversation while the reader stays a
 test('manual scrolling immediately offers the jump, and a later update marks it as new', () => {
   const source = {DRAG:0, FLING:1, OTHER_USER_INPUT:3, SCROLL_BAR:4, SCROLL_BAR_FLING:5, SCROLLER:6};
   const Controller = new Function('ScrollSource', 'return ' + stripTypeScriptTypes('class Controller {' +
-    ['userScroll','markLatest','reachedLatest'].map(method).join('') + '}'))(source);
+    ['trackScrollMotion','userScroll','markLatest','reachedLatest'].map(method).join('') + '}'))(source);
   const view = new Controller(), row = {id:'m',readingId:'m'};
   Object.assign(view,{active:true,atEnd:true,userScrolling:false,unseenLatest:false,
     readingMotion:0,tailMarker:'',lines:[row],
@@ -366,7 +403,7 @@ test('scrolling through earlier turns coalesces incoming display updates and the
   const v=new Controller(), shown=[];
   Object.assign(v,{active:true,userScrolling:true,atEnd:false,lines:[{},{},{}],
     lastVisibleIndex:0,model:{selected:{kind:'session'}},readingPrefix:()=>0,readingEpoch:1,
-    syncRevision(){},refreshFeed(){},timelinePositionChanged(){},followReading(){},reachedLatest(){},tailLayoutChanged(){},
+    syncRevision(){},refreshFeed(){},timelinePositionChanged(){},followReading(){},reachedLatest(){},finishReadingMotion(){},tailLayoutChanged(){},
     syncTimeline(){this.timelinePending=false;shown.push(this.model.frame);}});
   for(const frame of [1,2,3]){v.model.frame=frame;v.messagesChanged();}
   assert.deepEqual(shown,[]);v.finishScroll();assert.deepEqual(shown,[3]);
