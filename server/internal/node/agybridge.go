@@ -619,12 +619,9 @@ func (h *runtimeConn) agyWorking() bool {
 
 // agyFiniteBackground: s lists background work that ends by itself, which a companion restart would stop ("All your
 // subagents and background tasks have been stopped due to server restart"): a command, workflow or subagent
-// (Background of kind shell / workflow / agent), a one-shot timer, or a running entry in Subagents or Workflows. agy's
-// `schedule` arrives as kind monitor whether it is a cron job or a one-shot timer, and the row keeps no flag that tells
-// them apart (background.js drops its oneShot), so the description does, by agyOneShotSchedule's rule with no call to
-// read: "Timer: …" is a timer, which fires once and then leaves the list, so the restart waits for it rather than lose
-// the session's scheduled follow-up; "Cron: …", or no description, is a recurring job, which never ends, so a restart
-// that waited on it would never come, and it is left out. So is a cron schedule that arrives as kind shell: the
+// (Background of kind shell / workflow / agent), or a running entry in Subagents or Workflows. A schedule (kind
+// monitor: agy's `schedule`, a cron job or a one-shot timer, which the row does not tell apart) is left out: a cron job
+// never ends, so a restart that waited on it would never come. So is a cron schedule that arrives as kind shell: the
 // companion (integrations/antigravity/lib/background.js extractBackground) calls a task shell when it cannot match the
 // task's start notice to its tool call (none, or two calls claiming the step), and only the notice's description, agy's
 // "Cron: <expression> <prompt>", still says what it is (agyStandingSchedule).
@@ -639,11 +636,7 @@ func (h *runtimeConn) agyWorking() bool {
 // the companion-side follow-up).
 func agyFiniteBackground(s proto.Session) bool {
 	for _, task := range s.Background {
-		if task.Kind == "monitor" {
-			if agyOneShotSchedule(task.Description, nil) {
-				return true
-			}
-		} else if !agyStandingSchedule(task) {
+		if task.Kind != "monitor" && !agyStandingSchedule(task) {
 			return true
 		}
 	}
@@ -662,7 +655,7 @@ func agyFiniteBackground(s proto.Session) bool {
 
 // agyStandingSchedule: task is an agy cron schedule the companion could not tell from a command: kind shell, no command
 // line (a matched run_command has one) and the description agy gives a cron `schedule` (the prefix agyOneShotSchedule
-// reads too). A one-shot timer ("Timer: …") is not matched: it ends by itself, so it holds a restart until it fires.
+// reads too). A one-shot timer ("Timer: …") is not matched: it ends by itself, so at worst it holds a restart until then.
 func agyStandingSchedule(task proto.BackgroundTask) bool {
 	return task.Kind == "shell" && task.Command == "" && strings.HasPrefix(task.Description, "Cron:")
 }
