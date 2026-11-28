@@ -319,6 +319,9 @@ func (s *Service) recheckQueuedDigestAtDetailed(ctx context.Context, to string, 
 				return msg, false, true, false
 			}
 		} else {
+			if g.Kind == sigCardlessWait && s.cardlessDigestShouldRetry(g) {
+				return msg, false, true, false
+			}
 			e, ok = s.digestEntryRecheck(ctx, g, web, tried)
 		}
 		if ok {

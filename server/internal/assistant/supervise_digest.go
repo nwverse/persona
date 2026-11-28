@@ -843,18 +843,21 @@ func (s *Service) digestEntryChecked(ctx context.Context, g superviseSignal, web
 	return e, ok, false
 }
 
-// cardlessDigestShouldRetry reports that a cardless entry's delivery-time revalidation could not run because the
-// acceptance book could not be read. The signal is then restored for a later digest instead of being dropped or
-// rendered against an unknown ledger. Every other outcome (a card/worker now answers, or the claim still holds) is
-// left to the two-state digestEntry, which re-runs the same checks against a readable book.
+// cardlessDigestShouldRetry reports that a stamped cardless claim's delivery-time revalidation could not run because
+// the acceptance book could not be read. It covers both a pending review and an owner wait. Every other outcome (a
+// card/worker now answers, or the claim still holds) is left to digestEntry, which re-runs the checks against a
+// readable book.
 func (s *Service) cardlessDigestShouldRetry(g superviseSignal) bool {
 	t, ok := s.todoNow(g.Todo)
 	if !ok || t.Supervision == nil {
 		return false
 	}
-	v := t.Supervision
-	if v.state(t) != reviewPending || v.CardlessToldAt == nil {
-		return false // reviewed or handed back meanwhile: moot, not a transient retry
+	if !cardlessClaimMatches(t, g) {
+		return false // reviewed, replaced, or handed back meanwhile: moot, not a transient retry
+	}
+	told, known := cardlessClaimToldAt(t.Supervision, g)
+	if !known || told == nil {
+		return false // the marker is not committed yet; completeCardlessClaim owns that step
 	}
 	_, readable, _ := s.askCopyReadable(t.ID)
 	return !readable
@@ -1130,10 +1133,11 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // decided or reviewed again meanwhile
 		}
 	case sigCardlessWait:
-		// The pending claim is durable before this marker. Compare round identities at Postgres precision so a
-		// restored signal cannot acknowledge a newer review or be rejected merely for losing nanoseconds.
-		if !cardlessClaimMatches(t, g) || v.CardlessToldAt == nil {
-			return prompts.SuperviseEntry{}, false // reviewed, or handed back already, meanwhile
+		// The pending claim is durable before its marker. Compare identities at Postgres precision so a restored
+		// signal cannot acknowledge a newer review or owner wait, or be rejected merely for losing nanoseconds.
+		told, known := cardlessClaimToldAt(v, g)
+		if !cardlessClaimMatches(t, g) || !known || told == nil {
+			return prompts.SuperviseEntry{}, false // reviewed, replaced, or not handed back yet, meanwhile
 		}
 		// Re-run the conditions that made the signal valid against current data: a card or active worker can have
 		// appeared while the entry waited in a queued/batched digest, in which case the "no card" claim is stale and
