@@ -1433,18 +1433,22 @@ The hub has an **egress proxy** (`server/internal/extension/egress`), started th
   (`dialRace` in `extension/egress/race.go`, after RFC 8305 Happy Eyeballs v2): IPv4 and IPv6 alternate starting with the resolver's first family, the next address starts 250 ms after
   the previous one or at once when one fails, at most four attempts are open at once (with four open and addresses waiting, the oldest is canceled after 10 s and its address goes once
   more to the back of the line, with 20 s that time, so making room never removes the only address that answers slowly), the first connection wins and every other attempt is canceled
-  or closed. When the request's deadline passes, the error is the deadline (with each address's cause), even when the attempts' own timeouts come first. Nothing is resolved again, so the address dialed is always one that was checked. The fetch broker of source runtimes pins the address
-  even through the hub's upstream proxy, so there each attempt is its own CONNECT to one checked address and is raced the same way. Process extensions race the addresses the proxy
-  resolves itself (allowed names and settings addresses); when the hub has an upstream proxy for them, the CONNECT carries the name and the upstream proxy picks the address, so there is
-  one attempt. The request budgets and the broker's admission limits are unchanged.
+  or closed. When the request's deadline passes, the error is the deadline (with each address's cause), even when the attempts' own timeouts come first.
+  Process extensions and the source-runtime fetch broker both pin each attempt to one locally checked address. Through the hub's upstream proxy, every CONNECT carries that numeric
+  address so the upstream has no hostname to resolve.
   Known limits: within a 15-second budget only the first eight addresses get an attempt (the ninth would start at 20 s; dialing one by one reached no further); and the process path
   bounds sockets per request, not in total: an extension's 128 pending requests can hold up to 512 attempts at once, with no cap across extensions.
-- **TCP connects but TLS stays silent** (#2745): direct CONNECT tunnels with several checked addresses keep the TCP race, then buffer a complete TLS ClientHello (up to 64 KiB). TLS on port 443 and other ports is recognized by its initial handshake record (`0x16`).
-  Each address gets 4 s to write the hello and return its first byte; a silent connection is closed and the hello is replayed to the remaining checked addresses, with each retry's TCP dial included in that budget.
-  Any server byte commits the connection, including a TLS alert: there is no switching after that, and TLS early application data is never replayed. When all addresses fail, the proxy logs the causes and closes the tunnel (CONNECT 200 has already been sent).
-  The responding address is preferred on the next CONNECT to that host:port, but only if it appears in the freshly checked DNS answer. This in-memory hint cache holds at most 1024 destinations.
-  Server-first protocols pass their banner through immediately. Clients get up to 1 s to send a complete hello; idle, incomplete, oversized or unrecognized input falls back to ordinary relay with its bytes preserved, without retries.
-  Single-address destinations, tunnels through an upstream proxy, plain HTTP, HTTP upgrades and the source-runtime fetch broker keep their existing behavior and timeouts. There is no new configuration.
+- **TCP connects but TLS stays silent** (#2745, #17802): CONNECT tunnels with several checked addresses buffer a complete TLS ClientHello (up to 64 KiB) after the initial address race.
+  TLS on any port is recognized by its initial handshake record (`0x16`). Each address gets 4 s to write the hello and return its first byte. A silent connection is closed and the
+  hello is replayed to the remaining checked addresses over the same route. Each retry's budget includes its TCP dial and any upstream CONNECT handshake.
+  Any server byte commits the connection, including a TLS alert. Early application data goes through ordinary relay after the connection commits. When all addresses fail,
+  the proxy logs the causes and closes the tunnel.
+  The responding address is preferred on the next CONNECT to the same host:port over the same route, provided it appears in the freshly checked DNS answer. The in-memory cache
+  holds at most 1024 hints, keyed by destination and either the direct route or the upstream proxy's TCP endpoint.
+  Server-first protocols pass their banner through immediately. Clients get up to 1 s to send a complete hello. Idle, incomplete, oversized or unrecognized input falls back to
+  ordinary relay with its bytes preserved. Single-address CONNECT tunnels go straight to relay. Plain HTTP and upgrades use the address race.
+  The source-runtime fetch broker uses the resolver's address preference because its HTTP transport handles TLS itself. A tunnel hint can come from a TLS alert, and the transport
+  cannot recover from a poor hint with tunnel failover.
 - Env vars: `HTTP_PROXY`, `HTTPS_PROXY`, `http_proxy`, `https_proxy`, `ALL_PROXY`, `all_proxy` point at the proxy, and `NO_PROXY` is empty. Go, Python, curl and Node libraries that apply the proxy themselves honor them;
   old clients that only honor `HTTPS_PROXY` still can't get out from the sandbox, which is the intended effect.
   `NODE_USE_ENV_PROXY=1` is set as well (#15707): without it Node's own `fetch` and `WebSocket` ignore the proxy variables, dial straight out and fail inside the Linux sandbox with `ENETUNREACH` while the proxy counts nothing.
