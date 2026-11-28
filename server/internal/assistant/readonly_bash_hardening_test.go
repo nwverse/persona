@@ -26,11 +26,36 @@ func TestReadonlyTaskSafeBashHardeningBypasses(t *testing.T) {
 		{"cat backslash .env traversal", "/code/app", `cat '..\.env'`},
 		{"cat backslash .config/gh", "/Users/alice", `cat '.config\gh\config.yml'`},
 
-		// git arbitrary file-read flags and bundled short-flag bypasses.
+		// UNC paths, backslash root paths, Windows drive-relative paths, and git -C backslash roots.
+		{"cat UNC share", "/code/app", `cat '\\server\share\secret.txt'`},
+		{"cat slash UNC share", "/code/app", `cat //server/share/secret.txt`},
+		{"cat backslash root Windows hosts", "/code/app", `cat '\Windows\System32\drivers\etc\hosts'`},
+		{"cat Windows drive-relative secret", "/code/app", `cat C:secret.txt`},
+		{"cat Windows drive-relative .config/gh", "/Users/alice", `cat 'C:.config\gh\config.yml'`},
+		{"cat Windows drive-relative .ssh", "/Users/alice", `cat 'C:.ssh\config'`},
+		{"git -C backslash root", "/code/app", `git -C '\Windows' status`},
+		{"git -C UNC share", "/code/app", `git -C '\\server\share' status`},
+		{"git -C drive-relative", "/code/app", `git -C C:repo status`},
+		{"git diff UNC share", "/code/app", `git diff '\\server\share\secret.txt'`},
+		{"git diff drive-relative .config/gh", "/Users/alice", `git diff 'C:.config\gh\config.yml'`},
+		{"git diff drive-relative secret", "/code/app", `git diff C:secret.txt`},
+
+		// git rev:path and :(magic) pathspec prefixes targeting sensitive paths.
+		{"git show HEAD:.config/gh/config.yml", "/Users/alice", `git show HEAD:.config/gh/config.yml`},
+		{"git show :0:.env.local", "/code/app", `git show :0:.env.local`},
+		{"git diff :(top).config/gh/config.yml", "/Users/alice", `git diff -- ':(top).config/gh/config.yml'`},
+		{"git diff :(icase,top)gh/config.yml from .config", "/Users/alice/.config", `git diff -- ':(icase,top)gh/config.yml'`},
+		{"git diff :/.env", "/code/app", `git diff -- :/.env`},
+		{"git show HEAD:../etc/passwd", "/code/app", `git show HEAD:../etc/passwd`},
+
+		// git arbitrary file-read flags and bundled short-flag bypasses (including boolean -D).
 		{"git diff -O orderfile attached", "/code/app", `git diff -O/etc/passwd`},
 		{"git diff -O orderfile separate", "/code/app", `git diff -O /etc/passwd`},
+		{"git diff -DO boolean D before O", "/code/app", `git diff -DO/etc/passwd`},
 		{"git show -O orderfile attached", "/code/app", `git show -O/etc/passwd HEAD`},
+		{"git show -DO boolean D before O", "/code/app", `git show -DO/etc/passwd HEAD`},
 		{"git log -O orderfile attached", "/code/app", `git log -O/etc/passwd -n 1`},
+		{"git log -DpO boolean D and p before O", "/code/app", `git log -n1 -DpO/etc/passwd`},
 		{"git diff bundled -pO orderfile", "/code/app", `git diff -pO/etc/passwd`},
 		{"git show bundled -po output", "/code/app", `git show -po/tmp/patch.diff HEAD`},
 		{"git log bundled -px exec", "/code/app", `git log -pxsh -n 1`},
@@ -45,17 +70,25 @@ func TestReadonlyTaskSafeBashHardeningBypasses(t *testing.T) {
 		// gh boolean short flags misclassified as value-taking flags skip --web / -w / --watch.
 		{"gh run view -e skips --web", "/code/app", `gh run view 123 -e --web`},
 		{"gh run view -e skips -w", "/code/app", `gh run view 123 -e -w`},
+		{"gh run view -v skips --web", "/code/app", `gh run view 123 -v --web`},
 		{"gh pr view -b skips --web", "/code/app", `gh pr view 123 -b --web`},
+		{"gh pr view -c skips --web", "/code/app", `gh pr view 123 -c --web`},
+		{"gh pr view -j skips --web", "/code/app", `gh pr view 123 -j --web`},
+		{"gh pr list -d skips --web", "/code/app", `gh pr list -d --web`},
 		{"gh pr checks -e skips --watch", "/code/app", `gh pr checks 123 -e --watch`},
 		{"gh issue view -u skips --web", "/code/app", `gh issue view 456 -u --web`},
+		{"gh issue view -c skips --web", "/code/app", `gh issue view 456 -c --web`},
+		{"gh run list -a skips --web", "/code/app", `gh run list -a --web`},
 		{"gh pr view dangling -R", "/code/app", `gh pr view 123 -R`},
+		{"gh pr diff dangling -e", "/code/app", `gh pr diff 123 -e`},
 
 		// ls symlink dereference flags.
 		{"ls -L dereference", "/code/app", `ls -L .`},
 		{"ls -H dereference command line", "/code/app", `ls -H .`},
 		{"ls bundled -lL", "/code/app", `ls -lL .`},
 		{"ls --dereference", "/code/app", `ls --dereference .`},
-		{"ls --dereference abbrev", "/code/app", `ls --der .`},
+		{"ls --dereference short abbrev --de", "/code/app", `ls --de .`},
+		{"ls --dereference abbrev --der", "/code/app", `ls --der .`},
 		{"ls --dereference-command-line", "/code/app", `ls --dereference-command-line .`},
 	}
 
@@ -75,9 +108,12 @@ func TestReadonlyTaskSafeBashHardeningBypasses(t *testing.T) {
 	}{
 		{"git diff -S pattern containing O", "/code/app", `git diff -SORDER HEAD~1`},
 		{"git log -n20 --oneline", "/code/app", `git log -n20 --oneline`},
+		{"git show HEAD:README.md", "/code/app", `git show HEAD:README.md`},
+		{"git diff :/README.md", "/code/app", `git diff -- :/README.md`},
 		{"git -C chained safe subdirs", "/code/app", `git -C server -C internal status -sb`},
 		{"gh run view -e --log", "/code/app", `gh run view 123 -e --log`},
 		{"gh run list -e push -L 5", "/code/app", `gh run list -e push -L 5`},
+		{"gh pr diff -e attached", "/code/app", `gh pr diff 123 -e'*.go'`},
 		{"gh repo view -b main", "/code/app", `gh repo view -b main`},
 		{"ls -lh human readable", "/code/app", `ls -lh server/internal/assistant`},
 	}

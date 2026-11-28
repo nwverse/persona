@@ -302,7 +302,7 @@ func safeReadonlyGit(args []string, cwd string) bool {
 						if ch == 'o' || ch == 'O' || ch == 'x' {
 							return false
 						}
-						if strings.ContainsRune("nUSGLMCBlD", rune(ch)) {
+						if strings.ContainsRune("nUSGLMCBl", rune(ch)) {
 							break
 						}
 					}
@@ -367,6 +367,48 @@ func safeReadonlyGit(args []string, cwd string) bool {
 	return true
 }
 
+func gitArgEmbeddedPaths(arg string) []string {
+	var out []string
+	add := func(p string) {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	if strings.HasPrefix(arg, ":") {
+		s := arg[1:]
+		if strings.HasPrefix(s, "(") {
+			if end := strings.IndexByte(s, ')'); end >= 0 {
+				add(s[end+1:])
+			}
+		} else {
+			// Short pathspec magic (:!, :^, :/) or stage syntax (:0:path).
+			trimmed := strings.TrimLeft(s, "!^/")
+			add(trimmed)
+		}
+	}
+	for i := 0; i < len(arg); i++ {
+		if arg[i] != ':' {
+			continue
+		}
+		after := arg[i+1:]
+		if after == "" {
+			continue
+		}
+		if strings.HasPrefix(after, "(") {
+			if end := strings.IndexByte(after, ')'); end >= 0 {
+				add(after[end+1:])
+				continue
+			}
+		}
+		if i == 0 && strings.HasPrefix(after, "/") {
+			add(strings.TrimLeft(after, "/"))
+			continue
+		}
+		add(after)
+	}
+	return out
+}
+
 // safeReadonlyGitArg validates a non-flag git argument (revision, pathspec, or diff operand)
 // so implicit --no-index paths (such as `git diff /dev/null /etc/passwd` or `.env`) and
 // tilde/traversal/credential paths cannot escape the task workspace, while allowing quoted
@@ -375,12 +417,22 @@ func safeReadonlyGitArg(arg, cwd string) bool {
 	if arg == "" || strings.ContainsRune(arg, '\x00') || strings.HasPrefix(arg, "~") || strings.ContainsRune(arg, '$') {
 		return false
 	}
-	if isReadonlyWindowsAbs(arg) || readonlyGuardedTarget(arg, cwd) {
+	if strings.ContainsRune(arg, '\\') || isUnsafeCrossOSOrUNCPath(arg) || hasWindowsDrivePrefix(arg) || readonlyGuardedTarget(arg, cwd) {
 		return false
 	}
 	for _, seg := range strings.Split(normalizeReadonlySlash(arg), "/") {
 		if seg == ".." || readonlyCredentialSegment(seg) {
 			return false
+		}
+	}
+	for _, sub := range gitArgEmbeddedPaths(arg) {
+		if strings.HasPrefix(sub, "~") || strings.ContainsRune(sub, '\\') || isUnsafeCrossOSOrUNCPath(sub) || hasWindowsDrivePrefix(sub) || readonlyGuardedTarget(sub, cwd) {
+			return false
+		}
+		for _, seg := range strings.Split(normalizeReadonlySlash(sub), "/") {
+			if seg == ".." || readonlyCredentialSegment(seg) {
+				return false
+			}
 		}
 	}
 	if filepath.IsAbs(arg) {
@@ -405,21 +457,21 @@ func safeReadonlyGitArg(arg, cwd string) bool {
 func ghShortValueFlags(cmd, sub string) string {
 	switch cmd + " " + sub {
 	case "pr view", "pr status", "issue view", "issue status":
-		return "Rqtj"
+		return "Rqt"
 	case "pr diff":
-		return "R"
+		return "Re"
 	case "pr list":
-		return "RqtjAaBHlLSs"
+		return "RqtAaBHlLSs"
 	case "pr checks":
-		return "Rqtji"
+		return "Rqti"
 	case "issue list":
-		return "RqtjAalLSsm"
+		return "RqtAalLSsm"
 	case "repo view":
-		return "Rqtjb"
+		return "qtb"
 	case "run view":
-		return "RqtjaJ"
+		return "Rqtaj"
 	case "run list":
-		return "RqtjbceLsu"
+		return "RqtbceLsu"
 	default:
 		return ""
 	}
@@ -660,7 +712,7 @@ func safeReadonlyFileTool(args []string, cwd string, noFollow, rejectFiles0, noD
 				if rejectFiles0 && matchesLongFlagPrefix(flag, "--files0-from", len("--f")) {
 					return false
 				}
-				if noDeref && (strings.HasPrefix(flag, "--dereference") || matchesLongFlagPrefix(flag, "--dereference", len("--der"))) {
+				if noDeref && (strings.HasPrefix(flag, "--dereference") || matchesLongFlagPrefix(flag, "--dereference", len("--de"))) {
 					return false
 				}
 				if valueFlags[flag] && !hasVal {
@@ -698,8 +750,22 @@ func normalizeReadonlySlash(p string) string {
 	return strings.ReplaceAll(filepath.ToSlash(p), "\\", "/")
 }
 
-func isReadonlyWindowsAbs(p string) bool {
-	return len(p) >= 3 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':' && (p[2] == '/' || p[2] == '\\')
+func hasWindowsDrivePrefix(p string) bool {
+	return len(p) >= 2 && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) && p[1] == ':'
+}
+
+func isUnsafeCrossOSOrUNCPath(arg string) bool {
+	if strings.HasPrefix(arg, `\`) {
+		return true
+	}
+	norm := normalizeReadonlySlash(arg)
+	if strings.HasPrefix(norm, "//") {
+		return true
+	}
+	if strings.HasPrefix(norm, "/") && !filepath.IsAbs(arg) {
+		return true
+	}
+	return false
 }
 
 func readonlyGuardedTarget(arg, cwd string) bool {
@@ -719,7 +785,7 @@ func safeReadonlyPath(arg, cwd string) bool {
 	if arg == "" || strings.ContainsRune(arg, '\x00') {
 		return false
 	}
-	if strings.HasPrefix(arg, "~") || strings.ContainsAny(arg, "*?[]{}$") || isReadonlyWindowsAbs(arg) {
+	if strings.HasPrefix(arg, "~") || strings.ContainsAny(arg, "*?[]{}$") || hasWindowsDrivePrefix(arg) || isUnsafeCrossOSOrUNCPath(arg) {
 		return false
 	}
 	if readonlyGuardedDir(cwd) || readonlyGuardedTarget(arg, cwd) {
