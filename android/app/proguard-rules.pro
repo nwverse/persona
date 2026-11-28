@@ -37,7 +37,9 @@
 -keepnames class persona.core.designsystem.MarkdownRenderer
 -keepnames class persona.core.hub.HttpChatComposerService
 -keepnames class persona.feature.agents.AgentsViewModel
+-keepnames class persona.feature.files.DocumentText
 -keepnames class persona.feature.files.Notebooks
+-keepnames class persona.feature.files.Xlsx
 -keepnames class persona.feature.inbox.LarkInboxRepository
 
 # Looked up by name on a failed tasks call (TasksStore.reloadTodos and isLegacySpacesRoute in core/domain).
