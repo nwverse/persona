@@ -1,4 +1,5 @@
 {
+  "leader_placement_pending": "The leader’s workspace on this computer is not confirmed yet. Retry the worker after the leader is ready.",
   "infer": "Cannot infer the task workspace on {machine}; choose a workspace explicitly",
   "resolve": "Cannot resolve the task workspace {path}",
   "unavailable": "Workspace {path} is not an available absolute directory",

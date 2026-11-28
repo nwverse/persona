@@ -1,4 +1,5 @@
 {
+  "leader_placement_pending": "尚未确认负责人在这台电脑上的工作区。请等负责人就绪后再重试启动成员。",
   "infer": "无法推断 {machine} 上的任务工作区；请显式选择工作区",
   "resolve": "无法解析任务工作区 {path}",
   "unavailable": "工作区 {path} 不是可用的绝对目录",

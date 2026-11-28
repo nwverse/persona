@@ -331,14 +331,20 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 				var sourceErr error
 				if eagerPrepare {
 					// With prefer-new and no shared-branch repository overrides, mode is guaranteed workspaceNew;
-					// overlap workspace.resolve and worktree.prepare to save a serial round-trip.
+					// overlap workspace.resolve and worktree.prepare to save a serial round-trip. A node that prepares
+					// the workspace itself never gets the engine call (previewDispatchedWorkspace's rule, asked first).
 					prepared = true
+					var engineSkipped bool
 					prepCtx, cancelPrep := context.WithCancel(ctx)
 					var wg sync.WaitGroup
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
-						prepErr = s.call(prepCtx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd}, &prep)
+						if prepareOnNode && !s.enginePathAllowed(prepCtx, t) {
+							engineSkipped = true
+							return
+						}
+						prepErr = s.prepareTaskWorktree(prepCtx, t, map[string]any{"cwd": t.Cwd}, &prep)
 					}()
 					source, sourceErr = s.taskWorkspaceResolve(ctx, t.Machine, t.Cwd)
 					if sourceErr != nil || !source.Available || !proto.NodeAbs(source.Cwd) {
@@ -346,6 +352,7 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 					}
 					wg.Wait()
 					cancelPrep()
+					prepared = !engineSkipped // skipped: the engine is asked later only if the node turns out to need it
 				} else {
 					source, sourceErr = s.taskWorkspaceResolve(ctx, t.Machine, t.Cwd)
 				}
@@ -439,7 +446,7 @@ func (s *Service) resolveTaskWorkspaceForDispatch(ctx context.Context, t *PlanTa
 		}
 		res.Branch = firstNonEmpty(t.Workspace.Branch, "task/"+firstNonEmpty(t.TodoID, t.ReservedTodoID))
 		if !prepared {
-			prepErr = s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd}, &prep)
+			prepErr = s.prepareTaskWorktree(ctx, t, map[string]any{"cwd": t.Cwd}, &prep)
 		}
 		if prepErr == nil {
 			if !proto.NodeAbs(prep.Path) {
@@ -717,7 +724,14 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	return nil
 }
 
-// newTaskWorktree makes a checkout or reuses the idle checkout of its branch. Explicit branches must be clean
+func (s *Service) prepareTaskWorktree(ctx context.Context, t *PlanTask, params map[string]any, out *proto.WorktreePrepare) error {
+	if kind := s.taskWorktreeKind(ctx, t); kind != "" {
+		params["kind"] = kind
+	}
+	return s.call(ctx, t.Machine, DeviceWorktreePrepare, params, out)
+}
+
+// findTaskWorktree reuses the idle checkout of its branch. Explicit branches must be clean
 // (#8357). The to-do's generated branch can retain untracked files in the checkouts folder. A node that cannot
 // look up the branch still falls back to normal creation.
 func (s *Service) findTaskWorktree(ctx context.Context, t *PlanTask) (proto.WorktreeCreateResult, bool, error) {
@@ -727,7 +741,7 @@ func (s *Service) findTaskWorktree(ctx context.Context, t *PlanTask) (proto.Work
 	}
 	if branch != "" {
 		var prep proto.WorktreePrepare
-		err := s.call(ctx, t.Machine, DeviceWorktreePrepare, map[string]any{"cwd": t.Cwd, "branch": branch, "allow_untracked": own}, &prep)
+		err := s.prepareTaskWorktree(ctx, t, map[string]any{"cwd": t.Cwd, "branch": branch, "allow_untracked": own}, &prep)
 		switch at := prep.Existing; {
 		case err != nil && !own:
 			return proto.WorktreeCreateResult{}, false, err
@@ -758,7 +772,8 @@ func (s *Service) newTaskWorktree(ctx context.Context, t *PlanTask) (proto.Workt
 	if wt, reused, err := s.findTaskWorktree(ctx, t); reused || err != nil {
 		return wt, reused, err
 	}
-	wt, err := s.newWorktreeForTask(ctx, t.Machine, t.Cwd, t.WorkspaceResolved.Branch, s.taskCheckoutOnly(ctx, *t))
+	kind := s.taskWorktreeKind(ctx, t)
+	wt, err := s.newWorktreeOn(ctx, t.Machine, t.Cwd, t.WorkspaceResolved.Branch, kind, s.taskCheckoutOnly(ctx, t, kind))
 	if t.Workspace.Branch == "" && err != nil {
 		if path, taken := pathTaken(err); taken {
 			return wt, false, taskCheckoutRefusal{i18n.ErrEnglish("assistant-tasks_workspace.own_path_taken",

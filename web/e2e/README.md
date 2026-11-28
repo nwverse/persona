@@ -368,6 +368,10 @@ node web/e2e/todo-progress-board.mjs <loopback-web-origin> [--shots <artifact-di
 
 Runs against an exclusively owned mock-backed web server, replacing every to-do, session and project with synthetic data over REST and the socket; no real hub data is read. At desktop and phone widths, light and dark, and default and large text, it checks stored-project and No-project groups, responsibility, latest progress with its own timestamp, owner decisions, per-project counts, closed/shelved exclusion, the exact 72-hour boundary, positive-hour persistence and invalid input, read-only rows, detail navigation and browser Back. It records and rejects every non-GET request and permits no client socket command other than the ordinary read-only `client_hello`, including across a Board reload, then checks viewport fit and browser errors and optionally saves four screenshots. The browser clock is fixed; no fixed sleeps are used. A failing check exits non-zero, and a four-minute watchdog prints a timeout verdict.
 
+## Download deadlines from the To-dos calendar
+
+Run `node web/e2e/todo-calendar-export.mjs <loopback-web-origin>` with Chrome and the mock-backed Web app. The test supplies dated to-dos, opens a week at desktop and phone widths, disconnects the page and reads the downloaded files. It checks the filenames, visible dates, source revision times and removal of credential-bearing links.
+
 ## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
 
 ```sh

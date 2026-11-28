@@ -24,9 +24,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
-// (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
-func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
+// newRuntimeHost creates a standalone RuntimeHost bound to n.runtimes without listening yet.
+func (n *Node) newRuntimeHost() *RuntimeHost {
 	rh := &RuntimeHost{reg: n.runtimes, path: n.runtimePath(), version: n.Version, logger: n.logger, autoCompanions: n.autoCompanions}
 	if rh.reg == nil {
 		rh.reg = newRuntimeRegistry()
@@ -34,9 +33,18 @@ func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
 	if rh.reg.logf == nil && n.logger != nil {
 		rh.reg.logf = n.logger.Printf
 	}
+	return rh
+}
+
+// listenRuntimeSocket gives n a runtime socket of its own, at runtimePath, for the connection it serves itself
+// (`--stdio` with no resident node: runtimehost.go). A resident node's Nodes share one instead.
+func (n *Node) listenRuntimeSocket(ctx context.Context) (*RuntimeHost, error) {
+	rh := n.newRuntimeHost()
+	n.runtimes = rh.reg
 	if err := rh.Listen(ctx); err != nil {
 		return nil, err
 	}
+	n.runtimeHost = rh
 	rh.attach(n)
 	return rh, nil
 }
