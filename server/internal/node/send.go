@@ -115,7 +115,10 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		return err
 	}
 	if n.externalCodex(id) {
-		return n.sendCodexSession(ctx, id, text, images, opts)
+		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
+			return n.stoppedRefusal(id)
+		}
+		return n.sendCodex(ctx, id, text, images)
 	}
 	selected, err := n.sessionSelectedSkills(ctx, id, text)
 	if err != nil {
@@ -138,18 +141,9 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
 		ctx = n.withResumeHost(ctx, id)
-		if path := n.codexPath(id); path != "" {
-			if _, known := n.codexSource(id); !known {
-				n.registerCodex(n.codexHome(), id, path)
-			}
-			if n.externalCodex(id) {
-				return n.sendCodexSession(ctx, id, text, images, opts)
-			}
-			return n.stoppedRefusal(id)
-		}
-		if n.traexPath(id) != "" {
-			return n.stoppedRefusal(id)
-		}
+	}
+	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
+		return n.stoppedRefusal(id) // a stopped Codex or TRAE CLI takes no messages (stopped.go, #4754)
 	}
 	kind := "claude"
 	if err == nil {
@@ -307,7 +301,7 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 	err = n.prompt(ctx, pane, text)
 	if errors.Is(err, host.ErrAgentBlocked) && (kind == "codex" || kind == traexAgent) {
 		// herdr refuses to prompt a Codex with an async question open; its box (checked above) takes the message.
-		err = n.codexType(ctx, pane, text, func(draft string) bool { return stillPrompted(draft, text) || pastedRE.MatchString(draft) })
+		err = n.codexType(ctx, pane, text, func(draft string) bool { return stillPrompted(draft, text) || codexPasted(draft, text) })
 	}
 	if r := deliveryRefusal(err); r != nil { // the host refused it with nothing typed (herdr-core, Orca's front)
 		log.Printf("send %s: the host refused it, nothing typed: %v", id, err) // which check refused, in its words
