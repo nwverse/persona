@@ -119,9 +119,7 @@ export function useNavPages() {
   const total = useStore((s) => scoped(s.machines, scope).length);
   const assistant = useStore((s) => s.assistant);
   const todosSupported = useStore((s) => s.todosSupported);
-  // The open to-dos that need the owner, not those Agents are on (#11085, lib/todo-triage ownerNeeds); quiet tasks
-  // (#1731) are told about in the main conversation, not counted here. The To-dos page's "Not done" counts every open one,
-  // and the page marks the rows counted here from the same hook (#11838), so the number and the marks agree.
+  // Use the hub's deduplicated total under the Lab. Standard and older hubs keep the badge's owner marks (#11085, #11838).
   const todoBoard = useTodoBoard(scope);
   const legacyNeeds = useOwnerNeeds(!todoBoard);
   const todosBadge = todoBoard?.counts.needs_you ?? legacyNeeds.size;

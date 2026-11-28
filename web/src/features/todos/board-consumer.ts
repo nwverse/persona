@@ -1,5 +1,5 @@
 // Thin client consumer for the server-owned `board` projection tree under todos_v2 (#15800).
-// Consumes `board.status_groups`, `board.direction_groups`, `board.sidebar_tree`, and `board.counts`
+// Consumes `board.status_groups`, `board.direction_groups`, and `board.counts`
 // directly without re-running client-side triage, goal folding, or direction derivation rules.
 
 import type { Direction } from "../../lib/direction-tree";
