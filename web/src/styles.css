@@ -542,6 +542,13 @@ button:disabled { cursor: default; }
 .prose-j code[data-gap*=e] { margin-right: .12em; }
 .prose-j code[data-copy-code] { cursor: pointer; }
 .prose-j code[data-copy-code]:hover { background: var(--hover-2); }
+/* Narration inside an opened work timeline (#13841): body size in secondary ink (--ink-2) with regular-weight inline
+   code on the field surface, so the final answer outside the timeline remains the strongest text. */
+[data-work-detail] [data-answer] .prose-j {
+  color: var(--ink-2);
+  & :not(pre) > code { font-weight: 400; color: var(--ink-2); background: var(--field); padding: .08em .35em; border-radius: var(--radius-chip); }
+  & a code { color: inherit; }
+}
 .prose-j table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: separate; border-spacing: 0; margin: .8em 0; font-size: 13px; border-radius: 10px; box-shadow: var(--shadow-hairline); }
 /* The copy button's wrap is what the edge rule above sees, so pass that rule through to the table. The wrap
    adds no margin, padding or border; the table keeps its own box, scroll and margin collapse. */

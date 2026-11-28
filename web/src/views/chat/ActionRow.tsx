@@ -38,8 +38,8 @@ const StepTelemetry = lazy(() => import("./StepTelemetry").then((m) => ({ defaul
 export const ROW_CHROME = "flex w-full min-w-0 gap-1.5 rounded-[8px] px-2 py-[3px] [@media(pointer:coarse)]:min-h-10 text-left";
 export const ROW_HOVER = "group select-none transition-colors duration-150 hover:bg-tool-hover motion-reduce:transition-none";
 const ROW = `${ROW_CHROME} items-center ${ROW_HOVER}`;
-export const CHEVRON_SLOT = "ml-auto flex size-[18px] shrink-0 items-center justify-center rounded-[8px] text-tool-ink transition-colors duration-150 group-hover:bg-hover-2 motion-reduce:transition-none";
-export const STATUS_SLOT = "inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-tool-ink";
+export const CHEVRON_SLOT = "ml-auto flex size-[18px] shrink-0 items-center justify-center rounded-[8px] text-ink-3 transition-colors duration-150 group-hover:bg-hover-2 motion-reduce:transition-none";
+export const STATUS_SLOT = "inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-ink-3";
 
 const COMMAND_TOOLS = new Set(["Bash", "exec_command", "shell", "PowerShell"]);
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -122,7 +122,10 @@ export function presentAction(use: Item): ActionPresentation {
   if (COMMAND_TOOLS.has(name)) {
     const cmd = commandOf(inp);
     const desc = str(inp.description);
-    return { param: { text: cmd || desc || t("chat-actionrow.verb_run_command"), title: desc || cmd || undefined } };
+    const text = cmd || desc;
+    return text
+      ? { verb: VERB[name] ?? t("chat-actionrow.verb_run"), param: { text, title: desc || cmd || undefined } }
+      : { verb: t("chat-actionrow.verb_run_command") };
   }
   if (FILE_TOOLS.has(name)) {
     const path = toolFile(name, inp)?.path ?? "";
@@ -502,16 +505,12 @@ function ActionRowView({
         <span role="img" aria-label={running ? t("chat-actionrow.status_running") : error ? t("chat-actionrow.status_error") : t("chat-actionrow.status_done")} className={cx(STATUS_SLOT, error && "text-red")}>
           {running ? <Spinner size={13} /> : <Icon name={error ? "x" : "check"} size={13} />}
         </span>
-        {p.verb && <span className="shrink-0 text-[length:var(--chat-secondary)] whitespace-nowrap text-tool-ink">{p.verb}</span>}
-        {p.param &&
-          (p.file ? (
-            <span className="inline-flex max-w-full min-w-0 items-center gap-[3px] rounded-[4px] border border-line bg-field px-[5px] py-[0.5px] font-mono text-meta leading-[1.385] whitespace-nowrap text-ink-2 transition-colors group-hover:bg-hover-2" data-file-chip>
-              <Icon name="read" size={12} className="shrink-0 text-ink-3" />
-              <span className="truncate">{p.param.text}</span>
-            </span>
-          ) : (
-            <span className="min-w-0 truncate text-[length:var(--chat-secondary)] font-medium text-tool-ink">{p.param.text}</span>
-          ))}
+        {p.verb && <span className="shrink-0 text-[length:var(--chat-secondary)] whitespace-nowrap text-ink-3">{p.verb}</span>}
+        {p.param && (
+          <span className="min-w-0 truncate font-mono text-meta font-normal text-ink-2" data-file-chip={p.file ? "" : undefined}>
+            {p.param.text}
+          </span>
+        )}
         <span className="flex-1" />
         {stats && (stats.add > 0 || stats.del > 0) && (
           <span className="flex shrink-0 gap-1 font-mono text-meta font-medium tabular-nums">

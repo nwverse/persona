@@ -91,19 +91,22 @@ describe("WorkGroup", () => {
 });
 
 describe("ActionRow", () => {
-  it("a command with a description is that sentence, no verb; the command is its title", () => {
+  it("shows a run verb and the command, with the description as its hover title", () => {
     const p = presentAction(use("t1", "Bash", { command: "npm test", description: "跑单测" }));
-    expect(p).toEqual({ param: { text: "npm test", title: "跑单测" } });
+    expect(p).toEqual({ verb: "运行", param: { text: "npm test", title: "跑单测" } });
     const html = renderToStaticMarkup(<ActionRow step={tool("t1", "Bash", { command: "npm test", description: "跑单测" })} mid="m" sid="s" />);
     expect(html).toContain("py-[3px]");
     expect(html).toContain("rounded-[8px]");
-    expect(html).not.toContain("运行命令");
+    expect(html).toContain('aria-label="运行 npm test"');
+    expect(html).toContain('title="跑单测"');
+    expect(html).toMatch(/font-mono text-meta[^>]*>npm test</);
   });
 
-  it("one without: 运行命令 and the command on a quieter line under it", () => {
+  it("uses the command as the hover title when there is no description", () => {
     const html = renderToStaticMarkup(<ActionRow step={tool("t1", "Bash", { command: "git status --short" })} mid="m" sid="s" />);
     expect(html).toContain(">git status --short<");
-    expect(html).not.toContain("pl-[30px]");
+    expect(html).toContain('aria-label="运行 git status --short"');
+    expect(html).toContain('title="git status --short"');
   });
 
   it("a file is a chip with its name only; long parameters stop at 60 characters", () => {
@@ -129,7 +132,7 @@ describe("ActionRow", () => {
     expect(presentAction(use("n", "TaskCreate", { subject: "Write tests", description: "…" }))).toEqual({ verb: "添加待办", param: { text: "Write tests", title: "Write tests" } });
     expect(presentAction(use("n", "ListAgents", {}))).toEqual({ verb: "查看 Agent 列表" });
     expect(presentAction(use("n", "Monitor", { command: "tail -f x", description: "errors in x" })).verb).toBe("监视");
-    expect(presentAction(use("n", "PowerShell", { command: "Get-ChildItem" }))).toEqual({ param: { text: "Get-ChildItem", title: "Get-ChildItem" } });
+    expect(presentAction(use("n", "PowerShell", { command: "Get-ChildItem" }))).toEqual({ verb: "运行", param: { text: "Get-ChildItem", title: "Get-ChildItem" } });
     expect(inlineInput(use("n", "Monitor", { command: "tail -f x", description: "d" }))).toBe("tail -f x");
   });
 
@@ -209,17 +212,16 @@ describe("thought rows (cindy's ThinkingActivityRow, #5155)", () => {
     expect(renderToStaticMarkup(<ThinkingRow item={thought("  \n ")} />)).toBe("");
   });
 
-  it("one with words is one row: the sparkle in the 16 px slot, its words italic on one line, the whole as its title", () => {
+  it("shows a short thought as one italic line with its full text as the hover title", () => {
     const html = renderToStaticMarkup(<ThinkingRow item={thought("先看测试，  再看实现")} />);
     expect(html).toContain('data-thinking="words"');
-    expect(html).toMatch(/h-\[18px\] w-4[^>]*><svg/);
+    expect(html).not.toContain("<svg");
     expect(html).toMatch(/class="[^"]*truncate[^"]*"[^>]*>先看测试， 再看实现</);
     expect(html).toContain('title="先看测试， 再看实现"');
-    expect(html).toContain("text-thinking-ink italic");
-    expect(html).toContain("text-[length:var(--chat-secondary)]");
-    // the tool rows' chrome: the same radius, padding and chevron slot
+    expect(html).toContain("text-meta text-thinking-ink italic");
+    // Keep the tool rows' radius and padding, but omit the chevron slot for static thoughts.
     expect(html).toContain("rounded-[8px] px-2 py-[3px]");
-    expect(html).toContain("size-[18px]");
+    expect(html).not.toContain("size-[18px]");
     // it fits: nothing to open (measured once drawn), so no chevron and no toggle
     expect(html).not.toContain('role="button"');
     expect(html).not.toContain("aria-expanded");
@@ -233,6 +235,7 @@ describe("thought rows (cindy's ThinkingActivityRow, #5155)", () => {
     expect(html).toMatch(/<div role="button" tabindex="0" aria-expanded="false"/);
     expect(html).not.toContain("<button");
     expect(html).toContain(">先看测试 再看实现<");
+    expect(html).toMatch(/size-\[18px\][^>]*><svg/);
   });
 
   it("reads **strong** and backtick code as cindy does, on the row and opened, and nothing else", () => {

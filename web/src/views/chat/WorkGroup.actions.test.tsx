@@ -20,8 +20,8 @@ it("headers retain first-seen kind order, deduplicate read paths, combine edit k
   expect(actionSummary({ kind: "group", id: "think", live: false, clock: "run", children: [{ kind: "step", step: { kind: "thinking", id: "th#0", item: { id: "th#0", seq: 1, role: "assistant", kind: "thinking", text: "Checking" } } }] })).toEqual({ text: "", icon: null });
 });
 
-it("command rows lead with the full command (including argv), search rows retain the query and target", () => {
-  expect(presentAction(tool("1", "exec_command", { command: ["npm", "test"], description: "Run unit checks" }).use)).toEqual({ param: { text: "npm test", title: "Run unit checks" } });
+it("command rows show a run verb and the full argv, and search rows retain the query and target", () => {
+  expect(presentAction(tool("1", "exec_command", { command: ["npm", "test"], description: "Run unit checks" }).use)).toEqual({ verb: "运行", param: { text: "npm test", title: "Run unit checks" } });
   expect(presentAction(tool("2", "Grep", { pattern: "missing reply", path: "src/example.ts" }).use).param).toEqual({ text: "missing reply · src/example.ts", title: "missing reply · src/example.ts" });
 });
 

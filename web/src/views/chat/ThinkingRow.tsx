@@ -10,7 +10,7 @@ import { thinkingPlainText, tokenizeThinkingText } from "../../lib/thinking-text
 import type { Item } from "../../lib/types";
 import { cx } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { CHEVRON_SLOT, ROW_CHROME, ROW_HOVER, STATUS_SLOT } from "./ActionRow";
+import { CHEVRON_SLOT, ROW_CHROME, ROW_HOVER } from "./ActionRow";
 import { useExpanded } from "./expanded";
 import { useReveal } from "./search-reveal";
 import { StepTelemetry } from "./StepTelemetry";
@@ -70,17 +70,16 @@ export function ThinkingRow({ item, scope = "" }: { item: Item; scope?: string }
         onKeyDown={opens ? key : undefined}
         className={cx(ROW_CHROME, open ? "items-start" : "items-center", opens ? cx(ROW_HOVER, "cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent") : "cursor-default")}
       >
-        <span aria-hidden className={STATUS_SLOT}>
-          <Icon name="spark" size={13} />
-        </span>
-        <span ref={text} title={title} className={cx("min-w-0 flex-1 text-[length:var(--chat-secondary)] text-thinking-ink italic", open ? "cursor-text whitespace-pre-wrap select-text [overflow-wrap:anywhere]" : "truncate")}>
+        <span ref={text} title={title} className={cx("min-w-0 flex-1 text-meta text-thinking-ink italic", open ? "cursor-text whitespace-pre-wrap select-text [overflow-wrap:anywhere]" : "truncate")}>
           <ThinkingText tokens={tokens} />
         </span>
-        <span aria-hidden className={CHEVRON_SLOT}>
-          {opens && <Icon name="chevronRight" size={13} stroke={2.2} className="transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />}
-        </span>
+        {opens && (
+          <span aria-hidden className={cx(CHEVRON_SLOT, "text-thinking-ink")}>
+            <Icon name="chevronRight" size={13} stroke={2.2} className="transition-transform duration-150 motion-reduce:transition-none" style={{ transform: open ? "rotate(90deg)" : "none" }} />
+          </span>
+        )}
       </div>
-      {open && hasTelemetry && <StepTelemetry items={stepItems} className="mt-1 mb-1 pl-7" />}
+      {open && hasTelemetry && <StepTelemetry items={stepItems} className="mt-1 mb-1 pl-2" />}
     </div>
   );
 }
