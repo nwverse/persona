@@ -1,5 +1,12 @@
 # Lessons: web UI and interactions
 
+## Closed history extends the to-do list without replacing the board (#17695)
+
+The hub projects the board and its direction counts before bounding the closed rows in GET /todos. Use those counts to
+offer a direction review even before its first completed row is loaded. Keep that review selected while the cursor reads
+older rows. Append those rows to Done or Cancelled without feeding them back into active board groups. Calendar shows
+the dated rows already in memory.
+
 ## Channel refreshes keep the routing draft (#17664)
 
 A channel read updates the current configuration document under one resource key. A refresh counter in that key or a

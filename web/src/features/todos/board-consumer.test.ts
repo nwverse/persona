@@ -3,9 +3,9 @@ import {
   boardSectionMap,
   boardSectionToTriageSection,
   consumeBoardDirectionGroups,
-  consumeBoardSidebarTree,
   consumeBoardStatusGroups,
 } from "./board-consumer";
+import { consumeBoardSidebarTree } from "./board-sidebar-tree";
 import type { Todo, TodoBoardProjection } from "../../lib/todos";
 import type { Machine, Session } from "../../lib/types";
 
