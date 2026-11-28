@@ -40,8 +40,9 @@ beforeEach(() => {
   root = createRoot(host);
 });
 
-afterEach(() => {
+afterEach(async () => {
   act(() => root.unmount());
+  await act(async () => { await vi.dynamicImportSettled(); });
   host.remove();
   resetSidebarPrefs();
   reset();
