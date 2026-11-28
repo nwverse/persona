@@ -36,8 +36,35 @@ func pluginSocket(t *testing.T, n *Node) *http.Client {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	go acceptloop.Run(ctx, ln, t.Logf, func(c net.Conn) { go n.serveSock(ctx, c) })
-	t.Cleanup(func() { cancel(); _ = ln.Close(); _ = os.RemoveAll(dir) })
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	conns := map[net.Conn]struct{}{}
+	go acceptloop.Run(ctx, ln, t.Logf, func(c net.Conn) {
+		mu.Lock()
+		conns[c] = struct{}{}
+		mu.Unlock()
+		wg.Add(1)
+		go func() {
+			defer func() {
+				mu.Lock()
+				delete(conns, c)
+				mu.Unlock()
+				wg.Done()
+			}()
+			n.serveSock(ctx, c)
+		}()
+	})
+	t.Cleanup(func() {
+		cancel()
+		_ = ln.Close()
+		mu.Lock()
+		for c := range conns {
+			_ = c.Close()
+		}
+		mu.Unlock()
+		wg.Wait()
+		_ = os.RemoveAll(dir)
+	})
 	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer

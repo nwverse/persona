@@ -37,6 +37,7 @@ func bgTranscript(t *testing.T, home, cwd, id, title string) string {
 }
 
 func TestClaudeBgPluginInputWithoutPeerInbox(t *testing.T) {
+	shortPluginWaits(t)
 	for _, tc := range []struct{ entrypoint, status, mode string }{
 		{"cli", "idle", "submit"},
 		{"claude-desktop-3p", "idle", "submit"},
@@ -45,7 +46,6 @@ func TestClaudeBgPluginInputWithoutPeerInbox(t *testing.T) {
 		t.Run(tc.entrypoint+"/"+tc.status, func(t *testing.T) {
 			n, f, home := herdrNode(t)
 			noPaneEnv(t)
-			shortPluginWaits(t)
 			p := bgTranscript(t, home, home, sidA, "plan")
 			writeOutsideClaude(t, home, sidA, tc.entrypoint, tc.status, nil, nil)
 			f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
