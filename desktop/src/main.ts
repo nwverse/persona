@@ -238,10 +238,9 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     autoHideMenuBar: true,
     backgroundColor: initialBackground,
     ...(process.platform === "darwin" ? {
-      transparent: true,
       titleBarStyle: "hiddenInset" as const,
       trafficLightPosition: { x: 14, y: 19 },
-      vibrancy: initialVibrancy,
+      ...(initialStyle === "liquid-glass" ? { vibrancy: initialVibrancy } : {}),
       visualEffectState: "active" as const,
     } : {}),
     webPreferences: {
@@ -263,8 +262,10 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   mainWindow = current;
   let surfaceStyle: DesktopSurfaceStyle = initialStyle;
   if (process.platform === "darwin") {
-    seedMacSurfaceState(current, { vibrancy: initialVibrancy, background: initialBackground });
-    if (initialStyle !== "liquid-glass") applySurfaceStyle(current, "default");
+    seedMacSurfaceState(current, {
+      vibrancy: initialStyle === "liquid-glass" ? initialVibrancy : null,
+      background: initialBackground,
+    });
   }
   const readWindowChrome = (): DesktopWindowChrome => ({
     unifiedTitlebar: process.platform === "darwin",
