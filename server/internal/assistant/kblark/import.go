@@ -2,6 +2,7 @@ package kblark
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
@@ -96,6 +97,9 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 	if failedTitles > 0 && logf != nil {
 		logf("kb: lark minutes: %d document title(s) could not be read", failedTitles)
 	}
+	if ctx.Err() != nil {
+		return res, ctx.Err()
+	}
 	for _, q := range cfg.DocSearch {
 		if ctx.Err() != nil {
 			return res, ctx.Err()
@@ -111,6 +115,9 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 			continue
 		}
 		for _, d := range docs {
+			if strings.TrimSpace(d.Token) == "" {
+				continue
+			}
 			it := kb.Item{Kind: kb.KindDoc, Source: Source, ID: d.Token, Title: d.Title, URL: d.URL, At: d.At, Where: Where}
 			changed, err := e.PutCollectedItem(&it)
 			if err != nil {
@@ -168,8 +175,26 @@ func clip(s string, n int) string {
 	return string(r[:n]) + "…"
 }
 
-// isLarkLink: a document URL lark-cli can inspect; another source's links are left to it.
+// isLarkLink: an HTTPS Feishu/Lark document URL lark-cli can inspect; foreign or non-HTTPS links are left alone.
 func isLarkLink(it *kb.Item) bool {
-	u := strings.ToLower(it.URL)
-	return strings.Contains(u, "lark") || strings.Contains(u, "feishu")
+	if it == nil {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(it.URL))
+	if err != nil || u.Scheme != "https" || u.User != nil {
+		return false
+	}
+	if port := u.Port(); port != "" && port != "443" {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "" {
+		return false
+	}
+	for _, domain := range []string{"feishu.cn", "larksuite.com", "larkoffice.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
 }
