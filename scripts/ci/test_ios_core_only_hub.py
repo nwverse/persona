@@ -96,6 +96,8 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         self.assertIn('"PERSONA_NODE_SESSION_DIR"', source)
         self.assertIn('"CLAUDE_CONFIG_DIR": str(paths["claude"])', source)
         self.assertIn("wait_for_main_fixture(base, master, main_session, nodes)", source)
+        self.assertIn('"herdr_autostart": False', source)
+        self.assertIn('"botmux": False', source)
 
     def test_voice_check_uses_the_real_plugin_identifier(self):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()

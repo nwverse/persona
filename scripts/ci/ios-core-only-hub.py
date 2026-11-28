@@ -719,7 +719,8 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         smoke.write_hub_json(home, port, master, database)
         config_path = home / ".persona/hub.json"
         config = json.loads(config_path.read_text())
-        config["machines"] = [{"id": "fixture-machine", "name": "Fixture Computer", "kind": "link", "icon": "server"}]
+        config["machines"] = [{"id": "fixture-machine", "name": "Fixture Computer", "kind": "link", "icon": "server",
+                               "herdr_autostart": False, "botmux": False}]
         config["public"] = {"tls_listen": f"127.0.0.1:{smoke.free_port()}"}
         config_path.write_text(json.dumps(config))
         config_path.chmod(0o600)

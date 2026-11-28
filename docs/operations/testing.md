@@ -844,7 +844,8 @@ a short-lived real Link/node pair, in its own short-path temporary home and with
 computer online while the app reads the session. The node has an independent state root and `PERSONA_NODE_SESSION_DIR`,
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME` inside it, so it cannot discover the OS user's other Agent sessions. Before opening
 the composer, the driver requires both real projections to contain the synthetic main session and fails if either contains
-any additional session. The driver stops both processes and removes the node home. The composer's
+any additional session. Herdr and botmux autostart are off because the fixture runs no engine; no daemon is left behind.
+The driver stops both processes and removes the node home. The composer's
 `PersonaUITests/CoreOnlyHubLiveUITests` uses XCTest's real press-and-hold and skips when `PERSONA_IOS_CORE_HUB_FIXTURE` is absent;
 a malformed fixture fails. This does not claim model or Agent execution.
 
