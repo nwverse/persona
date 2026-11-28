@@ -1458,6 +1458,28 @@ describe("Assistant Needs you / In progress trays", () => {
     act(() => entry("needs").click());
     expect(host.querySelector('[data-needs-row="task:tray-task"]')).toBeNull();
     act(() => entry("needs").click());
+    expect(entry("running").textContent).toBe(`${label.running}1`);
+    await act(async () => entry("running").click());
+    const heldStatus = host.querySelector('[data-task-slot] [data-task-status="working"]');
+    expect(heldStatus?.textContent).toBe("督办处理中");
+    await act(async () => entry("running").click());
+
+    // A separate owner question takes priority while the supervisor still holds the screen card.
+    todo = { ...todo, quiet: false, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0 } };
+    moreInteractions = [{ ...baseScreen, delegating: true }, {
+      id: "ix-owner-question", machine_id: "demo", session_id: "worker", kind: "question", created_at: at,
+      questions: [{ question: "Which report should we use?" }],
+    }];
+    await act(async () => {
+      await refresh();
+      await refreshTodos();
+    });
+    expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    await act(async () => entry("needs").click());
+    const mixed = host.querySelector('[data-needs-row="task:tray-task"]');
+    expect(mixed?.textContent).toContain("Which report should we use?");
+    expect(mixed?.textContent).not.toContain("Do you want to proceed?");
+    await act(async () => entry("needs").click());
 
     // Plain unescalated screen card on a quiet task (even with view needs_you / agent_asks): stays out of main chat
     // Needs you per D19 until explicitly escalated via ask_escalate.
@@ -1477,6 +1499,7 @@ describe("Assistant Needs you / In progress trays", () => {
       await refreshTodos();
     });
     expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    expect(entry("running").textContent).toBe(label.running);
     act(() => entry("needs").click());
     const folded = host.querySelector<HTMLButtonElement>('button[data-needs-row="task:tray-task"]')!;
     expect(folded).not.toBeNull();

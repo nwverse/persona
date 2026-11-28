@@ -39,6 +39,16 @@ func TestReportTaskRuntimeContract(t *testing.T) {
 	if fields["phase"] != "waiting" || after.Stage != todo.Stage || after.Delivery != nil {
 		t.Fatalf("structured wait was replaced by delivery prose: phase=%v, stage=%q, delivery=%+v", fields["phase"], after.Stage, after.Delivery)
 	}
+	row, found, err := s.viewedTodo(t.Context(), todo.ID)
+	if err != nil || !found {
+		t.Fatalf("read reported wait: found=%t, err=%v", found, err)
+	}
+	if row.View == nil || row.View.Phase != assistantwire.TodoPhaseWaiting || row.Wait == nil ||
+		row.Wait.Kind != assistantwire.TodoWaitKindTodoHandoff || row.Wait.HandoffTodoID != "todo_translation" ||
+		row.Wait.WaitingOn != "Translated copy" || !row.Wait.Until.Equal(after.WaitState.Until) ||
+		row.Supervision.Parked != nil {
+		t.Fatalf("structured dependency did not project without a park: view=%+v wait=%+v", row.View, row.Wait)
+	}
 	s.advanceTaskReply(t.Context(), todo, a.MachineID, a.SessionID, "Merged, deployed and verified.\n交付：已上线并实测")
 	if after := todoNow(s, todo.ID); !reflect.DeepEqual(runtimeTodoJSON(t, after)["wait_state"], fields["wait_state"]) ||
 		after.Stage != todo.Stage || after.Delivery != nil {
@@ -51,6 +61,45 @@ func TestReportTaskRuntimeContract(t *testing.T) {
 	fields = runtimeTodoJSON(t, todoNow(s, todo.ID))
 	if fields["phase"] != "working" || fields["wait_state"] != nil {
 		t.Fatalf("resuming did not clear the wait: %v", fields)
+	}
+}
+
+func TestStageTaskRuntimeLandedDoesNotWaitForDeploy(t *testing.T) {
+	s, _, task := newSupervisedService(t)
+	ctx := t.Context()
+	if _, err := s.applyScope(ctx, task, scopeChange{
+		Change:       "Accept once merged",
+		taskContract: taskContract{WorkMode: assistantwire.WorkModeCoordinate, CompletionMode: assistantwire.CompletionModeLanded},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const pr = "https://github.com/example/app/pull/12"
+	s.setTaskStage(ctx, task.ID, "review", pr)
+	a := task.Agents[0]
+	if result := s.agentTool(ctx, a.MachineID, a.SessionID, "report_to_supervisor", json.RawMessage(
+		`{"kind":"progress","text":"The change is in review","phase":"reviewing"}`)); result.IsError {
+		t.Fatalf("report runtime: %+v", result)
+	}
+	at := time.Now().UTC()
+	if err := s.applyPRStatus(ctx, todoNow(s, task.ID), TodoPRStatus{URL: pr, State: "merged", CheckedAt: at}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.applyRuntimeDeploy(ctx, todoNow(s, task.ID), pr, deployResult{State: deployOut, Hub: oldHub}, at.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	got := todoNow(s, task.ID)
+	if got.Phase != assistantwire.TaskPhaseReviewing || got.WaitState != nil || got.DoneAt != nil ||
+		got.Delivery == nil || got.Delivery.State != deliveryMerged || got.Delivery.Gate != "" {
+		t.Fatalf("merged landed task should await review without a deployment hold: phase=%s wait=%+v delivery=%+v done=%v",
+			got.Phase, got.WaitState, got.Delivery, got.DoneAt)
+	}
+	_, p, err := s.todosViewed(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fact := p.facts[0]; fact.WorkModeNow != assistantwire.WorkModeCoordinate ||
+		fact.CompletionModeNow != assistantwire.CompletionModeLanded {
+		t.Fatalf("projection did not read the current brief modes: work=%q completion=%q", fact.WorkModeNow, fact.CompletionModeNow)
 	}
 }
 

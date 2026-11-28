@@ -142,6 +142,19 @@ func TestDomainRuleCases(t *testing.T) {
 				"\t\"github.com/nwverse/persona/server/internal/domainkit/slot\"\n",
 			"type view struct{ rows int }\n\nfunc (x *view) VisitAgent(a slot.Slot, w fleetcount.Why, s instant.Instant) {}\n")),
 			[]string{"out-visitor-impl"}},
+		{"a parameterless visitor method in application code", merged(fleet, app("internal/assistant/sample",
+			fleetImport,
+			"type whyView struct{ held bool }\n\nfunc (x *whyView) VisitNeedsYou() { x.held = false }\nfunc (x *whyView) VisitHeld() { x.held = true }\n")),
+			[]string{"out-visitor-impl", "out-visitor-impl"}},
+		{"a parameterless visitor split from the file that imports the core", merged(fleet, app("internal/assistant/sample",
+			fleetImport,
+			"func check(w fleetcount.Why) { var v whyView; w.Accept(&v) }\n"), map[string]string{
+			"internal/assistant/sample/view.go": "package sample\n\ntype whyView struct{ held bool }\n\nfunc (x *whyView) VisitNeedsYou() { x.held = false }\nfunc (x *whyView) VisitHeld() { x.held = true }\n",
+		}), []string{"out-visitor-impl", "out-visitor-impl"}},
+		{"an unrelated parameterless Visit method in application code passes", merged(fleet, app("internal/assistant/sample",
+			fleetImport,
+			"type other struct{}\n\nfunc (other) VisitNothing() {}\nfunc (other) VisitHeld() bool { return false }\n")),
+			[]string{}},
 		// A core's own black-box tests implement its visitors, whatever the kit's or a shared kernel's types they take
 		// (quiethours' VisitHoldUntil takes only an instant.Instant); another domain package's visitor in such a test is
 		// a finding against that package, one that takes only the kit's types included.
@@ -669,10 +682,11 @@ func TestDomainHookScope(t *testing.T) {
 		{"internal/assistant/inbox/item", []string{}},
 		{"internal/assistant/quiethours", []string{}},
 		{"internal/assistant/nofamily", []string{"core-fail-family"}},
-		// fleetcount's own code passes; what its importers do to it is its hook's business too.
+		// fleetcount's own code passes; what its importers do to it is its hook's business too, the planted
+		// parameterless visitors (badapp/visitorimpl.go's whyView) included.
 		{"internal/assistant/fleetcount", []string{"core-importers", "out-alias", "out-conversion", "out-dot-import",
 			"out-literal", "out-unsafe", "out-unsafe", "out-visitor-impl", "out-visitor-impl", "out-visitor-impl",
-			"out-visitor-impl", "out-visitor-impl", "path-no-core"}},
+			"out-visitor-impl", "out-visitor-impl", "out-visitor-impl", "out-visitor-impl", "path-no-core"}},
 	} {
 		findings, _, err := domainrules.Run(pkgs, idx, c.scope)
 		if err != nil {

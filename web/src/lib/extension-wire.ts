@@ -1699,6 +1699,11 @@ export interface SecretsResolveParams {
   contribution: string;
   reference: string;
   purpose: SecretPurpose;
+  /**
+   * The manager still holds an earlier value of the reference and uses it if this fails: the provider must not ask
+   * the user (no authorization prompt), and answers not_signed_in at once when it cannot answer without them.
+   */
+  quiet?: boolean;
 }
 
 /**

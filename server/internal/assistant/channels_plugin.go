@@ -158,34 +158,30 @@ func (s *Service) channelCommandInGeneration(ctx context.Context, id string, m c
 			_ = s.channelTell(ctx, id, m.ID, t, channel.OutNote)
 		}
 	}
-	setTarget := func(t channel.Target) {
-		c := &s.chans
-		c.mu.Lock()
-		if c.generation[id] != generation {
-			c.mu.Unlock()
-			return
-		}
-		s.loadChannelsLocked(ctx)
-		s.channelPrefLocked(id).Target = &t
-		s.saveChannelsLocked()
-		c.mu.Unlock()
-	}
 	switch strings.ToLower(name) {
 	case "/help", "/帮助":
 		reply(i18n.T(l, "assistant-channels_plugin.help"))
 	case "/main", "/主对话":
-		setTarget(channel.Target{Kind: channel.TargetMain})
+		if err := s.setChannelTarget(ctx, id, channel.Target{Kind: channel.TargetMain}, generation); err != nil {
+			reply(i18n.T(l, "http-status.unavailable"))
+			return true, ""
+		}
 		reply(i18n.T(l, "assistant-channels_plugin.now_to_main"))
 	case "/new", "/新对话":
 		// In a thread it starts the thread over; the channel's target stays where it is.
-		thread := s.channelThreadKey(ctx, id, m)
-		if thread != "" {
-			s.unbindChannelThread(id, thread, generation)
+		keys := s.channelRoutingKeys(ctx, id, m, s.integrationsV2On(ctx))
+		var err error
+		if keys.primary != "" {
+			err = s.unbindChannelThread(id, keys, generation)
 		} else {
-			setTarget(channel.Target{Kind: channel.TargetNew})
+			err = s.setChannelTarget(ctx, id, channel.Target{Kind: channel.TargetNew}, generation)
+		}
+		if err != nil {
+			reply(i18n.T(l, "http-status.unavailable"))
+			return true, ""
 		}
 		if rest == "" {
-			if thread != "" {
+			if keys.primary != "" {
 				reply(i18n.T(l, "assistant-channels_plugin.thread_next_is_new"))
 			} else {
 				reply(i18n.T(l, "assistant-channels_plugin.next_is_new"))
@@ -284,37 +280,36 @@ func (s *Service) channelTarget(ctx context.Context, id string) (resolvedTarget,
 	return s.resolveBotTarget(ctx, botTarget{Kind: targetMain})
 }
 
-// channelThreadKey is the routing key m uses when channel id keeps per-thread/group/topic conversations, ""
-// when m goes to the channel's target. While integrations_v2 is off, legacy capabilities.threads + m.Thread runs unchanged.
-func (s *Service) channelThreadKey(ctx context.Context, id string, m channel.Message) string {
+// channelRoutingKeys gives the thread keys for m, or an empty route when it goes to the channel's target.
+func (s *Service) channelRoutingKeys(ctx context.Context, id string, m channel.Message, v2 bool) channelThreadKeys {
 	v, ok := s.pluginChannel(ctx, id)
 	if !ok {
-		return ""
+		return channelThreadKeys{}
 	}
-	if !s.integrationsV2On(ctx) {
+	if !v2 {
 		if !v.Capabilities.Threads {
-			return ""
+			return channelThreadKeys{}
 		}
-		return strings.TrimSpace(m.Thread)
+		return channelThreadAliases(strings.TrimSpace(m.Thread), m)
 	}
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelsLocked(ctx)
 	mode := s.channelPrefLocked(id).ThreadMode.Effective(v.Capabilities.Threads)
 	c.mu.Unlock()
-	return channelRouteKey(mode, m)
+	return channelThreadAliases(channelRouteKey(mode, m), m)
 }
 
 // channelRoute is where channel id's message m goes: its thread's conversation when the channel keeps one per thread
-// (a new one for the thread's first message, or when the thread's is gone), else the channel's target. thread is the
-// thread's key, "" for the target.
-func (s *Service) channelRoute(ctx context.Context, id string, m channel.Message) (rt resolvedTarget, thread string, err error) {
-	thread = s.channelThreadKey(ctx, id, m)
-	if thread == "" {
+// (a new one for the thread's first message, or when the thread's is gone), else the channel's target.
+func (s *Service) channelRoute(ctx context.Context, id string, m channel.Message) (rt resolvedTarget, keys channelThreadKeys, err error) {
+	v2 := s.integrationsV2On(ctx)
+	keys = s.channelRoutingKeys(ctx, id, m, v2)
+	if keys.primary == "" {
 		rt, err = s.channelTarget(ctx, id)
-		return rt, "", err
+		return rt, keys, err
 	}
-	if t := s.channelThreadOf(ctx, id, thread); t != nil {
+	if t := s.channelThreadOf(ctx, id, keys, v2); t != nil {
 		if d, ok := s.device(ctx, t.MachineID); ok {
 			// Only a conversation its computer says is gone starts the thread over: one that can't be asked now is an
 			// error the owner is told, not a reason to lose the thread's history.
@@ -323,18 +318,18 @@ func (s *Service) channelRoute(ctx context.Context, id string, m channel.Message
 				OK      bool          `json:"ok"`
 			}
 			if err := s.call(ctx, d.ID, DeviceSessionGet, map[string]any{"session_id": t.SessionID}, &res); err != nil {
-				return resolvedTarget{}, thread, err
+				return resolvedTarget{}, keys, err
 			}
 			if res.OK {
 				sess := res.Session
 				sess.SessionID, sess.MachineID = t.SessionID, d.ID
 				main := s.settings(ctx).Main
-				return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: conversationName(sess, main), main: t.SessionID == main}, thread, nil
+				return resolvedTarget{machine: d.ID, machineName: d.Name, session: sess, label: conversationName(sess, main), main: t.SessionID == main}, keys, nil
 			}
 		}
 	}
 	rt, err = s.resolveBotTarget(ctx, botTarget{Kind: targetPersona})
-	return rt, thread, err
+	return rt, keys, err
 }
 
 // channelForward sends the owner's message to the conversation the channel talks to (starting it when there is none
@@ -355,7 +350,7 @@ func (s *Service) channelForwardInGeneration(ctx context.Context, id string, m c
 		return errors.New(i18n.T(s.botLang(ctx), "assistant-channels_plugin.mention_owner_required"))
 	}
 	caps := v.Capabilities.Normalized()
-	rt, thread, err := s.channelRoute(ctx, id, m)
+	rt, keys, err := s.channelRoute(ctx, id, m)
 	if err != nil {
 		return err
 	}
@@ -419,21 +414,14 @@ func (s *Service) channelForwardInGeneration(ctx context.Context, id string, m c
 		if !s.channelGenerationCurrent(id, generation) {
 			return nil
 		}
-		if thread != "" { // the thread's first message: the thread goes on in it, the channel's target stays
-			if !s.bindChannelThread(id, thread, sess.MachineID, sess.SessionID, generation) {
+		if keys.primary != "" { // the thread's first message: the thread goes on in it, the channel's target stays
+			if !s.bindChannelThread(id, keys, sess.MachineID, sess.SessionID, generation) {
 				return nil
 			}
 		} else if !rt.main { // /new: the chat goes on in it
-			c := &s.chans
-			c.mu.Lock()
-			if c.generation[id] != generation {
-				c.mu.Unlock()
-				return nil
-			}
-			s.loadChannelsLocked(ctx)
-			s.channelPrefLocked(id).Target = &channel.Target{Kind: channel.TargetConversation, MachineID: sess.MachineID, SessionID: sess.SessionID}
-			s.saveChannelsLocked()
-			c.mu.Unlock()
+			_ = s.setChannelTarget(ctx, id, channel.Target{
+				Kind: channel.TargetConversation, MachineID: sess.MachineID, SessionID: sess.SessionID,
+			}, generation) // Follow the turn even if the new target could not be saved.
 		}
 		run.MachineID, run.SessionID, run.Probe = sess.MachineID, sess.SessionID, ""
 	} else {
@@ -463,8 +451,8 @@ func (s *Service) channelForwardInGeneration(ctx context.Context, id string, m c
 		if err := s.sendOnce(ctx, rt.machine, params); err != nil {
 			return err
 		}
-		if thread != "" {
-			if !s.bindChannelThread(id, thread, rt.machine, sid, generation) {
+		if keys.primary != "" {
+			if !s.bindChannelThread(id, keys, rt.machine, sid, generation) {
 				return nil
 			} // the thread is still alive
 		}

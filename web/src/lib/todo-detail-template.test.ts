@@ -62,13 +62,17 @@ describe("classifyTodoDetailTemplate", () => {
 });
 
 describe("safeDetailHttpUrl & firstSafePrUrl", () => {
-  it("accepts http(s) URLs and rejects unsafe schemes", () => {
+  it("accepts http(s) URLs and rejects unsafe schemes, credentials, and backslash confusion", () => {
     expect(safeDetailHttpUrl("https://github.com/org/repo/pull/42")).toBe("https://github.com/org/repo/pull/42");
     expect(safeDetailHttpUrl("http://example.com/pr/1")).toBe("http://example.com/pr/1");
     expect(safeDetailHttpUrl("javascript:alert(1)")).toBeUndefined();
     expect(safeDetailHttpUrl("data:text/html,hi")).toBeUndefined();
     expect(safeDetailHttpUrl("ftp://example.com/file")).toBeUndefined();
     expect(safeDetailHttpUrl("not a url")).toBeUndefined();
+    expect(safeDetailHttpUrl("https://user:pass@example.com/org/repo/pull/42")).toBeUndefined();
+    expect(safeDetailHttpUrl("https://evil.example\\@example.com/org/repo/pull/42")).toBeUndefined();
+    expect(safeDetailHttpUrl("https:/org/repo/pull/42")).toBeUndefined();
+    expect(safeDetailHttpUrl("https://example.com/a b")).toBeUndefined();
   });
 
   it("extracts the first safe PR URL across pr_status, pr_url, other_prs, and prs", () => {

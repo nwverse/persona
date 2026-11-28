@@ -648,9 +648,9 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 	if s.isWorkMachine(machine) {
 		return proto.Session{}, errWorkAssistant
 	}
-	// MCP discovery can arrive before assistant.send returns its session ID. Keep the
-	// manager's authorization until the resulting conversation's origin is recorded.
-	finishStart := s.beginAssistantStart(machine)
+	// MCP discovery and the first assistant.context can arrive before assistant.send returns its session ID.
+	// Keep the manager's authorization and in-flight start space until origin and space are recorded.
+	finishStart := s.beginAssistantStartSpace(machine, p.Space, p.NewSessionID)
 	defer finishStart()
 	guestID := ""
 	if p.GuestTools != nil {
@@ -664,6 +664,8 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 		// restriction first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
 		if p.GuestHandoff != "" {
 			err = s.guestSetHandoff(ctx, machine, guestID, p.GuestHandoff, p.GuestTools)
+		} else if p.GuestGroup != "" {
+			err = s.guestSetGroup(ctx, machine, guestID, p.GuestGroup, p.GuestTools)
 		} else {
 			err = s.guestSet(ctx, machine, guestID, p.GuestTools)
 		}

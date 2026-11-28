@@ -86,7 +86,7 @@ func TestAssistantToolContextAndActionBusRoundTrip(t *testing.T) {
 	}
 
 	call := assistantwire.ToolCall{Name: "ask_user", MachineID: "box", SessionID: "conversation",
-		Arguments: json.RawMessage(`{"questions":[{"question":"Continue?","options":[{"label":"Yes"},{"label":"No"}]}]}`)}
+		Arguments: json.RawMessage(`{"why_owner":"priority","questions":[{"question":"Continue?","options":[{"label":"Yes"},{"label":"No"}]}]}`)}
 	done := make(chan proto.ToolResult, 1)
 	go func() { done <- a.Tool(ctx, call) }()
 	var question proto.Interaction

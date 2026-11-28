@@ -38,7 +38,7 @@ func (f feishuSink) nativeWorker(r *channel.Run) *cotWorker {
 
 // cotWorked: r's agent message is a worker's. Topics always; a private run with dm_cot on, or one that already
 // has a worker (the route does not change mid-turn: the legacy path has a different cursor and would append twice).
-func (f feishuSink) cotWorked(ctx context.Context, r *channel.Run, scope cotScope) bool {
+func (f feishuSink) cotWorked(ctx context.Context, r *channel.Run, scope int) bool {
 	switch scope {
 	case cotScopeTopic:
 		return true

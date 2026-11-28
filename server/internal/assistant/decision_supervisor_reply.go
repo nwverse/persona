@@ -151,7 +151,9 @@ func supervisorOptionLabel(text string, options []DecisionOption) string {
 //   - recorded: the round is answered.
 //   - the round is over or replaced (a zero result), or the words name no option any more: the card was answered
 //     another way, or asks something else; the choice no longer applies.
-//   - the choice did not reach the Agent, or could not be saved: the card keeps waiting, as chooseOption leaves it for
+//   - no Agent can take it now (decisionWaitsForSupervisor, #17431): recorded and handed to the supervisor, the round
+//     answered.
+//   - the choice did not reach the Agent otherwise, or could not be saved: the card keeps waiting, as chooseOption leaves it for
 //     the card and task_decided. Their own option has marked the deadline answered before the send
 //     (deadlineAnswered), so no default follows; the recommended one failing leaves the default to take that same
 //     option at the deadline.

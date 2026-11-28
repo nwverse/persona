@@ -56,6 +56,7 @@ type sessionState struct {
 	Cwd                     string          `json:"cwd"`
 	TaskID                  string          `json:"task_id,omitempty"`
 	WorkspaceID             string          `json:"workspace_id,omitempty"`
+	WorkspaceHost           string          `json:"workspace_host,omitempty"`
 	WorkspaceLabel          string          `json:"workspace_label,omitempty"`
 	IsMain                  bool            `json:"is_main,omitempty"`
 	SupervisionInstructions string          `json:"supervision_instructions,omitempty"`

@@ -789,6 +789,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return map[string]any{}, s.larkModule().Handoff(ctx, p)
+	case assistantwire.MethodFeishuGuest:
+		var p assistantwire.FeishuGuestTurn
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.larkModule().Guest(ctx, p)
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:

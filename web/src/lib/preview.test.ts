@@ -113,6 +113,13 @@ describe("addresses", () => {
 
   it("opens only web addresses in a new tab", () => {
     expect(safeExternal("https://example.com/a")).toBe("https://example.com/a");
+    expect(safeExternal("https://example.com/a?email=me@example.com")).toBe("https://example.com/a?email=me@example.com");
+    expect(safeExternal("https://good.example@evil.example/a")).toBeNull();
+    expect(safeExternal("http://me:pw@example.com/a")).toBeNull();
+    expect(safeExternal("https:/admin")).toBeNull();
+    expect(safeExternal("https://@evil.example/a")).toBeNull();
+    expect(safeExternal("https://good.example\\@evil.example/a")).toBeNull();
+    expect(safeExternal("https://example.com/\x00a")).toBeNull();
     expect(safeExternal("javascript:alert(1)")).toBeNull();
     expect(safeExternal("data:text/html,x")).toBeNull();
     expect(safeExternal("file:///etc/passwd")).toBeNull();

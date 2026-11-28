@@ -499,7 +499,7 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 			return cur.DoneAt == nil && !acceptAskStale(&a, cur)
 		}); err != nil {
 			s.logf("task %s: conclusion to agent: %v", id, err)
-			if a.ByDefault || !noAgentCanTake(err) {
+			if a.ByDefault || !decisionWaitsForSupervisor(err) {
 				return acceptResult{}, err // a retryable failure or an automatic default takes nothing
 			}
 			sendErr = err

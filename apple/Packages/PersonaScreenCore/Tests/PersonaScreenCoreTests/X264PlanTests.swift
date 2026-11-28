@@ -108,6 +108,16 @@ final class X264PlanTests: XCTestCase {
         XCTAssertFalse(X264Watch.overdue(oldest: nil, now: 5_000_000))
         XCTAssertFalse(X264Watch.overdue(oldest: 1_000_000, now: 1_200_000))
         XCTAssertTrue(X264Watch.overdue(oldest: 1_000_000, now: 1_200_001))
+        // Backward clock must not wrap into a false overdue stall or evict the slow-frame window.
+        XCTAssertFalse(X264Watch.overdue(oldest: 1_000_000, now: 900_000))
+        var backward = X264Watch()
+        var bt: UInt64 = 10_000_000
+        for k in 0 ..< (X264Watch.minFrames - 1) {
+            bt += 16_000
+            XCTAssertFalse(backward.encoded(micros: 9_000, at: bt, index: X264Watch.warmupFrames + 1 + k))
+        }
+        // A slightly earlier timestamp must keep the existing 59 slow samples so sample #60 still triggers fallback.
+        XCTAssertTrue(backward.encoded(micros: 9_000, at: 9_000_000, index: X264Watch.warmupFrames + X264Watch.minFrames))
     }
 
     /// A frame's own time starts when ffmpeg could start on it: when it was given, or when the one before it came out.
@@ -115,6 +125,8 @@ final class X264PlanTests: XCTestCase {
         XCTAssertEqual(X264Watch.ownMicros(given: 1_000, lastOut: 0, now: 3_000), 2_000)
         XCTAssertEqual(X264Watch.ownMicros(given: 1_000, lastOut: 30_000, now: 32_000), 2_000) // waited behind the one before
         XCTAssertEqual(X264Watch.ownMicros(given: 5_000, lastOut: 4_000, now: 6_500), 1_500)
+        XCTAssertEqual(X264Watch.ownMicros(given: 5_000, lastOut: 4_000, now: 3_000), 0) // backward clock clamps to 0
+        XCTAssertEqual(X264Watch.ownMicros(given: 0, lastOut: 0, now: UInt64.max), Int64.max) // saturates instead of wrapping negative
     }
 
     /// Frames 60 fps apart, each taking `cost(i)` of its own; what the watch says, frame by frame, as X264Session feeds it.
