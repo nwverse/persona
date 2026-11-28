@@ -443,6 +443,21 @@ func TestCodexTakeoverColdActivatesOnSharedRemoteWithoutTerminalEngine(t *testin
 	}
 }
 
+func TestSendCodexColdResumesOnSharedRemote(t *testing.T) {
+	n := remoteTestNode(t)
+	home := n.codexHome()
+	path := writeCodexTestRollout(t, home, remoteRaw, t.TempDir(), "codex-tui", "cli", time.Now())
+	id := n.registerCodex(home, remoteRaw, path)
+	f, _ := connectRemoteFixture(t, n, home, "shared-cold")
+	if row := requireCodexSession(t, n.codexSessions(map[string]bool{}), id); !row.Capabilities.Send {
+		t.Fatalf("cold history is read-only: %+v", row.Capabilities)
+	}
+	err := n.send(t.Context(), id, "continue", nil, sendOpts{})
+	if turns := f.sent("turn/start"); err != nil || f.count("thread/resume") != 1 || len(turns) != 1 || inputText(turns[0]) != "continue" || turns[0]["threadId"] != remoteRaw {
+		t.Fatalf("resumes = %v, turns = %v, send = %v", f.sent("thread/resume"), turns, err)
+	}
+}
+
 func TestCodexTakeoverColdActivateMapsWriterConflictAndEncryptedFailure(t *testing.T) {
 	t.Run("active writer conflict from app-server", func(t *testing.T) {
 		n := remoteTestNode(t)

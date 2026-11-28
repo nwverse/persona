@@ -155,6 +155,8 @@
   "orca_start_unsupported": "这个版本的 Orca 不能从 Persona 新开对话，什么都没有开。请在 Orca 里新开，或者更新 Orca。",
   "orca_start_folder": "Orca 里没有包含这个文件夹的项目，什么都没有开。请先在 Orca 里打开这个文件夹，再新开对话。",
   "orca_start_launcher": "那台电脑上的 Orca 不能开这种对话（{detail}），什么都没有开。请换一个启动器。",
+  "orca_chat_runtime_missing": "那台电脑上的 Orca 还没有安装 {program} 的对话运行环境，什么都没有开。请在终端里启动，或者在 Orca 里新开一个对话标签页来安装。",
+  "orca_chat_unavailable": "那台电脑上的 Orca 在这里不能把 {program} 作为对话打开，什么都没有开。请改在终端里启动。",
   "orca_not_registered": "Orca 当前没有任何打开的项目，请先在电脑上打开一个项目再新建 Agent。",
   "orca_workspace_unavailable": "所选的 Orca 工作区已经不在了，或者不包含这个文件夹，这次什么也没开始。刷新后重新选择工作区。",
   "runtime_session": "这个会话属于另一个工具（例如 Orca 的原生对话），请在那里继续，这次没有启动。",

@@ -167,20 +167,35 @@ runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but in
     without it), so a chat read in Persona is not unread in Orca.
   - A closed chat (above) takes none of these until a message opens it again.
 - **Starting a chat** (#17047, `orcabridge_start.go`; `caps.start`):
-  - Launchers: one per provider Orca runs as a chat (its structured agents) and found installed (`preflight.installedAgents`, read at most once a minute),
-    on an Orca whose `agent.launch` takes the chat surface (`agent.launch.surface.v1`): `orca-<provider>` (`orca-claude`, `orca-codex`…), display name
-    "Orca chat · <provider>", pushed with `runtime.launchers` as they change. A provider other than Claude Code lists the permission modes a start takes
-    (Orca's table, plan aside: the bridge promises no read-only start, `caps.readonly`, so the node refuses a plan start), and each lists the models its
-    provider's open chats name in `agentSession.options` (with the efforts among Persona's levels). None while Orca is not running or cannot start chats,
-    and none on a computer whose Orca host is off (the bridge does not run there). Every open chat's row names its provider's launcher (`launcher`), so the
-    apps' model picker offers Orca's models; a chat Persona started says `started_by_persona`.
+  - Launchers: one per provider Orca runs as a chat (its structured agents; on Orca 1.4.277 the ones `agentSession.agents` names) and found installed
+    (`preflight.installedAgents`; both read at most once a minute), on an Orca whose `agent.launch` takes the chat surface (`agent.launch.surface.v1`):
+    `orca-<provider>` (`orca-claude`, `orca-codex`…), display name "Orca chat · <provider>", pushed with `runtime.launchers` as they change. A provider
+    other than Claude Code lists the permission modes a start takes (Orca's table, plan aside: the bridge promises no read-only start, `caps.readonly`,
+    so the node refuses a plan start), and each lists the models its provider's open chats name in `agentSession.options` (with the efforts among
+    Persona's levels). None while Orca is not running or cannot start chats, and none on a computer whose Orca host is off (the bridge does not run
+    there). Every open chat's row names its provider's launcher (`launcher`), so the apps' model picker offers Orca's models; a chat Persona started says
+    `started_by_persona`.
+  - Only where Orca can open the chat (#17684): a provider whose chat runs on a runtime Orca installs itself (Claude Code's, Codex's and most others on
+    1.4.277, `agentSession.agents`' `managedRuntime`) opens as a chat only once Orca has that runtime, or finds the provider's own CLI where it launches
+    chats; installed agents alone don't say so. Orca tells whether it can open one only to streaming clients (`agentSession.subscribeAvailability`'s
+    `chatProgram: available | installable | missing`, `managedRuntime.subscribe`), which the local socket refuses (`method_not_supported`, measured;
+    `managedRuntime` is the same before and after the install). So the bridge learns it from Orca's refusal: `agent.launch` answering
+    `agent_launch_surface_unavailable` because the chat runtime isn't installed ("…its chat runtime isn't installed on this host (install it from a new
+    chat tab in Orca)…") refuses the start as `orca_chat_runtime_missing`, naming the provider, nothing started, and withdraws that provider's launcher at
+    once, so New Agent no longer offers it and "Start new Agents as Orca chats" sends its default starts to a terminal. It is offered again when Orca
+    shows a chat of that provider it did not have open then, or one of those changes (the person installed the runtime from a new chat tab in Orca and
+    used it), and every launcher once Orca stops running (it may come back updated or with the runtime) or Persona Link restarts. Orca refusing the chat
+    surface for another reason (a project under WSL, a host that cannot run one there) is `orca_chat_unavailable`, Orca's words as the detail, and keeps
+    the launcher: that may hold for one folder only. `agentSession.create` is no way around it: Orca takes it on such a computer, and the chat then
+    fails at once ("Claude wasn't found on the computer running this chat").
   - `start({cwd, prompt, client_msg_id, launcher, model, permission_mode, effort, session_id})`: the chat goes into the deepest local Orca worktree holding
     `cwd`, else, for a folder in a Git repository Orca does not have (not the home folder, the root or a temporary folder), the repository added with
     `repo.add` as a terminal start adds it; a folder no worktree holds is refused (`orca_start_folder`), never started in an unrelated workspace. The chat
     starts at its worktree's root (Orca's chat surface takes no start directory). It is `agent.launch {agent, operationId, target: {kind: "existing",
     worktree}, prompt: {text, delivery: "submit"}, chatOptions: {permissionMode, model, effort}, sessionId, surface: "chat", presentation: "background"}`,
     as Orca's own New chat, so Orca's window keeps what it shows; an Orca whose launch has no chat surface gets `agentSession.create` (envelope with no
-    fence, `firstMessage`, `options`); one with neither is refused (`orca_start_unsupported`). Pictures reach it as for any runtime start: the node saves
+    fence, `firstMessage`, `options`); one with neither is refused (`orca_start_unsupported`), and one that won't open that provider as a chat
+    as above (`orca_chat_runtime_missing`, `orca_chat_unavailable`). Pictures reach it as for any runtime start: the node saves
     them and names their files in the prompt.
   - Never doubled: the Orca session id is `persona-<the id the hub named>` (the book maps it back, above). A start asked for again finds the chat it made
     (the row it answered with stands until Orca lists the chat, at most a minute, else Orca's `agentSession.history` knows the id) and launches nothing.

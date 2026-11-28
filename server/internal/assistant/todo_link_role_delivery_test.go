@@ -133,6 +133,48 @@ func TestBoundDeliveryRoleSurvivesDifferentForgeAuthor(t *testing.T) {
 	}
 }
 
+// An explicit delivery binding that equals the stage PR looks the same as the link setTaskStage mirrors from the stage
+// (the store keeps no source, #17792), so it counts as the legacy record (#17788). Unmerged, it still blocks and keeps
+// its role, as under #17714's rule. A finished no-PR closeout removes it along with the mirrors: the known boundary
+// that #17792 would flip.
+func TestBoundDeliveryEqualToStagePR(t *testing.T) {
+	for _, tc := range []struct {
+		name, closeout string
+		accepted       bool
+	}{
+		{"unmerged", "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + ownDeliveryPR + "\n</closeout>", false},
+		{"no-PR closeout", "Research references issue #4; no PR was opened.\n" + researchNoPRCloseout, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, todo, _ := linkRoleTask(t)
+			ctx := t.Context()
+			if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{ownDeliveryPR}, "pull_request", nil,
+				map[string]string{ownDeliveryPR: repository.LinkRoleDelivery}, nil); err != nil {
+				t.Fatal(err)
+			}
+			s.setTaskStage(ctx, todo.ID, "review", ownDeliveryPR)
+			s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: tc.closeout})
+			_, err := acceptReview(s, todo.ID, nil)
+			roles := linkRoles(t, s, todo.ID)
+			if !tc.accepted {
+				if err == nil || !strings.Contains(err.Error(), "not merged yet") {
+					t.Fatalf("the unmerged binding did not block acceptance: %v", err)
+				}
+				if got := roles[ownDeliveryPR]; got != repository.LinkRoleDelivery {
+					t.Fatalf("bound PR has role %q, want delivery", got)
+				}
+				return
+			}
+			if err != nil || todoNow(s, todo.ID).DoneAt == nil {
+				t.Fatalf("a finished no-PR closeout did not clear the stage-equal binding: %v", err)
+			}
+			if _, ok := roles[ownDeliveryPR]; ok {
+				t.Fatalf("the stage-equal binding survived the no-PR cleanup: %v", roles)
+			}
+		})
+	}
+}
+
 type multiRepoDeliveryForge struct{ *fakeForge }
 
 func (f multiRepoDeliveryForge) PRMerge(ctx context.Context, repo string, number int) (bool, string, error) {

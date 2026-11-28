@@ -375,7 +375,6 @@
   "reorganize_success_transferred": "已更新 {count} 项（已移交 {transferred} 项督办权）",
   "detail_template_work_goal": "工作目标",
   "detail_ownership_region": "工作目标归属",
-  "detail_status_summary_region": "工作目标状态摘要",
   "detail_parent_label": "主任务：{title}",
   "detail_subtasks_section": "子任务 · {done}/{total}",
   "detail_open_active_agent": "打开活跃 Agent",
@@ -510,5 +509,9 @@
   "done_direction_filter_label": "按方向筛选已完成待办",
   "direction_done_count": "已完成 {count}",
   "direction_review_done_label": "回顾「{direction}」的 {count} 项已完成",
-  "detail_subtasks_done_toggle": "已完成子任务 · {count}"
+  "detail_subtasks_done_toggle": "已完成子任务 · {count}",
+  "detail_focus_region": "当前焦点",
+  "detail_focus_more": "展开其余 {count} 项状态",
+  "detail_focus_less": "收起其余状态",
+  "detail_audit_group": "记录与回溯"
 }
