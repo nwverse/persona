@@ -2065,15 +2065,16 @@ private struct AgentsList: View {
         let host = showHost ? s.hostKind.flatMap { $0 == "herdr" ? nil : $0 } : nil
         let sideUnread = unreadSideSummary(for: s)
         let preferTab = model.prefersHerdrTabName(for: s)
+        let pendingTitle = model.pendingAgentTitle(s.key)
         if grouping == .repo && !repoTree {
             // The Mac's and Apple Vision Pro's repository cards keep their rows. On iOS By Repository draws the same
             // rows as every other grouping (#3753).
-            WorkspaceAgentRow(session: s, time: time, muted: model.isMuted(s), sideUnread: sideUnread, preferHerdrTabName: preferTab)
+            WorkspaceAgentRow(session: s, pendingTitle: pendingTitle, time: time, muted: model.isMuted(s), sideUnread: sideUnread, preferHerdrTabName: preferTab)
         } else if compact {
-            CompactSlotRow(session: s, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, sideUnread: sideUnread, preferHerdrTabName: preferTab)
+            CompactSlotRow(session: s, pendingTitle: pendingTitle, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, sideUnread: sideUnread, preferHerdrTabName: preferTab)
                 .equatable()
         } else {
-            SlotRow(session: s, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
+            SlotRow(session: s, pendingTitle: pendingTitle, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
                     machine: rowMachine(s, context: context), host: host,
                     hideState: inStateSection, surface: cardLast.map { .cardRow(last: $0) } ?? .capsule, time: time, pane: pane,
                     rowStyle: listRowStyle, dense: !ownsTop, sideUnread: sideUnread, preferHerdrTabName: preferTab)
@@ -4602,6 +4603,7 @@ struct SourceLabel: View {
 /// words there: a tinted tab chip, a colored state word and an outlined kind tag on one line said the state three times.
 nonisolated struct SlotRow: View, Equatable {
     var session: Session
+    var pendingTitle: String? = nil
     /// Muted (itself or its space): no state word, a bell-slash — it should not catch the eye.
     var muted = false
     /// Named when the list is grouped by state or machine (otherwise the section is the space).
@@ -4635,7 +4637,7 @@ nonisolated struct SlotRow: View, Equatable {
     var preferHerdrTabName = false
 
     var primaryTab: String? { session.displayTabName(preferTab: preferHerdrTabName) }
-    var rowTitle: String { session.displayTitle(preferTab: preferHerdrTabName) }
+    var rowTitle: String { pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName) }
     var titleDetail: String? { session.displayTitleDetail(preferTab: preferHerdrTabName) }
 
     enum Surface: Equatable {
@@ -4964,6 +4966,7 @@ struct AgentTimeText: View {
 /// when on the right (alone there, so the times line up). `CompactList`'s scale.
 nonisolated struct CompactSlotRow: View, Equatable {
     var session: Session
+    var pendingTitle: String? = nil
     var muted = false
     /// As SlotRow's: the section already says the state (By Status).
     var hideState = false
@@ -4977,6 +4980,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
     var sideUnread: SideFold.UnreadSummary? = nil
     /// Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail (#13899).
     var preferHerdrTabName = false
+
+    var rowTitle: String { pendingTitle ?? session.displayTitle(preferTab: preferHerdrTabName) }
 
     @MainActor
     var body: some View {
@@ -5010,7 +5015,7 @@ nonisolated struct CompactSlotRow: View, Equatable {
             }
             .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
-                Text(session.displayTitle(preferTab: preferHerdrTabName))
+                Text(rowTitle)
                     .font(session.state == .unread ? CompactList.titleUnread : CompactList.title)
                     .lineLimit(1)
                     .layoutPriority(1)
@@ -5271,6 +5276,7 @@ struct QuietSpaceCardHead: View {
 /// A session that is no longer running (resumable by sending a message).
 /// Used by the machine detail page.
 struct SessionRow: View {
+    @Environment(AppModel.self) private var model
     var session: Session
     var machine: Machine?
     var showMachine = true
@@ -5280,7 +5286,7 @@ struct SessionRow: View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
             // The avatar's color is the state: no dot on its corner nor beside the title (2026-10-31, three said it once).
             SessionAvatar(machine: machine, state: session.state, dot: false)
-            SlotRow(session: session, dot: false, preferHerdrTabName: preferHerdrTabName).equatable()
+            SlotRow(session: session, pendingTitle: model.pendingAgentTitle(session.key), dot: false, preferHerdrTabName: preferHerdrTabName).equatable()
         }
     }
 }

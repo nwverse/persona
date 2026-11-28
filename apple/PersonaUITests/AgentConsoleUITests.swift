@@ -21,6 +21,7 @@ import XCTest
         XCTAssertTrue(segments.buttons.element(boundBy: 1).isSelected)
         XCTAssertFalse(app.descendants(matching: .any)["feishu-conversations"].exists)
 
+
         app.tabBars.buttons.element(boundBy: 2).tap()
         XCTAssertTrue(app.buttons["settings-templates"].waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.buttons["settings-more"].exists)

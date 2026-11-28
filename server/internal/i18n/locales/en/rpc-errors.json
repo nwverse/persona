@@ -146,5 +146,7 @@
   "orca_refused": "Orca turned this down, and nothing was changed: {detail}",
   "orca_unknown": "It’s not clear whether Orca did this. Check the chat in Orca on that computer before you try again.",
   "orca_session_gone": "This chat is no longer in Orca.",
-  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings."
+  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings.",
+  "orca_mode_unsupported": "Orca’s chats of this kind don’t take that permission mode ({detail}), so nothing was changed.",
+  "orca_rename_unsupported": "This version of Orca can’t rename chats from Persona. Rename it in Orca, or update Orca."
 }

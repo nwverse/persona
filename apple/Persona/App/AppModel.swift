@@ -5776,6 +5776,49 @@ final class AppModel {
         await refresh()
     }
 
+    @ObservationIgnored private var namingAgents: Set<SessionKey> = []
+
+    // Each row observes only its own pending request, including before its first rename.
+    private(set) subscript(naming key: SessionKey) -> Bool {
+        get {
+            access(keyPath: \.[naming: key])
+            return namingAgents.contains(key)
+        }
+        set {
+            withMutation(keyPath: \.[naming: key]) {
+                if newValue { namingAgents.insert(key) } else { namingAgents.remove(key) }
+            }
+        }
+    }
+
+    func pendingAgentTitle(_ key: SessionKey) -> String? {
+        self[naming: key] ? String(localized: "Renaming…") : nil
+    }
+
+    @discardableResult
+    func autoRenameAgent(_ session: Session, fromWorktreeSubmenu: Bool = false) -> Task<Void, Never>? {
+        let key = session.key
+        guard !session.assistant, features(key.group).contains(APIClient.agentAutonameFeature),
+              let api = api(key.group), !self[naming: key] else { return nil }
+        self[naming: key] = true
+        if fromWorktreeSubmenu {
+            // The selected Agent’s row can be hidden inside a collapsed worktree.
+            let progress = String(localized: "Renaming…")
+            toast = Toast(String(localized: "\(progress) · \(session.displayTitle)"))
+        }
+        return Task {
+            defer { self[naming: key] = false }
+            do {
+                try await api.autoRenameSession(key)
+                if fromWorktreeSubmenu { toast = Toast(String(localized: "Renamed"), style: .success) }
+            } catch {
+                // This action was requested explicitly, so even a timeout needs an explanation.
+                let reason = (error as? APIError)?.message ?? error.localizedDescription
+                toast = Toast(String(localized: "\(reason) · \(session.displayTitle)"), style: .error)
+            }
+        }
+    }
+
     /// Renames an agent's herdr tab and / or its Claude session name (nil leaves that one alone); a session without a
     /// terminal, its name where its runtime keeps it (`Session.canRename`, #6294).
     func renameSession(_ k: SessionKey, tab: String?, title: String?) async {

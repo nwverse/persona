@@ -488,6 +488,21 @@ func validate(method string, p map[string]any) string {
 		return ""
 	case "agentSession.setOption":
 		return first(envelopeOf(p), str("key", true))
+	case "agentSession.rename":
+		if name, _ := p["name"].(string); len(name) > 4096 {
+			return "name must be at most 4096 characters"
+		}
+		return first(str("sessionId", true), str("name", true))
+	case "agentSession.rewind":
+		return first(envelopeOf(p), str("itemId", true), str("expectedEpoch", true))
+	case "agentSession.acknowledgeAttention":
+		cursor, isObject := p["observedCursor"].(map[string]any)
+		epoch, _ := cursor["epoch"].(string)
+		sequence, isNumber := cursor["sequence"].(float64)
+		if !isObject || epoch == "" || !isNumber || sequence < 0 || sequence != float64(int64(sequence)) {
+			return "observedCursor must contain epoch and a non-negative sequence"
+		}
+		return str("sessionId", true)
 	case "agentSession.cancel":
 		return envelopeOf(p)
 	case "agentSession.send":
