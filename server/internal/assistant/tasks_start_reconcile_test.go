@@ -12,6 +12,26 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+func TestPlanStartTimeout(t *testing.T) {
+	ordinary := PlanTask{}
+	if got := ordinary.planStartTimeout(); got != taskStartTimeout {
+		t.Errorf("ordinary task timeout = %v, want %v", got, taskStartTimeout)
+	}
+	minimum := 2*repoMirrorCallTimeout + 3*5*time.Minute + taskStartTimeout
+	workspaces := map[string]PlanTask{
+		"resolved": {WorkspaceResolved: &TaskWorkspaceResolved{Repositories: make([]BackendLaunchRepository, 2)}},
+		"selected": {Workspace: &TaskWorkspace{
+			Mode:      workspaceContainer,
+			Container: &ContainerWorkspaceSelection{SelectedRepoIDs: []string{"repo_web", "repo_api"}},
+		}},
+	}
+	for name, task := range workspaces {
+		if got := task.planStartTimeout(); got <= minimum {
+			t.Errorf("%s workspace timeout = %v, want more than %v for two mirrors, workspace RPCs and the agent start", name, got, minimum)
+		}
+	}
+}
+
 // ctxAwareLinkStore is a Store + todoStore whose agent links refuse a spent context, as pgx does: its first pool
 // Acquire on a cancelled or deadline-exceeded context fails at once. Only the methods the task-start path calls are
 // real; the embedded nil todoStore panics on anything else, so an unexpected call fails the test loudly.

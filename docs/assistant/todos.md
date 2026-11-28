@@ -2008,6 +2008,12 @@ repository. The Manager enrolls the pair with `enabled=true` and
 `enabled=false` to prepare workspaces directly from the remote. Deleting the
 configuration lets the next workspace prepare enroll the pair again.
 
+Automatic task starts allow the mirror RPC budget for each repository and
+reserve time for the direct workspace prepare, acquisition, and Agent launch.
+If a mirror times out, preparation can still fetch directly from the remote.
+The Hub gives manual mirror sync and workspace prepare requests time to finish
+those operations.
+
 - **Node RPCs (`server/internal/node/repo_mirror.go`, registered via `nodeRPC`)**:
   - `repo.mirror.ensure`: initializes `~/.persona/repos/<repo_id>.git` as a bare
     mirror if missing, or refreshes it with `git fetch --prune --tags` when

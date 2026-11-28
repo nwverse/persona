@@ -9,10 +9,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
@@ -641,6 +644,100 @@ func TestTaskPlanContainerUsesOnDemandRepoMirror(t *testing.T) {
 	defer h.mu.Unlock()
 	if !slices.Equal(h.lastPrepare.MirrorRepos, []string{"repo_web"}) {
 		t.Fatalf("workspace did not use the enrolled mirror: %v", h.lastPrepare.MirrorRepos)
+	}
+}
+
+func TestTaskPlanColdMirrorTimeoutFallsBackAndLaunches(t *testing.T) {
+	// Keep the harness's local model listener outside the virtual clock.
+	h := newWorkspaceTestHarness(t, newMemRepoMirrorStore())
+	// Disable the Agent's background tab naming so it cannot open a real network connection in the bubble.
+	h.f.mu.Lock()
+	h.f.hello.Models.AI = ai.Config{}
+	h.f.mu.Unlock()
+	synctest.Test(t, func(t *testing.T) {
+		var mirrorWaits []time.Duration
+		launched := make(chan struct{}, 1)
+		setHub(h.s, &firstToolsTimingHub{Hub: h.f, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+			switch call.Method {
+			case repository.MethodRepoMirrorEnsure:
+				started := time.Now()
+				<-ctx.Done()
+				mirrorWaits = append(mirrorWaits, time.Since(started))
+				return nil, ctx.Err()
+			case "task.workspace.prepare", "task.workspace.acquire", devicewire.MethodStartBackendSession:
+				if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) != 5*time.Minute {
+					t.Errorf("%s deadline leaves %v, want five minutes", call.Method, time.Until(deadline))
+				}
+				// Use almost all of each existing RPC budget after the mirrors have timed out.
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(5*time.Minute - time.Second):
+				}
+			}
+			out, err := h.f.DeviceCall(ctx, call)
+			if call.Method == devicewire.MethodStartBackendSession && err == nil {
+				launched <- struct{}{}
+			}
+			return out, err
+		}})
+
+		ctx := t.Context()
+		args := `{"tasks":[{"title":"Prepare workspace","prompt":"Update the example repositories","role":"worker","machine":"box","permission":"bypassPermissions","done_when":["Tests pass"],"workspace":{"container":{"selected_repo_ids":["repo_web","repo_api"]}}}]}`
+		if _, err := h.s.toolTaskPlan(ctx, "mirror-chat", json.RawMessage(args)); err != nil {
+			t.Fatal(err)
+		}
+		p := readonlyFeedPlan(t, h.s, "mirror-chat")
+		if _, err := h.s.startPlan(ctx, p.ID, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-launched:
+		case <-time.After(45 * time.Minute):
+			t.Errorf("agent did not launch after a direct workspace prepare")
+		}
+		synctest.Wait()
+		if want := []time.Duration{11 * time.Minute, 11 * time.Minute}; !slices.Equal(mirrorWaits, want) {
+			t.Errorf("mirror attempts waited %v, want %v", mirrorWaits, want)
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if h.prepareCalls != 1 || len(h.lastPrepare.MirrorRepos) != 0 {
+			t.Errorf("workspace prepare calls = %d, supplied mirrors = %v, want one direct prepare", h.prepareCalls, h.lastPrepare.MirrorRepos)
+		}
+		if todo, ok := h.s.todoNow(p.Tasks[0].ReservedTodoID); !ok || len(todo.Agents) != 1 {
+			t.Errorf("expected one agent linked to the task, found %d (%s)", len(todo.Agents), todo.StartError)
+		}
+	})
+}
+
+func TestPrepareWorkspaceMirrorsStopsOnCallerCancellation(t *testing.T) {
+	st := newMemRepoMirrorStore()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var calls int
+	hub := &repoMirrorTestHub{fakeHub: newFakeHub(), onCall: func(context.Context, string, string, json.RawMessage) (any, error) {
+		calls++
+		cancel()
+		return nil, context.Canceled
+	}}
+	s := New(Options{Hub: hub, Store: func() Store { return st }})
+	r := &taskworkspace.Record{}
+	r.Plan.Source.MachineID = "dev1"
+	for _, repoID := range []string{"repo_web", "repo_api"} {
+		url := "https://github.com/example/" + repoID
+		seedMirrorRepo(t, st, repoID, url)
+		id, _ := repository.Parse(url, "")
+		r.Plan.Source.Repositories.Repositories = append(r.Plan.Source.Repositories.Repositories, repository.PreparationRepository{
+			RepoID:         repoID,
+			SourceSnapshot: repository.SourceSnapshot{Identity: id, CloneURL: url, CatalogRevision: 1},
+		})
+	}
+	if ready := s.prepareEnabledMirrorsForWorkspace(ctx, r); len(ready) != 0 || calls != 1 {
+		t.Fatalf("after cancellation: ready = %v, RPCs = %d, want no mirror and one RPC", ready, calls)
+	}
+	if rec, err := st.RepoMirror(t.Context(), "dev1", "repo_api"); err != nil || rec != nil {
+		t.Fatalf("enrolled the second repository after cancellation: %+v (%v)", rec, err)
 	}
 }
 
