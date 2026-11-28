@@ -39,6 +39,8 @@ export interface LarkGatewaySummary {
 export interface IntegrationItem {
   key: string;
   kind: "builtin" | "extension" | "source";
+  /** True when an `extension` item ships built into Persona (`extension.source === "builtin"`). */
+  builtinExtension?: boolean;
   id: string;
   name: string;
   description?: string;
@@ -261,11 +263,13 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     const subtitle = errorNote || needs || primaryChannel?.account?.name || primaryConnector?.account || ext.description;
     const alertTone: "red" | "orange" | undefined = errorNote ? "red" : needs ? "orange" : undefined;
 
+    const builtinExtension = ext.source === "builtin";
     const sub = formatIntegrationsSub({ kind: "extension", id: ext.id, manager: extManager }) ?? `ext:${ext.id}`;
     return attachSubscriptions(
       {
         key: `ext:${extManager ?? ""}:${ext.id}`,
         kind: "extension",
+        ...(builtinExtension ? { builtinExtension: true } : {}),
         id: ext.id,
         name: ext.name,
         description: ext.description,
@@ -559,7 +563,10 @@ export function buildIntegrationCatalog(input: IntegrationCatalogInput): Integra
     });
   }
 
-  return [...builtinItems, ...pushSourceItems, ...extensionItems];
+  const builtinExtensionItems = extensionItems.filter((it) => it.builtinExtension);
+  const installedExtensionItems = extensionItems.filter((it) => !it.builtinExtension);
+
+  return [...builtinItems, ...builtinExtensionItems, ...pushSourceItems, ...installedExtensionItems];
 }
 
 /** Filters items by the active capability filter chip. */

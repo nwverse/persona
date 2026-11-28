@@ -79,10 +79,23 @@ vi.mock("./settings/HubConnector", () => ({
 }));
 vi.mock("./settings/SentSettings", () => ({ SentSettings: () => <div data-page="sent" /> }));
 vi.mock("./settings/Integrations", () => ({
-  Integrations: ({ open, onOpen, onSettings }: { open: string | null; onOpen: (id: string | null, drillDown?: boolean) => void; onSettings?: (url: string) => void }) => (
-    <div data-page="integrations" data-open={open ?? ""}>
+  Integrations: ({
+    open,
+    onOpen,
+    parentSub,
+    onBackParent,
+    onSettings,
+  }: {
+    open: string | null;
+    onOpen: (id: string | null, drillDown?: boolean) => void;
+    parentSub?: string | null;
+    onBackParent?: () => void;
+    onSettings?: (url: string) => void;
+  }) => (
+    <div data-page="integrations" data-open={open ?? ""} data-parent={parentSub ?? ""}>
       <button type="button" data-related-connector onClick={() => onOpen("connector:larkcli@work", true)} />
       <button type="button" data-related-sources onClick={() => onOpen("-sources@work/scoped", true)} />
+      {onBackParent && <button type="button" data-back-parent onClick={onBackParent} />}
       <button type="button" data-integrations-sources onClick={() => onOpen("-sources")} />
       <button type="button" data-integrations-repos onClick={() => onSettings?.("settings/persona#repositories")} />
       <button type="button" data-integrations-kb onClick={() => onSettings?.("settings/knowledge#knowledge-items")} />
@@ -744,6 +757,20 @@ describe("Settings category navigation", () => {
       await popped(() => browserBack ? history.back() : host.querySelector<HTMLButtonElement>("header button")!.click());
       expect(location.href).toBe(parent);
     }
+  });
+
+  it.each([["connector", "connector:larkcli@work"], ["sources", "-sources@work/scoped"]])(
+    "preserves integrationParent and returns to parent integration on desktop %s drill-down", async (kind, child) => {
+    viewport.phone = false;
+    viewport.integrationsV2 = true;
+    await mount("/settings?tab=integrations&integration=builtin%3Afeishu-bot%40work");
+    const parent = location.href;
+    await act(async () => host.querySelector<HTMLButtonElement>(`[data-related-${kind}]`)!.click());
+    expect(new URLSearchParams(location.search).get("integration")).toBe(child);
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-parent")).toBe("builtin:feishu-bot@work");
+    await popped(() => host.querySelector<HTMLButtonElement>("[data-back-parent]")!.click());
+    expect(location.href).toBe(parent);
+    expect(host.querySelector('[data-page="integrations"]')?.getAttribute("data-parent")).toBe("");
   });
 
   it.each([["persona", "repositories"], ["knowledge", "knowledge-items"]])(
