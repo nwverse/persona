@@ -40,6 +40,10 @@ test.describe("Sidebar collapse, resize handle & macOS chrome drag regions", () 
     await expect(shell).toHaveAttribute("data-mac-bay", "rail");
     await expect(shell).not.toHaveAttribute("data-sidebar-animating", "1");
 
+    await expect(page.locator("[data-mac-contour]")).toBeVisible();
+    const railPaddingLeft = await header.evaluate((el) => Number.parseFloat(getComputedStyle(el).paddingLeft));
+    expect(railPaddingLeft).toBeGreaterThanOrEqual(140);
+
     const railMainBox = await main.boundingBox();
     expect(railMainBox).not.toBeNull();
     expect(railMainBox!.width).toBeGreaterThan(expandedMainBox!.width + 100);
@@ -69,6 +73,30 @@ test.describe("Sidebar collapse, resize handle & macOS chrome drag regions", () 
     await page.mouse.up();
 
     await expect.poll(async () => (await sidebarCol.boundingBox())?.width ?? 0).toBeGreaterThan(beforeSidebarBox!.width + 40);
+    await expectNoHorizontalOverflow(page);
+  });
+
+  test("settles sidebar collapse/expand animation cleanly when reduced motion is off", async ({ openApp }) => {
+    const page = await openApp({
+      theme: "light",
+      surfaceStyle: "liquid-glass",
+      desktopBridge: true,
+      reducedMotion: "no-preference",
+    });
+    const shell = page.locator("[data-app-shell]");
+    const main = page.locator("[data-app-shell] > main");
+    const expandedWidth = (await main.boundingBox())!.width;
+
+    await page.locator('[data-mac-bay-tools] button[aria-label="Collapse sidebar"]').click();
+    await expect(shell).toHaveAttribute("data-mac-bay", "rail");
+    await expect(shell).not.toHaveAttribute("data-sidebar-animating", "1");
+
+    await page.locator('[data-mac-bay-tools] button[aria-label="Expand sidebar"]').click();
+    await expect(shell).toHaveAttribute("data-mac-bay", "expanded");
+    await expect(shell).not.toHaveAttribute("data-sidebar-animating", "1");
+
+    const restoredWidth = (await main.boundingBox())!.width;
+    expect(Math.abs(restoredWidth - expandedWidth)).toBeLessThanOrEqual(2);
     await expectNoHorizontalOverflow(page);
   });
 });

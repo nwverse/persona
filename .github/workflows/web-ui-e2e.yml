@@ -33,8 +33,23 @@ jobs:
           node-version-file: web/.nvmrc
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Restore Playwright Chromium cache
+        id: pw-cache
+        # Only a manual main run saves (below); branch runs restore main's entry without writing their own.
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: web-ui-e2e-playwright-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            web-ui-e2e-playwright-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Install web dependencies
+        run: cd web && npm ci --no-audit --no-fund
       - name: Install Playwright Chromium
-        run: cd web && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: cd web && npx --no -- playwright install --with-deps chromium
+      - name: Install Playwright Chromium system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: cd web && npx --no -- playwright install-deps chromium
       - name: Run Web UI E2E
         env:
           UI_E2E_GREP: ${{ inputs.grep }}
@@ -44,6 +59,12 @@ jobs:
           else
             scripts/ci/web-ui-e2e.sh
           fi
+      - name: Save Playwright Chromium cache
+        if: success() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && steps.pw-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.pw-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

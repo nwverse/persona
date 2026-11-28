@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { expect, openSplitPanelAgent, test } from "./fixtures/mock-hub";
 import {
   expectInsideViewport,
@@ -5,6 +6,22 @@ import {
   expectNoHorizontalOverflow,
   expectSingleLineButtons,
 } from "./fixtures/assertions";
+
+async function readShellGlassState(page: Page) {
+  return page.evaluate(() => {
+    const read = (sel: string) => {
+      const el = document.querySelector<HTMLElement>(sel);
+      return el ? getComputedStyle(el).backdropFilter : null;
+    };
+    return {
+      surfaceStyle: document.documentElement.dataset.surfaceStyle ?? null,
+      desktopGlass: document.documentElement.dataset.desktopGlass ?? null,
+      shell: read("[data-app-shell]"),
+      main: read("[data-app-shell] > main"),
+      aside: read("aside[data-side-panel]"),
+    };
+  });
+}
 
 test.describe("Shell split pane & Frosted Glass invariants", () => {
   for (const theme of ["light", "dark"] as const) {
@@ -56,20 +73,7 @@ test.describe("Shell split pane & Frosted Glass invariants", () => {
     const page = await openApp({ theme: "light", surfaceStyle: "liquid-glass", desktopBridge: false });
     await openSplitPanelAgent(page);
 
-    const glass = await page.evaluate(() => {
-      const read = (sel: string) => {
-        const el = document.querySelector<HTMLElement>(sel);
-        return el ? getComputedStyle(el).backdropFilter : null;
-      };
-      return {
-        surfaceStyle: document.documentElement.dataset.surfaceStyle ?? null,
-        desktopGlass: document.documentElement.dataset.desktopGlass ?? null,
-        shell: read("[data-app-shell]"),
-        main: read("[data-app-shell] > main"),
-        aside: read("aside[data-side-panel]"),
-      };
-    });
-
+    const glass = await readShellGlassState(page);
     expect(glass.surfaceStyle).toBe("liquid-glass");
     expect(glass.desktopGlass).toBeNull();
     expect(glass.shell).toContain("blur(");
@@ -82,20 +86,7 @@ test.describe("Shell split pane & Frosted Glass invariants", () => {
     const page = await openApp({ theme: "dark", surfaceStyle: "default", desktopBridge: true });
     await openSplitPanelAgent(page);
 
-    const state = await page.evaluate(() => {
-      const read = (sel: string) => {
-        const el = document.querySelector<HTMLElement>(sel);
-        return el ? getComputedStyle(el).backdropFilter : null;
-      };
-      return {
-        surfaceStyle: document.documentElement.dataset.surfaceStyle ?? null,
-        desktopGlass: document.documentElement.dataset.desktopGlass ?? null,
-        shell: read("[data-app-shell]"),
-        main: read("[data-app-shell] > main"),
-        aside: read("aside[data-side-panel]"),
-      };
-    });
-
+    const state = await readShellGlassState(page);
     expect(state.surfaceStyle).toBeNull();
     expect(state.desktopGlass).toBeNull();
     expect(state.shell).toBe("none");

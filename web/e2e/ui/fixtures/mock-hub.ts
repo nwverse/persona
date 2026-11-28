@@ -87,6 +87,7 @@ export interface OpenAppOptions {
   surfaceStyle?: "default" | "liquid-glass";
   desktopBridge?: boolean;
   viewport?: { width: number; height: number };
+  reducedMotion?: "reduce" | "no-preference";
   path?: string;
   inboxItems?: MockInboxItem[];
 }
@@ -95,8 +96,12 @@ export type OpenAppFn = (options?: OpenAppOptions) => Promise<Page>;
 
 export const test = base.extend<{ openApp: OpenAppFn }>({
   openApp: async ({ page }, use) => {
-    const errors: string[] = [];
-    page.on("pageerror", (err) => errors.push(String(err)));
+    const pageErrors: string[] = [];
+    const consoleErrors: string[] = [];
+    page.on("pageerror", (err) => pageErrors.push(String(err)));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") consoleErrors.push(msg.text());
+    });
 
     const openApp: OpenAppFn = async (options = {}) => {
       const {
@@ -104,12 +109,13 @@ export const test = base.extend<{ openApp: OpenAppFn }>({
         surfaceStyle = "default",
         desktopBridge = false,
         viewport,
+        reducedMotion = "reduce",
         path = "/",
         inboxItems = DEFAULT_INBOX_ITEMS,
       } = options;
 
       if (viewport) await page.setViewportSize(viewport);
-      await page.emulateMedia({ colorScheme: theme, reducedMotion: "reduce" });
+      await page.emulateMedia({ colorScheme: theme, reducedMotion });
       await page.clock.setFixedTime(new Date(AT));
 
       await page.addInitScript(
@@ -153,7 +159,7 @@ export const test = base.extend<{ openApp: OpenAppFn }>({
       await page.route("**/api/v1/**", (route) => {
         const reqUrl = new URL(route.request().url());
         const apiPath = reqUrl.pathname.replace(/^.*\/api\/v1/, "");
-        if (apiPath.includes("/file")) {
+        if (/\/file(?:\/|$)/.test(apiPath)) {
           return route.fulfill({ status: 200, contentType: "image/png", body: PNG_1X1 });
         }
         if (route.request().method() !== "GET") {
@@ -233,12 +239,17 @@ export const test = base.extend<{ openApp: OpenAppFn }>({
     };
 
     await use(openApp);
-    expect(errors, "Unexpected pageerror during UI test").toEqual([]);
+    expect(pageErrors, "Unexpected pageerror during UI test").toEqual([]);
+    expect(consoleErrors, "Unexpected console.error during UI test").toEqual([]);
   },
 });
 
 export async function openSplitPanelAgent(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /In progress/ }).click();
+  const inProgress = page.locator('[data-tray-entry="running"]').or(page.getByRole("button", { name: /In progress/ })).first();
+  await inProgress.waitFor({ state: "visible" });
+  if ((await inProgress.getAttribute("aria-expanded")) !== "true") {
+    await inProgress.click();
+  }
   const agentRow = page.locator(`[data-running-agent="${MACHINE.id}/${AGENT_ID}"]`);
   await agentRow.waitFor({ state: "visible" });
   await agentRow.click();

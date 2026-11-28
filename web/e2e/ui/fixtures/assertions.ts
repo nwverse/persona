@@ -1,5 +1,20 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 
+export function parseCssAlpha(color: string): number {
+  const value = color.trim().toLowerCase();
+  if (!value || value === "transparent") return 0;
+  const rgbaMatch = /^rgba\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([0-9.]+%?)\s*\)$/.exec(value);
+  if (rgbaMatch) {
+    return rgbaMatch[1].endsWith("%") ? Number.parseFloat(rgbaMatch[1]) / 100 : Number.parseFloat(rgbaMatch[1]);
+  }
+  const slashMatch = /\/\s*([0-9.]+%?)\s*\)$/.exec(value);
+  if (slashMatch) {
+    return slashMatch[1].endsWith("%") ? Number.parseFloat(slashMatch[1]) / 100 : Number.parseFloat(slashMatch[1]);
+  }
+  if (/^(?:rgb|hsl|hwb|lab|lch|oklab|oklch|color)\(/.test(value)) return 1;
+  return 0;
+}
+
 export async function expectNoHorizontalOverflow(page: Page, selector?: string): Promise<void> {
   const result = await page.evaluate((sel) => {
     const doc = document.documentElement;
@@ -8,10 +23,16 @@ export async function expectNoHorizontalOverflow(page: Page, selector?: string):
       issues.push(`documentElement scrollWidth=${doc.scrollWidth} > clientWidth=${doc.clientWidth}`);
     }
     if (sel) {
-      const target = document.querySelector<HTMLElement>(sel);
-      if (!target) issues.push(`Missing container selector: ${sel}`);
-      else if (target.scrollWidth > target.clientWidth + 1) {
-        issues.push(`${sel} scrollWidth=${target.scrollWidth} > clientWidth=${target.clientWidth}`);
+      const targets = document.querySelectorAll<HTMLElement>(sel);
+      if (targets.length === 0) {
+        issues.push(`Missing container selector: ${sel}`);
+      } else {
+        for (const target of targets) {
+          if (target.scrollWidth > target.clientWidth + 1) {
+            const name = target.getAttribute("aria-label") || target.tagName.toLowerCase();
+            issues.push(`${name} (${sel}) scrollWidth=${target.scrollWidth} > clientWidth=${target.clientWidth}`);
+          }
+        }
       }
     }
     return issues;
@@ -52,25 +73,41 @@ export async function expectSingleLineButtons(container: Locator): Promise<void>
       if (box.width === 0 || box.height === 0) continue;
       if (getComputedStyle(btn).visibility === "hidden") continue;
       const walker = document.createTreeWalker(btn, NodeFilter.SHOW_TEXT);
-      const tops = new Set<number>();
+      const lineTops: number[] = [];
       let label = "";
       let node: Node | null;
       while ((node = walker.nextNode())) {
         const text = node.textContent?.trim() ?? "";
         if (!text) continue;
         const parentEl = node.parentElement;
-        if (parentEl && (parentEl.closest(".sr-only") || parentEl.offsetWidth === 0 || parentEl.offsetHeight === 0)) {
-          continue;
+        let visible = true;
+        for (let el: HTMLElement | null = parentEl; el && el !== btn; el = el.parentElement) {
+          if (el.classList.contains("sr-only")) {
+            visible = false;
+            break;
+          }
+          const cs = getComputedStyle(el);
+          if (cs.display === "none" || cs.visibility === "hidden") {
+            visible = false;
+            break;
+          }
+          if (cs.display !== "contents" && (el.offsetWidth === 0 || el.offsetHeight === 0)) {
+            visible = false;
+            break;
+          }
         }
+        if (parentEl && !visible) continue;
         label += (label ? " " : "") + text;
         const range = document.createRange();
         range.selectNodeContents(node);
         for (const rect of range.getClientRects()) {
-          if (rect.width > 0 && rect.height > 0) tops.add(Math.round(rect.top));
+          if (rect.width > 0 && rect.height > 0 && !lineTops.some((top) => Math.abs(top - rect.top) <= 3)) {
+            lineTops.push(rect.top);
+          }
         }
       }
-      if (tops.size > 1) {
-        failures.push(`button "${label || btn.getAttribute("aria-label") || "(unnamed)"}" wrapped across ${tops.size} lines`);
+      if (lineTops.length > 1) {
+        failures.push(`button "${label || btn.getAttribute("aria-label") || "(unnamed)"}" wrapped across ${lineTops.length} lines`);
       }
     }
     return failures;
