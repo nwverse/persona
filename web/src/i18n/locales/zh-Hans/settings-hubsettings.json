@@ -53,6 +53,7 @@
   "resolving_latest": "更新前正在确认最新版本…",
   "checking": "正在检查…",
   "check": "检查更新",
+  "check_unavailable": "当前更新来源暂不支持检查更新。",
   "update": "更新",
   "update_footer": "更新会等待助手及所有 Agent 空闲后再重启 hub；如果新版本无法启动，系统将自动回滚至上一版本。重启期间连接会短暂断开。",
   "new_version": "新版本 {version}",

@@ -53,6 +53,7 @@
   "resolving_latest": "Checking the latest version before updating…",
   "checking": "Checking…",
   "check": "Check for updates",
+  "check_unavailable": "Checking isn't available for this source.",
   "update": "Update",
   "update_footer": "The update waits until the assistant and all agents are idle before restarting the hub. If the new version won't start, it rolls back on its own. Connections drop briefly during the restart.",
   "new_version": "New version {version}",
