@@ -70,8 +70,10 @@ func TestAcceptedResearchDropsUnownedPRReferences(t *testing.T) {
 			s, f, todo, criterion := researchDeliveryTask(t)
 			ctx := context.Background()
 			for _, n := range []string{"9", "10", "4", current} {
-				s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+n)
+				s.setTaskStageOn(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+n, "", false, "")
 			}
+			// These are mistaken legacy stage facts, not saved delivery bindings.
+			requireStageOnlyRecoveryLinks(t, s, todo.ID)
 			wrong := "https://github.com/o/r/pull/" + current
 			if err := s.applyPRStatus(ctx, todoNow(s, todo.ID), TodoPRStatus{URL: wrong, State: "open"}); err != nil {
 				t.Fatal(err)

@@ -35,7 +35,9 @@ func TestAcceptedResearchWithIssueOnlyCloseout(t *testing.T) {
 			waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 			todo := onlyTodo(s)
 			wrong := "https://github.com/o/r/pull/4"
-			s.setTaskStage(ctx, todo.ID, "review", wrong)
+			// The mistaken issue exists in the legacy stage only.
+			s.setTaskStageOn(ctx, todo.ID, "review", wrong, "", false, "")
+			requireStageOnlyRecoveryLinks(t, s, todo.ID)
 			s.watchDeploy(ctx, todo.ID, deployWatch{PR: wrong, Since: time.Now()})
 			s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})
 			f.setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: "Research references issue #4; no PR was opened.\n" +

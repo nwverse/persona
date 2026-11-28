@@ -308,9 +308,11 @@ func TestAcceptedDoesNotDiscardUnconfirmedPR(t *testing.T) {
 }
 
 func TestAcceptedNonPRCannotHideEarlierRealPR(t *testing.T) {
-	s, todo := deliveryReviewServiceOn(t, &fakeForge{}, &runningHub{commit: oldHub}, false, repositorystore.New(todoTestDB(t)))
+	s, _, todo := stageOnlyDeliveryReviewService(t, &runningHub{commit: oldHub})
 	ctx := context.Background()
-	s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/10")
+	s.setTaskStageOn(ctx, todo.ID, "review", "https://github.com/o/r/pull/9", "", false, "")
+	s.setTaskStageOn(ctx, todo.ID, "review", "https://github.com/o/r/pull/10", "", false, "")
+	requireStageOnlyRecoveryLinks(t, s, todo.ID)
 	s.hub.(*fakeHub).setItems(append(artifactCreationItems(todo, "https://github.com/o/r/pull/9"), proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo),
 		Text: "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\n" +
 			"artifact: pr https://github.com/o/r/pull/9\n</closeout>"})...)
@@ -334,6 +336,10 @@ func TestAcceptedNonPRCannotHideEarlierRealPR(t *testing.T) {
 	got := todoNow(s, todo.ID)
 	if got.DoneAt != nil || got.PRURL != "https://github.com/o/r/pull/9" || slices.Contains(got.PRs, "https://github.com/o/r/pull/10") {
 		t.Fatalf("incorrect PR history after recovery: %+v", got)
+	}
+	// Native creation proof must recover the real earlier PR as delivery, never reference.
+	if role := linkRoles(t, s, todo.ID)["https://github.com/o/r/pull/9"]; role != repository.LinkRoleDelivery {
+		t.Fatalf("real earlier PR lost its delivery role: %q", role)
 	}
 	if !s.deploy.githubDown.IsZero() {
 		t.Fatal("a non-PR 404 put unrelated PR verification on cooldown")

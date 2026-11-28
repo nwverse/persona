@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -25,10 +24,11 @@ func TestRecoveredNumberedPRUsesReplyRepository(t *testing.T) {
 		{"5", "o/actual#5", "o/r"},
 	} {
 		t.Run("saved_"+tc.saved+"/"+tc.ref, func(t *testing.T) {
-			s, todo := deliveryReviewServiceOn(t, &fakeForge{}, nil, false, repositorystore.New(todoTestDB(t)))
-			f := s.hub.(*fakeHub)
+			s, f, todo := stageOnlyDeliveryReviewService(t, nil)
 			ctx := context.Background()
-			s.setTaskStage(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+tc.saved)
+			s.setTaskStageOn(ctx, todo.ID, "review", "https://github.com/o/r/pull/9", "", false, "")
+			s.setTaskStageOn(ctx, todo.ID, "review", "https://github.com/o/r/pull/"+tc.saved, "", false, "")
+			requireStageOnlyRecoveryLinks(t, s, todo.ID)
 			f.setItems(append(artifactCreationItems(todo, "https://github.com/o/actual/pull/5"),
 				proto.Item{Role: "assistant", Kind: proto.KindText, TS: artifactTurnAt(todo), Text: "Delivery repository: https://github.com/" + tc.replyRepo + "/issues/5\n" +
 					"<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + tc.ref + "\n</closeout>"})...)
