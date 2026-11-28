@@ -774,6 +774,11 @@ type ModelPick struct {
 	Launcher string `json:"launcher"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+	// Runtime and Channel are the pick's two other dimensions (docs/assistant/execution-spec.md): the engine and the
+	// connection the launcher alias stands for. A newer client may send them without a launcher; the hub then finds
+	// the alias, and an older client keeps reading the launcher.
+	Runtime string `json:"runtime,omitempty"`
+	Channel string `json:"channel,omitempty"`
 }
 
 // UndeliveredMessage is one of Session.Undelivered: an owner's message its manager keeps after it could not go in.

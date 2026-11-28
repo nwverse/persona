@@ -7,7 +7,7 @@ import { formatNumber, t } from "../../i18n";
 import { enc, errorText } from "../../lib/api";
 import { defaultManager, pinManagerAt } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import {
   addMarket, agreeLabel, canUninstall, getCatalog, installPreview, isGitMarket, itemLine, itemState, listMarkets, MARKET_SPEC_HINT, MARKET_SPEC_PLACEHOLDER, marketKind, marketLine, previewFromMarket,
   previewVersion, renameConsent, refreshMarket, removeMarket, setMarketToken, specLabel, uninstallExtension, upgradePreview, upgradingFrom, wantsGitHubToken,
@@ -362,12 +362,7 @@ export function MarketItem({ market, id, manager, onBack, onInstalled }: { marke
   const opFailed = (e: unknown) => (opGone(e) ? toast(t("settings-extensionmarket.op_gone"), "info") : toast(errorText(e), "error"));
   const st = it ? itemState(it) : null;
   const contributes = Object.entries(it?.contributes ?? {});
-  let home = "";
-  try {
-    home = it?.homepage && new URL(it.homepage).protocol === "https:" ? it.homepage : "";
-  } catch {
-    home = "";
-  }
+  const home = safeWebURL(it?.homepage, true) ?? "";
 
   return (
     <>

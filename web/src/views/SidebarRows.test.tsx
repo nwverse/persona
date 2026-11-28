@@ -92,6 +92,9 @@ describe("where an agent was opened, as a mark at its row's end (#2526)", () => 
     const linked = mark(render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic" }));
     expect(linked).toMatch(/^<span data-source="feishu" role="link" tabindex="0"[^>]*aria-label="飞书群 · 在飞书中打开该话题"/);
     expect(linked).toContain("<img");
+    for (const bad of ["javascript:alert(1)", "http://example.com/topic", "https:/admin", "https://user:pw@evil.example/topic"]) {
+      expect(mark(render({ pane_id: "botmux:oc_1/t1", external_url: bad })), bad).toMatch(/^<span data-source="feishu" role="img"/);
+    }
   });
   it("keeps the source mark and pending count without trailing age", () => {
     const timed = render({ pane_id: "botmux:oc_1/t1", external_url: "https://example.com/topic",

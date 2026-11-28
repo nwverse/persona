@@ -235,8 +235,8 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 ## Task workspaces (#4786)
 
 On classic herdr a top-level task leader and its workers share one workspace named after the leader's task. This is
-placement and cleanup for that task only; ordinary tasks, Herdr App, Orca, Tern, Paseo and Cindy keep their existing
-workspace behavior.
+placement and cleanup for that task only. On Orca the leader and same-machine workers share tabs of the leader's
+worktree. Other engines and ordinary tasks keep their existing workspace behavior.
 
 - **Opening.** A leader's `session.start` carries `task_id` and `workspace_label`. With no recorded `workspace_id`, its
   first tab opens a new workspace under the task title instead of the directory's basename. The manager records the
@@ -259,6 +259,18 @@ workspace behavior.
   transfer ownership; matching only a label is never enough. Already-gone and repeated closes are idempotent.
   Closing the workspace closes any shells left in it after the Agents stopped; this task-owned exception does not
   change ordinary terminal retention. Git checkouts and transcripts stay.
+
+**Orca (#17051).** The leader opens a tab in its selected Orca worktree. Each same-machine worker opens a separate tab there. If the start reply
+omitted the placement, the manager confirms the linked leader's task and worktree IDs with the node before starting
+the first worker. Read-only workers use their assigned directory. Writable workers
+enter their own checkout in their new shell. A node-prepared checkout keeps its planned path, and a worker that
+needs a Git worktree through `worktree.create` uses `open_workspace:false`. This groups the terminals even when
+the checkouts belong to different repositories. The existing Orca worktree keeps its name and other tabs.
+
+After the task is accepted or cancelled and its Agents have stopped, the node checks each terminal's original
+creation receipt, task ID, worktree ID and idle shell before closing that terminal by handle and incarnation.
+User-opened or adopted terminals have no creation receipt for the task. An older Orca that cannot provide the
+required evidence still opens the tab and leaves it open. Git worktrees, branches and conversation transcripts stay.
 
 ## Agents run in a terminal
 
@@ -302,7 +314,7 @@ workspace behavior.
   - **No terminal engine** (the empty set, #3302): an Agent that isn't running gets the item disabled, with "No terminal engine on <computer>". Its terminal page says the same and offers no Resume.
   - **Never offered**: while the session runs, in Persona's terminal or in one of the user's own (`claude_cli`: a second `claude --resume` would write the same transcript, and the node refuses it as `open_elsewhere`); while it starts; for assistant conversations; for the desktop apps' sessions (a message reopens those in the app, #4300); for rows of older nodes, which carry no capabilities.
   - **Tests**: `server/internal/node/outside_resume_test.go` (herdr: a new tab with `--resume`; no engine: no terminal and `engine_missing`; open elsewhere: no terminal and `open_elsewhere`, nothing opened), `TerminalResumeTests`, `ResumeInTerminalTests` and `web/e2e/resume-in-terminal.mjs` (mock `MOCK_RESUME_TERMINAL=1`).
-- **A task goes on with a new Agent**: when every Agent of a task has stopped, the user's message on the task's card or its Retry starts a new Agent for the task (same computer, directory and launcher as its latest Agent, linked to the to-do; `server/internal/assistant/tasks_successor.go`), its first message the user's after who worked on it before and that Agent's last reply. Persona's own follow-ups to a stopped task (relayed answers and other supervision) start nothing and are refused. The one task-scoped exception is rework of a retired herdr leader: it resumes the same session in the recorded task workspace (#4786).
+- **A task goes on with a new Agent**: when every Agent of a task has stopped, the user's message on the task's card or its Retry starts a new Agent for the task (same computer, directory and launcher as its latest Agent, linked to the to-do; `server/internal/assistant/tasks_successor.go`), its first message the user's after who worked on it before and that Agent's last reply. Persona's own follow-ups to a stopped task (relayed answers and other supervision) start nothing and are refused. The one task-scoped exception is rework of a retired classic herdr or Orca leader with recorded placement: it resumes the same session in its task workspace.
 - **Finished terminals close after a grace period** (#10111, `server/internal/node/finished_close.go`): the node closes a terminal a stopped Agent left once it has sat unchanged for `PERSONA_AGENT_TERMINAL_GRACE` (a Go duration in the node's environment, default `30m`; `0` or `off` keeps them until the user closes them, as before). It looks every minute, on a fresh snapshot, and closes a pane only when all of these hold, checked again under the session's recovery lock right before closing:
   - Persona opened it for an Agent: herdr's `persona_tab` mark, or on Orca, the live record or the original terminal identity saved with the session. A matching saved record survives a node restart;
   - no Agent is in it or bound to it (working, idle or waiting for an answer), no start is in flight, no failed start keeps it for a retry and no Codex waits for its thread there;

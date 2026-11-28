@@ -51,9 +51,7 @@ type chatData struct {
 	deadline    func(ix proto.Interaction) (time.Time, bool)
 	gone        func(ix proto.Interaction) bool
 	todoOf      func(chat, thread string) (assistantwire.ChatTodo, bool)
-	routes      func(todoID string) ([]assistantwire.ChatTarget, error)
 	decision    func(todoID, text, messageID string) string
-	openTarget  func(st FeishuStatus) (assistantwire.ChatTarget, string, string)
 	openTodo    func(t assistantwire.ChatOpenTodo) (string, error)
 	acceptReply func(messageID, text string) bool
 }
@@ -174,6 +172,18 @@ func (s *Service) ResolveTarget(_ context.Context, t assistantwire.ChatTarget) (
 	return r, nil
 }
 
+func (s *Service) SessionExists(_ context.Context, machine, session string) bool {
+	if machine == "" {
+		machine = "server"
+	}
+	for _, sess := range s.ch().sessions[machine] {
+		if sess.SessionID == session {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) TargetLabel(context.Context, assistantwire.ChatTarget) string { return s.wb().target }
 
 // Allowed is the core's botAllowed.
@@ -251,8 +261,8 @@ func (s *Service) InterruptConversation(_ context.Context, rt assistantwire.Chat
 
 func (s *Service) TurnPending(string, string) bool { return false }
 
-func (s *Service) StopProgressCard(_ context.Context, _ assistantwire.FeishuFeatures, t assistantwire.ChatTarget, _ string) (string, string) {
-	return "info", "expired"
+func (s *Service) FindInterruptibleRun(func(*channel.Run) bool) func(proto.Session, func(string) string) {
+	return nil
 }
 
 func (s *Service) Conversations(context.Context) ([]proto.Session, string) {
@@ -459,13 +469,10 @@ func (s *Service) TodoOfThread(chat, thread string) (assistantwire.ChatTodo, boo
 	return assistantwire.ChatTodo{}, false
 }
 
-func (s *Service) ThreadNoReply(context.Context, botcard.MessageEvent, string, string, string) {}
+func (s *Service) ThreadNoReply(context.Context, string, string, assistantwire.ChannelTarget) {}
 
-func (s *Service) ThreadRoutes(_ context.Context, todoID string, _ assistantwire.FeishuFeatures) ([]assistantwire.ChatTarget, error) {
-	if f := s.ch().routes; f != nil {
-		return f(todoID)
-	}
-	return []assistantwire.ChatTarget{{Kind: targetMain}}, nil
+func (s *Service) ThreadRouteCandidates(context.Context, string) []assistantwire.ChatTarget {
+	return nil
 }
 
 func (s *Service) TopicDecision(_ context.Context, todoID, _, text, messageID string) string {
@@ -482,13 +489,6 @@ func (s *Service) AskTodoTopicAnswer(context.Context, string, string) (string, b
 }
 func (s *Service) SettleAskClaim(context.Context, string, bool) {}
 func (s *Service) CloseAskTodo(context.Context, string)         {}
-
-func (s *Service) OpenTarget(_ context.Context, st FeishuStatus) (assistantwire.ChatTarget, string, string) {
-	if f := s.ch().openTarget; f != nil {
-		return f(st)
-	}
-	return assistantwire.ChatTarget{Kind: targetMain}, "m1", ""
-}
 
 func (s *Service) TodoTitle(_ context.Context, words string, _ i18n.Lang, _ bool) (string, bool) {
 	return oneLine(words), true

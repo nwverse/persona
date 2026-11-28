@@ -1006,15 +1006,18 @@ func (s *Service) agentTool(ctx context.Context, machine, session, name string, 
 // false is no signal: it goes into the queue of questions that can wait (later.go) when a briefing will list it.
 func (s *Service) reportToSupervisor(ctx context.Context, machine, session string, args json.RawMessage, now time.Time) (string, error) {
 	var a struct {
-		Kind     string                  `json:"kind"`
-		Text     string                  `json:"text"`
-		Evidence []string                `json:"evidence"`
-		Step     int                     `json:"step"`
-		Steps    int                     `json:"steps"`
-		Urgent   *bool                   `json:"urgent"`
-		Criteria []criterionReport       `json:"criteria"`
-		Handoff  *taskHandoffReceipt     `json:"handoff_receipt"`
-		Findings *[]investigationFinding `json:"findings"`
+		Kind     string                       `json:"kind"`
+		Text     string                       `json:"text"`
+		Evidence []string                     `json:"evidence"`
+		Step     int                          `json:"step"`
+		Steps    int                          `json:"steps"`
+		Urgent   *bool                        `json:"urgent"`
+		Criteria []criterionReport            `json:"criteria"`
+		Handoff  *taskHandoffReceipt          `json:"handoff_receipt"`
+		Findings *[]investigationFinding      `json:"findings"`
+		Phase    *assistantwire.TaskPhase     `json:"phase"`
+		Wait     *assistantwire.TaskWaitState `json:"wait_state"`
+		PR       string                       `json:"delivery_pr"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -1024,6 +1027,11 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 	default:
 		return "", fmt.Errorf("kind must be progress, question, blocked or done")
 	}
+	phase, err := readTaskRuntimeReport(a.Phase, a.Wait)
+	if err != nil {
+		return "", err
+	}
+	a.PR = strings.TrimSpace(a.PR)
 	text := clip(strings.TrimSpace(a.Text), 2000)
 	if text == "" {
 		return "", fmt.Errorf("text is empty")
@@ -1035,6 +1043,9 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		return "", errors.New("investigation findings are for the task’s done or blocked report")
 	}
 	if a.Handoff != nil {
+		if phase != "" || a.PR != "" {
+			return "", errors.New("task runtime fields belong to the task report, outside a handoff receipt")
+		}
 		return s.reportTaskHandoff(ctx, machine, session, *a.Handoff, a.Kind, text, a.Evidence, now)
 	}
 	if err := s.ensureTodosLoaded(ctx); err != nil {
@@ -1078,6 +1089,9 @@ func (s *Service) reportToSupervisor(ctx context.Context, machine, session strin
 		text = fmt.Sprintf("Investigation findings version %d; review the list on the to-do before parking or closing.\n%s", version, clip(text, 1850))
 	}
 	if err := s.recordCriterionReports(ctx, t, machine, session, reports, now.UTC()); err != nil {
+		return "", err
+	}
+	if err := s.recordTaskRuntimeReport(ctx, t, machine, session, a.Kind, phase, a.Wait, a.PR, now); err != nil {
 		return "", err
 	}
 	evidence := make([]string, 0, len(a.Evidence))
@@ -1167,7 +1181,9 @@ func (s *Service) reportLater(ctx context.Context, t Todo, machine, session, tex
 
 // reportNow sends a report to the supervisor of task t as a signal, and shows it in its conversation.
 func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind, text string, evidence []string, step, steps int, now time.Time) (string, error) {
-	if kind == upReportDone {
+	current, _ := s.todoNow(t.ID)
+	done := kind == upReportDone && (current.Phase != assistantwire.TaskPhaseWaiting || current.WaitState == nil)
+	if done {
 		s.recordBriefCompletion(ctx, t, briefCompletionReport, now)
 	}
 	s.progressReported(machine, session, len(evidence), step, now) // evidence or a later step is progress (supervise_progress.go)
@@ -1187,7 +1203,9 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 	if s.noteProgress(ctx, t.ID, progress) {
 		s.goReportLine(t, progress.At, kind, text) // off the tool call: it answers right away
 	}
-	s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
+	if !current.hasTaskRuntime() {
+		s.advanceTaskReply(ctx, t, machine, session, strings.Join(append([]string{text}, evidence...), "\n"))
+	}
 	// What it asks, what blocks it and its finish show in the supervisor's conversation too, so the user can follow
 	// the handoff; progress reports only update the card (the stream stays quiet).
 	if kind != upReportProgress {
@@ -1197,7 +1215,7 @@ func (s *Service) reportNow(ctx context.Context, t Todo, machine, session, kind,
 		}
 	}
 	s.logf("task %s: %s reports %s", t.ID, short(session), kind)
-	if kind == upReportDone {
+	if done {
 		s.goRecordWorkerReport(ctx, t, machine, session, text, evidence, now)
 	}
 	if kind == upReportProgress {

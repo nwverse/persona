@@ -102,9 +102,17 @@ import (
 // Targeted Antigravity stepsToItems lookup (targetItemId), per-session sentMsgVersions, and lazy transcriptOf projection (#16152) add 567 B (305,425 B -> 305,992 B).
 // Antigravity unavailable-Auto permission-mode fallback, restricted permission_modes advertisement, and runtime-sdk session.modes permission_mode forwarding (#17239) add 703 B (305,992 B -> 306,695 B).
 // Hardening dsh assistant memoryWrite against relative-path, clipInput truncation, and symlink escapes (#17339) adds 739 B (306,695 B -> 307,434 B).
+// Isolating managed Antigravity channel model catalogs, stripping ambient/extension provider env across channels, preserving Assistant channel and extension env snapshots across respawns, and rotating warm idle Assistant channels add 181 B (307,434 B -> 307,615 B).
+// Routing dsh assistant shell gates through runtime-sdk shell-gates with fail-closed hubReady/disconnect/phoneTools=false guards adds 794 B (307,615 B -> 308,409 B).
+// Guarding Antigravity ACP stdout/nativeRequest against JSON null/non-object payloads and rejecting stale _start() after stop/process replacement add 107 B (308,409 B -> 308,516 B).
+// Hardening opencode companion & plugin assistant isMemoryWrite with symlink/namei/multi-resource/allowlisted-rawInput/diff/metadata containment (opencode/lib/memory-write.js) adds 2,064 B (308,516 B -> 310,580 B).
+// Persona-owned prepared identity persistence, scoped marker validation, lazy restoration and fail-closed
+// supervision-policy recovery (#17348) measured 310,620 B against the 308,516 B ACP main: +2,104 B.
+// Its Antigravity part is unchanged by the separately packed OpenCode change above, giving a 312,684 B union.
+// Fixing Antigravity supervision policy >24KB early-newline split fallback and hardening policyRoot/session/file symlink + O_NOFOLLOW checks add 337 B (312,684 B -> 313,021 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 307_434
+	const budget = 313_021
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

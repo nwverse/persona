@@ -252,6 +252,7 @@
   "calendar_today": "今天",
   "calendar_previous": "上一页",
   "calendar_next": "下一页",
+  "calendar_download": "下载截止日期",
   "calendar_show_done": "显示已完成",
   "calendar_all_day": "全天",
   "calendar_move_failed": "调整日期失败：{error}",

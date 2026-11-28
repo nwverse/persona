@@ -288,6 +288,9 @@ func (s *Service) checkModelProfileForSave(ctx context.Context, p *ModelProfile,
 		return err
 	}
 	ctx = withManagedSnapshot(ctx, stored)
+	if err := s.projectTiers(ctx, p.Tiers); err != nil {
+		return err
+	}
 	if p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, map[string]modelRecord{}, stored); err != nil {
 		return err
 	}
