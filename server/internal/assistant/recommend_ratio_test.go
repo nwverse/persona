@@ -236,3 +236,122 @@ func TestPlacementFallbackUsesLowestSlotRatio(t *testing.T) {
 		t.Fatalf("fallback picked %v, want [linux-heavy]", starts)
 	}
 }
+
+func TestRecommendMachineRespectsHubAndMachineMinMemory(t *testing.T) {
+	const gib = int64(1024 * 1024 * 1024)
+
+	t.Run("hub-default-2.5gib-allows-3gib", func(t *testing.T) {
+		s, f, d := ratioTestFleet(t, "hub-1")
+		f.hello.Assistant.MachineID = "hub-1"
+		d.machines["hub-1"] = admissionMachine(4)
+		d.samples["hub-1"] = admissionSample(0.2, 8*gib, 5*gib, 0) // 3.0 GiB free
+		s.fleetKeepPrevious("hub-1", nil)
+
+		got, ok := s.recommendMachine(context.Background(), "", nil)
+		if !ok || got.ID != "hub-1" {
+			t.Fatalf("got (%q, %v), want (hub-1, true)", got.ID, ok)
+		}
+	})
+
+	t.Run("hub-explicit-2.5gib-allows-3gib", func(t *testing.T) {
+		s, f, d := ratioTestFleet(t, "hub-1")
+		f.hello.Assistant.MachineID = "hub-1"
+		hubMin := int64(2684354560) // 2.5 GiB
+		s.admission.cached.HubMinMemoryBytes = &hubMin
+		d.machines["hub-1"] = admissionMachine(4)
+		d.samples["hub-1"] = admissionSample(0.2, 8*gib, 5*gib, 0) // 3.0 GiB free
+		s.fleetKeepPrevious("hub-1", nil)
+
+		got, ok := s.recommendMachine(context.Background(), "", nil)
+		if !ok || got.ID != "hub-1" {
+			t.Fatalf("got (%q, %v), want (hub-1, true)", got.ID, ok)
+		}
+	})
+
+	t.Run("hub-below-2.5gib-blocks-with-2.5gib-limit", func(t *testing.T) {
+		s, f, d := ratioTestFleet(t, "hub-1")
+		f.hello.Assistant.MachineID = "hub-1"
+		d.machines["hub-1"] = admissionMachine(4)
+		d.samples["hub-1"] = admissionSample(0.2, 8*gib, 6*gib, 0) // 2.0 GiB free
+		s.fleetKeepPrevious("hub-1", nil)
+
+		pl := newPlacement("auto", "enforce")
+		ctx := context.WithValue(context.Background(), placementKey{}, pl)
+		if got, ok := s.recommendMachine(ctx, "", nil); ok {
+			t.Fatalf("expected hub with 2.0 GiB free to be rejected, got %q", got.ID)
+		}
+		c := pl.candidate("hub-1")
+		if len(c.Hits) == 0 {
+			t.Fatalf("expected admission_memory violation on hub-1, got none")
+		}
+		v := c.Hits[0]
+		if v.Key != "assistant-tasks.admission_memory" || v.Args["limit"] != "2.5 GiB" {
+			t.Fatalf("violation = (%q, %v), want (assistant-tasks.admission_memory, limit=2.5 GiB)", v.Key, v.Args)
+		}
+	})
+
+	t.Run("per-machine-explicit-min-memory-not-clamped", func(t *testing.T) {
+		s, _, d := ratioTestFleet(t, "worker-1")
+		workerMin := 2 * gib
+		s.admission.cached.Machines = map[string]MachineAdmission{
+			"worker-1": {MinMemoryBytes: &workerMin},
+		}
+		d.machines["worker-1"] = admissionMachine(8)
+		d.samples["worker-1"] = admissionSample(0.2, 16*gib, 13*gib, 0) // 3.0 GiB free
+		s.fleetKeepPrevious("worker-1", nil)
+
+		got, ok := s.recommendMachine(context.Background(), "", nil)
+		if !ok || got.ID != "worker-1" {
+			t.Fatalf("got (%q, %v), want (worker-1, true)", got.ID, ok)
+		}
+	})
+
+	t.Run("non-hub-without-override-keeps-4gib-floor", func(t *testing.T) {
+		s, _, d := ratioTestFleet(t, "worker-1")
+		d.machines["worker-1"] = admissionMachine(8)
+		d.samples["worker-1"] = admissionSample(0.2, 16*gib, 16*gib-int64(3.5*float64(gib)), 0) // 3.5 GiB free
+		s.fleetKeepPrevious("worker-1", nil)
+
+		if got, ok := s.recommendMachine(context.Background(), "", nil); ok {
+			t.Fatalf("expected unconfigured non-hub machine with 3.5 GiB free to be rejected, got %q", got.ID)
+		}
+	})
+}
+
+func TestPlacementFallbackTryHubRespectsHubMinMemory(t *testing.T) {
+	e := newPlacementTestEnv(t)
+	const gib = int64(1024 * 1024 * 1024)
+
+	for i := range e.f.devices {
+		if e.f.devices[i].ID != "hub-1" {
+			e.f.devices[i].Online = false
+			e.f.devices[i].Reachable = false
+		}
+	}
+	e.f.hello.Assistant.MachineID = "hub-1"
+	hubMin := int64(2684354560) // 2.5 GiB
+	e.s.admission.cached.HubMinMemoryBytes = &hubMin
+	e.d.samples["hub-1"] = admissionSample(0.2, 8*gib, 5*gib, 0) // 3.0 GiB free
+
+	ctx := context.Background()
+	_, err := e.s.toolTaskPlan(ctx, "conv_pub", json.RawMessage(`{
+		"tasks":[{
+			"title":"TryHub respects hub_min_memory_bytes",
+			"prompt":"Verify tryHub fallback admits hub at 3.0 GiB free when limit is 2.5 GiB",
+			"cwd":"~/repo",
+			"role":"worker",
+			"readonly":true,
+			"goal":"Verify tryHub respects hub_min_memory_bytes",
+			"user_requested":true,
+			"why":"Hub min memory placement check"
+		}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.s.sweepPendingPlacement(ctx)
+	waitFor(t, "tryHub fallback starts on hub-1", func() bool { return len(taskStartMachines(e.f.fakeHub)) == 1 })
+	if starts := taskStartMachines(e.f.fakeHub); starts[0] != "hub-1" {
+		t.Fatalf("tryHub fallback picked %v, want [hub-1]", starts)
+	}
+}

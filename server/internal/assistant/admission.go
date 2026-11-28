@@ -402,8 +402,20 @@ func (s *Service) machineViolationWith(p *placement, machineID string, lim admis
 	return first
 }
 
+// hasExplicitRecommendMinMemory reports whether machineID has a hub or per-machine minimum memory line that
+// automatic selection must respect instead of raising to the generic 4 GiB recommendation floor.
+func (s *Service) hasExplicitRecommendMinMemory(ctx context.Context, machineID string, cfg AdmissionSettings) bool {
+	if hubMachine := s.settings(ctx).MachineID; hubMachine != "" && machineID == hubMachine {
+		return true
+	}
+	if over, ok := cfg.Machines[machineID]; ok && over.MinMemoryBytes != nil && *over.MinMemoryBytes > 0 {
+		return true
+	}
+	return false
+}
+
 // recommendMachine names the reachable computer best able to take work now: fresh metrics, every machine line
-// passing (including at least 4 GiB available memory), lowest working-to-slot ratio
+// passing (including at least 4 GiB available memory unless the hub or per-machine floor applies), lowest working-to-slot ratio
 // ((working_agents + claims) / (available_memory / 2.5 GiB)), breaking ties toward more available memory and then
 // lower load1-per-core. except and the optional suitable filter narrow the field.
 func (s *Service) recommendMachine(ctx context.Context, except string, suitable func(Device) bool) (Device, bool) {
@@ -443,7 +455,7 @@ func (s *Service) recommendMachine(ctx context.Context, except string, suitable 
 			continue
 		}
 		lim := s.limitsFor(ctx, d.ID, "", "", cfg)
-		if lim.minMemory < recommendMinMemoryBytes {
+		if !s.hasExplicitRecommendMinMemory(ctx, d.ID, cfg) && lim.minMemory < recommendMinMemoryBytes {
 			lim.minMemory = recommendMinMemoryBytes
 		}
 		s.admission.mu.Lock()
