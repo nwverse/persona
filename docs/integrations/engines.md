@@ -180,11 +180,12 @@ no terminal to resume it in; A2A messages do not wake it. The node keeps this ma
 conversations closed: after a restart the companion's rows are listed as it says.
 
 Orca's native chats (structured, no terminal) connect through node's bridge: Claude Code's, Codex's and every other provider's.
-List, state, send text / images, interrupt, close, answer approvals / questions, change permission / thinking (no plan mode); no
+List, state, send text / images, interrupt, close, answer approvals / questions, change the permission mode (plan and full access
+included, only those Orca takes for the chat's provider), thinking and model, rename, rewind the conversation, and mark read; no
 screen reads, keys, or live terminal. A Claude chat reads as its Claude transcript, a Codex chat is listed once as its Codex thread,
 and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
 running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card. See
-`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats and the cards.
+`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats, the cards and the controls.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with Claude not in front, saying "Claude is not in foreground (possibly suspended); nothing sent," or asking to reopen on the computer.
