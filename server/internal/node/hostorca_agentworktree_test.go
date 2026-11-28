@@ -86,6 +86,45 @@ func TestOrcaAgentWorktreeIsOrcasChild(t *testing.T) {
 	}
 }
 
+// The Agent's start in its new worktree, by folder (a client that sends no workspace id) as by id, opens its tab there
+// and closes the empty first shell Orca opened in it; a shell elsewhere stays.
+func TestOrcaAgentTabReplacesTheWorktreesFirstShell(t *testing.T) {
+	for _, byID := range []bool{false, true} {
+		t.Run(map[bool]string{false: "by-folder", true: "by-id"}[byID], func(t *testing.T) {
+			w := orcaWorktreeNode(t)
+			ctx := context.Background()
+			a, err := w.n.worktreeAdd(ctx, "", w.repo, "", "fix login")
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.orcaListed(a.Path)
+			w.o.SetTerminals(
+				orcarttest.Terminal("term_new", "tab-new", "leaf-new", a.WorkspaceID, a.Path, "refs/heads/"+a.Branch, "zsh", ""),
+				orcarttest.Terminal("term_src", "tab-src", "leaf-src", w.src, w.repo, "refs/heads/dev", "zsh", ""))
+			if err := w.n.refreshHosts(ctx); err != nil {
+				t.Fatal(err)
+			}
+			ws := ""
+			if byID {
+				ws = a.WorkspaceID
+			}
+			created, err := w.n.newTab(ctx, w.n.hosts.Get(host.Orca).(host.Launcher), a.Path, ws, "fix-login", "")
+			if err != nil || created.SpaceID != a.WorkspaceID {
+				t.Fatalf("the Agent's tab: %+v %v", created, err)
+			}
+			var closed []string
+			for _, wr := range w.o.Writes() {
+				if wr.Close {
+					closed = append(closed, wr.Handle)
+				}
+			}
+			if !slices.Equal(closed, []string{"term_new"}) {
+				t.Fatalf("closed %v, want only the worktree's first shell", closed)
+			}
+		})
+	}
+}
+
 // A folder Orca holds no worktree for (and may not register: a temporary folder), or an Orca that is not running,
 // keeps the plain git worktree of before.
 func TestOrcaAgentWorktreeFallsBackToGit(t *testing.T) {
