@@ -276,3 +276,24 @@ func TestBotmuxOwnerCandidatesMethod(t *testing.T) {
 		t.Fatalf("with botmux: %s", raw)
 	}
 }
+
+// botmux puts its code in errorCode and its words in error (deepcoldy/botmux#3954); an answer with only a bare code in
+// error is read the same, and words alone are no code.
+func TestBotmuxTriggerAnswerCode(t *testing.T) {
+	for _, tc := range []struct {
+		raw, code string
+	}{
+		{`{"ok":false,"errorCode":"owner_mismatch","error":"actorUnionId does not name this bot's owner"}`, "owner_mismatch"},
+		{`{"ok":false,"error":"owner_unresolved"}`, "owner_unresolved"},
+		{`{"ok":false,"error":"bot owner is not configured"}`, ""},
+		{`{"ok":true}`, ""},
+	} {
+		var a botmuxTriggerAnswer
+		if err := json.Unmarshal([]byte(tc.raw), &a); err != nil {
+			t.Fatal(err)
+		}
+		if got := a.code(); got != tc.code {
+			t.Errorf("%s: code = %q, want %q", tc.raw, got, tc.code)
+		}
+	}
+}

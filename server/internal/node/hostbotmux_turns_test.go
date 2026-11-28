@@ -98,7 +98,8 @@ func newFakeBotmuxTurnsServer(t *testing.T) *fakeBotmuxTurnsServer {
 			if fs.triggerStatus != 0 {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(fs.triggerStatus)
-				fmt.Fprintf(w, `{"ok":false,"error":%q,"message":"refused by the fake"}`, fs.triggerErr)
+				// botmux's shape (dashboard-ipc-server.ts): the code in errorCode, its words in error.
+				fmt.Fprintf(w, `{"ok":false,"errorCode":%q,"error":"refused by the fake"}`, fs.triggerErr)
 				return
 			}
 			resp := map[string]any{"ok": true, "action": "delivered"}

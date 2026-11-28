@@ -7245,8 +7245,9 @@ An owner send carries `target.kind: "turn"`, `botId` and `sessionId` (omitting `
 Clients show the reason as a one-line composer notice: `owner_unset` says no BotMux Owner Union ID is set and messages go the usual way; `upgrade`
 (or no reason, from an older node) recommends botmux `3.59.23+`. Decoding and the botmux display chip do not depend on the setting.
 
-botmux answers an owner it will not take with `403 {"ok":false,"error":"owner_unresolved"}` (several `allowedUsers` and no `ownerUnionId`) or
-`owner_mismatch` (the `actorUnionId` is not the bot's owner). Neither is a stale dashboard token: the node does not refresh the token or retry, and
+botmux answers an owner it will not take with `403 {"ok":false,"errorCode":"owner_unresolved","error":"…"}` (several `allowedUsers` and no
+`ownerUnionId`) or `errorCode` `owner_mismatch` (the `actorUnionId` is not the bot's owner); an answer with the bare code in `error` is read the
+same (deepcoldy/botmux#3954). Neither is a stale dashboard token: the node does not refresh the token or retry, and
 refuses the send with `not_delivered`, `delivered: "none"` and `reason` `botmux_owner_unresolved`, `botmux_owner_mismatch` (or
 `botmux_owner_refused` for another `owner_…` code), which the hub words as `rpc-errors.not_delivered_<reason>` in the viewer's language instead of
 the generic "the terminal didn't accept this message". A `403` without an `owner_…` code is still a stale token, refreshed and tried once more.

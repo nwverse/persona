@@ -744,12 +744,13 @@ func (h *botmuxHost) Prompt(ctx context.Context, pane host.PaneRef, text string)
 		}
 		status, res, err := h.trigger(ctx, base, token, body)
 		msg := res.message()
-		refusedOwner := err == nil && status == http.StatusForbidden && botmuxOwnerRefusal(res.Error)
+		refusedOwner := err == nil && status == http.StatusForbidden && botmuxOwnerRefusal(res.code())
 		stale := !refusedOwner && (err != nil || status == http.StatusUnauthorized || status == http.StatusForbidden ||
 			(status >= 300 && status < 400))
 		switch {
 		case refusedOwner:
-			return host.Mark(&botmuxOwnerRefusedError{Code: res.Error, Message: res.Message}, host.ErrNotDelivered)
+			return host.Mark(&botmuxOwnerRefusedError{Code: res.code(), Message: strings.TrimSpace(res.Error + " " + res.Message)},
+				host.ErrNotDelivered)
 		case stale && attempt == 0:
 			continue // the dashboard moved or its token was rotated: refresh and re-probe before retrying
 		case err != nil:
@@ -774,15 +775,29 @@ func (h *botmuxHost) Prompt(ctx context.Context, pane host.PaneRef, text string)
 }
 
 // botmuxTriggerAnswer is /api/trigger's answer: Actor is the echoed `actor` ("owner" when ownerActor took effect),
-// Error botmux's code (owner_unresolved, …) and Message its words.
+// ErrorCode botmux's code (owner_unresolved, …) and Error / Message its words.
 type botmuxTriggerAnswer struct {
-	OK      bool   `json:"ok"`
-	Actor   string `json:"actor"`
-	Error   string `json:"error"`
-	Message string `json:"message"`
+	OK        bool   `json:"ok"`
+	Actor     string `json:"actor"`
+	ErrorCode string `json:"errorCode"`
+	Error     string `json:"error"`
+	Message   string `json:"message"`
 }
 
-func (a botmuxTriggerAnswer) message() string { return strings.TrimSpace(a.Error + " " + a.Message) }
+func (a botmuxTriggerAnswer) message() string {
+	return strings.TrimSpace(strings.TrimSpace(a.ErrorCode+" "+a.Error) + " " + a.Message)
+}
+
+// code is botmux's error code: errorCode, else an error that is a bare code (an answer without errorCode).
+func (a botmuxTriggerAnswer) code() string {
+	if a.ErrorCode != "" {
+		return a.ErrorCode
+	}
+	if a.Error != "" && !strings.ContainsAny(a.Error, " \t\n") {
+		return a.Error
+	}
+	return ""
+}
 
 // Codes of botmux's 403 for actor "owner" (deepcoldy/botmux, actorUnionId): no owner could be resolved for the bot
 // (several allowedUsers and no ownerUnionId), or the union_id sent is not its owner.
