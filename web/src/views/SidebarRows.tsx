@@ -32,7 +32,8 @@ import { contextMenuProps } from "../ui/context-menu";
 import type { MenuAt } from "../ui/menu-model";
 import { rowDetail, useAgentDetails } from "../lib/context-usage";
 import { ContextUsageBar } from "../ui/ContextUsageBar";
-import { AgentMark, SessionMark } from "../ui/AgentMark";
+import { AgentMark } from "../ui/AgentMark";
+import { CodingAgentAvatar } from "../ui/CodingAgentAvatar";
 import { AgentAvatar } from "./agents/AgentAvatar";
 import { useFolded } from "../lib/use-folded";
 import { ariaKeyshortcuts, formatChord } from "../lib/shortcuts";
@@ -246,11 +247,11 @@ export const ShellRow = memo(function ShellRow({ k, reg, hover, active, to, go, 
         aria-hidden
         data-shell-mark
         className={cx(
-          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border border-line bg-inset",
+          "inline-flex size-6 shrink-0 items-center justify-center rounded-full border border-line bg-inset",
           active ? "text-ink" : "text-ink-3",
         )}
       >
-        <Icon name="terminal" size={10} stroke={2} />
+        <Icon name="terminal" size={12} stroke={2} />
       </span>
       <span aria-hidden data-shell-status className="flex size-3.5 shrink-0 items-center justify-center">
         <span className="size-1.5 rounded-full bg-ink-3/50" />
@@ -563,8 +564,8 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
           ? "pr-1 [@media(hover:none)]:pr-1"
           : cx(onMenu && (active ? "pr-8" : "group-hover/row:pr-8"), onMenu && "[@media(hover:none)]:pr-11"))}
     >
-      {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
-      {showState && !s.assistant && <SessionMark s={s} size={14} />}
+      {/* the coding Agent's circular contact avatar + bottom-right hosting engine badge, before its state */}
+      {showState && !s.assistant && <CodingAgentAvatar session={s} size={24} markSize={14} ring="canvas" />}
       <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || unseen || leadActive ? <StatusMark state={leadActive ? "working" : phase === "error" ? "error" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a

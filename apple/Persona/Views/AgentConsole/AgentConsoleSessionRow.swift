@@ -8,7 +8,7 @@ struct AgentConsoleSessionRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
-            AgentMark(session)
+            CodingAgentAvatar(session: session, side: Theme.Size.avatar, ringColor: Theme.card)
             words
             Spacer(minLength: 0)
             AgentTimeText(time: time, fallback: session.updatedAt, font: Theme.Font.label)

@@ -149,7 +149,9 @@ import { usageLimitLabel } from "../../lib/usage-limit";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type DisplayLine, type FeedItem } from "../../lib/feed";
 import { splitBackgroundActivity } from "../../lib/quiet-activity";
 import { CardConversation } from "../../ui/AssistantCard";
-import { SessionMark, sessionMarkName } from "../../ui/AgentMark";
+import { sessionMarkName } from "../../ui/AgentMark";
+import { CodingAgentAvatar } from "../../ui/CodingAgentAvatar";
+import { codingAgentAvatarLabel, resolveCodingAgentAvatar, resolveHostingEngine } from "../../lib/coding-agent-avatar";
 import { sessionAgentName } from "../../lib/agent-kind";
 import { AssistantActionBar, DayLine, FeedLineView, QuickResultCard, RouteChip } from "../assistant/Tasks";
 import { groupAssistantLines, HandoffFeedRun, HandoffGroupStateContext } from "../assistant/Handoff";
@@ -3785,10 +3787,13 @@ export const Header = memo(function Header({
 export function AgentDeviceMark({ session, machineName }: { session: Session; machineName: string }) {
   const offline = useStore((s) => s.machines.find((m) => m.id === session.machine_id)?.online === false);
   const where = t(offline ? "chat-chatview.agent_device_offline" : "chat-chatview.agent_device", { device: machineName });
-  // the hover is cindy's sentence; the spoken name says which Agent too, as the mark alone did
+  const engine = resolveHostingEngine(session);
+  const agent = engine ? codingAgentAvatarLabel(resolveCodingAgentAvatar(session), engine) : sessionMarkName(session);
+  const title = engine ? `${agent} · ${where}` : where;
+  // the hover is cindy's sentence (with model/engine prefix when a host is present); the spoken name names all three
   return (
-    <span role="img" aria-label={t("chat-chatview.agent_device_label", { agent: sessionMarkName(session), where })} title={where} data-agent-device={offline ? "offline" : "online"} className={cx("mr-2 inline-flex shrink-0", offline && "opacity-75")}>
-      <SessionMark s={session} size={14} decorative remote className="text-ink-3" />
+    <span role="img" aria-label={t("chat-chatview.agent_device_label", { agent, where })} title={title} data-agent-device={offline ? "offline" : "online"} className={cx("mr-2 inline-flex shrink-0", offline && "opacity-75")}>
+      <CodingAgentAvatar session={session} size={28} ring="page" remote decorative />
     </span>
   );
 }

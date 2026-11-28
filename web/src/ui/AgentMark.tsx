@@ -127,7 +127,7 @@ function CliBadge({ size }: { size: number }) {
  * without taking room, so a mark with it lines up with one without. Drawn on a 16-unit canvas whose lower-left 12.5 units
  * are the mark's box.
  */
-function RemoteSignal({ size }: { size: number }) {
+export function RemoteSignal({ size }: { size: number }) {
   const unit = size / 12.5;
   const band = 3.5 * unit;
   return (

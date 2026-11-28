@@ -162,18 +162,20 @@ describe("Sidebar unified active shell tabs", () => {
     const workspaceList = agentLink.closest(".sidebar-indent");
     expect(workspaceList?.contains(shellLink)).toBe(true);
 
-    // Leading icon-column alignment: ShellRow reserves the exact same 14px mark slot + 14px status-dot slot + gap-2 as SessionRow.
+    // Leading icon-column alignment: ShellRow reserves the exact same 24px avatar slot + 14px status-dot slot + gap-2 as SessionRow.
     expect(agentLink.className).toContain("gap-2");
     expect(shellLink.className).toContain("gap-2");
     expect(agentLink.className).toContain("px-2");
     expect(shellLink.className).toContain("px-2");
 
+    const agentAvatar = agentLink.querySelector<HTMLElement>("[data-coding-agent-avatar]")!;
     const agentMark = agentLink.querySelector<HTMLElement>("[data-agent-mark]")!;
     const shellMark = shellLink.querySelector<HTMLElement>("[data-shell-mark]")!;
     const shellStatus = shellLink.querySelector<HTMLElement>("[data-shell-status]")!;
 
+    expect(agentAvatar.style.width).toBe("24px");
     expect(agentMark.style.width).toBe("14px");
-    expect(shellMark.className).toContain("size-3.5");
+    expect(shellMark.className).toContain("size-6");
     expect(shellStatus.className).toContain("size-3.5");
     expect(agentLink.children[1]?.className).toContain("size-3.5");
   });

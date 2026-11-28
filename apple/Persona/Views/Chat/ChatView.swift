@@ -4039,26 +4039,32 @@ struct ChatView: View {
     /// The title over its second line; `chevron` adds the ⌄ of a title that switches agents.
     private func titleLabel(chevron: Bool) -> some View {
         let link = model.connection.shown
-        return VStack(spacing: Theme.Space.xxs) {
-            HStack(spacing: Theme.Space.xs) {
-                Text(shownTitle).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
-                if chevron {
-                    ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
-                }
+        let devSession = style == .dev ? session.flatMap { $0.assistant ? nil : $0 } : nil
+        return HStack(spacing: Theme.Space.s) {
+            if let s = devSession {
+                CodingAgentAvatar(session: s, side: Theme.Size.well, ringColor: Theme.pageBackground, decorative: true)
             }
-            ZStack {
-                if link != .online {
-                    ConnectionLabel(phase: link, compact: true).transition(.opacity)
-                } else {
-                    HStack(spacing: Theme.Space.xs) {
-                        if style == .dev, let s = session { devSubtitle(s) } else { Text(subtitle).lineLimit(1) }
+            VStack(alignment: devSession != nil ? .leading : .center, spacing: Theme.Space.xxs) {
+                HStack(spacing: Theme.Space.xs) {
+                    Text(shownTitle).font(Theme.Font.heading).lineLimit(1).truncationMode(.tail)
+                    if chevron {
+                        ThemedIcon(Theme.Icon.expand).font(Theme.Font.labelStrong).foregroundStyle(.secondary)
                     }
-                    .font(Theme.Font.label)
-                    .foregroundStyle(.secondary)
-                    .transition(.opacity)
                 }
+                ZStack {
+                    if link != .online {
+                        ConnectionLabel(phase: link, compact: true).transition(.opacity)
+                    } else {
+                        HStack(spacing: Theme.Space.xs) {
+                            if style == .dev, let s = session { devSubtitle(s) } else { Text(subtitle).lineLimit(1) }
+                        }
+                        .font(Theme.Font.label)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                    }
+                }
+                .animation(Theme.Motion.standard, value: link)
             }
-            .animation(Theme.Motion.standard, value: link)
         }
         // All the room between the round buttons on an iPhone; a readable cap on a wide page.
         .scaledFrame(maxWidth: Theme.Size.headerTitle)
@@ -4115,8 +4121,7 @@ struct ChatView: View {
             let machine = model.namedMachine(s.machineRef)?.title ?? s.machineID
             let rest = s.chatSubtitleParts(machine: machine, tabShown: tabShown, preferTab: preferHerdrTabName)
             HStack(spacing: Theme.Space.xs) {
-                AgentMark(s, side: Theme.Size.markXS) // its agent before its state (#6390); this line is an agent's only
-                StatusDot(state: s.state, size: 7, waiting: s.waitsInBackground)
+                StatusDot(state: s.state, size: Theme.Size.dotS, waiting: s.waitsInBackground)
                 // Not ViewThatFits: that measured both lines again at every width of a window resize (#1337).
                 FirstFitting {
                     subtitleLine(s, words, rest.full)
