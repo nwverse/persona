@@ -286,6 +286,7 @@ type Service struct {
 	avail            availBook              // availability.go
 	quiet            quietBook              // quiet.go
 	taskFileBook     taskFileBook           // task_files.go: the files tasks handed over, by todo id
+	inboxReminders   inboxReminderReader    // the Inbox module rechecks queued supervision reminders
 	supervise        superviseBook          // supervise_signals.go
 	progress         progressBook           // supervise_progress.go
 	preempt          preemptBook            // owner_preempt.go

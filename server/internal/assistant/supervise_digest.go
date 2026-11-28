@@ -17,6 +17,13 @@ import (
 
 // ---- the supervision message ----
 
+// inboxReminderReader supplies the Inbox state supervision rechecks before delivering a reminder.
+type inboxReminderReader interface {
+	remindersEnabled(context.Context) bool
+	taskReceivesReminder(Todo, *prompts.SuperviseInbox) bool
+	eventUnhandled(context.Context, string) bool
+}
+
 // superviseTool marks a queued supervision message (relayMsg.Tool).
 const superviseTool = "supervise"
 
@@ -1131,10 +1138,10 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // closed, card already active, or no longer waiting on owner
 		}
 	case sigInbox:
-		if g.Inbox == nil || !s.inboxSignalsOn(ctx) {
+		if g.Inbox == nil || !s.inboxReminders.remindersEnabled(ctx) {
 			return prompts.SuperviseEntry{}, false // switch went off meanwhile
 		}
-		if !s.inboxSignalHolds(t) && (!acceptedFeedback || !s.acceptedFeedbackHolds(t, g.Inbox) || s.agentSupervised(t)) {
+		if !s.inboxReminders.taskReceivesReminder(t, g.Inbox) {
 			if needsUserWakeEligible(t) && !s.agentSupervised(t) && g.Inbox.ToAgent != "unhandled" {
 				// Task entered reviewNeedsUser while this inbox signal waited: deliver it as non-destructive external info
 				// alongside the pending needs_user summary rather than silently dropping it (#13112).
@@ -1156,7 +1163,7 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			}
 			return prompts.SuperviseEntry{}, false // waits for the owner's decision (returned) or no longer eligible
 		}
-		if g.Inbox.ToAgent == "unhandled" && !s.taskInboxUnhandled(ctx, g.Key) {
+		if g.Inbox.ToAgent == "unhandled" && !s.inboxReminders.eventUnhandled(ctx, g.Key) {
 			return prompts.SuperviseEntry{}, false // the source event was answered while its notice waited
 		}
 	}

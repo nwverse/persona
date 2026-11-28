@@ -229,6 +229,20 @@ func TestInboxReviewsKeepReachingSupervisorAfterAcceptance(t *testing.T) {
 		!strings.Contains(notices[1], "待办已验收") || !strings.Contains(notices[1], linkedPRURL) {
 		t.Fatalf("notices: %q", notices)
 	}
+	// A third review waits behind the supervisor's turn. Closing the PR before the queue drains retires it.
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusWorking})
+	b.mu.Lock()
+	receive(b, it, "review:3", "Please check the final wording.", 1)
+	b.mu.Unlock()
+	s.linkInboxTaskURLs(ctx)
+	waitFor(t, "post-acceptance review to queue", func() bool { return s.queuedFor("conv1") == 1 })
+	b.mu.Lock()
+	it.Connector.ThreadState = "closed"
+	b.mu.Unlock()
+	drainQueuedDigest(t, s, f)
+	if len(f.notices()) != 2 || s.queuedFor("conv1") != 0 {
+		t.Fatalf("queued review after PR closure: notices=%q queue=%d", f.notices(), s.queuedFor("conv1"))
+	}
 	if after := todoNow(s, task.ID); after.DoneAt == nil || !acceptanceStands(after) || len(sentToAgent(f)) != before {
 		t.Fatalf("post-acceptance notifications changed the work: %+v, sends=%v", after.Supervision, sentToAgent(f))
 	}

@@ -32,6 +32,18 @@ func (s *Service) inboxSignalsOn(ctx context.Context) bool {
 	return v != nil && *v
 }
 
+func (m inboxModule) remindersEnabled(ctx context.Context) bool {
+	return m.s.inboxSignalsOn(ctx)
+}
+
+func (m inboxModule) taskReceivesReminder(t Todo, in *prompts.SuperviseInbox) bool {
+	return m.s.inboxSignalHolds(t) || in.AfterAcceptance && m.s.acceptedFeedbackHolds(t, in) && !m.s.agentSupervised(t)
+}
+
+func (m inboxModule) eventUnhandled(ctx context.Context, key string) bool {
+	return m.s.taskInboxUnhandled(ctx, key)
+}
+
 // superviseInbox raises the inbox signal for those of items (the twin's pass just took new content into them) that are
 // linked to a supervised task, while assistant.inbox_signals is on. linked are the items the judge linked in this pass:
 // all they hold is new to the supervisor.

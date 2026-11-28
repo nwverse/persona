@@ -34,6 +34,7 @@ func (m inboxModule) Register(k seam.Kernel) {
 	if s == nil {
 		defect.Raise("assistant.inboxModule.Register", "an inboxModule comes from newInboxModule")
 	}
+	s.inboxReminders = m
 	s.routesThrough(k, s.inboxRoutes) // its route functions as they are (inbox_api.go)
 	// The extension manager's calls about the Inbox (assistantwire.MethodInbox*).
 	k.Bus(seam.NewTypedBusMethod(assistantwire.InboxCollectedMethod, s.inboxCollectedCall))
