@@ -920,8 +920,13 @@ func (n *Node) codexSubmitted(ctx context.Context, pane string) error {
 	}
 }
 
-// pastedRE is how Codex shows a long paste in its box.
+// pastedRE is how Codex shows a long paste in its box; codexPasted also accepts
+// numbered chips ("#2"), multi-chip pastes, and chips with a visible tail (#2133).
 var pastedRE = lazyre.New(`^\[Pasted Content \d+ chars\]$`)
+
+func codexPasted(draft, text string) bool {
+	return pastedRE.MatchString(draft) || codexFirstPromptShown(draft, text)
+}
 
 // Desktop answers need their own turn. Do not queue them behind a running turn: the question may be answered in the App in the meantime.
 func (n *Node) codexReplyDesktop(ctx context.Context, session string, card *codexCard, r proto.Resolution) error {
@@ -959,7 +964,7 @@ func (n *Node) codexReply(ctx context.Context, session string, card *codexCard, 
 	}
 	err = n.codexType(ctx, card.pane, msg, func(draft string) bool {
 		d := strings.Join(strings.Fields(draft), "")
-		return strings.HasSuffix(d, "</send_user_message_question_reply>") || pastedRE.MatchString(draft)
+		return strings.HasSuffix(d, "</send_user_message_question_reply>") || codexPasted(draft, msg)
 	})
 	if err != nil {
 		return err
@@ -1208,7 +1213,7 @@ func (n *Node) codexApprove(ctx context.Context, card *codexCard, r proto.Resolu
 	for deadline := time.Now().Add(8 * time.Second); time.Now().Before(deadline); time.Sleep(codexPoll) {
 		if last = n.codexReady(ctx, card.pane, true); last == nil {
 			text := inertControls(strings.TrimSpace(r.Message))
-			return n.codexType(ctx, card.pane, text, func(draft string) bool { return sameText(draft, text) || pastedRE.MatchString(draft) })
+			return n.codexType(ctx, card.pane, text, func(draft string) bool { return sameText(draft, text) || codexPasted(draft, text) })
 		}
 	}
 	return uncertain(fmt.Errorf("已经拒绝并停下了这一轮，但理由没发出去（%v）：在电脑上告诉它", last))

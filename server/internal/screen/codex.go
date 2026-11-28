@@ -220,23 +220,35 @@ func codexBox(plain []string) int {
 	return -1
 }
 
+func codexFooterHint(line string) bool {
+	last := strings.ToLower(strings.TrimSpace(line))
+	return strings.HasPrefix(last, "? for shortcuts") ||
+		strings.HasPrefix(last, "← for agents · ? for shortcuts") ||
+		strings.HasPrefix(last, "tab to queue message") ||
+		strings.HasPrefix(last, "← for agents · tab to queue message") ||
+		codexWarningRE.MatchString(line)
+}
+
+func codexSingleRowFooter(line string) bool {
+	if !codexStatusRE.MatchString(line) {
+		return false
+	}
+	return codexWarningRE.MatchString(line) || strings.Contains(strings.ToLower(line), " · tab to queue message")
+}
+
 // codexDraft is the box's text that is not its dim placeholder: the › row and the rows right under it (a draft of
 // several lines), up to the TUI's recognized footer. With an unrecognized footer, stop at the first blank row.
 func codexDraft(raw, plain []string, i int, noColor bool) string {
 	var rows []string
 	end := len(plain)
-	if end > i+1 && codexStatusRE.MatchString(plain[end-1]) && codexWarningRE.MatchString(plain[end-1]) {
-		// 0.166 also draws one status row with a warning and no shortcuts row.
+	if end > i+1 && codexSingleRowFooter(plain[end-1]) {
+		// 0.166+ can draw one status row with a warning or active-turn queue hint and no second footer row (#2133).
 		end--
-	} else if end > i+2 {
-		last := strings.TrimSpace(plain[end-1])
-		if strings.HasPrefix(last, "? for shortcuts") || strings.HasPrefix(last, "← for agents · ? for shortcuts") ||
-			codexWarningRE.MatchString(plain[end-1]) {
-			// Match the status/path and shortcut footer together at the bottom, not model names or hint text
-			// inside a multiline draft. Real text above the footer remains protected from remote input.
-			if s := codexStatusStart(plain, i, end-1); s >= 0 {
-				end = s
-			}
+	} else if end > i+2 && codexFooterHint(plain[end-1]) {
+		// Match the status/path and shortcut/queue footer together at the bottom, not model names or hint text
+		// inside a multiline draft. Real text above the footer remains protected from remote input.
+		if s := codexStatusStart(plain, i, end-1); s >= 0 {
+			end = s
 		}
 	}
 	for k := i; k < end; k++ {
