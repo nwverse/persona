@@ -13,9 +13,14 @@ import { Group, Row } from "./SettingsParts";
 import { t } from "../../i18n";
 import { useOpeningDefaultAssistant, useScopedAssistant } from "./integrations/useScopedAssistant";
 
-type Props = { extension: string; editable?: boolean };
+type Props = { extension: string; editable?: boolean; manager?: string };
 
 export function ExtensionInfoAccess(props: Props) {
+  if (props.manager) return <ScopedGrantCard {...props} managerId={props.manager} />;
+  return <DefaultGrantCard {...props} />;
+}
+
+function DefaultGrantCard(props: Props) {
   const managerId = useOpeningDefaultAssistant(props.extension);
   return managerId === undefined ? null : <ScopedGrantCard {...props} managerId={managerId} />;
 }

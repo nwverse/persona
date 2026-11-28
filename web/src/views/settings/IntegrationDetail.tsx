@@ -58,12 +58,16 @@ import {
   resolveBuiltinChannelId, resolveBuiltinConnectorId,
   type BuiltinIntegrationId, type IntegrationSectionId, type IntegrationTarget,
 } from "./integrations/model";
+import { projectionStatus } from "./integrations/projectedCatalog";
+import { editableSection, projectedSections, ProjectionDetailIssues, type ProjectedDetail } from "./integrations/projectedDetail";
 
 export type { BuiltinIntegrationId, IntegrationSectionId, IntegrationTarget };
 export { isIntegrationsV2Active, partitionExtensionFields };
 
 export interface IntegrationDetailProps {
   target: IntegrationTarget;
+  /** Read-only metadata for this exact resource when the owning assistant supports projection. */
+  projection?: ProjectedDetail;
   /** Proposed configuration from a settings link, kept as an unsaved draft. */
   prefill?: JsonObject;
   /** Back action; omit when the top bar (phone) or desktop split-pane list already provides navigation. */
@@ -253,14 +257,15 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
 
   if (!enabled) return <>{props.fallback ?? null}</>;
 
-  const { target } = props;
+  const { target, projection } = props;
   if (target.kind === "builtin") {
-    const mailOff = !mailEnabled && target.id === "mail";
-    const feishuOff = !larkModule && (
+    const moduleOff = projection?.detail.item.availability.state === "module_off";
+    const mailOff = (projection ? moduleOff : !mailEnabled) && target.id === "mail";
+    const feishuOff = (projection ? moduleOff : !larkModule) && (
       target.id === "feishu-bot" || target.id === "feishu" || target.channelId === "feishu" ||
       target.id === "larkcli" || target.connectorId === "larkcli"
     );
-    if (mailOff || feishuOff) {
+    if (mailOff || feishuOff || moduleOff) {
       const back = props.onBack ?? props.onUnavailableBack;
       return (
         <div data-integration-detail={target.id} data-integration-kind="builtin">
@@ -269,8 +274,8 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
               {t("settings-integrations.back")}
             </Button>
           )}
-          <Group title={t(mailOff ? "settings-connectors.mail" : "settings-feishubot.title")}>
-            <SettingsHint>{t(mailOff ? "settings-integrations.mail_module_off" : "settings-integrations.feishu_module_off")}</SettingsHint>
+          <Group title={projection?.detail.item.name ?? t(mailOff ? "settings-connectors.mail" : "settings-feishubot.title")}>
+            <SettingsHint>{t(mailOff ? "settings-integrations.mail_module_off" : feishuOff ? "settings-integrations.feishu_module_off" : "settings-integrations.projection_module_off")}</SettingsHint>
           </Group>
         </div>
       );
@@ -282,6 +287,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
       <ExtensionIntegrationDetail
         key={`ext:${props.target.id}@${effectiveManager ?? ""}`}
         target={props.target}
+        projection={projection}
         manager={effectiveManager}
         prefill={props.prefill}
         onBack={props.onBack}
@@ -294,11 +300,12 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
     );
   }
 
-  if (props.target.id === "feishu-bot") {
+  if (props.target.id === "feishu-bot" && (!projection || projection.detail.item.ref.kind === "service")) {
     return (
       <FeishuBotBuiltinDetail
         key={`builtin:feishu-bot@${effectiveManager ?? ""}`}
         target={props.target}
+        projection={projection}
         manager={effectiveManager}
         onBack={props.onBack}
         onSettings={props.onSettings}
@@ -312,6 +319,7 @@ export function IntegrationDetail(props: IntegrationDetailProps) {
     <BuiltinIntegrationDetail
       key={`builtin:${props.target.id}@${effectiveManager ?? ""}`}
       target={props.target}
+      projection={projection}
       manager={effectiveManager}
       onBack={props.onBack}
       onSettings={props.onSettings}
@@ -328,6 +336,23 @@ function LastChannelEvent({ detail }: { detail: ChannelDetail | null }) {
   return detail?.last_event_at
     ? <span className="shrink-0">{t("settings-channels.last_event", { when: ago(detail.last_event_at) })}</span>
     : null;
+}
+
+function projectedChannelController(ctl: ReturnType<typeof useChannelController>, projection?: ProjectedDetail) {
+  if (!projection || !ctl.detail) return ctl;
+  const section = projectedSections(projection, "conversation_and_push", "channel").find(({ ref }) => ref.id === ctl.detail?.id);
+  return section && editableSection(section) ? ctl : { ...ctl, detail: { ...ctl.detail, read_only: true } };
+}
+
+function ProjectedStatus({ projection, channel }: { projection: ProjectedDetail; channel?: ChannelDetail | null }) {
+  const status = projectionStatus(projection.detail.item.availability);
+  return (
+    <>
+      <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", CONN_DOT[status.tone])} />
+      <span className="truncate">{status.text}</span>
+      <LastChannelEvent detail={channel ?? null} />
+    </>
+  );
 }
 
 function ConnectorReadError({ error, onRetry, loading = false }: { error: string; onRetry?: () => void; loading?: boolean }) {
@@ -365,6 +390,7 @@ function BuiltinMark({ id, channel }: { id: string; channel?: ReturnType<typeof 
 
 function FeishuBotBuiltinDetail({
   target,
+  projection,
   manager,
   onBack,
   onSettings,
@@ -372,30 +398,38 @@ function FeishuBotBuiltinDetail({
   onOpenSources,
 }: {
   target: Extract<IntegrationTarget, { kind: "builtin" }>;
+  projection?: ProjectedDetail;
   manager?: string;
   onBack?: () => void;
   onSettings?: (url: string, manager?: string) => void;
   onOpenConnector?: (id: string, manager?: string) => void;
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
-  const channelId = resolveBuiltinChannelId(target) ?? "feishu";
-  useLayoutEffect(() => pinManagerAt(["/bots/feishu", "/connectors/larkcli"], manager), [manager]);
+  const channelId = projection ? target.channelId ?? null : resolveBuiltinChannelId(target) ?? "feishu";
+  const connectorId = projection ? target.connectorId ?? null : "larkcli";
+  useLayoutEffect(() => pinManagerAt(["/bots/feishu", ...(connectorId ? [`/connectors/${enc(connectorId)}`] : [])], manager), [connectorId, manager]);
 
-  const channelCtl = useChannelController(channelId, manager);
+  const channelCtl = projectedChannelController(useChannelController(channelId, manager), projection);
   const { connectors: [larkcli], load: loadLarkcli, loading: connectorLoading, error: connectorError, onSaved } =
-    useDetailConnectors(["larkcli"], manager);
+    useDetailConnectors(connectorId ? [connectorId] : [], manager, !!projection);
 
-  const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
+  const serviceConnection = projectedSections(projection, "connection", "service")[0];
+  const botEditable = !projection || (!!serviceConnection && editableSection(serviceConnection));
+  const channelSection = projectedSections(projection, "conversation_and_push", "channel")[0];
+  const canDeliver = !projection || (!!channelSection && editableSection(channelSection));
+  const feishuCtl = useFeishuBotController(botEditable || canDeliver, loadLarkcli, channelCtl.load);
 
   const refreshAll = () => {
+    projection?.refresh();
     void loadLarkcli({ fresh: true });
-    void channelCtl.load();
-    void feishuCtl.load();
+    if (channelId) void channelCtl.load();
+    if (botEditable || canDeliver) void feishuCtl.load();
   };
 
   const title = target.name ?? feishuCtl.status?.bot_name ?? t("settings-feishubot.title");
   const description = target.description ?? t("settings-integrations.feishu_bot_description");
-  const showInboxSection = !!larkcli && connectorHasInbox(larkcli);
+  const showInboxSection = !!larkcli && connectorHasInbox(larkcli) && (!projection ||
+    projectedSections(projection, "inbox_and_sync", "connector").some(editableSection));
 
   return (
     <div data-integration-detail={target.id} data-integration-kind="builtin">
@@ -411,7 +445,7 @@ function FeishuBotBuiltinDetail({
           icon="retry"
           label={t("settings-integrations.refresh")}
           onClick={refreshAll}
-          disabled={connectorLoading || channelCtl.loading || feishuCtl.loading}
+          disabled={connectorLoading || channelCtl.loading || feishuCtl.loading || projection?.loading}
         />
       </div>
 
@@ -423,7 +457,11 @@ function FeishuBotBuiltinDetail({
               {title && <h1 className="truncate text-card-title font-semibold text-ink">{title}</h1>}
               <Pill>{t("settings-integrations.builtin_badge")}</Pill>
             </div>
-            {channelCtl.detail && (
+            {projection ? (
+              <div className="mt-0.5 flex min-w-0 items-center gap-2 text-label text-ink-3">
+                <ProjectedStatus projection={projection} channel={channelCtl.detail} />
+              </div>
+            ) : channelCtl.detail && (
               <div className="mt-0.5 flex min-w-0 items-center gap-2 text-label text-ink-3">
                 <ChannelStateInline c={channelCtl.detail} />
                 {channelCtl.detail.account?.name && <span className="truncate">{channelCtl.detail.account.name}</span>}
@@ -440,59 +478,74 @@ function FeishuBotBuiltinDetail({
         )}
       </section>
 
+      <ProjectionDetailIssues projection={projection} />
+
       {/* 1. Account & Connection */}
-      <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
+      {(!projection || serviceConnection || connectorId) && <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
         {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadLarkcli({ fresh: true })} loading={connectorLoading} />}
-        <FeishuBotConnectionPanel
+        {botEditable ? <FeishuBotConnectionPanel
           ctl={feishuCtl}
           larkcli={larkcli ?? null}
           onOpenConnector={(id) => onOpenConnector?.(id, manager)}
-        />
-      </SectionBlock>
+        /> : (
+          <>
+            {serviceConnection && <Group><SettingsHint>{t("settings-integrations.projection_read_only")}</SettingsHint></Group>}
+            {larkcli && <ConnectorConnectionBlock connector={larkcli} reload={() => loadLarkcli({ fresh: true })} loading={connectorLoading}
+              readOnly={!projectedSections(projection, "connection", "connector").some(editableSection)} />}
+          </>
+        )}
+      </SectionBlock>}
 
       {/* 2. Chat & Delivery */}
-      <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
+      {channelId && <SectionBlock id="channel" title={t("settings-integrations.section_channel")}>
         <ChannelDeliveryBlock ctl={channelCtl} target={target} targetOnly onSettings={onSettings} />
-        <FeishuBotDeliveryPanel ctl={feishuCtl} />
-      </SectionBlock>
-      <ConnectorExternalSourceSettings ids={[channelId]} manager={manager} />
+        {canDeliver && <FeishuBotDeliveryPanel ctl={feishuCtl} />}
+      </SectionBlock>}
+      {channelId && (!projection || projectedSections(projection, "external_sources", "channel").some(editableSection)) &&
+        <ConnectorExternalSourceSettings ids={[channelId]} manager={manager} />}
 
       {/* 3. Inbox & Sync */}
-      <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
+      {(!projection || projectedSections(projection, "inbox_and_sync").length > 0) && <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
         {showInboxSection && larkcli && (
           <>
             <ConnectorInboxBlock connector={larkcli} reload={loadLarkcli} onSaved={onSaved} />
             <SubscriptionsEntry
-              pick={(l) => l.connector === "larkcli"}
-              scope={{ c: "larkcli" }}
+              pick={(l) => l.connector === connectorId}
+              scope={{ c: larkcli.id }}
               manager={manager}
               onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
             />
           </>
         )}
         <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />
-      </SectionBlock>
+      </SectionBlock>}
     </div>
   );
 }
 
 function BuiltinIntegrationDetail({
   target,
+  projection,
   manager,
   onBack,
   onSettings,
   onOpenSources,
 }: {
   target: Extract<IntegrationTarget, { kind: "builtin" }>;
+  projection?: ProjectedDetail;
   manager?: string;
   onBack?: () => void;
   onSettings?: (url: string, manager?: string) => void;
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
-  const isMail = target.id === "mail";
-  const isLarkGateway = target.id === "lark";
-  const channelId = resolveBuiltinChannelId(target);
-  const connectorId = resolveBuiltinConnectorId(target);
+  const service = !projection || projection.detail.item.ref.kind === "service";
+  const isMail = service && target.id === "mail";
+  const isLarkGateway = service && target.id === "lark";
+  const channelId = projection ? target.channelId ?? null : resolveBuiltinChannelId(target);
+  const connectorId = projection ? (isMail || isLarkGateway ? null : target.connectorId ?? null) : resolveBuiltinConnectorId(target);
+  const serviceConnection = projectedSections(projection, "connection", "service")[0];
+  const editService = !projection || (!!serviceConnection && editableSection(serviceConnection));
+  const editConnector = !projection || projectedSections(projection, "connection", "connector").some(editableSection);
 
   useLayoutEffect(() => {
     const prefixes: string[] = [];
@@ -507,16 +560,17 @@ function BuiltinIntegrationDetail({
     return pinManagerAt(prefixes, manager);
   }, [isMail, isLarkGateway, connectorId, manager]);
 
-  const channelCtl = useChannelController(channelId, manager);
+  const channelCtl = projectedChannelController(useChannelController(channelId, manager), projection);
 
   const { connectors, loaded: connectorsLoaded, load: loadConnector, loading: connectorLoading, error: connectorReadError, onSaved } =
-    useDetailConnectors(connectorId ? [connectorId] : [], manager);
+    useDetailConnectors(connectorId ? [connectorId] : [], manager, !!projection);
   const connector = connectors[0];
   const connectorError = connectorReadError || (connectorsLoaded && !connector ? t("settings-hubconnector.not_on_hub") : "");
   const [reloadKey, setReloadKey] = useState(0);
   const [mailHasAccounts, setMailHasAccounts] = useState(false);
 
   const refreshAll = () => {
+    projection?.refresh();
     if (isMail || isLarkGateway) setReloadKey((key) => key + 1);
     void loadConnector({ fresh: true });
     if (channelId) void channelCtl.load();
@@ -540,15 +594,19 @@ function BuiltinIntegrationDetail({
 
   const subscriptionConnectorId = connectorId ?? (isMail ? "mail" : isLarkGateway ? "lark" : null);
   const subscriptions = countsOf(useSubscriptionSummary(manager), (l) => l.connector === subscriptionConnectorId);
-  const isGitHub = isGitHubIntegration(target.id, connectorId ? [connectorId] : []);
+  const isGitHub = (!projection || connectorId !== null) && isGitHubIntegration(target.id, connectorId ? [connectorId] : []);
   const showKnowledgeScope =
     isMail ||
     isLarkGateway ||
     connectorId === "larkcli" ||
     (connector?.capabilities?.includes("history") ?? false);
-  const showInboxSection = showKnowledgeScope || (!!connector && connectorHasInbox(connector)) || !!subscriptions;
-  const showConnection = isMail || isLarkGateway || connectorId || isGitHub || hasBinding(channelCtl.detail);
+  const showInboxSection = (!projection || projectedSections(projection, "inbox_and_sync").length > 0) &&
+    (showKnowledgeScope || (!!connector && connectorHasInbox(connector)) || !!subscriptions);
+  const showConnection = (service && (!projection || serviceConnection) && (isMail || isLarkGateway)) ||
+    connectorId || isGitHub || hasBinding(channelCtl.detail);
   const sourceChannel = channelCtl.detail?.installed && channelCtl.detail.kind !== "app" ? channelId : null;
+  const externalSources = projection ? projectedSections(projection, "external_sources").filter(editableSection).map(({ ref }) => ref.id)
+    : [connectorId ?? "", sourceChannel ?? ""].filter(Boolean);
 
   return (
     <div data-integration-detail={target.id} data-integration-kind="builtin">
@@ -564,7 +622,7 @@ function BuiltinIntegrationDetail({
           icon="retry"
           label={t("settings-integrations.refresh")}
           onClick={refreshAll}
-          disabled={connectorLoading || channelCtl.loading}
+          disabled={connectorLoading || channelCtl.loading || projection?.loading}
         />
       </div>
 
@@ -575,9 +633,14 @@ function BuiltinIntegrationDetail({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               {title && <h1 className="truncate text-card-title font-semibold text-ink">{title}</h1>}
-              <Pill>{t("settings-integrations.builtin_badge")}</Pill>
+              {(!projection || projection.detail.item.origin === "builtin_service") && <Pill>{t("settings-integrations.builtin_badge")}</Pill>}
             </div>
-            {connector && (
+            {projection && (
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
+                <ProjectedStatus projection={projection} channel={channelCtl.detail} />
+              </div>
+            )}
+            {!projection && connector && (
               <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
                 <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", CONN_DOT[connectorTone(connector)])} />
                 <span className="truncate">
@@ -587,7 +650,7 @@ function BuiltinIntegrationDetail({
                 <LastChannelEvent detail={channelCtl.detail} />
               </div>
             )}
-            {!connector && channelCtl.detail && (
+            {!projection && !connector && channelCtl.detail && (
               <div className="mt-0.5 flex min-w-0 items-center gap-2 text-label text-ink-3">
                 <ChannelStateInline c={channelCtl.detail} />
                 {channelCtl.detail.account?.name && <span className="truncate">{channelCtl.detail.account.name}</span>}
@@ -604,15 +667,18 @@ function BuiltinIntegrationDetail({
         )}
       </section>
 
+      <ProjectionDetailIssues projection={projection} />
+
       {/* 1. Account & Connection */}
       {showConnection && (
         <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-          {isMail && <Mail hideInboxSwitch manager={manager} reloadKey={reloadKey} onHasAccounts={setMailHasAccounts} />}
-          {isLarkGateway && <Feishu reloadKey={reloadKey} manager={manager} />}
+          {isMail && editService && <Mail hideInboxSwitch manager={manager} reloadKey={reloadKey} onHasAccounts={setMailHasAccounts} />}
+          {isLarkGateway && editService && <Feishu reloadKey={reloadKey} manager={manager} />}
+          {serviceConnection && !editService && <Group><SettingsHint>{t("settings-integrations.projection_read_only")}</SettingsHint></Group>}
           {connectorId && (
             <>
               {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnector({ fresh: true })} loading={connectorLoading} />}
-              {connector && <ConnectorConnectionBlock connector={connector} reload={() => loadConnector({ fresh: true })} loading={connectorLoading} />}
+              {connector && <ConnectorConnectionBlock connector={connector} reload={() => loadConnector({ fresh: true })} loading={connectorLoading} readOnly={!editConnector} />}
               {!connector && !connectorError && <Group><div className="px-4 py-3"><Loading /></div></Group>}
             </>
           )}
@@ -631,8 +697,8 @@ function BuiltinIntegrationDetail({
       {/* 3. Inbox & Sync */}
       {showInboxSection && (
         <SectionBlock id="inbox" title={t("settings-integrations.section_inbox")}>
-          {isMail && mailHasAccounts && <MailInboxSwitch key={reloadKey} manager={manager} grouped />}
-          {connector && connectorHasInbox(connector) && (
+          {isMail && editService && mailHasAccounts && <MailInboxSwitch key={reloadKey} manager={manager} grouped />}
+          {connector && connectorHasInbox(connector) && (!projection || projectedSections(projection, "inbox_and_sync", "connector").some(editableSection)) && (
             <ConnectorInboxBlock connector={connector} reload={loadConnector} onSaved={onSaved} />
           )}
           {subscriptionConnectorId && subscriptions && (
@@ -645,7 +711,7 @@ function BuiltinIntegrationDetail({
           {showKnowledgeScope && <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />}
         </SectionBlock>
       )}
-      {!isMail && !isLarkGateway && (connectorId || sourceChannel) && <ConnectorExternalSourceSettings ids={[connectorId ?? "", sourceChannel ?? ""]} manager={manager} />}
+      {!isMail && !isLarkGateway && externalSources.length > 0 && <ConnectorExternalSourceSettings ids={externalSources} manager={manager} />}
     </div>
   );
 }
@@ -654,6 +720,7 @@ function BuiltinIntegrationDetail({
 
 type ExtensionIntegrationProps = {
   target: Extract<IntegrationTarget, { kind: "extension" }>;
+  projection?: ProjectedDetail;
   manager?: string;
   prefill?: JsonObject;
   onBack?: () => void;
@@ -672,6 +739,7 @@ function ExtensionIntegrationDetail(props: ExtensionIntegrationProps) {
 function ExtensionIntegrationResource({
   binding,
   target,
+  projection,
   manager,
   prefill,
   onBack: back,
@@ -697,19 +765,22 @@ function ExtensionIntegrationResource({
   const [startSignIn] = useState(() => signInAsked(id));
   useEffect(() => void takeSignIn(id), [id]);
 
-  // Associated channel (from explicit target override or extension's contributes.channel).
-  const channelId = target.channelId ?? (detail ? channelOf(detail) : null);
-  const channelCtl = useChannelController(channelId, manager);
+  const projectedChannel = projectedSections(projection, "conversation_and_push", "channel")[0];
+  const channelId = projection ? projectedChannel?.ref.id ?? null : target.channelId ?? (detail ? channelOf(detail) : null);
+  const channelCtl = projectedChannelController(useChannelController(channelId, manager), projection);
 
+  const projectedDetail = projection?.detail;
+  const projectedConnections = useMemo(() => projectedSections(projection, "connection", "connector"), [projection]);
   const connectorIds = useMemo(() => {
+    if (projectedDetail) return projectedConnections.map(({ ref }) => ref.id);
     const ids = new Set<string>();
     if (target.connectorId) ids.add(target.connectorId);
     for (const cid of detail?.contributes?.connectors ?? []) {
       if (cid.trim()) ids.add(cid);
     }
     return [...ids];
-  }, [target.connectorId, detail?.contributes?.connectors]);
-  const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
+  }, [projectedConnections, projectedDetail, target.connectorId, detail?.contributes?.connectors]);
+  const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager, !!projection);
   const lastConnectorRefresh = useRef(connectorRefreshKey);
   useEffect(() => {
     if (lastConnectorRefresh.current === connectorRefreshKey) return;
@@ -725,7 +796,18 @@ function ExtensionIntegrationResource({
   }, [manager, connectorIds, connectors]);
 
   const allFields = detail?.form?.fields;
-  const sections = useMemo(() => partitionExtensionFields(allFields), [allFields]);
+  const editableGroups = useMemo(() => new Set(projectedDetail?.sections
+    .filter((section) => section.ref.kind === "extension" && section.ref.id === id && editableSection(section))
+    .flatMap((section) => section.configuration_groups ?? [])), [projectedDetail, id]);
+  const sections = useMemo(() => {
+    const parts = partitionExtensionFields(allFields);
+    if (projectedDetail) {
+      for (const group of Object.keys(parts) as (keyof typeof parts)[]) {
+        if (!editableGroups.has(group)) parts[group] = [];
+      }
+    }
+    return parts;
+  }, [allFields, projectedDetail, editableGroups]);
 
   const saveBar = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -800,16 +882,25 @@ function ExtensionIntegrationResource({
   };
 
   const p = detail;
-  const setupTarget = editable ? setupSecret(p?.needs_setup, p?.secrets) : undefined;
-  const topSecrets = (p?.secrets ?? []).filter((s) => !s.list);
-  const uiPages = p ? shownPages(p.ui, p.auth) : [];
+  const lifecycle = projectedSections(projection, "lifecycle", "extension");
+  const editableLifecycle = editable && (!projection || lifecycle.some(editableSection));
+  const editableConfig = editable && (!projection || editableGroups.size > 0);
+  const canConfigureSecrets = editable && (!projection || editableGroups.has("general"));
+  const configurationUnavailable = projectedDetail?.sections.some((section) => section.kind === "extension_configuration" &&
+    section.availability.reason === "read_failed");
+  const setupTarget = canConfigureSecrets ? setupSecret(p?.needs_setup, p?.secrets) : undefined;
+  const topSecrets = canConfigureSecrets ? (p?.secrets ?? []).filter((s) => !s.list) : [];
+  const uiPages = p && (!projection || lifecycle.length > 0) ? shownPages(p.ui, p.auth) : [];
+  const showAuth = !!p?.auth && (!projection || editableLifecycle || editable && editableGroups.has("connection"));
+  const projectedInbox = projectedSections(projection, "inbox_and_sync");
 
   const isGitHub = isGitHubIntegration(id, connectorIds, p?.contributes?.repository_providers);
-  const showKnowledgeScope = connectors.some((c) => c.capabilities?.includes("history")) || id === "larkx";
+  const showKnowledgeScope = (!projection || projectedInbox.length > 0) &&
+    (connectors.some((c) => c.capabilities?.includes("history")) || id === "larkx");
 
   const hasConnectionSection =
     !!p && (
-      !!p.auth ||
+      showAuth ||
       connectors.length > 0 ||
       !!connectorError ||
       hasBinding(channelCtl.detail) ||
@@ -817,9 +908,12 @@ function ExtensionIntegrationResource({
       (editable && sections.connection.length > 0)
     );
   const hasChannelSection = !!p && (!!channelId || (editable && sections.channel.length > 0));
-  const inboxConnectors = connectors.filter(connectorHasInbox);
+  const inboxConnectors = connectors.filter((connector) => connectorHasInbox(connector) && (!projection ||
+    projectedInbox.some((section) => section.ref.kind === "connector" && section.ref.id === connector.id && editableSection(section))));
   const subscriptions = countsOf(useSubscriptionSummary(manager), (l) => l.extension === id);
-  const showSubscriptions = (p?.enabled ?? true) && !!p?.contributes?.connectors?.length && !!subscriptions;
+  const showSubscriptions = (p?.enabled ?? true) && !!subscriptions && (projection
+    ? projectedInbox.some(({ ref }) => ref.kind === "connector" || ref.kind === "subscription")
+    : !!p?.contributes?.connectors?.length);
   const hasInboxSection =
     !!p && (
       inboxConnectors.length > 0 ||
@@ -831,12 +925,19 @@ function ExtensionIntegrationResource({
     sections.connection.length > 0 || sections.channel.length > 0 || sections.inbox.length > 0 ||
     !!p?.auth || connectors.length > 0 || !!channelId;
   const noConfiguration =
-    !!p && editable && !allFields?.length && !topSecrets.length && !uiPages.length && !hasAnyConfigElsewhere;
+    !!p && editable && !configurationUnavailable && !allFields?.length && !topSecrets.length && !uiPages.length && !hasAnyConfigElsewhere;
+
+  const externalSources = projection ? projectedSections(projection, "external_sources").filter(editableSection).map(({ ref }) => ref.id)
+    : [...connectorIds, ...(p?.contributes?.channel ?? []), channelId ?? ""];
+  const infoAccess = projectedSections(projection, "information_access", "extension")[0];
+  const showInfoAccess = projection ? manager === roster?.default && !!infoAccess : !manager;
+  const name = projection?.detail.item.name ?? (p?.name || target.name);
 
   const market = p ? (marketOf(p.origin) || p.upgrade?.market || "") : "";
-  const marketManaged = !!p && p.source === "installed" && !p.attached && !p.read_only && !!market;
-  const uninstallable = !!p && p.source === "installed" && !p.attached && !p.read_only && !!marketOf(p.origin);
-  const automatic = !!p && p.source === "installed" && !p.attached && !p.read_only && p.auto_upgrade !== undefined;
+  const allowLifecycle = !projection || editableLifecycle;
+  const marketManaged = allowLifecycle && !!p && p.source === "installed" && !p.attached && !p.read_only && !!market;
+  const uninstallable = allowLifecycle && !!p && p.source === "installed" && !p.attached && !p.read_only && !!marketOf(p.origin);
+  const automatic = allowLifecycle && !!p && p.source === "installed" && !p.attached && !p.read_only && p.auto_upgrade !== undefined;
   const marketRemoved = p?.auto_upgrade_paused === "market_removed";
   const noUpdates = !p
     ? ""
@@ -851,6 +952,7 @@ function ExtensionIntegrationResource({
   const blocked = toggling || saving || offline;
 
   const refreshAll = () => {
+    projection?.refresh();
     load();
     if (channelId) void channelCtl.load();
     void loadConnectors({ fresh: true });
@@ -870,7 +972,7 @@ function ExtensionIntegrationResource({
           icon="retry"
           label={t("settings-integrations.refresh")}
           onClick={refreshAll}
-          disabled={loading || channelCtl.loading || connectorsLoading}
+          disabled={loading || channelCtl.loading || connectorsLoading || projection?.loading}
         />
       </div>
 
@@ -885,15 +987,19 @@ function ExtensionIntegrationResource({
           />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              {(p?.name || target.name) && <h1 className="truncate text-card-title font-semibold text-ink">{p?.name || target.name}</h1>}
-              <Pill>{t("settings-integrations.extension_badge")}</Pill>
+              {name && <h1 className="truncate text-card-title font-semibold text-ink">{name}</h1>}
+              <Pill>{t(projection?.detail.item.origin === "builtin_extension" ? "settings-integrations.builtin_badge" : "settings-integrations.extension_badge")}</Pill>
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
-              <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", EXT_DOT[extensionTone(p)])} />
-              <span className="truncate">
-                {p ? stateLine(p) : loading ? t("settings-extensions.loading") : t("settings-extensions.unavailable")}
-              </span>
-              <LastChannelEvent detail={channelCtl.detail} />
+              {projection ? <ProjectedStatus projection={projection} channel={channelCtl.detail} /> : (
+                <>
+                  <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", EXT_DOT[extensionTone(p)])} />
+                  <span className="truncate">
+                    {p ? stateLine(p) : loading ? t("settings-extensions.loading") : t("settings-extensions.unavailable")}
+                  </span>
+                  <LastChannelEvent detail={channelCtl.detail} />
+                </>
+              )}
             </div>
           </div>
           {loading && !p && <Spinner />}
@@ -923,6 +1029,8 @@ function ExtensionIntegrationResource({
         )}
       </section>
 
+      <ProjectionDetailIssues projection={projection} />
+
       {!p && !error && (
         <Group><div className="px-4 py-3"><Loading /></div></Group>
       )}
@@ -938,7 +1046,7 @@ function ExtensionIntegrationResource({
           {/* 1. Account & Connection */}
           {hasConnectionSection && (
             <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-              {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
+              {showAuth && p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
               {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnectors({ fresh: true })} loading={connectorsLoading} />}
               {connectors.map((c) => (
                 <ConnectorConnectionBlock
@@ -946,7 +1054,8 @@ function ExtensionIntegrationResource({
                   connector={c}
                   reload={() => loadConnectors({ fresh: true })}
                   loading={connectorsLoading}
-                  authManagedByHost={!!p.auth}
+                  authManagedByHost={showAuth}
+                  readOnly={!!projection && !projectedConnections.some((section) => section.ref.id === c.id && editableSection(section))}
                 />
               ))}
               {channelId && <ChannelBindingBlock ctl={channelCtl} />}
@@ -1006,7 +1115,7 @@ function ExtensionIntegrationResource({
               {showKnowledgeScope && <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />}
             </SectionBlock>
           )}
-          <ConnectorExternalSourceSettings ids={[...connectorIds, ...(p.contributes?.channel ?? []), channelId ?? ""]} manager={manager} />
+          {externalSources.length > 0 && <ConnectorExternalSourceSettings ids={externalSources} manager={manager} />}
 
           {/* 4. Extension Settings (unsectioned legacy fields + folded advanced fields + secrets + UI pages) */}
           <SectionBlock id="extension-settings" title={t("settings-integrations.section_extension_settings")}>
@@ -1060,7 +1169,7 @@ function ExtensionIntegrationResource({
                 </Disclosure>
               </div>
             )}
-            {editable && topSecrets.length > 0 && (
+            {canConfigureSecrets && topSecrets.length > 0 && (
               <Group title={t("settings-extensions.secrets_title")} footer={t("settings-extensions.secrets_footer")}>
                 {topSecrets.map((s) => (
                   <Row
@@ -1082,13 +1191,13 @@ function ExtensionIntegrationResource({
           </SectionBlock>
 
           {/* 5. Plugin Management */}
-          <SectionBlock id="management" title={t("settings-integrations.section_management")}>
-            <Group footer={offline ? t("settings-extensions.manager_offline") : editable ? enableFooter(p, memberNames) : t(p.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
+          {(!projection || lifecycle.length > 0 || showInfoAccess) && <SectionBlock id="management" title={t("settings-integrations.section_management")}>
+            <Group footer={offline ? t("settings-extensions.manager_offline") : editableLifecycle ? enableFooter(p, memberNames) : t(p.read_only ? "settings-extensions.read_only" : "settings-extensions.externally_managed")}>
               <Row label={t("settings-extensions.enable")}>
                 <Switch
                   on={p.enabled ?? true}
                   onChange={(on) => (!on && p.pack_members_follow && p.pack_on?.length ? setPackOff(true) : void toggle(on))}
-                  disabled={blocked || !editable}
+                  disabled={blocked || !editableLifecycle}
                   label={t("settings-extensions.enable")}
                 />
               </Row>
@@ -1113,10 +1222,11 @@ function ExtensionIntegrationResource({
               extension={id}
               users={p.secret_users}
               rules={p.handoff_rules}
-              editable={editable}
+              editable={editableLifecycle}
               mutate={mutate}
             />
-            {!manager && <ExtensionInfoAccess extension={id} editable={editable} />}
+            {showInfoAccess && <ExtensionInfoAccess extension={id} manager={projection ? manager : undefined}
+              editable={editable && (!infoAccess || editableSection(infoAccess))} />}
             {!!p.depends?.length && (
               <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
                 {p.depends.map((d) => (
@@ -1144,7 +1254,7 @@ function ExtensionIntegrationResource({
                     <Switch
                       label={c.title || c.id}
                       on={c.enabled}
-                      disabled={!editable || toggling || offline || !c.can_disable}
+                      disabled={!editableLifecycle || toggling || offline || !c.can_disable}
                       onChange={(on) => void toggleContribution(c, on)}
                     />
                   </Row>
@@ -1179,14 +1289,14 @@ function ExtensionIntegrationResource({
                 </Button>
               </Row>
             </Group>
-          </SectionBlock>
+          </SectionBlock>}
           {dirty && (
             <div ref={saveBar} className="sticky bottom-0 z-10 flow-root bg-canvas [&>section]:mb-0">
               <Group anchor="integration-save-bar">
                 {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
                 <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
                   <Button className="min-h-11" tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
-                  <Button className="min-h-11" tone="accent" busy={saving} disabled={!canSave || offline} onClick={() => void save()}>{t("common.save")}</Button>
+                  <Button className="min-h-11" tone="accent" busy={saving} disabled={!canSave || !editableConfig || offline} onClick={() => void save()}>{t("common.save")}</Button>
                 </Row>
               </Group>
             </div>
@@ -1194,12 +1304,13 @@ function ExtensionIntegrationResource({
         </>
       )}
 
-      {removing && p && (
+      {removing && p && (!projection || uninstallable) && (
         <UninstallDialog
           id={p.id}
           name={p.name}
           version={p.version}
           pack={p.extension_pack}
+          client={projection ? binding.client : undefined}
           onClose={() => setRemoving(false)}
           onDone={exit}
         />
