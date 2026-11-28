@@ -1,13 +1,13 @@
 import type { TodoBoardProjection } from "../../lib/todos";
 import { api, credentialOwner } from "../../lib/api";
-import { chosenManager, shownManager, stampedHeaders } from "../../lib/manager-choice";
-import { currentRoster, multiManager, subscribeRoster } from "../../lib/managers";
-import { applyScopedTodoBoard, getState, subscribe } from "../../lib/store";
+import { shownManager, stampedHeaders } from "../../lib/manager-choice";
+import { applyScopedTodoBoard, getState } from "../../lib/store";
 
 let requested: { manager: string; source: TodoBoardProjection } | undefined;
 
 /** The merged list contains all managers' totals. The shown assistant's counts need its own projection. */
-async function refreshScopedTodoBoard(manager: string, source: TodoBoardProjection) {
+export async function refreshScopedTodoBoard(manager: string, source: TodoBoardProjection) {
+  if (requested?.manager === manager && requested.source === source) return;
   const request = requested = { manager, source };
   const owner = credentialOwner();
   try {
@@ -15,27 +15,13 @@ async function refreshScopedTodoBoard(manager: string, source: TodoBoardProjecti
     if (requested !== request) return;
     if (getState().todoBoard === source && shownManager() === manager && credentialOwner() === owner) {
       applyScopedTodoBoard({ manager, board: validTodoBoard(answer?.board) });
+      return;
     }
   } catch {
     // Keep the previous projection for this assistant on a transient failure.
   }
+  if (requested === request) requested = undefined;
 }
-
-// This module first loads when the hub sends a board. Follow the assistant profile and roster as they arrive.
-function syncScopedBoard() {
-  const { assistant, todoBoard } = getState();
-  const manager = shownManager();
-  if (!todoBoard || assistant?.todos_v2 !== true || (assistant.manager && assistant.manager !== manager)) {
-    requested = undefined;
-    return;
-  }
-  if (requested?.source === todoBoard && requested.manager === manager) return;
-  const roster = currentRoster();
-  if (multiManager(roster) || (!roster && chosenManager())) void refreshScopedTodoBoard(manager, todoBoard);
-}
-
-subscribe(syncScopedBoard);
-subscribeRoster(syncScopedBoard);
 
 const isCount = (n: unknown): n is number => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 const areIds = (ids: unknown): boolean => Array.isArray(ids) && ids.every((id) => typeof id === "string");

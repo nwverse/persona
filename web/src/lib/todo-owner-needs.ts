@@ -1,7 +1,7 @@
 // The sidebar's To-dos badge and the To-dos page's marks (#11085, #11838). The v2 board supplies the hub's counts.
 // The fallback uses the current assistant's to-dos, linked Agents, local restores and a shared minute clock.
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { answeredLookup } from "./answered-lookup";
 import { useScopedTodos, type Scope } from "./current-assistant";
 import { useAgentSessions } from "./sessions";
@@ -62,9 +62,11 @@ export function useOwnerNeeds(enabled = true): ReadonlyMap<string, OwnerNeed> {
 }
 
 export function useTodoBoard({ id, several }: Scope, enabled = true) {
-  return useStore(({ assistant, todoBoard, scopedTodoBoard }) => {
-    if (!enabled || assistant?.todos_v2 !== true || (assistant.manager && assistant.manager !== id)) return null;
-    if (!several) return todoBoard;
-    return scopedTodoBoard?.manager === id ? scopedTodoBoard.board : null;
-  });
+  const source = useStore(({ assistant, todoBoard }) =>
+    enabled && assistant?.todos_v2 === true && (!assistant.manager || assistant.manager === id) ? todoBoard : null);
+  const scoped = useStore(({ scopedTodoBoard }) => several && scopedTodoBoard?.manager === id ? scopedTodoBoard.board : null);
+  useEffect(() => {
+    if (several && source) void import("../features/todos/board-wire").then((wire) => wire.refreshScopedTodoBoard(id, source), () => {});
+  }, [id, several, source]);
+  return several && source ? scoped : source;
 }
