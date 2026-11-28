@@ -1116,7 +1116,7 @@ function ExtensionIntegrationResource({
               editable={editable}
               mutate={mutate}
             />
-            {!manager && <ExtensionInfoAccess extension={id} editable={editable} />}
+            <ExtensionInfoAccess client={binding.client} extension={id} editable={editable && !offline} />
             {!!p.depends?.length && (
               <Group title={t("settings-extensions.depends_title")} footer={t("settings-extensions.depends_footer")}>
                 {p.depends.map((d) => (
