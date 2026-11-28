@@ -107,19 +107,24 @@ struct SettingsRegistryTests {
         #expect(SettingsCatalog.rows(.core, in: .device, model).map(\.id) == ["notifications", "about"])
     }
 
-    /// Settings home draws its rows only through the registry: between its marks `SettingsView` has no link of its own,
-    /// one registry list per scope, and no row but the demo's two buttons (actions, not settings).
+    /// Settings home uses the registry except for its declared Templates and More Settings sections. Between its marks,
+    /// only those two custom links are allowed; every other row comes from the registry, except the demo's two buttons.
     @Test func homeDrawsOnlyTheRegistrysRows() throws {
         let source = try String(contentsOf: Self.settingsView, encoding: .utf8)
         let start = try #require(source.range(of: "// MARK: Settings home's rows"))
         let end = try #require(source.range(of: "// MARK: End of Settings home's rows"))
         let home = String(source[start.upperBound..<end.lowerBound])
-        #expect(!home.contains("NavigationLink(") && !home.contains("SettingsListLink("),
-                "a row on Settings home outside SettingsCatalog: add it to the registry")
+        var registryRows = home
+        for custom in ["SettingsListLink(value: SettingsPage.templates)", "SettingsListLink(value: SettingsPage.advanced)"] {
+            #expect(home.components(separatedBy: custom).count - 1 == 1)
+            registryRows = registryRows.replacingOccurrences(of: custom, with: "")
+        }
+        #expect(!registryRows.contains("NavigationLink(") && !registryRows.contains("SettingsListLink("),
+                "a row on Settings home outside SettingsCatalog and its two declared custom sections")
         #expect(home.components(separatedBy: "SettingsCatalog.rows(.core,").count - 1 == 3)
         // `SettingsRow(` itself, not `ChecklistSettingsRow(` (the steps still to go, a prompt rather than a setting).
         let rows = try NSRegularExpression(pattern: #"(?<![A-Za-z])SettingsRow\("#)
-        #expect(rows.numberOfMatches(in: home, range: NSRange(home.startIndex..., in: home)) == 2,
-                "only the demo's Connect My Hub and Exit Demo Mode")
+        #expect(rows.numberOfMatches(in: home, range: NSRange(home.startIndex..., in: home)) == 4,
+                "the demo's two buttons, Templates and More Settings")
     }
 }
