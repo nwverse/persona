@@ -750,7 +750,7 @@ describe("Integrations unified list view", () => {
     const render = async (sub: string | null, twoCol = true) => {
       const mount = (next: IntegrationsRoute) => {
         currentSub = subOf(next);
-        root.render(<Integrations route={next} twoCol={twoCol} onOpen={mount} onBack={() => {}} />);
+        root.render(<Integrations route={next} twoCol={twoCol} parentView={{ kind: "list" }} onOpen={mount} onBack={() => {}} />);
       };
       await act(async () => {
         mount(parseRoute(sub));

@@ -897,7 +897,7 @@ function IntegrationsForManager({
     </>
   );
 
-  const detailBack = !headerBack && (!twoCol || (parentView && parentView.kind !== "list")) ? onBack : undefined;
+  const detailBack = !headerBack && (!twoCol || parentView?.kind !== "list") ? onBack : undefined;
   const pushSourceBackLabel = parentView?.kind === "data-flow" ? t("subscriptions.view_graph")
     : parentView && parentView.kind !== "list" ? t("settings-extensionview.back")
     : t("settings-integrations.back");
