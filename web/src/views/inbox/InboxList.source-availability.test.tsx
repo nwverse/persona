@@ -60,6 +60,7 @@ const listeners = new Set<() => void>();
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 const larkChip = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Lark");
 const hint = () => host.querySelector("[data-inbox-empty-hint]")?.textContent;
+const sourceKindDivider = () => host.querySelector("[data-source-kind-divider]");
 
 beforeEach(async () => {
   await initI18n("en");
@@ -147,6 +148,8 @@ describe("Inbox source availability", () => {
     hub.stored = stored;
     await show();
     expect(Boolean(larkChip())).toBe(chip);
+    // No source chip precedes the kind filters in these fixtures, so a divider must not dangle before @Me.
+    expect(Boolean(sourceKindDivider())).toBe(chip);
     expect(hint()).toBe(words);
   });
 
@@ -155,6 +158,7 @@ describe("Inbox source availability", () => {
     hub.stored = { lark: false, mail: false };
     await show();
     expect(larkChip()).toBeUndefined();
+    expect(sourceKindDivider()).toBeNull();
     expect(localStorage.getItem("inbox.source")).toBeNull();
     expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
     expect(hint()).toBe("New items will show up here.");

@@ -96,11 +96,12 @@ export function ChannelLink({ id, manager, onOpen }: { id: string; manager?: str
 
 /** `openBeside`: the channel open beside the list (Settings' two columns): its row is marked current, and every row puts
  *  its state under its name, so the narrow column shows the name whole. */
-export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null }) {
+export function ChannelList({ onOpen, onMarketItem, openBeside, manager }: { onOpen: (id: string) => void; onMarketItem: (market: string, plugin: string) => void; openBeside?: string | null; manager?: string }) {
   // the current assistant's channels (docs/assistant/managers.md "The current assistant"), asked of it by name (none for
   // the default); a row opens its copy (`<id>@<manager>`)
-  const picked = useChosenManager();
-  const owner = otherManager(picked ?? undefined);
+  const chosen = useChosenManager();
+  const picked = manager ?? chosen;
+  const owner = manager ?? otherManager(chosen ?? undefined);
   const [list, setList] = useState<Channel[] | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);

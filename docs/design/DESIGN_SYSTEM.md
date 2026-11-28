@@ -4923,3 +4923,10 @@ catalog or a full-width view of where data goes. A `SubscriptionAlertBadge` belo
 owns the subscription. A single alert names its state, multiple alerts show their count. The most
 severe state supplies the detail and tone (failure red, missing recipe, rate limit or disconnected
 source orange). Standalone push sources have their own rows. See [web Settings](../web/web.md#labs).
+
+Settings keeps the visited parent route, including its assistant and filter, for the phone header,
+narrow desktop Back, and split-pane drill-downs. Back from an upgrade returns to its extension.
+Back from a source returns to the list, detail, or Data Flow page that opened it. A bookmarked
+detail without a visited parent returns to the same assistant's directory. Conflicting assistant
+names in a link show an unavailable page with Back. Browsing a linked assistant keeps the sidebar
+selection. The explicit switch action changes it.
