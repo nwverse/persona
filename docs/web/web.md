@@ -2434,6 +2434,10 @@ Settings search entries for Inbox Sources redirect cleanly into the unified view
 when enabled, and `/settings/integrations/...` links (including `-sources...`) fall back cleanly to the corresponding legacy tab
 (restoring the standalone `Inbox Sources` menu, routes, `manager`, and `state`) when disabled, with zero data migration or data
 loss. Older hubs that do not expose boolean `integrations_v2` degrade gracefully to a read-only row with an update hint.
+Integration addresses accept an independent `manager` parameter. An address without one or a legacy owner follows the
+sidebar's current assistant. The linked assistant's Labs setting selects the unified or legacy page, keeping the object,
+filter, push-source state, and proposed `set` values. Shareable object URLs carry the legacy owner suffix during the trial.
+When the two owner spellings disagree, Settings shows Back and leaves the integration unopened.
 Under the trial, Assistant settings shows the state of `inbox_todo_forward` and links to its single editable switch in
 **Data flow** (#16190), preserving the assistant named in the link. GitHub detail opens saved Repositories in Assistant
 settings. Mail, Feishu and sources with history link to the sync scope in Knowledge. Turning off the trial restores the

@@ -52,9 +52,11 @@ import { isOpenBeside } from "./open-beside";
  * The tab's pages, by its `extension` parameter (lib/extension-market.ts extensionsRoute): the list, an extension, a page an extension
  * draws, and the market (its catalog, one extension of it, the markets).
  */
-export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, openBeside, onPageWide, prefill }: {
+export function Extensions({ open, onOpen, onBack, onChannel, onConnector, headerBack, openBeside, onPageWide, prefill, manager: scope }: {
   open: string | null;
   onOpen: (id: string | null) => void;
+  onBack?: () => void;
+  manager?: string;
   /** The page's top bar has the way back (a phone, Settings.tsx itemParent): an extension's page, a page it draws, the
    *  market's catalog, one of its extensions and the list of markets draw no Back of their own. */
   headerBack?: boolean;
@@ -71,17 +73,17 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
   const go = (to: Parameters<typeof routeSub>[0]) => onOpen(routeSub(to));
   // what is installed from a market goes to the current assistant (none: the default, named by no header)
   const picked = useChosenManager();
-  const installTo = otherManager(picked ?? undefined);
+  const installTo = scope ?? otherManager(picked ?? undefined);
   switch (r.kind) {
     case "extension":
       return (
-        <OwnedExtension id={r.id} manager={r.manager}>
+        <OwnedExtension id={r.id} manager={r.manager ?? scope}>
           {(manager) => (
             <ExtensionDetail
               key={`${r.id}@${manager ?? ""}`}
               id={r.id}
               manager={manager}
-              onBack={() => onOpen(null)}
+              onBack={onBack ?? (() => onOpen(null))}
               headerBack={headerBack}
               onPage={(ui) => go({ kind: "page", id: r.id, ui, manager })}
               onUpgrade={(market, id) => go({ kind: "item", market, id, manager })}
@@ -94,12 +96,12 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
       );
     case "page":
       return (
-        <OwnedExtension id={r.id} manager={r.manager}>
-          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : () => go({ kind: "extension", id: r.id, manager })} onWide={onPageWide} />}
+        <OwnedExtension id={r.id} manager={r.manager ?? scope}>
+          {(manager) => <ExtensionPage key={`${open}@${manager ?? ""}`} id={r.id} ui={r.ui} manager={manager} onBack={headerBack ? undefined : onBack ?? (() => go({ kind: "extension", id: r.id, manager }))} onWide={onPageWide} />}
         </OwnedExtension>
       );
     case "catalog":
-      return <MarketCatalog onBack={headerBack ? undefined : () => onOpen(null)} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
+      return <MarketCatalog manager={scope} onBack={headerBack ? undefined : onBack ?? (() => onOpen(null))} onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })} onMarkets={() => go({ kind: "markets" })} />;
     case "item":
       // another manager's upgrade goes back to that manager's extension: the catalog is the default's
       return (
@@ -108,14 +110,14 @@ export function Extensions({ open, onOpen, onChannel, onConnector, headerBack, o
           market={r.market}
           id={r.id}
           manager={r.manager ?? installTo}
-          onBack={headerBack ? undefined : () => go(r.manager ? { kind: "extension", id: r.id, manager: r.manager } : { kind: "catalog" })}
+          onBack={headerBack ? undefined : onBack ?? (() => go(r.manager ? { kind: "extension", id: r.id, manager: r.manager } : { kind: "catalog" }))}
           onInstalled={(id) => go({ kind: "extension", id, manager: r.manager })}
         />
       );
     case "markets":
-      return <Markets onBack={headerBack ? undefined : () => go({ kind: "catalog" })} />;
+      return <Markets manager={scope} onBack={headerBack ? undefined : onBack ?? (() => go({ kind: "catalog" }))} />;
     default:
-      return <ExtensionList onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
+      return <ExtensionList manager={scope} onOpen={onOpen} onMarket={() => go({ kind: "catalog" })} onMarkets={() => go({ kind: "markets" })} openBeside={openBeside} />;
   }
 }
 
@@ -177,7 +179,7 @@ function StateDot({ extension }: { extension?: HubExtension | null }) {
 
 // ── the list ────────────────────────────────────────────
 
-type ExtensionListProps = { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null };
+type ExtensionListProps = { onOpen: (id: string) => void; onMarket: () => void; onMarkets: () => void; openBeside?: string | null; manager?: string };
 type ExtensionListView = { extensions: HubExtension[]; markets: boolean };
 const extensionViews = listViewCache<ExtensionListView>();
 
@@ -189,9 +191,10 @@ function ExtensionList(props: ExtensionListProps) {
 /** `openBeside`: the extension open beside the list (Settings' two columns): its row is marked current, and every row
  *  puts its state under its name (with a warning, when it has one, in place of the description), so the narrow column
  *  shows the name whole. */
-function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside }: ExtensionListProps & { viewKey: string }) {
-  const picked = useChosenManager();
-  const [view, setView] = useState(() => extensionViews.read(viewKey));
+function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside, manager }: ExtensionListProps & { viewKey: string }) {
+  const chosen = useChosenManager();
+  const picked = manager ?? chosen;
+  const [view, setView] = useState(() => manager ? undefined : extensionViews.read(viewKey));
   const extensions = view?.extensions;
   const markets = view?.markets;
   const [error, setError] = useState("");
@@ -247,13 +250,15 @@ function ScopedExtensionList({ viewKey, onOpen, onMarket, onMarkets, openBeside 
   useEffect(() => onHubEvent("hello", (m) => !isResumed(m) && load()), [load]);
   // the current assistant's extensions only (docs/assistant/managers.md "The current assistant"); one assistant: all
   const scope = useScope();
-  const own = useMemo(() => (extensions ? scoped(extensions, scope) : null), [extensions, scope]);
+  const own = useMemo(() => (extensions ? manager
+    ? extensions.filter((extension) => (extension.manager || defaultManager()) === manager)
+    : scoped(extensions, scope) : null), [extensions, manager, scope]);
   useEffect(() => {
-    if (own && markets !== undefined) extensionViews.keep(viewKey, { extensions: own, markets });
-  }, [viewKey, own, markets]);
+    if (!manager && own && markets !== undefined) extensionViews.keep(viewKey, { extensions: own, markets });
+  }, [manager, viewKey, own, markets]);
   const drafts = useUnsaved();
   // an offline current assistant: the hub has none of its extensions to merge in, which must not read as "none installed"
-  const offline = useShownOffline();
+  const offline = useShownOffline({ shownManager: manager });
 
   return (
     <>

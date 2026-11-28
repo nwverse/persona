@@ -212,14 +212,14 @@ import { navigate } from "../../lib/router";
 import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { loadRoster, resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
-import { Integrations } from "./Integrations";
+import { Integrations, type IntegrationsProps } from "./Integrations";
 import {
   buildIntegrationCatalog,
   filterIntegrationItems,
   isIntegrationRowSelected,
   resolveIntegrationTarget,
 } from "./integrations/catalog";
-import { parseIntegrationsSub } from "./integrations-route";
+import { decodeIntegrationsRoute, integrationHref, integrationScope, type IntegrationsRoute } from "./integrations-route";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -368,6 +368,11 @@ const flush = async () => {
   }
 };
 
+const parseRoute = (sub: string | null) => decodeIntegrationsRoute("integrations", sub);
+const subOf = (route: IntegrationsRoute) => new URL(integrationHref(route), location.origin).searchParams.get("integration");
+const show = (sub: string | null, props: Partial<IntegrationsProps> = {}) =>
+  <Integrations route={parseRoute(sub)} onOpen={() => {}} onBack={() => {}} {...props} />;
+
 const SAMPLE_SUBSCRIPTIONS: HubSubscription[] = [
   {
     id: "sub_gh_fail",
@@ -505,7 +510,11 @@ function stubFullHubFetch(overrides?: {
           const parsed = JSON.parse(String(init.body)) as { inbox_todo_forward?: boolean };
           if (typeof parsed.inbox_todo_forward === "boolean") forwarding.set(manager, parsed.inbox_todo_forward);
         }
-        return Promise.resolve(json({ inbox_todo_forward: forwarding.get(manager) ?? overrides?.inboxTodoForward ?? false }));
+        return Promise.resolve(json({
+          manager: manager ?? "assistant",
+          integrations_v2: state.integrationsV2,
+          inbox_todo_forward: forwarding.get(manager) ?? overrides?.inboxTodoForward ?? false,
+        }));
       }
       if (path === "/api/v1/mail/accounts") {
         return overrides?.failMail
@@ -575,10 +584,10 @@ describe("buildIntegrationCatalog deduplication and capability classification", 
     expect(filterIntegrationItems(items, "tools").map((it) => it.id)).toEqual(["larkx", "nord-theme"]);
 
     // Legacy channel/connector deep links resolve to the merged larkx extension target and highlight its row.
-    expect(resolveIntegrationTarget(parseIntegrationsSub("channel:larkx-bot"), items, null)).toEqual(larkxMatches[0]!.target);
-    expect(resolveIntegrationTarget(parseIntegrationsSub("connector:larkx"), items, null)).toEqual(larkxMatches[0]!.target);
-    expect(isIntegrationRowSelected("channel:larkx-bot", larkxMatches[0]!, null)).toBe(true);
-    expect(isIntegrationRowSelected("connector:larkx", larkxMatches[0]!, null)).toBe(true);
+    expect(resolveIntegrationTarget(parseRoute("channel:larkx-bot"), items, null)).toEqual(larkxMatches[0]!.target);
+    expect(resolveIntegrationTarget(parseRoute("connector:larkx"), items, null)).toEqual(larkxMatches[0]!.target);
+    expect(isIntegrationRowSelected(parseRoute("channel:larkx-bot"), larkxMatches[0]!, null)).toBe(true);
+    expect(isIntegrationRowSelected(parseRoute("connector:larkx"), larkxMatches[0]!, null)).toBe(true);
   });
 
   it("attaches deduplicated subscription alerts to owning integrations and adds standalone push sources under data", () => {
@@ -671,7 +680,7 @@ describe("buildIntegrationCatalog deduplication and capability classification", 
     expect(pushItem.sourceState).toBe(subscriptionSourceState("sub_push_iphone"));
     expect(filterIntegrationItems(items, "data").map((it) => it.id)).toContain("sub_push_iphone");
     expect(filterIntegrationItems(items, "channels").map((it) => it.id)).not.toContain("sub_push_iphone");
-    expect(isIntegrationRowSelected(pushItem.sub, pushItem, null)).toBe(true);
+    expect(isIntegrationRowSelected({ scope: integrationScope(), view: pushItem.view, filter: "all" }, pushItem, null)).toBe(true);
   });
 
   it("distinguishes source=builtin extensions from user-installed extensions while preserving extension target boundaries", () => {
@@ -739,12 +748,12 @@ describe("Integrations unified list view", () => {
     stubFullHubFetch();
     let currentSub: string | null = null;
     const render = async (sub: string | null, twoCol = true) => {
-      const mount = (next: string | null) => {
-        currentSub = next;
-        root.render(<Integrations open={next} twoCol={twoCol} onOpen={mount} />);
+      const mount = (next: IntegrationsRoute) => {
+        currentSub = subOf(next);
+        root.render(<Integrations route={next} twoCol={twoCol} onOpen={mount} onBack={() => {}} />);
       };
       await act(async () => {
-        mount(sub);
+        mount(parseRoute(sub));
       });
       await flush();
     };
@@ -787,7 +796,7 @@ describe("Integrations unified list view", () => {
     const larkxRow = rows().find((r) => r.dataset.integrationId === "larkx")!;
     await act(async () => larkxRow.click());
     await flush();
-    expect(currentSub).toBe("ext:larkx");
+    expect(currentSub).toBe("ext:larkx@assistant");
     const split = host.querySelector<HTMLElement>("[data-integrations-split]")!;
     expect(split).not.toBeNull();
     expect(split.classList.contains("overflow-hidden")).toBe(true);
@@ -848,7 +857,7 @@ describe("Integrations unified list view", () => {
 
     // Phone layout (twoCol=false, headerBack=true) omits inner Back because the top bar provides Back.
     await act(async () => {
-      root.render(<Integrations open="ext:larkx" twoCol={false} headerBack={true} onOpen={(n) => (currentSub = n)} />);
+      root.render(show("ext:larkx", { twoCol: false, headerBack: true }));
     });
     await flush();
     expect(host.querySelector("[data-integrations-split]")).toBeNull();
@@ -886,19 +895,11 @@ describe("Integrations unified list view", () => {
     stubFullHubFetch({ markets: true, extensions: [], channels: [], connectors: [], failMail: true, failBot: true });
     let currentSub: string | null = null;
     const render = async (sub: string | null) => {
-      currentSub = sub;
-      await act(async () => {
-        root.render(
-          <Integrations
-            open={sub}
-            twoCol={false}
-            onOpen={(next) => {
-              currentSub = next;
-              root.render(<Integrations open={next} twoCol={false} onOpen={(n) => (currentSub = n)} />);
-            }}
-          />,
-        );
-      });
+      const mount = (next: IntegrationsRoute) => {
+        currentSub = subOf(next);
+        root.render(<Integrations route={next} onOpen={mount} onBack={() => {}} />);
+      };
+      await act(async () => mount(parseRoute(sub)));
       await flush();
     };
 
@@ -931,7 +932,7 @@ describe("Integrations unified list view", () => {
       }
       return fetchNow(input, init);
     });
-    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await act(async () => root.render(show(null)));
     expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
     expect(host.querySelector('[data-integration-id="nord-theme"]')).not.toBeNull();
     expect(host.querySelector('[data-integrations-empty]')).toBeNull();
@@ -944,7 +945,7 @@ describe("Integrations unified list view", () => {
     state.features = [];
     stubFullHubFetch({ markets: false, failMail: true, failBot: true });
     await act(async () => {
-      root.render(<Integrations open={null} onOpen={() => {}} />);
+      root.render(show(null));
     });
     await flush();
     // Still renders Mail built-in without crashing, hides Extension Market header button, and shows filter chips.
@@ -957,7 +958,7 @@ describe("Integrations unified list view", () => {
   it("hides the Feishu bot and its channel when the hub turns off module.lark, with the gateway still available", async () => {
     stubFullHubFetch();
     state.features.push("modules", "module.mail");
-    const draw = () => act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    const draw = () => act(async () => root.render(show(null)));
     await draw();
     await flush();
 
@@ -985,7 +986,7 @@ describe("Integrations unified list view", () => {
     mockFetch.mockImplementation((url, init) => failing && errors[String(url)]
       ? Promise.resolve(json({ error: errors[String(url)] }, 500))
       : fallback(url, init));
-    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    await act(async () => root.render(show(null)));
     await flush();
 
     const refresh = host.querySelector<HTMLButtonElement>(`[aria-label="${t("settings-integrations.refresh")}"]`)!;
@@ -1007,7 +1008,7 @@ describe("Integrations unified list view", () => {
     try {
       await initI18n(lang);
       await act(async () => {
-        root.render(<Integrations open="ext:larkx" twoCol={true} onOpen={() => {}} />);
+        root.render(show("ext:larkx", { twoCol: true }));
       });
       await flush();
       expect(host.textContent).toContain(t("settings-integrations.list_title"));
@@ -1023,7 +1024,7 @@ describe("Integrations unified list view", () => {
       expect(filters.classList.contains("overflow-x-auto")).toBe(true);
 
       await act(async () => {
-        root.render(<Integrations open={null} twoCol={true} onOpen={() => {}} />);
+        root.render(show(null, { twoCol: true }));
       });
       await flush();
       const singleMarket = host.querySelector<HTMLButtonElement>('[data-testid="integrations-market-entry"]')!;
@@ -1067,7 +1068,7 @@ describe("Integrations unified list view", () => {
     for (const lang of ["en", "zh-Hans", "ja"]) {
       await initI18n(lang);
       await act(async () => {
-        root.render(<Integrations open={null} twoCol={false} onOpen={() => {}} />);
+        root.render(show(null));
       });
       await flush();
 
@@ -1122,7 +1123,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     await flush();
 
     // Redirected cleanly back to legacy Extensions with @work preserved, zero 404/white screen.
-    expect(location.pathname + location.search).toBe("/settings?tab=extensions&extension=larkx%40work");
+    expect(location.pathname + location.search).toBe("/settings?tab=extensions&manager=work&extension=larkx%40work");
     const opens = [...host.querySelectorAll('[data-page="legacy-extensions"]')].map((el) => el.getAttribute("data-open"));
     expect(opens).toContain("larkx@work");
 
@@ -1142,7 +1143,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     });
     await flush();
 
-    expect(location.pathname + location.search).toBe("/settings?tab=integrations&integration=connector%3Agithub%40work");
+    expect(location.pathname + location.search).toBe("/settings?tab=integrations&manager=work&integration=connector%3Agithub%40work");
     expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("github");
     expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-manager")).toBe("work");
 
@@ -1429,7 +1430,11 @@ describe("Settings navigation collapse and bidirectional redirects under integra
       const backToGraphBtn = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
         b.textContent?.includes(t("subscriptions.view_graph")),
       )!;
-      await act(async () => backToGraphBtn.click());
+      await act(async () => {
+        const returned = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
+        backToGraphBtn.click();
+        await returned;
+      });
       await flush();
       expect(host.textContent).toContain("My iPhone Notifications");
 
@@ -1569,6 +1574,8 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     state.phone = false;
     stubFullHubFetch();
 
+    await act(async () => loadRoster());
+
     const waitPop = (go: () => void) => act(async () => {
       const done = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
       go();
@@ -1585,7 +1592,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
 
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
     await flush();
-    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx");
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx@assistant");
     expect(host.querySelector("[data-mock-market-item]")?.getAttribute("data-id")).toBe("larkx");
 
     await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
@@ -1618,7 +1625,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-upgrade]")!.click());
     await flush();
-    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx");
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/larkx@assistant");
     await waitPop(() => host.querySelector<HTMLButtonElement>("header button")!.click());
     await flush();
     expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
@@ -1633,8 +1640,8 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-market-open]")!.click());
     await flush();
-    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/demo-ext");
-    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-market/official/demo-ext@assistant");
+    await waitPop(() => host.querySelector<HTMLButtonElement>("[data-mock-item-back]")!.click());
     await flush();
     expect(new URLSearchParams(location.search).get("integration")).toBe("-market");
     expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
@@ -1648,13 +1655,15 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
     vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(600);
 
+    await act(async () => loadRoster());
+
     const waitPop = (go: () => void) => act(async () => {
       const done = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
       go();
       await done;
     });
 
-    // Narrow desktop: list -> ext:larkx -> drill into push source -> Back returns to ext:larkx (not list).
+    // Narrow desktop: list → extension → source → Back returns to the same scoped extension.
     history.replaceState(null, "", "/settings?tab=integrations");
     await act(async () => {
       root.render(<Settings onToggleSidebar={() => {}} />);
@@ -1663,7 +1672,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
 
     await act(async () => host.querySelector<HTMLButtonElement>('[data-integration-id="larkx"]')!.click());
     await flush();
-    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx@assistant");
 
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-detail-sources]")!.click());
     await flush();
@@ -1674,7 +1683,7 @@ describe("Settings navigation collapse and bidirectional redirects under integra
 
     await waitPop(() => pushBackBtn.click());
     await flush();
-    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx");
+    expect(new URLSearchParams(location.search).get("integration")).toBe("ext:larkx@assistant");
     expect(host.querySelector("[data-mock-integration-detail]")?.getAttribute("data-id")).toBe("larkx");
 
     // Back from ext:larkx returns cleanly to the Integrations list.
@@ -1724,7 +1733,9 @@ describe("assistant isolation across integration routes", () => {
     await clickOption("[data-integrations-view-switch]", t("settings-integrations.view_sources"));
     expect(new URLSearchParams(location.search).get("integration")).toBe("-sources@work");
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    const returned = new Promise<void>((resolve) => addEventListener("popstate", () => resolve(), { once: true }));
     await clickOption("[data-integrations-view-switch]", t("settings-integrations.view_list"));
+    await act(async () => returned);
     expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
     expect(chosenManager()).toBe("work");
     expect(managerHeaderFor("/subscriptions/-/graph")).toBeUndefined();
@@ -1733,17 +1744,19 @@ describe("assistant isolation across integration routes", () => {
   it("uses the chosen assistant for an unqualified Data flow link and a market install", async () => {
     chooseManager("work");
     const onOpen = vi.fn();
-    await act(async () => root.render(<Integrations open="-sources" onOpen={onOpen} />));
+    await act(async () => root.render(show("-sources", { onOpen })));
     await act(async () => vi.dynamicImportSettled());
     await flush();
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
-    await act(async () => root.render(<Integrations open="-market" onOpen={onOpen} />));
+    await act(async () => root.render(show("-market", { onOpen })));
     await flush();
     expect(host.querySelector("[data-mock-market-catalog]")?.getAttribute("data-manager")).toBe("work");
-    await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
+    await act(async () => root.render(show("-market/official/demo-ext", { onOpen })));
     await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
-    expect(onOpen).toHaveBeenCalledWith("ext:demo-ext@work");
+    expect(onOpen).toHaveBeenCalledWith({
+      scope: integrationScope("work"), view: { kind: "extension", id: "demo-ext" }, filter: "all",
+    }, "replace");
   });
 
   it.each([true, false])("reads and saves forwarding for the linked assistant with Labs enabled=%s", async (v2) => {
@@ -1751,7 +1764,8 @@ describe("assistant isolation across integration routes", () => {
     history.replaceState(null, "", v2 ? "/settings?tab=integrations&integration=-sources%40work" : "/settings?tab=sources&manager=work");
     await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
     await flush();
-    expect(headersFor("/assistant", "GET")).toEqual(["work"]);
+    expect(headersFor("/assistant", "GET").length).toBeGreaterThan(0);
+    expect(new Set(headersFor("/assistant", "GET"))).toEqual(new Set(["work"]));
     const toggle = host.querySelector<HTMLButtonElement>('[data-settings-group="inbox-todo-forward"] [role="switch"]')!;
     await act(async () => toggle.click());
     expect(headersFor("/assistant", "PUT")).toEqual(["work"]);
@@ -1766,8 +1780,8 @@ describe("assistant isolation across integration routes", () => {
 
   it("reloads the same push source page when only the route owner changes", async () => {
     const onOpen = vi.fn();
-    await act(async () => root.render(<Integrations open="-sources@work/source" onOpen={onOpen} />));
-    await act(async () => root.render(<Integrations open="-sources/source" onOpen={onOpen} />));
+    await act(async () => root.render(show("-sources@work/source", { onOpen })));
+    await act(async () => root.render(show("-sources/source", { onOpen })));
     expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work", null]);
   });
 
@@ -1788,11 +1802,12 @@ describe("assistant isolation across integration routes", () => {
     expect(switchBtn).not.toBeNull();
     expect(switchBtn.textContent).toContain(t("settings-integrations.switch_assistant_integrations", { name: "Work" }));
 
-    // Returning via Back opens the current assistant's list WITHOUT mutating global chosenManager.
+    // Back opens the linked assistant’s directory while the sidebar keeps its selection.
     await act(async () => backBtn.click());
     await flush();
     expect(chosenManager()).toBeNull();
     expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+    expect(new URLSearchParams(location.search).get("manager")).toBe("work");
 
     // Re-open -sources@work and explicitly click "Switch to Work": now global assistant switches intentionally.
     await act(async () => root.render(null));
