@@ -6550,10 +6550,16 @@ struct Composer: View, Equatable {
         .onChange(of: focused) { _, f in onFocus?(f) }
         .onDisappear { if focused { onFocus?(false) } } // gone with the keyboard (a subagent opened, another pane)
         .modifier(CompactionTracking(key: key))
-        .onChange(of: model.composerFocus) { _, k in
-            guard k == key else { return }
-            model.composerFocus = nil
-            focused = true
+        // A quote (#1058) or Message Persona (#17789) asks for the keyboard. Taken once this chat is in front and the app
+        // is active: from a cold launch the field may be laid out before it can be first responder, so it tries briefly.
+        .tabActiveTask(id: model.composerFocus == key) {
+            guard model.composerFocus == key else { return }
+            for _ in 0..<10 {
+                focused = true
+                try? await Task.sleep(for: .milliseconds(150))
+                if focused || Task.isCancelled { break }
+            }
+            if model.composerFocus == key { model.composerFocus = nil }
         }
         #if DEBUG
         .task { // `-showClearConfirm YES`: the /clear confirmation, for screenshots

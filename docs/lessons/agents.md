@@ -1,5 +1,14 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A stopped Agent's row is a contract beyond the node (#17809)
+
+- `send` missing from a stopped row is what the assistant's `stoppedAgent` reads. Making stopped Codex rows sendable,
+  so that a message resumes them, also let a plain `agent_send` and automatic relays wake them past the explicit
+  resume (#8099, #8214). A stopped Agent stays read-only on every engine (#4754); changing that rule takes the owner's
+  decision and every gate changing with it, not one runtime's send path.
+- Widening a glob (`rollout-*.jsonl*` for compressed rollouts, #17768) breaks tests that match the old pattern by
+  string, and turns misses into hits: check that the hit cache survives the minute listing as the miss cache does.
+
 ## Codex dialog hints do not identify the active dialog (#17406)
 
 Codex 0.172 shares submit/cancel hints between approvals and questions; match the active title and options, and
