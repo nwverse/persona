@@ -122,3 +122,36 @@ func TestOutboundPromiseMissingAnswerPiecesDoNotFulfill(t *testing.T) {
 		})
 	}
 }
+
+func TestOutboundPromiseFromNativeFeishuTopicAnswer(t *testing.T) {
+	needsLarkLayer(t)
+	s, posts, calls := cotHub(t, false)
+	holdDigest(s)
+	s.hub.(*fakeHub).answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) {
+		return FeishuStatus{Ready: true, Enabled: true, Owner: "ou_a",
+			Features: FeishuFeatures{Main: true, Cards: true, TopicCot: true, CotAnswer: true}}, nil
+	})
+	r, _ := cotRun(s)
+	s.setRunExt(r, "chat", "oc_example")
+	s.setRunExt(r, "thread", "omt_example")
+
+	const answer = "I'll share the results later."
+	s.finishChannelRun(r, &channel.Result{Answer: answer, End: channel.EndDone})
+
+	if len(*posts) != 0 || !strings.Contains(strings.Join(*calls, " "), "TEXT_MESSAGE_CONTENT") {
+		t.Fatalf("answer did not go through the native agent message: calls=%v posts=%v", *calls, *posts)
+	}
+	receipts := outwardReceipts(t, s.store())
+	if len(receipts) != 1 {
+		t.Fatalf("native answer recorded %d receipts, want 1", len(receipts))
+	}
+	receipt := receipts[0]
+	if !receipt.Promise || receipt.SentAt.IsZero() || !receipt.DueAt.Equal(receipt.SentAt.Add(24*time.Hour)) {
+		t.Fatalf("native answer has no confirmed promise with its deadline: %+v", receipt)
+	}
+	todo, ok := s.todoNow(receipt.Reply.TodoID)
+	topicURL := outboundTopicURL("oc_example", "omt_example", r.ReplyTo)
+	if !ok || !strings.Contains(todo.Notes, answer) || !strings.Contains(todo.Notes, topicURL) {
+		t.Fatalf("native answer did not put its wording and original topic on the to-do: %+v", todo)
+	}
+}

@@ -235,6 +235,7 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if fin.answer != "" && worker != nil {
 		out, ok := worker.result(ctx, s.timing("cot_answer_wait"))
 		if ok && out.answered {
+			*delivery = assistantwire.FeishuAnswerDelivery{Complete: true}
 			f.markDone(ctx, r, final, end)
 			return nil
 		}
