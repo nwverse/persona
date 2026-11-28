@@ -4338,6 +4338,12 @@ export interface ConnectorCallParams {
    * confirms a write stays the hub's decision.
    */
   categories?: string[];
+  /**
+   * The hub-authenticated paired device ID (for example dev_...) that originated the current user turn; absent when
+   * the turn did not come from a paired user device (scheduled task, channel, extension, or older hub). Set
+   * exclusively by the hub from verified credentials.
+   */
+  origin_device_id?: string;
 }
 
 /**
@@ -4435,6 +4441,12 @@ export interface ConnectorDoParams {
    * confirms a write stays the hub's decision.
    */
   categories?: string[];
+  /**
+   * The hub-authenticated paired device ID (for example dev_...) that originated the current user turn; absent when
+   * the turn did not come from a paired user device (scheduled task, channel, extension, or older hub). Set
+   * exclusively by the hub from verified credentials.
+   */
+  origin_device_id?: string;
 }
 
 /**

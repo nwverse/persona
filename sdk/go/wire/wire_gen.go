@@ -4057,6 +4057,10 @@ type ConnectorCallParams struct {
 	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
 	// confirms a write stays the hub's decision.
 	Categories []string `json:"categories,omitempty"`
+	// The hub-authenticated paired device ID (for example dev_...) that originated the current user turn; absent when
+	// the turn did not come from a paired user device (scheduled task, channel, extension, or older hub). Set
+	// exclusively by the hub from verified credentials.
+	OriginDeviceID string `json:"origin_device_id,omitempty"`
 }
 
 // ConnectorCallResult: tools.call and actions.do.
@@ -4126,6 +4130,10 @@ type ConnectorDoParams struct {
 	// general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
 	// confirms a write stays the hub's decision.
 	Categories []string `json:"categories,omitempty"`
+	// The hub-authenticated paired device ID (for example dev_...) that originated the current user turn; absent when
+	// the turn did not come from a paired user device (scheduled task, channel, extension, or older hub). Set
+	// exclusively by the hub from verified credentials.
+	OriginDeviceID string `json:"origin_device_id,omitempty"`
 }
 
 // ConnectorRecallParams: recall: take back a message the connector's program sent in the user's name, which the

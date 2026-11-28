@@ -154,6 +154,10 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 	if p.Name != "" { // and which device: the manager records who switched a model profile
 		req.Header[assistantwire.DeviceNameHeader] = []string{p.Name}
 	}
+	delete(req.Header, assistantwire.DeviceIDHeader)
+	if devID := originDeviceID(r.Context()); devID != "" { // paired user device ID for turn-level connector call context
+		req.Header[assistantwire.DeviceIDHeader] = []string{devID}
+	}
 	delete(req.Header, assistantwire.PersonHeader)
 	if personSent(r.Context()) { // and whether a person's own app asks: what may change a held message (#10661)
 		req.Header[assistantwire.PersonHeader] = []string{"1"}

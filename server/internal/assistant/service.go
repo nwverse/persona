@@ -185,6 +185,9 @@ type Service struct {
 	heard ownerHeard
 	// humanSent: the messages a person's own app sent, as the hub vouched (secret_handoff.go).
 	humanSent      humanSends
+	// originDevices tracks the hub-authenticated paired device ID of the latest user turn per conversation
+	// (connector_context.go).
+	originDevices  conversationOriginDevices
 	storeApprovals storeApprovals
 	ownerWaits     ownerActionWaits
 	routineChecks  routineCheckApprovalBook
