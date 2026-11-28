@@ -550,7 +550,7 @@ describe("Integrations server catalog", () => {
     capabilities: ["channels", "tools", "future_capability"], availability: { state: "available" },
   };
 
-  function serveProjection(catalog: () => Response) {
+  function serveProjection(catalog: () => Response, detail?: (path: string) => Response) {
     const fetcher = vi.fn(async (input: string) => {
       const path = new URL(input, "http://hub.example.com").pathname;
       if (path === "/api/v1/managers") {
@@ -560,6 +560,7 @@ describe("Integrations server catalog", () => {
         ] });
       }
       if (path === "/api/v1/assistant/integrations") return catalog();
+      if (path.startsWith("/api/v1/assistant/integrations/") && detail) return detail(path);
       if (path.endsWith("/-/markets")) return json({ markets: [{ id: "official" }] });
       return json({});
     });
@@ -637,6 +638,25 @@ describe("Integrations server catalog", () => {
     await flush();
     expect(host.querySelector('[data-integration-id="larkx"]')).not.toBeNull();
     expect(fetcher.mock.calls.some(([url]) => url.includes("/assistant/integrations"))).toBe(false);
+  });
+
+  it("opens standalone subscription settings with the subscription ref", async () => {
+    const ref = { manager: "assistant", kind: "subscription", id: "standalone" };
+    const item = { ref, name: "Projected subscription", origin: "standalone_subscription", capabilities: ["data"], availability: { state: "available" } };
+    const fetcher = serveProjection(() => json({ items: [item], counts: { all: 1, channels: 0, data: 1, tools: 0 }, availability: [] }),
+      (path) => path.endsWith("/subscription/standalone") ? json({ item, sections: [], availability: [] }) : json({}, 404));
+    const onOpen = vi.fn();
+    await act(async () => root.render(<Integrations route={route} onOpen={onOpen} onBack={() => {}} />));
+    await flush();
+    const row = host.querySelector<HTMLButtonElement>('[data-integration-id="standalone"]')!;
+    expect(row.closest('section')?.querySelector('h2')?.textContent).toContain(t("subscriptions.title"));
+    await act(async () => row.click());
+    const opened = onOpen.mock.calls[0]![0];
+    expect(opened.scope).toEqual({ kind: "owned", manager: "assistant" });
+    await act(async () => root.render(<Integrations route={opened} onOpen={onOpen} onBack={() => {}} />));
+    await flush();
+    expect(host.querySelector('[data-integration-detail="standalone"] h1')?.textContent).toBe(item.name);
+    expect(fetcher.mock.calls.some(([url]) => url.endsWith("/push_source/standalone"))).toBe(false);
   });
 });
 

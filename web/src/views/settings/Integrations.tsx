@@ -917,7 +917,7 @@ function IntegrationsForManager({
           anchor="push-sources"
           title={
             <span className="flex items-center gap-2">
-              {t("settings-integrations.group_push_sources")}
+              {t(pushSources.some((item) => item.ref?.kind === "subscription") ? "subscriptions.title" : "settings-integrations.group_push_sources")}
               <span className="font-normal">{t("settings-integrations.count", { count: pushSources.length })}</span>
             </span>
           }
