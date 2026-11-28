@@ -2,6 +2,8 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -133,45 +135,115 @@ func TestBoundDeliveryRoleSurvivesDifferentForgeAuthor(t *testing.T) {
 	}
 }
 
-// An explicit delivery binding that equals the stage PR looks the same as the link setTaskStage mirrors from the stage
-// (the store keeps no source, #17792), so it counts as the legacy record (#17788). Unmerged, it still blocks and keeps
-// its role, as under #17714's rule. A finished no-PR closeout removes it along with the mirrors: the known boundary
-// that #17792 would flip.
+// A saved delivery binding stays authoritative when the stage happens to name the same PR (#17792).
 func TestBoundDeliveryEqualToStagePR(t *testing.T) {
 	for _, tc := range []struct {
-		name, closeout string
-		accepted       bool
+		name, closeout, wantError string
+		issueOnly                 bool
 	}{
-		{"unmerged", "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + ownDeliveryPR + "\n</closeout>", false},
-		{"no-PR closeout", "Research references issue #4; no PR was opened.\n" + researchNoPRCloseout, true},
+		{"unmerged", "<closeout status=\"not_done\" merged=\"no\" deployed=\"no\">\nartifact: pr " + ownDeliveryPR + "\n</closeout>", "not merged yet", false},
+		{"no-PR closeout", researchNoPRCloseout, "not merged yet", false},
+		{"forge confirms a non-PR", "", "HTTP 404", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, todo, _ := linkRoleTask(t)
+			s, todo, forge := linkRoleTask(t)
 			ctx := t.Context()
 			if _, err := s.importReportedLinksWithRoles(ctx, todo.ID, []string{ownDeliveryPR}, "pull_request", nil,
 				map[string]string{ownDeliveryPR: repository.LinkRoleDelivery}, nil); err != nil {
 				t.Fatal(err)
 			}
 			s.setTaskStage(ctx, todo.ID, "review", ownDeliveryPR)
-			s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: tc.closeout})
-			_, err := acceptReview(s, todo.ID, nil)
-			roles := linkRoles(t, s, todo.ID)
-			if !tc.accepted {
-				if err == nil || !strings.Contains(err.Error(), "not merged yet") {
-					t.Fatalf("the unmerged binding did not block acceptance: %v", err)
-				}
-				if got := roles[ownDeliveryPR]; got != repository.LinkRoleDelivery {
-					t.Fatalf("bound PR has role %q, want delivery", got)
-				}
-				return
+			if tc.issueOnly {
+				forge.mu.Lock()
+				forge.err = errors.New("HTTP 404")
+				forge.issueOnly = true
+				forge.mu.Unlock()
+			} else {
+				s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: tc.closeout})
 			}
-			if err != nil || todoNow(s, todo.ID).DoneAt == nil {
-				t.Fatalf("a finished no-PR closeout did not clear the stage-equal binding: %v", err)
+			if _, err := acceptReview(s, todo.ID, nil); err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("the bound PR did not block acceptance with %q: %v", tc.wantError, err)
 			}
-			if _, ok := roles[ownDeliveryPR]; ok {
-				t.Fatalf("the stage-equal binding survived the no-PR cleanup: %v", roles)
+			if got := todoNow(s, todo.ID); got.DoneAt != nil || got.PRURL != ownDeliveryPR {
+				t.Fatalf("acceptance changed the task's delivery: done=%v PR=%q", got.DoneAt, got.PRURL)
+			}
+			if got := linkRoles(t, s, todo.ID)[ownDeliveryPR]; got != repository.LinkRoleDelivery {
+				t.Fatalf("bound PR has role %q, want delivery", got)
 			}
 		})
+	}
+}
+
+func TestDeliveryBindingAfterStageMirror(t *testing.T) {
+	s, todo, _ := linkRoleTask(t)
+	ctx := t.Context()
+	s.setTaskStage(ctx, todo.ID, "review", ownDeliveryPR)
+	args := fmt.Appendf(nil, `{"id":%q,"urls":[%q]}`, todo.ID, ownDeliveryPR)
+	if _, err := s.toolTodoRepositoryLinksAdd(ctx, "", "", "todo_repository_links_add", args); err != nil {
+		t.Fatal(err)
+	}
+	s.setTaskStage(ctx, todo.ID, "merge", ownDeliveryPR)
+	s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: researchNoPRCloseout})
+	if _, err := acceptReview(s, todo.ID, nil); err == nil || !strings.Contains(err.Error(), "not merged yet") {
+		t.Fatalf("binding a mirrored PR did not hold acceptance: %v", err)
+	}
+	if got := linkRoles(t, s, todo.ID)[ownDeliveryPR]; got != repository.LinkRoleDelivery {
+		t.Fatalf("later stage report lost the bound PR: role=%q", got)
+	}
+}
+
+func TestStageMirrorDeliveryFallback(t *testing.T) {
+	const relatedIssue = "https://github.com/o/r/issues/4"
+	for _, name := range []string{"recorded mirror", "historical link"} {
+		t.Run(name, func(t *testing.T) {
+			s, todo, _ := linkRoleTask(t)
+			ctx := t.Context()
+			s.setTaskStage(ctx, todo.ID, "review", ownDeliveryPR)
+			st := s.store().(*repositorystore.Store)
+			if name == "historical link" {
+				var revision int64
+				if err := st.QueryRow(ctx, `UPDATE todo_repository_sets
+					SET repositories = repositories #- '{0,links,0,provenance}'
+					WHERE todo_id = $1 RETURNING revision`, todo.ID).Scan(&revision); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, _, err := st.ImportTodoRepositoryLinkDetails(ctx, todo.ID, []repository.LinkInput{
+				{URL: relatedIssue, Role: repository.LinkRoleReference},
+			}, "explicit"); err != nil {
+				t.Fatal(err)
+			}
+			s.hub.(*fakeHub).setItems(proto.Item{Role: "assistant", Kind: proto.KindText, Text: researchNoPRCloseout})
+			if _, err := acceptReview(s, todo.ID, nil); err != nil {
+				t.Fatalf("a stage mirror blocked non-PR closeout: %v", err)
+			}
+			if got := todoNow(s, todo.ID); got.DoneAt == nil || got.PRURL != "" {
+				t.Fatalf("non-PR closeout left stage delivery: done=%v PR=%q", got.DoneAt, got.PRURL)
+			}
+			if roles := linkRoles(t, s, todo.ID); len(roles) != 1 || roles[relatedIssue] != repository.LinkRoleReference {
+				t.Fatalf("non-PR closeout should leave only the reference issue: %v", roles)
+			}
+		})
+	}
+}
+
+func TestForgetReportedPRLinksKeepsBindingInStageHistory(t *testing.T) {
+	st := newMemRepoStore()
+	const id = "delivery-history"
+	st.sets[id] = repository.TaskSet{TodoID: id, Revision: 1, Repositories: []repository.TaskRepository{{
+		RepoID: "repo_o_r",
+		Links: []repository.TaskLink{
+			{CanonicalURL: foreignPR, Kind: "pull_request", Number: "6206", Provenance: repository.LinkProvenanceUnbound},
+			{CanonicalURL: ownDeliveryPR, Kind: "pull_request", Number: "21", Provenance: repository.LinkProvenanceExplicit},
+		},
+	}}}
+	s, _ := newQuietServiceOn(t, st)
+	// A binding can be saved after acceptance started checking a stage mirror.
+	if err := s.forgetReportedPRLinks(t.Context(), id, todoStage{PR: foreignPR, PRs: []string{ownDeliveryPR}}); err == nil {
+		t.Fatal("non-PR cleanup deleted a delivery binding in stage history")
+	}
+	if roles := linkRoles(t, s, id); len(roles) != 2 || roles[ownDeliveryPR] != repository.LinkRoleDelivery {
+		t.Fatalf("non-PR cleanup changed the saved links: %v", roles)
 	}
 }
 

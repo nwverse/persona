@@ -6524,7 +6524,7 @@ The normative text, with every rule, threshold and compatibility case, is [meeti
   - `detail.segments[]` gains optional `speaker` (merged person id, e.g. `"s1"`) and `speaker_unsure` (`true` when unsure or when `quality` is `low`). Extensions with `kb.read` receive these fields through the extension KB contract (`schema/extension/kb.schema.json`).
   - `detail.minutes.debates[].positions[]` gains optional `span` (`[start, end]`), `est` (`true` when timing is unreliable), `over` (`{id: seconds}` layer-one overlaps), `said_by` (the model's `holder`), `speaker`, `speaker_unsure`, and `also` (`[{at, span, over, said_by?, speaker?, speaker_unsure?}]`).
 - **Event**: `meeting_live` adds `speakers` to `changed` and `revs`. Speaker edits and timeline updates also emit the recording's `summary` notification without changing `minutes.version` or sending a push.
-- **Errors**: `404`, `410` (deleted), `403 forbidden` (not full credentials), `403 kb_read_only`, `409 not_meeting` (not a meeting, a track recording or a device-mode meeting), `409 speakers_stale`, `409 speakers_cleared`, `409 op_id_reused`.
+- **Errors**: `400` (invalid body, unknown op, unknown speaker, or a name that is multiline or over 100 characters), `404`, `410` (deleted), `403 forbidden` (not full credentials), `403 kb_read_only`, `409 not_meeting` (not a meeting, a track recording or a device-mode meeting), `409 speakers_stale`, `409 speakers_cleared`, `409 op_id_reused`, `413 too_large`.
 
 #### All-day recordings (#4741)
 

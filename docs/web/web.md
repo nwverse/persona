@@ -2444,6 +2444,14 @@ settings. Mail, Feishu and sources with history link to the sync scope in Knowle
 original forwarding switch. See the [split layout](../design/DESIGN_SYSTEM.md#integrations--extensions-in-web-settings),
 [channel settings](../extensions/channels.md#7-ui) and [connector overview](../extensions/connectors.md).
 
+Channel and extension editors keep their configuration in tab memory under the bound hub credential, assistant, resource
+kind, and ID (#17762). The split breakpoint and legacy Extensions entry read the same drafts. Saves run in order for a
+resource, and a refresh requested during a write reads again after it. The channel form checks the document revision
+and sends only the named fields. Extension saves first load a fresh baseline for their full-config PUT, apply the
+edited fields, and keep the entry-preserving mode for immediate machine switches. Overlapping changes and the hub's
+`settings_moved` refusal keep the draft for review. If the save response is lost, the editor reads the same resource and
+compares the submitted fields with the confirmed values before showing a receipt. Pairing again clears these drafts.
+
 Graduation (making the new experience the default for at least one release with rollback kept) or removal is tracked in #14802.
 
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals

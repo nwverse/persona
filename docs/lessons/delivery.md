@@ -79,7 +79,9 @@ cleanup off on every real hub, and an issue number recorded as a PR blocked acce
 memory store has no repository store, so only the Postgres cases showed it, and the PR's `-run` filter selected tests by
 name and missed them.
 
-- A saved delivery PR that only repeats the stage's own record (its PR and earlier PRs) is the legacy record, not a
-  binding. Nothing saved tells it from an explicit binding of the same URL (#17792).
+- Store explicit delivery intent on the link (#17792). Stage equality is a recovery fallback for rows without
+  provenance, and stage mirrors can still be cleaned up. A deliberately bound PR keeps its delivery gate even when
+  its URL also appears in the current or earlier stage record. Preserve the binding through report replays and
+  title edits, and check for it again before cleanup in case the link changed during forge verification.
 - When a change reads saved links, run the Postgres cases of every test file that reaches that gate on the hub. A name
   pattern such as `.*Delivery` is not enough.
