@@ -1663,9 +1663,19 @@ linking pass, including after a manager restart. The deterministic Inbox linker
 reads these saved links as well as legacy task references, so a comment or review
 on any linked PR can return to the existing task Agent even when `pr_url` names
 another PR. Ambiguous or closed tasks are not selected.
-Old stage and delivery fields retain their existing
-judgment semantics. A stored receipt prevents historical imports and repeated reports
-from restoring links removed by the user. An explicit additive call can restore them.
+
+The manager stores delivery provenance with each saved link (#17792). An
+explicit delivery binding stays authoritative even if the stage names the same
+PR. A complete non-PR closeout or a forge-confirmed non-PR can clear a stage
+mirror. For links saved before provenance was recorded, the manager uses the
+existing match against the current or earlier stage PRs (#17796).
+The additive tool binds delivery links explicitly. A full-list save binds newly
+added delivery links and links switched to delivery. Retained links with the
+same role keep their provenance, including after a title edit. Switching to
+reference or removing the link clears the binding.
+
+A stored receipt prevents historical imports and repeated reports from restoring
+links removed by the user. An explicit additive call can restore them.
 Imports and interactive edits lock the same Todo and commit atomically; changes
 broadcast the existing `todos` event even when stage and legacy PR stay unchanged.
 Metadata import errors are logged and leave non-PR progress intact, but cannot
