@@ -44,7 +44,6 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	}
 	var a struct{ Tasks []PlanTask }
 	var contracts []taskContract
-	var plannedScopes []plannedWriteScopeInput
 	lead := "" // optional initial leader assignment; omission keeps the planning lead or main
 	if scope != nil {
 		tasks, err := scope.workerTasks(args)
@@ -52,7 +51,6 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			return "", err
 		}
 		a.Tasks = tasks
-		plannedScopes = make([]plannedWriteScopeInput, len(tasks))
 	} else {
 		var in struct {
 			Tasks      []planTaskIn `json:"tasks"`
@@ -65,6 +63,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if lead, err = s.planSupervisor(ctx, sessionID, in.Supervisor); err != nil {
 			return "", err
 		}
+		todosV2 := s.settings(ctx).todosV2On()
 		for i, t := range in.Tasks {
 			contract, err := t.validatedContract()
 			if err != nil {
@@ -74,12 +73,11 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 			t.PlanTask.ReuseTodo = strings.TrimSpace(t.TodoID)
 			t.PlanTask.Parent = "" // the hub's, set only for a task leader's workers
 			t.PlanTask.Supervisor = lead
+			t.PlanTask.WriteScope = nil
+			if todosV2 && (len(t.WritePrefixes) > 0 || len(t.ChangedFiles) > 0) {
+				t.PlanTask.WriteScope = &planWriteScope{WritePrefixes: t.WritePrefixes, ChangedFiles: t.ChangedFiles, ForceParallel: t.ForceParallel}
+			}
 			a.Tasks = append(a.Tasks, t.PlanTask)
-			plannedScopes = append(plannedScopes, plannedWriteScopeInput{
-				WritePrefixes: t.WritePrefixes,
-				ChangedFiles:  t.ChangedFiles,
-				ForceParallel: t.ForceParallel,
-			})
 		}
 	}
 	if len(a.Tasks) == 0 {
@@ -504,10 +502,7 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	// Same-directory active agents the conversation already supervises: surfaced with exact ids even when the titles
 	// are worded too differently for planDuplicates (#13192). A hint, never a refusal.
 	reuse := reuseHintText("task_plan", s.planReuseHints(ctx, sessionID, a.Tasks))
-	for i := range a.Tasks {
-		plannedScopes[i].Task = a.Tasks[i]
-	}
-	conflictHints := s.planWriteScopeConflicts(ctx, plannedScopes)
+	conflictHints := s.planWriteScopeConflicts(ctx, a.Tasks)
 	now := time.Now().UTC()
 	p := &TaskPlan{ID: "plan_" + randomHex(6), Conversation: sessionID, Tasks: a.Tasks, State: planOpen,
 		CreatedAt: now, UpdatedAt: now}
@@ -528,7 +523,6 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 		if err != nil {
 			return "", err
 		}
-		s.rememberPlannedWriteScopes(ctx, started.Tasks, plannedScopes)
 		var b strings.Builder
 		fmt.Fprintf(&b, "Queued %d worker(s) beneath your task %s for dispatch:\n", len(started.Tasks), scope.task.ID)
 		for _, t := range started.Tasks {
@@ -620,7 +614,6 @@ func (s *Service) taskPlanFrom(ctx context.Context, machine, sessionID string, a
 	if err != nil {
 		return "", err
 	}
-	s.rememberPlannedWriteScopes(ctx, started.Tasks, plannedScopes)
 	var b strings.Builder
 	supervisor := ""
 	fmt.Fprintf(&b, "Queued %d task(s) for dispatch without asking (plan %s):\n", len(started.Tasks), started.ID)
