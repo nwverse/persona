@@ -873,7 +873,7 @@ struct RecordingsPage: View {
                 if ["minutes", "pending"].contains(defaults.string(forKey: "showMeetingSample")) {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.pastMeeting)
-                } else if defaults.string(forKey: "showMeetingSample") == "overview" {
+                } else if ["overview", "debates"].contains(defaults.string(forKey: "showMeetingSample")) {
                     Self.sampleOpened = true
                     debugPage = .recording(RecordingSamples.overviewMeeting)
                 } else if ["after-minutes", "after-pending"].contains(defaults.string(forKey: "showMeetingSample")) {
@@ -881,7 +881,7 @@ struct RecordingsPage: View {
                     // longer one's (its minutes with an overview: headline, conclusions, topics).
                     Self.sampleOpened = true
                     debugPage = .after(RecordingSamples.pastMeeting)
-                } else if defaults.string(forKey: "showMeetingSample") == "after-overview" {
+                } else if ["after-overview", "after-debates"].contains(defaults.string(forKey: "showMeetingSample")) {
                     Self.sampleOpened = true
                     debugPage = .after(RecordingSamples.overviewMeeting)
                 } else if defaults.string(forKey: "showMeetingSample") == "untitled-page" {

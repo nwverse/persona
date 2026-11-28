@@ -101,6 +101,7 @@
   "step_mail_search": "Search mail",
   "step_mail_read": "Read mail",
   "step_mail_send": "Send mail",
+  "step_mail_move": "Move mail",
   "step_kb": "Search knowledge base",
   "step_kb_update": "Update knowledge base",
   "cot_tool_done": "✓ Done",

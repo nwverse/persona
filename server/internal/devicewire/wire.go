@@ -54,6 +54,7 @@ const (
 )
 
 var (
+	RequestMethod         = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRequest}
 	ConnectedMethod       = buswire.Method[Connected, ConnectedReply]{Name: MethodConnected}
 	ConnectorCredMethod   = buswire.Method[ConnectorCredRequest, ConnectorCred]{Name: MethodConnectorCred}
 	ConnectorPairedMethod = buswire.Method[ConnectorCred, buswire.None]{Name: MethodConnectorPaired}
@@ -126,6 +127,10 @@ const (
 )
 
 var (
+	CallMethod                 = buswire.Method[NodeCall, json.RawMessage]{Name: MethodCall}
+	FileCallMethod             = buswire.Method[NodeCall, json.RawMessage]{Name: MethodFileCall}
+	RetireCallMethod           = buswire.Method[NodeCall, json.RawMessage]{Name: MethodRetireCall}
+	AcceptMethod               = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
 	UpdateNodesMethod          = buswire.Method[buswire.None, buswire.None]{Name: MethodUpdateNodes}
 	PairConnectorMethod        = buswire.Method[PairConnector, PairConnectorReply]{Name: MethodPairConnector}
 	ReconnectMethod            = buswire.Method[ReconnectRequest, buswire.None]{Name: MethodReconnect}
@@ -418,6 +423,8 @@ const (
 	// PortStreamHalfCloseV1 supports directional EOF on forwarded TCP streams.
 	PortStreamHalfCloseV1 = 1
 )
+
+var PortDialMethod = buswire.Method[PortDial, PortDialReply]{Name: MethodPortDial}
 
 // PortDial opens a stream to a port on the node. The hub offers StreamVersion only for an endpoint with CloseWrite.
 type PortDial struct {

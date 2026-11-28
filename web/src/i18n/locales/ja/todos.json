@@ -252,6 +252,7 @@
   "calendar_today": "今日",
   "calendar_previous": "前へ",
   "calendar_next": "次へ",
+  "calendar_download": "期限をダウンロード",
   "calendar_show_done": "完了を表示",
   "calendar_all_day": "終日",
   "calendar_move_failed": "日時を変更できませんでした：{error}",

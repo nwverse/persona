@@ -535,7 +535,7 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 		v.Pairing = &botPairView{Code: p.Code, ExpiresAt: p.Expires.Unix()}
 	}
 	for _, c := range s.TopicChats {
-		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat(), RequireOwnerMention: c.RequireOwnerMention, TodoMode: c.TodoMode.Effective()})
+		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat(), RequireOwnerMention: c.RequireOwnerMention, TodoMode: c.TodoMode.Effective(), Space: c.Space})
 	}
 	botAppID := appID
 	b.mu.Unlock()
@@ -609,6 +609,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 				Home                *bool                        `json:"home"`
 				RequireOwnerMention *bool                        `json:"require_owner_mention"`
 				TodoMode            *assistantwire.TopicTodoMode `json:"todo_mode"`
+				Space               *string                      `json:"space"`
 			} `json:"topic_chats"`
 			// NudgeAfter is minutes before the one nudge under an unanswered card; 0 turns nudges off, absent leaves it.
 			// Read as raw JSON so that anything but a whole number in range gets the same answer (nudgeAfterValue).
@@ -656,6 +657,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		var topics []BotChat
 		mentionEdits := map[string]bool{}
+		spaceEdits := map[string]string{}
 		keepHome := true // no entry says anything about home: the list's own stays
 		if in.TopicChats != nil {
 			topics = []BotChat{}
@@ -673,6 +675,15 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 						return
 					}
 					chat.TodoMode = *c.TodoMode
+				}
+				if c.Space != nil {
+					sp := strings.TrimSpace(*c.Space)
+					if err := h.checkTopicSpace(r.Context(), sp); err != nil {
+						writeErr(w, http.StatusBadRequest, err)
+						return
+					}
+					spaceEdits[strings.TrimSpace(c.ChatID)] = sp
+					chat.Space = sp
 				}
 				topics = append(topics, chat)
 			}
@@ -694,7 +705,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			return
 		}
 		if topics != nil {
-			if err := h.setTopicChats(r.Context(), topics, keepHome, mentionEdits); err != nil {
+			if err := h.setTopicChatsOpt(r.Context(), topics, keepHome, mentionEdits, spaceEdits); err != nil {
 				writeErr(w, http.StatusBadRequest, err)
 				return
 			}

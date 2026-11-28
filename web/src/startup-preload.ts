@@ -634,7 +634,15 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // base 53884840c4: ja 486,430 B to 486,476 B). Merged with origin/main (including #17071, which added +109 B to the
 // first screen), this tree measures en 484,077 B, ja 486,585 B, zh-Hans 485,079 B. Raise the budget to the measured
 // ja size plus 10 B of room.
-export const FIRST_SCREEN_BUDGET = 486_595;
+// Frosted Glass & macOS bay polish: fade truncated overlay-menu sidebar row text before ⋯ without "..."+"⋯" six dots,
+// apply translucent glass tokens inside [data-sidebar-column] under liquid-glass, and host both Collapse and Search in
+// MacBayTools (+274 B on origin/main 0e974208f9: en 484,357 B, ja 486,859 B, zh-Hans 485,362 B). Raise the budget to
+// the measured ja size plus 10 B of room.
+// Vibrancy focus-churn reduction + 3-track wide-screen sidebar transition + continuous Apple G2 contour morph
+// (lib/sidebar-transition.ts, useMacChromeMode, appleG2ContourAt, MacMainContour live SVG driver, desktop-glass
+// inner backdrop-filter suppression, and animating top-inset preservation): en 485,174 B, ja 487,676 B,
+// zh-Hans 486,179 B. Raise the budget to the measured ja size plus 10 B of room.
+export const FIRST_SCREEN_BUDGET = 487_686;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

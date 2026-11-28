@@ -221,7 +221,8 @@ func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 // --- messages between conversations ---
 
 type relayMsg struct {
-	// OnceID preserves a supervision relay's delivery identity when its queued text is refreshed.
+	// OnceID preserves a relay's delivery identity when its queued text is refreshed
+	// (supervision digest refresh or a consumed detached continuation).
 	OnceID string `json:"once_id,omitempty"`
 	// Signals is the structured JSON content of a queued supervision message. It stays comparable with the relay and lets
 	// /stop remove one task and regather the others after restart; older messages without it use their embedded task ids.
@@ -272,6 +273,12 @@ type relayMsg struct {
 	// Private renews Just me when the message is actually dispatched, including
 	// a result that waited in the durable queue or across a manager restart.
 	Private bool `json:"private,omitempty"`
+	// Continuation marks a detached approval's one-time retry instruction. Its
+	// grant is checked again at the final drain, not only when it was queued.
+	Continuation bool `json:"continuation,omitempty"`
+	// ContinuationDigest binds that instruction to the exact journal occurrence,
+	// not to whichever grant later reuses the interaction ID.
+	ContinuationDigest string `json:"continuation_digest,omitempty"`
 	// Answer: it answers a request the receiver sent (hopLocked, #7391), so it starts no exchange of its own: what
 	// the receiver sends next costs a hop.
 	Answer bool `json:"answer,omitempty"`
@@ -425,6 +432,16 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	}
 	if rs.SupervisePending == nil {
 		rs.SupervisePending = map[string]superviseSignal{}
+	}
+	for to, q := range rs.Queue {
+		for i := range q {
+			if q[i].Continuation && q[i].OnceID == "" {
+				// Keep the ID an older manager may already have sent. New
+				// continuations are pinned before delivery in deliverApprovalResult.
+				q[i].OnceID = legacyRelayMsgID(to, q[i])
+			}
+		}
+		rs.Queue[to] = q
 	}
 	// Upgrade an old queue in place: structured signals are exact; a pre-signals message still carries its todo ids.
 	here := s.settings(ctx)
@@ -1349,7 +1366,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 			}
 			if !stale && !keep && !landed {
-				msg, retry, err = s.tryQueuedRelay(ctx, machine, id, &original)
+				msg, retry, err = s.tryQueuedApprovalRelay(ctx, machine, id, &original)
 				keep = retry > 0
 				if relaySuppressed(err) { // restored after a restart or a reconnect, or left by a withdrawal that did not reach it
 					stale, suppressed, keep, retry, err = true, true, false, 0, nil // leaves unsent: nothing replayed, nobody pushed

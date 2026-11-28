@@ -9,6 +9,7 @@
   "topic_chats_many": "オンにできるグループは最大{n}件です",
   "topic_chat_bad": "グループIDが空、空白を含む、または重複しています",
   "topic_todo_mode_bad": "このグループのToDo設定を選んでください",
+  "topic_space_bad": "そのスペースは存在しないか、トピックグループに設定できません",
   "topic_chat_home_many": "ホームのトピックグループは1つだけです",
   "topic_needs_owner": "先にボットをペアリングしてください。グループの一覧は所有者のものです",
   "topic_chats_new_app": "グループの一覧は別のリクエストで送ってください。App IDを変えると所有者のペアリングが解除されます",

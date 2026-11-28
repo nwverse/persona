@@ -619,11 +619,15 @@ func eachChannel(parent context.Context, ids []string, send func(ctx context.Con
 	wg.Wait()
 }
 
+func sameChannelAskOccurrence(a *channel.Ask, ix proto.Interaction) bool {
+	return a.ID == ix.ID && (a.CreatedAt.IsZero() || ix.CreatedAt.IsZero() || a.CreatedAt.Equal(ix.CreatedAt))
+}
+
 func (s *Service) askInChannel(ctx context.Context, id string, ix proto.Interaction) {
 	c := &s.chans
 	c.mu.Lock()
 	s.loadChannelStateLocked(ctx)
-	known := slices.ContainsFunc(c.st.Asks, func(a *channel.Ask) bool { return a.Channel == id && a.ID == ix.ID })
+	known := slices.ContainsFunc(c.st.Asks, func(a *channel.Ask) bool { return a.Channel == id && sameChannelAskOccurrence(a, ix) })
 	generation := c.generation[id]
 	now := c.clock()
 	c.mu.Unlock()
@@ -645,7 +649,7 @@ func (s *Service) askInChannel(ctx context.Context, id string, ix proto.Interact
 		return
 	}
 	c.mu.Lock()
-	if _, ended := c.ended[ix.ID]; !ended && c.generation[id] == generation && !slices.ContainsFunc(c.st.Asks, func(x *channel.Ask) bool { return x.Channel == id && x.ID == a.ID }) {
+	if !s.interactionEndedForLocked(ix) && c.generation[id] == generation && !slices.ContainsFunc(c.st.Asks, func(x *channel.Ask) bool { return x.Channel == id && sameChannelAskOccurrence(x, ix) }) {
 		c.st.Asks = append(c.st.Asks, a)
 		s.saveChannelStateLocked()
 	}
@@ -667,7 +671,7 @@ func (s *Service) channelInteractionEnded(ix proto.Interaction, inChat bool) {
 	}
 	n := len(c.st.Asks)
 	c.st.Asks = slices.DeleteFunc(c.st.Asks, func(a *channel.Ask) bool {
-		if a.ID != ix.ID {
+		if !sameChannelAskOccurrence(a, ix) {
 			return false
 		}
 		if !inChat {
@@ -692,6 +696,10 @@ type endedAsk struct {
 func (c *channelsBook) noteEndedLocked(a *channel.Ask) {
 	if c.lastEnded == nil {
 		c.lastEnded = map[string]endedAsk{}
+	}
+	if previous, ok := c.lastEnded[a.Channel]; ok && previous.ask != nil &&
+		!a.CreatedAt.IsZero() && !previous.ask.CreatedAt.IsZero() && a.CreatedAt.Before(previous.ask.CreatedAt) {
+		return // a delayed terminal event must not replace a newer occurrence's late-answer marker
 	}
 	c.lastEnded[a.Channel] = endedAsk{ask: a, at: c.clock()}
 }
@@ -737,10 +745,11 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 	c.mu.Lock()
 	n := len(c.st.Asks)
 	c.st.Asks = slices.DeleteFunc(c.st.Asks, func(a *channel.Ask) bool {
-		if pending[a.ID] {
-			return false
+		at, ok := pending[a.ID]
+		if ok && (a.CreatedAt.IsZero() || a.CreatedAt.Equal(at)) {
+			return false // a timestamp-less persisted ask retains its legacy ID-only cleanup
 		}
-		c.noteEndedLocked(a) // its interaction.ended was missed
+		c.noteEndedLocked(a) // its interaction.ended was missed, or this ID now names a different occurrence
 		return true
 	})
 	var a *channel.Ask
@@ -781,11 +790,18 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 		reply(channel.QuestionText(l, a, a.Step)) // a question answered, the next one asked
 		return true
 	}
-	ok, err := s.resolveInteraction(ctx, id, a.ID, r, action)
+	var expected *time.Time
+	if !a.CreatedAt.IsZero() {
+		expected = &a.CreatedAt
+	}
+	ok, err := s.resolveInteractionAt(ctx, id, a.ID, r, action, expected)
+	sameOccurrence := func(x *channel.Ask) bool {
+		return x.ID == a.ID && x.CreatedAt.Equal(a.CreatedAt)
+	}
 	c.mu.Lock()
 	if err == nil {
-		c.st.Asks = slices.DeleteFunc(c.st.Asks, func(x *channel.Ask) bool { return x.ID == a.ID })
-		if e, ok := c.lastEnded[id]; ok && e.ask.ID == a.ID {
+		c.st.Asks = slices.DeleteFunc(c.st.Asks, func(x *channel.Ask) bool { return sameOccurrence(x) })
+		if e, ok := c.lastEnded[id]; ok && e.ask.ID == a.ID && e.ask.CreatedAt.Equal(a.CreatedAt) {
 			delete(c.lastEnded, id) // answered here: interaction.ended came before the resolve returned
 		}
 	} else {
@@ -797,7 +813,7 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 	left := 0
 	for _, x := range c.st.Asks {
 		// On a failed resolve this ask is still in the list and is the one the note is about: it is not "more".
-		if x.Channel == id && x.ID != a.ID {
+		if x.Channel == id && !sameOccurrence(x) {
 			left++
 		}
 	}
@@ -821,11 +837,18 @@ func (s *Service) channelAnswerAsk(ctx context.Context, id string, m channel.Mes
 // hub handed over with that message or press there (the hub refuses one without it, or one of another channel):
 // false when it is no longer pending.
 func (s *Service) resolveInteraction(ctx context.Context, ch, id string, r proto.Resolution, action string) (bool, error) {
+	return s.resolveInteractionAt(ctx, ch, id, r, action, nil)
+}
+
+func (s *Service) resolveInteractionAt(ctx context.Context, ch, id string, r proto.Resolution, action string, expected *time.Time) (bool, error) {
 	var res struct {
 		OK bool `json:"ok"`
 	}
-	err := s.appCall(ctx, AppInteractions, InteractionsResolve, map[string]any{"interaction_id": id, "resolution": r,
-		"action": action, "channel": ch}, &res)
+	params := map[string]any{"interaction_id": id, "resolution": r, "action": action, "channel": ch}
+	if expected != nil {
+		params["created_at"] = expected.Format(time.RFC3339Nano)
+	}
+	err := s.appCall(ctx, AppInteractions, InteractionsResolve, params, &res)
 	return res.OK, err
 }
 
@@ -833,11 +856,19 @@ func (s *Service) resolveInteraction(ctx context.Context, ch, id string, r proto
 // verification without resolving the card. The explicit reply target is the
 // card's own chat/message, never the bot's currently selected conversation.
 func (s *Service) clarifyInteraction(ctx context.Context, ch, id, text, clientMsgID, action, chatID, messageID string) (bool, error) {
+	return s.clarifyInteractionAt(ctx, ch, id, text, clientMsgID, action, chatID, messageID, nil)
+}
+
+func (s *Service) clarifyInteractionAt(ctx context.Context, ch, id, text, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error) {
 	var res struct {
 		OK bool `json:"ok"`
 	}
-	err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsClarify, map[string]any{"interaction_id": id,
-		"text": text, "client_msg_id": clientMsgID, "action": action, "channel": ch, "chat_id": chatID, "message_id": messageID}, &res)
+	params := map[string]any{"interaction_id": id, "text": text, "client_msg_id": clientMsgID,
+		"action": action, "channel": ch, "chat_id": chatID, "message_id": messageID}
+	if expected != nil {
+		params["created_at"] = expected.Format(time.RFC3339Nano)
+	}
+	err := s.appCall(ctx, AppInteractions, assistantwire.InteractionsClarify, params, &res)
 	return res.OK, err
 }
 

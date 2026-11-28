@@ -101,6 +101,7 @@
   "step_mail_search": "查邮件",
   "step_mail_read": "读邮件",
   "step_mail_send": "发邮件",
+  "step_mail_move": "移动邮件",
   "step_kb": "查知识库",
   "step_kb_update": "更新知识库",
   "cot_tool_done": "✓ 已完成",

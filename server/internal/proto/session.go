@@ -120,6 +120,16 @@ const (
 	StatusInterrupted = "interrupted"
 )
 
+// LauncherRefreshSendWait leaves time for a terminal Claude send to check the provider, quit and resume the
+// conversation in place before typing. The node bounds preparation and the restart separately.
+const LauncherRefreshSendWait = 4 * time.Minute
+
+// CanRefreshTerminalLauncher identifies sends that may need the longer wait. Only the node knows which process
+// and launcher configuration are actually in the pane.
+func (s *Session) CanRefreshTerminalLauncher() bool {
+	return s.PaneID != "" && !s.Assistant && s.SourceKind == "" && (s.Agent == "claude" || s.Agent == "")
+}
+
 // Unified agent states (docs/protocol/agent-states.md).
 const (
 	StateNeedsYou = "needs_you" // waiting for the user: a question, plan, permission or any TUI dialog
@@ -764,6 +774,11 @@ type ModelPick struct {
 	Launcher string `json:"launcher"`
 	Model    string `json:"model,omitempty"`
 	Effort   string `json:"effort,omitempty"`
+	// Runtime and Channel are the pick's two other dimensions (docs/assistant/execution-spec.md): the engine and the
+	// connection the launcher alias stands for. A newer client may send them without a launcher; the hub then finds
+	// the alias, and an older client keeps reading the launcher.
+	Runtime string `json:"runtime,omitempty"`
+	Channel string `json:"channel,omitempty"`
 }
 
 // UndeliveredMessage is one of Session.Undelivered: an owner's message its manager keeps after it could not go in.

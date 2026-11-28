@@ -34,14 +34,37 @@ final class LinkChannelTests: XCTestCase {
         XCTAssertEqual(s.oldestAge(at: 2), 2, "the oldest byte left came at 0")
         s.acknowledged(through: 6)
         XCTAssertEqual(s.oldestAge(at: 2), 1)
+        XCTAssertEqual(s.oldestAge(at: 0), 0, "backward clock never produces negative oldestAge")
         // A move: the node has 7, so the rest goes again from there.
         s.resume(from: 7)
-        XCTAssertEqual(s.next(max: 100)?.bytes, Data("rld".utf8))
+        XCTAssertNil(s.next(max: 0))
+        XCTAssertNil(s.next(max: -5))
+        // Consume 1 byte first so `from > 0` before passing `Int.max` (exercises `from + max` overflow guard).
+        XCTAssertEqual(s.next(max: 1)?.bytes, Data("r".utf8))
+        XCTAssertEqual(s.next(max: Int.max)?.bytes, Data("ld".utf8))
         s.acknowledged(through: 99)
         XCTAssertEqual(s.unacknowledged, 3, "an offset past what was sent is ignored")
         s.acknowledged(through: 10)
         XCTAssertNil(s.oldestAge(at: 5))
         XCTAssertTrue(s.hasRoom)
+    }
+
+    func testReceiverNearMaxOffsetAndMeterNonFiniteInputsDoNotTrapOrPoison() throws {
+        var r = LinkReceiver(offset: UInt64.max - 2)
+        // Non-zero startIndex Data slice exercises safe slicing when capping at UInt64.max.
+        let slice = Data("xxabcde".utf8).dropFirst(2)
+        XCTAssertEqual(try r.accept(slice, at: UInt64.max - 2), Data("ab".utf8))
+        XCTAssertEqual(r.offset, UInt64.max)
+        XCTAssertEqual(try r.accept(Data("z".utf8), at: UInt64.max), Data())
+
+        var m = LinkMeter()
+        for i in 0 ..< 3 { m.pong(rttMs: 10, retransmitted: 0, sent: 0, counts: false, at: Double(i)) }
+        m.pong(rttMs: .nan, retransmitted: 0, sent: 0, counts: false, at: 3)
+        m.pong(rttMs: .infinity, retransmitted: 0, sent: 0, counts: false, at: 3)
+        m.pong(rttMs: -5, retransmitted: 0, sent: 0, counts: false, at: 3)
+        let s = m.stats(kind: .lan, via: .wifi, at: 3)
+        XCTAssertTrue(s.healthy, "non-finite/negative RTT samples must not poison EWMA or health")
+        XCTAssertEqual(s.srttMs, 10)
     }
 
     func testTheAssemblerHandsOnWholeMessagesAndDropsAPartialOneOnReset() throws {
@@ -197,5 +220,43 @@ final class PathPolicyTests: XCTestCase {
         _ = p.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
         XCTAssertEqual(p.directOff(now: 3), .move(to: "relay", reason: .directOff))
         XCTAssertEqual(p.directOff(now: 4), .stay)
+    }
+
+    func testThreeWayTieBandRankingIsDeterministicAndNeverSelectsLostRelay() {
+        // Classic 3-cycle for pairwise tieMs (5 ms): relay=10, ts=14, lan=18.
+        // Fastest measured route is 10 ms; only routes within 10+5=15 ms (relay, ts) are in the top tie band,
+        // and ts beats relay deterministically regardless of dictionary ordering or extra NaN entries.
+        for _ in 0 ..< 16 {
+            var p = PathPolicy(relay: "relay")
+            let routes: [String: LinkStats] = [
+                "relay": stats(.relay, 10),
+                "ts": stats(.tailscale, 14),
+                "lan": stats(.lan, 18),
+                "bad": stats(.lan, .nan),
+            ]
+            XCTAssertEqual(p.decide(routes, now: 0), .move(to: "ts", reason: .faster))
+        }
+
+        // Same-kind, same-RTT routes break ties deterministically by route id; negative RTT is ignored.
+        var tieId = PathPolicy(relay: "relay")
+        XCTAssertEqual(
+            tieId.decide([
+                "relay": stats(.relay, 40),
+                "lan-b": stats(.lan, 10),
+                "lan-a": stats(.lan, 10),
+                "lan-neg": stats(.lan, -1)
+            ], now: 0),
+            .move(to: "lan-a", reason: .faster)
+        )
+
+        // If both the current direct route and the relay are reported in `lost` while still present in `routes`,
+        // `best` must NOT select the lost relay.
+        var lostRelay = PathPolicy(relay: "relay")
+        _ = lostRelay.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], now: 0)
+        XCTAssertEqual(lostRelay.current, "lan")
+        XCTAssertEqual(
+            lostRelay.decide(["relay": stats(.relay, 40), "lan": stats(.lan, 5)], lost: ["lan", "relay"], now: 10),
+            .stay
+        )
     }
 }

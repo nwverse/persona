@@ -1,6 +1,8 @@
 package assistantwire
 
 import (
+	"time"
+
 	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -127,10 +129,17 @@ type FleetInteraction struct {
 	Interaction proto.Interaction `json:"interaction"`
 }
 
+// InteractionCreatedAtHeader carries the exact displayed occurrence on an
+// interaction action. Current clients supply it on the initial request; the hub
+// preserves that fence and the manager rechecks it under the answer claim lock.
+// It is occurrence metadata, never authorization; older peers omit or ignore it.
+const InteractionCreatedAtHeader = "X-Persona-Interaction-Created-At"
+
 // FleetResolved is EventFleetResolved's params; AnsweredBy says the assistant answered it, Reason why and Answers
 // with what (docs/assistant/assistant.md "Assistant answers questions first").
 type FleetResolved struct {
 	ID         string            `json:"id"`
+	CreatedAt  time.Time         `json:"created_at,omitempty"`
 	AnsweredBy string            `json:"answered_by,omitempty"`
 	Reason     string            `json:"reason,omitempty"`
 	Answers    map[string]string `json:"answers,omitempty"`
@@ -252,9 +261,10 @@ type FleetItem struct {
 	Background bool `json:"background,omitempty"`
 	// Progress: the counts of the workflow Detail names, for the expanded island's bar (#3437). Nil when the item is not
 	// a background workflow or its workflow has started no agent yet. It moves only when Detail does, so it costs no push.
-	Progress    *FleetProgress `json:"progress,omitempty"`
-	Interaction string         `json:"interaction,omitempty"` // what "Allow" / "Deny" / "Approve" resolve
-	Since       float64        `json:"since,omitempty"`
+	Progress             *FleetProgress `json:"progress,omitempty"`
+	Interaction          string         `json:"interaction,omitempty"`          // what "Allow" / "Deny" / "Approve" resolve
+	InteractionCreatedAt string         `json:"interactionCreatedAt,omitempty"` // exact occurrence those buttons displayed
+	Since                float64        `json:"since,omitempty"`
 }
 
 // FleetProgress is a background workflow's agents done of those it started so far, as Detail prints them ("169/185"):
