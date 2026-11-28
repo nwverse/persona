@@ -186,14 +186,31 @@ no terminal to resume it in; A2A messages do not wake it. The node keeps this ma
 conversations closed: after a restart the companion's rows are listed as it says.
 
 Orca's native chats (structured, no terminal) connect through node's bridge: Claude Code's, Codex's and every other provider's.
-List, state, send text / images, interrupt, close, answer approvals / questions, change permission / thinking (no plan mode); no
+List, state, send text / images, interrupt, close, answer approvals / questions, change the permission mode (plan and full access
+included, only those Orca takes for the chat's provider), thinking and model, rename, rewind the conversation, and mark read; no
 screen reads, keys, or live terminal. A Claude chat reads as its Claude transcript, a Codex chat is listed once as its Codex thread,
 and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
 running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card. See
-`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats and the cards.
+`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats, the cards and the controls.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
+
+Typing into an Orca terminal (#17040) is decided right before each write, and every write stays fenced to the terminal's
+process (its incarnation), so nothing reaches a process that replaced it. Text and the keys that type it (letters,
+digits, space) go in when a supported Agent is in front (the process scan); when Orca's `terminal.inspectProcess` names
+another program in front (pi, opencode, an editor, a CLI Persona does not recognize), which is what a message to such a
+CLI then types, as on herdr for an agent herdr does not detect (paste, then Enter); and when the owner answers the
+question a failed start's kept tab stopped on (`start.continue`, `start.answer`, `start.keys`: "Answering a start's
+question" in `docs/protocol/protocol.md`), only in a terminal the node opened that still runs the same process. Any
+other shell in front gets nothing (an Agent's tab whose Agent exited would run the text as a command), and neither does
+a terminal Orca can't tell about or an Orca without `terminal.inspectProcess`. Keys that type nothing (Enter, Esc,
+arrows, Ctrl-C) go to whatever is there, so a stuck terminal can still be interrupted. **Run Agent Here** and the
+**launcher switch** (#5035, and Claude Code ↔ Codex, #5054) restart in the same Orca terminal through #17039's guarded
+single-use grant: the start line goes in only if Orca still reads that terminal with just its shell in front. A plain
+shell is typed into from the phone only through the live terminal, which Orca doesn't offer over its local socket
+(#17048); Orca doesn't list pi or opencode in its tabs as Agents (its process scan knows Claude Code, Codex, TRAE
+CLI, omp and agy).
 
 Orca New Agent creates terminals inside already-open Orca workspaces or subdirectories, starting in the selected directory. Unopened Git-repository directories attempt automatic registration; any other directory gets a terminal in the first local Orca workspace that `cd`s there (refused only when Orca has no workspace open). The `cd` is typed into the shell's line editor, so a directory whose name holds a control character (a tab, a line break) is refused before any terminal opens (`directory_untypable`). New Agent never takes over an existing terminal; Run Agent Here and a Resume in the shell an Agent left type into one only through a single-use grant, after Orca reads that terminal again, right before the command goes in, as the same process with only its shell in front (`terminal.inspectProcess` with its incarnation; an Orca without the call refuses with nothing typed). A start's terminal gets the start environment (`terminal.create`'s `env`, "What a start tab's shell starts with"); **New Terminal** / Open Terminal Here for a folder opens a terminal whose shell Orca puts in that folder (`terminal.create`'s `command`, [terminal.md](terminal.md), "New terminal: `panes.new` (optional, explicit action)"), with no start environment and nothing typed by Persona afterwards.
 Resume of a running session returns it. A Claude session whose agent exited is continued like on herdr (#5548): in the shell its Agent left when Persona opened that terminal for it, it is still there and its shell is in front (its session's directory in that terminal's worktree, #17039), else a new terminal in the Orca workspace holding its directory (the same rules as New Agent); `cd` there, the launcher that started it with `--resume`, then the message. Never a second writer: a session a live claude still has open (Claude's desktop app, another terminal, suspended) is refused (`open_elsewhere`). A session an Orca native chat owns is refused too. Orca's own `terminal create --agent claude --resume` is not used: it exists only in some Orca builds' CLI, and it starts Orca's claude command, not the session's launcher.
@@ -650,6 +667,40 @@ Persona therefore reports its own recovery command for each Claude pane (`resume
   nor user-started terminal sessions (no recorded pane). No automatic continuation: restart may interrupt a tool call, so the user decides. Resume uses ordinary
   `session.start {resume}`, launcher `--resume` in the shell the Agent left when it is still there, else in a new pane.
 - No "Continue all" yet (machine-wide batch start, client half).
+
+#### Orca after a reboot (#17038)
+
+Orca's terminals survive an orcad restart, and a node restart leaves them alone. A reboot of the computer stops orcad and
+its terminal daemon together, and Orca 1.4.277 cannot be given Persona's command to bring an Agent back with. Checked on an
+isolated 1.4.277 runtime with a stub `claude` (2026-11-28):
+
+- After the reboot orcad keeps each tab in its workspace session (`session.tabs.listAll`: `status: "pending-handle"`, no
+  terminal, the provider session Orca's own Claude hooks reported), but `terminal.list` lists none of them, and nothing
+  starts on its own. A tab comes back when a client opens it (`session.tabs.activate`; the desktop app does it for the tab
+  it shows); a headless orcad with no client attached brings nothing back.
+- Orca then resumes the Agent with its own command, built from the provider session its hooks reported:
+  `claude --plugin-dir <Orca's agent view plugin> --resume <id>`, in the session's directory, without the start's
+  environment. Persona's launcher (a gateway's credentials), `--settings`, `--mcp-config` and hooks are gone, as with a
+  bare herdr resume. Without Orca's Claude hooks in Claude Code's settings (Orca installs them when it finds `claude`),
+  Orca knows no session to resume, and a tab Persona opened (no `launchAgent`) should open as a plain shell (read from
+  Orca's bundle, not checked live).
+- `terminal.create` takes `launchAgent`, `launchToken` and `launchConfig {agentCommand, agentArgs, agentEnv}`, and Orca's
+  resume builder would run `<agentCommand> --resume <id>` from such a config. It uses only a launch config Orca holds as
+  its own launch evidence, which a create over the local socket never gets: a start typed after a create with those fields,
+  a start Orca typed itself (`command`), and either with `ORCA_AGENT_LAUNCH_TOKEN` in `env` were all resumed with Orca's
+  bare command, and no resume record with the config was kept. `resumeProviderSession`, `resumeOrigin: "saved"` and
+  `spawnIntent` ask Orca to resume a session now; none sets the command a later restore uses. `launchAgent` would also
+  hand the terminal Orca's Claude account environment, so Persona sends none of these fields.
+
+So the node keeps no resume command or launch record for Orca panes (`holdResume` is herdr's), and shows what happened instead:
+
+- Before the tab is opened again, a session Persona started in it is `interrupted` (above: a recorded pane, started before
+  this node, no live Agent) with Continue, which resumes it on its launcher in a new Orca terminal (`docs/protocol/agent-states.md`).
+- Once Orca has brought it back with its own command, it is listed in that tab with `off_launcher` (the scan of running
+  claudes sees no Persona `--mcp-config`); a switch to the launcher it was started on quits it and starts it again there, in
+  the same terminal, with the next message (#17040, `docs/protocol/protocol.md`, "Switching a running Agent to another provider").
+- Continue while Orca still holds the old tab: from Orca's bundle (not checked live), Orca does not resume a provider
+  session that runs in another pane it knows of, so opening the old tab afterwards should not start a second Claude on it.
 
 ## When an engine cannot be selected
 

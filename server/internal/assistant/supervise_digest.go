@@ -1282,8 +1282,9 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	if g.Kind != sigNeedsYou {
 		e.Ask = ""
 	}
-	if g.Kind == sigAllStopped {
-		return e, true // Detail covers every participant; no arbitrary last agent in the fingerprint
+	if g.Kind == sigAllStopped || len(g.Unlinked) > 0 {
+		// An unlinked terminal has no verified reply: its listed preview can be from an earlier binding.
+		return e, true
 	}
 	if g.Kind == sigInbox && g.Inbox.ToAgent == "unhandled" {
 		// This failure belongs to the delivered turn, not a successor's current reply.

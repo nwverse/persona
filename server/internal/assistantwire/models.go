@@ -200,6 +200,7 @@ var modelRoutes = []string{
 	"PUT /api/v1/launchers/{name}",
 	"DELETE /api/v1/launchers/{name}",
 	"POST /api/v1/launchers/{name}/check",
+	"POST /api/v1/launchers/{name}/refresh-key", // ask a key's provider extension again (launcher_secrets.go)
 	"GET /api/v1/launchers/health",
 	"POST /api/v1/launchers/health/check",
 	"POST /api/v1/launchers/{name}/restore",
