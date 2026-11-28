@@ -332,12 +332,17 @@ struct CodingAgentAvatar: View {
         .scaledFrame(width: side, height: side)
         .background(Theme.Fill.well, in: Circle())
         .overlay(Circle().stroke(Theme.cardStroke, lineWidth: Theme.Size.hairline))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(model.spokenLabel)
+        .accessibilityHidden(decorative)
+        .accessibilityIdentifier("agent.mark")
         .overlay(alignment: .topTrailing) {
             if let status {
                 StatusDot(state: status.state, size: status.size, waiting: status.waiting, justFinished: status.justFinished)
                     .padding(Theme.Size.rule)
                     .background(ringColor, in: Circle())
                     .offset(x: EngineBadgeTokens.cornerOffset, y: -EngineBadgeTokens.cornerOffset)
+                    .accessibilityHidden(decorative)
             }
         }
         .overlay(alignment: .bottomTrailing) {
@@ -346,10 +351,6 @@ struct CodingAgentAvatar: View {
                     .offset(x: EngineBadgeTokens.cornerOffset, y: EngineBadgeTokens.cornerOffset)
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.spokenLabel)
-        .accessibilityHidden(decorative)
-        .accessibilityIdentifier("agent.mark")
     }
 }
 
