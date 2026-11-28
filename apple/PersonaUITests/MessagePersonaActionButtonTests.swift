@@ -28,7 +28,7 @@ final class MessagePersonaActionButtonTests: XCTestCase {
         try? XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: dir + "/message-persona-\(name).png"))
     }
 
-    private func any(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+    @MainActor private func any(_ app: XCUIApplication, _ label: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ OR identifier == %@", label, label)).firstMatch
     }
 
@@ -50,15 +50,25 @@ final class MessagePersonaActionButtonTests: XCTestCase {
     @MainActor private func actionButtonPage(_ mode: String) {
         let settings = settings
         settings.terminate()
+        // English whatever the simulator's language, so the pages and pickers are found by their titles.
+        settings.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         settings.launch()
-        let row = settings.cells.matching(NSPredicate(format: "label CONTAINS[c] %@", "Action Button")).firstMatch
-        for _ in 0..<6 where !row.isHittable { settings.swipeUp() }
+        let row = settings.buttons["com.apple.settings.actionButton"]
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no Action Button row\n\(settings.debugDescription)")
+        for _ in 0..<4 where !row.isHittable { settings.swipeDown() }
         row.tap()
+        Thread.sleep(forTimeInterval: 2)
+        print("message-persona: Action Button page\n\(settings.debugDescription)")
         let title = settings.staticTexts[mode]
-        for _ in 0..<16 where !(title.exists && title.isHittable) {
-            settings.swipeLeft()
-            Thread.sleep(forTimeInterval: 0.8)
+        // The page opens on the mode picked last (No Action, the last one, on a new simulator): look both ways.
+        for right in [true, false] {
+            for _ in 0..<16 where !(title.exists && title.isHittable) {
+                // A slow drag turns one page; a swipe's fling can carry past the page looked for.
+                let from = settings.coordinate(withNormalizedOffset: CGVector(dx: right ? 0.2 : 0.8, dy: 0.45))
+                let to = settings.coordinate(withNormalizedOffset: CGVector(dx: right ? 0.8 : 0.2, dy: 0.45))
+                from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.1)
+                Thread.sleep(forTimeInterval: 0.8)
+            }
         }
         XCTAssertTrue(title.exists, "no \(mode) page\n\(settings.debugDescription)")
     }
@@ -71,8 +81,9 @@ final class MessagePersonaActionButtonTests: XCTestCase {
         XCUIDevice.shared.press(.action)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "Persona did not come to the front")
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 15), "no keyboard\n\(app.debugDescription)")
-        let field = app.textViews.matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
+        let field = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true")).firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "no focused field\n\(app.debugDescription)")
+        XCTAssertEqual(field.identifier, "shell-composer-field", "the focused field is not the chat's composer")
         Thread.sleep(forTimeInterval: 1)
         shot(name + "-opened")
         print("message-persona: \(name) opened\n\(app.debugDescription)")
@@ -92,7 +103,9 @@ final class MessagePersonaActionButtonTests: XCTestCase {
         for _ in 0..<12 where !(persona.exists && persona.isHittable) { settings.swipeUp() }
         XCTAssertTrue(persona.exists, "no Persona in the picker\n\(settings.debugDescription)")
         persona.tap()
-        let message = any(settings, "Message Persona")
+        // App Shortcuts here are in the app's language (the simulator's), not Settings'.
+        let message = settings.descendants(matching: .any).matching(NSPredicate(format: "label IN %@",
+            ["Message Persona", "给 Persona 发消息", "Personaにメッセージ"])).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 10), "no Message Persona\n\(settings.debugDescription)")
         Thread.sleep(forTimeInterval: 1)
         shot("shortcut-picker")

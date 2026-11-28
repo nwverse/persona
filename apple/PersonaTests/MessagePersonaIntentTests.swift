@@ -69,6 +69,19 @@ import Testing
         #expect(bundle.contains("MessagePersonaControl()"))
     }
 
+    /// What the system lists is what the build's App Intents metadata holds, not the Swift list: the extractor dropped every
+    /// App Shortcut inside an `#if` in the builder, so the phone listed seven, without Call Persona, Start Meeting or
+    /// Message Persona (#17789). The app hosts these tests, so its own metadata is in the main bundle.
+    @Test func theBuiltMetadataListsEveryAppShortcut() throws {
+        let url = Bundle.main.bundleURL.appending(path: "Metadata.appintents/extract.actionsdata")
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let listed = (json["autoShortcuts"] as? [[String: Any]] ?? []).compactMap { $0["actionIdentifier"] as? String }
+        #expect(listed.count == PersonaShortcuts.appShortcuts.count)
+        for intent in ["OpenPersonaTypingIntent", "CallPersonaIntent", "StartMeetingRecordingIntent"] {
+            #expect(listed.contains(intent), "\(intent) is not in the build's App Shortcuts: \(listed)")
+        }
+    }
+
     private static func model(_ hub: FakeHub = FakeHub()) throws -> AppModel {
         let model = AppModel(stateFolder: FileManager.default.temporaryDirectory.appending(path: "message-persona-" + UUID().uuidString))
         model.linkHooksForTests = (transport: try #require(hub.client.transport), socket: { SyncSocket() })
