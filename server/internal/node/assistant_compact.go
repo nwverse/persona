@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -54,7 +55,7 @@ func (n *Node) assistantCompact(ctx context.Context, id string, onlyRunning bool
 		p.mu.Unlock()
 		switch {
 		case compacting:
-			return refusal("compacting", "正在压缩", nil)
+			return refusal(assistantwire.CodeConversationCompacting, "正在压缩", nil)
 		case busy:
 			return refusal("busy", "正在回答，等这一轮结束再压缩", nil)
 		}

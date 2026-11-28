@@ -503,9 +503,10 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			h.conversationSent(m.cfg.ID, sid, id, f.status, f.body, outcome)
 		}
 		keepCode := errorCodeOf(f.body)
-		// A conversation at work whose task-follow-up role changed refuses the message (nothing typed): it waits for
-		// the work to end instead of answering the owner "try again later" (assistantwire.CodeConversationBusy).
-		busy := f.status == http.StatusConflict && keepCode == assistantwire.CodeConversationBusy
+		// A conversation at work whose task-follow-up role changed, or one that is compacting its context, refuses
+		// the message (nothing typed): it waits for the work or compaction to end instead of answering the owner
+		// "try again later" (assistantwire.CodeConversationBusy, assistantwire.CodeConversationCompacting).
+		busy := f.status == http.StatusConflict && (keepCode == assistantwire.CodeConversationBusy || keepCode == assistantwire.CodeConversationCompacting)
 		if assistantConv && (outcome == sendUnknown || f.status >= http.StatusInternalServerError || busy) && asSent != nil {
 			// Nothing was typed, or the connection ended before the outcome was known: the manager keeps the message,
 			// sends it again in the first case and only looks for it in the second (the owner decides when it is not

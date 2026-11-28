@@ -267,3 +267,46 @@ func TestSendWithoutIDIsNotKept(t *testing.T) {
 		t.Fatalf("answer: %d %s, keeps %d", w.Code, w.Body, len(k.keeps()))
 	}
 }
+
+// A conversation that is compacting its context refuses the owner's message (CodeConversationCompacting, nothing
+// typed): the hub keeps it with its file tags and inline base64 images, answers 202 delivered:"later", and a second
+// message sent while compaction is still running hits CodeUndeliveredAhead and is kept behind it in FIFO order.
+func TestSendRefusedCompactingIsKeptWithAttachmentsAndFIFO(t *testing.T) {
+	var tries atomic.Int32
+	h, m, k := undeliveredHub(t, func(context.Context) error {
+		tries.Add(1)
+		return &rpc.Error{Code: assistantwire.CodeConversationCompacting, Message: "conversation is still compacting"}
+	})
+	body1 := `{"text":"please check <persona-file path=\"/tmp/photo.jpg\"/>","images":["data:image/png;base64,iVBORw0KGgo="],"client_msg_id":"compact-1"}`
+	w1 := sendAs(h, m, body1)
+	if w1.Code != http.StatusAccepted || !strings.Contains(w1.Body.String(), `"delivered":"later"`) {
+		t.Fatalf("first answer: %d %s, want 202 delivered:later", w1.Code, w1.Body)
+	}
+	// Once the first message is kept, manager reports undelivered_ahead for subsequent messages.
+	k.mu.Lock()
+	k.ahead = true
+	k.mu.Unlock()
+	w2 := sendAs(h, m, `{"text":"follow-up during compaction","client_msg_id":"compact-2"}`)
+	if w2.Code != http.StatusAccepted || !strings.Contains(w2.Body.String(), `"delivered":"later"`) {
+		t.Fatalf("second answer: %d %s, want 202 delivered:later", w2.Code, w2.Body)
+	}
+	if tries.Load() != 1 {
+		t.Fatalf("node send tries = %d, want 1 (second message must queue without hitting node)", tries.Load())
+	}
+	kept := k.keeps()
+	if len(kept) != 2 {
+		t.Fatalf("kept %d messages, want 2: %+v", len(kept), kept)
+	}
+	if kept[0].Code != assistantwire.CodeConversationCompacting {
+		t.Fatalf("kept[0].Code = %q, want %q", kept[0].Code, assistantwire.CodeConversationCompacting)
+	}
+	if gotText, _ := kept[0].Params["text"].(string); !strings.Contains(gotText, `<persona-file path="/tmp/photo.jpg"/>`) {
+		t.Fatalf("kept[0] text = %q, want <persona-file> preserved", gotText)
+	}
+	if imgs, _ := kept[0].Params["images"].([]any); len(imgs) != 1 || imgs[0] != "data:image/png;base64,iVBORw0KGgo=" {
+		t.Fatalf("kept[0] images = %#v, want inline base64 image preserved", kept[0].Params["images"])
+	}
+	if kept[1].Code != assistantwire.CodeUndeliveredAhead || kept[1].Params["text"] != "follow-up during compaction" {
+		t.Fatalf("kept[1] = %+v, want undelivered_ahead second message in FIFO order", kept[1])
+	}
+}

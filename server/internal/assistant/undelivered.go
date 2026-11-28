@@ -65,6 +65,10 @@ func undeliveredWait(n int) time.Duration {
 // undeliveredTick is how often the kept messages are looked at without anything else waking the loop.
 var undeliveredTick = 15 * time.Second
 
+// undeliveredCompactionFallback is the low-frequency fallback retry wait while a conversation is compacting,
+// avoiding noisy 15s polling when sessions.changed will wake delivery immediately once compaction settles.
+var undeliveredCompactionFallback = time.Minute
+
 // undeliveredMaxBytes bounds one kept message (its words and pictures as the app sent them): a bigger one is not kept
 // and the app gets the failure as before.
 const undeliveredMaxBytes = 16 << 20
@@ -99,9 +103,13 @@ type keptMessage struct {
 	// WaitIdle: the latest try was refused because the conversation was at work while its task-follow-up role changed
 	// (assistantwire.CodeConversationBusy). A session list that shows it still working does not wake it; one that shows
 	// it settled does, so it goes in right after the work ends, on the new role.
-	WaitIdle  bool   `json:"wait_idle,omitempty"`
-	Error     string `json:"error,omitempty"`
-	SignedOut bool   `json:"signed_out,omitempty"`
+	WaitIdle bool `json:"wait_idle,omitempty"`
+	// WaitCompaction: the latest try was refused because the conversation was compacting its context
+	// (assistantwire.CodeConversationCompacting). A session list that shows it still compacting does not wake it;
+	// one that shows compaction ended (done, failed, or cleared) wakes it at once.
+	WaitCompaction bool   `json:"wait_compaction,omitempty"`
+	Error          string `json:"error,omitempty"`
+	SignedOut      bool   `json:"signed_out,omitempty"`
 }
 
 // inDoubt: the latest try may have gone in and nobody said to send it again, so it is only looked for (undeliveredLook).
@@ -203,9 +211,14 @@ func (s *Service) KeepUndelivered(ctx context.Context, p assistantwire.KeepUndel
 			return k.wire(), nil
 		}
 	}
+	waitCompaction := p.Code == assistantwire.CodeConversationCompacting
+	nextAt := now.Add(undeliveredBackoff[0])
+	if waitCompaction {
+		nextAt = now.Add(undeliveredCompactionFallback)
+	}
 	k := keptMessage{ID: id, Machine: p.MachineID, Session: p.SessionID, Params: params, Human: p.Human, Lang: string(lang), CredentialID: p.CredentialID,
-		At: now, State: proto.UndeliveredWaiting, Attempts: 1, NextAt: now.Add(undeliveredBackoff[0]),
-		Error: undeliveredReason(lang, p.Code), WaitIdle: p.Code == assistantwire.CodeConversationBusy}
+		At: now, State: proto.UndeliveredWaiting, Attempts: 1, NextAt: nextAt,
+		Error: undeliveredReason(lang, p.Code), WaitIdle: p.Code == assistantwire.CodeConversationBusy, WaitCompaction: waitCompaction}
 	if p.Code == assistantwire.CodeUndeliveredAhead {
 		// never tried: it goes right after the ones ahead of it, and says so
 		k.Attempts, k.NextAt, k.Error = 0, now, i18n.T(lang, "assistant-undelivered.behind")
@@ -243,6 +256,9 @@ func undeliveredReason(lang i18n.Lang, code string) string {
 	}
 	if code == assistantwire.CodeConversationBusy {
 		return i18n.T(lang, "assistant-undelivered.busy")
+	}
+	if code == assistantwire.CodeConversationCompacting {
+		return i18n.T(lang, "assistant-undelivered.compacting")
 	}
 	return i18n.T(lang, "assistant-undelivered.not_started")
 }
@@ -323,6 +339,23 @@ func (s *Service) undeliveredCount(id string) int {
 	return len(b.st[id])
 }
 
+// hasWaitingUndelivered reports whether conversation id has any kept owner message waiting to be sent
+// (or currently being sent), so background relays yield to owner messages first.
+func (s *Service) hasWaitingUndelivered(id string) bool {
+	b := &s.undelivered
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sending[id] {
+		return true
+	}
+	for _, k := range b.st[id] {
+		if k.State == proto.UndeliveredWaiting {
+			return true
+		}
+	}
+	return false
+}
+
 // hasKeptUndelivered reports whether message id is currently kept in undelivered for conversation sid (conservatively
 // true if the undelivered book cannot be read, so a kept message's quiet-relay reservation is not discarded).
 func (s *Service) hasKeptUndelivered(ctx context.Context, sid, id string) bool {
@@ -364,22 +397,28 @@ func (s *Service) keepsBehind(ctx context.Context, p SendParams) bool {
 }
 
 func (s *Service) undeliveredDrop(sid, id string) bool {
+	_, ok := s.undeliveredDropMachine(sid, id)
+	return ok
+}
+
+func (s *Service) undeliveredDropMachine(sid, id string) (string, bool) {
 	b := &s.undelivered
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.undeliveredLocked(context.Background()) {
-		return false
+		return "", false
 	}
 	q := b.st[sid]
 	i := slices.IndexFunc(q, func(k keptMessage) bool { return k.ID == id })
 	if i < 0 {
-		return false
+		return "", false
 	}
+	machine := q[i].Machine
 	b.st[sid] = slices.Delete(slices.Clone(q), i, i+1)
 	if err := s.saveUndeliveredLocked(); err != nil {
 		s.logf("save undelivered messages: %v", err)
 	}
-	return true
+	return machine, true
 }
 
 func (s *Service) wakeUndelivered() {
@@ -434,14 +473,27 @@ func (s *Service) undeliveredSeen(d DeviceSessions) {
 		if len(q) == 0 || row.Status == proto.StatusOffline || row.Status == "" {
 			continue
 		}
+		compacting := row.Compaction != nil && row.Compaction.State == proto.CompactionRunning
 		for i := range q {
 			// A try in doubt is only looked for, on its own steps (undeliveredLook).
 			// One refused while the conversation was at work waits until the list shows it settled.
 			if q[i].WaitIdle && row.Status == proto.StatusWorking {
 				continue
 			}
-			if q[i].State == proto.UndeliveredWaiting && !q[i].inDoubt() && q[i].Machine == d.MachineID && q[i].NextAt.After(now) {
-				q[i].NextAt, woke = now, true
+			// One refused while compacting waits until compaction leaves CompactionRunning (done, failed, or cleared).
+			if q[i].WaitCompaction && compacting {
+				continue
+			}
+			if q[i].State == proto.UndeliveredWaiting && !q[i].inDoubt() && q[i].Machine == d.MachineID {
+				if q[i].WaitCompaction {
+					q[i].WaitCompaction = false
+					if q[i].NextAt.After(now) {
+						q[i].NextAt = now
+					}
+					woke = true
+				} else if q[i].NextAt.After(now) {
+					q[i].NextAt, woke = now, true
+				}
 			}
 		}
 	}
@@ -471,6 +523,7 @@ func (s *Service) wakeUndeliveredFor(machine, sid string) {
 		if q[i].State == proto.UndeliveredWaiting && !q[i].inDoubt() && (machine == "" || q[i].Machine == machine) {
 			q[i].NextAt = now
 			q[i].WaitIdle = false
+			q[i].WaitCompaction = false
 			woke = true
 		}
 	}
@@ -518,10 +571,13 @@ func (s *Service) undeliveredPass(ctx context.Context, now time.Time) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.undeliveredSend(ctx, id)
+			machine := s.undeliveredSend(ctx, id)
 			b.mu.Lock()
 			delete(b.sending, id)
 			b.mu.Unlock()
+			if machine != "" && !s.hasWaitingUndelivered(id) && s.queuedFor(id) > 0 {
+				go s.drainConversations(machine, []string{id})
+			}
 		}()
 	}
 	wg.Wait()
@@ -529,8 +585,9 @@ func (s *Service) undeliveredPass(ctx context.Context, now time.Time) {
 
 // undeliveredSend sends conversation id's waiting messages in order until one does not go in. One whose latest try
 // is in doubt is only looked for (undeliveredLook).
-func (s *Service) undeliveredSend(ctx context.Context, id string) {
+func (s *Service) undeliveredSend(ctx context.Context, id string) string {
 	changed := false
+	machine := ""
 	defer func() {
 		if changed {
 			s.publish(context.WithoutCancel(ctx))
@@ -549,13 +606,14 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 		}
 		if !found { // the pass found it due; after one goes in, the next follows at once
 			b.mu.Unlock()
-			return
+			return machine
 		}
+		machine = k.Machine
 		if k.inDoubt() {
 			b.mu.Unlock()
 			changed = true
 			if !s.undeliveredLook(ctx, id, k) {
-				return
+				return machine
 			}
 			continue // it went in, or the owner decides now: the next one may go
 		}
@@ -564,7 +622,7 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 			b.mu.Unlock()
 			if err != nil {
 				s.logf("undelivered: a kept message to %s is not marked given up: %v", short(id), err)
-				return // the next pass marks it
+				return machine // the next pass marks it
 			}
 			changed = true
 			continue // the next one has its own day
@@ -585,7 +643,7 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 			b.mu.Unlock()
 			changed = true
 			s.logf("undelivered: not sending a kept message to %s, its try could not be marked: %v", short(id), err)
-			return
+			return machine
 		}
 		b.mu.Unlock()
 		doubt, err := s.deliverKept(ctx, k)
@@ -625,11 +683,18 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 				m.State, m.TriedAt, m.Error = proto.UndeliveredFailed, time.Time{}, i18n.T(i18n.Lang(m.Lang), "assistant-undelivered.gone")
 			})
 		default: // refused before anything was typed: tried again with backoff
+			code := keptErrCode(err)
+			compacting := code == assistantwire.CodeConversationCompacting
 			saveErr = s.updateKeptLocked(id, k.ID, func(m *keptMessage) {
-				m.Attempts++
-				m.NextAt = time.Now().UTC().Add(undeliveredWait(m.Attempts))
-				m.Error = undeliveredReason(i18n.Lang(m.Lang), keptErrCode(err))
-				m.WaitIdle = keptErrCode(err) == assistantwire.CodeConversationBusy
+				if compacting {
+					m.NextAt = time.Now().UTC().Add(undeliveredCompactionFallback)
+				} else {
+					m.Attempts++
+					m.NextAt = time.Now().UTC().Add(undeliveredWait(m.Attempts))
+				}
+				m.Error = undeliveredReason(i18n.Lang(m.Lang), code)
+				m.WaitIdle = code == assistantwire.CodeConversationBusy
+				m.WaitCompaction = compacting
 				// Nothing typed: the mark is as before the try. A first try's is cleared (the next need not look
 				// first); an owner's Retry after a try in doubt still has that try to look for, and stays a Retry.
 				m.TriedAt, m.OwnerRetry = k.TriedAt, k.OwnerRetry
@@ -644,9 +709,10 @@ func (s *Service) undeliveredSend(ctx context.Context, id string) {
 		}
 		changed = true
 		if err != nil && !errors.Is(err, errKeptSignedOut) {
-			return
+			return machine
 		}
 	}
+	return machine
 }
 
 var (
@@ -909,7 +975,7 @@ func (s *Service) undeliveredRoutes() {
 					// A new day of tries from now, sent even after a try in doubt: the owner looked and said so.
 					// The line it may have written is still looked for first.
 					m.State, m.At, m.NextAt, m.Attempts, m.OwnerRetry = proto.UndeliveredWaiting, now, now, 0, true
-					m.LookUntil, m.Looks = time.Time{}, 0
+					m.LookUntil, m.Looks, m.WaitIdle, m.WaitCompaction = time.Time{}, 0, false, false
 				})
 			}
 		}
@@ -948,7 +1014,8 @@ func (s *Service) undeliveredRoutes() {
 			apierr.Write(w, http.StatusConflict, errors.New(i18n.T(s.lang(r.Context()), "assistant-undelivered.sending_now")))
 			return
 		}
-		if !s.undeliveredDrop(sid, mid) {
+		machine, dropped := s.undeliveredDropMachine(sid, mid)
+		if !dropped {
 			if s.heldAction(w, r, sid, mid, false) {
 				return
 			}
@@ -957,6 +1024,9 @@ func (s *Service) undeliveredRoutes() {
 		}
 		s.forgetOwnerRelayLater(context.WithoutCancel(r.Context()), sid, mid)
 		s.publish(context.WithoutCancel(r.Context()))
+		if machine != "" && !s.hasWaitingUndelivered(sid) && s.queuedFor(sid) > 0 {
+			go s.drainConversations(machine, []string{sid})
+		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 }

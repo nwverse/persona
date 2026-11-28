@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -136,7 +137,7 @@ func (b *runtimeRegistry) compactingLocked(id string) bool {
 }
 
 func runtimeCompactingRefusal(ctx context.Context) error {
-	return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
+	return refusal(assistantwire.CodeConversationCompacting, i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 }
 
 func (b *runtimeRegistry) beginCompaction(ctx context.Context, host *runtimeConn, id string, silent, onlyRunning bool) (*runtimeCompaction, error) {

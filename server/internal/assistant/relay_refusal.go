@@ -55,7 +55,7 @@ const (
 // (runtime_away, handover); its node is restarting (node_restarting); or the call ran out of time with the node on it
 // (deadline). Read from the node's and the manager's devices layer's refusals on assistant.send, not observed: a code
 // missing here and in relaySetupCodes reads as refused for good.
-var relayBusyCodes = []string{"busy", "adapter_busy", "compacting", "runtime_away", "assistant_control_failed",
+var relayBusyCodes = []string{assistantwire.CodeConversationBusy, "adapter_busy", assistantwire.CodeConversationCompacting, "runtime_away", "assistant_control_failed",
 	"adapter_timeout", "adapter_unavailable", "adapter_revision_mismatch", "handover", "node_restarting", devicewire.CodeDeadline}
 
 // relaySetupCodes are the refusals the owner ends by fixing the setup, after which the message goes in: Claude Code or

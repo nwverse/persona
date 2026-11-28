@@ -227,6 +227,10 @@ const (
 	// sent. The hub keeps an owner's message with an id (MethodKeepUndelivered); the manager sends it again once the
 	// conversation is idle, resolving the role again, so it starts on the new role and the old one never gets it.
 	CodeConversationBusy = "busy"
+	// CodeConversationCompacting: an assistant conversation is compacting its context and cannot take a new message
+	// until compaction ends. Nothing was sent. The hub keeps an owner's message with an id (MethodKeepUndelivered);
+	// the manager sends it again once compaction settles (whether it succeeded or failed).
+	CodeConversationCompacting = "compacting"
 	// CodeTaskDirectoryMissing distinguishes a missing directory from permission and validation failures.
 	CodeTaskDirectoryMissing = "task_directory_missing"
 	// CodeSupervisionRuntime means the runtime cannot receive separate supervision instructions. Nothing was sent.

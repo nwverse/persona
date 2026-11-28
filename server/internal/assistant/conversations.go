@@ -1228,12 +1228,14 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	}
 	leads := s.queueLeads(context.Background())
 	placeholders := make([]bool, len(list))
+	undeliveredWaiting := make([]bool, len(list))
 	for i := range list {
 		if list[i].LogicalPlaceholder {
 			placeholders[i] = true
 		} else if list[i].Assistant && list[i].Cwd == "" && list[i].Space == "" {
 			placeholders[i] = s.isLogicalOfflineRow(list[i])
 		}
+		undeliveredWaiting[i] = s.hasWaitingUndelivered(list[i].SessionID)
 	}
 	b := &s.relays
 	b.mu.Lock()
@@ -1251,7 +1253,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 	now := time.Now()
 	for i, c := range list {
 		id := c.SessionID
-		if len(b.st.Queue[id]) == 0 || b.draining[id] || b.replacing[id] {
+		if len(b.st.Queue[id]) == 0 || b.draining[id] || b.replacing[id] || undeliveredWaiting[i] {
 			continue
 		}
 		placeholder := placeholders[i]

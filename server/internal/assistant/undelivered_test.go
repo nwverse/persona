@@ -972,3 +972,213 @@ func TestUndeliveredBusyRoleChangeWaitsForTheWorkToEnd(t *testing.T) {
 		t.Fatalf("still kept: %+v", q)
 	}
 }
+
+// A conversation compacting its context refuses the owner's message (CodeConversationCompacting, nothing typed).
+// While CompactionRunning is observed, undeliveredSeen does not wake it, undeliveredPass skips 15s polling and keeps
+// only the low-frequency fallback, and a fallback refusal with CodeConversationCompacting does not inflate backoff
+// Attempts. Once sessions.changed leaves CompactionRunning (whether CompactionDone or CompactionFailed), delivery
+// wakes immediately and re-runs messageParams for a fresh post-compaction snapshot.
+func TestUndeliveredCompactingWaitsAndWakesOnDoneOrFailed(t *testing.T) {
+	for _, finalState := range []string{proto.CompactionDone, proto.CompactionFailed} {
+		t.Run(finalState, func(t *testing.T) {
+			s, f := newQuietServiceOn(t, &memStore{})
+			kept, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{
+				MachineID: "server", SessionID: "conv1",
+				Params: map[string]any{"text": "after compact", "client_msg_id": "msg-compact"},
+				Human:  true, Code: assistantwire.CodeConversationCompacting,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			saysCompacting := false
+			for _, l := range []string{"en", "zh-Hans", "ja"} {
+				saysCompacting = saysCompacting || kept.Error == i18n.T(i18n.Lang(l), "assistant-undelivered.compacting")
+			}
+			if kept.State != proto.UndeliveredWaiting || !saysCompacting {
+				t.Fatalf("kept as %+v, want waiting with compacting reason", kept)
+			}
+			q := undeliveredOf(t, s, "conv1")
+			if len(q) != 1 || !q[0].WaitCompaction || q[0].Attempts != 1 {
+				t.Fatalf("kept %+v, want WaitCompaction=true Attempts=1", q)
+			}
+			// While CompactionRunning, undeliveredSeen does not wake it and 15s ticks do not poll session.send.
+			running := DeviceSessions{MachineID: "server", Sessions: []proto.Session{{
+				SessionID:  "conv1",
+				Status:     proto.StatusIdle,
+				Compaction: &proto.Compaction{State: proto.CompactionRunning},
+			}}}
+			s.undeliveredSeen(running)
+			s.undeliveredPass(context.Background(), time.Now().Add(15*time.Second))
+			s.undeliveredPass(context.Background(), time.Now().Add(30*time.Second))
+			if got := ownerSends(f); len(got) != 0 {
+				t.Fatalf("sent %q while compaction still running within fallback window", got)
+			}
+			// Fallback probe after 60s when still compacting keeps WaitCompaction=true without inflating Attempts.
+			failSends(f, &rpc.Error{Code: assistantwire.CodeConversationCompacting, Message: "still compacting"})
+			s.undeliveredPass(context.Background(), time.Now().Add(undeliveredCompactionFallback+time.Second))
+			q = undeliveredOf(t, s, "conv1")
+			if len(q) != 1 || !q[0].WaitCompaction || q[0].Attempts != 1 || q[0].State != proto.UndeliveredWaiting || q[0].inDoubt() {
+				t.Fatalf("after compacting fallback try: %+v (want WaitCompaction=true, Attempts still 1)", q)
+			}
+			if n := sendCalls(f, "msg-compact"); n != 1 {
+				t.Fatalf("tries = %d, want 1 fallback try", n)
+			}
+			// Still running after fallback: no immediate re-try.
+			failSends(f, nil)
+			s.undeliveredSeen(running)
+			s.undeliveredPass(context.Background(), time.Now().Add(15*time.Second))
+			if n := sendCalls(f, "msg-compact"); n != 1 {
+				t.Fatalf("tries = %d, want no retry while still CompactionRunning", n)
+			}
+			// Compaction settles (done or failed): undeliveredSeen wakes it immediately and deliverKept runs messageParams.
+			s.undeliveredSeen(DeviceSessions{MachineID: "server", Sessions: []proto.Session{{
+				SessionID:  "conv1",
+				Status:     proto.StatusIdle,
+				Compaction: &proto.Compaction{State: finalState},
+			}}})
+			if q := undeliveredOf(t, s, "conv1"); len(q) != 1 || q[0].WaitCompaction {
+				t.Fatalf("after compaction %s: %+v, want WaitCompaction cleared", finalState, q)
+			}
+			s.undeliveredPass(context.Background(), time.Now())
+			if n := sendCalls(f, "msg-compact"); n != 2 {
+				t.Fatalf("tries = %d, want immediate delivery after compaction %s", n, finalState)
+			}
+			f.mu.Lock()
+			sent := f.agentSent[len(f.agentSent)-1]
+			f.mu.Unlock()
+			if _, resolved := sent["supervision_instructions"]; !resolved {
+				t.Fatalf("sent %+v without fresh messageParams resolved after compaction", sent)
+			}
+			if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+				t.Fatalf("still kept after delivery: %+v", q)
+			}
+		})
+	}
+}
+
+// When both an owner's queued undelivered message and a background relay are waiting on a conversation after
+// compaction settles, drainRelays yields to the owner's message first, and the relay drains right after the
+// owner's queue empties (never starved or dropped).
+func TestUndeliveredPrioritizedOverRelaysAfterCompaction(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	stopHolds(t, s)
+	idle := proto.Session{
+		SessionID:  "conv1",
+		MachineID:  "server",
+		Assistant:  true,
+		Status:     proto.StatusIdle,
+		Compaction: &proto.Compaction{State: proto.CompactionDone},
+	}
+	f.mu.Lock()
+	f.sessions = map[string][]proto.Session{"server": {idle}}
+	f.mu.Unlock()
+
+	if _, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{
+		MachineID: "server", SessionID: "conv1",
+		Params: map[string]any{"text": "owner-first", "client_msg_id": "msg-owner"},
+		Human:  true, Code: assistantwire.CodeConversationCompacting,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.queueRelay("conv1", relayMsg{From: "c2", FromTitle: "Worker", Tool: "conversation_send", Text: "relay-second", At: time.Now().UTC()})
+
+	// SessionsChanged calls drainRelays before undeliveredSeen: drainRelays must yield while undelivered is waiting.
+	s.SessionsChanged(context.Background(), DeviceSessions{MachineID: "server", Sessions: []proto.Session{idle}})
+	if got := f.sentTo("conv1"); got != 0 {
+		t.Fatalf("drainRelays sent %d relay(s) ahead of waiting owner undelivered message", got)
+	}
+
+	// Now undeliveredPass delivers the owner message first, then triggers relay drain.
+	s.undeliveredPass(context.Background(), time.Now())
+	if got := ownerSends(f); len(got) != 1 || got[0] != "msg-owner" {
+		t.Fatalf("owner sends = %q, want owner message delivered first", got)
+	}
+	waitFor(t, "relay to drain after owner undelivered message", func() bool {
+		return f.sentTo("conv1") == 1 && s.queuedFor("conv1") == 0
+	})
+	f.mu.Lock()
+	relayText, _ := f.sends[0]["text"].(string)
+	f.mu.Unlock()
+	if !strings.Contains(relayText, "relay-second") {
+		t.Fatalf("relay delivered text = %q, want relay-second", relayText)
+	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+		t.Fatalf("owner undelivered queue not empty: %+v", q)
+	}
+	if n := s.queuedFor("conv1"); n != 0 {
+		t.Fatalf("relay queue still has %d message(s)", n)
+	}
+}
+
+// Deleting a kept message while waiting on compaction withdraws it cleanly (never sent once compaction finishes);
+// attempting DELETE while a delivery is in flight returns 409 to prevent double delivery.
+func TestUndeliveredDeleteDuringCompactionAndWhileSending(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	if _, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{
+		MachineID: "server", SessionID: "conv1",
+		Params: map[string]any{"text": "withdraw-me", "client_msg_id": "msg-del"},
+		Human:  true, Code: assistantwire.CodeConversationCompacting,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// DELETE while waiting on compaction succeeds.
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/assistant/conversations/conv1/undelivered/msg-del", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete while waiting: %d %s, want 200", rec.Code, rec.Body)
+	}
+	s.undeliveredSeen(DeviceSessions{MachineID: "server", Sessions: []proto.Session{{
+		SessionID:  "conv1",
+		Status:     proto.StatusIdle,
+		Compaction: &proto.Compaction{State: proto.CompactionDone},
+	}}})
+	s.undeliveredPass(context.Background(), time.Now().Add(time.Hour))
+	if got := ownerSends(f); len(got) != 0 {
+		t.Fatalf("sent %q after DELETE withdrawal", got)
+	}
+
+	// Keep another message and block session.send so DELETE arrives while b.sending["conv1"] is true.
+	if _, err := s.KeepUndelivered(context.Background(), assistantwire.KeepUndeliveredParams{
+		MachineID: "server", SessionID: "conv1",
+		Params: map[string]any{"text": "in-flight", "client_msg_id": "msg-flight"},
+		Human:  true, Code: assistantwire.CodeConversationCompacting,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	f.mu.Lock()
+	f.beforeSend = func() {
+		once.Do(func() { close(started) })
+		<-release
+	}
+	f.mu.Unlock()
+
+	s.undeliveredSeen(DeviceSessions{MachineID: "server", Sessions: []proto.Session{{
+		SessionID:  "conv1",
+		Status:     proto.StatusIdle,
+		Compaction: &proto.Compaction{State: proto.CompactionDone},
+	}}})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.undeliveredPass(context.Background(), time.Now())
+	}()
+	<-started
+
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/assistant/conversations/conv1/undelivered/msg-flight", nil))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("delete while sending: %d %s, want 409", rec.Code, rec.Body)
+	}
+	close(release)
+	wg.Wait()
+	if n := sendCalls(f, "msg-flight"); n != 1 {
+		t.Fatalf("in-flight send calls = %d, want 1", n)
+	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+		t.Fatalf("still kept after in-flight send completed: %+v", q)
+	}
+}

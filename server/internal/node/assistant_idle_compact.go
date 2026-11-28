@@ -160,7 +160,7 @@ func (n *Node) idleCompactBeforeInput(ctx context.Context, p *assistantProc) err
 		}
 		n.logf("assistant %s: compacting before unattended delivery", short(p.id))
 	} else {
-		return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
+		return refusal(assistantwire.CodeConversationCompacting, i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 	}
 
 	tick := time.NewTicker(25 * time.Millisecond)
@@ -186,7 +186,7 @@ func (n *Node) idleCompactBeforeInput(ctx context.Context, p *assistantProc) err
 		case <-p.exited:
 			return errors.New("assistant exited during idle compaction")
 		case <-timeout.C:
-			return refusal("compacting", i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
+			return refusal(assistantwire.CodeConversationCompacting, i18n.T(i18n.From(ctx), "assistant-start.compacting"), nil)
 		case <-tick.C:
 		}
 	}
