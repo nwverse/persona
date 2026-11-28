@@ -127,6 +127,7 @@ export struct SettingsPage {
     const current = (): boolean => this.mounted && this.active && this.page === 'appearance' && this.appearanceRevision === revision &&
       this.model === owner && owner.owns(generation, scope) && pairing === owner.pairingRevision();
     const context = this.getUIContext().getHostContext(); if (!context) return;
+    this.model.loadNextSuggestions().catch(() => undefined);
     try { await this.look.initialize(context as common.UIAbilityContext); }
     catch (_) { if (current()) this.look.error = 'device_look_storage_failed'; return; }
     if (!current()) return;
@@ -1462,6 +1463,34 @@ export struct SettingsPage {
                 .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
             } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
           }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+          if (this.model.nextSuggestionsValue !== null) {
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+            Row({ space: Tokens.inset }) {
+              Column({ space: Tokens.fine }) {
+                Text(tr('next_suggestions_title'))
+                  .fontSize(Tokens.body)
+                  .maxFontScale(Tokens.interfaceFontMaxScale)
+                  .fontColor(Colors.ink)
+                  .width('100%')
+                Text(tr('next_suggestions_note'))
+                  .fontSize(Tokens.caption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                  .fontColor(Colors.secondary)
+                  .width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.model.nextSuggestionsValue === true })
+                .selectedColor(Colors.action)
+                .enabled(!this.model.nextSuggestionsSaving && (this.model.connected || this.model.demo))
+                .onChange((value: boolean) => {
+                  if (this.model.nextSuggestionsValue !== null && value !== this.model.nextSuggestionsValue) {
+                    Haptics.selection();
+                    this.model.setNextSuggestions(value).catch(() => undefined);
+                  }
+                })
+                .accessibilityText(tr('next_suggestions_title'))
+                .id('appearance.next-suggestions')
+            }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+          }
           if (this.model.agentsDisplaySupported) {
             Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
             Row({ space: Tokens.inset }) {

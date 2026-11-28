@@ -28,7 +28,7 @@ export interface InboxHandling {
   error?: string;
 }
 
-export type SuggestionKind = "reply" | "agent" | "conclusion" | "todo";
+export type SuggestionKind = "reply" | "handoff" | "agent" | "conclusion" | "todo";
 
 export interface InboxSuggestion {
   version: number;
@@ -40,6 +40,9 @@ export interface InboxSuggestion {
   /** Needs judgment: confirming hands it back to the processing conversation instead of running it. */
   handback?: boolean;
   machine_id?: string;
+  /** The existing conversation proposed by a handoff suggestion. */
+  session_id?: string;
+  target_title?: string;
   changes?: DocChange[];
   at?: string;
   /** The conversation the item was handed to that handed it in (Hand to AI); absent for the item's own AI twin. */
@@ -126,10 +129,12 @@ export function handlingFailed(it: InboxItem): boolean {
 }
 
 /** The suggestion's name: "Suggested reply" / "Suggested Agent" / "Conclusion" (an unknown kind: "Suggestion"). */
-export function suggestionTitle(s: InboxSuggestion): string {
+export function suggestionTitle(s: InboxSuggestion, isMainTarget = false): string {
   switch (s.kind) {
     case "reply":
       return t("lib-inbox-events.kind_reply");
+    case "handoff":
+      return t("lib-inbox-events.kind_handoff", { target: s.target_title || (isMainTarget ? t("sidebar.main_chat") : t("lib-format.untitled_session")) });
     case "agent":
       return t("lib-inbox-events.kind_agent");
     case "conclusion":
@@ -152,6 +157,8 @@ export function suggestionButtons(s: InboxSuggestion): { confirm: string; edit: 
   switch (s.kind) {
     case "reply":
       return { confirm: t("lib-inbox-events.send"), edit: true };
+    case "handoff":
+      return { confirm: t("lib-inbox-events.hand_off"), edit: true };
     case "agent":
       return { confirm: t("lib-inbox-events.start"), edit: true };
     case "conclusion":

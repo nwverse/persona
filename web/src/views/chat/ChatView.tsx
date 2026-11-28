@@ -5,7 +5,7 @@ import { defaultManager, LinkManager, useShownManager } from "../../lib/manager-
 import { decisionLaterKey } from "../../lib/assistant-entries";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, activityOf, stateOf, tabLabel, uuid } from "../../lib/format";
+import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, activityOf, stateOf, tabLabel, uuid, viewOf } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type Route, type SessionView } from "../../lib/router";
@@ -50,6 +50,7 @@ import { chatLines, freshWords, isUserInput, openRecap, parseUserText, segments,
 import { foldsBackgroundRounds, relayNeedsAttention } from "../../lib/background-fold";
 import type { Interaction, Item, Session, Subagent } from "../../lib/types";
 import { REVIEW_FEATURE } from "../../lib/types";
+import { orcaChatRenamesSpace } from "../../lib/host-abilities";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
@@ -263,7 +264,7 @@ interface Pending extends QueueCandidate {
 }
 
 function queuesWhileWorking(row?: Session): boolean {
-  return Boolean(row && stateOf(row) === "working" && !row.background_waiting && (
+  return Boolean(row && stateOf(row) === "working" && !row.background_working && !row.background_waiting && viewOf(row).reason?.kind !== "background" && (
     (row.queued?.length ?? 0) > (row.queued_relayed ?? 0) || row.capabilities?.queue_edit || row.capabilities?.queue_send_now ||
     row.space_kind === "codex_app" ||
     (row.source_kind !== "runtime" && (!row.agent || row.agent === "claude" || row.agent === "agy"))
@@ -1715,10 +1716,23 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       toast(t("chat-chatview.send_now_failed", { error: errorText(e) }), "error");
     }
   }, [mid, sid]);
+  // Once the hub says the turn is over, four kinds of background work draw the last exchange finished (its work folded,
+  // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
+  // background subagents (#5030), commands that only wait (#6045), and finally a real background command or Monitor
+  // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
+  const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
+  const backgroundOnly = backgroundState !== null;
+  // Also cover runtime background agents/workflows where backgroundTurn returns null while the hub still reports background-only state.
+  const backgroundEnded =
+    backgroundOnly ||
+    Boolean(!streaming && outgoing === 0 && !awaiting && session && (session.background_working || session.background_waiting || viewOf(session).reason?.kind === "background"));
+  const foregroundWorking = (state === "working" && !backgroundEnded) || awaiting;
+  const canStopForeground = !backgroundEnded && sessionCan(session, "interrupt");
+
   // the turn ended, and not necessarily by this stop
   useEffect(() => {
-    if (state !== "working") stopDone();
-  }, [state, stopDone]);
+    if (!foregroundWorking) stopDone();
+  }, [foregroundWorking, stopDone]);
 
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
@@ -1729,7 +1743,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       if (embedded || inPanel) return;
       if (e.key === "Escape" && !e.defaultPrevented && !e.isComposing && e.keyCode !== 229) {
         if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
-        if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
+        if (foregroundWorking && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
           e.preventDefault();
           void interrupt();
           return;
@@ -1759,14 +1773,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, awaiting, session, view, embedded, inPanel, canCompose, offlineLine]);
+  }, [foregroundWorking, state, awaiting, session, view, embedded, inPanel, canCompose, offlineLine]);
 
-  // Once the hub says the turn is over, four kinds of background work draw the last exchange finished (its work folded,
-  // any run's card inside it) instead of keeping the turn's "Working…" clock going: first a workflow (#3434), then
-  // background subagents (#5030), commands that only wait (#6045), and finally a real background command or Monitor
-  // (#7341). A message of yours on its way, streaming, or an answer being written is a turn again.
-  const backgroundState = backgroundTurn(session, subagents, { streaming, outgoing: outgoing > 0, awaiting });
-  const backgroundOnly = backgroundState !== null;
   const lastLive = !detached && working && !backgroundOnly && (!tr.loading || tr.items.length > 0);
   // the main conversation's readiness: the card for what is missing, and the send button saying it (4.4)
   const gate = useReadinessGate(isMain);
@@ -2453,7 +2461,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const background = useMemo(() => backgroundLine(session), [session]);
   // ✓ Done only for a turn that finished: one waiting on you, stopped or cut off by an error keeps its last words
   const done = !detached && turnDone(state, session, lastLine, tr.items);
-  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={sessionCan(session, "interrupt") ? interrupt : undefined} /> : null;
+  const running = session && dockBarShown ? <RunningStatusBar mid={mid} sid={sid} working={runningWorking} done={done} startedAt={runStart} clock={barClock.current} plain={assistant} step={step} background={!backgroundState || backgroundState.kind === "workflow" ? background : null} wait={wait} subtasks={subtasks} command={command} onStop={canStopForeground ? interrupt : undefined} /> : null;
   // at the top of the composer's card, as cindy's pending queue (#5327); a phone on its side keeps it to one line beside
   // the run's status. The same element while nothing in it changes: the composer is memoized.
   const queue = useMemo(
@@ -3057,11 +3065,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         <Composer
           draftKey={draftKey}
           commentImagesRef={commentImagesRef}
-          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : state === "working" || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
+          placeholder={offlineLine ? offlineLine : waitsFirst ? t("chat-chatview.codex_first_placeholder") : refusedNoRow ? t(gone ? "chat-chatview.session_gone_placeholder" : "chat-chatview.connecting_placeholder") : viewOnlyRow(session) ? t("chat-chatview.view_only") : computerAway && awayLine ? awayLine : (state === "working" && !backgroundEnded) || state === "needs_you" ? t("chat-chatview.queue_placeholder") : assistant ? askPlaceholder ?? t("chat-chatview.ask_placeholder", { name: persona.name }) : state === "offline" ? t("chat-chatview.resume_placeholder") : t("chat-chatview.agent_placeholder")}
           machineId={mid}
           agent={session?.agent}
           uploadDest={session?.space === "health" ? "health" : undefined}
-          working={state === "working" || awaiting}
+          working={foregroundWorking}
           needsYou={state === "needs_you"}
           onSend={send}
           onSendNow={session && (session.capabilities?.queue_send_now ?? (assistant || ((session.agent === "claude" || session.agent === "agy") && session.source_kind !== "runtime"))) ? sendQueueNow : undefined}
@@ -3070,7 +3078,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
           editingLast={editProp}
           loadingDraft={editingLast}
           // Persona's conversations too, the main one included (#1467): the node stops their turn like an agent's
-          onStop={sessionCan(session, "interrupt") ? interrupt : undefined}
+          onStop={canStopForeground ? interrupt : undefined}
           stopping={stopping}
           commands={commands}
           suggestion={session?.suggestion}
@@ -3557,7 +3565,8 @@ export const Header = memo(function Header({
         { key: "export", label: t("chat-chatview.export"), icon: "download", onSelect: () => import("./ExportDialog").then((m) => m.openExportDialog({ session, title, machineName, assistant: Boolean(assistant) }), (e: unknown) => toast(errorText(e), "error")) },
         { key: "info", label: t("chat-chatview.session_info"), icon: "info", onSelect: () => setDialog("info") },
         ...(canRename ? [{ key: "rename", label: t("chat-chatview.rename"), icon: "pencil" as const, onSelect: () => setDialog("rename") }] : []),
-        ...(!assistant && session.space_id && !session.source_kind ? [{ key: "space", label: t("chat-chatview.rename_space"), icon: "folder" as const, onSelect: () => setDialog("space") }] : []),
+        // an Orca native chat's space is its Orca worktree, renamed there like a terminal's (#17053)
+        ...(!assistant && session.space_id && (!session.source_kind || orcaChatRenamesSpace(session)) ? [{ key: "space", label: t("chat-chatview.rename_space"), icon: "folder" as const, onSelect: () => setDialog("space") }] : []),
         ...(!assistant ? [{ key: "mute", label: muted ? t("chat-chatview.unmute") : t("chat-chatview.mute"), icon: muted ? ("bell" as const) : ("bellOff" as const), onSelect: () => void flipMute() }] : []),
         ...(!assistant ? [{ key: "pin", label: pinned ? t("chat-chatview.unpin") : t("chat-chatview.pin"), icon: "pin" as const, onSelect: () => void flipPin(session) }] : []),
         { key: "sid", label: t("chat-chatview.copy_session_id"), icon: "copy", onSelect: () => copyText(session.session_id) },

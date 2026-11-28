@@ -151,5 +151,8 @@
   "orca_session_gone": "このチャットはもう Orca にありません。",
   "orca_closed": "このチャットは Orca で閉じられています。メッセージを送ってもう一度開いてから、設定を変えてください。",
   "orca_mode_unsupported": "Orca のこの種類のチャットはその権限モード（{detail}）に対応していないため、何も変えていません。",
-  "orca_rename_unsupported": "このバージョンの Orca では Persona からチャットの名前を変えられません。Orca で名前を変えるか、Orca を更新してください。"
+  "orca_rename_unsupported": "このバージョンの Orca では Persona からチャットの名前を変えられません。Orca で名前を変えるか、Orca を更新してください。",
+  "orca_start_unsupported": "このバージョンの Orca では Persona からチャットを始められないため、何も始めていません。Orca でチャットを始めるか、Orca を更新してください。",
+  "orca_start_folder": "このフォルダを含むプロジェクトが Orca にないため、何も始めていません。Orca でフォルダを開いてから、もう一度チャットを始めてください。",
+  "orca_start_launcher": "そのコンピュータの Orca ではこの種類のチャット（{detail}）を始められないため、何も始めていません。別のランチャーを選んでください。"
 }

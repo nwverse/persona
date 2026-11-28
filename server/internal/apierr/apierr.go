@@ -502,6 +502,9 @@ var bridgeReasonKeys = map[string]string{
 	"orca_closed":             "rpc-errors.orca_closed",
 	"orca_mode_unsupported":   "rpc-errors.orca_mode_unsupported",
 	"orca_rename_unsupported": "rpc-errors.orca_rename_unsupported",
+	"orca_start_unsupported":  "rpc-errors.orca_start_unsupported",
+	"orca_start_folder":       "rpc-errors.orca_start_folder",
+	"orca_start_launcher":     "rpc-errors.orca_start_launcher",
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go
