@@ -17,9 +17,11 @@ import (
 // machine_orca_chat_starts, on the machine (orca_chat_starts) only while Orca is in its engine set, changed from a full
 // device only, and reported to the assistant only where it applies.
 func TestOrcaChatStartsSwitch(t *testing.T) {
-	h, st, m, mux := engineHub(t)
+	h, st, m, engineMux := engineHub(t)
+	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/machines/{mid}/orca-chat-starts", h.withMachine(h.getOrcaChatStarts))
 	mux.HandleFunc("PUT /api/v1/machines/{mid}/orca-chat-starts", h.withMachine(h.putOrcaChatStarts))
+	mux.Handle("/", engineMux)
 	ctx := context.Background()
 	send := func(method, body, role string) (int, map[string]any) {
 		t.Helper()
