@@ -110,9 +110,12 @@ import (
 // supervision-policy recovery (#17348) measured 310,620 B against the 308,516 B ACP main: +2,104 B.
 // Its Antigravity part is unchanged by the separately packed OpenCode change above, giving a 312,684 B union.
 // Fixing Antigravity supervision policy >24KB early-newline split fallback and hardening policyRoot/session/file symlink + O_NOFOLLOW checks add 337 B (312,684 B -> 313,021 B).
+// Hardening Paseo read-only (plan) start and takeover (withholding initialPrompt until verified, active-receiver resolution, pre-mutation pendingReadonly eviction, 0..callWait op/send coordination, and zombie inFlight cleanup) adds 2,516 B (313,021 B -> 315,537 B).
+// Refreshing expired native Antigravity OAuth through bounded ACP authentication (#17537) brought main to 317,692 B (+2,155 B); Antigravity readNativeError reload-on-not_found, fail-fast permanent loss, and non-API local notice / timeout formatting (#17577) add 271 B (317,692 B -> 317,963 B).
+// Hardening Antigravity Desktop hub discovery/RPC/context wrapping, workspacePathOf UNC/NUL/host checks, and custom-channel fork/rewind isolation with rollback adds 1,012 B (317,963 B -> 318,975 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 313_021
+	const budget = 318_975
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

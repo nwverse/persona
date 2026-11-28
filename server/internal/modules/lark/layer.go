@@ -221,6 +221,10 @@ type Host interface {
 	StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (machine, session string, err error)
 	RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (id string, err error)
 	WithdrawHandoffDecision(ctx context.Context, id string)
+	// What a group guest asks of the core (guest.go): start its conversation, and send a later question into the one
+	// it already has. A conversation the node no longer has returns an error whose text is guestGone (guest.go).
+	StartGroupGuest(ctx context.Context, group, text, launcher string, tools []string) (machine, session string, err error)
+	SendGroupGuest(ctx context.Context, machine, session, turn, text string) error
 }
 
 // Layer is the module's assistant layer, what the core asks of it (internal/larkhost.Layer): the outbound channel port

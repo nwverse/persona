@@ -405,18 +405,22 @@ struct Index {
       this.chatForward.isChoosing(this.detailModel) || this.environment.keyboardHeightPx>0;
   }
   @Builder slimSessionHeader() {
-    Row() {
-      Button({type:ButtonType.Normal}) {
-        SymbolGlyph(Symbols.collapse).fontSize(Tokens.interfaceFontVp(16,this.environment.fontScale)).fontColor([Colors.ink])
-      }.width(this.sessionActionSize()).height(40).padding(0).backgroundColor(Color.Transparent)
-        .responseRegion({x:0,y:(40-this.sessionActionSize())/2,width:this.sessionActionSize(),height:this.sessionActionSize()})
+    Row({ space: Tokens.spaceS }) {
+      Button({ type: ButtonType.Circle }) {
+        SymbolGlyph(Symbols.collapse).fontSize(Tokens.interfaceFontVp(16, this.environment.fontScale)).fontColor([Colors.ink])
+      }.width(36).height(36).padding(0)
+        .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+        .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: 18 })
+        .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+        .responseRegion(ButtonStyles.touchRegion(36))
         .accessibilityText(tr(this.phoneAtRoot ? 'conversation_spaces' : 'back'))
-        .onClick(() => { if (this.phoneAtRoot) { this.drawerSearching=false; this.spacesShown=true; } else this.phoneBack(); })
-        .bindContextMenu(this.backHistory(),ResponseType.LongPress).id(this.phoneAtRoot ? 'shell.spaces' : 'shell.back')
-      PhoneSessionHeading({model:this.detailModel,space:this.phoneSessionSpace,heading:this.phonePageName(),slim:true,
-        expand:() => this.agentReadingHeader.reveal(this.readingHeaderOwner)}).layoutWeight(1)
+        .onClick(() => { if (this.phoneAtRoot) { this.drawerSearching = false; this.spacesShown = true; } else this.phoneBack(); })
+        .bindContextMenu(this.backHistory(), ResponseType.LongPress).id(this.phoneAtRoot ? 'shell.spaces' : 'shell.back')
+      PhoneSessionHeading({ model: this.detailModel, space: this.phoneSessionSpace, heading: this.phonePageName(), slim: true,
+        expand: () => this.agentReadingHeader.reveal(this.readingHeaderOwner) }).layoutWeight(1)
       this.sessionMoreButton(true)
-    }.width('100%').height(AgentReadingHeader.slimHeight).padding({left:4,right:4}).alignItems(VerticalAlign.Center)
+    }.width('100%').height(AgentReadingHeader.slimHeight).padding({ left: Tokens.spaceM, right: Tokens.spaceM }).alignItems(VerticalAlign.Center)
   }
   @Computed get floatingDraftHeader(): boolean {
     return this.fullHeightPhone() && this.phoneTop === 'session' && !!this.longDraftIdentity &&
@@ -2061,20 +2065,29 @@ struct Index {
     ];
   }
   @Builder shellMenu() {
-    Row({ space: this.foldLayout.supportsInspector ? 4 : Tokens.gap }) {
+    Row({ space: this.foldLayout.supportsInspector ? Tokens.spaceSm : Tokens.spaceS }) {
       if (!this.rail() && this.model.profile.id) {
         this.quickPaletteButton(this.foldLayout.supportsInspector ? 32 : 36, true)
       }
       if (!this.rail()) ForEach(this.menus(), (item: NavigationMenuItem, index: number) => {
         Button({ type: ButtonType.Circle }) { SymbolGlyph(index === 0 ? Symbols.plus : Symbols.spaces).fontSize(Tokens.symbolFont).fontColor([Colors.ink]) }
-          .attributeModifier(ButtonStyles.chrome).width(this.foldLayout.supportsInspector ? 32 : 36).height(this.foldLayout.supportsInspector ? 32 : 36).accessibilityText(item.value as string).onClick(() => { Haptics.tap(); item.action?.(); }).id(index === 0 ? 'shell.new' : 'shell.spaces')
+          .width(this.foldLayout.supportsInspector ? 32 : 36).height(this.foldLayout.supportsInspector ? 32 : 36).padding(0)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: (this.foldLayout.supportsInspector ? 32 : 36) / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(this.foldLayout.supportsInspector ? 32 : 36))
+          .accessibilityText(item.value as string).onClick(() => { Haptics.tap(); item.action?.(); }).id(index === 0 ? 'shell.new' : 'shell.spaces')
       })
       if (!this.rail() && this.wide() && this.foldLayout.supportsInspector) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
-        }.attributeModifier(ButtonStyles.chrome).width(32).height(32)
-          .responseRegion({ x: -6, y: -6, width: 44, height: 44 })
-          .backgroundColor(this.showFoldInspector() ? Colors.selection : Color.Transparent)
+        }.width(32).height(32).padding(0)
+          .responseRegion(ButtonStyles.touchRegion(32))
+          .backgroundColor(this.showFoldInspector() ? Colors.selection : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.showFoldInspector() ? Colors.link : (Colors.styleEdge || Colors.hairlineGlass), radius: 16 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
           .accessibilityText(tr('fold_inspector_title'))
           .onClick(() => this.toggleFoldInspector())
           .id('shell.fold.inspector')
@@ -2096,25 +2109,30 @@ struct Index {
     Button({type:ButtonType.Circle}) {
       Row({space:3}) {
         ForEach([0,1,2], (_dot:number) => {
-          Circle().width(3.5).height(3.5).fill(slim ? Colors.link : Colors.ink)
+          Circle().width(3.5).height(3.5).fill(Colors.ink)
         }, (dot:number) => String(dot))
       }
-    }.width(this.sessionActionSize()).height(slim ? 40 : this.sessionActionSize()).padding(0)
-      .backgroundColor(slim ? Color.Transparent : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
-      .backgroundBlurStyle(!slim && Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
-      .responseRegion({x:0,y:slim ? (40-this.sessionActionSize())/2 : 0,width:this.sessionActionSize(),height:this.sessionActionSize()})
-      .border(slim ? {width:0} : {width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:this.sessionActionSize()/2})
-      .shadow(slim ? {radius:0,color:Color.Transparent} : PhoneStyle.floatingElevation(this.environment.dark))
+    }.width(slim ? 36 : this.sessionActionSize()).height(slim ? 36 : this.sessionActionSize()).padding(0)
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .responseRegion(ButtonStyles.touchRegion(slim ? 36 : this.sessionActionSize()))
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.hairlineGlass,radius:(slim ? 36 : this.sessionActionSize())/2})
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
       .accessibilityText(tr('more')).id('chat.title.more')
       .enabled(this.phoneChatActionsReady).onClick(() => this.showChatActions(this.phoneTop,this.phoneParam))
       .bindMenu(this.chatTitleMenuVisible && this.phoneChatActionsReady,this.chatActionsMenu,this.chatMenuOptions(this.chatMenuRevision))
   }
   @Builder destinationMenus(name: string, param: Object) {
-    if (!this.mainDestination(name, param)) Row({ space: Tokens.gap }) {
+    if (!this.mainDestination(name, param)) Row({ space: Tokens.spaceS }) {
       if (name==='knowledge' && this.routeRow(param).path==='recordings') {
         Button({type:ButtonType.Circle}) {
           SymbolGlyph($r('sys.symbol.label')).fontSize(Tokens.symbolFont).fontColor([Colors.link])
-        }.attributeModifier(ButtonStyles.chrome).width(Tokens.chrome).height(Tokens.chrome).backgroundColor(Color.Transparent)
+        }.width(Tokens.chrome).height(Tokens.chrome).padding(0)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: Tokens.chrome / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(Tokens.chrome))
           .accessibilityText(tr('tags')).enabled(this.targetReady(name,param)).onClick(() => {
             if (this.activeChild===this.childKey(name,param) && this.targetReady(name,param)) this.recordingEditRevision++;
           }).id('destination.action.0')
@@ -2128,8 +2146,12 @@ struct Index {
               }, (dot: number) => String(dot))
             }
           } else Image(item.icon).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink)
-        }.attributeModifier(ButtonStyles.chrome)
-          .width(Tokens.chrome).height(Tokens.chrome).backgroundColor(Color.Transparent)
+        }.width(Tokens.chrome).height(Tokens.chrome).padding(0)
+          .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.hairlineGlass, radius: Tokens.chrome / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(Tokens.chrome))
           .accessibilityText(item.value as string).enabled(item.isEnabled !== false).onClick(() => item.action?.())
           .id(name === 'session' || name === 'conversation' || name === 'tools' ? 'chat.title.more' : 'destination.action.' + String(index))
           .bindMenu((name === 'session' || name === 'conversation' || name === 'tools') && this.chatTitleMenuVisible && this.activeChild === this.childKey(name, param),
@@ -2138,9 +2160,12 @@ struct Index {
       if (this.rail() && this.foldLayout.supportsInspector && (name === 'session' || name === 'conversation' || name === 'tools')) {
         Button({ type: ButtonType.Circle }) {
           SymbolGlyph($r('sys.symbol.info_circle')).fontSize(Tokens.symbolFont).fontColor([this.showFoldInspector() ? Colors.link : Colors.ink])
-        }.attributeModifier(ButtonStyles.chrome)
-          .width(Tokens.chrome).height(Tokens.chrome)
-          .backgroundColor(this.showFoldInspector() ? Colors.selection : Color.Transparent)
+        }.width(Tokens.chrome).height(Tokens.chrome).padding(0)
+          .backgroundColor(this.showFoldInspector() ? Colors.selection : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
+          .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: this.showFoldInspector() ? Colors.link : (Colors.styleEdge || Colors.hairlineGlass), radius: Tokens.chrome / 2 })
+          .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+          .responseRegion(ButtonStyles.touchRegion(Tokens.chrome))
           .accessibilityText(tr('fold_inspector_title'))
           .onClick(() => this.toggleFoldInspector())
           .id('fold.inspector.toggle')

@@ -3,14 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDate, t } from "../../i18n";
 import { errorText } from "../../lib/api";
+import { safeWebURL } from "../../lib/format";
 import { fetchTodoCausalTrace, type TodoCausalTraceEvent } from "../../lib/todos";
 import { Button, cx, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 
 function safeTraceUrl(raw?: string): string | undefined {
-  const s = raw?.trim();
-  if (!s) return undefined;
-  return /^https?:\/\//i.test(s) ? s : undefined;
+  return safeWebURL(raw);
 }
 
 function categoryLabel(category: string): string {
