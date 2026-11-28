@@ -201,7 +201,9 @@ func TestSpaceStateUpdateFromTheSpaceKindsOwnConversation(t *testing.T) {
 	ctx := context.Background()
 	s, _, n := spaceMDService(t)
 	const sid = "plain-00-0000"
-	call := func() (string, bool) { return spaceTool(t, s, sid, spaceStateTool, `{"text":"Migrated: notes and decisions."}`) }
+	call := func() (string, bool) {
+		return spaceTool(t, s, sid, spaceStateTool, `{"text":"Migrated: notes and decisions."}`)
+	}
 
 	// As the hub notes it (start.go requestOrigin): origin extension, ref and opener the extension's id.
 	s.originSet(ctx, "server", sid, OriginExtension, testSpaceKindOwner, testSpaceKindOwner)
@@ -215,18 +217,18 @@ func TestSpaceStateUpdateFromTheSpaceKindsOwnConversation(t *testing.T) {
 		t.Errorf("node call: %+v", c)
 	}
 
-	for name, set := range map[string]func(){
-		"another extension": func() { s.originSet(ctx, "server", sid, OriginExtension, "other-ext", "other-ext") },
-		"a Feishu /agent":   func() { s.originSet(ctx, "server", sid, OriginLarkAgent, testSpaceKindOwner, testSpaceKindOwner) },
-		"the inbox's twin":  func() { s.originSet(ctx, "server", sid, OriginInbox, "", "") },
-		"another machine":   func() { s.originSet(ctx, "elsewhere", sid, OriginExtension, testSpaceKindOwner, testSpaceKindOwner) },
+	for _, tc := range []struct{ name, machine, origin, ext string }{
+		{"another extension", "server", OriginExtension, "other-ext"},
+		{"a Feishu /agent", "server", OriginLarkAgent, testSpaceKindOwner},
+		{"the inbox's twin", "server", OriginInbox, ""},
+		{"another machine", "elsewhere", OriginExtension, testSpaceKindOwner},
 	} {
-		set()
+		s.originSet(ctx, tc.machine, sid, tc.origin, tc.ext, tc.ext)
 		calls := len(n.calls)
 		if out, isErr := call(); !isErr || len(n.calls) != calls {
-			t.Errorf("%s: not refused: %s", name, out)
+			t.Errorf("%s: not refused: %s", tc.name, out)
 		} else if strings.Contains(out, "inside a space") {
-			t.Errorf("%s: refused as outside the space: %s", name, out)
+			t.Errorf("%s: refused as outside the space: %s", tc.name, out)
 		}
 	}
 
