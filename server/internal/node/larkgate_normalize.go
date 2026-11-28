@@ -84,9 +84,16 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 	hasHeredoc, safe, goTest := false, true, false
 	var bodies []*syntax.Word
 	dir := cwd // a literal cd moves where later relative targets are
-	// vars (relax): literal values of variables assigned by a statement of their own at the top of the list, in order.
+	// vars (relax): literal values of variables assigned by a statement of their own at the top of the list, in order,
+	// plus the trusted process HOME unless a statement in the command overrides HOME (#16755).
 	// One assigned anywhere else (after && or ||) or to anything but a literal is unknown from then on.
 	vars := map[string]string{}
+	homeOverridden := false
+	if relax {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			vars["HOME"] = home
+		}
+	}
 	top := map[*syntax.Stmt]bool{}
 	for _, stmt := range tree.Stmts {
 		top[stmt] = true
@@ -100,6 +107,12 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 		}
 		return value
 	}
+	targetSafe := func(target string) bool {
+		if homeOverridden && (target == "~" || strings.HasPrefix(target, "~/")) {
+			return false
+		}
+		return safeHeredocTarget(target, dir, relax)
+	}
 	for _, stmt := range stmts {
 		call := stmt.Cmd.(*syntax.CallExpr)
 		if len(call.Args) == 0 {
@@ -108,6 +121,11 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 			}
 			for _, a := range call.Assigns {
 				if a.Name == nil {
+					continue
+				}
+				if a.Name.Value == "HOME" {
+					homeOverridden = true
+					delete(vars, "HOME")
 					continue
 				}
 				value, ok := "", false
@@ -126,6 +144,9 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 		base := filepath.Base(name)
 		if name == "cd" && !dynamic && len(call.Args) == 2 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 {
 			to, expanded := executionWord(call.Args[1])
+			if homeOverridden && (to == "~" || strings.HasPrefix(to, "~/")) {
+				safe = false
+			}
 			if to = larkHomePath(to); !filepath.IsAbs(to) && filepath.IsAbs(dir) {
 				to = filepath.Join(dir, to)
 			}
@@ -161,7 +182,7 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 		}
 		for _, redir := range stmt.Redirs {
 			if redir.Hdoc == nil {
-				if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || redir.Word == nil || !safeHeredocTarget(path(redir.Word, redir.Word.Lit()), dir, relax) {
+				if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || redir.Word == nil || !targetSafe(path(redir.Word, redir.Word.Lit())) {
 					safe = false
 				}
 				continue
@@ -175,7 +196,7 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 			if base == "cat" {
 				output := false
 				for _, other := range stmt.Redirs {
-					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && safeHeredocTarget(path(other.Word, other.Word.Lit()), dir, relax) {
+					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && targetSafe(path(other.Word, other.Word.Lit())) {
 						output = true
 					}
 				}
@@ -189,7 +210,7 @@ func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, res
 					if value == "-a" || value == "--append" {
 						continue
 					}
-					if value == "" || strings.HasPrefix(value, "-") || !safeHeredocTarget(value, dir, relax) {
+					if value == "" || strings.HasPrefix(value, "-") || !targetSafe(value) {
 						safe = false
 					}
 					files++
@@ -301,6 +322,10 @@ func larkMissingParent(dir string) (string, error) {
 		}
 		if !os.IsNotExist(err) {
 			return "", err
+		}
+		// Reject an existing entry whose EvalSymlinks returned ErrNotExist (a dangling symlink, #16755).
+		if _, lerr := os.Lstat(dir); lerr == nil || !os.IsNotExist(lerr) {
+			return "", os.ErrInvalid
 		}
 		up := filepath.Dir(dir)
 		if up == dir {

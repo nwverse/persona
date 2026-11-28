@@ -128,8 +128,11 @@ func literalLarkLoopCommands(cmd string, gates []proto.CommandGate) ([]string, b
 					return false
 				}
 			}
-			// A variable method remains unknown, matching the existing gate policy.
+			// A variable method, lark-cli subcommand word, or sensitive flag remains unknown, matching the gate policy.
 			if gated && index+1 < len(bound) && bound[index+1] {
+				return false
+			}
+			if isLarkCLI(name) && larkCLILoopBindingUnsafe(words[index+1:], original[index+1:], bound[index+1:]) {
 				return false
 			}
 			if gateOf(gates, name) >= 0 && (index+1 >= len(words) || !strings.EqualFold(words[index+1], "GET") && !strings.EqualFold(words[index+1], "HEAD")) {
@@ -212,6 +215,90 @@ func literalLarkLoopCommands(cmd string, gates []proto.CommandGate) ([]string, b
 		}
 	}
 	return commands, loops > 0 && resolved
+}
+
+// larkCLILoopBindingUnsafe rejects loop-variable bindings in lark-cli subcommand words, api HTTP methods, flag names,
+// bare positional arguments after flags, and sensitive flags (--as, --method, -X, --request, --profile, --dry-run,
+// --help, --version). Ordinary flag values and api GET/HEAD paths may still be bound from a literal for-list (#16755).
+func larkCLILoopBindingUnsafe(args, origArgs []string, bound []bool) bool {
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		key, _, inline := strings.Cut(args[i], "=")
+		if !strings.Contains(" --as --format -q --jq -o --output ", " "+key+" ") {
+			break
+		}
+		origKey, _, _ := strings.Cut(origArgs[i], "=")
+		if bound[i] && (!inline || strings.Contains(origKey, "$") || larkCLISensitiveFlags[key]) {
+			return true
+		}
+		i++
+		if !inline {
+			if i == len(args) {
+				return true
+			}
+			if larkCLISensitiveFlags[key] && bound[i] {
+				return true
+			}
+			i++
+		}
+	}
+	subStart := i
+	for ; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			break
+		}
+	}
+	subWords, subBound := args[subStart:i], bound[subStart:i]
+	if len(subWords) > 0 && subWords[0] == "api" {
+		if subBound[0] || len(subWords) > 1 && subBound[1] {
+			return true
+		}
+	} else {
+		for _, b := range subBound {
+			if b {
+				return true
+			}
+		}
+	}
+	afterDashDash := false
+	for ; i < len(args); i++ {
+		f := args[i]
+		if afterDashDash {
+			if bound[i] {
+				return true
+			}
+			continue
+		}
+		if f == "--" {
+			afterDashDash = true
+			continue
+		}
+		if !strings.HasPrefix(f, "-") {
+			if bound[i] {
+				return true
+			}
+			continue
+		}
+		key, _, inline := strings.Cut(f, "=")
+		origKey, _, _ := strings.Cut(origArgs[i], "=")
+		if bound[i] && (!inline || strings.Contains(origKey, "$") || larkCLISensitiveFlags[key]) {
+			return true
+		}
+		if inline || larkCLIBoolFlags[key] || larkCLIReadBoolFlags[key] {
+			continue
+		}
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+			if larkCLISensitiveFlags[key] && bound[i] {
+				return true
+			}
+			continue
+		}
+		if larkCLISensitiveFlags[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // bindLiteralLoopAssignments records only top-level scalar assignments whose value is one literal executable word.
@@ -330,6 +417,8 @@ func larkFileReadLoops(cmd string, risk larkRisk) bool {
 		return false
 	}
 	loops, ok := 0, true
+	loopNodes := map[*syntax.ForClause]bool{}
+	tainted := map[string]bool{}
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		if !ok {
 			return false
@@ -349,11 +438,51 @@ func larkFileReadLoops(cmd string, risk larkRisk) bool {
 			}
 			loops++
 			ok = larkFileReadLoop(n, list, risk)
+			if ok && list.Name != nil {
+				loopNodes[n] = true
+				tainted[list.Name.Value] = true
+			}
 			return false // its body is read whole above
 		}
 		return true
 	})
-	return ok && loops > 0
+	return ok && loops > 0 && !larkFileReadLoopTaintEscapes(tree, loopNodes, tainted)
+}
+
+// larkFileReadLoopTaintEscapes reports whether any loop variable populated by a validated file-read loop is
+// referenced outside those validated loops (e.g. exfiltrated via curl, copied via ${y:=$s}, or fed into another loop).
+func larkFileReadLoopTaintEscapes(tree *syntax.File, loopNodes map[*syntax.ForClause]bool, tainted map[string]bool) bool {
+	if len(tainted) == 0 {
+		return false
+	}
+	escaped := false
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		if escaped {
+			return false
+		}
+		switch n := node.(type) {
+		case *syntax.ForClause:
+			if loopNodes[n] {
+				return false
+			}
+		case *syntax.ParamExp:
+			if n.Param != nil && tainted[n.Param.Value] {
+				escaped = true
+				return false
+			}
+		case *syntax.ArithmExp, *syntax.ArithmCmd:
+			syntax.Walk(node, func(inner syntax.Node) bool {
+				if lit, ok := inner.(*syntax.Lit); ok && tainted[lit.Value] {
+					escaped = true
+					return false
+				}
+				return !escaped
+			})
+			return !escaped
+		}
+		return true
+	})
+	return escaped
 }
 
 // larkShellKeywords open or close a compound command: a segment starting with one is part of it.
@@ -451,7 +580,7 @@ func larkLiteralFilter(s *syntax.Stmt) ([]string, bool) {
 		}
 		words[i] = value
 	}
-	return words, larkFilters[words[0]] && words[0] != "cd"
+	return words, isLarkFilter(words) && words[0] != "cd"
 }
 
 // larkLoopReadStmt is one statement of a file-read loop's body: a known lark-cli read (larkLoopCLIRead), optionally
@@ -551,8 +680,10 @@ func larkLoopFilter(call *syntax.CallExpr, piped bool) bool {
 		}
 	}
 	switch name := words[0]; {
-	case name == "echo" || name == "printf":
+	case name == "echo":
 		return true
+	case name == "printf":
+		return !larkPrintfAssignsVar(words[1:], call.Args[1:])
 	case dynamic:
 		return false
 	case name == "sed":
@@ -566,8 +697,29 @@ func larkLoopFilter(call *syntax.CallExpr, piped bool) bool {
 		}
 		return piped && len(rest) == 1 && !strings.HasPrefix(rest[0], "-") && sedScriptReadsOnly(rest[0])
 	default:
-		return larkFilters[name] && name != "cd"
+		return isLarkFilter(words) && name != "cd"
 	}
+}
+
+// larkPrintfAssignsVar reports whether printf may write a shell variable via -v (including -vNAME or a dynamic
+// leading option word before --), which would let a file-read loop variable escape into another variable (#16755).
+func larkPrintfAssignsVar(words []string, args []*syntax.Word) bool {
+	for i, w := range words {
+		if w == "--" {
+			return false
+		}
+		_, dyn := executionWord(args[i])
+		if dyn {
+			return i == 0 && len(words) > 1
+		}
+		if !strings.HasPrefix(w, "-") {
+			return false
+		}
+		if strings.Contains(w[1:], "v") {
+			return true
+		}
+	}
+	return false
 }
 
 // larkLoopSensitiveFlags never take a loop's word: who the call acts as, its method, its profile, where its output
@@ -672,7 +824,7 @@ func larkLoopCLIArgs(args []*syntax.Word) bool {
 			continue // a literal argument
 		}
 		name, _, inline := strings.Cut(values[i], "=")
-		if !inline && !larkCLIBoolFlags[name] {
+		if !inline && !larkCLIBoolFlags[name] && !larkCLIReadBoolFlags[name] {
 			valueOf = name
 		}
 	}

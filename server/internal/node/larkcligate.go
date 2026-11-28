@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -119,8 +120,8 @@ func parseLarkCLI(args []string, risk larkRisk) (c larkCall, deny string, ok boo
 		}
 		words = append(words, a)
 	}
-	if strings.Contains(strings.Join(words, " "), "$") {
-		return c, "", false // a variable names the command: its risk is unknown
+	if strings.Contains(strings.Join(words, " "), "$") || larkCLIDynamicFlagsUnsafe(flags) {
+		return c, "", false // a variable names the command, a sensitive flag, or a flag/positional slot: risk or actor is unknown
 	}
 	c.Path = "/" + strings.Join(words, "/")
 	switch {
@@ -286,6 +287,71 @@ func flagOn(flags []string, names ...string) bool {
 var larkCLIBoolFlags = map[string]bool{
 	"--help": true, "-h": true, "--version": true, "-v": true, "--dry-run": true,
 	"--reply-in-thread": true,
+}
+
+// larkCLIReadBoolFlags are read-side boolean flags that take no separate value argument.
+var larkCLIReadBoolFlags = map[string]bool{
+	"--no-reactions": true, "--page-all": true, "--is-at-me": true, "--json": true, "--download-resources": true,
+}
+
+// larkCLISensitiveFlags decide the actor, HTTP method, profile, or whether a write runs for real; an expansion in
+// their value keeps the call unclassifiable (#16755).
+var larkCLISensitiveFlags = map[string]bool{
+	"--as": true, "--method": true, "-X": true, "--request": true, "--profile": true,
+	"--dry-run": true, "--help": true, "-h": true, "--version": true, "-v": true,
+}
+
+// larkCLIDynamicFlagsUnsafe reports whether a variable or expansion appears outside an ordinary flag-value slot:
+// in a flag name, a bare positional word after flags, after "--", or as the value of a sensitive flag (--as,
+// --method, -X, --request, --profile, --dry-run, --help, --version).
+func larkCLIDynamicFlagsUnsafe(flags []string) bool {
+	if !slices.ContainsFunc(flags, func(f string) bool { return strings.Contains(f, "$") }) {
+		return false
+	}
+	afterDashDash := false
+	for i := 0; i < len(flags); i++ {
+		f := flags[i]
+		if afterDashDash {
+			if strings.Contains(f, "$") {
+				return true
+			}
+			continue
+		}
+		if f == "--" {
+			afterDashDash = true
+			continue
+		}
+		if !strings.HasPrefix(f, "-") {
+			if strings.Contains(f, "$") {
+				return true
+			}
+			continue
+		}
+		key, val, inline := strings.Cut(f, "=")
+		if strings.Contains(key, "$") {
+			return true
+		}
+		if inline {
+			if larkCLISensitiveFlags[key] && strings.Contains(val, "$") {
+				return true
+			}
+			continue
+		}
+		if larkCLIBoolFlags[key] || larkCLIReadBoolFlags[key] {
+			continue
+		}
+		if i+1 < len(flags) && !strings.HasPrefix(flags[i+1], "-") {
+			i++
+			if larkCLISensitiveFlags[key] && strings.Contains(flags[i], "$") {
+				return true
+			}
+			continue
+		}
+		if larkCLISensitiveFlags[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // flagValue follows pflag's last-value semantics, including --name=value. A value flag consumes
