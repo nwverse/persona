@@ -17,7 +17,7 @@ import (
 // Structured agent sessions: Orca's own chats around Claude Code / Codex (no terminal), driven with agentSession.*
 // on the same socket. Only the unary methods work here (subscribe* need Orca's paired WebSocket). Writes carry an
 // envelope Orca checks: an operation id (replaying the same id with the same payload answers as the first time) and
-// a fingerprint of the payload. Learned from Orca 1.4.243 / 1.4.246 (docs/plans/plan-orca-support.md "Structured sessions").
+// a fingerprint of the payload. Learned from Orca 1.4.243 / 1.4.246 (docs/integrations/orca.md "Structured sessions").
 
 // SessionPanePrefix starts the pane key of a structured session's row in worktree.ps:
 // "structured-agent-session-<session id>:<uuid>".

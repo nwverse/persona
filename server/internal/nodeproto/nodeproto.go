@@ -229,7 +229,7 @@ const (
 	// and answer start.status for reconnect reconciliation of held Agent starts (#10674).
 	StartOpID = "start_op_id_v1"
 	// OrcaBots: the node answers agentbot.roster and agentbot.items, and agentbot.describe / history / send take a
-	// bot_id they resolve to the bot's open Home Chat (docs/plans/plan-orca-support.md "Bots found on a computer",
+	// bot_id they resolve to the bot's open Home Chat (docs/integrations/orca.md "Bots found on a computer",
 	// #16891). Without it the manager finds no bots there; endpoints registered by hand work as before.
 	OrcaBots = "orca_bots_v1"
 )

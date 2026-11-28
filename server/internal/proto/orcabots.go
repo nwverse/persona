@@ -1,6 +1,6 @@
 package proto
 
-// Orca bots (docs/plans/plan-orca-support.md "Bots found on a computer", #16891): the bots of the Orca app on one
+// Orca bots (docs/integrations/orca.md "Bots found on a computer", #16891): the bots of the Orca app on one
 // computer, as that computer's node reads them from Orca's local runtime socket (bots.roster, bots.chats,
 // bots.items.list) and answers the manager's agentbot.roster and agentbot.items. Nothing here goes through Orca
 // Cloud. Orca's own words (an item's status, a reply's label) are kept as Orca wrote them.

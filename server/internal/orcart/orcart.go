@@ -3,7 +3,7 @@
 // {id, authToken, method, params}, answered by one JSON line {id, ok, result | error{code, message}} (slow calls send
 // {"_keepalive": true} lines first). The socket and its token are in orca-runtime.json in Orca's data directory; the
 // token changes every time Orca starts. Only unary methods work on this socket (streaming ones need Orca's paired
-// WebSocket). See docs/plans/plan-orca-support.md "Orca source".
+// WebSocket). See docs/integrations/orca.md "Orca source".
 //
 // Orca being absent (not installed, not running) is normal: calls fail fast with ErrNotRunning and log nothing until
 // it was seen once.

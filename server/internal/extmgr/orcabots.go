@@ -15,7 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Orca bots found on the computers (docs/plans/plan-orca-support.md "Bots found on a computer", #16891). Every
+// Orca bots found on the computers (docs/integrations/orca.md "Bots found on a computer", #16891). Every
 // orcaBotsEvery the manager asks each connected computer whose node announces nodeproto.OrcaBots for its bots
 // (agentbot.roster: the node reads bots.roster and bots.chats on its local Orca socket; nothing goes through Orca Cloud)
 // and keeps one Agents → Bots source per bot, bound to the bot and not to a session, so a new Home Chat is followed. A

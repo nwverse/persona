@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Orca's bots in the bridge (docs/plans/plan-orca-support.md "Bots found on a computer", #16891). Every orcaBotsPoll
+// Orca's bots in the bridge (docs/integrations/orca.md "Bots found on a computer", #16891). Every orcaBotsPoll
 // the bridge reads the computer's bots (bots.roster), each one's chats (bots.chats) and its items waiting on the owner
 // (bots.items.list), all on Orca's local socket. Two things come of it:
 //   - an item's open question becomes one question card on the session of the chat it was raised in (the bot's open

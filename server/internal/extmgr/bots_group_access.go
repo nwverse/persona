@@ -44,15 +44,13 @@ type botGroupAccess struct {
 	Revision      int64                               `json:"revision,omitempty"`
 }
 
-// botGuestRefusal is why a non-owner may not trigger the bot, in the order guestAccess checks them.
-type botGuestRefusal string
-
+// The reasons guestAccess gives why a non-owner may not trigger the bot, in the order it checks them.
 const (
-	botGuestBlockedUser    botGuestRefusal = "blocked_user"
-	botGuestBlockedChat    botGuestRefusal = "blocked_chat"
-	botGuestOwnerOnly      botGuestRefusal = "owner_only"
-	botGuestChatNotAllowed botGuestRefusal = "chat_not_allowed"
-	botGuestUserNotAllowed botGuestRefusal = "user_not_allowed"
+	botGuestBlockedUser    = "blocked_user"
+	botGuestBlockedChat    = "blocked_chat"
+	botGuestOwnerOnly      = "owner_only"
+	botGuestChatNotAllowed = "chat_not_allowed"
+	botGuestUserNotAllowed = "user_not_allowed"
 )
 
 // groupChatBlocked: chatID is on group_access.blocked_chats. It silences every inbound group message, the owner's too.
@@ -64,7 +62,7 @@ func (s FeishuBotSettings) groupChatBlocked(chatID string) bool {
 }
 
 // guestAccess says why a non-owner may not trigger the bot in chatID; "" when they may. The order is the precedence.
-func (s FeishuBotSettings) guestAccess(sender, chatID string) botGuestRefusal {
+func (s FeishuBotSettings) guestAccess(sender, chatID string) string {
 	g := s.GroupAccess
 	if g != nil && groupListed(g.BlockedUsers, sender) {
 		return botGuestBlockedUser

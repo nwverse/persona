@@ -8,7 +8,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Orca's bots (docs/plans/plan-orca-support.md "Bots found on a computer", #16891): bots.roster lists them,
+// Orca's bots (docs/integrations/orca.md "Bots found on a computer", #16891): bots.roster lists them,
 // bots.chats a bot's chats (its Home Chat among them), bots.items.list its items and bots.items.owner.comment
 // answers one as the owner, all on this socket. Learned from Orca 1.4.274. An Orca without bots (older, or with Bots
 // switched off) answers these with an error, which callers take as "no bots".

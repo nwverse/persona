@@ -216,6 +216,18 @@ func TestDomainRuleCases(t *testing.T) {
 		{"another package's interface as a parameter", merged(fleet, core("import \"github.com/nwverse/persona/server/internal/agentref\"\n\n"+
 			"// Tag is a tag. The zero Tag is none.\ntype Tag struct{ tag uint8 }\n\n"+
 			"// Tell tells v nothing.\nfunc (g Tag) Tell(v agentref.RefVisitor) {}\n")), []string{"core-interface-param"}},
+		{"standard-library named primitives and collections in a core", core("import (\n\t\"bytes\"\n\t\"iter\"\n\ts \"sort\"\n\t\"strings\"\n)\n\n" +
+			"// Tag is a tag. The zero Tag is none.\ntype Tag struct{ tag uint8 }\n\n" +
+			"type rawLines s.StringSlice\n\n" +
+			"// Note holds raw stdlib types. The zero Note is none.\ntype Note struct {\n\tlines rawLines\n\tbuf   strings.Builder\n\traw   bytes.Buffer\n\tseq   iter.Seq[Tag]\n}\n\n" +
+			"// NewNote takes a stdlib named slice.\nfunc NewNote(lines s.IntSlice, t Tag) Note { return Note{} }\n\n" +
+			"// Add takes a stdlib named slice.\nfunc (n Note) Add(lines s.Float64Slice) Note { return n }\n"),
+			[]string{"core-collection", "core-primitive-field", "core-primitive-field", "core-primitive-field",
+				"core-primitive-field", "core-primitive-signature", "core-primitive-signature"}},
+		{"iter.Seq as a parameter reports core-interface-param only", core("import \"iter\"\n\n" +
+			"// Tag is a tag. The zero Tag is none.\ntype Tag struct{ tag uint8 }\n\n" +
+			"// Each walks tags.\nfunc (g Tag) Each(seq iter.Seq[Tag]) Tag { return g }\n"),
+			[]string{"core-interface-param"}},
 		{"the hub importing a core", merged(fleet, app("internal/hub", fleetImport, "var badge = fleetcount.SurfaceBadge()\n")),
 			[]string{"path-no-core"}},
 		// An adapter's Wire hands application code a domain value's raw shape, called or passed on; tests are not counted.
@@ -682,10 +694,11 @@ func TestDomainHookScope(t *testing.T) {
 		{"internal/assistant/inbox/item", []string{}},
 		{"internal/assistant/quiethours", []string{}},
 		{"internal/assistant/nofamily", []string{"core-fail-family"}},
-		// fleetcount's own code passes; what its importers do to it is its hook's business too.
+		// fleetcount's own code passes; what its importers do to it is its hook's business too, the planted
+		// parameterless visitors (badapp/visitorimpl.go's whyView) included.
 		{"internal/assistant/fleetcount", []string{"core-importers", "out-alias", "out-conversion", "out-dot-import",
 			"out-literal", "out-unsafe", "out-unsafe", "out-visitor-impl", "out-visitor-impl", "out-visitor-impl",
-			"out-visitor-impl", "out-visitor-impl", "path-no-core"}},
+			"out-visitor-impl", "out-visitor-impl", "out-visitor-impl", "out-visitor-impl", "path-no-core"}},
 	} {
 		findings, _, err := domainrules.Run(pkgs, idx, c.scope)
 		if err != nil {
