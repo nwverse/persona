@@ -39,6 +39,16 @@ type userRuleStore interface {
 	Remove(ctx context.Context, id string) (bool, error)
 }
 
+type userRuleUpserter interface {
+	Put(ctx context.Context, rule connector.UserRule) error
+}
+
+const (
+	clubFollowDefaultTTL     = 30 * time.Minute
+	clubFollowDefaultMaxUses = 10
+	clubFollowAlwaysLabel    = "Allow follow-ups in this session"
+)
+
 // errNoRuleStore is what changing the user's rules says while there is nowhere to keep them.
 var errNoRuleStore = errors.New("no place to keep the user's rules")
 
@@ -180,16 +190,56 @@ func (h *Manager) readyForChange(ctx context.Context) error {
 	return nil
 }
 
+func (h *Manager) putRuleInStore(ctx context.Context, rule connector.UserRule) error {
+	if up, ok := h.ruleStore.(userRuleUpserter); ok {
+		return up.Put(ctx, rule)
+	}
+	if _, err := h.ruleStore.Remove(ctx, rule.ID()); err != nil {
+		return err
+	}
+	return h.ruleStore.Add(ctx, rule)
+}
+
+// recordUserRuleUsed is called by the connector Registry when a user rule with a turn limit or TTL consumes a turn.
+func (h *Manager) recordUserRuleUsed(ctx context.Context, id string, used int) {
+	h.userRules.mu.Lock()
+	defer h.userRules.mu.Unlock()
+	i := slices.IndexFunc(h.userRules.list, func(u connector.UserRule) bool { return u.ID() == id })
+	if i < 0 || used <= h.userRules.list[i].UsedCount {
+		return
+	}
+	updated := h.userRules.list[i]
+	updated.UsedCount = used
+	h.userRules.list = slices.Clone(h.userRules.list)
+	h.userRules.list[i] = updated
+	snap := slices.Clone(h.userRules.list)
+	h.userRules.snap.Store(&snap)
+	if h.ruleStore != nil {
+		storeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatRuleStoreTime)
+		defer cancel()
+		if err := h.putRuleInStore(storeCtx, updated); err != nil {
+			h.logf("user rules: keep used_count for %s: %v", id, err)
+		}
+	}
+}
+
 // addChatRule keeps the rule for the chat a ledger row went to and applies it at once, without a restart. It returns
 // the rule and whether it is new, or the *connector.NoChatRuleError that says why the row offers none; an error from the
-// store leaves the rules as they were. Adding a chat that has a rule is no change: the rule it has is returned, as it was
-// made.
+// store leaves the rules as they were. Adding a chat that has an active rule is no change: the rule it has is returned,
+// as it was made.
 func (h *Manager) addChatRule(ctx context.Context, row db.SentAsUser) (rule connector.UserRule, created bool, err error) {
 	rule, err = h.chatRuleOfRow(row)
 	if err != nil {
 		return connector.UserRule{}, false, err
 	}
-	rule.At, rule.Row, rule.Summary = time.Now().UTC(), row.ID, cutRunes(row.Summary, sentSummaryMost)
+	rule.At, rule.Row, rule.Summary = connector.UserRuleNow().UTC(), row.ID, cutRunes(row.Summary, sentSummaryMost)
+	return h.saveChatRule(ctx, rule, false)
+}
+
+func (h *Manager) saveChatRule(ctx context.Context, rule connector.UserRule, replaceActive bool) (connector.UserRule, bool, error) {
+	if err := rule.Validate(); err != nil {
+		return connector.UserRule{}, false, err
+	}
 	h.userRules.mu.Lock()
 	defer h.userRules.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, chatRuleStoreTime)
@@ -197,8 +247,30 @@ func (h *Manager) addChatRule(ctx context.Context, row db.SentAsUser) (rule conn
 	if err := h.readyForChange(ctx); err != nil {
 		return connector.UserRule{}, false, err
 	}
-	if err := h.ruleStore.Add(ctx, rule); err != nil {
-		return connector.UserRule{}, false, fmt.Errorf("keep the rule: %w", err)
+	now := connector.UserRuleNow()
+	if i := slices.IndexFunc(h.userRules.list, func(u connector.UserRule) bool { return u.ID() == rule.ID() }); i >= 0 {
+		if !replaceActive && h.userRules.list[i].Active(now) {
+			if err := h.ruleStore.Add(ctx, rule); err != nil {
+				return connector.UserRule{}, false, fmt.Errorf("keep the rule: %w", err)
+			}
+			return h.userRules.list[i], false, nil
+		}
+		if err := h.putRuleInStore(ctx, rule); err != nil {
+			return connector.UserRule{}, false, fmt.Errorf("keep the rule: %w", err)
+		}
+		h.userRules.list = slices.Clone(h.userRules.list)
+		h.userRules.list[i] = rule
+		h.applyUserRules()
+		return rule, true, nil
+	}
+	if replaceActive {
+		if err := h.putRuleInStore(ctx, rule); err != nil {
+			return connector.UserRule{}, false, fmt.Errorf("keep the rule: %w", err)
+		}
+	} else {
+		if err := h.ruleStore.Add(ctx, rule); err != nil {
+			return connector.UserRule{}, false, fmt.Errorf("keep the rule: %w", err)
+		}
 	}
 	if i := slices.IndexFunc(h.userRules.list, func(u connector.UserRule) bool { return u.ID() == rule.ID() }); i >= 0 {
 		return h.userRules.list[i], false, nil
@@ -206,6 +278,109 @@ func (h *Manager) addChatRule(ctx context.Context, row db.SentAsUser) (rule conn
 	h.userRules.list = append(slices.Clone(h.userRules.list), rule)
 	h.applyUserRules()
 	return rule, true, nil
+}
+
+// updateChatRuleKey updates the optional TTL (expiresAt) and/or turn limit (maxUses) of an existing user rule identified
+// by its opaque client key (or its canonical ID) and applies the updated rule immediately.
+func (h *Manager) updateChatRuleKey(ctx context.Context, key string, expiresAt *time.Time, maxUses *int) (connector.UserRule, bool, error) {
+	h.userRules.mu.Lock()
+	defer h.userRules.mu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, chatRuleStoreTime)
+	defer cancel()
+	if err := h.readyForChange(ctx); err != nil {
+		return connector.UserRule{}, false, err
+	}
+	i := slices.IndexFunc(h.userRules.list, func(u connector.UserRule) bool { return chatRuleKey(u) == key || u.ID() == key })
+	if i < 0 {
+		return connector.UserRule{}, false, nil
+	}
+	updated := h.userRules.list[i]
+	now := connector.UserRuleNow().UTC()
+	if expiresAt != nil {
+		updated.At = now
+		updated.ExpiresAt = expiresAt.UTC()
+	} else if updated.ExpiresAt.IsZero() || updated.ExpiresAt.After(now) {
+		updated.At = now
+	}
+	if maxUses != nil {
+		updated.MaxUses = *maxUses
+		updated.UsedCount = 0
+	}
+	if err := updated.Validate(); err != nil {
+		return connector.UserRule{}, false, err
+	}
+	if err := h.putRuleInStore(ctx, updated); err != nil {
+		return connector.UserRule{}, false, fmt.Errorf("keep the rule: %w", err)
+	}
+	h.userRules.list = slices.Clone(h.userRules.list)
+	h.userRules.list[i] = updated
+	h.applyUserRules()
+	return updated, true, nil
+}
+
+// clubFollowCardRule checks whether a connector tool call waiting on a phone approval card can offer a one-tap session
+// follow-up rule ("club:session:<session_key>"). It fails closed when the call has duplicate fields, is in a
+// ConfirmEach conversation, targets a ConfirmAlways action, or is blocked by a hand-written deny/confirm rule.
+func (h *Manager) clubFollowCardRule(ctx context.Context, by asker, tool string, input json.RawMessage) (connector.UserRule, bool) {
+	if tool != "club_agent_send" && tool != "club_agent_interrupt" {
+		return connector.UserRule{}, false
+	}
+	if connector.ConfirmsEach(ctx) || inSpace(h.askerCwd(by)) || connector.HasRepeatedField(input) {
+		return connector.UserRule{}, false
+	}
+	var m connector.Manifest
+	if h.connectors != nil {
+		if c := h.connectors.Owner(tool); c != nil {
+			if c.ID() != "club" {
+				return connector.UserRule{}, false
+			}
+			m = c.Manifest()
+			if m.AlwaysConfirms(tool) {
+				return connector.UserRule{}, false
+			}
+		}
+	}
+	if h.cfg != nil && len(h.cfg.ConnectorGate) > 0 {
+		// If a hand-written rule explicitly denies or confirms this call, a user rule could never override it.
+		allowCheck := append(slices.Clone(h.cfg.ConnectorGate), connector.Rule{Connector: "club", Action: "*", Decision: connector.Allow})
+		if connector.Decide(allowCheck, m, "club", tool, input) != connector.Allow {
+			return connector.UserRule{}, false
+		}
+	}
+	var args struct {
+		SessionKey string `json:"session_key"`
+	}
+	if len(input) == 0 || json.Unmarshal(input, &args) != nil || args.SessionKey == "" {
+		return connector.UserRule{}, false
+	}
+	target, _ := json.Marshal(map[string]string{"session_key": args.SessionKey})
+	rule, err := connector.ChatRuleFor("club", tool, target)
+	if err != nil {
+		return connector.UserRule{}, false
+	}
+	return rule, true
+}
+
+// grantClubFollowCardRule persists and activates a bounded session follow-up rule when the user answers a club session
+// approval card with Allow and Always.
+func (h *Manager) grantClubFollowCardRule(ctx context.Context, rule connector.UserRule, summary string) {
+	now := connector.UserRuleNow().UTC()
+	rule.At = now
+	rule.ExpiresAt = now.Add(clubFollowDefaultTTL)
+	rule.MaxUses = clubFollowDefaultMaxUses
+	rule.UsedCount = 0
+	rule.Summary = cutRunes(cleanText(summary), sentSummaryMost)
+	saveCtx := context.WithoutCancel(ctx)
+	if saved, _, err := h.saveChatRule(saveCtx, rule, true); err != nil {
+		h.logf("user rules: grant club follow-up rule from card: %v", err)
+	} else {
+		h.auditConnector(saveCtx, saved.Rule.Connector, auditConnectorChatRuleAdded, map[string]any{
+			"chat":       saved.Chat(),
+			"expires_at": saved.ExpiresAt,
+			"max_uses":   saved.MaxUses,
+			"source":     "card",
+		})
+	}
 }
 
 // removeChatRuleKey drops the rule that chatRuleKey names (what the API gives a client) and applies that at once,

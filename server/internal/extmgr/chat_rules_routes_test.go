@@ -1084,3 +1084,134 @@ func TestChatRuleRoutesWithAHandEditedSettingThatSlipped(t *testing.T) {
 		t.Errorf("after the make: %v", list)
 	}
 }
+
+func TestClubRuleRoutesAndAuthRedLines(t *testing.T) {
+	ctx := context.Background()
+	e := chatRoutes(t)
+	club := &chatClub{}
+	if err := e.h.addConnector(club); err != nil {
+		t.Fatal(err)
+	}
+	clubSendID, err := e.st.RecordSentAsUser(ctx, db.SentAsUser{
+		Connector:  "club",
+		Action:     "club_agent_send",
+		Target:     json.RawMessage(`{"session_key":"agent:cue:acc_route:sess_route"}`),
+		Origin:     json.RawMessage(`{}`),
+		LetThrough: json.RawMessage(`{"kind":"card"}`),
+		Summary:    "club_agent_send session_key agent:cue:acc_route:sess_route",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clubStartID, err := e.st.RecordSentAsUser(ctx, db.SentAsUser{
+		Connector:  "club",
+		Action:     "club_agent_start",
+		Target:     json.RawMessage(`{"account_id":"acc_start"}`),
+		Origin:     json.RawMessage(`{}`),
+		LetThrough: json.RawMessage(`{"kind":"card"}`),
+		Summary:    "club_agent_start account_id acc_start",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	phone := deviceToken("dev_phone", roleFull)
+	watch := deviceToken("dev_watch", roleAnswer)
+	pairing := "pair_" + randomHex(4)
+	testDevices.Store(pairing, principal{ID: "pair", Role: roleFull, Paired: true})
+	ext := e.h.extTokens.issueAll("example-club-caller", "Club Caller")
+
+	// 1. Auth red lines on add (POST) and update (PATCH/PUT) with TTL, max_uses, session_key and account_id:
+	// Every caller without byOwnDevice (master token, answer-only device, pairing token, extension token, unknown token)
+	// must be refused.
+	for name, tc := range map[string]struct {
+		token string
+		want  int
+	}{
+		"owner master token":    {e.master(), 403},
+		"answer-only device":    {watch, 403},
+		"pairing token":         {pairing, 403},
+		"extension token":       {ext, 403},
+		"unauthenticated token": {"invalid_tok", 401},
+	} {
+		for _, body := range []string{
+			fmt.Sprintf(`{"row":%d,"ttl_seconds":300,"max_uses":5}`, clubSendID),
+			fmt.Sprintf(`{"row":%d,"scope":"account","ttl_seconds":600}`, clubSendID),
+			`{"session_key":"agent:cue:acc_1:sess_1","ttl_seconds":300,"max_uses":5}`,
+			`{"account_id":"acc_1","ttl_seconds":600}`,
+		} {
+			if code, _ := e.post(t, tc.token, body); code != tc.want {
+				t.Errorf("%s POST %s: got %d, want %d", name, body, code, tc.want)
+			}
+		}
+		for _, method := range []string{"PATCH", "PUT"} {
+			if code, _ := call(t, e.mux, method, chatRulesPath+"/cr_0000000000000000", tc.token, `{"ttl_seconds":600,"max_uses":10}`); code != tc.want {
+				t.Errorf("%s %s: got %d, want %d", name, method, code, tc.want)
+			}
+		}
+	}
+	// Delete (DELETE) also refuses non-authorized callers (answer-only, pairing, extension, unknown).
+	for name, tc := range map[string]struct {
+		token string
+		want  int
+	}{
+		"answer-only device":    {watch, 403},
+		"pairing token":         {pairing, 403},
+		"extension token":       {ext, 403},
+		"unauthenticated token": {"invalid_tok", 401},
+	} {
+		if code, _ := call(t, e.mux, "DELETE", chatRulesPath+"/cr_0000000000000000", tc.token, ""); code != tc.want {
+			t.Errorf("%s DELETE: got %d, want %d", name, code, tc.want)
+		}
+	}
+	if len(e.rules(t)) != 0 || len(e.h.connectors.UserRules()) != 0 {
+		t.Fatalf("rejected auth calls modified rules: %v", e.rules(t))
+	}
+
+	// 2. Authorized own-device (byOwnDevice) creates club session rule from row with ttl_seconds and max_uses.
+	code, out := e.post(t, phone, fmt.Sprintf(`{"row":%d,"ttl_seconds":600,"max_uses":3}`, clubSendID))
+	if code != 200 || out["created"] != true {
+		t.Fatalf("create club session rule from row: %d %v", code, out)
+	}
+	ruleMap := out["rule"].(map[string]any)
+	sessRuleKey := ruleMap["id"].(string)
+	if ruleMap["connector"] != "club" || ruleMap["chat"] != "session:agent:cue:acc_route:sess_route" ||
+		ruleMap["max_uses"] != float64(3) || ruleMap["expires_at"] == nil {
+		t.Fatalf("session rule view mismatch: %v", ruleMap)
+	}
+
+	// 3. Authorized own-device updates TTL and max_uses via PATCH /api/v1/connectors/sent/chat-rules/{id}.
+	code, out = call(t, e.mux, "PATCH", chatRulesPath+"/"+sessRuleKey, phone, `{"ttl_seconds":1200,"max_uses":7}`)
+	if code != 200 || out["rule"].(map[string]any)["max_uses"] != float64(7) {
+		t.Fatalf("PATCH club session rule: %d %v", code, out)
+	}
+
+	// 4. Authorized own-device creates club account rule from club_agent_start row and via direct account_id.
+	code, out = e.post(t, phone, fmt.Sprintf(`{"row":%d}`, clubStartID))
+	if code != 200 || out["created"] != true || out["rule"].(map[string]any)["chat"] != "account:acc_start" {
+		t.Fatalf("create club account rule from start row: %d %v", code, out)
+	}
+	code, out = e.post(t, phone, `{"account_id":"acc_direct","ttl_seconds":900,"max_uses":4}`)
+	if code != 200 || out["created"] != true || out["rule"].(map[string]any)["chat"] != "account:acc_direct" {
+		t.Fatalf("create direct club account rule: %d %v", code, out)
+	}
+	accDirectKey := out["rule"].(map[string]any)["id"].(string)
+
+	// 5. Invalid inputs (wildcards, negative max_uses, negative ttl_seconds) are rejected with 400.
+	for _, badBody := range []string{
+		`{"session_key":"agent:cue:*:sess_1"}`,
+		`{"account_id":"acc_*"}`,
+		`{"account_id":"acc:colon"}`,
+		`{"account_id":"acc_direct","max_uses":0}`,
+		`{"account_id":"acc_direct","ttl_seconds":0}`,
+	} {
+		if code, _ := e.post(t, phone, badBody); code != 400 {
+			t.Errorf("POST %s: expected 400, got %d", badBody, code)
+		}
+	}
+
+	// 6. Delete via DELETE /api/v1/connectors/sent/chat-rules/{id}.
+	if code, _ := call(t, e.mux, "DELETE", chatRulesPath+"/"+accDirectKey, phone, ""); code != 200 {
+		t.Fatalf("DELETE club account rule: %d", code)
+	}
+}

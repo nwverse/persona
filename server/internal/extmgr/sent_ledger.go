@@ -63,6 +63,7 @@ func (h *Manager) newConnectors(rules []connector.Rule) *connector.Registry {
 		}
 	}
 	r.SetSent(h.recordSent)
+	r.SetUserRuleUsed(h.recordUserRuleUsed)
 	return r
 }
 
@@ -238,7 +239,7 @@ func mailTarget(args json.RawMessage) (map[string]any, string, bool) {
 }
 
 // targetFields are the arguments connectors usually name their destination by, in the order a row says them.
-var targetFields = []string{"chat", "thread", "channel", "conversation", "recipient", "to", "reply_to", "subject", "repo", "number"}
+var targetFields = []string{"chat", "thread", "channel", "conversation", "session_key", "account_id", "recipient", "to", "reply_to", "subject", "repo", "number"}
 
 func genericTarget(args json.RawMessage) (map[string]any, string) {
 	var fields map[string]any

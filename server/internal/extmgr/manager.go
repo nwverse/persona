@@ -383,7 +383,16 @@ func (h *Manager) approveCard(ctx context.Context, by asker, tool, summary strin
 		ID: "ix_" + randomHex(6), MachineID: by.machine, SessionID: by.session, Kind: proto.IxPermission, ToolName: tool, Summary: summary,
 		ToolInput: input, SessionTitle: "Persona", Cwd: h.askerCwd(by), CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(15 * time.Minute).UTC(),
 	}
+	followRule, canFollow := h.clubFollowCardRule(ctx, by, tool, input)
+	if canFollow {
+		yes := true
+		ix.AlwaysLabel = clubFollowAlwaysLabel
+		ix.AlwaysHonored = &yes
+	}
 	r, _ := h.waitInteraction(ctx, ix)
+	if canFollow && r.Allow != nil && *r.Allow && r.Always && r.AnsweredBy == "" && !r.Remembered && !r.Late {
+		h.grantClubFollowCardRule(ctx, followRule, summary)
+	}
 	return r, ix.ID
 }
 

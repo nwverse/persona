@@ -64,6 +64,26 @@ func (s *memRuleStore) Add(ctx context.Context, r connector.UserRule) error {
 	return nil
 }
 
+func (s *memRuleStore) Put(ctx context.Context, r connector.UserRule) error {
+	if s.before != nil {
+		if err := s.before(ctx, "add"); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.adds++
+	if s.addErr != nil {
+		return s.addErr
+	}
+	if i := slices.IndexFunc(s.rules, func(o connector.UserRule) bool { return o.ID() == r.ID() }); i >= 0 {
+		s.rules[i] = r
+		return nil
+	}
+	s.rules = append(s.rules, r)
+	return nil
+}
+
 func (s *memRuleStore) Remove(ctx context.Context, id string) (bool, error) {
 	if s.before != nil {
 		if err := s.before(ctx, "remove"); err != nil {
@@ -756,5 +776,183 @@ func TestChatRuleOfEveryRouteTheLedgerKnows(t *testing.T) {
 		if got, err := h.chatRuleOfRow(row); err != nil || got.ID() != "lark:oc_1" {
 			t.Errorf("%s: %+v, %v", route, got, err)
 		}
+	}
+}
+
+type chatClub struct {
+	mu            sync.Mutex
+	did           []string
+	confirmAlways []string
+}
+
+func (*chatClub) ID() string   { return "club" }
+func (*chatClub) Name() string { return "Personal Agent Club" }
+func (c *chatClub) Manifest() connector.Manifest {
+	return connector.Manifest{
+		Capabilities:  []connector.Capability{connector.CapStatus, connector.CapActions},
+		ConfirmAlways: c.confirmAlways,
+	}
+}
+func (*chatClub) Status(context.Context) connector.Status {
+	return connector.Status{State: connector.StateOK}
+}
+func (*chatClub) Actions() []proto.Tool {
+	return []proto.Tool{
+		{Name: "club_agent_send"},
+		{Name: "club_agent_interrupt"},
+		{Name: "club_agent_start"},
+	}
+}
+func (*chatClub) Describe(_ context.Context, name string, args json.RawMessage) (connector.Action, string, error) {
+	return connector.Action{Name: name, Visible: "Personal Agent"}, name + " " + string(args), nil
+}
+func (c *chatClub) Do(_ context.Context, name string, args json.RawMessage) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.did = append(c.did, name+" "+string(args))
+	return "done", nil
+}
+func (c *chatClub) done() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.did)
+}
+
+func TestClubRulesEndToEndInManagerAndApproveCard(t *testing.T) {
+	ctx := context.Background()
+	st := &memRuleStore{}
+	h, _ := chatRuleManager(t, nil, st)
+	club := &chatClub{}
+	if err := h.addConnector(club); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. One-tap follow-up rule creation from approveCard (Allow=true, Always=true).
+	yes := true
+	var lastCard proto.Interaction
+	hubOf(h).answer = func(ix proto.Interaction) proto.Resolution {
+		lastCard = ix
+		return proto.Resolution{Allow: &yes, Always: true}
+	}
+	sendArgs := `{"session_key":"agent:cue:acc_1:sess_1","text":"first turn"}`
+	cardsBefore := len(hubOf(h).asked())
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(sendArgs)); res.IsError || club.done() != 1 {
+		t.Fatalf("first club_agent_send failed: %+v", res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore+1 {
+		t.Fatalf("expected 1 card on initial club_agent_send, got %d", len(hubOf(h).asked())-cardsBefore)
+	}
+	if lastCard.AlwaysLabel == "" || lastCard.AlwaysHonored == nil || !*lastCard.AlwaysHonored {
+		t.Fatalf("expected approveCard to offer AlwaysLabel and AlwaysHonored=true, got label=%q honored=%v", lastCard.AlwaysLabel, lastCard.AlwaysHonored)
+	}
+
+	// Verify the first write was recorded as kind "card" in sent_as_user, and the follow-up rule was stored.
+	rows := h.store.(*sentLedgerStore).all()
+	if len(rows) != 1 || objectOf(t, rows[0].LetThrough)["kind"] != "card" {
+		t.Fatalf("first row LetThrough: %s", rows[0].LetThrough)
+	}
+	rules, err := h.chatRules(ctx)
+	if err != nil || len(rules) != 1 || rules[0].ID() != "club:session:agent:cue:acc_1:sess_1" ||
+		rules[0].ExpiresAt.IsZero() || rules[0].MaxUses != clubFollowDefaultMaxUses || rules[0].UsedCount != 0 {
+		t.Fatalf("stored follow-up rule after card Always: %+v, %v", rules, err)
+	}
+
+	// 2. Subsequent send and interrupt on the same session_key go through without a card, increment UsedCount in store,
+	// and write kind="rule", user_rule=true into sent_as_user.
+	cardsBefore = len(hubOf(h).asked())
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(`{"session_key":"agent:cue:acc_1:sess_1","text":"second turn"}`)); res.IsError {
+		t.Fatal(res)
+	}
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_interrupt", json.RawMessage(`{"session_key":"agent:cue:acc_1:sess_1","then":"pause"}`)); res.IsError {
+		t.Fatal(res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore {
+		t.Fatalf("expected 0 cards for follow-up turns, got %d", len(hubOf(h).asked())-cardsBefore)
+	}
+	rules, _ = h.chatRules(ctx)
+	if len(rules) != 1 || rules[0].UsedCount != 2 {
+		t.Fatalf("expected UsedCount=2 in manager rules, got %+v", rules)
+	}
+	storedList, _ := st.List(ctx)
+	if len(storedList) != 1 || storedList[0].UsedCount != 2 {
+		t.Fatalf("expected UsedCount=2 persisted in ruleStore, got %+v", storedList)
+	}
+	rows = h.store.(*sentLedgerStore).all()
+	for _, idx := range []int{1, 2} {
+		lt := objectOf(t, rows[idx].LetThrough)
+		if lt["kind"] != "rule" || lt["user_rule"] != true {
+			t.Fatalf("row %d LetThrough=%v, want kind=rule user_rule=true", idx, lt)
+		}
+	}
+
+	// 3. Narrow the rule's max_uses to 1 via updateChatRuleKey, consume the 1 turn, and verify the next call falls back to Confirm (card).
+	maxOne := 1
+	updated, ok, err := h.updateChatRuleKey(ctx, rules[0].ID(), nil, &maxOne)
+	if err != nil || !ok || updated.MaxUses != 1 || updated.UsedCount != 0 {
+		t.Fatalf("updateChatRuleKey: %+v, %v, %v", updated, ok, err)
+	}
+	hubOf(h).answer = func(ix proto.Interaction) proto.Resolution {
+		lastCard = ix
+		return proto.Resolution{Allow: &yes, Always: false}
+	}
+	cardsBefore = len(hubOf(h).asked())
+	// Turn 1 of 1: allowed without card
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(sendArgs)); res.IsError {
+		t.Fatal(res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore {
+		t.Fatalf("turn 1 of 1 asked a card")
+	}
+	// Turn 2 of 1 (exhausted): must fall back to Confirm (ask a card)
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(sendArgs)); res.IsError {
+		t.Fatal(res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore+1 {
+		t.Fatalf("exhausted rule did not fall back to Confirm card")
+	}
+
+	// 4. ConfirmEach (space/health) and repeatedField red lines in Manager.
+	maxFive := 5
+	_, _, _ = h.updateChatRuleKey(ctx, rules[0].ID(), nil, &maxFive)
+	cardsBefore = len(hubOf(h).asked())
+	if res := h.callConnector(connector.ConfirmEach(ctx), asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(sendArgs)); res.IsError {
+		t.Fatal(res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore+1 || lastCard.AlwaysLabel != "" {
+		t.Fatalf("ConfirmEach must ask a card without AlwaysLabel: cards=%d label=%q", len(hubOf(h).asked())-cardsBefore, lastCard.AlwaysLabel)
+	}
+	dupRes := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send",
+		json.RawMessage(`{"session_key":"agent:cue:acc_1:sess_1","SESSION_KEY":"agent:cue:acc_9:sess_9","text":"dup"}`))
+	if !dupRes.IsError || dupRes.ErrorKind != proto.ToolErrorDeclined {
+		t.Fatalf("repeatedField must be denied: %+v", dupRes)
+	}
+
+	// 5. Account bypass rule (club:account:<account_id>) in Manager.
+	accRule, err := connector.ClubAccountRule("acc_bypass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accRule.At = connector.UserRuleNow().UTC()
+	if _, created, err := h.saveChatRule(ctx, accRule, true); err != nil || !created {
+		t.Fatalf("saveChatRule account: %v, %v", created, err)
+	}
+	cardsBefore = len(hubOf(h).asked())
+	// club_agent_start with matching account_id -> allowed without card
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_start", json.RawMessage(`{"account_id":"acc_bypass","text":"start"}`)); res.IsError {
+		t.Fatal(res)
+	}
+	// club_agent_send with valid 4-segment session_key for acc_bypass -> allowed without card
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(`{"session_key":"agent:cue:acc_bypass:sess_new","text":"msg"}`)); res.IsError {
+		t.Fatal(res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore {
+		t.Fatalf("account rule asked a card on matching start/send: %d", len(hubOf(h).asked())-cardsBefore)
+	}
+	// club_agent_send with malformed 3-segment session_key -> fail-closed (must ask a card)
+	if res := h.callConnector(ctx, asker{machine: "box", session: "conv1"}, "club_agent_send", json.RawMessage(`{"session_key":"agent:cue:acc_bypass","text":"msg"}`)); res.IsError {
+		t.Fatal(res)
+	}
+	if len(hubOf(h).asked()) != cardsBefore+1 {
+		t.Fatalf("malformed session_key under account rule did not fail-closed to Confirm card")
 	}
 }

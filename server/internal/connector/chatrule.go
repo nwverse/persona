@@ -8,10 +8,18 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
+
+// userRuleNow is the clock user rule expiration checks read (tests pin it for deterministic TTL checks).
+var userRuleNow = time.Now
+
+// UserRuleNow returns the current time according to the user-rule clock.
+func UserRuleNow() time.Time { return userRuleNow() }
 
 // Per-chat rules (#5278): from a row of the sent-as-user ledger the user can say "don't ask again in this chat", which
 // adds a rule that lets writes into that one chat through without a card. The rules are the gate's own (Rule), made
@@ -42,6 +50,11 @@ const (
 	githubConnector = "github"
 	githubComment   = "github_comment"
 	githubReview    = "github_review"
+
+	clubConnector      = "club"
+	clubAgentSend      = "club_agent_send"
+	clubAgentInterrupt = "club_agent_interrupt"
+	clubAgentStart     = "club_agent_start"
 )
 
 // larkMessages is the one route of a conversation a Lark rule of the user's allows; larkCreationRoutes are the routes
@@ -59,6 +72,9 @@ var (
 	// exactly.
 	githubRepo = lazyre.New(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	githubRef  = lazyre.New(`^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]{0,8})$`)
+	// clubSessionKey and clubAccountID enforce strict literal character sets with no wildcards, whitespace or control characters.
+	clubSessionKey = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.:@=+-]{0,199}$`)
+	clubAccountID  = lazyre.New(`^[A-Za-z0-9][A-Za-z0-9_.@=+-]{0,199}$`)
 )
 
 // githubRepoOK is "owner/name" with nothing a pattern uses and nothing that changes an API path ("..", as the
@@ -68,40 +84,163 @@ func githubRepoOK(repo string) bool {
 	return ok && githubRepo.MatchString(repo) && owner != "." && owner != ".." && name != "." && name != ".."
 }
 
-// UserRule is one rule the user made from a row of the ledger. Row and Summary say where it came from, for the list the
-// user sees; they play no part in what the gate does.
-type UserRule struct {
-	Rule    Rule      `json:"rule"`
-	At      time.Time `json:"at,omitzero"`       // when it was made
-	Row     int64     `json:"row,omitempty"`     // the ledger row it was made from (the ledger is pruned, the row may be gone)
-	Summary string    `json:"summary,omitempty"` // that row's one line
+// isClubSessionAction reports whether action is a club session-level write tool.
+func isClubSessionAction(action string) bool {
+	return action == clubAgentSend || action == clubAgentInterrupt
 }
 
-// Chat is the chat the rule is for: a Lark conversation's id, or "owner/name#number" for GitHub; "" for a rule that is
-// not one-chat shaped.
+// clubSessionKeyOK reports whether s is a valid exact session_key for a club session rule: non-empty, at most 200
+// characters, containing no wildcards (* ? [ ] \), whitespace, control characters, "/" or "." / ".." segments.
+func clubSessionKeyOK(s string) bool {
+	if !clubSessionKey.MatchString(s) || s == "." || s == ".." || strings.HasSuffix(s, ":") || strings.Contains(s, "::") {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	if strings.ContainsAny(s, "*?[\\]/") {
+		return false
+	}
+	for _, seg := range strings.Split(s, ":") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// clubAccountIDOK reports whether s is a valid exact account_id for a club account rule: non-empty, at most 200
+// characters, containing no colons, wildcards (* ? [ ] \), whitespace, control characters, "/" or "." / "..".
+func clubAccountIDOK(s string) bool {
+	if !clubAccountID.MatchString(s) || s == "." || s == ".." {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return false
+		}
+	}
+	return !strings.ContainsAny(s, "*?[\\]/:")
+}
+
+// parseClubSessionKey strictly validates the 4-segment session_key format "agent:<provider>:<account_id>:<session>".
+// Any malformed string or wrong segment count fails closed.
+func parseClubSessionKey(s string) (provider, accountID, session string, ok bool) {
+	if !clubSessionKeyOK(s) {
+		return "", "", "", false
+	}
+	segs := strings.Split(s, ":")
+	if len(segs) != 4 || segs[0] != "agent" {
+		return "", "", "", false
+	}
+	if !clubAccountIDOK(segs[1]) || !clubAccountIDOK(segs[2]) || !clubAccountIDOK(segs[3]) {
+		return "", "", "", false
+	}
+	return segs[1], segs[2], segs[3], true
+}
+
+// clubRuleOf recognizes a Rule of connector "club" as either a single-session rule ("session", <session_key>) or an
+// account bypass rule ("account", <account_id>).
+func clubRuleOf(r Rule) (kind, value string, ok bool) {
+	if r.Connector != clubConnector {
+		return "", "", false
+	}
+	switch len(r.Match) {
+	case 1:
+		if sk, isStr := r.Match["session_key"].(string); isStr {
+			if (isClubSessionAction(r.Action) || r.Action == "club_session" || r.Action == "*") && clubSessionKeyOK(sk) {
+				return "session", sk, true
+			}
+			return "", "", false
+		}
+		if acc, isStr := r.Match["account_id"].(string); isStr {
+			if (r.Action == clubAgentStart || r.Action == "club_account" || r.Action == "*") && clubAccountIDOK(acc) {
+				return "account", acc, true
+			}
+			return "", "", false
+		}
+	case 0:
+		if sk, found := strings.CutPrefix(r.Action, "session:"); found && clubSessionKeyOK(sk) {
+			return "session", sk, true
+		}
+		if sk, found := strings.CutPrefix(r.Action, "club:session:"); found && clubSessionKeyOK(sk) {
+			return "session", sk, true
+		}
+		if acc, found := strings.CutPrefix(r.Action, "account:"); found && clubAccountIDOK(acc) {
+			return "account", acc, true
+		}
+		if acc, found := strings.CutPrefix(r.Action, "club:account:"); found && clubAccountIDOK(acc) {
+			return "account", acc, true
+		}
+	}
+	return "", "", false
+}
+
+// UserRule is one rule the user made from a row of the ledger or an approval card. Row and Summary say where it came
+// from, for the list the user sees; ExpiresAt, MaxUses and UsedCount bound how long and how many times the gate lets
+// matching writes through before falling back to Confirm.
+type UserRule struct {
+	Rule      Rule      `json:"rule"`
+	At        time.Time `json:"at,omitzero"`          // when it was made
+	ExpiresAt time.Time `json:"expires_at,omitzero"`  // optional TTL expiration time; zero means no time expiry
+	MaxUses   int       `json:"max_uses,omitempty"`   // optional turn limit; 0 means unlimited
+	UsedCount int       `json:"used_count,omitempty"` // how many writes this rule has already let through
+	Row       int64     `json:"row,omitempty"`        // the ledger row it was made from (the ledger is pruned, the row may be gone)
+	Summary   string    `json:"summary,omitempty"`    // that row's one line
+}
+
+// Expired reports whether u has a non-zero ExpiresAt that is at or before now.
+func (u UserRule) Expired(now time.Time) bool {
+	return !u.ExpiresAt.IsZero() && !now.Before(u.ExpiresAt)
+}
+
+// Exhausted reports whether u has a positive MaxUses and UsedCount has reached or exceeded it.
+func (u UserRule) Exhausted() bool {
+	return u.MaxUses > 0 && u.UsedCount >= u.MaxUses
+}
+
+// Active reports whether u is neither expired at now nor exhausted.
+func (u UserRule) Active(now time.Time) bool {
+	return !u.Expired(now) && !u.Exhausted()
+}
+
+// Chat is the chat the rule is for: a Lark conversation's id, "owner/name#number" for GitHub, or
+// "session:<session_key>" / "account:<account_id>" for club; "" for a rule that is not one-chat shaped.
 func (u UserRule) Chat() string {
 	id, _ := chatOf(u.Rule)
 	_, chat, _ := strings.Cut(id, ":")
 	return chat
 }
 
-// ID names the chat the rule is for, the same for the same chat: "lark:<conversation>" or
-// "github:<owner/name>#<number>"; "" for a rule that is not one-chat shaped (Validate says why). Two rules of one chat
-// are one rule: adding the chat again changes nothing.
+// ID names the chat the rule is for, the same for the same chat: "lark:<conversation>",
+// "github:<owner/name>#<number>", "club:session:<session_key>" or "club:account:<account_id>"; "" for a rule that is
+// not one-chat shaped (Validate says why). Two rules of one chat are one rule: adding the chat again changes nothing.
 func (u UserRule) ID() string {
 	id, _ := chatOf(u.Rule)
 	return id
 }
 
 // Validate says whether the rule is one the gate may run for a user: it allows (a user's rule never confirms or
-// denies), it is exactly the one-chat shape ChatRuleFor makes, and the gate can use it (ValidateRules).
+// denies), it is exactly a narrow shape ChatRuleFor makes, its optional TTL and turn limits are consistent, and the
+// gate can use it (ValidateRules).
 func (u UserRule) Validate() error {
 	if u.Rule.Decision != Allow {
 		return fmt.Errorf("a rule of the user's only allows, not %q", u.Rule.Decision)
 	}
 	if _, ok := chatOf(u.Rule); !ok {
 		return errors.New("a rule of the user's allows writes into one chat and nothing wider: a Lark conversation's " +
-			"messages, or one GitHub issue's or pull request's comments")
+			"messages, one GitHub issue's or pull request's comments, or one club session or account")
+	}
+	if u.MaxUses < 0 {
+		return fmt.Errorf("max_uses %d cannot be negative", u.MaxUses)
+	}
+	if u.UsedCount < 0 {
+		return fmt.Errorf("used_count %d cannot be negative", u.UsedCount)
+	}
+	if !u.At.IsZero() && !u.ExpiresAt.IsZero() && !u.ExpiresAt.After(u.At) {
+		return errors.New("expires_at must be after at")
 	}
 	if err := ValidateRules([]Rule{u.Rule}); err != nil {
 		return fmt.Errorf("the gate cannot use it: %s", strings.TrimPrefix(err.Error(), "connector_gate[0]: "))
@@ -109,7 +248,7 @@ func (u UserRule) Validate() error {
 	return nil
 }
 
-// chatOf reads a rule back as one of the two one-chat shapes, the way ChatRuleFor builds them, and says which chat it
+// chatOf reads a rule back as one of the allowed shapes, the way ChatRuleFor builds them, and says which target it
 // pins; false for anything else (a pattern where an id should be, an extra match field, another action).
 func chatOf(r Rule) (string, bool) {
 	switch {
@@ -126,6 +265,12 @@ func chatOf(r Rule) (string, bool) {
 			return "", false
 		}
 		return githubConnector + ":" + repo + "#" + strconv.FormatInt(n, 10), true
+	case r.Connector == clubConnector:
+		kind, val, ok := clubRuleOf(r)
+		if !ok {
+			return "", false
+		}
+		return clubConnector + ":" + kind + ":" + val, true
 	}
 	return "", false
 }
@@ -212,8 +357,87 @@ func ChatRuleFor(connectorID, action string, target json.RawMessage) (UserRule, 
 		return larkChatRule(action, target)
 	case connectorID == githubConnector:
 		return githubChatRule(action, target)
+	case connectorID == clubConnector:
+		return clubChatRule(action, target)
 	}
 	return UserRule{}, noChatRule(NoChatUnknown, "the gate has no one-chat rule for %q", connectorID)
+}
+
+func clubChatRule(action string, target json.RawMessage) (UserRule, error) {
+	switch {
+	case isClubSessionAction(action):
+		var t struct {
+			SessionKey string `json:"session_key"`
+		}
+		_ = json.Unmarshal(target, &t)
+		return ClubSessionRule(t.SessionKey)
+	case action == clubAgentStart:
+		var t struct {
+			AccountID string `json:"account_id"`
+		}
+		_ = json.Unmarshal(target, &t)
+		return ClubAccountRule(t.AccountID)
+	default:
+		return UserRule{}, noChatRule(NoChatRoute, "%q is not a club session or account write action", action)
+	}
+}
+
+// ClubSessionRule builds a user rule for a single club session ("club:session:<session_key>"), allowing session-level
+// write tools (such as club_agent_send and club_agent_interrupt) that match sessionKey literally.
+func ClubSessionRule(sessionKey string) (UserRule, error) {
+	if !clubSessionKeyOK(sessionKey) {
+		return UserRule{}, noChatRule(NoChatTarget, "the session_key %q has characters a rule cannot pin to one session", sessionKey)
+	}
+	return UserRule{Rule: Rule{
+		Connector: clubConnector,
+		Action:    clubAgentSend,
+		Match:     map[string]any{"session_key": sessionKey},
+		Decision:  Allow,
+	}}, nil
+}
+
+// ClubAccountRule builds a user rule for a club account ("club:account:<account_id>"), allowing club_agent_start on
+// accountID and session-level writes whose 4-segment session_key ("agent:<provider>:<account_id>:<session>") names
+// accountID in the third segment.
+func ClubAccountRule(accountID string) (UserRule, error) {
+	if !clubAccountIDOK(accountID) {
+		return UserRule{}, noChatRule(NoChatTarget, "the account_id %q has characters a rule cannot pin to one account", accountID)
+	}
+	return UserRule{Rule: Rule{
+		Connector: clubConnector,
+		Action:    clubAgentStart,
+		Match:     map[string]any{"account_id": accountID},
+		Decision:  Allow,
+	}}, nil
+}
+
+// ClubAccountRuleFor builds a club:account:<account_id> rule from a club ledger row's action and target: from
+// target.account_id on club_agent_start, or from the 3rd segment of a strict 4-segment target.session_key on
+// club_agent_send / club_agent_interrupt.
+func ClubAccountRuleFor(action string, target json.RawMessage) (UserRule, error) {
+	if action == MethodSentRecord {
+		return UserRule{}, noChatRule(NoChatRecorded, "an extension recorded this send itself: it did not pass the gate")
+	}
+	var t struct {
+		AccountID  string `json:"account_id"`
+		SessionKey string `json:"session_key"`
+	}
+	_ = json.Unmarshal(target, &t)
+	switch {
+	case action == clubAgentStart:
+		return ClubAccountRule(t.AccountID)
+	case isClubSessionAction(action):
+		_, acc, _, ok := parseClubSessionKey(t.SessionKey)
+		if !ok {
+			return UserRule{}, noChatRule(NoChatTarget, "the row's session_key %q is not a valid 4-segment agent:<provider>:<account_id>:<session>", t.SessionKey)
+		}
+		if t.AccountID != "" && t.AccountID != acc {
+			return UserRule{}, noChatRule(NoChatTarget, "the row's account_id %q does not match session_key account %q", t.AccountID, acc)
+		}
+		return ClubAccountRule(acc)
+	default:
+		return UserRule{}, noChatRule(NoChatRoute, "%q is not a club write action", action)
+	}
 }
 
 func larkChatRule(action string, target json.RawMessage) (UserRule, error) {
@@ -266,11 +490,60 @@ func githubChatRule(action string, target json.RawMessage) (UserRule, error) {
 		Match: map[string]any{"repo": m[1], "number": float64(n)}, Decision: Allow}}, nil
 }
 
+// userRuleUse tracks optional TTL expiration and atomic turn consumption for a UserRule across gate Rule copies.
+type userRuleUse struct {
+	id        string
+	at        time.Time
+	expiresAt time.Time
+	maxUses   int64
+	used      atomic.Int64
+}
+
+func (u *userRuleUse) available(now time.Time) bool {
+	if u == nil {
+		return true
+	}
+	if !u.expiresAt.IsZero() && !now.Before(u.expiresAt) {
+		return false
+	}
+	if u.maxUses > 0 && u.used.Load() >= u.maxUses {
+		return false
+	}
+	return true
+}
+
+func (u *userRuleUse) tryConsume(now time.Time) (int, bool) {
+	if u == nil {
+		return 0, true
+	}
+	if !u.expiresAt.IsZero() && !now.Before(u.expiresAt) {
+		return 0, false
+	}
+	if u.maxUses <= 0 {
+		return 0, true
+	}
+	for {
+		cur := u.used.Load()
+		if cur >= u.maxUses {
+			return 0, false
+		}
+		if u.used.CompareAndSwap(cur, cur+1) {
+			return int(cur + 1), true
+		}
+	}
+}
+
 // userRuleSet is the rules of list that pass Validate, in order and one to a chat (the first), and an error naming each
 // that did not: a rule that fails is left out, which can only make the gate ask more.
 func userRuleSet(list []UserRule) ([]Rule, error) {
+	rules, _, err := userRuleSetWithUses(list, nil)
+	return rules, err
+}
+
+func userRuleSetWithUses(list []UserRule, prev map[string]*userRuleUse) ([]Rule, map[string]*userRuleUse, error) {
 	var out []Rule
 	var errs []error
+	var uses map[string]*userRuleUse
 	seen := map[string]bool{}
 	for i, u := range list {
 		if err := u.Validate(); err != nil {
@@ -281,14 +554,43 @@ func userRuleSet(list []UserRule) ([]Rule, error) {
 			seen[id] = true
 			r := u.Rule
 			r.fromUser = true
+			r.ruleID = id
 			r.Match = maps.Clone(r.Match)
 			if n, whole := wholeNumber(r.Match["number"]); whole && r.Connector == githubConnector {
 				// The gate compares a Match with the arguments as JSON gave them (reflect.DeepEqual), where a number is a
 				// float64: a rule built in Go with an int would pass Validate and never match. It is set as the gate reads it.
 				r.Match["number"] = float64(n)
 			}
+			var use *userRuleUse
+			if prev != nil {
+				if old := prev[id]; old != nil && old.at.Equal(u.At) && old.expiresAt.Equal(u.ExpiresAt) && old.maxUses == int64(u.MaxUses) {
+					use = old
+					for {
+						cur := use.used.Load()
+						if int64(u.UsedCount) <= cur || use.used.CompareAndSwap(cur, int64(u.UsedCount)) {
+							break
+						}
+					}
+				}
+			}
+			if use == nil && (!u.ExpiresAt.IsZero() || u.MaxUses > 0 || u.UsedCount > 0) {
+				use = &userRuleUse{
+					id:        id,
+					at:        u.At,
+					expiresAt: u.ExpiresAt,
+					maxUses:   int64(u.MaxUses),
+				}
+				use.used.Store(int64(u.UsedCount))
+			}
+			if use != nil {
+				if uses == nil {
+					uses = map[string]*userRuleUse{}
+				}
+				uses[id] = use
+				r.use = use
+			}
 			out = append(out, r)
 		}
 	}
-	return out, errors.Join(errs...)
+	return out, uses, errors.Join(errs...)
 }

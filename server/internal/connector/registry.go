@@ -32,6 +32,9 @@ type Registry struct {
 	// from the ledger (SetUserRules), which can change while it runs and come after them.
 	rules []Rule
 	user  []Rule
+	uses  map[string]*userRuleUse
+	// ruleUsed is notified when a bounded user rule consumes a turn.
+	ruleUsed func(ctx context.Context, id string, used int)
 	// autoConfirm are the hub-side guarded conditional auto-confirm policies (manager.json connector_auto_confirm).
 	autoConfirm []AutoConfirmPolicy
 	off         map[string]bool // switched off by the user (SetEnabled)
@@ -66,11 +69,39 @@ func NewRegistry(rules []Rule) *Registry {
 // allow (UserRule.Validate) is left out and named in the error, the rest are set all the same: a rule left out can only
 // make the gate ask more. nil or empty leaves the gate as the hand-written rules alone make it.
 func (r *Registry) SetUserRules(list []UserRule) error {
-	rules, err := userRuleSet(list)
 	r.mu.Lock()
+	rules, uses, err := userRuleSetWithUses(list, r.uses)
 	r.user = rules
+	r.uses = uses
 	r.mu.Unlock()
 	return err
+}
+
+// SetUserRuleUsed registers a callback invoked whenever a user rule with a turn limit or TTL consumes a turn.
+func (r *Registry) SetUserRuleUsed(f func(ctx context.Context, id string, used int)) {
+	r.mu.Lock()
+	r.ruleUsed = f
+	r.mu.Unlock()
+}
+
+func (r *Registry) userRuleUsed() func(ctx context.Context, id string, used int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.ruleUsed
+}
+
+// UserRuleUsedCount returns the current atomic used count for the user rule with id (0 if none is tracked).
+func (r *Registry) UserRuleUsedCount(id string) int {
+	if r == nil {
+		return 0
+	}
+	r.mu.RLock()
+	use := r.uses[id]
+	r.mu.RUnlock()
+	if use == nil {
+		return 0
+	}
+	return int(use.used.Load())
 }
 
 // UserRules are the rules SetUserRules set, as the gate runs them (do not change them): what the node's Lark gate is
@@ -454,7 +485,7 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 	var through LetThrough
 	var approval *AutoConfirmApproval
 	if gated {
-		res, how, appr := gate(ctx, r.gateRules(), r.autoConfirmPolicies(), c, a, name, args, ask)
+		res, how, appr := gate(ctx, r.gateRules(), r.autoConfirmPolicies(), c, a, name, args, ask, r.userRuleUsed())
 		if res != nil {
 			return *res
 		}
