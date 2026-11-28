@@ -54,6 +54,11 @@ type nodeStateWriter struct {
 	mu      sync.Mutex
 	order   []string
 	pending map[string]*nodeStatePending
+	// exited is the terminal seal, set under mu exactly when the writer has stopped (or is committed to stop
+	// after a bounded drain give-up). enqueue reads it under the same mu as its insert, making the
+	// insert-versus-exit handshake atomic: an enqueue that sees false is owned by the writer and drained; one
+	// that sees true is rejected so the caller runs its bounded fallback instead of entering a dead map.
+	exited bool
 }
 
 func newNodeStateWriter(m *Machine, put nodeStateWrite) *nodeStateWriter {
@@ -83,8 +88,16 @@ func newNodeStateWriter(m *Machine, put nodeStateWrite) *nodeStateWriter {
 // enqueue stores the newest complete state of a session, coalescing an older pending one. It never does Store I/O
 // and never blocks on it. A creation receipt the older state carried and the new complete state omits is carried
 // forward, so coalescing cannot lose the creation/incarnation pair.
-func (w *nodeStateWriter) enqueue(session string, state db.NodeSession) {
+//
+// It reports whether the live writer owns the state. false means the writer has already been sealed/exited: the
+// state was NOT inserted, and the caller must write it itself through the bounded storeCtx fallback. This closes
+// the shutdown/removal window in which an admitted last put used to enter a map no goroutine reads.
+func (w *nodeStateWriter) enqueue(session string, state db.NodeSession) bool {
 	w.mu.Lock()
+	if w.exited {
+		w.mu.Unlock()
+		return false
+	}
 	if p := w.pending[session]; p != nil {
 		mergeCreationReceipt(&state, p.state)
 		p.state = state
@@ -98,6 +111,30 @@ func (w *nodeStateWriter) enqueue(session string, state db.NodeSession) {
 	case w.wake <- struct{}{}:
 	default: // a wake is already pending
 	}
+	return true
+}
+
+// sealIfEmpty is the writer's atomic terminal handshake. It seals the writer only when no state remains queued.
+// The emptiness check and exited=true happen under one mu critical section, so they are atomic against enqueue:
+// an enqueue that inserts first leaves order non-empty (this returns false and the writer flushes it); a seal
+// first makes a later enqueue observe exited and reject into the caller's fallback.
+func (w *nodeStateWriter) sealIfEmpty() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.order) != 0 {
+		return false
+	}
+	w.exited = true
+	return true
+}
+
+// seal marks the writer exited even if states remain, used only when the bounded drain budget is spent (the same
+// best-effort give-up class as the old per-event storeCtx timeout). Later admits then take the bounded fallback
+// instead of entering an unwatched map.
+func (w *nodeStateWriter) seal() {
+	w.mu.Lock()
+	w.exited = true
+	w.mu.Unlock()
 }
 
 // mergeCreationReceipt copies a creation receipt older held that newer omits. Each half is preserved independently.
@@ -118,9 +155,13 @@ func creationCommittedResult(state db.NodeSession) string {
 }
 
 // run is the single writer goroutine. It exits after a bounded drain once lifecycle ends; close(done) is its
-// completion signal.
+// completion signal. The deferred seal is a safety net: every normal exit already sealed atomically in drain, so
+// this only guarantees a late enqueue can never mistake a gone writer for a live one.
 func (w *nodeStateWriter) run() {
-	defer close(w.done)
+	defer func() {
+		w.seal()
+		close(w.done)
+	}()
 	failures := 0
 	for {
 		w.mu.Lock()
@@ -246,6 +287,10 @@ func (w *nodeStateWriter) callContext(parent context.Context) (context.Context, 
 // drain keeps flushing pending states after the Machine was retired/stopped, but no longer than drainWait overall.
 // It is best effort: a Store that stays down leaves the newest states unwritten, the same bounded give-up class as
 // the old per-event storeCtx timeout; the node resends a session's state when it next changes.
+//
+// The empty-queue exit goes through sealIfEmpty, the atomic terminal handshake against a concurrent enqueue. If
+// the drain budget expires with the Store down, seal marks the writer finished anyway so later admits take the
+// bounded fallback rather than silently entering a dead queue.
 func (w *nodeStateWriter) drain() {
 	wait := w.drainWait
 	if wait <= 0 {
@@ -254,10 +299,9 @@ func (w *nodeStateWriter) drain() {
 	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	for {
-		w.mu.Lock()
-		empty := len(w.order) == 0
-		w.mu.Unlock()
-		if empty {
+		// Atomic empty-check + terminal seal. false means a state is present (possibly enqueued while lifecycle
+		// was ending), so it must be flushed before exit.
+		if w.sealIfEmpty() {
 			return
 		}
 		session, version, state := w.head()
@@ -272,6 +316,7 @@ func (w *nodeStateWriter) drain() {
 		devicewire.ShareCreationLog(w.logf, session, "manager_persist", "store_error")
 		select {
 		case <-ctx.Done():
+			w.seal() // bounded give-up: release late admits to their own storeCtx fallback
 			return
 		case <-time.After(w.backoffMin):
 		}
@@ -292,6 +337,13 @@ func (w *nodeStateWriter) waitDone(timeout time.Duration) bool {
 // group before its connection serves) enqueues onto its single ordered writer, so the rpc read loop never waits on
 // the Store. A bare Machine with no run lifecycle (focused unit tests that call onEvent directly) keeps the old
 // bounded inline write and its synchronous outcome semantics; no serving production Machine takes that branch.
+//
+// One shutdown-window exception keeps the documented "last put of a machine being let go" guarantee: if the writer
+// has already sealed/exited when this admission wins its lock, enqueue rejects and the put runs the same bounded
+// storeCtx write inline. That branch is reachable only after m.ctx ended and the writer is gone, never during a
+// live Machine's normal lifetime, so it does not re-block the live read loop. It takes neither m.mu nor
+// eventRetire itself; in production the event wrapper may already hold eventRetire, exactly as the pre-PR inline
+// state.put and the bare-Machine branch did, and the call is bounded by storeCtx.
 func (m *Machine) persistNodeState(session string, state db.NodeSession) {
 	s, ok := m.d.opts.Store.(nodeStateStore)
 	if !ok {
@@ -299,13 +351,7 @@ func (m *Machine) persistNodeState(session string, state db.NodeSession) {
 		return
 	}
 	if m.ctx == nil {
-		ctx, cancel := m.storeCtx()
-		defer cancel()
-		if err := s.PutNodeSession(ctx, m.cfg.ID, session, state); err != nil {
-			devicewire.ShareCreationLog(m.d.logf, session, "manager_persist", "store_error")
-		} else {
-			devicewire.ShareCreationLog(m.d.logf, session, "manager_persist", creationCommittedResult(state))
-		}
+		m.putNodeStateNow(s, session, state)
 		return
 	}
 	m.stateWriterOnce.Do(func() {
@@ -317,5 +363,22 @@ func (m *Machine) persistNodeState(session string, state db.NodeSession) {
 			w.run()
 		}()
 	})
-	m.stateWriter.enqueue(session, state)
+	if m.stateWriter.enqueue(session, state) {
+		return
+	}
+	// The writer sealed/exited in the Machine-stop window. Keep this admitted last put instead of dropping it
+	// into an unwatched queue: the old bounded inline write, independent of the ended Machine context.
+	m.putNodeStateNow(s, session, state)
+}
+
+// putNodeStateNow performs one bounded synchronous PutNodeSession with the legacy outcome logging. It is the bare
+// Machine path and the post-exit shutdown fallback; Store I/O here runs under no m.mu lock.
+func (m *Machine) putNodeStateNow(s nodeStateStore, session string, state db.NodeSession) {
+	ctx, cancel := m.storeCtx()
+	defer cancel()
+	if err := s.PutNodeSession(ctx, m.cfg.ID, session, state); err != nil {
+		devicewire.ShareCreationLog(m.d.logf, session, "manager_persist", "store_error")
+		return
+	}
+	devicewire.ShareCreationLog(m.d.logf, session, "manager_persist", creationCommittedResult(state))
 }
