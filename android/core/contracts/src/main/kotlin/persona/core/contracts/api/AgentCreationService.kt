@@ -78,6 +78,12 @@ interface AgentCreationService {
 
     /** A catalog refresh, including usable hub-cache rows when a source cannot refresh; transport failures propagate. */
     suspend fun workspaceCatalog(machineId: String): AgentWorkspaceCatalog = AgentWorkspaceCatalog(workspaces(machineId))
+
+    /**
+     * Creating, renaming and deleting an engine's worktrees (#17054, [WorktreeManagement]); null where the wiring has none,
+     * which then offers none of those actions.
+     */
+    val worktrees: WorktreeManagement? get() = null
 }
 
 /** A complete response replaces the inventory. A partial response updates returned rows but does not remove missing ones. */

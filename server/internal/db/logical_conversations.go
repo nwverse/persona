@@ -679,6 +679,9 @@ type ConversationInput struct {
 	Version          int64           `json:"version"`
 	BlockedReason    string          `json:"blocked_reason,omitempty"`
 	LastReconciledAt *time.Time      `json:"last_reconciled_at"`
+	// ClaimedAt starts the attempt's delivery deadline (conversation_input_deadline.go). It is
+	// not part of the CAS tuple: the attempt version already names exactly one claim.
+	ClaimedAt time.Time `json:"claimed_at,omitzero"`
 }
 
 // Enqueue is idempotent by the original client message ID, not its text.
@@ -771,7 +774,7 @@ func (d *DB) ClaimConversationInput(ctx context.Context, machine, session string
 		if err = tx.QueryRow(ctx, `SELECT id,machine_id,session_id FROM conversation_segments WHERE logical_machine=$1 AND logical_session=$2 AND state='active'`, machine, session).Scan(&row.DispatchSegment, &row.DispatchMachine, &row.DispatchSession); err != nil {
 			return err
 		}
-		if err = tx.QueryRow(ctx, `UPDATE conversation_inputs SET state='sending',epoch=$4,dispatch_segment=$5,dispatch_machine=$6,dispatch_session=$7,dispatch_epoch=$4,delivery_version=delivery_version+1,blocked_reason='',last_reconciled_at=NULL WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 RETURNING delivery_version`, machine, session, row.ClientMsgID, epoch, row.DispatchSegment, row.DispatchMachine, row.DispatchSession).Scan(&row.Version); err != nil {
+		if err = tx.QueryRow(ctx, `UPDATE conversation_inputs SET state='sending',epoch=$4,dispatch_segment=$5,dispatch_machine=$6,dispatch_session=$7,dispatch_epoch=$4,delivery_version=delivery_version+1,blocked_reason='',last_reconciled_at=NULL,claimed_at=now(),expired_at=NULL WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 RETURNING delivery_version,claimed_at`, machine, session, row.ClientMsgID, epoch, row.DispatchSegment, row.DispatchMachine, row.DispatchSession).Scan(&row.Version, &row.ClaimedAt); err != nil {
 			return err
 		}
 		row.DispatchEpoch = epoch

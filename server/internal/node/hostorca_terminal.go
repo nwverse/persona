@@ -331,6 +331,7 @@ func (h *orcaHost) RenameSlot(ctx context.Context, slot, name string) error {
 	for _, term := range terms {
 		// An orphaned terminal this host made, listed under its own tab (#5547), is renamed as any other.
 		if term.TabID == slot && term.IsLocal() && term.Writable && (!term.Orphaned || h.rekeyedKey(term.PaneKey())) {
+			defer h.renamedTab() // the next listing reads the new name (namedTabs)
 			return orcaErr(h.onTerminal(ctx, term, true, func(target orcart.Target) error {
 				return h.c.RenameTerminal(ctx, target, name)
 			}))

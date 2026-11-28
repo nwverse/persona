@@ -73,6 +73,24 @@ func (n *Node) hasPane(pane string) bool {
 	return false
 }
 
+// canSplit and canCloseTab: the host splits a pane (host.Splitter) / closes a whole tab (host.SlotCloser) now, as far
+// as it knows without asking: an Orca that answered method_not_found to the call no longer offers it (#17043).
+func canSplit(h host.Host) bool {
+	if o, ok := h.(*orcaHost); ok {
+		return o.CanSplit()
+	}
+	_, ok := h.(host.Splitter)
+	return ok
+}
+
+func canCloseTab(h host.Host) bool {
+	if o, ok := h.(*orcaHost); ok {
+		return o.CanCloseSlot()
+	}
+	_, ok := h.(host.SlotCloser)
+	return ok
+}
+
 // listPanes is the terminal browser's tree: from the layouts the node keeps, refreshed first when they are older
 // than paneListMaxAge (or a host has none yet).
 func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
@@ -159,12 +177,11 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 
 // paneAbilities is what the menu methods (panes_actions.go, rename.go) can do on h, from what h implements: the
 // clients gate their items on it, not on the host's name (#17053), so a host that gains Splitter or SlotCloser gets its
-// items without a client change.
+// items without a client change. Split and close tab go through canSplit / canCloseTab: an older Orca without the call
+// reports false (#17043).
 func (n *Node) paneAbilities(h host.Host) *proto.PaneAbilities {
 	_, organizes := h.(host.Organizer)
-	_, splits := h.(host.Splitter)
-	_, closesTabs := h.(host.SlotCloser)
-	return &proto.PaneAbilities{Rename: organizes, ClosePane: organizes, Split: splits, CloseTab: closesTabs,
+	return &proto.PaneAbilities{Rename: organizes, ClosePane: organizes, Split: canSplit(h), CloseTab: canCloseTab(h),
 		Git: drivesScreen(h), RunHere: n.runsHere(h)}
 }
 

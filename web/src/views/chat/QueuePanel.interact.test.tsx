@@ -146,6 +146,20 @@ describe("QueuePanel row actions", () => {
     expect(rows()).toHaveLength(0);
   });
 
+  it("drops optimistic hold when own count shrinks via queued_relayed even if queued strings stay unchanged", async () => {
+    vi.mocked(api).mockResolvedValue({ queue: ["第一条", "第二条"] });
+    render(<QueuePanel session={{ ...session, queued: ["第一条", "第二条"] }} draftKey="qp-own-shrink" canEdit />);
+    // Delete index 0 so holdOrder is [1] (an index that becomes out-of-bounds once own shrinks to 1).
+    click(within(0, "[data-queue-delete]"));
+    await settle();
+    expect(texts()).toEqual(["第二条"]);
+
+    // Hub increases queued_relayed to 1 while `queued` strings stay identical.
+    render(<QueuePanel session={{ ...session, queued: ["第一条", "第二条"], queued_relayed: 1 }} draftKey="qp-own-shrink" canEdit />);
+    expect(texts()).toEqual(["第一条"]);
+    expect(within(0, "[data-queue-delete]").hasAttribute("disabled")).toBe(false);
+  });
+
   it("sends every queued message at one press, with no dialog; its tooltip and description say what happens", async () => {
     vi.mocked(api).mockResolvedValue({});
     render(<QueuePanel session={session} draftKey="qp-send" canEdit />);

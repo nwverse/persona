@@ -188,7 +188,7 @@ function QueuePanelBody({
       return { ...(confirmed[i] ?? { raw, id: `${nth}:${raw}` }), i, own: i < own };
     });
   }, [queued, own, confirmed]);
-  const queueKey = queued.join("\u0000");
+  const queueKey = `${own}\u0000${queued.join("\u0000")}`;
   const holdOrder = held && held.queue === queueKey ? held.order : null;
   const locked = busy !== null || withdraw !== null || holdOrder !== null || drag !== null;
 
