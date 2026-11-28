@@ -106,6 +106,19 @@ describe("resource configuration state", () => {
     expect(resource.snapshot().draft).toBe(matches ? undefined : 9);
   });
 
+  it("checks an unreadable write receipt against a fresh resource snapshot", async () => {
+    const { read, resource } = setup();
+    const confirmed = snapshot("confirmed", 9);
+    read.mockResolvedValueOnce(snapshot("one")).mockResolvedValueOnce(confirmed);
+    await resource.refresh();
+    const saved = resource.save({
+      label: "config",
+      prepare: () => ({ send: async () => undefined, matches: (remote) => remote.value === 9 }),
+    });
+    await expect(saved).resolves.toEqual(confirmed);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps a newer edit and reconciles a missing comparison on reconnect", async () => {
     const { read, resource } = setup();
     read.mockResolvedValueOnce(snapshot("one")).mockRejectedValueOnce(new HubTimeoutError());

@@ -1,6 +1,7 @@
 import { ApiError, HubTimeoutError, isTransient, subscribeCredentialOwner } from "../../../lib/api";
 import { ConfigurationError } from "../../../lib/configuration/contract";
 import { AssistantScopeUnverified, type ScopedAssistantClient } from "../../../lib/scoped-assistant-api";
+import { t } from "../../../i18n";
 
 type ResourceSnapshot<Remote, Draft> = {
   remote: Remote | null;
@@ -39,6 +40,10 @@ type Job<Remote, Draft> = {
 
 export function abortedConfiguration() {
   return new DOMException("aborted", "AbortError");
+}
+
+function invalidConfiguration() {
+  return new ConfigurationError("invalid_document", t("settings-configuration.error_invalid_document"));
 }
 
 function conflict(error: unknown) {
@@ -115,7 +120,7 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   }
 
   private validate(remote: Remote) {
-    if (remote?.id !== this.id) throw new ConfigurationError("invalid_document");
+    if (remote?.id !== this.id) throw invalidConfiguration();
   }
 
   private accept(remote: Remote, save?: PreparedSave<Remote, Draft>) {
@@ -214,7 +219,11 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   private async send(seq: number, prepared: PreparedSave<Remote, Draft>) {
     try {
       const result = await prepared.send();
-      if (!this.current(seq) || !result) return;
+      if (!this.current(seq)) return;
+      if (!result) {
+        if (result !== undefined || prepared.matches) throw invalidConfiguration();
+        return;
+      }
       this.validate(result);
       this.accept(result, prepared);
       return result;

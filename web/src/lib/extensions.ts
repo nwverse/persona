@@ -322,7 +322,7 @@ export const listExtensionsInfo = (isAuthContextCurrent?: () => boolean) =>
     markets: !!r.markets,
   }));
 /** A detail as either kind of hub sends it, its pages' places read with the new keys. */
-export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
+export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d?.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
 export const extensionDetail = (id: string, options?: Pick<Parameters<typeof api>[1] & object, "headers" | "signal" | "isAuthContextCurrent">, client?: ScopedAssistantClient) => {
   const path = withEntryLists(`${base(id)}/`);
   return (client ? client.request<HubExtensionDetail>(path) : api<HubExtensionDetail>(path, options)).then(detailOf);
