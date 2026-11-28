@@ -24,12 +24,14 @@
  *   node scripts/test/preview_origin_isolation_e2e.mjs
  *
  * Optional env vars:
- *   PLAYWRIGHT_CORE_PATH  Path to playwright-core entry module (defaults to web/node_modules/playwright-core)
- *   PERSONA_CHROME        Path to Chrome/Chromium executable (optional override)
+ *   PLAYWRIGHT_CORE_PATH        Path to playwright-core entry module (defaults to web/node_modules/playwright-core)
+ *   PERSONA_CHROME              Path to Chrome/Chromium executable (optional override)
+ *   PERSONA_PREVIEW_HARNESS_BIN Prebuilt `go test -c ./internal/hub` test binary (optional override)
  */
 
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { createRequire } from "node:module";
@@ -37,7 +39,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
-const OVERALL_TIMEOUT_MS = 90_000;
+const BUILD_TIMEOUT_MS = 180_000;
+const READY_TIMEOUT_MS = 30_000;
+const OVERALL_TIMEOUT_MS = 240_000;
 
 function assert(cond, msg) {
   if (!cond) {
@@ -95,11 +99,32 @@ function resolveBrowserExecutable() {
   return undefined;
 }
 
+function buildHarnessBinary() {
+  if (process.env.PERSONA_PREVIEW_HARNESS_BIN && fs.existsSync(process.env.PERSONA_PREVIEW_HARNESS_BIN)) {
+    return { binPath: process.env.PERSONA_PREVIEW_HARNESS_BIN, cleanupDir: null };
+  }
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "persona-preview-e2e-"));
+  const binPath = path.join(tmpDir, "hub.test");
+  try {
+    execFileSync("go", ["test", "-c", "-o", binPath, "./internal/hub"], {
+      cwd: path.join(REPO_ROOT, "server"),
+      timeout: BUILD_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { binPath, cleanupDir: tmpDir };
+  } catch (err) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    const stderr = err?.stderr ? `\n${err.stderr.toString("utf8")}` : "";
+    throw new Error(`failed to compile hub test binary: ${err.message}${stderr}`);
+  }
+}
+
 function startHarness() {
+  const { binPath, cleanupDir } = buildHarnessBinary();
   return new Promise((resolve, reject) => {
     const proc = spawn(
-      "go",
-      ["test", "-v", "-count=1", "-run", "^TestPreviewOriginE2EHarness$", "./internal/hub"],
+      binPath,
+      ["-test.v", "-test.count=1", "-test.run", "^TestPreviewOriginE2EHarness$"],
       {
         cwd: path.join(REPO_ROOT, "server"),
         env: { ...process.env, PERSONA_PREVIEW_ORIGIN_HARNESS: "1" },
@@ -115,9 +140,10 @@ function startHarness() {
       if (!settled) {
         settled = true;
         proc.kill("SIGKILL");
+        if (cleanupDir) fs.rmSync(cleanupDir, { recursive: true, force: true });
         reject(new Error(`timed out waiting for Go harness\n${stderrChunks.join("")}`));
       }
-    }, 45_000);
+    }, READY_TIMEOUT_MS);
 
     const rl = readline.createInterface({ input: proc.stdout });
     const stdoutLines = [];
@@ -130,9 +156,10 @@ function startHarness() {
         clearTimeout(readyTimer);
         try {
           const info = JSON.parse(line.slice(idx + marker.length));
-          resolve({ proc, info });
+          resolve({ proc, info, cleanupDir });
         } catch (err) {
           proc.kill("SIGKILL");
+          if (cleanupDir) fs.rmSync(cleanupDir, { recursive: true, force: true });
           reject(new Error(`failed to parse HARNESS_READY JSON: ${err.message}`));
         }
       }
@@ -142,6 +169,7 @@ function startHarness() {
       if (!settled) {
         settled = true;
         clearTimeout(readyTimer);
+        if (cleanupDir) fs.rmSync(cleanupDir, { recursive: true, force: true });
         reject(
           new Error(
             `Go harness exited early (code=${code}, signal=${signal})\nstdout:\n${stdoutLines.join("\n")}\nstderr:\n${stderrChunks.join("")}`,
@@ -173,7 +201,7 @@ async function stopHarness(proc, ctrlURL) {
 
 async function run() {
   const { chromium } = loadPlaywrightCore();
-  const { proc, info } = await startHarness();
+  const { proc, info, cleanupDir } = await startHarness();
   let browser;
   try {
     const launchArgs = [
@@ -377,6 +405,9 @@ async function run() {
       await browser.close().catch(() => {});
     }
     await stopHarness(proc, info.ctrl_url);
+    if (cleanupDir) {
+      fs.rmSync(cleanupDir, { recursive: true, force: true });
+    }
   }
 }
 
