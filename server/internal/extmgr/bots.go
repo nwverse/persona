@@ -114,6 +114,13 @@ type BotFeatures struct {
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message, beside the progress card.
 	// On by default, including settings saved before it; off keeps the card's folded process panel.
 	TopicCot bool `json:"topic_cot"`
+	// DMCot: a private-chat run also shows its thinking and tools in a native agent message, beside the progress card
+	// (#16847). Off by default, and for settings saved before it: they have no such key.
+	DMCot bool `json:"dm_cot"`
+	// CotAnswer: a run whose agent message is allowed (dm_cot, topic_cot) gets its answer inside that message and no
+	// progress or answer card; cards take over when the message cannot carry it (#16847). Off by default, and for
+	// settings saved before it.
+	CotAnswer bool `json:"cot_answer"`
 	// ReadGroup: the owner's "@bot /read <task>" in a group the bot is in reads the group's recent messages, images and
 	// files as the owner, then does the task and answers under that message (#11803, bots_read.go). Off by default, and
 	// for settings saved before it: they have no such key.
@@ -516,7 +523,7 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 		v.Pairing = &botPairView{Code: p.Code, ExpiresAt: p.Expires.Unix()}
 	}
 	for _, c := range s.TopicChats {
-		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat(), RequireOwnerMention: c.RequireOwnerMention, TodoMode: c.TodoMode.Effective()})
+		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat(), RequireOwnerMention: c.RequireOwnerMention, TodoMode: c.TodoMode.Effective(), Space: c.Space})
 	}
 	botAppID := appID
 	b.mu.Unlock()
@@ -590,6 +597,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 				Home                *bool                        `json:"home"`
 				RequireOwnerMention *bool                        `json:"require_owner_mention"`
 				TodoMode            *assistantwire.TopicTodoMode `json:"todo_mode"`
+				Space               *string                      `json:"space"`
 			} `json:"topic_chats"`
 			// NudgeAfter is minutes before the one nudge under an unanswered card; 0 turns nudges off, absent leaves it.
 			// Read as raw JSON so that anything but a whole number in range gets the same answer (nudgeAfterValue).
@@ -637,6 +645,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		var topics []BotChat
 		mentionEdits := map[string]bool{}
+		spaceEdits := map[string]string{}
 		keepHome := true // no entry says anything about home: the list's own stays
 		if in.TopicChats != nil {
 			topics = []BotChat{}
@@ -654,6 +663,15 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 						return
 					}
 					chat.TodoMode = *c.TodoMode
+				}
+				if c.Space != nil {
+					sp := strings.TrimSpace(*c.Space)
+					if err := h.checkTopicSpace(r.Context(), sp); err != nil {
+						writeErr(w, http.StatusBadRequest, err)
+						return
+					}
+					spaceEdits[strings.TrimSpace(c.ChatID)] = sp
+					chat.Space = sp
 				}
 				topics = append(topics, chat)
 			}
@@ -675,7 +693,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			return
 		}
 		if topics != nil {
-			if err := h.setTopicChats(r.Context(), topics, keepHome, mentionEdits); err != nil {
+			if err := h.setTopicChatsOpt(r.Context(), topics, keepHome, mentionEdits, spaceEdits); err != nil {
 				writeErr(w, http.StatusBadRequest, err)
 				return
 			}

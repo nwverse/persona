@@ -9,6 +9,7 @@
 // (lib/side-sessions.ts). This module is the rule, with no imports of the store, so every list and count reads it.
 import { activityOf } from "./format";
 import type { AgentState, Session } from "./types";
+import { byTime } from "./times";
 
 /** The hub folds side sessions into their parent (#7944): fold them only while hello lists this. */
 export const SESSIONS_SIDE_FOLD_FEATURE = "sessions_side_fold";
@@ -90,11 +91,9 @@ export function foldedStateWith(s: Session, sides?: SideRollup): AgentState {
 
 // needs you first, then working, then the rest, stopped ones last
 const RANK: Partial<Record<AgentState, number>> = { needs_you: 0, working: 1, offline: 3 };
-const at = (s: Session) => Date.parse(s.updated_at ?? "") || 0;
-
 /** The panel's order (#7944): needs you first, then working, then by last activity, newest first, stopped ones last. */
 export function sideOrder(a: Session, b: Session): number {
-  return (RANK[activityOf(a)] ?? 2) - (RANK[activityOf(b)] ?? 2) || at(b) - at(a) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0);
+  return (RANK[activityOf(a)] ?? 2) - (RANK[activityOf(b)] ?? 2) || byTime(b.updated_at, a.updated_at) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0);
 }
 
 /** The side sessions among a parent's folded rows (sides of sides too), in the panel's order. */
@@ -105,7 +104,7 @@ export function sidesAmong(rows: readonly Session[]): Session[] {
 /** The side sessions among a parent's folded rows that keep it Unread (#13299 showed why a row must say so): the unread
  *  ones, the most recent first. The sidebar names the first on the parent's row and opens it in one click. */
 export function unreadSides(rows: readonly Session[]): Session[] {
-  return rows.filter((s) => isSide(s) && activityOf(s) === "unread").sort((a, b) => at(b) - at(a) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0));
+  return rows.filter((s) => isSide(s) && activityOf(s) === "unread").sort((a, b) => byTime(b.updated_at, a.updated_at) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0));
 }
 
 /** The chat a card is answered in: the side session it belongs to (`folded_side`, or its own session when that is a

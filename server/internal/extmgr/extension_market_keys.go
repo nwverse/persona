@@ -100,7 +100,7 @@ func (h *Manager) marketKeysEdit(ctx context.Context, id string, edit func([]str
 	rec, index := s.rec, s.index
 	rec.TrustedKeys = keys
 	if len(rec.Index) > 0 {
-		verified, ix, verr := signedIndex(rec, &extension.Fetched{Raw: rec.Index}, time.Now())
+		verified, ix, verr := signedIndex(rec, &extension.Fetched{Raw: rec.Index}, time.Now(), h.build.Number)
 		verified.FetchedAt = rec.FetchedAt
 		if verr == nil {
 			index = ix

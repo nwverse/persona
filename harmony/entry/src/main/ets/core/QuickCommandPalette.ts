@@ -55,6 +55,7 @@ export interface QuickCommandLabels {
   readonly workbenchCode?: string;
   readonly workbenchMachines?: string;
   readonly openXiaoYi?: string;
+  readonly openTokenUsage?: string;
   readonly toggleTheme?: string;
   readonly liveViewPreview?: string;
   readonly starredMessages?: string;
@@ -71,6 +72,7 @@ export interface QuickCommandBuildOptions {
   readonly useHerdrTabName?: boolean;
   readonly inboxVisible?: boolean;
   readonly todosVisible?: boolean;
+  readonly knowledgeVisible?: boolean;
   readonly showWorkbench?: boolean;
   readonly showLiveView?: boolean;
   readonly showStarred?: boolean;
@@ -275,8 +277,8 @@ function buildWorkspaceEntries(
     });
   }
 
-  candidates.push(
-    {
+  if (options.knowledgeVisible !== false) {
+    candidates.push({
       id: 'workspace:knowledge',
       category: 'workspaces',
       title: labels?.knowledge || 'Knowledge',
@@ -286,7 +288,10 @@ function buildWorkspaceEntries(
       iconKey: 'knowledge',
       workspaceKind: 'knowledge',
       keywords: ['knowledge', 'docs', 'notes', 'meetings', '知识库', 'ナレッジ']
-    },
+    });
+  }
+
+  candidates.push(
     {
       id: 'workspace:health',
       category: 'workspaces',
@@ -373,6 +378,17 @@ function buildActionEntries(
   }
 
   candidates.push(
+    {
+      id: 'action:open_token_usage',
+      category: 'actions',
+      title: labels?.openTokenUsage || 'Token Usage',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'token_usage',
+      actionId: 'open_token_usage',
+      keywords: ['token', 'usage', 'heatmap', 'calendar', 'project', 'tokens', '用量', 'トークン']
+    },
     {
       id: 'action:open_xiaoyi',
       category: 'actions',

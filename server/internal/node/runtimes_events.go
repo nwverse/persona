@@ -211,8 +211,10 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 		// sending, interrupting, answering cards and every terminal control on capabilities, the hub guards sends.
 		// What a runtime declared, never more: no terminal, no attach, cards always answerable (they are its own asks).
 		s.SourceKind, s.SourceInstanceID, s.SourceThreadID, s.ParentThreadID = proto.SourceRuntime, rt, "", ""
-		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID {
-			s.Host = rt // an engine host, though no terminal (#2576)
+		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID || rt == orcaRuntimeID && !daemon {
+			// An engine host, though no terminal (#2576). Orca's chats (orcabridge.go) are its engine's too: the apps ask
+			// that engine about the chat's worktree, not the computer's default one.
+			s.Host = rt
 		} else {
 			s.Host = ""
 		}
@@ -237,10 +239,11 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 			s.Efforts = nil
 		}
 		// The permission modes it lists for an agent that is not Claude Code (#8261) go with its modes too, and only where
-		// the apps' Claude Code chips do not stand (claudeModes): the apps switch between those instead.
+		// the apps' Claude Code chips do not stand (claudeModes) — except Antigravity (agy), which keeps capabilities.modes
+		// true while advertising a narrower permission_modes subset when a native mode (such as auto) is unavailable.
 		claudeModes := modes && runtimeModes(caps.Modes, rt, agent, s)
 		permissionModes := own.PermissionModes
-		if !modes || claudeModes {
+		if !modes || (claudeModes && s.Agent != agyAgent && agent != agyAgent) {
 			permissionModes = 0
 		}
 		rowCaps := proto.SessionCapabilities{Read: true, Send: caps.Send, Interrupt: caps.Interrupt, Approve: true,

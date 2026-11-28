@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -212,66 +213,78 @@ func checkAssistantAction(a *Action, pages map[string]View) error {
 	return nil
 }
 
-func CheckAssistantOpen(target string) error {
+func parseAssistantOpen(target string) (*url.URL, error) {
 	if strings.IndexFunc(target, unicode.IsControl) >= 0 || strings.Contains(target, "\\") {
-		return errors.New("open: no control characters or backslashes")
+		return nil, errors.New("open: no control characters or backslashes")
 	}
 	u, err := url.Parse(target)
 	if err != nil || u.User != nil || u.Hostname() == "" {
-		return errors.New("open: a URL without credentials is required")
+		return nil, errors.New("open: a URL without credentials is required")
 	}
 	if u.Scheme == "https" {
-		return nil
+		return u, nil
 	}
-	if !assistantURLScheme(u.Scheme) || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
-		return errors.New("open: use https or a persona session, task, kb or file link")
+	if !assistantURLScheme(u.Scheme) || u.ForceQuery || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || strings.ContainsAny(target, "?#") {
+		return nil, errors.New("open: use https or a persona session, task, kb or file link")
 	}
-	parts := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
+	rawPath := ""
+	if rest, ok := strings.CutPrefix(target[len(u.Scheme):], "://"); ok {
+		if slash := strings.IndexByte(rest, '/'); slash >= 0 {
+			rawPath = rest[slash:]
+		}
+	}
+	if !strings.HasPrefix(rawPath, "/") {
+		return nil, errors.New("open: invalid path segment")
+	}
+	parts := strings.Split(strings.TrimPrefix(rawPath, "/"), "/")
 	decoded := make([]string, len(parts))
 	for i, part := range parts {
 		value, err := url.PathUnescape(part)
-		if err != nil || value == "" || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.Contains(value, "\\") {
-			return errors.New("open: invalid path segment")
+		if err != nil || value == "" || !utf8.ValidString(value) || strings.IndexFunc(value, unicode.IsControl) >= 0 || strings.Contains(value, "\\") {
+			return nil, errors.New("open: invalid path segment")
+		}
+		if value == "." || value == ".." {
+			return nil, errors.New("open: paths cannot traverse directories")
 		}
 		if u.Host != "file" && strings.Contains(value, "/") {
-			return errors.New("open: do not escape multiple path segments into one")
+			return nil, errors.New("open: do not escape multiple path segments into one")
 		}
 		decoded[i] = value
 	}
 	switch u.Host {
 	case "session":
 		if len(parts) == 2 {
-			return nil
+			return u, nil
 		}
 	case "task":
 		if len(parts) == 1 {
-			return nil
+			return u, nil
 		}
 	case "kb":
-		for _, part := range decoded {
-			if part == "." || part == ".." {
-				return errors.New("open: knowledge paths cannot traverse directories")
-			}
-		}
-		return nil
+		return u, nil
 	case "file":
 		if len(parts) == 2 && !strings.Contains(decoded[0], "/") && path.IsAbs(decoded[1]) {
-			return nil
+			return u, nil
 		}
 	}
-	return errors.New("open: the target has the wrong kind or number of path segments")
+	return nil, errors.New("open: the target has the wrong kind or number of path segments")
+}
+
+func CheckAssistantOpen(target string) error {
+	_, err := parseAssistantOpen(target)
+	return err
 }
 
 // CheckExtensionOpen accepts the two internal destinations a full extension page may open: a Persona session
 // (persona://session/<machine>/<session>) and a to-do (persona://task/<id>). It applies the same structural checks as
 // CheckAssistantOpen; every other kind stays assistant-only.
 func CheckExtensionOpen(target string) error {
-	if err := CheckAssistantOpen(target); err != nil {
+	u, err := parseAssistantOpen(target)
+	if err != nil {
 		return err
 	}
-	u, err := url.Parse(target)
-	if err != nil {
-		return errors.New("open: a URL is required")
+	if !assistantURLScheme(u.Scheme) {
+		return errors.New("open: an extension page may open only a persona session or task")
 	}
 	switch u.Host {
 	case "session", "task":
@@ -428,7 +441,7 @@ func stripAssistantFields(v *View, keepPageNavigation bool) []string {
 				}
 				e.Buttons = kept
 			}
-			for _, ap := range []**Action{&e.Expand, &e.Load, &e.Comment, &e.Reply, &e.Context, &e.MarkViewed, &e.Draft} {
+			for _, ap := range []**Action{&e.Expand, &e.Load, &e.Comment, &e.Reply, &e.Context, &e.MarkViewed, &e.Draft, &e.Navigate} {
 				if assistantOnlyAction(*ap, keepPageNavigation) {
 					drop("assistant_action")
 					*ap = nil

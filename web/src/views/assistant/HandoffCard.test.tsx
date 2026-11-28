@@ -95,7 +95,7 @@ describe("the hand-off card", () => {
   it("offers nothing to send once a newer suggestion replaced it", () => {
     box.items = [open({ suggestion: { version: 3, kind: "reply", text: "新的", conversation: { machine_id: "server", session_id: "m1" } } })];
     draw(<HandoffCard item={feed} />);
-    expect(host.textContent).toContain("已不是当前建议");
+    expect(host.textContent).toContain("不再是当前建议");
     expect(host.textContent).not.toContain("没有发出");
     expect(host.querySelector('[data-testid="handoff-card"]')?.getAttribute("data-state")).toBe("replaced");
     expect(host.querySelector('[data-testid="handoff-card-confirm"]')).toBeNull();
@@ -198,7 +198,7 @@ describe("Wrap up chips", () => {
     await act(async () => chip.click());
     expect(box.handed).toHaveLength(1);
     expect((box.handed[0][0] as InboxItem).id).toBe("lark:f1:100");
-    expect(box.handed[0][1]).toBe("可以收尾了：把最终的总结和回复写回这条收件箱事项。");
+    expect(box.handed[0][1]).toBe("请进行收尾：整理最终总结，并将回复写回这条收件箱事项。");
   });
 
   it("reveals the current pending reply instead of starting another hand-off", async () => {

@@ -407,6 +407,35 @@ func TestHTTPParamsAreJSONMarshals(t *testing.T) {
 	}
 }
 
+func TestCallHTTPInlineUsesAppendedParams(t *testing.T) {
+	req := assistantwire.HTTPRequest{
+		Method: http.MethodPut, Path: "/example", Query: "a=1&b=2",
+		Body: bytes.Repeat([]byte{0, 0xff, 0x1f}, bodyStreamMin/3+1),
+	}
+	wantLine, err := callLineOf(req, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := managerBusCaller{call: func(_ context.Context, _, method string, params, out any) error {
+		if method != "http.request" {
+			t.Fatalf("method = %q, want http.request", method)
+		}
+		if _, ok := params.(rpc.Appended); !ok {
+			t.Fatalf("large body sent as %T, want rpc.Appended", params)
+		}
+		got, err := callLineOf(params, 0)
+		if err != nil || !bytes.Equal(got, wantLine) {
+			t.Fatalf("appended request wrote %d bytes, %v, want the same %d wire bytes", len(got), err, len(wantLine))
+		}
+		*out.(*assistantwire.HTTPResponse) = assistantwire.HTTPResponse{Status: http.StatusCreated}
+		return nil
+	}}
+	var res assistantwire.HTTPResponse
+	if err := callHTTPInline(t.Context(), caller, assistantwire.HTTPMethod, req, &res); err != nil || res.Status != http.StatusCreated {
+		t.Fatalf("callHTTPInline = %+v, %v, want HTTP 201", res, err)
+	}
+}
+
 // httpParams appends the body after the rest of the request: it is HTTPRequest's last field, left out when empty,
 // and method and path, always written, come before it.
 func TestHTTPRequestBodyIsLast(t *testing.T) {

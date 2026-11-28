@@ -266,7 +266,8 @@ test('changing permissions alone does not apply the configured model', async (t)
 const resumedSession = 'agy-11111111-2222-3333-4444-555555555555'
 
 test('history stays passive and the first resumed prompt applies the native default', async (t) => {
-  const { n, calls } = await fixture(t, { noStart: true })
+  const { n, home, calls } = await fixture(t, { noStart: true })
+  mkdirSync(join(home, 'settings', 'brain', resumedSession.slice(4)), { recursive: true })
   await n.peer.call('session.items', { session_id: resumedSession })
   assert.deepEqual(calls(), [])
 
@@ -813,4 +814,83 @@ test('loadSession configOptions without modes during session.modes model switch 
   assert.equal(row()?.model, entries[0].modelId)
   assert.equal(row()?.effort, 'medium')
   assert.equal(calls().filter((call) => call.method === 'session/set_mode' && call.params?.modeId === 'accept-edits').length, 2)
+})
+
+const NO_AUTO_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+
+test('agy 1.5.18 omitting auto from availableModes and rejecting session/set_mode(auto) degrades cleanly to bypassPermissions (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({
+    models: entries,
+    availableModes: [{ id: 'default' }, { id: 'accept-edits' }, { id: 'plan' }],
+    rejectAuto: true,
+  })
+  f.settings({ model: entries[1].name, agentMode: 'default' })
+  const { session } = await f.n.peer.call('session.start', {
+    cwd: f.home,
+    assistant: true,
+    permission_mode: 'auto',
+    prompt: 'ask-read-permissions',
+  })
+  const row = () => f.n.last('runtime.sessions')?.sessions.find((entry) => entry.session_id === session.session_id)
+  const answers = () => f.calls().filter((call) => typeof call.id === 'string' && call.id.startsWith('read-permission-') && call.result)
+  await until('all three read permissions are answered', () => answers().length === 3)
+  await until('the task turn ends', () => row()?.status === 'done')
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  assert.deepEqual(session.capabilities?.permission_modes, NO_AUTO_MODES)
+  assert.equal(row()?.permission_mode, 'bypassPermissions')
+  assert.deepEqual(row()?.capabilities?.permission_modes, NO_AUTO_MODES)
+  assert.deepEqual(f.n.last('runtime.launchers')?.launchers[0]?.permission_modes, NO_AUTO_MODES)
+  assert.equal(f.n.asked.length, 0)
+  // Skipping the doomed session/set_mode("auto") when availableModes omits it prevents spurious -32602 errors.
+  assert.equal(f.calls().some((call) => call.method === 'session/set_mode' && call.params?.modeId === 'auto'), false)
+  const page = await f.n.peer.call('session.items', { session_id: session.session_id })
+  const notices = page.items.filter((item) => item.kind === 'notice').map((item) => item.text)
+  assert.deepEqual(notices, [AUTO_REFUSAL_NOTICE])
+})
+
+test('JSON-RPC -32602 auto mode refusal without availableModes degrades cleanly on session.start and session.modes (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({ models: entries, rejectAuto: true })
+  f.settings({ model: entries[1].name, agentMode: 'default' })
+  const { session } = await f.n.peer.call('session.start', {
+    cwd: f.home,
+    assistant: true,
+    permission_mode: 'auto',
+  })
+  assert.equal(session.permission_mode, 'bypassPermissions')
+  assert.deepEqual(session.capabilities?.permission_modes, NO_AUTO_MODES)
+  await until('launcher advertises restricted permission_modes', () =>
+    JSON.stringify(f.n.last('runtime.launchers')?.launchers[0]?.permission_modes) === JSON.stringify(NO_AUTO_MODES))
+  const switched = await f.n.peer.call('session.modes', {
+    session_id: session.session_id,
+    permission_mode: 'auto',
+    assistant: true,
+  })
+  assert.equal(switched?.permission_mode, 'bypassPermissions')
+  const page = await f.n.peer.call('session.items', { session_id: session.session_id })
+  const notices = page.items.filter((item) => item.kind === 'notice').map((item) => item.text)
+  assert.deepEqual(notices, [AUTO_REFUSAL_NOTICE])
+})
+
+test('launchers.check observing availableModes without auto advertises restricted permission_modes (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({
+    models: entries,
+    availableModes: [{ id: 'default' }, { id: 'accept-edits' }, { id: 'plan' }],
+  })
+  const checked = await f.n.peer.call('launchers.check', { cwd: f.home, prompt: 'Reply with OK' })
+  assert.equal(checked.ok, true)
+  await until('launcher advertises restricted permission_modes after check', () =>
+    JSON.stringify(f.n.last('runtime.launchers')?.launchers[0]?.permission_modes) === JSON.stringify(NO_AUTO_MODES))
+})
+
+test('older agy without session/set_mode (-32601) still rejects auto instead of swallowing modeUnsupported (#17239)', async (t) => {
+  const f = await fixture(t, { noStart: true })
+  f.catalog({ models: entries, noSetMode: true })
+  f.settings({ model: entries[1].name, agentMode: 'default' })
+  await assert.rejects(
+    f.n.peer.call('session.start', { cwd: f.home, permission_mode: 'auto' }),
+    /too old to switch to the "auto" mode.*Please update agy/,
+  )
 })

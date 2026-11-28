@@ -66,7 +66,7 @@ describe("x-confirm on a boolean field", () => {
     expect(toggle().getAttribute("aria-checked")).toBe("false");
 
     act(() => toggle().click());
-    act(() => button("打开")!.click());
+    act(() => button("启用")!.click());
     await flush();
     expect(toggle().getAttribute("aria-checked")).toBe("true");
     await act(async () => button("保存")!.click());

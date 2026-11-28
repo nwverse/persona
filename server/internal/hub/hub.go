@@ -351,8 +351,10 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	}
 	h.push = newPusher(cfg.dir, h.store, h.logf)
 	h.push.quiesce = &h.quiesce
+	h.push.revoked = h.isDeviceRevoked
 	h.push.web = newWebPusher(h.store, h.logf) // browsers' subscriptions and the VAPID key, in the hub's settings (#7459)
 	h.push.web.quiesce = &h.quiesce
+	h.push.web.revoked = h.isDeviceRevoked
 	h.push.traffic = h.recordTraffic
 	h.push.desktopOnline = h.desktopOnline
 	h.push.desktopOpen = h.desktopOpen

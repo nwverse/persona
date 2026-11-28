@@ -14,6 +14,7 @@ import { useAgentSessions, useFullAgentSessions } from "./sessions";
 import { stateCount, stateName } from "./state-labels";
 import type { Interaction, Session } from "./types";
 import type { DesktopIsland, DesktopIslandRow, DesktopIslandState } from "./desktop-types";
+import { byTime } from "./times";
 
 /** The most rows the island lists, as the desktop draws them. */
 export const ISLAND_ROWS = 5;
@@ -35,11 +36,11 @@ function joinLead(lead: string, text: string): string {
 export function islandState(sessions: readonly Session[], interactions: readonly Interaction[]): DesktopIslandState {
   // the card a row speaks for, as the Agents list finds it: its own, else one a child session folded under it waits on
   const card = (s: Session) => sessionCard(interactions, s.machine_id, s.session_id);
-  const since = (s: Session) => Date.parse(s.state_since ?? s.updated_at ?? "") || 0;
+  const since = (s: Session) => s.state_since ?? s.updated_at;
   // filter makes the copy that is sorted: the hooks' shared lists are never reordered
   const agents = sessions.filter((s) => !s.assistant && activityOf(s) in RANK && (stateOf(s) !== "needs_you" || !s.view || s.view.counted));
   const rows = agents
-    .sort((a, b) => RANK[activityOf(a)] - RANK[activityOf(b)] || since(b) - since(a))
+    .sort((a, b) => RANK[activityOf(a)] - RANK[activityOf(b)] || byTime(since(b), since(a)))
     .slice(0, ISLAND_ROWS)
     .map((s): DesktopIslandRow => {
       const state = activityOf(s);

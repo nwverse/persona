@@ -34,8 +34,10 @@ import XCTest
         _ = try Data(contentsOf: URL(string: hub + "/mock/personal-agents?reset=1&state=configured")!)
         let app = XCUIApplication()
         let pair = "persona://pair?url=" + hub.addingPercentEncoding(withAllowedCharacters: .alphanumerics)! + "&token=mock"
-        app.launchArguments = ["-pairURL", pair, "-persona.ios.console.enabled", "YES", "-tab", "chats", "-dev.openChat", ""]
+        app.launchArguments = ["-pairURL", pair, "-persona.ios.console.enabled", "YES", "-tab", "assistant", "-dev.openChat", ""]
         app.launchPinned()
+        XCTAssertTrue(app.tabBars.buttons.element(boundBy: 1).waitForExistence(timeout: 30), app.debugDescription)
+        app.tabBars.buttons.element(boundBy: 1).tap()
 
         let segments = app.segmentedControls.firstMatch
         XCTAssertTrue(segments.waitForExistence(timeout: 30), app.debugDescription)

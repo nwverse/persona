@@ -669,7 +669,7 @@ func (s *Service) reportCardLedger(ctx context.Context, now time.Time) {
 		if main == "" {
 			return // nobody to tell yet: tried again on the next tick
 		}
-		if _, ok := s.keepRelayLater(main, relayMsg{From: cardLedgerFrom, FromTitle: cardLedgerTitle, Tool: cardLedgerFrom, Text: text, At: now.UTC()}); !ok {
+		if _, ok := s.keepRelayLater(main, relayMsg{From: cardLedgerFrom, FromTitle: cardLedgerTitle, Tool: cardLedgerFrom, Text: text, At: now.UTC(), Internal: true}); !ok {
 			return // the relay state could not be saved: tried again on the next tick
 		}
 		s.publish(ctx) // shown waiting above the main conversation's composer

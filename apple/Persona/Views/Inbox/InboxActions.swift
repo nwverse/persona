@@ -18,6 +18,7 @@ struct InboxActionBar: View {
                 (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                     .font(Theme.Font.secondary)
                     .lineLimit(3)
+                    .lookUpWords(plain: "\u{FFFC} " + s) // the mark is one attachment character (#10977)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             InboxLineSection(tree: line)

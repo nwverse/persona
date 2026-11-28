@@ -447,6 +447,7 @@ data class ExtensionContributes(
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
     @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
+    @SerialName("text_lookup") val textLookup: List<ExtensionTextLookupItem>? = null,
     @SerialName("memory_sources") val memorySources: List<ExtensionMemorySourceItem>? = null,
     @SerialName("disk_offload") val diskOffload: List<ExtensionDiskOffloadItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
@@ -487,6 +488,7 @@ private data class ExtensionContributesKnown(
     @SerialName("auth_relay") val authRelay: List<ExtensionAuthRelayItem>? = null,
     @SerialName("secret_providers") val secretProviders: List<ExtensionSecretProviderItem>? = null,
     @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
+    @SerialName("text_lookup") val textLookup: List<ExtensionTextLookupItem>? = null,
     @SerialName("memory_sources") val memorySources: List<ExtensionMemorySourceItem>? = null,
     @SerialName("disk_offload") val diskOffload: List<ExtensionDiskOffloadItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
@@ -494,7 +496,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "text_lookup", "memory_sources", "disk_offload", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -534,6 +536,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             authRelay = fields.authRelay,
             secretProviders = fields.secretProviders,
             repositoryProviders = fields.repositoryProviders,
+            textLookup = fields.textLookup,
             memorySources = fields.memorySources,
             diskOffload = fields.diskOffload,
             messaging = fields.messaging,
@@ -575,6 +578,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             authRelay = value.authRelay,
             secretProviders = value.secretProviders,
             repositoryProviders = value.repositoryProviders,
+            textLookup = value.textLookup,
             memorySources = value.memorySources,
             diskOffload = value.diskOffload,
             messaging = value.messaging,
@@ -910,6 +914,33 @@ data class ExtensionRepositoryProviderItem(
      * (repo.pr_status). Without it the manager reads repo.describe's state. Each at most once.
      */
     val capabilities: List<String>? = null,
+)
+
+/**
+ * Identifies one text_lookup dictionary within its extension. It encodes as the bare string.
+ */
+@Serializable
+@JvmInline
+value class ExtensionTextLookupContributionID(val raw: String) {
+    override fun toString(): String = raw
+}
+
+/**
+ * A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
+ * text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"]) for
+ * now.
+ */
+@Serializable
+data class ExtensionTextLookupItem(
+    val id: ExtensionTextLookupContributionID = ExtensionTextLookupContributionID(""),
+    /**
+     * What the dictionary is called, in a few words.
+     */
+    val name: String? = null,
+    /**
+     * The languages it looks up. Only "en" is accepted for now; omitted means ["en"].
+     */
+    val languages: List<String>? = null,
 )
 
 /**
@@ -2134,6 +2165,88 @@ data class ExtensionAuthRelayResult(
 )
 
 /**
+ * text_lookup.state's parameters: which contribution to ask for the words the user saved and whether saved words are
+ * underlined.
+ */
+@Serializable
+data class ExtensionTextLookupStateParams(
+    val contribution: String = "",
+)
+
+/**
+ * What text_lookup.state answers. words is capped by the manager at 5000.
+ */
+@Serializable
+data class ExtensionTextLookupStateResult(
+    @SerialName("underline_saved") val underlineSaved: Boolean = false,
+    val words: List<String>? = null,
+)
+
+/**
+ * text_lookup.lookup's parameters: the word the user tapped, an optional sentence around it, the word's language and
+ * the language of the app.
+ */
+@Serializable
+data class ExtensionTextLookupLookupParams(
+    val contribution: String = "",
+    val word: String = "",
+    val context: String? = null,
+    val lang: String = "",
+    @SerialName("ui_lang") val uiLang: String = "",
+)
+
+/**
+ * One meaning of a looked-up word.
+ */
+@Serializable
+data class ExtensionTextLookupSense(
+    val pos: String? = null,
+    val text: String = "",
+)
+
+/**
+ * What text_lookup.lookup answers: found is false when the dictionary has no entry.
+ */
+@Serializable
+data class ExtensionTextLookupLookupResult(
+    val found: Boolean = false,
+    val word: String = "",
+    val lemma: String? = null,
+    val phonetic: String? = null,
+    val senses: List<ExtensionTextLookupSense>? = null,
+    val saved: Boolean = false,
+)
+
+/**
+ * text_lookup.save's parameters: the word to remember, an optional sentence around it and where the user saved it
+ * from.
+ */
+@Serializable
+data class ExtensionTextLookupSaveParams(
+    val contribution: String = "",
+    val word: String = "",
+    val context: String? = null,
+    val source: String? = null,
+)
+
+/**
+ * text_lookup.remove's parameters: the saved word to forget.
+ */
+@Serializable
+data class ExtensionTextLookupRemoveParams(
+    val contribution: String = "",
+    val word: String = "",
+)
+
+/**
+ * What text_lookup.save and text_lookup.remove answer: whether the word is saved afterwards.
+ */
+@Serializable
+data class ExtensionTextLookupSavedResult(
+    val saved: Boolean = false,
+)
+
+/**
  * What a secret value is resolved for: kind extension (an extension's secret, id its id), launcher (a launcher's or
  * model provider's key, id its name, machine the computer it goes to) or agent_run (handed to one Agent run after the
  * user approved it on the phone, id the variable's name, machine and session the Agent's).
@@ -2969,6 +3082,13 @@ data class ExtensionCodeComponent(
      * (…/blob/<sha>/a.go#L{start}-L{end}).
      */
     @SerialName("line_url") val lineUrl: String? = null,
+    /**
+     * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it;
+     * Alt+F7 for its usages) calls ui.action with action and values {path, line, column (1-based, in characters),
+     * word, intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older
+     * app leaves it out.
+     */
+    val navigate: ExtensionAction? = null,
 ) : ExtensionComponent
 
 /**

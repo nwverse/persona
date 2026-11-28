@@ -331,7 +331,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) {
 	if res.Held {
 		r.Held = true
 		delete(r.Ext, "card")
-		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off"} {
+		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off", "cot_answer"} {
 			delete(r.Ext, k)
 		}
 		prog.steps, prog.from = nil, 0
@@ -602,16 +602,6 @@ func (s *Service) SetLiveRunExt(r *channel.Run, key, value string) {
 		s.SetRunExt(real, key, value)
 	}
 	s.SetRunExt(r, key, value)
-}
-
-func (s *Service) RunTo(ext map[string]string) assistantwire.ChannelTarget {
-	if ext[readChatKey] != "" {
-		return assistantwire.ChannelTarget{ChatID: ext[readChatKey], InThread: ext["read_thread"] != "", NoDetour: true, Read: true}
-	}
-	if ext["chat"] == "" || ext["thread"] == "" {
-		return assistantwire.ChannelTarget{}
-	}
-	return assistantwire.ChannelTarget{ChatID: ext["chat"], InThread: true}
 }
 
 func (s *Service) RunState(id string, kept bool, make func() any) (any, <-chan struct{}, bool) {

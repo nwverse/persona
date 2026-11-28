@@ -10,7 +10,7 @@ import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react
 import { errorText } from "../../lib/api";
 import { connectorState, connectorSummary, signsInHere, connectorTone, isEnabled, larkcliOptions, listConnectors, setConnector, type ConnectorTone, type HubConnector } from "../../lib/connectors";
 import { t } from "../../i18n";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import { documentPage, visiblePoll } from "../../lib/visible-poll";
 import {
   botStateText, botStatus, botSummary, botTone, credentialsChanged, credentialsOf, credentialsUpdate, DEFAULT_FEATURES, DEFAULT_NUDGE_AFTER, livePairing, nudgeChoices, nudgeLabel, pairBot, pairingLeft,
@@ -49,7 +49,7 @@ function missingScopes(c: HubConnector): string[] {
 
 /** The open-platform page for the missing permissions: the hub's guide_url, or a permission_url. */
 function permissionLink(c: HubConnector): string {
-  return c.guide_url || c.permission_url || "";
+  return safeWebURL(c.guide_url, true) || safeWebURL(c.permission_url, true) || "";
 }
 
 function combinedLarkState(bot: FeishuBotStatus | null, loading: boolean, c: HubConnector): { label: string; tone?: ConnectorTone } {
@@ -68,6 +68,8 @@ export const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; 
   { key: "read_group", icon: "search", title: t("settings-feishubot.feature_read_group_title"), detail: t("settings-feishubot.feature_read_group_detail") },
   { key: "read_group_direct", icon: "chat", title: t("settings-feishubot.feature_read_group_direct_title"), detail: t("settings-feishubot.feature_read_group_direct_detail") },
   { key: "topic_cot", icon: "spark", title: t("settings-feishubot.feature_topic_cot_title"), detail: t("settings-feishubot.feature_topic_cot_detail") },
+  { key: "dm_cot", icon: "spark", title: t("settings-feishubot.feature_dm_cot_title"), detail: t("settings-feishubot.feature_dm_cot_detail") },
+  { key: "cot_answer", icon: "spark", title: t("settings-feishubot.feature_cot_answer_title"), detail: t("settings-feishubot.feature_cot_answer_detail") },
   { key: "sync", icon: "loop", title: t("settings-feishubot.feature_sync_title"), detail: t("settings-feishubot.feature_sync_detail") },
   { key: "reports", icon: "list", title: t("settings-feishubot.feature_reports_title"), detail: t("settings-feishubot.feature_reports_detail") },
   { key: "board", icon: "pin", title: t("settings-feishubot.feature_board_title"), detail: t("settings-feishubot.feature_board_detail") },
@@ -407,17 +409,19 @@ function FeishuBotDialog({ bot, manager, larkcli, onClose, onOpen }: { manager?:
           {status.owner && <TopicGroups status={status} saving={saving} save={(topic_chats) => run(t("settings-feishubot.save_failed"), () => updateBot({ topic_chats }))} />}
 
           <Group title={t("settings-feishubot.features")} footer={t("settings-feishubot.features_footer")}>
-            {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card" && f.key !== "topic_cot" && f.key !== "read_group" && f.key !== "read_group_direct") || features[f.key] !== undefined).map((f) => {
+            {FEATURES.filter((f) => (f.key !== "report_steps" && f.key !== "answer_new_card" && f.key !== "topic_cot" && f.key !== "dm_cot" && f.key !== "cot_answer" && f.key !== "read_group" && f.key !== "read_group_direct") || features[f.key] !== undefined).map((f) => {
               // "All cards" needs "cards"; "only conclusions" needs task progress, without which the hub sends no conclusions either,
               // and trims only the execution steps, which a current hub pushes only with "report_steps" on (#3218).
               // "report_steps" needs task progress too; a hub from before it leaves the key out and the switch is hidden,
-              // as are "answer_new_card", "topic_cot", "read_group" and "read_group_direct" on hubs from before them.
+              // as are "answer_new_card", "topic_cot", "dm_cot", "cot_answer", "read_group" and "read_group_direct" on hubs from before them.
               // "read_group_direct" only says where a /read's answer goes, so it waits dimmed while /read is off (#14437).
+              // "cot_answer" only applies to a turn that gets a native agent message, so it waits dimmed while neither dm_cot nor topic_cot is on.
               const off =
                 (f.key === "all_cards" && !features.cards) ||
                 (f.key === "only_conclusions" && (features.reports === false || (features.report_steps === false && !features.only_conclusions))) ||
                 (f.key === "report_steps" && features.reports === false) ||
-                (f.key === "read_group_direct" && !features.read_group);
+                (f.key === "read_group_direct" && !features.read_group) ||
+                (f.key === "cot_answer" && !features.dm_cot && features.topic_cot === false);
               return (
                 <div key={f.key} className={cx("flex items-start gap-3 px-4 py-2.5", off && "opacity-50")}>
                   <Icon name={f.icon} size={15} className="mt-0.5 shrink-0 text-accent" />

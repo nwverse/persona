@@ -9,6 +9,7 @@
   "topic_chats_many": "最多开启 {n} 个群",
   "topic_chat_bad": "群 ID 为空、含空格或重复",
   "topic_todo_mode_bad": "请选择有效的群待办设置",
+  "topic_space_bad": "该空间不存在或不可绑定到话题群",
   "topic_chat_home_many": "主话题群只能有一个",
   "topic_needs_owner": "先配对机器人：开启的群属于主人的名单",
   "topic_chats_new_app": "群名单请单独提交：换 App ID 会解除主人配对",

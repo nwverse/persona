@@ -34,6 +34,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -531,6 +532,11 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
 	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
+	// The rows of a module an installed extension may supply wait unread while nothing may serve them: a built-in's
+	// row on a build without it, or any row of a module the modules setting switched off (module_providers.go).
+	for _, m := range modapi.ExtensionModules() {
+		reg.HoldModule(string(m.ID), !h.modules().On(string(m.ID)))
+	}
 	if err := reg.Load(ctx); err != nil {
 		h.logf("plugins: %v", err)
 	}
@@ -659,6 +665,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if ps.h != nil {
 		ps.h.agentFiltersChanged(ctx) // only when they changed (agent_filters.go)
+	}
+	if ps.h != nil && textLookupTouched(c.Old, c.ID, ps.reg) {
+		ps.h.textLookupChanged() // the apps ask GET /api/v1/text-lookup again
 	}
 	if ps.h != nil {
 		ps.h.sendReport() // its looks came or went: the hub serves them from the report (hub/looks.go)

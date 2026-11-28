@@ -166,6 +166,7 @@ func TestTaskReceipt(t *testing.T) {
 	s, f := newTaskService(t)
 	todo := startedTask(t, s, f)
 	ctx := context.Background()
+	artifactNodeProof(f, "https://github.com/o/r/pull/901", "contributor", "contributor", "fix/login", "fix/login", "abc", "abc")
 	turn := func(status, text string) {
 		f.setSessions("box", proto.Session{SessionID: "s1", MachineID: "box", Cwd: "/code/app", Agent: "claude", Status: status, LastText: text,
 			UpdatedAt: time.Now()})
@@ -894,6 +895,7 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 		raw, _ := json.Marshal(map[string]any{"tasks": []map[string]any{{
 			"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app",
 			"readonly": false, "permission": "bypassPermissions", "user_requested": requested, "why": "这个仓库最近在 box 上",
+			"model_aliases": map[string]string{"haiku_model": "vendor/fast"},
 		}}})
 		return raw
 	}
@@ -912,6 +914,12 @@ func TestTaskPlanStartsWhatTheUserAskedFor(t *testing.T) {
 	waitFor(t, "the agent to start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
 
 	s2, f2 := newTaskService(t)
+	f.mu.Lock()
+	aliases, _ := json.Marshal(f.starts[0]["model_aliases"])
+	f.mu.Unlock()
+	if string(aliases) != `{"haiku_model":"vendor/fast"}` {
+		t.Fatalf("node aliases: %s", aliases)
+	}
 	if res, err := s2.toolTaskPlan(context.Background(), "conv1", plan(false)); err != nil || !strings.Contains(res, "nothing has started") {
 		t.Fatalf("an inferred task: %q %v", res, err)
 	}

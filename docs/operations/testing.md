@@ -559,7 +559,7 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
   device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
   script prints the same reminder whenever it leaves the simulator slice only.
-- **The Rust core on Linux, for a Linux Apple toolchain** (such as nwverse/apple-build, #16944). The same
+- **The Rust core on Linux, for a Linux Apple toolchain** (one that builds the iOS app without Xcode, #16944). The same
   `native/app-core/scripts/build-apple.sh` (with or without `--simulator`) needs no Xcode there: it builds the device
   and arm64 simulator slices as static libraries whatever the machine's architecture, writes the XCFramework in the
   layout `xcodebuild -create-xcframework` produces, and builds no macOS slice (it says so in one line: macOS
@@ -903,6 +903,7 @@ xcrun simctl launch --terminate-running-process $SIM <bundle id> \
 - Tool names in words (#2986, `ToolNaming` in `apple/Persona/Views/Chat/ToolNaming.swift`): `MOCK_TOOL_NAMES=1` adds MacBook's "Why the CSV export times out" (`macbook/a1f3c2d4-0000-4000-8000-0000000c2986`), one turn that calls ToolSearch, TaskCreate, TaskUpdate (started, then completed), NotebookEdit, Monitor, SendMessage, ScheduleWakeup, another server's MCP tool (`mcp__github__create_issue`, "GitHub · Create issue") and a tool no table knows with nested arguments (`RenderChart`). The MCP call and the unknown one also have a chat of their own (`…0c2987`, `…0c2988`): open the work (`-openAllWork YES`) and tap the row to see its arguments as a key/value list with Raw Input under it. `…0c2989` is a review whose ReportFindings lists two findings, each with its file and line. `…0c298a` is the Monitor alone, its Background badge on the first screen at the largest text size. `-showAsUnread YES` lands the long turn at its first step.
   The first three also end chats of their own (`…c2916` Edit, `…c2917` MultiEdit, `…c2918` Write), so `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows each diff without scrolling; `scripts/app/personactl.py tap --label-prefix "Show All"` opens the long one.
 - A reply's Markdown as written (#3863, `CJKEmphasis` in PersonaKit and `MarkdownTable.swift`): `MOCK_REPLY_MARKDOWN=1` adds MacBook's "导出耗时整理" (`macbook/a1f3c2d4-0000-4000-8000-0000000c3863`) and puts the same turn at the end of Persona's conversation: a table whose delimiter row aligns its columns (the seconds right-aligned so the decimals line up, the result centered), headings at levels 4 to 6, and bold labels next to full-width punctuation (`**注意：**后文`, `**「必须」**`), which render bold with no asterisks left over.
+- Word lookup (#10977, docs/apple/ios.md "Word lookup (text_lookup)"): `MOCK_TEXT_LOOKUP=1` adds the `text_lookup` feature and an enabled "Relingo" that answers `GET/POST /api/v1/text-lookup…` from a made-up dictionary (context, deploy, latency, review, summary, weather, widget, landscape; forms such as "deployed" give their lemma), an English Inbox row `assistant:tl1`, and announces each save as `text_lookup_changed`; `=off` has the feature with no extension (`available: false`). `MOCK_TEXT_LOOKUP_UNDERLINE=1` sets `underline_saved`, `MOCK_TEXT_LOOKUP_LATENCY=<s>` delays every lookup (default 0.4). `GET /mock/text-lookup?available=0|1&underline=0|1&fail=0|1&latency=<s>&reset=1` changes it live and returns what the app sent (`log`). UI suite `TextLookupUITests` (`TEST_RUNNER_PERSONA_TEXT_LOOKUP_HUB=<mock URL>`, `TEST_RUNNER_PERSONA_SHOTS`, `TEST_RUNNER_PERSONA_SHOTS_APPEARANCE`); mock tests `scripts/mock/test_text_lookup_mock.py`.
 - Paths with non-ASCII names in a reply (#8386, `PathRefs` in PersonaKit and `web/src/lib/path-refs.ts`): `MOCK_CJK_PATHS=1` adds MacBook's "报表整理" (`macbook/a1f3c2d4-0000-4000-8000-000000008386`) and puts the same turn at the end of Persona's conversation: bare paths to files with Chinese and Japanese names, which are there (so they link), one glued to the sentence after its extension and one before a full-width full stop.
 - Tool outcomes (#4303, `ToolOutcomeText` in `apple/Persona/Views/Chat/ToolOutcomeViews.swift`): `MOCK_TOOL_OUTCOMES=1` adds MacBook's "Why the last export batch goes missing" (`macbook/a1f3c2d4-0000-4000-8000-0000000c4303`), one turn whose tool results carry the node's `outcome`: a test run that failed with exit code 1 and an output the page cut (its last lines in `tail`), an edit the user denied, a write refused before it ran, a command the user interrupted and one that timed out and went on in the background. Only the failed run is red; the others say in gray what stopped them. The failed run and the denied edit also end chats of their own (`…c4304`, `…c4305`): `-openSession macbook/<id> -openAllWork YES -showToolDetails YES` shows "Exit code 1" with "End of output" under the cut output, or "Denied".
 - Full access by a restart (#6476, #6513): `MOCK_BYPASS_PENDING=1` gives the widget agent (`macbook/a1f3c2d4-0000-4000-8000-000000000001`, working in Auto-Edit) `bypass_pending`, a restart into Full access that waits for its turn to end, so the clients' pending state can be screenshotted without picking it. Any other mock agent in a pane takes a Full access pick by a restart (`MOCK_BYPASS_RESTART_SECONDS`).
@@ -2503,8 +2504,56 @@ go run ./scripts/transcribelive -hub <hub address> -token-file <file> -kb <PERSO
   line and in all, the Latin words kept as said); the latency of each `line` frame after its sentence ended, of the
   first caption after each sentence began, of the final pass after the complete upload and of the minutes after it;
   Persona's echo (marked in the hub's transcript, never a live line); the minutes' share of Han letters against
-  `-lang`; the upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
-  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it.
+  `-lang`; `meeting_transcription_extension` (from `GET /api/v1/assistant`, with a warning when it is not `""`); the
+  upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
+  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it,
+  and `<out>/hub_segments.json` is copied from the knowledge base before the recording is deleted.
+- Sentence-time and speaker-label scoring (`timing` and `labels` in `<out>/report.json`):
+  - **Text-only matching (`timing.match`)**: hub sentences (live `line` frames ordered by `n`; `hub_segments.json` in
+    stored order) are aligned monotonically to non-echo script lines by normalized text alone, with no timestamps in the
+    cost (1:1, up to 1:3 / 3:1 merges and splits, and skips on either side; Persona's echo lines and segments are left
+    out).
+  - **Start and end errors (`timing.live`, `timing.final`, `timing.final_replay`)**: for each matched group
+    (`H1…Hk`, `L1…Lm`), start error is `H1.start - L1.start` and end error is `Hk.end - Lm.end`, reported as `{n, min,
+    p50, p90, max}` of the absolute error in seconds plus `start_signed_p50` and `end_signed_p50` (`null` when a group
+    is empty). `final_replay` is the subset of `final` written by the final pass rather than kept from live: a non-echo
+    final segment counts as `live_kept` when a live `line` frame has the same normalized text and both `start` and `end`
+    within 0.01 s, and `replay` otherwise (`timing.final_split`).
+  - **Perfect-timeline speaker labels (`labels.rule`, `labels.<group>`)**: using the non-echo script lines as a perfect
+    turn timeline, each matched hub sentence is labelled by overlap with each voice's turns (no overlap: `unlabelled`;
+    otherwise the voice with the most overlap is sure when it has at least 70% of the sentence's total overlap, at least
+    1 s of overlap, and at least 20 s of total speech in the timeline, else `unsure`; a sentence matched to lines from
+    more than one voice is `mixed`). The rule runs once with hub times and once with the matched lines' true span, and
+    reports `time_caused_wrong_pts` and `time_caused_unsure_unlabelled_pts` (in percentage points), both over all matched
+    sentences and under `substantive` (true span >= 2 s, or >= 8 Han characters in the normalized text; English counts by
+    duration only).
+- **Result line and fail-fast checks**: the last line on stdout is `RESULT ...` on success (naming a `failed` minutes
+  state without stopping scoring), `TIMEOUT ...` when the final pass does not finish within 40 minutes, or `FAIL ...` on
+  any fatal error (including a `failed` final pass, or `<kb>/recordings/<id>/meta.json` not appearing within 60 s of the
+  first upload, which deletes the recording and reports a bad `-kb`).
+- **Offline rescoring (`-rescore <dir>`)**: recomputes `timing` and `labels` from `<dir>/script.json`,
+  `<dir>/frames.json` and `<dir>/hub_segments.json` with no hub and no network, writing `<dir>/rescore.json` and the
+  `RESULT` line.
+- **Reusing a longer meeting**: place `<out>/meeting.pcm` (raw signed 16-bit little-endian mono 16 kHz, no header) and
+  `<out>/script.json` (JSON array with all six keys `{voice, lang, text, echo, start, end}` on every line, with
+  `"echo": false` written explicitly on non-echo lines; times in seconds on that PCM's clock). Keep a backup of both
+  files: a `script.json` that fails to parse falls back to synthesizing the embedded meeting and overwrites both files.
+- **Zero-cost dry run**: configure the voice extension with the `fake` dialect (`manager.json` only,
+  `server/internal/modules/voice/transcribe_fake.go`) and set `PERSONA_VOICE_FAKE_TRANSCRIPT` in its environment to the
+  script's `[{start, end, text}]` JSON file. With `<out>/meeting.pcm` and `<out>/script.json` pre-populated, no speech
+  is synthesized and no upstream is called; timing errors and time-caused label shifts should be about 0 (and
+  `final_replay` empty, since the fake emits identical live and replay times).
+- **Running against a real upstream (manual only, never in CI)**:
+  - Use a throwaway test hub (`docs/lessons/workflow.md`, "Temporary test hubs") with its own `HOME`, `PERSONA_HOME`,
+    port and Postgres, never a hub in use. Pass `-hub`, `-token-file` (full device token) and `-kb` explicitly with
+    `PERSONA_HOME` pointing at the test hub so the tool cannot fall back to `~/.persona/hub.json`.
+  - Enable the knowledge base, recording module and built-in `voice` extension with a `live`-dialect upstream
+    (`meeting_transcription_extension` `""` and `meeting_transcription_ready` true). Keep upstream keys only in the
+    test hub's own settings or secret provider, never in issues or PRs. Without a minutes model, every run waits the
+    full 30-minute minutes timeout and audio stays until the final `DELETE`.
+  - Expect roughly 5× the meeting duration in billed upstream minutes (live multi-session pass plus 4× replay), plus
+    one-time speech synthesis (not in `usage_seconds`), minutes model calls and any listener-role room conversation. Run
+    the short embedded script first and extrapolate from its `usage_seconds` before running a 20+ minute script.
 
 ## Live Activity screenshots (`LiveActivityShots`)
 

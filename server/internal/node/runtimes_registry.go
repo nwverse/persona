@@ -766,6 +766,9 @@ func (b *runtimeRegistry) setSessionList(h *runtimeConn, list []proto.Session, a
 	h.sessions = list
 	h.sessionsListed = true
 	h.agyPaneBackground = agyPaneBackground
+	if h.hello.Runtime == agyRuntimeID && h.daemon == "" {
+		h.agyPreviews = nextAgyPreviews(h.agyPreviews, list)
+	}
 	rt := h.hello.Runtime
 	agent := h.hello.Agent
 	if agent == "" {
