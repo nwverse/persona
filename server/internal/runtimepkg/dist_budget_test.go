@@ -117,9 +117,10 @@ import (
 // Preserving active native Antigravity interrupts alongside running background tasks (#17652) adds 15 B (319,197 B -> 319,212 B).
 // Runtime command input (#14573) adds 2,657 B to the runtime SDK package
 // on top of the 319,212 B upstream total (321,869 B combined).
+// Reaping idle assistant ACP workers independently of coding agents and storing compact background summaries instead of full exported.steps in listedTranscriptCache add 8 B (321,869 B -> 321,877 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 321_869
+	const budget = 321_877
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

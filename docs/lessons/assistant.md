@@ -7,6 +7,9 @@
   make a queued topic reset change the channel's default target. Use a synchronized clock in rollback tests because
   background snapshots also read the clock, including from managers that have been reloaded.
 
+- A start failure awaiting retry is open for supervision handover even though the stored row has `done_at`
+  (#17273). Use `closedForGood` to distinguish it from completed or cancelled work.
+
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
   receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real

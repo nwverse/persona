@@ -52,7 +52,7 @@ From the node:
 
 | Message | Meaning |
 | --- | --- |
-| binary `f` | A picture: `seq` (uint32), CSS width and height (uint16 each), then a JPEG. At most 2 are in flight: the browser makes the next one when the web acknowledges one, so a slow link gets fewer pictures, not a backlog; nothing is sent while the page does not change |
+| binary `f` | A picture: `seq` (uint32), CSS width and height (uint16 each), then image bytes — JPEG (`FF D8 FF`) for screencast frames (up to 2x pixel size at `dpr` 2) or PNG (`89 50 4E 47`) for still frames once the web sends `features {png: true}` (else a higher-quality JPEG). Once the page is still for ~150 ms with no new screencast frame, the node sends one sharper still frame and drops it if a newer screencast arrives first. At most 2 frames are in flight: the browser makes the next screencast frame when the web acknowledges one, so a slow link gets fewer pictures, not a backlog; nothing is sent while the page does not change |
 | binary `s` | A screenshot: `id` (uint32), then a PNG |
 | `ready` | `{browser, w, h}` |
 | `error` | `{code, error}` from the hub: the preview could not open (above); the close follows |
@@ -60,6 +60,8 @@ From the node:
 | `external` | `{url}`: the page (or the address typed) went somewhere that is not this computer; it was not followed, the web offers to open it in a new tab |
 | `failed` | `{url, error}`: the address could not be loaded (`net::ERR_CONNECTION_REFUSED`: the server stopped) |
 | `dialog` / `dialog_closed` | `{kind: alert / confirm / prompt / beforeunload, message, default}`: the page waits for the answer |
+| `select_open` | `{id, rect: {x, y, w, h}, selected, options: [{index, label, disabled?, group?}]}`: a single-choice `<select>` (not `multiple`, `size` <= 1, not disabled) opened by a primary click/tap or popup-opening key after `features {select: true}`. The node prevents the invisible native popup and focuses the select. `id` increases per tab (uint32 > 0; a new open replaces an open one); `rect` is viewport-relative CSS pixels (`getBoundingClientRect`); `selected` is `selectedIndex` (-1 when none); `options` lists up to 1000 visible options in document order with collapsed labels/groups capped at 200 characters |
+| `select_close` | `{id}`: the node withdrew open `<select>` list `id` (the select lost focus, was removed or disabled, the page navigated, or the viewport size changed) |
 | `pick` / `picked` / `pick_failed` | Picking ended; the element picked (below) |
 | `copied` | `{text}`: what ⌘C / Ctrl+C copied in the page, for the web to put on the clipboard |
 | `notice` | `{code: file_chooser}`: the page asked for a file, which a preview cannot give yet |
@@ -70,7 +72,10 @@ From the web:
 
 | Message | Meaning |
 | --- | --- |
-| `ack` | `{seq}`: a picture was drawn |
+| `ack` | `{seq}`: a picture (screencast or still frame) was drawn |
+| `features` | `{select: true, png: true}`: sent after every `ready`; enables the native `<select>` bridge (for new documents and the current one, idempotent) and PNG still frames |
+| `select_choose` | `{id, index}`: choose option `index` (into `select.options`) of open list `id`; ignores a stale `id`, missing or disabled option, else sets `selectedIndex`, dispatches bubbling `input` then `change` only when the value changed, keeps focus on the select, and closes the list |
+| `select_close` | `{id}`: dismiss open list `id` without changing the page (focus stays on the select) |
 | `mouse` | `{type: down / up / move, x, y, button, buttons, clicks, mods}` in CSS pixels of the page; `mods` is CDP's (Alt 1, Ctrl 2, Meta 4, Shift 8) |
 | `wheel` | `{x, y, dx, dy, mods}` |
 | `key` | `{type: down / up, key, code, key_code, text?, mods, repeat, location}`; `text` makes it a typed character |
@@ -101,12 +106,24 @@ The web panel types into the page through a hidden text field (`web/src/views/se
 - A touch's `pointerup` is a user activation in the HTML standard, which is what lets iOS raise the keyboard for a focus made in it; assumed for iOS WebKit, not yet checked on a device.
 - `scripts/test/web_preview_e2e.py`'s phone step checks it at 390 with CDP touches and a stand-in for the iOS keyboard (up while a text field has focus): no focus and no smaller `size` after a scroll, Pick or Go; a tap focuses the field only after the finger lifts. `web/src/views/session/PreviewPanel.touch.test.tsx` covers the same cases and the mouse.
 
+### Native `<select>` lists and high-DPI pictures (web)
+
+Headless Chromium draws native `<select>` popups in an OS widget outside the screencast surface. Every time the web panel (`web/src/views/session/PreviewPanel.tsx`) receives `ready`, it announces `features {select: true, png: true}` so compatible nodes bridge native single-choice `<select>` popups and send lossless PNG still frames.
+
+- **Option overlay (`web/src/ui/SelectListbox.tsx`)**: when `select_open` arrives, the panel renders a `role="listbox"` overlay above `<canvas>` with `role="option"` rows, `aria-selected`, `aria-disabled`, `aria-activedescendant`, and `optgroup` headings. Labels and group headings are capped in `web/src/lib/preview.ts` (`normalizeSelectOpen`) and always rendered as plain text (never HTML).
+- **Positioning and scrolling (`placeSelectPopup`)**: the page-space `rect` is mapped onto the canvas display box by the current `fit` scale. The popup opens below the `<select>` by default and flips above when space below is insufficient and more room exists above; its width is at least the select's rendered width (clamped to the container), its height is capped (`280 px`) with scroll overflow fades, and opening scrolls the currently selected option into view.
+- **Pointer, touch and keyboard behavior**: mouse clicks and touch taps choose an enabled option and send `select_choose {id, index}` (always including `index`, even `0`); disabled options cannot be chosen. While the popup is open, keys are handled by the listbox instead of being forwarded to the page: `ArrowUp` / `ArrowDown` move across enabled options (skipping disabled ones), `Home` / `End` jump to the first / last enabled option, `Enter` and `Space` choose the active option, and `Esc` dismisses the list and sends `select_close {id}` without closing the side panel. Clicking or tapping outside the popup (swallowed inside the preview container so the click does not hit the page underneath), wheel scrolling outside the popup, resizing the panel, switching Desktop / Phone, or navigating via the address bar all close the popup and send `select_close {id}`. A matching node `select_close {id}`, a replacement `select_open`, or a socket disconnect closes the popup locally without echoing `select_close`. Closing returns focus to the hidden keyboard input when focus stayed inside the popup.
+- **High-DPI frames and PNG still frames**: binary `f` frames are identified by magic bytes (`frameImageMime`: PNG `89 50 4E 47` vs JPEG `FF D8 FF`) rather than assuming JPEG. The `<canvas>` backing store sizes to the decoded image's own pixel dimensions while its CSS display size follows `canvasFit` (CSS size × `fit`, keeping `MAX_DPR = 2` and aligning desktop display dimensions to physical pixels without subpixel centering). Every `f` frame is acknowledged with `ack {seq}`, even if decoding fails.
+- **Tests**: `web/src/views/session/PreviewPanel.select.test.tsx`, `web/src/lib/preview.test.ts`, `scripts/mock/mock_preview.py`, and `scripts/test/web_preview_e2e.py`.
+
 ### Implementation notes
 
 - The tab's goroutine handles CDP events and the web's messages in order and never waits for a CDP answer that may depend on an event it has not handled yet (a navigation waits on `Fetch.requestPaused`): input and acknowledgements are sent without waiting, calls whose answer matters run on goroutines of their own and post the answer back.
 - Browsers do not report a page's title as it changes (headless Edge 156 says only `localhost:<port>`), so a script added to each document reports `document.title` through a `Runtime.addBinding` function as it changes.
 - `Page.getNavigationHistory` fails while the page is between documents; back / forward are asked again when loading stops.
-- `TestPreviewDrivesARealBrowser` (`preview_live_test.go`) drives the browser this computer has: picture, click, typing (with `Input.insertText` for an input method's text), a link elsewhere and an address elsewhere refused, a screenshot, a picked element, a local link and back, phone size. It is skipped where there is no browser, and in `-short`.
+- Headless Chromium's `Page.startScreencast` ignores `Emulation.setDeviceMetricsOverride`'s `deviceScaleFactor` on a 1x virtual display and streams 1x frames unless the browser starts with `--force-device-scale-factor=2`; with that flag, `dpr=2` streams at `2w × 2h` while `dpr=1` stays `w × h` via `maxWidth` / `maxHeight`.
+- Native `<select>` popups are rendered outside `Page.startScreencast`. After `features {select: true}`, the node registers a `Runtime.addBinding` handler and injects `preview_select.go`'s bridge into an isolated world (so page scripts cannot see the binding) for both new documents and the current document.
+- `TestPreviewDrivesARealBrowser`, `TestPreviewDPRAndStillFrames` and `TestPreviewSelectBridge` (`preview_live_test.go`) drive the browser this computer has: picture, 2x/1x DPR and PNG still frames, click, typing (with `Input.insertText` for an input method's text), native `<select>` bridge (mouse, keyboard and phone touch), a link elsewhere and an address elsewhere refused, a screenshot, a picked element, a local link and back, phone size. They are skipped where there is no browser, and in `-short`.
 - The web panel is described in [web.md](web.md) "Side panels". The iPhone's preview is below ("iPhone").
 
 ## iPhone

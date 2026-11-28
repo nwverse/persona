@@ -627,7 +627,7 @@ function ExtensionCapabilityResource({
   const roster = useRoster();
   const offline = roster?.managers.find((m) => m.id === binding.client.managerId)?.online === false;
   const {
-    detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, dirty, editable,
+    detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, saveBarLabel, editable,
     canSave, problems, load, reload, authChanged, connectorRefreshKey, mutate, remove: exit, edit, type, revert, save, saveNow,
   } = useExtensionConfiguration(id, binding, prefill, onUninstalled ?? back);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
@@ -683,6 +683,7 @@ function ExtensionCapabilityResource({
   }, [allFields, projectedDetail, editableGroups]);
 
   const saveBar = useRef<HTMLDivElement>(null);
+  const showSaveBar = !!saveBarLabel;
   useLayoutEffect(() => {
     const field = document.activeElement;
     const bar = saveBar.current;
@@ -690,7 +691,7 @@ function ExtensionCapabilityResource({
     const bounds = field.getBoundingClientRect();
     const footer = bar.getBoundingClientRect();
     if (bounds.bottom > footer.top && bounds.top < footer.bottom) field.scrollIntoView({ block: "center" });
-  }, [dirty]);
+  }, [showSaveBar]);
 
   // Auto-open the Advanced disclosure when a validation error targets a field inside it.
   const advancedError = useMemo(
@@ -1145,11 +1146,11 @@ function ExtensionCapabilityResource({
     ) : undefined,
   } : {};
 
-  const footer = p && dirty ? (
+  const footer = p && showSaveBar ? (
     <div ref={saveBar} className="sticky bottom-0 z-10 flow-root bg-canvas [&>section]:mb-0">
       <Group anchor="integration-save-bar">
         {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
-        <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
+        <Row label={saveBarLabel}>
           <Button className="min-h-11" tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
           <Button className="min-h-11" tone="accent" busy={saving} disabled={!canSave || !editableConfig || offline} onClick={() => void save()}>{t("common.save")}</Button>
         </Row>
