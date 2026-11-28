@@ -108,7 +108,25 @@ type codexRemote struct {
 	// A loaded-list snapshot can outlive the startup that created its thread.
 	// Keep discarded starts out of the registry until the server drops them.
 	discardedStarts map[string]time.Time
+	// Shared paginated thread/loaded/list cache and singleflight for background joins (#13578).
+	loadedAt     time.Time
+	loadedSet    map[string]bool
+	loadedActive *codexLoadedFlight
+	// Bounded background join dispatcher for this app-server instance (#13578).
+	joinMu     sync.Mutex
+	joinQueue  []string
+	joinQueued map[string]bool
+	joinActive int
 }
+
+type codexLoadedFlight struct {
+	done chan struct{}
+	set  map[string]bool
+	err  error
+}
+
+// codexLoadedCacheTTL bounds how long background joins share one paginated thread/loaded/list snapshot.
+var codexLoadedCacheTTL = 2 * time.Second
 
 // codexSeen is what refreshes keep about a loaded thread besides its listing (#12517).
 type codexSeen struct {
@@ -321,12 +339,14 @@ func (c *codexRemote) run() {
 	defer tick.Stop()
 	for {
 		cfg := c.n.codexInventory()
+		var rejoin []string
 		for id, instance := range cfg.Joined {
 			if instance == c.spec.ID {
-				if _, _, err := c.n.codexOwner(id); err == nil {
-					_ = c.join(c.ctx, id, false)
-				}
+				rejoin = append(rejoin, id)
 			}
+		}
+		if len(rejoin) > 0 {
+			c.enqueueBackgroundJoins(rejoin)
 		}
 		select {
 		case <-c.ctx.Done():
@@ -398,7 +418,131 @@ func (c *codexRemote) loaded(ctx context.Context) ([]string, error) {
 		}
 		seen[cursor] = true
 	}
+	c.noteLoaded(ids, time.Now())
 	return ids, nil
+}
+
+func (c *codexRemote) noteLoaded(ids []string, at time.Time) {
+	set := make(map[string]bool, len(ids))
+	for _, raw := range ids {
+		set[raw] = true
+	}
+	c.mu.Lock()
+	c.loadedSet = set
+	c.loadedAt = at
+	c.mu.Unlock()
+}
+
+// loadedShared returns the loaded thread ID set for this app-server, coalescing concurrent callers into one
+// paginated thread/loaded/list query and reusing a recent snapshot for background joins (fresh=false) (#13578).
+func (c *codexRemote) loadedShared(ctx context.Context, fresh bool) (map[string]bool, error) {
+	c.mu.Lock()
+	if !fresh && c.loadedSet != nil && time.Since(c.loadedAt) < codexLoadedCacheTTL {
+		set := c.loadedSet
+		c.mu.Unlock()
+		return set, nil
+	}
+	if f := c.loadedActive; f != nil {
+		c.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.set, f.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f := &codexLoadedFlight{done: make(chan struct{})}
+	c.loadedActive = f
+	c.mu.Unlock()
+
+	go func() {
+		lctx, cancel := context.WithTimeout(c.ctx, codexRefreshWait)
+		ids, err := c.loaded(lctx)
+		cancel()
+		var set map[string]bool
+		if err == nil {
+			set = make(map[string]bool, len(ids))
+			for _, raw := range ids {
+				set[raw] = true
+			}
+		}
+		f.set, f.err = set, err
+		c.mu.Lock()
+		if c.loadedActive == f {
+			c.loadedActive = nil
+		}
+		c.mu.Unlock()
+		close(f.done)
+	}()
+
+	select {
+	case <-f.done:
+		return f.set, f.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// enqueueBackgroundJoins runs background thread joins for this app-server with bounded concurrency (#13578).
+func (c *codexRemote) enqueueBackgroundJoins(ids []string) {
+	if c == nil || len(ids) == 0 || c.ctx.Err() != nil {
+		return
+	}
+	limit := max(codexJoinConcurrency, 1)
+	c.joinMu.Lock()
+	if c.joinQueued == nil {
+		c.joinQueued = map[string]bool{}
+	}
+	for _, id := range ids {
+		if id == "" || c.joinQueued[id] {
+			continue
+		}
+		c.joinQueued[id] = true
+		c.joinQueue = append(c.joinQueue, id)
+	}
+	for c.joinActive < limit && len(c.joinQueue) > 0 {
+		c.joinActive++
+		go c.backgroundJoinWorker()
+	}
+	c.joinMu.Unlock()
+}
+
+func (c *codexRemote) backgroundJoinWorker() {
+	defer func() {
+		c.joinMu.Lock()
+		c.joinActive--
+		c.joinMu.Unlock()
+	}()
+	for {
+		if c.ctx.Err() != nil {
+			return
+		}
+		c.joinMu.Lock()
+		if len(c.joinQueue) == 0 {
+			c.joinMu.Unlock()
+			return
+		}
+		id := c.joinQueue[0]
+		c.joinQueue = c.joinQueue[1:]
+		delete(c.joinQueued, id)
+		c.joinMu.Unlock()
+
+		owner, t, err := c.n.codexOwner(id)
+		if err != nil || owner != c || t.joined || t.parent != "" || !c.n.cx.startJoin(id) {
+			continue
+		}
+		jctx, cancel := context.WithTimeout(c.ctx, 30*time.Second)
+		err = c.join(jctx, id, false)
+		cancel()
+		c.n.cx.endJoin(id, err)
+		if err != nil {
+			if c.ctx.Err() == nil {
+				c.n.logf("codex %s: joining it on app-server %s failed, it stays on the terminal: %v", id, c.spec.ID, err)
+			}
+			continue
+		}
+		c.n.logf("codex %s: joined on app-server %s", id, c.spec.ID)
+	}
 }
 
 type remoteThreadData struct {
@@ -965,8 +1109,8 @@ func (c *codexRemote) join(ctx context.Context, id string, remember bool) error 
 	if t.joined {
 		return nil
 	}
-	ids, err := c.loaded(ctx)
-	if err != nil || !slices.Contains(ids, t.id) {
+	loadedSet, err := c.loadedShared(ctx, remember)
+	if err != nil || !loadedSet[t.id] {
 		return refusal("codex_read_only", "会话已不在原 app-server 中运行，未恢复或新建会话", nil)
 	}
 	// This is an explicit user-requested join, not a discovery or global subscription. Do not override runtime config.
