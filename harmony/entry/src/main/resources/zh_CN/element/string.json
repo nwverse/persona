@@ -10039,6 +10039,210 @@
     {
       "name": "recording_transcript_empty",
       "value": "暂无保留的转写内容。"
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "长期授权"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "长期授权"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "会话始终允许"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "合并变更"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "推送变更"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "部署到测试环境"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "部署到生产环境"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "发送消息"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "删除数据"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "消费资金"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "未记录操作"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "所有检查通过"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "无合并冲突"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "仅当满足"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "位于 {machine} 的 {folder}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "可撤销"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "不可撤销"
+    },
+    {
+      "name": "standing_since",
+      "value": "自 {date}"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "某次对话"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "建议的规则：14 天内 {count} 次相同的回答，点「总是」确认。"
+    },
+    {
+      "name": "standing_show_details",
+      "value": "详情"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "收起详情"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "撤销"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "撤销授权"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "撤销此授权？"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "此后在 {machine} 的 {folder} 执行以下操作前，Persona 会再次询问你：{actions}。已完成的工作不受影响。若要重新授权，请在主对话中告诉 Persona。"
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "授权已撤销"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "无法撤销此授权，当前仍然有效。请检查连接后重试。"
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "暂无授权"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "合并、推送、部署、发送消息、删除数据或消费资金前，Persona 会先向你确认。当你在对话中允许某处始终继续执行时，该授权会显示在这里。"
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "需要完整访问权限"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "只有具备完整访问权限的设备才能查看和撤销长期授权。"
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "无法加载长期授权"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "在撤销之前，Persona 会直接执行这些操作而不再询问。"
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "对话"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "长期授权 始终允许 权限 撤销 standing authorizations always allow"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "此对话中始终允许"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "没有已保存的权限。"
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "已保存的权限已撤销，但运行中的对话未能重置。请在重启该对话后再依赖此次撤销。"
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "这些已保存的权限仅适用于当前对话。记录仅保存工具名称，不包含具体目录或命令范围。"
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "未命名权限"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "撤销此权限？"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "撤销会停止当前回复以清除权限。发送下一条消息即可继续。"
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "权限已撤销"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "搜索对话与智能体"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "对话"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "没有已归档的智能体"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "已归档的智能体会话会显示在这里，随时可恢复。"
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "自动重命名"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "正在重命名…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "不能在此自动重命名助手对话"
     }
   ]
 }

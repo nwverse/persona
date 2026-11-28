@@ -193,6 +193,7 @@ export class ClientModel {
   @Trace private attentionOwner: string = '';
   private attentionReadRevision: number = 0;
   @Trace conversations: ResourceRow[] = [];
+  @Trace namingAgentKeys: string[] = [];
   @Trace machines: ResourceRow[] = [];
   @Trace directorySessions: ResourceRow[] = [];
   @Trace directoryMachines: ResourceRow[] = [];
@@ -762,6 +763,7 @@ export class ClientModel {
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
     this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.managers = []; this.rosterDefaultId = '';
+    this.namingAgentKeys = [];
     this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
@@ -925,6 +927,7 @@ export class ClientModel {
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
       this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.error = '';
+      this.namingAgentKeys = [];
       this.publishedImageLimits = {};
     }
     this.publishDirectory();
@@ -2245,6 +2248,42 @@ export class ClientModel {
     const previous=this.sourceContext,target=this.target();this.sourceContext='';this.draftRevision=util.generateRandomUUID();
     this.persistDraft().then(()=>new ChatDraftStore(this.local).discardForwardMedia(target,previous,'')).catch(()=>this.error='failed');
   }
+  private autoRenameKey(row: ResourceRow): string {
+    const sid = row.session || row.id;
+    return JSON.stringify([this.scope(), this.connectionGeneration(), row.machine, sid]);
+  }
+  canAutoRenameAgent(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session' || Wire.bool(row.data(), 'assistant')) return false;
+    if (!this.demo && !this.features.includes('agent_autoname')) return false;
+    const sid = row.session || row.id;
+    return !!row.machine && !!sid;
+  }
+  isAutoRenamingRow(row: ResourceRow): boolean {
+    if (!row || row.kind !== 'session') return false;
+    return this.namingAgentKeys.includes(this.autoRenameKey(row));
+  }
+  async autoRenameAgent(row: ResourceRow): Promise<string> {
+    if (!this.canAutoRenameAgent(row)) return '';
+    const key = this.autoRenameKey(row);
+    if (this.namingAgentKeys.includes(key)) return '';
+    const machine = row.machine, sid = row.session || row.id;
+    const path = '/api/v1/sessions/' + segment(machine) + '/' + segment(sid) + '/autoname';
+    if (this.operationBlocked(path)) return 'pending_action';
+    const generation = this.generation, scope = this.scope();
+    this.namingAgentKeys = this.namingAgentKeys.concat([key]);
+    try {
+      await this.repo().call(path, 'POST', {}, '', () => this.owns(generation, scope));
+      if (!this.owns(generation, scope)) return '';
+      if (this.demo) await this.refresh();
+      return '';
+    } catch (error) {
+      if (!this.owns(generation, scope)) return '';
+      const msg = error instanceof Error ? error.message : 'failed';
+      return msg || 'failed';
+    } finally {
+      this.namingAgentKeys = this.namingAgentKeys.filter((entry: string) => entry !== key);
+    }
+  }
   async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = ''): Promise<ResourceRow> {
     if (machine.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), repo = this.repo();
@@ -2300,6 +2339,7 @@ export class ClientModel {
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.publishedImageLimits = {};
+    this.namingAgentKeys = [];
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
     this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;

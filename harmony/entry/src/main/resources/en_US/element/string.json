@@ -9859,6 +9859,210 @@
     {
       "name": "recording_transcript_empty",
       "value": "No retained transcript passages."
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "Standing Authorizations"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "Standing"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "Session Grants"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "Merge changes"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "Push changes"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "Deploy to a test environment"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "Deploy to production"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "Send messages"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "Delete data"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "Spend money"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "No actions recorded"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "All checks pass"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "No merge conflicts"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "Only when"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "In {folder} on {machine}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "Reversible"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "Irreversible"
+    },
+    {
+      "name": "standing_since",
+      "value": "Since {date}"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "A chat"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "Suggested rule: the same answer {count} times in 14 days, confirmed with Always."
+    },
+    {
+      "name": "standing_show_details",
+      "value": "Details"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "Hide Details"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "Revoke"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "Revoke Authorization"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "Revoke this authorization?"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "Persona will ask you again before it does this in {folder} on {machine}: {actions}. Work already done isn't affected. To grant it again, ask Persona in the main chat."
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "Authorization revoked"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "Couldn't revoke this authorization. It's still in effect. Check the connection and try again."
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "None yet"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "Persona asks you before it merges, pushes, deploys, sends messages, deletes data or spends money. When you tell it in a chat to always go ahead somewhere, that go-ahead is listed here."
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "Needs full access"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "Only a device with full access can see and revoke standing authorizations."
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "Couldn't load standing authorizations"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "Persona does these without asking you first, until you revoke them."
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "Conversation"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "standing authorizations always allow grants permissions revoke"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "Always allowed in this conversation"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "No saved permissions."
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "The saved permission was revoked, but the running conversation could not be reset. Restart this conversation before relying on the revocation."
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "These saved permissions apply only to this conversation. Records store the tool name, but not detailed directory or command scope."
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "Unnamed permission"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "Revoke this permission?"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "Revoking stops the current response to clear its permissions. Send another message to continue."
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "Permission revoked"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "Search Chats & Agents"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "Chats"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "No archived agents"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "Archived agent sessions appear here until you restore them."
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "Auto Rename"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "Renaming…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "Assistant chats cannot be auto-renamed here"
     }
   ]
 }

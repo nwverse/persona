@@ -10039,6 +10039,210 @@
     {
       "name": "recording_transcript_empty",
       "value": "保持されている文字起こしはありません。"
+    },
+    {
+      "name": "standing_auth_title",
+      "value": "常時許可"
+    },
+    {
+      "name": "standing_tab_standing",
+      "value": "常時許可"
+    },
+    {
+      "name": "standing_tab_session",
+      "value": "セッション許可"
+    },
+    {
+      "name": "standing_action_merge",
+      "value": "変更をマージ"
+    },
+    {
+      "name": "standing_action_push",
+      "value": "変更をプッシュ"
+    },
+    {
+      "name": "standing_action_deploy_test",
+      "value": "テスト環境へデプロイ"
+    },
+    {
+      "name": "standing_action_deploy_production",
+      "value": "本番環境へデプロイ"
+    },
+    {
+      "name": "standing_action_send",
+      "value": "メッセージを送信"
+    },
+    {
+      "name": "standing_action_delete",
+      "value": "データを削除"
+    },
+    {
+      "name": "standing_action_spend",
+      "value": "費用を支出"
+    },
+    {
+      "name": "standing_no_actions",
+      "value": "記録された操作はありません"
+    },
+    {
+      "name": "standing_condition_ci_green",
+      "value": "すべてのチェックが通過"
+    },
+    {
+      "name": "standing_condition_no_conflicts",
+      "value": "マージ競合なし"
+    },
+    {
+      "name": "standing_only_when",
+      "value": "条件"
+    },
+    {
+      "name": "standing_place_format",
+      "value": "{machine} の {folder}"
+    },
+    {
+      "name": "standing_reversible_yes",
+      "value": "取り消し可能"
+    },
+    {
+      "name": "standing_reversible_no",
+      "value": "取り消し不可"
+    },
+    {
+      "name": "standing_since",
+      "value": "{date} から"
+    },
+    {
+      "name": "standing_source_chat",
+      "value": "チャット"
+    },
+    {
+      "name": "standing_source_suggested_rule",
+      "value": "提案されたルール：14 日間に同じ回答が {count} 回あり、「常に」で確認されました。"
+    },
+    {
+      "name": "standing_show_details",
+      "value": "詳細"
+    },
+    {
+      "name": "standing_hide_details",
+      "value": "詳細を隠す"
+    },
+    {
+      "name": "standing_revoke",
+      "value": "取り消す"
+    },
+    {
+      "name": "standing_revoke_action",
+      "value": "許可を取り消す"
+    },
+    {
+      "name": "standing_revoke_confirm_title",
+      "value": "この許可を取り消しますか？"
+    },
+    {
+      "name": "standing_revoke_confirm_message",
+      "value": "取り消すと、{machine} の {folder} で {actions} を実行する前に Persona が再度確認します。完了済みの作業には影響しません。再び許可するにはメインチャットで指示してください。"
+    },
+    {
+      "name": "standing_revoked_toast",
+      "value": "許可を取り消しました"
+    },
+    {
+      "name": "standing_revoke_failed_toast",
+      "value": "この許可を取り消せませんでした。現在も有効です。接続を確認して再試行してください。"
+    },
+    {
+      "name": "standing_empty_title",
+      "value": "許可はまだありません"
+    },
+    {
+      "name": "standing_empty_message",
+      "value": "マージ、プッシュ、デプロイ、メッセージ送信、データ削除、支出の前に Persona が確認します。チャットで常に許可するとここに表示されます。"
+    },
+    {
+      "name": "standing_forbidden_title",
+      "value": "フルアクセスが必要です"
+    },
+    {
+      "name": "standing_forbidden_message",
+      "value": "常時許可の表示と取り消しができるのは、フルアクセス権のあるデバイスのみです。"
+    },
+    {
+      "name": "standing_failed_title",
+      "value": "常時許可を読み込めませんでした"
+    },
+    {
+      "name": "standing_footer_note",
+      "value": "取り消されるまで、Persona は確認なしでこれらを実行します。"
+    },
+    {
+      "name": "standing_select_conversation",
+      "value": "会話"
+    },
+    {
+      "name": "phone_search_alias_standing_authorizations",
+      "value": "常時許可 セッション許可 権限 取り消し standing authorizations always allow"
+    },
+    {
+      "name": "always_grants_heading",
+      "value": "この会話で常に許可"
+    },
+    {
+      "name": "always_grants_empty",
+      "value": "保存された許可はありません。"
+    },
+    {
+      "name": "always_grants_restart_needed",
+      "value": "保存された許可は取り消されましたが、実行中の会話をリセットできませんでした。取り消しを有効にするにはこの会話を再開してください。"
+    },
+    {
+      "name": "always_grants_scope_footer",
+      "value": "これらの保存された許可はこの会話のみに適用されます。記録にはツール名のみが保存され、詳細なディレクトリやコマンド範囲は保存されません。"
+    },
+    {
+      "name": "always_grant_unnamed",
+      "value": "名前のない許可"
+    },
+    {
+      "name": "always_grant_revoke_title",
+      "value": "この許可を取り消しますか？"
+    },
+    {
+      "name": "always_grant_revoke_message",
+      "value": "取り消すと許可をクリアするため現在の応答を停止します。次のメッセージを送信すると続行できます。"
+    },
+    {
+      "name": "always_grant_revoked_toast",
+      "value": "許可を取り消しました"
+    },
+    {
+      "name": "assistant_full_search_title",
+      "value": "チャットとエージェントを検索"
+    },
+    {
+      "name": "assistant_search_scope_chats",
+      "value": "チャット"
+    },
+    {
+      "name": "archived_agents_empty_title",
+      "value": "アーカイブ済みのエージェントはありません"
+    },
+    {
+      "name": "archived_agents_empty_message",
+      "value": "アーカイブされたエージェントセッションは復元するまでここに表示されます。"
+    },
+    {
+      "name": "agent_auto_rename",
+      "value": "自動名前変更"
+    },
+    {
+      "name": "agent_renaming",
+      "value": "名前を変更中…"
+    },
+    {
+      "name": "assistant_session",
+      "value": "アシスタントチャットはここで自動名前変更できません"
     }
   ]
 }
