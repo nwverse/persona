@@ -104,6 +104,7 @@ type Service struct {
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
 	agyNodePush     agyNodeConfigPush
+	botmuxOwnerPush botmuxOwnerPush // the BotMux Owner Union ID's pushes to the nodes (agents_botmux_owner.go)
 	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
 	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).

@@ -834,9 +834,9 @@ For each edition the app receives a real single-use `jp_…` code from `POST /ap
 `-openPairLink`, without `-pairURL` (whose presence would skip the credential exchange). The driver reads the fresh sessions,
 Inbox and To-dos API responses before pairing, then drives the actual app through the DEBUG Runtime CLI: active pairing, the
 real hello's module registry, Agents with its synthetic offline computer, the empty Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
-Channels, Extensions, Devices and the main-chat composer. Both Inbox styles check the shared retained-source rule (#17399):
-a fresh core-only hub has no Lark chip or Lark/mail empty-state wording and uses the generic message, while the full hub keeps
-its current chip and wording; @Me / DM / Group filters remain unchanged. The current device must be marked in Devices, a second exchange of
+Channels, Extensions, Devices and the main-chat composer. Both Inbox styles check the shared retained-source rule (#17399, #17814):
+a fresh core-only hub has no Lark or Mail chip or Lark/mail empty-state wording and uses the generic message, while the full hub keeps
+its current chips and wording; @Me / DM / Group filters remain unchanged. The current device must be marked in Devices, a second exchange of
 the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
 Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
 available in both editions. Each hub declares only a synthetic offline computer named `Fixture Computer`. After the initial
