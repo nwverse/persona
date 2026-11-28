@@ -28,6 +28,7 @@
   "launcher_swapped": "{machine} に {launcher} がないため、{to}（既定のモデル）で実行します",
   "launcher_desktop_default": "{launcher} はあなたが新規エージェントで始める会話にだけ使うため、{to}（既定のモデル）で実行します",
   "launcher_desktop_default_model": "{launcher} はあなたが新規エージェントで始める会話にだけ使うため、{to}で、選択したモデル{model}をそのまま使って実行します",
+  "orca_chat_option_dropped": "{to} として開きます。{option} は使えないため、Orca の設定で実行します",
   "launcher_swapped_model": "{machine}に{launcher}がないため、{to}で、選択したモデル{model}をそのまま使って実行します",
   "speed_type": "speed は文字列で指定してください：standard、fast、ultrafast。",
   "speed_invalid": "Agent speed {speed} が無効です。standard、fast、ultrafast のいずれかを指定してください。",
