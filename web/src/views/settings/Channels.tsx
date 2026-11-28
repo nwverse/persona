@@ -190,14 +190,14 @@ export function ChannelBindingBlock({ ctl, showAccountMark = true }: { ctl: Chan
   const d = ctl.detail;
   useEffect(() => {
     setUnbinding(false);
-  }, [d?.id]);
+  }, [ctl.resourceKey]);
   if (!d) return null;
   const editable = !d.read_only && d.source !== "market";
   if (!editable) return null;
 
   return (
     <>
-      {canBind(d) && <BindSteps c={d} bind={ctl.bind} onDone={ctl.load} />}
+      {canBind(d) && <BindSteps key={ctl.resourceKey} c={d} bind={ctl.bind} onDone={ctl.load} />}
       {isBound(d) && (
         <Group title={t("settings-channels.binding")} footer={t("settings-channels.binding_footer")}>
           <Row label={t("settings-channels.bound_account")}>
@@ -253,7 +253,7 @@ export function ChannelTargetControls({ ctl, onSettings }: { ctl: ChannelControl
   const d = ctl.detail;
   useEffect(() => {
     setPicking(false);
-  }, [d?.id]);
+  }, [ctl.resourceKey]);
   if (!d) return null;
 
   const editable = !d.read_only && d.source !== "market";

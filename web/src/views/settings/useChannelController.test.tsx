@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
-import { setPairedToken } from "../../lib/api";
+import { HubTimeoutError, setPairedToken } from "../../lib/api";
 import type { ChannelDetail, ChannelTestResult } from "../../lib/channels";
 import type { ScopedAssistantClient } from "../../lib/scoped-assistant-api";
 import { useChannelController, type ChannelController } from "./integrations/ChannelSection";
@@ -371,5 +371,33 @@ describe("useChannelController", () => {
     await act(async () => hub.asked.shift()!.answer(plugin));
     await act(async () => latest.routing!.start());
     expect(latest.routing!.form.snapshot().fields).toEqual({});
+  });
+
+  it("keeps the typed routing draft when a lost response cannot be confirmed", async () => {
+    const plugin = makeDetail("alpha", { source: "plugin", thread_mode: "channel_default", thread_idle_hours: 24 });
+    await act(async () => root.render(<Harness channelId="alpha" manager="m-1" />));
+    await act(async () => hub.asked.shift()!.answer(plugin));
+    const routing = latest.routing!;
+    await act(async () => routing.start());
+    act(() => {
+      routing.form.setDraft("thread_idle_hours", "48");
+      routing.form.saveDraft("thread_idle_hours");
+    });
+    const lost = hub.asked.shift()!;
+    expect(lost).toMatchObject({ kind: "put", manager: "m-1", id: "alpha", body: { thread_idle_hours: 48 } });
+    await act(async () => lost.reject(new HubTimeoutError()));
+    const comparison = hub.asked.shift()!;
+    expect(comparison).toMatchObject({ kind: "get", manager: "m-1", id: "alpha" });
+    await act(async () => comparison.answer(plugin));
+    expect(routing.form.snapshot()).toMatchObject({ blocked: { code: "unconfirmed" }, fields: { thread_idle_hours: { draft: "48" } } });
+    expect(hub.asked).toHaveLength(0);
+    act(() => { void routing.reload(); });
+    await act(async () => hub.asked.shift()!.answer(plugin));
+    act(() => routing.form.saveDraft("thread_idle_hours"));
+    const retry = hub.asked.shift()!;
+    expect(retry.body).toEqual({ thread_idle_hours: 48 });
+    await act(async () => retry.answer({ ...plugin, thread_idle_hours: 48 }));
+    expect(routing.form.snapshot().doc?.values.thread_idle_hours).toBe(48);
+    expect(routing.form.snapshot().fields.thread_idle_hours?.draft).toBeUndefined();
   });
 });

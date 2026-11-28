@@ -17,6 +17,7 @@ type TestFeedback = { tone: "ok" | "error"; text: string };
 type ChannelRouting = { form: ConfigurationController; start: () => void; reload: () => Promise<void> };
 
 export interface ChannelController {
+  resourceKey?: string;
   detail: ChannelDetail | null;
   error: string;
   loading: boolean;
@@ -34,6 +35,12 @@ const channels = resourceConfigurations((id, client) => {
   const resource = new ResourceConfiguration(id, client, { read: () => channelDetail(id, client) });
   const form = new ConfigurationController(channelRoutingSource(resource));
   let started = false;
+  let wasUnconfirmed = false;
+  const stopRecovery = resource.subscribe(() => {
+    const { unconfirmed, saveError } = resource.snapshot();
+    if (wasUnconfirmed && !unconfirmed && !saveError && form.snapshot().blocked) form.reload();
+    wasUnconfirmed = unconfirmed;
+  });
   const routing: ChannelRouting = {
     form,
     start() {
@@ -46,7 +53,7 @@ const channels = resourceConfigurations((id, client) => {
       if (!resource.snapshot().readError) form.reload();
     },
   };
-  return { resource, routing, retire: () => { form.dispose(); resource.retire(); } };
+  return { resource, routing, retire: () => { stopRecovery(); form.dispose(); resource.retire(); } };
 });
 
 const noChannel = async () => {};
@@ -89,27 +96,31 @@ export function useChannelController(channelId: string | null, manager?: string)
       return false;
     }
   };
-  const bind: ChannelController["bind"] = (step, values) => {
-    if (!resource || !view.active) return Promise.reject(abortedConfiguration());
-    return bindChannel(resource.id, step, values, resource.client);
+  const bind: ChannelController["bind"] = async (step, values) => {
+    if (!resource || !view.active) throw abortedConfiguration();
+    const prompt = await bindChannel(resource.id, step, values, resource.client);
+    if (!view.active) throw abortedConfiguration();
+    return prompt;
   };
   const runTest = async () => {
-    if (!resource || !view.active || resource.snapshot().saving || !resource.snapshot().remote) return;
+    const initial = resource?.snapshot().remote;
+    if (!resource || !view.active || resource.snapshot().saving || !initial) return;
     setTestFeedback(null);
     try {
+      let result: Awaited<ReturnType<typeof testChannel>> | undefined;
       await resource.save({
         label: "test",
-        prepare: (remote) => ({
+        prepare: () => ({
           send: async () => {
-            const result = await testChannel(resource.id, resource.client);
-            if (!view.active) return;
-            const text = result?.note || t(remote.capabilities.reply_only || result?.reply_only
-              ? "settings-channels.connection_ok" : "settings-channels.test_sent", { name: remote.name });
-            setTestFeedback({ view, feedback: { tone: "ok", text } });
-            toast(text, "ok");
+            result = await testChannel(resource.id, resource.client);
           },
         }),
       });
+      if (!view.active) return;
+      const text = result?.note || t(initial.capabilities.reply_only || result?.reply_only
+        ? "settings-channels.connection_ok" : "settings-channels.test_sent", { name: initial.name });
+      setTestFeedback({ view, feedback: { tone: "ok", text } });
+      toast(text, "ok");
     } catch (error) {
       if (view.active && !isAbort(error)) {
         setTestFeedback({ view, feedback: { tone: "error", text: errorText(error) } });
@@ -119,6 +130,7 @@ export function useChannelController(channelId: string | null, manager?: string)
   };
 
   return {
+    resourceKey: resource?.client.key,
     detail: state.remote, error: state.readError ? errorText(state.readError) : "", loading: state.loading,
     busy: state.saving ?? "", routing: entry?.routing, load: resource?.refresh ?? noChannel, bind, change, unbind, runTest,
     testFeedback: testFeedback?.view === view ? testFeedback.feedback : null,

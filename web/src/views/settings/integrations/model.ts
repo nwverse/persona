@@ -220,18 +220,24 @@ export function channelRoutingDocument(d: ChannelDetail, saved = false): Configu
   };
 }
 
-export function saveChannelFields(resource: ResourceConfiguration<ChannelDetail>, label: string, body: ChannelUpdateBody) {
+export function saveChannelFields(
+  resource: ResourceConfiguration<ChannelDetail>, label: string, body: ChannelUpdateBody,
+  check?: (remote: ChannelDetail) => void,
+) {
   return resource.save({
     label, key: JSON.stringify(body),
-    prepare: () => ({
-      send: () => updateChannel(resource.id, body, resource.client),
-      matches: (d) =>
-        (body.enabled === undefined || d.enabled === body.enabled) &&
-        (!body.target || (d.target?.kind === body.target.kind && d.target.machine_id === body.target.machine_id && d.target.session_id === body.target.session_id)) &&
-        Object.entries(body.features ?? {}).every(([id, on]) => d.features?.some((f) => f.id === id && f.on === on)) &&
-        (body.thread_mode === undefined || d.thread_mode === body.thread_mode) &&
-        (body.thread_idle_hours === undefined || (supportsThreadRouting(d) && (d.thread_idle_hours ?? 0) === body.thread_idle_hours)),
-    }),
+    prepare: (remote) => {
+      check?.(remote);
+      return {
+        send: () => updateChannel(resource.id, body, resource.client),
+        matches: (d) =>
+          (body.enabled === undefined || d.enabled === body.enabled) &&
+          (!body.target || (d.target?.kind === body.target.kind && d.target.machine_id === body.target.machine_id && d.target.session_id === body.target.session_id)) &&
+          Object.entries(body.features ?? {}).every(([id, on]) => d.features?.some((f) => f.id === id && f.on === on)) &&
+          (body.thread_mode === undefined || d.thread_mode === body.thread_mode) &&
+          (body.thread_idle_hours === undefined || (supportsThreadRouting(d) && (d.thread_idle_hours ?? 0) === body.thread_idle_hours)),
+      };
+    },
   });
 }
 
@@ -262,7 +268,14 @@ export function channelRoutingSource(resource: ResourceConfiguration<ChannelDeta
         body.thread_idle_hours = Math.trunc(update.changes.thread_idle_hours);
       }
       try {
-        const next = await saveChannelFields(resource, "routing", body);
+        const next = await saveChannelFields(resource, "routing", body, (remote) => {
+          const latest = channelRoutingDocument(remote);
+          for (const [id, value] of Object.entries(body)) {
+            if (latest.values[id] !== doc.values[id] && latest.values[id] !== value) throw new ConfigurationError("configuration_conflict");
+          }
+          const refused = checkUpdate(latest, { ...update, revision: latest.revision });
+          if (refused) throw refused;
+        });
         if (!next) throw new ConfigurationError("configuration_unavailable");
         forgetChannels();
         return channelRoutingDocument(next, true);
