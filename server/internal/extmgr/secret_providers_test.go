@@ -432,12 +432,12 @@ func TestLauncherSecretsKept(t *testing.T) {
 	if n := resolves(); n != 3 {
 		t.Fatalf("after a restart: %d resolutions", n)
 	}
-	var raw json.RawMessage
-	if ok, err := h.store.Setting(ctx, launcherKeptKey, &raw); !ok || err != nil {
+	var sealedCopies json.RawMessage
+	if ok, err := h.store.Setting(ctx, launcherKeptKey, &sealedCopies); !ok || err != nil {
 		t.Fatalf("no sealed copies: %v %v", ok, err)
 	}
-	if strings.Contains(string(raw), secretValueForTest) || strings.Contains(string(raw), "exv://") || !strings.Contains(string(raw), `"value_sealed"`) {
-		t.Fatalf("kept in the clear: %s", raw)
+	if strings.Contains(string(sealedCopies), secretValueForTest) || strings.Contains(string(sealedCopies), "exv://") || !strings.Contains(string(sealedCopies), `"value_sealed"`) {
+		t.Fatalf("kept in the clear: %s", sealedCopies)
 	}
 
 	// A failure that may pass leaves what is kept (here: rate limited before reaching the provider), for every use.
