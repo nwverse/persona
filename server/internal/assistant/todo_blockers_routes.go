@@ -136,27 +136,21 @@ func (s *Service) todoBlockersRoutes() {
 			apierr.Write(w, http.StatusNotFound, errors.New("blocker not found"))
 			return
 		}
-		wasActive := matched.State == db.TodoBlockerStateActive
 		cancelled, err := s.cancelTodoBlocker(ctx, blockerID)
 		if err != nil {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
-		if matched.Kind == todoBlockerKindMergeTrain {
-			s.clearMergeTrainBlocker(todoID, matched.TargetRef, matched.ConditionJSON)
-		}
-		s.todosChanged(ctx)
-		if wasActive && cancelled != nil && !s.hasActiveTodoBlockers(ctx, todoID) {
-			var onUnblocked func(ctx context.Context, todoID string)
-			if h := s.todoBlockerHooks(false); h != nil {
-				h.mu.RLock()
-				onUnblocked = h.onUnblocked
-				h.mu.RUnlock()
+		if cancelled != nil {
+			if matched.Kind == todoBlockerKindMergeTrain {
+				s.clearMergeTrainBlocker(todoID, matched.TargetRef, matched.ConditionJSON)
 			}
-			s.notifyTodoBlockerUnblocked(ctx, todoID, *cancelled, nil, onUnblocked)
-			if s.settings(ctx).todosV2On() {
-				s.sweepAdmissionQueue(ctx)
+			s.todosChanged(ctx)
+			ready, err := s.blockerUnblockStillHolds(ctx, superviseSignal{Todo: todoID, Key: blockerResolutionKey(*cancelled)})
+			if ready || err != nil {
+				s.emitTodoBlockerWake(ctx, todoBlockerWake{last: *cancelled})
 			}
+			s.sweepAdmissionQueue(ctx)
 		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})

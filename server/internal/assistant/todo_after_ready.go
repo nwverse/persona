@@ -584,17 +584,9 @@ func (s *Service) checkTodoAfterReady(ctx context.Context, candidate Todo) ([]pr
 	if todoHasActiveAgent(candidate) || len(cleanIDs(candidate.After)) == 0 {
 		return nil, false, nil
 	}
-	var task PlanTask
-	if candidate.PlanID != "" {
-		plan, index, err := s.currentPlanAssignment(ctx, candidate)
-		if err == nil && plan.State == planStarted {
-			task = plan.Tasks[index]
-			if task.Queue != nil && (task.RequestGate != "" || task.Queue.Workspace != nil) {
-				return nil, false, nil
-			}
-		} else if err != nil && !errors.Is(err, errTaskNotInPlan) {
-			return nil, false, err
-		}
+	task, err := s.readinessPlan(ctx, candidate)
+	if err != nil || task.Queue != nil && (task.RequestGate != "" || task.Queue.Workspace != nil) {
+		return nil, false, err
 	}
 	result, err := s.taskTodoReadiness(ctx, candidate, task)
 	if err != nil || !result.ready() {

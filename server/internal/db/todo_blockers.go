@@ -187,8 +187,7 @@ func (d *DB) ListActiveTodoBlockersByTarget(ctx context.Context, targetRef strin
 	return scanTodoBlockerRows(rows)
 }
 
-// ResolveTodoBlocker marks blocker id as resolved and sets resolved_at when unset.
-// Returns nil, nil when id does not exist.
+// ResolveTodoBlocker marks an active blocker as resolved. A missing or changed row returns nil.
 func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
@@ -197,7 +196,7 @@ func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*
 		SET state = $2,
 		    updated_at = $3,
 		    resolved_at = COALESCE(resolved_at, $3)
-		WHERE id = $1
+		WHERE id = $1 AND state = 'active'
 		RETURNING `+todoBlockerCols,
 		strings.TrimSpace(id), TodoBlockerStateResolved, at))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -206,8 +205,7 @@ func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*
 	return row, err
 }
 
-// CancelTodoBlocker marks blocker id as cancelled and sets resolved_at when unset.
-// Returns nil, nil when id does not exist.
+// CancelTodoBlocker marks an active blocker as cancelled. A missing or changed row returns nil.
 func (d *DB) CancelTodoBlocker(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
 	return cancelTodoBlocker(ctx, d.pool, id, at)
 }
@@ -220,7 +218,7 @@ func cancelTodoBlocker(ctx context.Context, q queryRower, id string, at time.Tim
 		SET state = $2,
 		    updated_at = $3,
 		    resolved_at = COALESCE(resolved_at, $3)
-		WHERE id = $1
+		WHERE id = $1 AND state = 'active'
 		RETURNING `+todoBlockerCols,
 		strings.TrimSpace(id), TodoBlockerStateCancelled, at))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -229,8 +227,8 @@ func cancelTodoBlocker(ctx context.Context, q queryRower, id string, at time.Tim
 	return row, err
 }
 
-// IncrementTodoBlockerAttempts atomically increments the persistent attempt counter for blocker id.
-// Returns nil, nil when id does not exist.
+// IncrementTodoBlockerAttempts atomically increments the attempt counter for an active blocker.
+// A missing or changed row returns nil.
 func (d *DB) IncrementTodoBlockerAttempts(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
@@ -238,7 +236,7 @@ func (d *DB) IncrementTodoBlockerAttempts(ctx context.Context, id string, at tim
 	row, err := scanTodoBlocker(d.pool.QueryRow(ctx, `UPDATE todo_blockers
 		SET attempts = attempts + 1,
 		    updated_at = $2
-		WHERE id = $1
+		WHERE id = $1 AND state = 'active'
 		RETURNING `+todoBlockerCols,
 		strings.TrimSpace(id), at))
 	if errors.Is(err, pgx.ErrNoRows) {

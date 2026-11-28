@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -52,15 +53,29 @@ func (s *Service) ensureApprovedPRBlockers(ctx context.Context, todoID string, r
 func (*todoStartBlocked) Error() string { return "task prerequisites are not ready" }
 
 func (s *Service) checkTodoStartReadiness(ctx context.Context, task PlanTask) error {
-	todo, ok := s.todoNow(task.TodoID)
-	if !ok {
-		todo.ID, todo.PartOf = task.TodoID, task.PartOf
-	}
+	todo, _ := s.todoNow(task.TodoID)
 	readiness, err := s.taskTodoReadiness(ctx, todo, task)
 	if err != nil || !readiness.ready() {
 		return &todoStartBlocked{refs: readiness.refs(), err: err}
 	}
 	return nil
+}
+
+func (s *Service) readinessPlan(ctx context.Context, todo Todo) (PlanTask, error) {
+	if todo.PlanID == "" {
+		return PlanTask{}, nil
+	}
+	plan, index, err := s.currentPlanAssignment(ctx, todo)
+	if errors.Is(err, errTaskNotInPlan) {
+		return PlanTask{}, nil
+	}
+	if err != nil {
+		return PlanTask{}, err
+	}
+	if plan.State != planStarted {
+		return PlanTask{}, nil
+	}
+	return plan.Tasks[index], nil
 }
 
 func (r todoReadiness) ready() bool {
@@ -103,7 +118,8 @@ func (s *Service) evaluateTodoReadiness(ctx context.Context, todo Todo, task Pla
 		if row.Kind == todoBlockerKindExternalPR {
 			knownPRs[strings.ToLower(normalizeTodoBlockerPRRef(row.TargetRef))] = true
 		}
-		if row.State != db.TodoBlockerStateActive || !v2 && row.Kind != todoBlockerKindExternalPR {
+		if row.State != db.TodoBlockerStateActive ||
+			!v2 && (row.Kind != todoBlockerKindExternalPR || task.Queue == nil && len(task.BlockedByPR) == 0) {
 			continue
 		}
 		// A mirror and its after edge represent the same prerequisite. The live verdict also

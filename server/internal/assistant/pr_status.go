@@ -674,7 +674,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		}
 	}
 	reconcileEarlyTerminal := func() {
-		if terminalState && s.settings(ctx).todosV2On() {
+		if terminalState {
 			reconcileTerminalBlockers()
 			s.onPRStatusMergeTrain(ctx, t, status)
 		}
@@ -777,7 +777,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	}
 	b.stageWriting.Unlock()
 	s.discardStalePRFeedback(ctx, t.ID, prevPR, status)
-	s.todosChanged(ctx)
+	defer s.todosChanged(ctx)
 	parkWoke := false
 	preStage := t.Stage
 	needsUserMergeHandled := false
@@ -878,7 +878,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			s.maybeEmitUnparkedPRMerged(ctx, t.ID, u, held, parkWoke, newlyClosed, preStage)
 		}
 	}
-	if terminalState && s.settings(ctx).todosV2On() {
+	if terminalState {
 		reconcileTerminalBlockers()
 	}
 	s.onPRStatusMergeTrain(ctx, t, status)

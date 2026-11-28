@@ -172,9 +172,6 @@ func TestTodosV2BlockerQueueDefersStartAndAutoStartsOnPRMerge(t *testing.T) {
 	}
 
 	// While the external PR is still open, sweepAdmissionQueue must NOT launch the agent.
-	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (todoBlockerPRFact, bool) {
-		return todoBlockerPRFact{URL: targetRef, State: "open", Merged: false}, true
-	})
 	s.sweepAdmissionQueue(ctx)
 	if got := len(f.started()); got != 0 {
 		t.Fatalf("agent started prematurely while blocker active: started=%d", got)
@@ -188,10 +185,7 @@ func TestTodosV2BlockerQueueDefersStartAndAutoStartsOnPRMerge(t *testing.T) {
 
 	// Once the external PR merges, ReconcileTodoBlockers resolves the blocker and triggers sweepAdmissionQueue
 	// which automatically launches the deferred agent.
-	s.setTodoBlockerPRFetcher(func(_ context.Context, targetRef string) (todoBlockerPRFact, bool) {
-		return todoBlockerPRFact{URL: targetRef, State: "merged", Merged: true}, true
-	})
-	summary, err := s.ReconcileTodoBlockers(ctx, "")
+	summary, err := s.reconcileTodoBlockersForPR(ctx, TodoPRStatus{URL: prURL, State: "merged"})
 	if err != nil {
 		t.Fatalf("ReconcileTodoBlockers: %v", err)
 	}

@@ -42,10 +42,9 @@ func TestTodoReadinessPostgresProtectsApprovedPRWaitAfterLabsRollback(t *testing
 	if err != nil || reloaded.Tasks[0].Queue == nil || len(f.started()) != 0 {
 		t.Fatalf("rollback released an active PR blocker: plan=%+v starts=%d err=%v", reloaded, len(f.started()), err)
 	}
-	if _, err := database.ResolveTodoBlocker(ctx, rows[0].ID, s.todoViewNow()); err != nil {
+	if err := s.applyPRStatus(ctx, Todo{}, TodoPRStatus{URL: prURL, State: "merged", CheckedAt: s.todoViewNow()}); err != nil {
 		t.Fatal(err)
 	}
-	s.sweepAdmissionQueue(ctx)
 	waitWorkspaceStarts(t, s, f, 1)
 }
 
