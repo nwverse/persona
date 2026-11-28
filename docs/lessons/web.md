@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Idle app ownership still needs takeover confirmation (#17419)
+
+A Codex takeover plan's `running` and `app_owned` flags describe different things. An idle app-owned session still
+requires explicit confirmation and `confirm_stop: true`; use both flags when opening the dialog and building the POST
+body. Keep the running-turn warning for active turns and show app-ownership copy for idle App sessions.
+
 ## Closed history extends the to-do list without replacing the board (#17695)
 
 The hub projects the board and its direction counts before bounding the closed rows in GET /todos. Use those counts to
