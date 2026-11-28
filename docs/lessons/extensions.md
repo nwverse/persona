@@ -53,3 +53,8 @@
 ## Lark sender-name backfill
 
 - A one-time repair that makes paced API calls needs a resumable position, not just a bigger budget. Backfill v3 read up to 500 member pages per large group within a 2-minute budget at 5 requests a second (about 600 calls). Two large groups whose unnamed senders had left could never fit, and with no position saved every run started again at page 0. The `context.DeadlineExceeded` it returned was classified `other`, so the binding's health showed `failing` and the deploy was rolled back. Make a budget-limited step stop partial and save its cursor. Let only owner-fixable errors (scope, auth) change health. Reproduce with the real family rate on the fake clock (`TestResolveNamesCompletesTwoLargeGroupsOfLeftSenders`), not with the test syncer's unlimited rate.
+
+## Guest traffic
+
+- Guest traffic gets its own bounded list; never share a ring with the owner's entries (#16848). A teammate's question, its refusal and its rate-limit note live in the guest's own book and its own short memory, counted and capped on their own, so a busy group cannot push the owner's dedup, thread bindings or pending cards out of their ring. The guest's reply and its chain of thought are posted through their own calls, never through the owner's progress card.
+- Call `pass()` before anything a stranger can slow down (#16848). The owner's messages and a guest's message share one intake, so the guest path releases the next message before it reads settings, parses content, checks the mention or starts a conversation. Anything that waits on the network or the store happens after that, or one slow stranger stalls the owner's chat.

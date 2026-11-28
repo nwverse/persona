@@ -809,15 +809,16 @@ export function useTranscript(mid: string, sid: string, opts: { starting?: boole
         }
         from = batch[batch.length - 1].seq + 1;
       }
-      if (complete) expanded.current.set(fold.id, fold.fold);
       // from_seq..through_seq is line-granular, so boundary lines can carry blocks of an adjacent fold (#13859).
       const expandedItems = out.filter((i) => insideFold(i, fold));
+      const resolved = complete && expandedItems.length > 0;
+      if (resolved) expanded.current.set(fold.id, fold.fold);
       if (expandedItems.length) {
         coalescer.current?.flush();
         apply(expandedItems);
       }
       // The closeout's evidence reader needs to know a capped or superseded read; existing fold UI keeps the partial steps.
-      return complete;
+      return resolved;
     },
     [mid, sid, apply],
   );

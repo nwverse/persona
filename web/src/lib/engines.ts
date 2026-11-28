@@ -2,20 +2,25 @@
 // computer's sessions come from. The hub keeps one per machine (herdr when never chosen) and takes a new one with
 // PUT /api/v1/machines/{mid}/engine, also while the machine is offline (applied when it connects).
 import { t } from "../i18n";
+import { ENGINE_NAMES, engineName } from "./engine-names";
 import type { DetectedEngine, Machine } from "./types";
 
-/** The engines this client knows (the hub's proto.EngineNames), in the order they are listed when the node reports none. */
-export const KNOWN_ENGINES: { id: string; name: string; detail: string }[] = [
-  { id: "herdr", name: "herdr", detail: t("lib-engines.detail_herdr") },
-  { id: "herdr-core", name: "Herdr App", detail: t("lib-engines.detail_herdr_core") },
-  { id: "herdr-both", name: "herdr + Herdr App", detail: t("lib-engines.detail_herdr_both") },
-  { id: "orca", name: "Orca", detail: t("lib-engines.detail_orca") },
-  { id: "tern", name: "Tern", detail: t("lib-engines.detail_tern") },
-  { id: "rex", name: "Rex", detail: t("lib-engines.detail_rex") },
-  { id: "paseo", name: "Paseo", detail: t("lib-engines.detail_paseo") },
-  { id: "cindy", name: "Cindy", detail: t("lib-engines.detail_cindy") },
-  { id: "t3code", name: "T3 Code", detail: t("lib-engines.detail_t3code") },
+export { engineName };
+
+const DETAILS: [id: string, detail: string][] = [
+  ["herdr", t("lib-engines.detail_herdr")],
+  ["herdr-core", t("lib-engines.detail_herdr_core")],
+  ["herdr-both", t("lib-engines.detail_herdr_both")],
+  ["orca", t("lib-engines.detail_orca")],
+  ["tern", t("lib-engines.detail_tern")],
+  ["rex", t("lib-engines.detail_rex")],
+  ["paseo", t("lib-engines.detail_paseo")],
+  ["cindy", t("lib-engines.detail_cindy")],
+  ["t3code", t("lib-engines.detail_t3code")],
 ];
+
+/** The engines this client knows (the hub's proto.EngineNames), in the order they are listed when the node reports none. */
+export const KNOWN_ENGINES: { id: string; name: string; detail: string }[] = DETAILS.map(([id, detail]) => ({ id, name: ENGINE_NAMES[id], detail }));
 
 const known = (id: string) => KNOWN_ENGINES.find((e) => e.id === id);
 
@@ -24,11 +29,6 @@ type EngineMachine = Pick<Machine, "engine" | "engines" | "online">;
 /** The machine's engine: herdr when it was never chosen (an engine is always picked; nothing is guessed from detection). */
 export function currentEngine(m: Pick<Machine, "engine">): string {
   return m.engine || "herdr";
-}
-
-/** An engine's name: the node's words first, then ours, then its id (a future engine). */
-export function engineName(id: string, m?: Pick<Machine, "engines">): string {
-  return m?.engines?.find((e) => e.id === id)?.name || known(id)?.name || id;
 }
 
 /** One line on what the engine is; none for an engine this client does not know. */

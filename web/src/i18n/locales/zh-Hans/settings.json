@@ -15,6 +15,8 @@
   "reply_motion_hint": "新回复将逐词淡入显示；系统开启「减弱动态效果」时自动关闭。",
   "starred_messages": "消息收藏",
   "starred_messages_hint": "在侧边栏显示「消息收藏」，并在消息菜单中提供收藏 / 取消收藏选项。关闭后，已收藏的消息仍会保留。",
+  "needs_you_auto_open": "进入主对话时自动展开「要你处理」",
+  "needs_you_auto_open_hint": "从侧栏或折叠导航栏进入主对话时自动展开。底部数量胶囊始终保留，可随时手动展开或收起。",
   "sidebar_terminals": "在侧栏显示 Shell",
   "sidebar_terminals_hint": "按机器分组时，每台电脑的 Shell 显示在其 Agent 下方。选择一个 Shell 可打开终端视图。默认关闭，仅对当前浏览器生效。",
   "avatar": "形象",

@@ -4,7 +4,9 @@ import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
 import persona.core.contracts.DetectedEngine
 import persona.core.contracts.Machine
+import persona.core.contracts.Session
 import persona.core.contracts.api.NO_TERMINAL_ENGINE
+import persona.core.domain.sort.hostKind
 
 /**
  * One terminal engine per machine, or none (docs/integrations/engines.md), as on iOS `EngineSelectionModel`; a set of several that
@@ -132,6 +134,19 @@ object Engines {
 
     fun name(id: String, machine: Machine): String = machine.engines.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() }
         ?: if (id == NONE) Key.EngineNone.english else known.firstOrNull { it.id == id }?.name ?: id
+
+    /** A known engine's name ("Orca", "Herdr App"), or its id: a host badge never shows a bare id this build can name (#17054). */
+    fun displayName(id: String): String = known.firstOrNull { it.id == id }?.name ?: id
+
+    /**
+     * The engine a session's terminal is in, by name, for the words that say where its tab or workspace is renamed (#17054,
+     * the web's `sessionEngineName`): its pane's host, else its space's kind when that is an engine (an Orca chat has no
+     * pane), else herdr.
+     */
+    fun sessionEngineName(session: Session): String {
+        val kind = session.hostKind.ifEmpty { session.spaceKind.orEmpty() }
+        return known.firstOrNull { it.id == kind }?.name ?: DEFAULT
+    }
 
     /** The machine pairing asks about: the hub's own (kind local), else the first one. */
     fun pairingMachine(machines: List<Machine>): Machine? = machines.firstOrNull { it.kind == "local" } ?: machines.firstOrNull()

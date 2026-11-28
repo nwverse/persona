@@ -96,9 +96,10 @@ export function shellPath(path: string): string {
 }
 
 export function sessionMenuActions(s: Session): string[] {
+  const foreground = viewOf(s).reason?.kind !== "background" && !s.background_working && !s.background_waiting;
   return [
     ...(sessionCan(s, "attach") ? ["attach"] : []),
-    ...(stateOf(s) === "working" && sessionCan(s, "interrupt") ? ["stop"] : []),
+    ...(stateOf(s) === "working" && foreground && sessionCan(s, "interrupt") ? ["stop"] : []),
     ...(sessionCan(s, "terminal") ? ["resume"] : []),
     ...(!s.assistant && activityOf(s) !== "offline" && sessionCan(s, "close") ? ["close"] : []),
   ];
