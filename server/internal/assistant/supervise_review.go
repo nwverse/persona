@@ -521,7 +521,8 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			return "", deferredScopeError(a.FollowUpTodoID)
 		}
 	} else if closing != nil {
-		closing.closed, err = s.reviewDoneTodo(ctx, t.ID, closing.reason, closing.accepted)
+		closing.row, err = s.commitReviewedTodo(ctx, t.ID, closing.reason, closing.accepted, nil, false)
+		closing.closed = closing.row != nil
 	}
 	if err != nil {
 		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
@@ -661,7 +662,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				"archived only when idle and the user has been inactive for 10 minutes (their terminals stay). "+
 				"Tell the user only if they need to know.", t.ID), nil
 		}
-		s.autoSeeAcceptedTodo(ctx, t.ID, conclusion.Outcome, a.UserCheck)
+		completed := t
+		if closing.row != nil {
+			completed.DoneAt, completed.ReopenedAt = closing.row.DoneAt, closing.row.ReopenedAt
+		}
+		s.autoSeeAcceptedTodo(ctx, completed, conclusion.Outcome, a.UserCheck)
 		authorized := isMain || background || t.Supervision != nil && t.Supervision.Supervisor == self ||
 			t.Supervision == nil && t.Origin == self
 		cleanup := s.finishTaskTerminal(ctx, t, acceptedHere && authorized && a.Outcome != outcomeCannot && !a.UserCheck)
@@ -977,40 +982,42 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 }
 
 func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason string, accepted bool, ledger *Supervision, ownerPass bool) (bool, error) {
+	row, err := s.commitReviewedTodo(ctx, id, reason, accepted, ledger, ownerPass)
+	return row != nil, err
+}
+
+func (s *Service) commitReviewedTodo(ctx context.Context, id, reason string, accepted bool, ledger *Supervision, ownerPass bool) (*db.TodoRow, error) {
 	if !ownerPass {
 		s.loadSeen(ctx)
 		_ = s.loadTaskActivity(ctx)
 	}
 	s.todos.writing.Lock()
-	var cancelCheckedAgents []TodoAgent
-	cancelWorkersGone := false
-	if ledger == nil && !accepted {
-		if cur, ok := s.todoNow(id); ok {
-			cancelCheckedAgents, cancelWorkersGone = s.checkStaleInvestigationCancelWorkers(ctx, cur)
-		}
-	}
 	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-		var err error
-		if ledger == nil && !accepted && staleInvestigationCancelAllowed(current, cancelCheckedAgents, cancelWorkersGone) {
-			err = s.receivedFindingsCloseError(current, nil)
-		} else {
-			err = s.investigationCloseError(ctx, current)
-		}
-		if err != nil {
+		if err := s.reviewInvestigationCloseError(ctx, current, ledger == nil && !accepted); err != nil {
 			s.todos.writing.Unlock()
-			return false, err
+			return nil, err
 		}
 	}
-	ok, after, err := s.reviewDoneTodoLocked(ctx, id, reason, accepted, ledger, ownerPass, SessionRef{})
+	row, after, err := s.reviewDoneTodoLocked(ctx, id, reason, accepted, ledger, ownerPass, SessionRef{})
 	s.todos.writing.Unlock()
 	if after != nil {
 		after()
 	}
-	return ok, err
+	return row, err
+}
+
+func (s *Service) reviewInvestigationCloseError(ctx context.Context, t Todo, allowStaleCancellation bool) error {
+	if allowStaleCancellation {
+		checked, gone := s.checkStaleInvestigationCancelWorkers(ctx, t)
+		if staleInvestigationCancelAllowed(t, checked, gone) {
+			return s.receivedFindingsCloseError(t, nil)
+		}
+	}
+	return s.investigationCloseError(ctx, t)
 }
 
 // reviewDoneTodoLocked commits the closure while todos.writing is held and returns its post-commit effects.
-func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, accepted bool, ledger *Supervision, ownerPass bool, untouched SessionRef) (bool, func(), error) {
+func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, accepted bool, ledger *Supervision, ownerPass bool, untouched SessionRef) (*db.TodoRow, func(), error) {
 	guard := func() error {
 		if t, ok := s.todoNow(id); ok {
 			if !ownerPass {
@@ -1023,10 +1030,10 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 		return nil
 	}
 	if err := guard(); err != nil {
-		return false, nil, err
+		return nil, nil, err
 	}
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
-		return false, nil, nil // only its report closes a concern (concerns.go)
+		return nil, nil, nil // only its report closes a concern (concerns.go)
 	}
 	now := time.Now().UTC()
 	var row db.TodoRow
@@ -1040,13 +1047,13 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 		}
 		r, ok, err := st.ReviewTodo(ctx, id, reason, accepted, now, review, guard)
 		if err != nil || !ok {
-			return false, nil, err
+			return nil, nil, err
 		}
 		row = *r
 	} else {
 		t, ok := s.todoNow(id)
 		if !ok {
-			return false, nil, db.ErrTodoNotFound
+			return nil, nil, db.ErrTodoNotFound
 		}
 		row = db.TodoRow{ID: t.ID, Title: t.Title, Notes: t.Notes, CreatedAt: t.CreatedAt, Origin: t.Origin, PlanID: t.PlanID,
 			ReopenedAt: t.ReopenedAt, Quiet: t.Quiet}
@@ -1078,47 +1085,52 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 		return false
 	})
 	if activityErr != nil {
-		return false, nil, activityErr
+		return nil, nil, activityErr
 	}
 	if !ok {
-		return false, nil, nil
+		return nil, nil, nil
 	}
-	return true, func() {
+	return &row, func() {
 		s.todoRowSet(ctx, doneKeys)
-		// Recording an outcome and telling the planning conversation belong to a newly closed open task, not a failed start.
-		if before.DoneAt == nil {
-			s.todoPushOver(id) // closed: nothing about it waits on the owner any more
-			if accepted && row.DoneAt != nil {
-				s.goRecordTaskOutcome(before, *row.DoneAt)
-				s.learnAcceptedEstimate(ctx, id)
-				s.goLearnTaskLessons(ctx, before, *row.DoneAt) // what it taught its project's next Agents (task_lessons.go)
-				// Post-closure PR lifecycle: keep watching this to-do's own still-open delivery PRs without reopening it (#12371).
-				if cur, ok := s.todoNow(id); ok {
-					s.createPRFollowups(ctx, cur)
-				}
-			}
-			s.onTodoWorkspaceReleased(ctx, before, accepted)
-			if accepted && row.DoneAt != nil {
-				s.evaluateTodoAfterDependents(ctx, id)
-				s.evaluateParentCloseoutForChild(ctx, id)
-			}
-			if s.settings(ctx).todosV2On() {
-				if recErr := s.ResetSupervisedTaskRecovery(ctx, id); recErr != nil {
-					s.logf("task %s: reset todos_v2 restart recovery: %v", id, recErr)
-				}
-				if accepted && row.DoneAt != nil {
-					if _, blkErr := s.ReconcileTodoBlockers(ctx, id); blkErr != nil {
-						s.logf("task %s: reconcile todos_v2 blockers: %v", id, blkErr)
-					}
-				}
-			}
-			if t, now := s.todoNow(id); ok && now {
-				// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
-				go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)
-			}
-			s.evaluateTodoAfterDependents(ctx, id)
-		}
+		s.afterReviewClose(ctx, before, row, accepted)
 	}, nil
+}
+
+func (s *Service) afterReviewClose(ctx context.Context, before Todo, row db.TodoRow, accepted bool) {
+	id, reason := row.ID, row.DoneReason
+	// Recording an outcome and telling the planning conversation belong to a newly closed open task, not a failed start.
+	if before.DoneAt == nil {
+		s.todoPushOver(id) // closed: nothing about it waits on the owner any more
+		if accepted && row.DoneAt != nil {
+			s.goRecordTaskOutcome(before, *row.DoneAt)
+			s.learnAcceptedEstimate(ctx, id)
+			s.goLearnTaskLessons(ctx, before, *row.DoneAt) // what it taught its project's next Agents (task_lessons.go)
+			// Post-closure PR lifecycle: keep watching this to-do's own still-open delivery PRs without reopening it (#12371).
+			if cur, ok := s.todoNow(id); ok {
+				s.createPRFollowups(ctx, cur)
+			}
+		}
+		s.onTodoWorkspaceReleased(ctx, before, accepted)
+		if accepted && row.DoneAt != nil {
+			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
+		}
+		if s.settings(ctx).todosV2On() {
+			if recErr := s.ResetSupervisedTaskRecovery(ctx, id); recErr != nil {
+				s.logf("task %s: reset todos_v2 restart recovery: %v", id, recErr)
+			}
+			if accepted && row.DoneAt != nil {
+				if _, blkErr := s.ReconcileTodoBlockers(ctx, id); blkErr != nil {
+					s.logf("task %s: reconcile todos_v2 blockers: %v", id, blkErr)
+				}
+			}
+		}
+		if t, ok := s.todoNow(id); ok {
+			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).
+			go s.taskEndedNotice(context.WithoutCancel(ctx), t, accepted, reason)
+		}
+		s.evaluateTodoAfterDependents(ctx, id)
+	}
 }
 
 // pickTaskAgent is the agent of a task that most needs what is sent to it: one waiting for the user, then working,

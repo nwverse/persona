@@ -170,10 +170,10 @@ func (n *Node) hostEnabled(kind string) bool { return slices.Contains(n.engineCh
 // defaultKind is the default host of the set in use: where pane-less operations go; "" when the set is empty.
 func (n *Node) defaultKind() string { return n.engineChoice().Default }
 
-// noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set).
+// noEngineRefusal is why nothing can start on a machine that enables no terminal engine (the empty set); the hub words
+// it by its reason (apierr's engineMissingWords, #17057).
 func noEngineRefusal() error {
-	return refusal(engineMissing, "这台电脑没启用终端引擎，不能从手机新开或接着会话，这次没有发送。"+
-		"在 设置 › 机器 › 这台电脑 › 引擎 里启用一个（herdr、Herdr App、Orca、Paseo、Cindy 或 T3 Code）再试。", nil)
+	return refusal(engineMissing, i18n.T(i18n.Default, "rpc-errors.engine_none"), map[string]any{"reason": engineNone})
 }
 
 // watchEngine starts watching the engine in use for as long as ctx lasts (Serve); engine.use moves it to the new one.

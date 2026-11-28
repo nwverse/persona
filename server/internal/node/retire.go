@@ -921,7 +921,7 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
+		return nil, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	n.forgetPane(created.Pane.String()) // a new tab: whatever ran in a pane of its id before, nothing runs in it yet
 	ts.opened(created.SpaceID)
