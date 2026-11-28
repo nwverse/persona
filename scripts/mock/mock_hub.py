@@ -15270,6 +15270,13 @@ if PASEO_PROVIDERS:
                                                             {"id": "grok-4-fast", "name": "Grok 4 Fast"}]}
     LAUNCHER_MODELS["cursor"] = {"agent": "paseo", "models": [{"id": "auto", "name": "Auto", "default": True},
                                                               {"id": "grok-4", "name": "Grok 4"}]}
+# MOCK_ORCA_CHAT_LAUNCHERS=1 (#17047, web/e2e/orca-chat-launchers.mjs, on the server): the Orca bridge's chat launchers,
+# one per provider Orca has installed, with the models Orca's chats of that provider list (node orcabridge_start.go).
+ORCA_CHAT_LAUNCHERS = bool(os.environ.get("MOCK_ORCA_CHAT_LAUNCHERS"))
+if ORCA_CHAT_LAUNCHERS:
+    LAUNCHER_MODELS["orca-claude"] = {"agent": "claude", "models": [{"id": "opus", "name": "Opus", "default": True, "efforts": ["low", "medium", "high", "max"]},
+                                                                    {"id": "sonnet", "name": "Sonnet", "efforts": ["low", "medium", "high"]}]}
+    LAUNCHER_MODELS["orca-codex"] = {"agent": "codex", "models": [{"id": "gpt-5.5", "name": "GPT-5.5", "default": True, "efforts": ["low", "medium", "high"]}]}
 # MOCK_NEW_AGENT_PANEL=1 (#5104, web/e2e/new-agent-model.mjs): the gateway behind claude's glm-5.3 also serves Codex, so
 # codex lists the same model ID and New Agent's flyout offers that model under both engines; and the Mac Studio has no
 # codex launcher, so a Codex pick made on another computer falls back to the default there.
@@ -15571,6 +15578,11 @@ def machine_launchers(mid=""):
         # named as in Paseo and saying the modes a start takes (#8261)
         out += [{"name": n, "display_name": d, "model": m, "source": "paseo", "agent": "paseo", "agent_type": "paseo",
                  "permission_modes": ["default", "bypassPermissions"]} for n, d, m in (("grok", "Grok", "Grok 4"), ("cursor", "Cursor", "Auto"))]
+    if ORCA_CHAT_LAUNCHERS and mid == "server":
+        # The Orca bridge's chat launchers (#17047): Claude Code's with Claude Code's choices, Codex's with the modes Orca takes for it
+        out += [{"name": "orca-claude", "display_name": "Orca chat · Claude Code", "model": "opus", "source": "orca"},
+                {"name": "orca-codex", "display_name": "Orca chat · Codex", "model": "gpt-5.5", "source": "orca", "agent": "codex",
+                 "agent_type": "codex", "permission_modes": ["default", "auto", "bypassPermissions"]}]
     if machine_alerts.ON:
         return machine_alerts.with_health(mid, out)
     return launcher_health_list(out)
