@@ -131,8 +131,11 @@ type undeliveredBook struct {
 	sending         map[string]bool          // conversations a pass is sending into
 	revoked         map[string]bool          // credentials this manager was told were signed out
 	revocationDirty bool                     // the failed rows still need to be saved
-	wake            chan struct{}
-	start           sync.Once
+	// seen: the status each conversation with kept messages last had in its computer's session list (by machine and
+	// conversation). A list wakes the kept messages only when it shows a change, not every time it comes (#17094).
+	seen  map[string]string
+	wake  chan struct{}
+	start sync.Once
 }
 
 func (s *Service) undeliveredLocked(ctx context.Context) bool {
@@ -419,19 +422,39 @@ func (s *Service) undeliveredLoop(ctx context.Context) {
 }
 
 // undeliveredSeen: a session list came in. A conversation with kept messages that runs again (its process is up, or
-// it works) gets them now rather than at the next backoff step.
+// it works) gets them now rather than at the next backoff step. Only a change wakes them: a computer sends its list
+// every few seconds, and a conversation that is idle all along yet refuses every try (its runtime cannot read it any
+// more) would otherwise be tried on each list instead of on the backoff steps (#17094).
 func (s *Service) undeliveredSeen(d DeviceSessions) {
 	b := &s.undelivered
 	b.mu.Lock()
 	if !b.loaded || len(b.st) == 0 {
+		clear(b.seen)
 		b.mu.Unlock()
 		return
+	}
+	if b.seen == nil {
+		b.seen = map[string]string{}
+	}
+	for key := range b.seen {
+		if _, sid, _ := strings.Cut(key, "\x00"); len(b.st[sid]) == 0 {
+			delete(b.seen, key)
+		}
 	}
 	now := time.Now().UTC()
 	woke := false
 	for _, row := range d.Sessions {
 		q := b.st[row.SessionID]
-		if len(q) == 0 || row.Status == proto.StatusOffline || row.Status == "" {
+		if len(q) == 0 {
+			continue
+		}
+		key := d.MachineID + "\x00" + row.SessionID
+		was, known := b.seen[key]
+		b.seen[key] = row.Status
+		if known && was == row.Status {
+			continue // as on the list before: the backoff decides
+		}
+		if row.Status == proto.StatusOffline || row.Status == "" {
 			continue
 		}
 		for i := range q {

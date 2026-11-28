@@ -230,6 +230,37 @@ func TestUndeliveredGoesWhenTheConversationRunsAgain(t *testing.T) {
 	}
 }
 
+// A conversation idle all along that refuses every try (its runtime can no longer read it) is tried on the backoff
+// steps, not on every session list its computer sends; a change on the list (it came back) still sends at once (#17094).
+func TestUndeliveredIdleListsDoNotHurryARefusedTry(t *testing.T) {
+	s, f := newQuietServiceOn(t, &memStore{})
+	keepFor(t, s, "msg-1", "hello")
+	failSends(f, &rpc.Error{Code: "agent_error", Message: "Failed to read session conv1; retry, or load it with session/load"})
+	idle := DeviceSessions{MachineID: "server", Sessions: []proto.Session{{SessionID: "conv1", Status: proto.StatusIdle}}}
+	s.undeliveredSeen(idle)
+	s.undeliveredPass(context.Background(), time.Now())
+	if n := sendCalls(f, "msg-1"); n != 1 {
+		t.Fatalf("%d tries, want one when the conversation was first seen running", n)
+	}
+	for range 10 {
+		s.undeliveredSeen(idle)
+		s.undeliveredPass(context.Background(), time.Now())
+	}
+	if n := sendCalls(f, "msg-1"); n != 1 {
+		t.Fatalf("%d tries from lists that showed nothing new, want the backoff to decide", n)
+	}
+	s.undeliveredSeen(DeviceSessions{MachineID: "server", Sessions: []proto.Session{{SessionID: "conv1", Status: proto.StatusOffline}}})
+	failSends(f, nil)
+	s.undeliveredSeen(idle)
+	s.undeliveredPass(context.Background(), time.Now())
+	if n := sendCalls(f, "msg-1"); n != 2 {
+		t.Fatalf("%d tries, want it sent once the conversation came back", n)
+	}
+	if q := undeliveredOf(t, s, "conv1"); len(q) != 0 {
+		t.Fatalf("still kept: %+v", q)
+	}
+}
+
 func TestUndeliveredFromSignedOutDeviceIsDeleteOnly(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
