@@ -12,6 +12,19 @@ fun inboxSourceVisibility(larkOffered: Boolean, mailOffered: Boolean, stored: In
         mail = mailOffered || (stored?.mail ?: true),
     )
 
+/**
+ * Fixed kind-filter values in row order, shared by the Kind filter sheet and the Glass filter strip. Unlike source
+ * options these are not built from loaded records, so the Mail entry can show on an empty core-only hub (#17814).
+ */
+val INBOX_FILTER_KIND_VALUES: List<String> = listOf("mention", "dm", "group", "mail", "agent")
+
+/**
+ * The fixed kind filters that stay offered. Only Mail follows the single offered/retained visibility decision; every
+ * other kind matches item kinds across sources and always stays.
+ */
+fun visibleInboxFilterKinds(visibility: InboxSourceVisibility): List<String> =
+    INBOX_FILTER_KIND_VALUES.filter { it != "mail" || visibility.mail }
+
 /** The zero-record setup sentence. The original both-sources text is unchanged when both remain visible. */
 @StringRes
 fun inboxEmptyText(visibility: InboxSourceVisibility): Int = when {
