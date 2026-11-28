@@ -921,6 +921,9 @@ func (h *Hub) heldNeedsIDs(crossMachine bool) (held, supervised []string) {
 	}
 	byHome := map[[2]string]flags{}
 	for _, ix := range interactions {
+		if ix.MirrorOf != "" {
+			continue
+		}
 		home := ix.FoldedUnder
 		homeMachine := ix.FoldedUnderMachineID
 		if home == "" || (!crossMachine && homeMachine != "" && homeMachine != ix.MachineID) {

@@ -48,15 +48,17 @@ public struct ReceiverSignals: Sendable {
             bursts.append(Double(bytes) * 8 * 1000 / Double(arrivalMicros - first))
         }
         guard !refinement else { return }
-        let delay = Int64(truncatingIfNeeded: arrivalMicros) - Int64(truncatingIfNeeded: captureMicros)
+        let delay = Int64(truncatingIfNeeded: arrivalMicros) &- Int64(truncatingIfNeeded: captureMicros)
         while let last = baseline.last, last.delay >= delay { baseline.removeLast() }
         baseline.append((arrivalMicros, delay))
-        while baseline.count > 1, arrivalMicros &- baseline[0].at > Self.baselineMicros { baseline.removeFirst() }
-        let ms = Double(delay - baseline[0].delay) / 1000
+        while baseline.count > 1, arrivalMicros > baseline[0].at,
+              arrivalMicros - baseline[0].at > Self.baselineMicros { baseline.removeFirst() }
+        let ms = Double(UInt64(bitPattern: delay &- baseline[0].delay)) / 1000
         let interval = 1000 / Double(max(fps, 1))
         if keyframe {
             let took = firstByteMicros.map { arrivalMicros > $0 ? arrivalMicros - $0 : 0 } ?? 0
-            wakeUntil = arrivalMicros + took + UInt64(2 * interval * 1000)
+            let end = Self.saturatingAdd(Self.saturatingAdd(arrivalMicros, took), UInt64(2 * interval * 1000))
+            wakeUntil = wakeUntil.map { max($0, end) } ?? end
         }
         let wake = keyframe || wakeUntil.map { arrivalMicros <= $0 } ?? false
         queue.append((arrivalMicros, ms, ms > 2 * interval, bytes, wake))
@@ -85,14 +87,21 @@ public struct ReceiverSignals: Sendable {
     }
 
     private mutating func prune(_ now: UInt64) {
-        queue.removeAll { $0.at + 2_000_000 < now }
-        arrivals.removeAll { $0.at + 1_000_000 < now }
-        decodes.removeAll { $0.at + 2_000_000 < now }
-        shown.removeAll { $0.at + 2_000_000 < now }
+        queue.removeAll { now > $0.at && now - $0.at > 2_000_000 }
+        arrivals.removeAll { now > $0.at && now - $0.at > 1_000_000 }
+        decodes.removeAll { now > $0.at && now - $0.at > 2_000_000 }
+        shown.removeAll { now > $0.at && now - $0.at > 2_000_000 }
     }
 
-    /// Within the last `window` µs of `now`.
-    private static func within(_ at: UInt64, _ now: UInt64, _ window: UInt64) -> Bool { at + window >= now }
+    /// Within the last `window` µs of `now` (overflow-safe near `UInt64.max`).
+    private static func within(_ at: UInt64, _ now: UInt64, _ window: UInt64) -> Bool {
+        at >= now || now - at <= window
+    }
+
+    private static func saturatingAdd(_ a: UInt64, _ b: UInt64) -> UInt64 {
+        let (sum, overflow) = a.addingReportingOverflow(b)
+        return overflow ? .max : sum
+    }
 
     /// The signals at `now`; the bursts are handed over once.
     public mutating func take(now: UInt64) -> TierSignals {
@@ -114,21 +123,22 @@ public struct ReceiverSignals: Sendable {
         // Frames read together (a backlog arrives several to a read, #7842) all count, in the time since the read before;
         // skipping all but the first under-read the link, and the policy stepped down past the tier that fits. Those that
         // came with the run's first read came in before it started, so they don't.
-        var busyBytes = 0, busyMicros: UInt64 = 0, busyFrames = 0, counting = false
+        var busyBytes = 0.0, busyMicros: UInt64 = 0, busyFrames = 0, counting = false
         for (a, b) in zip(queue, queue.dropFirst()) {
             guard a.ms > Self.busyMs, b.ms > Self.busyMs, b.at >= a.at else { counting = false; continue }
             if b.at > a.at {
                 counting = true
-                busyMicros += b.at - a.at
+                busyMicros = Self.saturatingAdd(busyMicros, b.at - a.at)
                 busyFrames += 1
             }
-            if counting { busyBytes += b.bytes }
+            if counting { busyBytes += Double(b.bytes) }
         }
         if busyFrames >= 3, busyMicros >= 50_000 {
-            s.deliveredKbps = Double(busyBytes) * 8 * 1000 / Double(busyMicros)
-        } else if arrivals.count >= 4, let first = arrivals.first, let last = arrivals.last, last.at &- first.at >= 200_000 {
-            let bytes = arrivals.dropFirst().reduce(0) { $0 + $1.bytes }
-            s.deliveredKbps = Double(bytes) * 8 * 1000 / Double(last.at - first.at)
+            s.deliveredKbps = busyBytes * 8 * 1000 / Double(busyMicros)
+        } else if arrivals.count >= 4, let first = arrivals.first, let last = arrivals.last,
+                  last.at > first.at, last.at - first.at >= 200_000 {
+            let bytes = arrivals.dropFirst().reduce(0.0) { $0 + Double($1.bytes) }
+            s.deliveredKbps = bytes * 8 * 1000 / Double(last.at - first.at)
         }
         s.burstKbps = bursts
         s.lateShare = window.isEmpty ? nil : Double(window.filter(\.late).count) / Double(window.count)

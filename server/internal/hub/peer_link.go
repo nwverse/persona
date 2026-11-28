@@ -190,7 +190,24 @@ func (h *Hub) runPeerLink(parent context.Context, conn *websocket.Conn, hubID, d
 		return fmt.Errorf("hello: %w", err)
 	}
 	h.setupPeerHTTP(l) // before anyone can find the link
-	if !h.registerLink(l) {
+	switch h.registerLink(l) {
+	case peerRegisterOK:
+	case peerRegisterStopping:
+		if l.transport != nil {
+			l.transport.CloseIdleConnections()
+		}
+		_ = conn.Close(websocket.StatusGoingAway, "hub stopping")
+		return errors.New("hub stopping")
+	case peerRegisterUnpaired:
+		if l.transport != nil {
+			l.transport.CloseIdleConnections()
+		}
+		_ = conn.Close(peerCloseUnpaired, "credential revoked")
+		return errors.New("peer unpaired or credential revoked")
+	case peerRegisterDuplicate:
+		if l.transport != nil {
+			l.transport.CloseIdleConnections()
+		}
 		_ = conn.Close(peerCloseDuplicate, "the two hubs already have a link")
 		return errDuplicateLink
 	}
@@ -219,28 +236,46 @@ func (h *Hub) runPeerLink(parent context.Context, conn *websocket.Conn, hubID, d
 	return err
 }
 
-// registerLink makes l the link to its hub, unless the two hubs already have one that stays: the one dialed by the
-// smaller hub_id stays; a newer link dialed by the same hub replaces the older (it went away unnoticed).
-func (h *Hub) registerLink(l *peerLink) bool {
+type peerRegisterOutcome int
+
+const (
+	peerRegisterOK peerRegisterOutcome = iota
+	peerRegisterStopping
+	peerRegisterUnpaired
+	peerRegisterDuplicate
+)
+
+// registerLink makes l the link to its hub, unless the mesh is stopping, the peer was unpaired or its credential
+// rotated/revoked during hello, or the two hubs already have another link that stays: the one dialed by the smaller
+// hub_id stays; a newer link dialed by the same hub replaces the older (it went away unnoticed).
+func (h *Hub) registerLink(l *peerLink) peerRegisterOutcome {
 	self := h.hubID()
 	preferred := min(self, l.hubID)
 	ms := &h.mesh
 	ms.mu.Lock()
 	if !ms.running {
 		ms.mu.Unlock()
-		return false
+		return peerRegisterStopping
+	}
+	peer, paired := ms.peers[l.hubID]
+	if !paired || (peer.CredentialID != "" && h.isDeviceRevoked(peer.CredentialID)) || (l.tokenID != "" && ((peer.CredentialID != "" && peer.CredentialID != l.tokenID) || h.isDeviceRevoked(l.tokenID))) {
+		ms.mu.Unlock()
+		return peerRegisterUnpaired
 	}
 	old := ms.links[l.hubID]
 	if old != nil && old.ctx.Err() == nil && old.dialer != l.dialer && l.dialer != preferred {
 		ms.mu.Unlock()
-		return false
+		return peerRegisterDuplicate
+	}
+	if ms.links == nil {
+		ms.links = map[string]*peerLink{}
 	}
 	ms.links[l.hubID] = l
 	ms.mu.Unlock()
 	if old != nil {
 		old.close(peerCloseDuplicate, "replaced by another link between the two hubs")
 	}
-	return true
+	return peerRegisterOK
 }
 
 func (h *Hub) unregisterLink(l *peerLink) {

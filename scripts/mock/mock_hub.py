@@ -22160,7 +22160,7 @@ def mock_files(p, q):
                     {"path": "WeatherWidget/WidgetView.swift", "index": "A", "worktree": ".",
                      **diff_counts(MOCK_DIFFS["WeatherWidget/WidgetView.swift"]), "binary": False},
                     {"path": "docs/icon.png", "index": "?", "worktree": "?", "added": 0, "deleted": 0, "binary": True}]
-                + [{"path": rel, "index": ".", "worktree": "M", "added": 0, "deleted": 0, "binary": True} for rel in COMPARE_BLOBS]
+                + [{"path": rel, "index": "A" if rel == COMPARE_PICTURE else ".", "worktree": "M", "added": 0, "deleted": 0, "binary": True} for rel in COMPARE_BLOBS]
                 + [{"path": "Sources/App/Models/Forecast.swift", "index": ".", "worktree": "M", "added": 3, "deleted": 0, "binary": False}
                    for _ in range(min(FS_STATE["dirty"], 1))]}, 200
     if what == "git/diff":
@@ -22170,9 +22170,12 @@ def mock_files(p, q):
         return {"commits": MOCK_COMMITS[skip:skip + limit], "has_more": skip + limit < len(MOCK_COMMITS)}, 200
     c = next((c for c in MOCK_COMMITS if c["hash"] == arg("hash")), None)
     if not c: return {"error": "unknown revision"}, 502
+    deleted_picture = []
+    if COMPARE_PICTURE in COMPARE_BLOBS and c == MOCK_COMMITS[0]:
+        deleted_picture.append({"path": COMPARE_PICTURE, "index": "D", "worktree": ".", "added": 0, "deleted": 0, "binary": True})
     return {"commit": dict(c, body="Made-up commit for the mock hub."),
             "files": [{"path": "Sources/App/main.swift", "index": "M", "worktree": ".", "added": 2, "deleted": 1, "binary": False},
-                      {"path": "README.md", "index": "M", "worktree": ".", "added": 2, "deleted": 0, "binary": False}],
+                      {"path": "README.md", "index": "M", "worktree": ".", "added": 2, "deleted": 0, "binary": False}] + deleted_picture,
             "diff": MOCK_DIFFS["Sources/App/main.swift"] + "\n" + MOCK_DIFFS["README.md"], "truncated": False}, 200
 # --- end of Files & Git ---
 
@@ -22365,6 +22368,8 @@ if os.environ.get("MOCK_MEDIA"):  # the web's media (#1422): a sound, an SVG, a 
         MOCK_TREE[MOCK_REPO + "/media/preview.mp4"] = ("video/mp4", "")
 # MOCK_COMPARE=1 (with MOCK_FILES): a changed Word file, deck and picture in the repository's status, and git/blob
 # answering their staged (INDEX) / HEAD versions from the node's "cache", for the web's comparing (#1437).
+# The last commit removed the banner. It was added back to the index and edited in the working tree.
+COMPARE_PICTURE = "assets/banner.png"
 COMPARE_BLOBS = {}
 if os.environ.get("MOCK_COMPARE"):
     import io as _io, zipfile as _zf
@@ -22378,7 +22383,7 @@ if os.environ.get("MOCK_COMPARE"):
     _docx_old = _zip_edit(_docx_new, "word/document.xml", lambda x: x.replace("+10.2%", "+9.8%").replace("6 个百分点", "4 个百分点").replace("海外区域接入本地天气数据源。", "海外区域先观望。"))
     _pptx_old = _zip_edit(_pptx_new, "ppt/slides/slide2.xml", lambda x: x.replace("日活提高 18%", "日活提高 12%").replace("锁屏小组件适配深色壁纸", "锁屏小组件"))
     for _rel, _new, _old in (("reports/季度报告.docx", _docx_new, _docx_old), ("reports/季度回顾.pptx", _pptx_new, _pptx_old),
-                             ("assets/banner.png", _bar_png(480, 200), _bar_png(480, 200, (0.3, 0.5, 0.55, 0.7)))):
+                             (COMPARE_PICTURE, _bar_png(480, 200), _bar_png(480, 200, (0.3, 0.5, 0.55, 0.7)))):
         FILES["/Users/me/code/weather/" + _rel] = _new
         _blob = _cache + hashlib.sha1(_old).hexdigest() + os.path.splitext(_rel)[1]
         FILES[_blob] = _old
@@ -27672,8 +27677,10 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "LibreOffice is not installed on this machine", "code": "no_converter"}, 404)
             return self.send_json({"path": "/Users/me/Library/Caches/persona/convert/mock.pdf", "size": len(FILES.get("/Users/me/Library/Caches/persona/convert/mock.pdf", b"")), "mime": "application/pdf"})
         if p.startswith("/api/v1/machines/") and p.endswith("/git/blob"):  # node git.blob: a version written into the cache
-            blob = COMPARE_BLOBS.get(q.get("path", [""])[0])
-            return self.send_json({"path": blob, "size": len(FILES[blob])} if blob and q.get("rev", [""])[0] in ("HEAD", "INDEX") else {"missing": True})
+            path = q.get("path", [""])[0]
+            blob = COMPARE_BLOBS.get(path)
+            revisions = ("INDEX", MOCK_COMMITS[0]["hash"] + "^") if path == COMPARE_PICTURE else ("HEAD", "INDEX")
+            return self.send_json({"path": blob, "size": len(FILES[blob])} if blob and q.get("rev", [""])[0] in revisions else {"missing": True})
         if p.startswith("/api/v1/machines/") and p.endswith("/file/thumb"):  # node file.thumb: a drawn stand-in for a HEIC
             if not q.get("path", [""])[0].lower().endswith((".heic", ".heif")):
                 return self.file_thumb(p, q)  # the rest drawn by Quick Look, as a Mac node does (the Files tab's thumbnails)

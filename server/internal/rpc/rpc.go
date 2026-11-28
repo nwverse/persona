@@ -137,7 +137,6 @@ type Peer struct {
 	methods      map[string]string // the method of each pending call, by id: what Close reports as cut off
 	suspended    bool
 	closed       chan struct{}
-	once         sync.Once
 	err          error
 
 	OnRequest Handler
@@ -735,25 +734,49 @@ func (p *Peer) notifyRoute(ctx context.Context, event string, params any, r rout
 }
 
 func (p *Peer) Close(err error) {
-	p.once.Do(func() {
-		var inflight []string
-		p.mu.Lock() // taken before the waiters wake: they drop their entries as they return
-		if p.OnClose != nil {
-			for _, m := range p.methods {
-				inflight = append(inflight, m)
-			}
-		}
-		p.err = err
-		close(p.closed)
-		if p.runtimeCancel != nil {
-			p.runtimeCancel()
-		}
+	p.closeIf(err, nil)
+}
+
+// closeIf atomically checks cond (when non-nil) and closes p while holding p.mu, so conditional closes such as a
+// resume-window timer cannot race with Resume or AcceptResume installing a new transport.
+func (p *Peer) closeIf(err error, cond func() bool) bool {
+	var inflight []string
+	var onClose func(error, []string)
+	p.mu.Lock() // taken before the waiters wake: they drop their entries as they return
+	select {
+	case <-p.closed:
 		p.mu.Unlock()
-		if p.OnClose != nil {
-			sort.Strings(inflight)
-			p.OnClose(err, inflight)
+		return false
+	default:
+	}
+	if cond != nil && !cond() {
+		p.mu.Unlock()
+		return false
+	}
+	if p.resume != nil {
+		p.resume.timerGen++
+		if p.resume.timer != nil {
+			p.resume.timer.Stop()
+			p.resume.timer = nil
 		}
-	})
+	}
+	if p.OnClose != nil {
+		onClose = p.OnClose
+		for _, m := range p.methods {
+			inflight = append(inflight, m)
+		}
+	}
+	p.err = err
+	close(p.closed)
+	if p.runtimeCancel != nil {
+		p.runtimeCancel()
+	}
+	p.mu.Unlock()
+	if onClose != nil {
+		sort.Strings(inflight)
+		onClose(err, inflight)
+	}
+	return true
 }
 
 func (p *Peer) Done() <-chan struct{} { return p.closed }

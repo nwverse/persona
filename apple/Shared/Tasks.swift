@@ -936,8 +936,9 @@ nonisolated enum WatchInteractions {
     /// like the phone's Agents badge and inbox. The hub stamps `muted`; an older hub leaves it false. A question the
     /// assistant is still looking at stays off too (#544): it buzzes once it is handed to the user. So does a card its
     /// task's supervisor holds (`Interaction.supervisorHeld`): the watch would answer it with a tap.
+    /// A display copy also stays out: its authoritative card is the watch's one row and one buzz.
     static func leavingMuted(_ interactions: [Interaction]) -> [Interaction] {
-        interactions.filter { !$0.muted && !$0.isDelegating && $0.answerableHere }
+        interactions.filter { !$0.isDisplayMirror && !$0.muted && !$0.isDelegating && $0.answerableHere }
     }
 
     /// Cards passed to `WatchPet.status`: keeps non-muted pending cards (including delegating questions, which stay

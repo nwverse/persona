@@ -137,11 +137,15 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 			}
 			if old, err := decodeA2A(st.A2ARequest(ctx, c.Owner, a.ID)); err == nil && old == nil && a2aValidID(a.ID) && a2aValidText(a.Text) &&
 				a.a2aRef != c.Ref && (launch != nil || s.a2aAllowed(ctx, cfg, a.a2aRef)) {
-				// A new hand-off, not a retry of one already made (a2aStart answers those).
+				// A new hand-off, not a retry of one already made (a2aStart answers those). Its tier is resolved, or
+				// refused, before anything is asked or recorded (agent_presets.go), and a launch that could not start
+				// read-only where it would go is refused there too (start_host.go).
 				where := a.CWD
 				if launch != nil {
-					// Its tier is resolved, or refused, before anything is asked or recorded (agent_presets.go).
 					if err := s.a2aLaunchTier(ctx, cfg, a.Machine, launch); err != nil {
+						return nil, err
+					}
+					if err := s.a2aLaunchCheck(ctx, cfg, a.a2aRef, a.Context, launch); err != nil {
 						return nil, err
 					}
 					where = s.a2aLaunchWhere(ctx, launch)

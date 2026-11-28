@@ -481,21 +481,21 @@ func agyPaneBackgroundFromRows(params json.RawMessage) map[string][]proto.Backgr
 }
 
 // agyPaneRuntimeRow reads the companion row and its pane inventory from the same list update.
-func (b *runtimeRegistry) agyPaneRuntimeRow(id string) (proto.Session, bool) {
+func (b *runtimeRegistry) agyPaneRuntimeRow(id string) (proto.Session, agyPreview, bool) {
 	h := b.ownerOf(id)
 	if h == nil {
-		return proto.Session{}, false
+		return proto.Session{}, agyPreview{}, false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.hello.Runtime != agyRuntimeID || h.daemon != "" {
-		return proto.Session{}, false
+		return proto.Session{}, agyPreview{}, false
 	}
 	row, ok := h.rowLocked(id)
 	if tasks := h.agyPaneBackground[id]; len(row.Background) == 0 && len(tasks) > 0 {
 		row.Background = tasks
 	}
-	return row, ok
+	return row, h.agyPreviews[id], ok
 }
 
 // Runtime task metadata cannot grant access to node-local files. Join the log

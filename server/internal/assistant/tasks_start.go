@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -143,6 +144,20 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 				return nil, planInvalid{err}
 			}
 		}
+		if task.scratchWorkspace() && task.Cwd != "" && (task.WorkspaceResolved == nil || (!task.WorkspaceResolved.Created && !task.WorkspaceResolved.Reused)) {
+			if identity.IsAssistantDir(task.Cwd) {
+				return nil, planInvalid{i18n.Err("rpc-errors.agent_assistant_workspace")}
+			}
+			if task.Machine != "" {
+				if m, ok := s.machineByName(ctx, task.Machine); ok && assistantWorkspace(m, proto.ExpandHome(task.Cwd, m.Home)) {
+					return nil, planInvalid{i18n.Err("rpc-errors.agent_assistant_workspace")}
+				}
+			}
+			return nil, planInvalid{fmt.Errorf("workspace %q cannot be combined with cwd; omit cwd to use a managed scratch directory", workspaceScratch)}
+		}
+		if strings.TrimSpace(task.Cwd) == "" && !task.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *task) && !task.scratchWorkspace() {
+			return nil, planInvalid{errors.New("title, prompt and cwd are required")}
+		}
 		if p.Tasks[i].Machine != "" {
 			if err := s.resolveTaskWorkspace(ctx, &p.Tasks[i]); err != nil {
 				return nil, planInvalid{err}
@@ -163,6 +178,10 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if supervisors[i], err = s.planTaskSupervisor(ctx, p.Conversation, *task); err != nil {
 			return nil, err
 		}
+	}
+	// Waiting cards may have changed, or gained a conflicting association, since planning.
+	if err := s.checkPlanRepositoryDuplicates(ctx, p.Tasks); err != nil {
+		return nil, planInvalid{err}
 	}
 	p.State = planStarted
 	for i := range p.Tasks {
@@ -620,11 +639,16 @@ func (s *Service) startRemedying(ctx context.Context, t Todo) bool {
 }
 
 // todoAgentStopped: nothing runs agent a now, so a new agent may take over its to-do: its session is listed stopped
-// (switchStopped) or archived, or its computer is gone from the hub. Not listed at all, or the computer not reached,
-// is not known to be stopped.
+// (switchStopped) or archived, its computer is gone from the hub, or its computer authoritatively confirms via
+// session.info that no such session exists there. An unlisted session whose existence cannot be ruled out (for
+// example, an aged-out Antigravity session still on disk beyond the recent list cap, an away runtime, a known
+// no_transcript session, or an unreachable computer) stays fail-closed as not stopped.
 func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
-	stopped, _ := s.todoAgentStopPresence(ctx, a)
-	return stopped
+	_, stopped, listed, listErr := s.todoAgentStopPresenceRow(ctx, a)
+	if stopped || listed || listErr != nil {
+		return stopped
+	}
+	return s.todoAgentConfirmedMissing(ctx, a)
 }
 
 // todoAgentStopPresence is todoAgentStopped plus listed: listed says a session list answered and some row names
@@ -634,29 +658,47 @@ func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
 // stop answer; an id no row or alias names can still be settled by the computer's authoritative "no such session"
 // stop answer.
 func (s *Service) todoAgentStopPresence(ctx context.Context, a TodoAgent) (stopped, listed bool) {
+	_, stopped, listed, _ = s.todoAgentStopPresenceRow(ctx, a)
+	return stopped, listed
+}
+
+// todoAgentStopPresenceRow checks a's computer session list once, matching by SessionID or Aliases so an Antigravity
+// conversation running in a terminal pane under a pane row is still seen as live. Any live matching row wins, and among
+// live matches a terminal-backed row takes precedence so continuation never routes a terminal pane to session.close.
+func (s *Service) todoAgentStopPresenceRow(ctx context.Context, a TodoAgent) (row proto.Session, stopped, listed bool, listErr error) {
 	list, err := s.sessions(ctx, a.MachineID)
 	if errors.Is(err, ErrNoDevice) {
-		return true, false
+		return proto.Session{}, true, false, nil
 	}
 	if err != nil {
-		return false, false
+		return proto.Session{}, false, false, err
 	}
 	// Every row naming the id counts: a stopped alias row can sort before the live exact row (runtime
 	// fork aliases), so one stopped match must not hide another live match. Any live match wins.
 	live := false
+	liveHasTerminal := false
 	for _, c := range list {
 		if !sessionNamesID(c, a.SessionID) {
 			continue
 		}
-		listed = true
-		if !(c.Archived || switchStopped(c)) {
+		cLive := !(c.Archived || switchStopped(c))
+		cTerm := c.PaneID != "" || (c.Capabilities != nil && c.Capabilities.Terminal)
+		if !listed {
+			row = c
+			listed = true
+		}
+		if cLive {
+			if !live || (cTerm && !liveHasTerminal) {
+				row = c
+				liveHasTerminal = cTerm
+			}
 			live = true
 		}
 	}
 	if !listed {
-		return false, false
+		return proto.Session{}, false, false, nil
 	}
-	return !live, true
+	return row, !live, true, nil
 }
 
 // sessionNamesID reports whether row is id or names id as another of its machine-known ids (proto.Session.Aliases).
@@ -694,6 +736,32 @@ func (s *Service) otherTodoOwnsNamedSession(ctx context.Context, a TodoAgent, to
 		}
 	}
 	return false
+}
+
+// todoAgentConfirmedMissing probes a's computer directly via session.info to confirm that no such session exists
+// there. Only an authoritative missing-session refusal (not_found with confirmed_missing=true or reason=unknown_session)
+// returns true; existing/aged-out sessions, no_transcript, away runtimes, older nodes, and transport errors stay false.
+func (s *Service) todoAgentConfirmedMissing(ctx context.Context, a TodoAgent) bool {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := s.call(cctx, a.MachineID, "session.info", map[string]any{"session_id": a.SessionID}, nil)
+	return sessionConfirmedMissing(err)
+}
+
+// sessionConfirmedMissing reports whether err is a node's authoritative confirmation that a session does not exist.
+func sessionConfirmedMissing(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != codeSessionNotFound || len(re.Data) == 0 {
+		return false
+	}
+	var data struct {
+		Reason           string `json:"reason"`
+		ConfirmedMissing bool   `json:"confirmed_missing"`
+	}
+	if json.Unmarshal(re.Data, &data) != nil {
+		return false
+	}
+	return data.ConfirmedMissing || data.Reason == proto.NotFoundUnknownSession
 }
 
 // agyCompanionIDRe is the Antigravity companion row id agy-<conversation-uuid> shape the node's
@@ -828,6 +896,77 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 	return formatTodo(t), nil
 }
 
+// runtimeCanClose reports whether c is a non-terminal runtime session that explicitly advertises session.close.
+// Terminal-backed sessions (including pi/omp inside a terminal pane) and assistant conversations never match.
+func runtimeCanClose(c proto.Session) bool {
+	return c.SourceKind == proto.SourceRuntime &&
+		!c.Assistant &&
+		c.PaneID == "" &&
+		c.Capabilities != nil &&
+		!c.Capabilities.Terminal &&
+		c.Capabilities.Close != nil && *c.Capabilities.Close
+}
+
+// runtimeCanInterruptOnly reports whether c is a non-terminal runtime session without session.close
+// (such as Antigravity Desktop, DSH, Managed Agents, or opencode TUI) whose execution is controlled by session.interrupt.
+func runtimeCanInterruptOnly(c proto.Session) bool {
+	return c.SourceKind == proto.SourceRuntime &&
+		!c.Assistant &&
+		c.PaneID == "" &&
+		c.Capabilities != nil &&
+		!c.Capabilities.Terminal &&
+		(c.Capabilities.Close == nil || !*c.Capabilities.Close) &&
+		c.Capabilities.Interrupt
+}
+
+// runtimeSessionBusy reports whether a runtime session has active or queued work that must be interrupted before
+// releasing its to-do link.
+func runtimeSessionBusy(c proto.Session) bool {
+	return c.Status == proto.StatusWorking ||
+		c.Status == proto.StatusBlocked ||
+		c.Starting ||
+		c.State == proto.StateWorking ||
+		c.State == proto.StateNeedsYou ||
+		c.BackgroundWorking ||
+		len(c.Background) > 0 ||
+		len(c.Queued) > 0
+}
+
+// stopContinuedAgent stops one active predecessor Agent during a task_plan(continues=...) handoff (#16231).
+// Terminal-backed Agents always use session.stop so their terminal pane stays open (#4754).
+// Non-terminal runtime sessions use their declared lifecycle control: session.close when Capabilities.Close is true
+// (e.g. native Antigravity companion, Paseo, Opencode companion, Grok, Orca, T3Code, Cindy, Pi Web), or
+// session.interrupt when Close is unavailable and Interrupt is true while busy (e.g. Antigravity Desktop, DSH,
+// Managed Agents, Opencode TUI). When an unlisted non-terminal session answers no_terminal to session.stop,
+// session.close is attempted only if the live session list confirmed no terminal pane exists for it.
+func (s *Service) stopContinuedAgent(ctx context.Context, a TodoAgent, sess proto.Session, listed bool, listErr error) error {
+	targetID := a.SessionID
+	if listed && sess.SessionID != "" && (sess.PaneID != "" || runtimeCanClose(sess) || runtimeCanInterruptOnly(sess)) {
+		targetID = sess.SessionID
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	switch {
+	case listErr == nil && runtimeCanClose(sess):
+		return s.call(cctx, a.MachineID, "session.close", map[string]any{"session_id": targetID}, nil)
+	case listed && runtimeCanInterruptOnly(sess):
+		if !runtimeSessionBusy(sess) {
+			return nil
+		}
+		return s.call(cctx, a.MachineID, "session.interrupt", map[string]any{"session_id": targetID}, nil)
+	default:
+		err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": targetID}, nil)
+		canFallbackClose := listErr == nil &&
+			!sess.Assistant &&
+			sess.PaneID == "" &&
+			(sess.Capabilities == nil || (!sess.Capabilities.Terminal && (sess.Capabilities.Close == nil || *sess.Capabilities.Close)))
+		if canFallbackClose && isNoTerminalStopError(err) {
+			return s.call(cctx, a.MachineID, "session.close", map[string]any{"session_id": targetID}, nil)
+		}
+		return err
+	}
+}
+
 // stopContinuedTaskAgents is an explicit handoff, not the idle task-closure pass: stop the old process but keep its
 // terminal and history. A refusal leaves the handoff failed on this to-do, with no replacement Agent.
 func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]TodoAgent, error) {
@@ -863,8 +1002,13 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 		} else if c, ok := s.session(ctx, a.MachineID, a.SessionID); ok {
 			sess, hasSess = c, true
 		}
+		liveRow, isStopped, listed, listErr := s.todoAgentStopPresenceRow(ctx, a)
 		if !hasSess {
-			sess = proto.Session{MachineID: a.MachineID, SessionID: a.SessionID}
+			if listed {
+				sess, hasSess = liveRow, true
+			} else {
+				sess = proto.Session{MachineID: a.MachineID, SessionID: a.SessionID}
+			}
 		}
 		if refused, why := sessionSafetyRefusal(sess); refused {
 			return nil, handoffBlockerError{
@@ -872,27 +1016,41 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 				msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s is blocked by a provider safety refusal (%s); safety refusals remain recorded blockers", a.MachineID, short(a.SessionID), todo.ID, why),
 			}
 		}
-		if s.sessionUnresolvedApproval(sess) {
+		if listed {
+			if refused, why := sessionSafetyRefusal(liveRow); refused {
+				return nil, handoffBlockerError{
+					code: "safety_refusal",
+					msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s is blocked by a provider safety refusal (%s); safety refusals remain recorded blockers", a.MachineID, short(a.SessionID), todo.ID, why),
+				}
+			}
+		}
+		if s.sessionUnresolvedApproval(sess) || (listed && s.sessionUnresolvedApproval(liveRow)) {
 			return nil, handoffBlockerError{
 				code: "unresolved_approval",
 				msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s has an unresolved approval or question; resolve it first", a.MachineID, short(a.SessionID), todo.ID),
 			}
 		}
-		isStopped, listed := s.todoAgentStopPresence(ctx, a)
+		// A list row that is live (listed and not stopped) contradicting the stop answer stays hard.
+		// "listed but stopped" only reaches stop for the companion-uuid verification call and may be
+		// reconciled by an authoritative not_found from the node.
+		liveListed := listed && !isStopped
+		confirmedMissing := false
+		if !isStopped && !listed && listErr == nil && s.todoAgentConfirmedMissing(ctx, a) {
+			s.logf("continues: agent %s/%s on to-do %s is confirmed missing on its computer; letting its stale link go", a.MachineID, a.SessionID, todo.ID)
+			s.endSessionCards(a.MachineID, a.SessionID)
+			isStopped = true
+			confirmedMissing = true
+		}
 		// For the companion agy-<uuid> form a stopped exact row can coexist with two live panes whose
 		// double attribution made the node omit the alias, so presence alone cannot certify it stopped:
-		// always ask the node's raw-pane authority for that form even when the list says stopped.
-		if !isStopped || agyCompanionIDRe.MatchString(a.SessionID) {
-			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": a.SessionID}, nil)
-			if isNoTerminalStopError(err) {
-				err = s.call(cctx, a.MachineID, "session.close", map[string]any{"session_id": a.SessionID}, nil)
+		// always ask the node's raw-pane authority for that form even when the list says stopped, unless
+		// session.info already certified confirmed_missing (which vetoes on raw pane attribution and presence lock).
+		if (!isStopped || agyCompanionIDRe.MatchString(a.SessionID)) && !confirmedMissing {
+			target := sess
+			if listed {
+				target = liveRow
 			}
-			cancel()
-			// A list row that is live (listed and not stopped) contradicting the stop answer stays hard.
-			// "listed but stopped" only reaches here for the companion-uuid verification call and may be
-			// reconciled by an authoritative not_found from the node.
-			liveListed := listed && !isStopped
+			err := s.stopContinuedAgent(ctx, a, target, listed, listErr)
 			switch {
 			case err == nil:
 				s.endSessionCards(a.MachineID, a.SessionID)

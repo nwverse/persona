@@ -8,6 +8,7 @@
 import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorText } from "../../lib/api";
+import { safeLink } from "../../lib/extension-auth";
 import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import {
@@ -657,6 +658,7 @@ export function SignInStep({ name, prompt, values, busy, isChannel, integrations
 }) {
   const view = stepView(prompt);
   const canSend = canSendStep(prompt, values) && !busy;
+  const deviceUrl = safeLink(prompt.url);
   return (
     <>
       {(prompt.hint || prompt.error) && (
@@ -684,9 +686,9 @@ export function SignInStep({ name, prompt, values, busy, isChannel, integrations
             />
           </div>
           <p className="flex items-center gap-2 text-[12.5px] text-ink-3"><Spinner size={11} />{t("settings-hubconnector.waiting_auth", { name })}</p>
-          {prompt.url && (
+          {deviceUrl && (
             <div>
-              <Button tone={prompt.qr?.rows.length ? "secondary" : "accent"} icon="external" onClick={() => window.open(prompt.url, "_blank", "noopener,noreferrer")}>{t("settings-hubconnector.open_to_enter_code", { name })}</Button>
+              <Button tone={prompt.qr?.rows.length ? "secondary" : "accent"} icon="external" onClick={() => window.open(deviceUrl, "_blank", "noopener,noreferrer")}>{t("settings-hubconnector.open_to_enter_code", { name })}</Button>
             </div>
           )}
         </div>

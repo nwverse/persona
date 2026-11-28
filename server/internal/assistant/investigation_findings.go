@@ -222,24 +222,94 @@ func sameActiveAgents(a, b []TodoAgent) bool {
 	return true
 }
 
-func (s *Service) todoAgentLiveListed(ctx context.Context, a TodoAgent) bool {
+func (s *Service) todoAgentPositivelyStopped(ctx context.Context, a TodoAgent) bool {
 	list, err := s.sessions(ctx, a.MachineID)
-	if errors.Is(err, ErrNoDevice) {
+	if err != nil {
 		return false
 	}
-	if err != nil {
+	matched := false
+	for _, c := range list {
+		if !sessionNamesID(c, a.SessionID) {
+			continue
+		}
+		matched = true
+		if !(c.Archived || switchStopped(c)) {
+			return false
+		}
+	}
+	if matched {
 		return true
 	}
-	now := time.Now()
-	for _, c := range list {
-		if c.SessionID == a.SessionID || slices.Contains(c.Aliases(), a.SessionID) {
-			if c.Archived || switchStopped(c) {
-				return false
-			}
-			return agentGone(orphanAgent{machine: a.MachineID, session: a.SessionID, reachable: true, listed: true, c: c}, now) == ""
+	return s.todoAgentConfirmedMissing(ctx, a)
+}
+
+func orphanCoversAgent(o TodoOrphan, a TodoAgent) bool {
+	body, ok := strings.CutPrefix(o.key, "orphaned:")
+	if !ok {
+		return false
+	}
+	idsPart, _, ok := strings.Cut(body, "@")
+	if !ok || idsPart == "" {
+		return false
+	}
+	want := a.MachineID + "/" + a.SessionID
+	for id := range strings.SplitSeq(idsPart, ",") {
+		if id == want {
+			return true
 		}
 	}
 	return false
+}
+
+func (s *Service) todoAgentLiveListed(ctx context.Context, a TodoAgent) bool {
+	return s.todoAgentLiveListedAt(ctx, a, false, TodoOrphan{}, time.Now())
+}
+
+func (s *Service) todoAgentLiveListedAt(ctx context.Context, a TodoAgent, hasOrphan bool, o TodoOrphan, now time.Time) bool {
+	devices := s.devices(ctx)
+	reachable := false
+	for _, d := range devices {
+		if d.ID == a.MachineID {
+			reachable = d.Reachable
+			break
+		}
+	}
+	if !reachable {
+		return true
+	}
+	connected := s.deviceConnectedAt(a.MachineID)
+	if !connected.IsZero() && now.Sub(connected) < orphanReconnectWait {
+		return true
+	}
+	if hasOrphan && !connected.IsZero() && (o.Since.IsZero() || connected.After(o.Since)) {
+		return true
+	}
+	list, err := s.sessions(ctx, a.MachineID)
+	if err != nil {
+		return true
+	}
+	matched := false
+	for _, c := range list {
+		if !sessionNamesID(c, a.SessionID) {
+			continue
+		}
+		matched = true
+		if !(c.Archived || switchStopped(c)) &&
+			agentGone(orphanAgent{machine: a.MachineID, session: a.SessionID, reachable: true, listed: true, c: c, connected: connected}, now) == "" {
+			return true
+		}
+	}
+	if matched {
+		return false
+	}
+	if s.todoAgentConfirmedMissing(ctx, a) {
+		return false
+	}
+	if hasOrphan && (o.Reason == orphanClosed || o.Reason == orphanError) && orphanCoversAgent(o, a) &&
+		agentGone(orphanAgent{machine: a.MachineID, session: a.SessionID, reachable: true, listed: false, connected: connected}, now) == orphanClosed {
+		return false
+	}
+	return true
 }
 
 // investigationWorkerGone reports whether open to-do t currently has no active Agent
@@ -253,7 +323,7 @@ func (s *Service) investigationWorkerGone(ctx context.Context, t Todo) ([]TodoAg
 	}
 	allStopped := true
 	for _, a := range active {
-		if !s.todoAgentStopped(ctx, a) {
+		if !s.todoAgentPositivelyStopped(ctx, a) {
 			allStopped = false
 			break
 		}
@@ -265,31 +335,44 @@ func (s *Service) investigationWorkerGone(ctx context.Context, t Todo) ([]TodoAg
 	if !ok || (o.Reason != orphanClosed && o.Reason != orphanError) {
 		return nil, false
 	}
+	now := time.Now()
 	for _, a := range active {
 		if !o.Since.IsZero() && a.LinkedAt.After(o.Since) {
 			return nil, false
 		}
-		if s.todoAgentLiveListed(ctx, a) {
+		if !orphanCoversAgent(o, a) {
+			return nil, false
+		}
+		if s.todoAgentLiveListedAt(ctx, a, true, o, now) {
 			return nil, false
 		}
 	}
 	return active, true
 }
 
-func (s *Service) canBypassStaleInvestigationCancel(ctx context.Context, t Todo) ([]TodoAgent, bool) {
+func (t Todo) hasStaleInvestigationReport() bool {
+	if t.DoneAt != nil || t.Supervision == nil {
+		return false
+	}
+	r := t.Supervision.Investigation
+	return r != nil && r.Version > 0 && r.Stale
+}
+
+func (s *Service) checkStaleInvestigationCancelWorkers(ctx context.Context, t Todo) ([]TodoAgent, bool) {
 	if t.DoneAt != nil || t.Supervision == nil || t.Supervision.Investigation == nil {
 		return nil, false
 	}
-	if t.Supervision.Investigation.current(t, t.Supervision) {
+	if t.hasStaleInvestigationReport() || t.Supervision.Investigation.current(t, t.Supervision) {
 		return nil, false
 	}
 	return s.investigationWorkerGone(ctx, t)
 }
 
-func staleInvestigationCancelAllowed(cur Todo, checked []TodoAgent) bool {
-	return cur.Supervision != nil && cur.Supervision.Investigation != nil &&
-		!cur.Supervision.Investigation.current(cur, cur.Supervision) &&
-		sameActiveAgents(activeInvestigationAgents(cur), checked)
+func staleInvestigationCancelAllowed(cur Todo, checked []TodoAgent, workersGone bool) bool {
+	return cur.hasStaleInvestigationReport() ||
+		(workersGone && cur.Supervision != nil && cur.Supervision.Investigation != nil &&
+			!cur.Supervision.Investigation.current(cur, cur.Supervision) &&
+			sameActiveAgents(activeInvestigationAgents(cur), checked))
 }
 
 func (s *Service) investigationActionCovered(parent Todo, f recordedFinding) bool {
@@ -373,7 +456,7 @@ const reviewFindings = "findings"
 func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *findingReview, checks []ReviewCheck, reviewer string, allowed func(Todo) bool) (string, error) {
 	var checkedAgents []TodoAgent
 	allowStale := false
-	if in != nil && t.Supervision != nil && t.Supervision.Investigation != nil &&
+	if in != nil && !t.hasStaleInvestigationReport() && t.Supervision != nil && t.Supervision.Investigation != nil &&
 		t.Supervision.Investigation.Version > 0 && !t.Supervision.Investigation.current(t, t.Supervision) {
 		checkedAgents, allowStale = s.investigationWorkerGone(ctx, t)
 	}
@@ -392,7 +475,8 @@ func (s *Service) reviewInvestigationFindings(ctx context.Context, t Todo, in *f
 			report = v.Investigation
 			return false
 		}
-		canReviewStale := allowStale && sameActiveAgents(activeInvestigationAgents(current), checkedAgents)
+		canReviewStale := current.hasStaleInvestigationReport() ||
+			(allowStale && sameActiveAgents(activeInvestigationAgents(current), checkedAgents))
 		if problem = v.Investigation.review(current, v, *in, canReviewStale); problem != nil {
 			return false
 		}
@@ -473,6 +557,23 @@ func (s *Service) receivedFindingsCloseError(t Todo, checks []ReviewCheck) error
 			continue
 		}
 		return i18n.ErrEnglish("assistant-tasks.investigation_handoff_open", i18n.Args{"finding": f.Summary})
+	}
+	return nil
+}
+
+func (s *Service) investigationParentDeleteError(t Todo) error {
+	if t.Supervision == nil || t.Supervision.Investigation == nil {
+		return nil
+	}
+	for _, f := range t.Supervision.Investigation.Items {
+		if f.Disposition.FollowUp == "" {
+			continue
+		}
+		target, ok := s.todoNow(f.Disposition.FollowUp)
+		if ok && findingActionMet(target.Supervision, f.Next) {
+			continue
+		}
+		return i18n.ErrEnglish("assistant-tasks.investigation_parent_handoff_open", i18n.Args{"finding": f.Summary})
 	}
 	return nil
 }

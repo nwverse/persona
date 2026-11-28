@@ -66,11 +66,10 @@ func (s *Service) gatewayPool(ctx context.Context, launcher string) (GatewayQuot
 	if cfg.Enabled != nil && !*cfg.Enabled {
 		return GatewayQuotaPool{}, false
 	}
-	group, ok := cfg.launcherGroup(launcher)
-	if !ok || group.QuotaPool == nil || !group.QuotaPool.valid() {
-		return GatewayQuotaPool{}, false
+	if group, ok := cfg.launcherGroup(launcher); ok && group.QuotaPool != nil && group.QuotaPool.valid() {
+		return *group.QuotaPool, true // an admission group's own pool wins over its channel's
 	}
-	return *group.QuotaPool, true
+	return s.channelQuotaOf(ctx, launcher)
 }
 
 // deferGatewayStart runs for the first background launch only. When quota
