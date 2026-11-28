@@ -184,7 +184,7 @@ describe("a to-do's row", () => {
     await settle();
     expect(accepts()).toHaveLength(3);
     expect(accepts().every(([, init]) => (init as { json: { asked_at: string } }).json.asked_at === ASKED)).toBe(true);
-    expect(toast).toHaveBeenCalledWith("已采用推荐方案", "ok");
+    expect(toast).toHaveBeenCalledWith("已按推荐来", "ok");
   });
 
   it("keeps the choice after the tries run out, says why, and Resend sends that round once more", async () => {
@@ -205,7 +205,7 @@ describe("a to-do's row", () => {
     act(() => { action.run(); action.run(); });
     await flush();
     expect(accepts()).toHaveLength(4);
-    expect(toast).toHaveBeenCalledWith("已采用推荐方案", "ok");
+    expect(toast).toHaveBeenCalledWith("已按推荐来", "ok");
   });
 
   it("never tries again an accept the hub refused with its own reason", async () => {
