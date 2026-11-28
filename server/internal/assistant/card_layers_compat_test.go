@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // The stable deployment needs the real held-notification outcome, not an always-zero field.
@@ -22,12 +24,12 @@ func TestCardLedgerHeldOutcomeSurvivesStableBackport(t *testing.T) {
 	if c := cardsToday(t, s)[cardAskHeld]; c.N != 0 || c.Held != 1 {
 		t.Fatalf("held outcome = %+v, want N=0 Held=1", c)
 	}
-	s.deliverCard(cardAgentDone, Notification{Title: "held completion", SessionID: "sess1"})
+	s.deliverCard(cardAgentDone, Notification{Kind: assistantwire.NotifyDone, Title: "held completion", SessionID: "sess1"})
 	waitFor(t, "asynchronous held outcome recorded", func() bool {
 		c := cardsToday(t, s)[cardAgentDone]
 		return c.N == 0 && c.Held == 1
 	})
-	n := Notification{ID: "ntf_held_recording", Title: "held recording", SessionID: "conv1"}
+	n := Notification{ID: "ntf_held_recording", Kind: NotifyPush, Title: "held recording", SessionID: "conv1"}
 	h := recordingHost{s}
 	if err := h.Notify(ctx, n); err != nil {
 		t.Fatal(err)

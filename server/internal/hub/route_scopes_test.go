@@ -199,3 +199,26 @@ func TestTodoHandoffRequiresFullCredentials(t *testing.T) {
 		}
 	}
 }
+
+// Execution setup and key refresh are personal configuration, not authority granted by an extension scope.
+func TestExecutionAndLauncherKeyRefreshRequireFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, pattern := range []string{
+		"GET /api/v1/execution/catalog",
+		"GET /api/v1/execution/channels",
+		"POST /api/v1/execution/validate",
+		"PUT /api/v1/execution/channels/{name}",
+		"DELETE /api/v1/execution/channels/{name}",
+		"POST /api/v1/execution/channels/rollback",
+		"GET /api/v1/assistant/conversations/{id}/model/last-good",
+		"POST /api/v1/assistant/conversations/{id}/model/restore",
+		"POST /api/v1/launchers/{name}/refresh-key",
+	} {
+		if !slices.Contains(patterns, pattern) {
+			t.Errorf("missing execution or key refresh route %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Errorf("execution or key refresh route %s grants extension scope %s", pattern, scope)
+		}
+	}
+}
