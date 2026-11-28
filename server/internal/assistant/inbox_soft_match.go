@@ -55,7 +55,10 @@ func (s *Service) matchPlannedInbox(ctx context.Context, machine, conversation s
 			handed = id
 		}
 	}
-	if handed != "" {
+	if handed != "" && strong {
+		// Omitted sources remain inferred even when a matching handoff exists.
+		// Keep the snapshot so admission cannot overwrite a link acquired meanwhile.
+		t.InboxMatch = b.softInboxVersion(ids)
 		t.InboxItem, t.InboxHandoff = handed, handoffTo(b.items[handed], conversation).Op
 		return b.checkTaskInbox(conversation, *t)
 	}
@@ -288,7 +291,7 @@ func (b *inboxBook) softInboxVersion(ids []string) string {
 }
 func (b *inboxBook) checkSoftInbox(t PlanTask, now time.Time, excluded func(*InboxItem) bool) error {
 	ids, strong := b.softInboxCandidates(softTaskText(t), t, now, excluded)
-	if !strong || len(ids) == 0 || ids[0] != t.InboxItem || b.softInboxVersion(ids) != t.InboxMatch {
+	if !strong || len(ids) == 0 || !slices.Contains(ids, t.InboxItem) || b.softInboxVersion(ids) != t.InboxMatch {
 		return i18n.Err("assistant-tasks.inbox_link_removed")
 	}
 	return nil

@@ -78,6 +78,9 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 	}
 	release := n.recovery.lock(id)
 	defer release()
+	if err := n.resolveStopRuntime(ctx, id); err != nil {
+		return false, err
+	}
 	unlock, _, ok, err := n.stoppable(id, true)
 	if err != nil {
 		return false, err
@@ -261,6 +264,17 @@ func (n *Node) closeExitedChecked(ctx context.Context, id string, before func() 
 		p, _ := n.keptPane(id)
 		pane = p.PaneID
 	}
+	if host.ParsePane(pane).Kind == host.Orca {
+		h, ref, err := n.paneHost(pane)
+		if err != nil {
+			return false, err
+		}
+		o, ok := h.(*orcaHost)
+		if !ok {
+			return false, unsupported(h)
+		}
+		return n.closeStoppedOrca(ctx, o, id, ref.String(), st, before)
+	}
 	if pane == "" || host.ParsePane(pane).Kind != host.Herdr {
 		return false, nil // no shell it left that Persona can tell apart safely: kept, as before
 	}
@@ -277,11 +291,48 @@ func (n *Node) stop(ctx context.Context, id string, retire bool) (stopped bool, 
 	return n.stopWithCause(ctx, id, retire, proto.StopUser)
 }
 
+// resolveStopRuntime probes connected Antigravity runtimes for an unlisted companion session ID (agy-<uuid>, which can
+// drop off runtime.sessions past maxSessions=80) when this machine has no local terminal pane, presence lock, or active
+// start holding it. If the runtime owns it, runtimeFor claims it so resolveAgyCompanionStop/stoppable classify it as
+// no_terminal / not_retirable instead of not_found; if the owning-prefix runtime confirms it does not exist, that typed
+// not_found error (with confirmed_missing=true) is returned (#16410, #16231).
+func (n *Node) resolveStopRuntime(ctx context.Context, id string) error {
+	conversation, ok := agyConversationID(id)
+	if !ok {
+		return nil
+	}
+	if h, _, known := n.runtimes.belongs(id); h != nil || known {
+		return nil
+	}
+	if n.hasOwnSession(id) || n.agyPaneRow(id) ||
+		n.isAssistantSession(id) || n.runtimeAssistant(id) || n.externalCodex(id) || n.restarting(id) {
+		return nil
+	}
+	if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+		return nil
+	}
+	if _, _, held := n.agyOpenIn(id); held || n.agyHasRawPaneAttribution(conversation) {
+		return nil
+	}
+	switch agyPresenceLockProbe(filepath.Join(n.agyDataRoot(), "presence", conversation+".lock")) {
+	case agyLockHeld, agyLockUnknown:
+		return nil
+	}
+	_, err := n.runtimeFor(ctx, "session.interrupt", id)
+	return err
+}
+
 func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause proto.StopCause) (stopped bool, err error) {
 	return n.stopWithGuard(ctx, id, retire, cause, false)
 }
 
 func (n *Node) stopWithGuard(ctx context.Context, id string, retire bool, cause proto.StopCause, guarded bool) (stopped bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := n.resolveStopRuntime(ctx, id); err != nil {
+		return false, err
+	}
 	// An Antigravity companion row id agy-<conversation-uuid> resolves here first: to its one live pane
 	// row, to an authoritative not_found for an orphaned conversation, or to a hard refusal. Every other
 	// id comes back unchanged. Resolving before the recovery lock also serializes companion-id stops with
@@ -400,7 +451,8 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 		return no(notRetirable, "assistant conversations are not stopped")
 	case n.externalCodex(id) || h != nil || known || terminalOnly:
 		return no(noTerminal, "this session belongs to another tool")
-	case n.restarting(id):
+	}
+	if n.restarting(id) {
 		// Refused at once rather than after the lock below, which a message carrying out a launcher switch holds for
 		// minutes: stopping the agent it starts then would leave the switch for nothing (launcher_switch.go).
 		return no(notRetirable, "still starting")
@@ -587,16 +639,20 @@ func (n *Node) resumeWith(id string, opts sendOpts) resumed {
 // fillResume: a start that resumes a Claude session that is not running (the app's Resume Session, #4328) keeps what
 // the session ran with for whatever the start leaves out (asked), as a message that resumes it does; before, it ran
 // on the launcher's default model and wrote that over the one the session remembered. The model comes along only
-// with the launcher it was picked for. A Codex or compatible thread resumes its own way (codex_resume.go), and a
-// running session is not started again: both keep what was asked.
+// with the launcher it was picked for. A Codex thread resumes its own way (codex_resume.go), and a running session is
+// not started again: both keep what was asked. A TRAE CLI session gets only its launcher, directory and task
+// (traexResumeWith): without them a bare Resume (the web's sends only the id) would start Claude Code on its id.
 func (n *Node) fillResume(id string, asked resumed) resumed {
 	if !validID(id) {
 		return asked
 	}
-	if _, live := n.agent(id); live || n.codexPath(id) != "" || n.traexPath(id) != "" {
+	if _, live := n.agent(id); live || n.codexPath(id) != "" {
 		return asked
 	}
 	r := n.resumeWith(id, sendOpts{})
+	if n.traexPath(id) != "" {
+		r = n.traexResumeWith(id)
+	}
 	out := asked
 	if out.execution.Source.Role == "" {
 		out.execution.Source = r.execution.Source
@@ -621,6 +677,25 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	return out
 }
 
+// traexResumeWith is what a TRAE CLI session that is not running comes back with when a start leaves it out:
+// `<launcher> resume <id>` (startOtherAgent) on the launcher it ran on (the CLI by name for one Persona has no record
+// of), in its directory, on its task. Its model, effort and permission mode stay the CLI's own: a TRAE CLI takes them
+// only on a new session (control.go).
+func (n *Node) traexResumeWith(id string) resumed {
+	st, _ := n.state.get(id)
+	r := resumed{launcher: cmp.Or(st.Launcher, traexAgent), cwd: st.Cwd, taskID: st.TaskID, workspaceID: st.WorkspaceID,
+		workspaceLabel: st.WorkspaceLabel, tab: n.traexTitle(id)}
+	r.execution.Source = st.ModelSource
+	if r.cwd == "" {
+		if t, ok := n.traexThread(id); ok && t.Cwd != "" {
+			r.cwd = t.Cwd
+		} else if p := rolloutPath(n.traexHome(), id); p != "" {
+			r.cwd = metaOf(n.traexHome(), p).cwd
+		}
+	}
+	return r
+}
+
 // resumeTabName names the tab a session is resumed in: its title (Claude's AI title, or the one it was given), so
 // the tab reads as it did before it was closed rather than agent-<n>.
 func (n *Node) resumeTabName(id string) string {
@@ -637,13 +712,14 @@ func (n *Node) resumeTabName(id string) string {
 
 // resumeOtherWith resumes a Codex or a compatible CLI that is not running, with text as its first message, the user's
 // Resume (#4754): with the launcher, directory and model to resume with (st): the session's own, or
-// what a Codex thread started outside Persona is resumed with (codex_resume.go).
+// what a Codex thread started outside Persona is resumed with (codex_resume.go). Herdr and Orca alike (#17044): a new
+// terminal in the engine's workspace for its directory, or the shell its agent left.
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
 	ctx = n.withResumeHost(ctx, id)
 	if st.TaskID != "" {
 		ctx, _ = withTaskSpace(ctx, st.TaskID, st.WorkspaceID, st.WorkspaceLabel)
 	}
-	if r := n.notRunningRefusal(ctx, id); r != nil {
+	if r := n.resumeEngineRefusal(ctx, id); r != nil {
 		return r
 	}
 	launch, err := n.launcherFor(n.startKind(ctx))
@@ -660,6 +736,13 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		argv, ok = n.codexLauncher(ctx, st.Launcher)
 		if !ok {
 			return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
+		}
+		if st.AppMode == "" && stockOrcaCodexArgv(st.Launcher, argv) {
+			// Orca's own Codex launch profile, as a new start of the stock launcher there runs it: the resumed Codex
+			// gets the arguments it started with (codex_orca_launch_defaults.go). Herdr leaves the words as they are.
+			if argv, err = codexOrcaLaunchDefaults(ctx, launch, argv); err != nil {
+				return err
+			}
 		}
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
@@ -719,7 +802,10 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
+	// In an Orca terminal the resumed Codex keeps that terminal's hooks, as a new start there does (codex_start.go).
+	owner, _ := launch.(interface{ Kind() string })
+	isolateHooks := owner != nil && owner.Kind() == host.Orca
+	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}
@@ -836,6 +922,9 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	ts.opened(created.SpaceID)
 	n.markPersonaTab(ctx, launch, created.Pane, id)
 	markTaskTerminal(ctx, launch, created.Pane)
+	if h, ok := launch.(*orcaHost); ok {
+		h.markOrcaTerminal(ctx, created.Pane, id)
+	}
 	return created, nil
 }
 

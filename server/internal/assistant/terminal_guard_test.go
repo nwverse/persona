@@ -20,7 +20,7 @@ var terminalClosers = map[string][]string{
 	"session.close": {
 		"forceArchiveConfirmation",   // the user's force archive of an Agent blocked on a confirmation
 		"cleanAutoReview",            // a finished review's reviewer, an internal helper (#4754 decision 3)
-		"stopContinuedTaskAgents",    // only a session with no terminal (session.stop answers no_terminal)
+		"stopContinuedAgent",         // explicit continuation of a non-terminal runtime session (SourceRuntime with !Terminal and Close, or no_terminal when non-terminal and not disallowed)
 		"retireArchived",             // the user's "Archive and close" for a runtime whose declared close needs no terminal
 		"logicalSweep",               // only recorded assistant segment identities, never ordinary coding Agents
 		"advanceLogicalConversation", // retired assistant source, after the target accepted its first input

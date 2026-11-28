@@ -17,9 +17,8 @@ import (
 // run in it; nothing closed it, and the shells piled up by the dozen. The node now closes such a pane once it has sat
 // unchanged for agentTerminalGrace, checking everything again under the session's recovery lock right before:
 //
-//   - Persona opened it for an Agent: herdr's persona_tab mark (personatab.go), or, on an engine without metadata
-//     tokens (Orca), the node's own record of the terminals it opened for Agents and their sessions (agentTerms; a
-//     node restart forgets it, and those terminals are then left alone);
+//   - Persona opened it for an Agent: herdr's persona_tab mark, Orca's live mark or the original Orca terminal
+//     identity saved with the session (personatab.go);
 //   - no Agent is in it: the engine lists none there, no session the node tracks is bound to it, no failed start keeps
 //     it for a retry and no Codex waits for its thread there;
 //   - only a shell is in front (herdr: pane.process_info), or, on Orca, Orca proves the shell at rest with nothing
@@ -187,6 +186,18 @@ func (n *Node) closeFinishedRound(ctx context.Context, grace time.Duration, now 
 	return closed
 }
 
+func (n *Node) finishedOrcaScreen(ctx context.Context, h *orcaHost, id, pane string, st sessionState) ([32]byte, bool) {
+	t, _, err := n.orcaStoppedTarget(ctx, h, id, pane, st)
+	if err != nil || t.Handle == "" {
+		return [32]byte{}, false
+	}
+	screen, err := h.c.Read(ctx, t.Target())
+	if err != nil {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256([]byte(t.IncarnationID + "\x00" + screen.Text())), true
+}
+
 // inFreshLayout: pane is in the snapshot its host gave at or after since; true when that host has not answered since
 // (nothing is known about it then). n.mu held.
 func (n *Node) inFreshLayout(pane string, since time.Time) bool {
@@ -233,7 +244,7 @@ func (n *Node) finishedPanes(since time.Time, only string) []finishedPane {
 			if p.PaneID == "" {
 				continue
 			}
-			if c, ok := n.finishedAgentPaneLocked(h, p, marks, inUse); ok {
+			if c, ok := n.finishedAgentPaneLocked(h, p, inUse); ok {
 				agentDone[p.PaneID] = c
 			} else if n.worktreeShellLocked(p, marks, inUse) {
 				roots = append(roots, p)
@@ -267,14 +278,11 @@ func (n *Node) finishedPanes(since time.Time, only string) []finishedPane {
 }
 
 // finishedAgentPaneLocked: p is a terminal Persona opened for an Agent that has finished (finishedPanes). n.mu held.
-func (n *Node) finishedAgentPaneLocked(h host.Host, p host.Agent, marks bool, inUse map[string]bool) (finishedPane, bool) {
+func (n *Node) finishedAgentPaneLocked(h host.Host, p host.Agent, inUse map[string]bool) (finishedPane, bool) {
 	if p.Agent != "" || inUse[p.PaneID] {
 		return finishedPane{}, false
 	}
-	id := p.Tokens[personaTabToken]
-	if !marks {
-		id = n.agentTerms[p.PaneID]
-	}
+	id := n.personaTabLocked(p)
 	if id == "" {
 		return finishedPane{}, false // not one Persona opened for an Agent
 	}
@@ -320,6 +328,11 @@ func (n *Node) worktreeShellLocked(p host.Agent, marks bool, inUse map[string]bo
 // programs in front must all be shells (herdr). "No agent process carries the pane" is not asked: a dev server, an
 // editor or a CLI Persona does not know is none either (#17039).
 func (n *Node) finishedAtRest(ctx context.Context, c finishedPane) (screen [32]byte, ok bool) {
+	if h, ok := c.h.(*orcaHost); ok && validID(c.id) {
+		if st, _ := n.state.get(c.id); st.OrcaTerminal != nil {
+			return n.finishedOrcaScreen(ctx, h, c.id, c.p.PaneID, st)
+		}
+	}
 	ref := n.hosts.Ref(c.p.PaneID)
 	switch h := c.h.(type) {
 	case restingShell:
@@ -352,6 +365,24 @@ func (n *Node) closeFinishedPane(ctx context.Context, c finishedPane, screen [32
 			return false
 		}
 		defer release()
+	}
+	st, _ := n.state.get(c.id)
+	if h, ok := c.h.(*orcaHost); ok && validID(c.id) && st.OrcaTerminal != nil {
+		unlock, ok := n.typing.tryLock(c.id)
+		if !ok {
+			return false
+		}
+		defer unlock()
+		closed, err := n.closeStoppedOrca(ctx, h, c.id, c.p.PaneID, st, func() error {
+			if current, ok := n.finishedOrcaScreen(ctx, h, c.id, c.p.PaneID, st); !ok || current != screen {
+				return orcaTerminalRefusal()
+			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("finished terminal %s (session %s): close failed, trying again later: %v", c.p.PaneID, c.id, err)
+		}
+		return closed
 	}
 	org, ok := c.h.(host.Organizer)
 	if !ok {

@@ -3259,3 +3259,14 @@ A fixture's next `SetConversationPick` can collide with its final `ClaimConversa
 input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConversationSwitchBusy`. Use the existing
 bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
 Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.
+
+## A built-in bridge is a runtime to every check that counts them (#17049)
+
+The manager update inventory refuses while any runtime is connected (`updateSourceCoverage`). The Orca bridge
+(`node/orcabridge.go`) is one: it connects to the runtime host through a pipe whenever Orca is enabled, even with Orca
+not running, so the inventory refused every machine with Orca enabled before any host was read, and the error a review
+saw first ("configured host lacks a fresh update inventory contract") was not the only blocker. Before exempting a
+built-in connection, give its sessions an authority (here Orca's own update read, which refuses any Orca chat) and tell
+the connection by something only the node knows (the bridge's hello instance), never by its runtime id or a zero peer
+PID. A test fixture with its own runtime registry does not show this: in production `n.runtimes` is the runtime
+host's registry (`node/runtimehost.go`).

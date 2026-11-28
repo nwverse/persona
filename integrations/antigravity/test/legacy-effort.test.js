@@ -30,25 +30,58 @@ async function fixture(t, { transcriptModel, effortFallback } = {}) {
   writeFileSync(join(home, 'calls.jsonl'), '')
   const agyBin = join(home, 'agy')
   writeFileSync(agyBin, `#!/bin/sh\nexec '${process.execPath}' '${fake}' '${home}' "$@"\n`, { mode: 0o700 })
+  const brainDir = join(agyDir, 'brain', rawId)
   if (transcriptModel) {
-    const logs = join(agyDir, 'brain', rawId, '.system_generated', 'logs')
+    const logs = join(brainDir, '.system_generated', 'logs')
     mkdirSync(logs, { recursive: true })
     const steps = [CARBON, transcriptModel, '<synthetic>'].map((model, step_index) => ({
       type: 'PLANNER_RESPONSE', step_index, model, input_tokens: 100, content: 'Reply',
     }))
     writeFileSync(join(logs, 'transcript_full.jsonl'), steps.map(step => JSON.stringify(step)).join('\n') + '\n')
   }
-  const n = await startFakeNode(t, )
-  const runtime = createAgyRuntime({ home, agyDir, agyBin, personadBin: join(home, 'missing'), socketPath: n.path, log: () => {} })
+  let n, runtime
+  const connect = async () => {
+    n = await startFakeNode(t)
+    runtime = createAgyRuntime({ home, agyDir, agyBin, personadBin: join(home, 'missing'), socketPath: n.path, log: () => {} })
+    runtime.start()
+    await n.ready
+  }
+  await connect()
   t.after(async () => { await runtime.stop(); rmSync(home, { recursive: true, force: true }) })
-  runtime.start()
-  await n.ready
+  const restart = async () => {
+    await runtime.stop()
+    await connect()
+  }
+  const start = (params) => n.peer.call('session.start', { cwd: home, ...params })
+  const session = () => n.last('runtime.sessions')?.sessions.find(row => row.session_id === sessionId)
   const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
   const withSession = (method, params) => n.peer.call(`session.${method}`, { session_id: sessionId, ...params })
-  const promptModel = async () => (await until('native prompt model', () => calls().find(call => call.method === 'fake/prompt_model'))).model
+  const promptModels = () => calls().filter(call => call.method === 'fake/prompt_model').map(call => call.model)
+  const promptModel = () => until('native prompt model', () => promptModels()[0])
   const setModels = () => calls().filter(call => call.method === 'session/set_model').map(call => call.params.modelId)
-  return { calls, withSession, promptModel, setModels }
+  return { brainDir, calls, promptModel, promptModels, restart, session, setModels, start, withSession }
 }
+
+test('restarting the companion after the first prompt restores the selected model', async (t) => {
+  const { brainDir, promptModels, restart, session, start, withSession } = await fixture(t)
+  await start({ assistant: true, model: CARBON })
+  // Native storage can first appear after session/new has already accepted the model.
+  mkdirSync(brainDir, { recursive: true })
+  await withSession('send', { assistant: true, text: 'First prompt' })
+  await until('first turn finishes', () => session()?.status === 'done')
+  assert.deepEqual(promptModels(), [CARBON])
+
+  await restart()
+  await withSession('send', { assistant: true, text: 'Continue after restart' })
+  await until('resumed prompt reaches ACP', () => promptModels().length === 2)
+  assert.deepEqual(promptModels(), [CARBON, CARBON])
+})
+
+test('a cold send restores the last advertised model of an older session', async (t) => {
+  const { promptModel, withSession } = await fixture(t, { transcriptModel: CARBON.toUpperCase() })
+  await withSession('send', { text: 'Continue an existing conversation' })
+  assert.equal(await promptModel(), CARBON)
+})
 
 test('legacy effort-only modes select the matching model in the saved family after resume', async (t) => {
   const { calls, withSession, promptModel, setModels } = await fixture(t, { transcriptModel: CARBON.toUpperCase() })

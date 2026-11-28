@@ -137,7 +137,7 @@ class ReleaseMergeGateTests(unittest.TestCase):
             gate.main(["release_merge_gate.py", "7", COMMIT, None], env={}, runner=runner)
 
     def test_resolve_repository_rejects_errors_and_invalid_names(self):
-        for bad_repo in ("", "   ", "onlyone", "../evil", "nwverse/..", "./persona"):
+        for bad_repo in ("", "   ", "onlyone", "../evil", "owner/..", "./persona"):
             with self.subTest(bad_repo=bad_repo):
                 with self.assertRaisesRegex(gate.ReleaseMergeError, "owner/name"):
                     gate.resolve_repository(env={}, runner=lambda cmd, **kw: bad_repo)

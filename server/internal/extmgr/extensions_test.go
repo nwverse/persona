@@ -96,6 +96,10 @@ func TestMain(m *testing.M) {
 		serveAuthRelayExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "lookup" {
+		serveTextLookupExtensionForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "secrets" {
 		serveSecretProviderExtensionForTest()
 		return

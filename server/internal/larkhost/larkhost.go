@@ -137,7 +137,7 @@ type Asks interface {
 	AskBack(ix proto.Interaction, grace time.Duration)
 	// AsksCatchUp closes the cards whose interaction is over for good, as the hub's history says; pending are the
 	// interactions up now (after a reconnection).
-	AsksCatchUp(ctx context.Context, pending map[string]bool)
+	AsksCatchUp(ctx context.Context, pending map[string]proto.Interaction)
 }
 
 // Workbench is the Lark workbench (/home, /today, /inbox and their buttons, the home card).
@@ -221,6 +221,9 @@ type Chat interface {
 	// SetTarget makes the chat's messages go to t; RememberThread binds a message the bot posted to a target.
 	SetTarget(t assistantwire.ChatTarget)
 	RememberThread(messageID string, t assistantwire.ChatTarget, title string)
+	// RememberTopicSession binds a group chat topic (chatID/threadID) to a conversation target so replies
+	// in that topic continue the bound conversation.
+	RememberTopicSession(ctx context.Context, chatID, threadID string, t assistantwire.ChatTarget, title string)
 	// Send passes a message of the chat on to its target and starts the run that answers it.
 	Send(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t assistantwire.ChatTarget) error
 	// CardsWaiting is how many cards are open; CardNudged whether interaction id's card was nudged under.
@@ -284,7 +287,6 @@ type Host interface {
 	SetRunExt(r *channel.Run, key, value string)
 	// SetLiveRunExt sets a value on the live run as well when r is a copy of it (an answer works on a copy).
 	SetLiveRunExt(r *channel.Run, key, value string)
-	RunTo(ext map[string]string) assistantwire.ChannelTarget
 	// RunState is the module's own state of live run id (made with make the first time); done closes when the run
 	// ends. False when the run is not live or, with kept, no longer among the channels' runs.
 	RunState(id string, kept bool, make func() any) (state any, done <-chan struct{}, ok bool)
@@ -331,6 +333,8 @@ type Host interface {
 	// whether the bot's switches allow it, and the run that answers a message sent to it (StartRun: rt, t and the
 	// owner's message; ext the run's channel values besides the reaction).
 	ResolveTarget(ctx context.Context, t assistantwire.ChatTarget) (assistantwire.ChatResolved, error)
+	// SessionExists reads the named session. An empty machine uses the configured assistant machine.
+	SessionExists(ctx context.Context, machine, session string) bool
 	TargetLabel(ctx context.Context, t assistantwire.ChatTarget) string
 	Allowed(l i18n.Lang, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget) error
 	StartRun(ctx context.Context, rt assistantwire.ChatResolved, t assistantwire.ChatTarget, messageID, text string, images []proto.Image, probe, reaction string, ext map[string]string) error
@@ -358,7 +362,10 @@ type Host interface {
 	// model.
 	InterruptConversation(ctx context.Context, rt assistantwire.ChatResolved) (kind, message string)
 	TurnPending(machine, session string) bool
-	StopProgressCard(ctx context.Context, f assistantwire.FeishuFeatures, t assistantwire.ChatTarget, messageID string) (kind, message string)
+	// FindInterruptibleRun returns a guard if the first matching run is watched. The guard rechecks the same run
+	// and watcher after resolution. match may only read the run during the call, under the channel state lock.
+	// The guard calls interrupt with the progress lock alone and stores the returned last successful stop.
+	FindInterruptibleRun(match func(*channel.Run) bool) (guard func(session proto.Session, interrupt func(lastStop string) string))
 	Conversations(ctx context.Context) (list []proto.Session, main string)
 	ConversationName(sess proto.Session, main string) string
 	Devices(ctx context.Context) []assistantwire.Device
@@ -384,8 +391,10 @@ type Host interface {
 	EndedText(l i18n.Lang, status, fallback string) string
 	ResolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string
 	ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error)
+	ResolveInteractionAt(ctx context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error)
 	ValidateClarifyQuestion(text string) error
 	ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error)
+	ClarifyInteractionAt(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error)
 	AcceptAction(ctx context.Context, a *botcard.CardAction) (kind, text string)
 	LaterHandled(ctx context.Context, id string) (bool, error)
 	TabName(ctx context.Context, prompt string) string
@@ -403,7 +412,11 @@ type Host interface {
 	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
 	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
 	AskSensitive(ctx context.Context, ix proto.Interaction) bool
+	// AskDirect admits an eligible owner-decision Assistant write approval independently of all_cards.
+	AskDirect(ctx context.Context, ix proto.Interaction) bool
 	AskState(id string) (ended, pending bool)
+	// AskStateFor binds the terminal marker and announcement to ix's exact occurrence.
+	AskStateFor(ix proto.Interaction) (ended, pending bool)
 	AskPending(id string) (proto.Interaction, bool)
 
 	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
@@ -417,9 +430,9 @@ type Host interface {
 	SourceChannels() []string
 	EnsureTodosLoaded(ctx context.Context) error
 	TodoOfThread(chatID, threadID string) (assistantwire.ChatTodo, bool)
-	ThreadNoReply(ctx context.Context, ev botcard.MessageEvent, todoID, chatID, threadID string)
-	// ThreadRoutes are who can get what was said in an open to-do's topic, best first; the error says why none.
-	ThreadRoutes(ctx context.Context, todoID string, f assistantwire.FeishuFeatures) ([]assistantwire.ChatTarget, error)
+	ThreadNoReply(ctx context.Context, messageID, todoID string, to assistantwire.ChannelTarget)
+	// ThreadRouteCandidates reads the to-do's active agent and opening or asking conversation, in that order.
+	ThreadRouteCandidates(ctx context.Context, todoID string) []assistantwire.ChatTarget
 	// TopicDecision notes a topic message as the to-do's decision (assistantwire.Decision*).
 	TopicDecision(ctx context.Context, todoID, question, text, messageID string) string
 	// TopicWake tells the to-do's supervisor what the owner said in its topic, when it waits for that.
@@ -427,8 +440,6 @@ type Host interface {
 	AskTodoTopicAnswer(ctx context.Context, todoID, text string) (answer string, ok bool)
 	SettleAskClaim(ctx context.Context, todoID string, ok bool)
 	CloseAskTodo(ctx context.Context, todoID string)
-	// OpenTarget is who takes a to-do opened from the chat: the main conversation, origin its id; fail says why not.
-	OpenTarget(ctx context.Context, st assistantwire.FeishuStatus) (target assistantwire.ChatTarget, origin, fail string)
 	// TodoTitle is an opened to-do's title from the words (linkLabel: they are a link's label, kept as they are);
 	// retitle: it is named again later.
 	TodoTitle(ctx context.Context, words string, l i18n.Lang, linkLabel bool) (title string, retitle bool)
@@ -479,13 +490,13 @@ func (None) DivertNotices(_ context.Context, kind assistantwire.NoticeKind, _ []
 }
 
 // No cards for what is asked without a channel: none is wanted, none is posted.
-func (None) AskAnnounced(proto.Interaction)                    {}
-func (None) AskPost(context.Context, proto.Interaction)        {}
-func (None) AskWanted(context.Context, proto.Interaction) bool { return false }
-func (None) AskEnded(proto.Interaction, string, bool)          {}
-func (None) AskDetached([]string, time.Duration)               {}
-func (None) AskBack(proto.Interaction, time.Duration)          {}
-func (None) AsksCatchUp(context.Context, map[string]bool)      {}
+func (None) AskAnnounced(proto.Interaction)                            {}
+func (None) AskPost(context.Context, proto.Interaction)                {}
+func (None) AskWanted(context.Context, proto.Interaction) bool         { return false }
+func (None) AskEnded(proto.Interaction, string, bool)                  {}
+func (None) AskDetached([]string, time.Duration)                       {}
+func (None) AskBack(proto.Interaction, time.Duration)                  {}
+func (None) AsksCatchUp(context.Context, map[string]proto.Interaction) {}
 
 // The chat without a channel: a bot switched off. Nothing is taken or answered, nothing waits, no target is set, and
 // its records are empty: what is kept in them is dropped.
@@ -509,6 +520,8 @@ func (None) Route(string, string) assistantwire.ChatTarget {
 }
 func (None) SetTarget(assistantwire.ChatTarget)                      {}
 func (None) RememberThread(string, assistantwire.ChatTarget, string) {}
+func (None) RememberTopicSession(context.Context, string, string, assistantwire.ChatTarget, string) {
+}
 func (None) Send(context.Context, *botcard.MessageEvent, botcard.Content, assistantwire.ChatTarget) error {
 	return ErrNoChannel
 }
