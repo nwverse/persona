@@ -21,7 +21,8 @@ import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, 
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
 import { lazyPage } from "../../lib/lazy-page";
-import { chooseManager, defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { managerOf, useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useLarkOn, useStore } from "../../lib/store";
 import {
@@ -345,6 +346,7 @@ function IntegrationsForManager({
 
   const owner = otherManager(picked ?? undefined);
   const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
+  const roster = useRoster();
   const scope = useScope();
   const offline = useShownOffline();
 
@@ -687,6 +689,9 @@ function IntegrationsForManager({
     </div>
   );
 
+  const crossAssistantSources = isSourcesView && !sameManager(effectiveManager, owner);
+  const targetAssistantName = (effectiveManager && managerOf(roster, effectiveManager)?.name) || effectiveManager || "";
+
   const viewSwitch = hasInboxSources ? (
     <div className={cx(compactList ? "mb-2" : "mb-3 flex")} data-integrations-view-switch>
       <Segmented
@@ -699,10 +704,7 @@ function IntegrationsForManager({
         ]}
         onChange={(v) => {
           if (v === "sources") go({ kind: "sources", manager: otherManager(effectiveManager) });
-          else {
-            chooseManager(effectiveManager ?? null);
-            go({ kind: "list" });
-          }
+          else go({ kind: "list" });
         }}
       />
     </div>
@@ -714,8 +716,38 @@ function IntegrationsForManager({
     return (
       <div data-integrations-sources-view>
         {listHeader}
-        {!headerBack && viewSwitch}
-        <SourcesFlowPane manager={effectiveManager} reloadKey={sourcesReload}
+        {!headerBack &&
+          (crossAssistantSources ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2" data-integrations-cross-assistant-nav>
+              <Button
+                tone="quiet"
+                icon="chevronLeft"
+                testId="integrations-cross-assistant-back"
+                onClick={() => go({ kind: "list" })}
+                className="-ml-2"
+              >
+                {t("settings-integrations.back")}
+              </Button>
+              {targetAssistantName && (
+                <Button
+                  tone="secondary"
+                  size="sm"
+                  testId="integrations-switch-assistant"
+                  onClick={() => {
+                    chooseManager(otherManager(effectiveManager) ?? null);
+                    go({ kind: "list" });
+                  }}
+                >
+                  {t("settings-integrations.switch_assistant_integrations", { name: targetAssistantName })}
+                </Button>
+              )}
+            </div>
+          ) : (
+            viewSwitch
+          ))}
+        <SourcesFlowPane
+          manager={effectiveManager}
+          reloadKey={sourcesReload}
           onOpenSource={headerBack ? (page) => drillDown({ kind: "sources", state: page, manager: effectiveManager }) : undefined}
         />
       </div>

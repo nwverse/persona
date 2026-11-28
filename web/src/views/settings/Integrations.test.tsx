@@ -205,7 +205,7 @@ import type { SourcesGraph } from "../../lib/sources-graph";
 import { subscriptionSourceState, type HubSubscription } from "../../lib/subscriptions";
 import { navigate } from "../../lib/router";
 import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
-import { resetRoster } from "../../lib/managers";
+import { loadRoster, resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
 import { Integrations } from "./Integrations";
 import {
@@ -1694,5 +1694,45 @@ describe("assistant isolation across integration routes", () => {
     await act(async () => root.render(<Integrations open="-sources@work/source" onOpen={onOpen} />));
     await act(async () => root.render(<Integrations open="-sources/source" onOpen={onOpen} />));
     expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work", null]);
+  });
+
+  it("hides the ambiguous view switcher on cross-assistant -sources@other deep links and never silently switches the global assistant", async () => {
+    // Sidebar is on default assistant (chosenManager() === null), deep-linked to -sources@work.
+    await act(async () => loadRoster());
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources%40work");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+
+    // Ambiguous "Integrations | Data flow" segmented toggle is hidden on cross-assistant deep links.
+    expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
+    const crossNav = host.querySelector<HTMLElement>("[data-integrations-cross-assistant-nav]")!;
+    expect(crossNav).not.toBeNull();
+    const backBtn = crossNav.querySelector<HTMLButtonElement>('[data-testid="integrations-cross-assistant-back"]')!;
+    const switchBtn = crossNav.querySelector<HTMLButtonElement>('[data-testid="integrations-switch-assistant"]')!;
+    expect(backBtn).not.toBeNull();
+    expect(switchBtn).not.toBeNull();
+    expect(switchBtn.textContent).toContain(t("settings-integrations.switch_assistant_integrations", { name: "Work" }));
+
+    // Returning via Back opens the current assistant's list WITHOUT mutating global chosenManager.
+    await act(async () => backBtn.click());
+    await flush();
+    expect(chosenManager()).toBeNull();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+
+    // Re-open -sources@work and explicitly click "Switch to Work": now global assistant switches intentionally.
+    await act(async () => root.render(null));
+    history.replaceState(null, "", "/settings?tab=integrations&integration=-sources%40work");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    const explicitSwitch = host.querySelector<HTMLButtonElement>('[data-testid="integrations-switch-assistant"]')!;
+    await act(async () => explicitSwitch.click());
+    await flush();
+    expect(chosenManager()).toBe("work");
+    expect(new URLSearchParams(location.search).get("integration")).toBeNull();
+    // Once the switched assistant's state arrives, Settings renders Work's Integrations list.
+    state.assistant = "work";
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
   });
 });

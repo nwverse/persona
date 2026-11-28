@@ -6,6 +6,7 @@
   "view_label": "集成视图切换",
   "view_list": "集成列表",
   "view_sources": "数据流向",
+  "switch_assistant_integrations": "切换到「{name}」",
   "filter_label": "按能力筛选",
   "filter_all": "全部",
   "filter_channels": "对话渠道",

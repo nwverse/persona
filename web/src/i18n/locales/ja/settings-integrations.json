@@ -6,6 +6,7 @@
   "view_label": "連携ビューの切り替え",
   "view_list": "連携一覧",
   "view_sources": "データフロー",
+  "switch_assistant_integrations": "「{name}」に切り替え",
   "filter_label": "機能で絞り込む",
   "filter_all": "すべて",
   "filter_channels": "チャットチャンネル",
