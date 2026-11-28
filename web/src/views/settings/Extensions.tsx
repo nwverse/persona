@@ -415,7 +415,7 @@ function ExtensionResourceDetail({ binding, id, manager, onBack: back, headerBac
   const offline = roster?.managers.find((m) => m.id === binding.client.managerId)?.online === false;
   const {
     detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, dirty, editable,
-    canSave, problems, load, reload, authChanged, mutate, remove: onBack, edit, type, revert, save, saveNow,
+    canSave, problems, load, reload, authChanged, connectorRefreshKey, mutate, remove: onBack, edit, type, revert, save, saveNow,
   } = useExtensionConfiguration(id, binding, prefill, back);
   const [removing, setRemoving] = useState(false);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
@@ -548,7 +548,7 @@ function ExtensionResourceDetail({ binding, id, manager, onBack: back, headerBac
             </Group>
           )}
 
-          {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
+          {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} refreshKey={connectorRefreshKey} />}
           <ConnectorExternalSourceSettings
             ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]}
             manager={manager}

@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../../i18n";
 import { errorText, isAbort } from "../../../lib/api";
 import { ConfigurationError } from "../../../lib/configuration/contract";
-import { getAuth, onAuthChange, type ExtensionAuth } from "../../../lib/extension-auth";
 import { opOf, operations, operationsListed, watchOperations } from "../../../lib/extension-operations";
 import {
   changed, checkError, clearedSecrets, compact, configError, draftEdits, extensionDetail, isDirty, isEntryList,
@@ -15,6 +14,7 @@ import { toast } from "../../../ui/atoms";
 import { abortedConfiguration, ResourceConfiguration, resourceConfigurations } from "./resourceConfiguration";
 import { useResourceConfiguration } from "./useResourceConfiguration";
 import { useScopedAssistant } from "./useScopedAssistant";
+import { useExtensionAuthSync } from "./useExtensionAuthSync";
 
 export type Typed = Record<string, { text: string; integer: boolean }>;
 type Draft = { base: JsonObject; draft: JsonObject; typed: Typed; dirty: boolean; editedDuringSave?: boolean };
@@ -146,7 +146,6 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
   const { client, routing } = binding;
   const resource = useMemo(() => resources.get(id, client), [id, client]);
   const active = useRef(false);
-  const authSeq = useRef(0);
   const removed = useRef(onRemoved);
   removed.current = onRemoved;
   useLayoutEffect(() => {
@@ -159,27 +158,18 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
     const endpoint = `/${encodeURIComponent(id)}/-/auth`;
     return pinManagerAt([`/extensions${endpoint}`, `/plugins${endpoint}`], client.managerId);
   }, [id, client]);
-  const authChanged = useCallback((auth?: ExtensionAuth) => {
-    const seq = ++authSeq.current;
-    if (auth) {
-      resource.patchRemote((remote) => ({ ...remote, auth }));
-      return;
-    }
-    const baseline = resource.snapshot().remote;
-    if (!baseline?.auth) return;
-    void getAuth(id, client).then((answer) => {
-      if (active.current && seq === authSeq.current && baseline === resource.snapshot().remote) {
-        resource.patchRemote((remote) => ({ ...remote, auth: answer }));
-      }
-    }, () => {});
-  }, [id, client, resource]);
   const reconnect = useCallback(() => {
     const state = resource.snapshot();
     if (!state.remote || state.readError || state.unconfirmed) void resource.refresh();
-    else authChanged();
-  }, [resource, authChanged]);
+  }, [resource]);
   const state = useResourceConfiguration(resource, routing, reconnect);
   const detail = state.remote;
+  const [connectorRefreshKey, setConnectorRefreshKey] = useState(0);
+  const authChanged = useExtensionAuthSync({
+    id, client, auth: detail?.auth,
+    onAuth: (auth) => resource.patchRemote((remote) => ({ ...remote, auth })),
+    onSync: () => setConnectorRefreshKey((key) => key + 1),
+  });
   const draft = state.draft?.draft ?? (detail ? configOf(detail) : NO_CONFIG);
   const typed = state.draft?.typed ?? NO_TYPED;
   const dirty = state.draft?.dirty ?? false;
@@ -189,9 +179,6 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
   const refused = configError(error);
   const fieldErrors = refused ? { [refused.field]: refused.message } : {};
   const checkFailed = state.unconfirmed ? t("settings-configuration.error_unconfirmed") : error && !refused ? errorText(error) : "";
-  useEffect(() => onAuthChange((extension, auth, manager) => {
-    if (extension === id && manager === client.managerId) authChanged(auth);
-  }), [id, client, authChanged]);
 
   const remove = useCallback(() => {
     if (!active.current) return;
@@ -294,6 +281,7 @@ export function useExtensionConfiguration(id: string, binding: ExtensionBinding,
     error: state.readError && !isAbort(state.readError) ? errorText(state.readError) : "",
     loading: state.loading, saving: state.saving === "config", toggling: state.saving !== null && state.saving !== "config",
     canSave: editable && dirty && !Object.keys(problems).length && !state.saving && !state.unconfirmed,
-    load: resource.refresh, reload, authChanged, mutate, remove, edit, type, save, saveNow, revert: () => resource.edit(() => undefined),
+    load: resource.refresh, reload, authChanged, connectorRefreshKey, mutate, remove, edit, type, save, saveNow,
+    revert: () => resource.edit(() => undefined),
   };
 }

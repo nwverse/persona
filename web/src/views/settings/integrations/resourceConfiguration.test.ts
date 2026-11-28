@@ -70,6 +70,24 @@ describe("resource configuration state", () => {
     expect(resource.snapshot()).toMatchObject({ remote: snapshot("three", 2), saving: null, queued: 0 });
   });
 
+  it("keeps a pushed snapshot field over an older detail read or write reply", async () => {
+    const { read, resource } = setup();
+    const inFlight = deferred<Remote>();
+    read.mockReturnValueOnce(inFlight.promise);
+    const reading = resource.refresh();
+    resource.patchRemote((remote) => ({ ...remote, other: 1 }));
+    inFlight.resolve(snapshot("read"));
+    await reading;
+    expect(resource.snapshot().remote).toEqual(snapshot("read", 0, 1));
+
+    const put = deferred<Remote>();
+    const saving = resource.save({ label: "config", prepare: () => ({ send: () => put.promise }) });
+    resource.patchRemote((remote) => ({ ...remote, other: 2 }));
+    put.resolve(snapshot("write", 1, 1));
+    await saving;
+    expect(resource.snapshot().remote).toEqual(snapshot("write", 1, 2));
+  });
+
   it("keeps a refused draft and refreshes a server revision conflict without replaying it", async () => {
     const { read, resource } = setup();
     read.mockResolvedValueOnce(snapshot("one")).mockResolvedValueOnce(snapshot("other", 3, 4));

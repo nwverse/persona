@@ -67,6 +67,7 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   private refreshRequested = false;
   private queue: Job<Remote, Draft>[] = [];
   private comparison?: PreparedSave<Remote, Draft>;
+  private latestPatch?: (remote: Remote) => Remote;
 
   constructor(readonly id: string, readonly client: ScopedAssistantClient, private adapter: {
     read: () => Promise<Remote>;
@@ -116,7 +117,13 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   };
 
   patchRemote(change: (remote: Remote) => Remote) {
-    if (!this.retired && this.state.remote) this.set({ remote: change(this.state.remote) });
+    if (this.retired) return;
+    this.latestPatch = change;
+    if (this.state.remote) this.set({ remote: change(this.state.remote) });
+  }
+
+  private carryForward(remote: Remote, patchAtStart: typeof this.latestPatch) {
+    return this.latestPatch && this.latestPatch !== patchAtStart ? this.latestPatch(remote) : remote;
   }
 
   private validate(remote: Remote) {
@@ -144,12 +151,14 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   };
 
   private async read(seq: number) {
+    const patchAtStart = this.latestPatch;
     this.refreshRequested = false;
     this.set({ loading: true });
     try {
-      const remote = await this.adapter.read();
+      const answer = await this.adapter.read();
       if (!this.current(seq)) return;
-      this.validate(remote);
+      this.validate(answer);
+      const remote = this.carryForward(answer, patchAtStart);
       const comparison = this.comparison;
       const matched = comparison?.matches?.(remote);
       this.comparison = undefined;
@@ -217,6 +226,7 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   }
 
   private async send(seq: number, prepared: PreparedSave<Remote, Draft>) {
+    const patchAtStart = this.latestPatch;
     try {
       const result = await prepared.send();
       if (!this.current(seq)) return;
@@ -225,8 +235,9 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
         return;
       }
       this.validate(result);
-      this.accept(result, prepared);
-      return result;
+      const remote = this.carryForward(result, patchAtStart);
+      this.accept(remote, prepared);
+      return remote;
     } catch (error) {
       if (!this.current(seq)) return;
       if (prepared.matches && uncertain(error)) {
@@ -244,6 +255,7 @@ export class ResourceConfiguration<Remote extends { id: string }, Draft = never>
   retire = () => {
     this.retired = true;
     this.comparison = undefined;
+    this.latestPatch = undefined;
     this.queue.splice(0).forEach((job) => job.reject(abortedConfiguration()));
     this.set(emptyConfiguration);
     this.listeners.clear();

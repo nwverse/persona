@@ -330,10 +330,17 @@ function LastChannelEvent({ detail }: { detail: ChannelDetail | null }) {
     : null;
 }
 
-function ConnectorReadError({ error }: { error: string }) {
+function ConnectorReadError({ error, onRetry, loading = false }: { error: string; onRetry?: () => void; loading?: boolean }) {
   return (
     <Group>
       <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error })}</SettingsHint>
+      {onRetry && (
+        <div className="px-4 py-2.5">
+          <Button tone="secondary" icon="retry" onClick={onRetry} busy={loading}>
+            {t("settings-hubconnector.recheck")}
+          </Button>
+        </div>
+      )}
     </Group>
   );
 }
@@ -381,7 +388,7 @@ function FeishuBotBuiltinDetail({
   const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
 
   const refreshAll = () => {
-    void loadLarkcli();
+    void loadLarkcli({ fresh: true });
     void channelCtl.load();
     void feishuCtl.load();
   };
@@ -435,7 +442,7 @@ function FeishuBotBuiltinDetail({
 
       {/* 1. Account & Connection */}
       <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-        {connectorError && <ConnectorReadError error={connectorError} />}
+        {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadLarkcli({ fresh: true })} loading={connectorLoading} />}
         <FeishuBotConnectionPanel
           ctl={feishuCtl}
           larkcli={larkcli ?? null}
@@ -511,7 +518,7 @@ function BuiltinIntegrationDetail({
 
   const refreshAll = () => {
     if (isMail || isLarkGateway) setReloadKey((key) => key + 1);
-    void loadConnector();
+    void loadConnector({ fresh: true });
     if (channelId) void channelCtl.load();
   };
 
@@ -604,8 +611,8 @@ function BuiltinIntegrationDetail({
           {isLarkGateway && <Feishu reloadKey={reloadKey} manager={manager} />}
           {connectorId && (
             <>
-              {connectorError && <ConnectorReadError error={connectorError} />}
-              {connector && <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />}
+              {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnector({ fresh: true })} loading={connectorLoading} />}
+              {connector && <ConnectorConnectionBlock connector={connector} reload={() => loadConnector({ fresh: true })} loading={connectorLoading} />}
               {!connector && !connectorError && <Group><div className="px-4 py-3"><Loading /></div></Group>}
             </>
           )}
@@ -680,7 +687,7 @@ function ExtensionIntegrationResource({
   const offline = roster?.managers.find((m) => m.id === binding.client.managerId)?.online === false;
   const {
     detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, dirty, editable,
-    canSave, problems, load, reload, authChanged, mutate, remove: exit, edit, type, revert, save, saveNow,
+    canSave, problems, load, reload, authChanged, connectorRefreshKey, mutate, remove: exit, edit, type, revert, save, saveNow,
   } = useExtensionConfiguration(id, binding, prefill, onUninstalled ?? back);
   const [secret, setSecret] = useState<ExtensionSecret | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -694,7 +701,6 @@ function ExtensionIntegrationResource({
   const channelId = target.channelId ?? (detail ? channelOf(detail) : null);
   const channelCtl = useChannelController(channelId, manager);
 
-  // Associated connectors (from explicit target override or extension's contributes.connectors).
   const connectorIds = useMemo(() => {
     const ids = new Set<string>();
     if (target.connectorId) ids.add(target.connectorId);
@@ -704,6 +710,13 @@ function ExtensionIntegrationResource({
     return [...ids];
   }, [target.connectorId, detail?.contributes?.connectors]);
   const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
+  const lastConnectorRefresh = useRef(connectorRefreshKey);
+  useEffect(() => {
+    if (lastConnectorRefresh.current === connectorRefreshKey) return;
+    lastConnectorRefresh.current = connectorRefreshKey;
+    void loadConnectors({ fresh: true });
+  }, [connectorRefreshKey, loadConnectors]);
+
   useLayoutEffect(() => {
     const ids = new Set([...connectorIds, ...connectors.map((c) => c.id)]);
     const prefixes = [...ids].map((cid) => `/connectors/${enc(cid)}`);
@@ -840,7 +853,7 @@ function ExtensionIntegrationResource({
   const refreshAll = () => {
     load();
     if (channelId) void channelCtl.load();
-    void loadConnectors();
+    void loadConnectors({ fresh: true });
   };
 
   return (
@@ -926,13 +939,14 @@ function ExtensionIntegrationResource({
           {hasConnectionSection && (
             <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
               {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
-              {connectorError && <ConnectorReadError error={connectorError} />}
+              {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnectors({ fresh: true })} loading={connectorsLoading} />}
               {connectors.map((c) => (
                 <ConnectorConnectionBlock
                   key={`${c.manager ?? ""}:${c.id}`}
                   connector={c}
-                  reload={loadConnectors}
+                  reload={() => loadConnectors({ fresh: true })}
                   loading={connectorsLoading}
+                  authManagedByHost={!!p.auth}
                 />
               ))}
               {channelId && <ChannelBindingBlock ctl={channelCtl} />}
