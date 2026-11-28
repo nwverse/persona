@@ -176,9 +176,15 @@ func TestRepoMirrorEnsureTTLPruneStatusAndRemove(t *testing.T) {
 	}
 }
 
-func TestRepoMirrorSingleFlightCoalescing(t *testing.T) {
+func TestConcurrentBackendWorkspacePreparesShareOneColdMirrorFetch(t *testing.T) {
 	home := workspaceTemp(t)
 	remote := workspaceRemote(t, "main")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	var wg sync.WaitGroup
+	defer func() {
+		cancel()
+		wg.Wait()
+	}()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var fetchCount atomic.Int32
@@ -202,38 +208,37 @@ func TestRepoMirrorSingleFlightCoalescing(t *testing.T) {
 	}
 
 	req := repository.MirrorEnsureRequest{
-		RepoID:   "repo_shared",
-		Identity: testRepoIdentity(t, "shared"),
+		RepoID:   "web",
+		Identity: testRepoIdentity(t, "web"),
 		CloneURL: remote,
 	}
 
-	var wg sync.WaitGroup
-	results := make([]repository.MirrorInfo, 2)
-	errs := make([]error, 2)
+	var results [2]repository.MirrorInfo
+	var errs [2]error
+	wg.Go(func() { results[0], errs[0] = n.ensureRepoMirror(ctx, req) })
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		results[0], errs[0] = n.ensureRepoMirror(t.Context(), req)
-	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first workspace never entered the mirror fetch")
+	}
+	wg.Go(func() { results[1], errs[1] = n.ensureRepoMirror(ctx, req) })
 
-	// Wait deterministically until the first ensure is inside fetch, then launch a concurrent ensure.
-	<-entered
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		results[1], errs[1] = n.ensureRepoMirror(t.Context(), req)
-	}()
-
-	// Wait deterministically until the second caller has joined the in-flight map (waiters == 2).
+	// Hold the cold fetch until both preparations have joined it.
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
 	for {
 		n.repoMirrors.mu.Lock()
-		f := n.repoMirrors.flights["repo_shared"]
+		f := n.repoMirrors.flights[req.RepoID]
 		joined := f != nil && f.waiters == 2
 		n.repoMirrors.mu.Unlock()
 		if joined {
 			break
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("second workspace never joined the in-flight mirror fetch")
 		}
 	}
 	close(release)
@@ -252,6 +257,46 @@ func TestRepoMirrorSingleFlightCoalescing(t *testing.T) {
 	}
 	if results[0].Coalesced || !results[1].Coalesced {
 		t.Fatalf("expected caller 0 Coalesced=false, caller 1 Coalesced=true; got %v, %v", results[0].Coalesced, results[1].Coalesced)
+	}
+
+	// Take the upstream offline after preflight. Both real workspace prepares must use the shared mirror.
+	if err := os.Rename(remote, filepath.Join(workspaceTemp(t), "offline")); err != nil {
+		t.Fatal(err)
+	}
+	source := workspacePlan(t, home, repository.LayoutRoot, remote).Source
+	var preparations [2]taskworkspace.Record
+	for i, todoID := range []string{"todo_first", "todo_second"} {
+		source.TodoID, source.Repositories.TodoID = todoID, todoID
+		preview := workspacenaming.Resolve(source, workspacenaming.NodeContext{Home: home, PersonaHome: n.dir})
+		if preview.Plan == nil {
+			t.Fatal(preview)
+		}
+		raw, err := json.Marshal(taskworkspace.Request{
+			WorkspaceID: "ws_" + todoID,
+			OperationID: "op_" + todoID,
+			Plan:        *preview.Plan,
+			MirrorRepos: []string{req.RepoID},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wg.Go(func() {
+			out, err := n.handle(ctx, "task.workspace.prepare", raw)
+			errs[i] = err
+			if err == nil {
+				preparations[i] = out.(taskworkspace.Record)
+			}
+		})
+	}
+	wg.Wait()
+	for i, prep := range preparations {
+		if errs[i] != nil || prep.Error != nil || prep.State != "ready" || len(prep.Repositories) != 1 ||
+			prep.Repositories[0].ResolvedCommit != results[i].HeadCommit {
+			t.Fatalf("workspace %d did not prepare from the shared mirror: %+v, %v", i, prep, errs[i])
+		}
+	}
+	if fetchCount.Load() != 1 {
+		t.Fatalf("expected one mirror fetch across both workspace preparations, got %d", fetchCount.Load())
 	}
 }
 
