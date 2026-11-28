@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
-import { useChannelController, type ChannelController } from "./useChannelController";
+import { ChannelPageContent, type ChannelPageProps } from "./Channels";
+import { useChannelController } from "./useChannelController";
 
 /** Open the scoped editor when its channel detail is requested. */
-export function ChannelResource({ id, manager, children }: { id: string; manager?: string; children: (controller: ChannelController) => ReactNode }) {
-  return children(useChannelController(id, manager));
+export function ChannelResource({ id, ...props }: ChannelPageProps) {
+  const ctl = useChannelController(id, props.manager);
+  return <ChannelPageContent {...props} ctl={ctl} />;
 }

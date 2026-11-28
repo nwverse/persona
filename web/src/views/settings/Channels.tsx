@@ -422,7 +422,7 @@ export function ChannelDeliveryControls({
 /** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
  *  is open; none: the current assistant's. */
 /** `headerBack`: the page's top bar has the way back (a phone), so it draws no Back of its own. */
-type ChannelPageProps = { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean };
+export type ChannelPageProps = { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean };
 
 const ChannelResource = lazyPage(() => import("./ChannelResource").then((m) => m.ChannelResource));
 
@@ -430,11 +430,14 @@ export function ChannelPage({ id, manager: named, ...props }: ChannelPageProps) 
   // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
   const chosen = useChosenManager();
   const manager = named ?? otherManager(chosen ?? undefined);
-  const show = (ctl: ChannelController | null) => <ChannelPageContent {...props} manager={manager} ctl={ctl} />;
-  return <Suspense fallback={show(null)}><ChannelResource id={id} manager={manager}>{show}</ChannelResource></Suspense>;
+  return (
+    <Suspense fallback={<ChannelPageContent {...props} manager={manager} ctl={null} />}>
+      <ChannelResource {...props} id={id} manager={manager} />
+    </Suspense>
+  );
 }
 
-function ChannelPageContent({ ctl, manager, onBack, onSettings, headerBack }: Omit<ChannelPageProps, "id"> & { ctl: ChannelController | null }) {
+export function ChannelPageContent({ ctl, manager, onBack, onSettings, headerBack }: Omit<ChannelPageProps, "id"> & { ctl: ChannelController | null }) {
   const d = ctl?.detail;
 
   const head = (
