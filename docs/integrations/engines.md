@@ -667,6 +667,39 @@ Persona therefore reports its own recovery command for each Claude pane (`resume
   `session.start {resume}`, launcher `--resume` in the shell the Agent left when it is still there, else in a new pane.
 - No "Continue all" yet (machine-wide batch start, client half).
 
+#### Orca after a reboot (#17038)
+
+Orca's terminals survive an orcad restart, and a node restart leaves them alone. A reboot of the computer stops orcad and
+its terminal daemon together, and Orca 1.4.277 cannot be given Persona's command to bring an Agent back with. Checked on an
+isolated 1.4.277 runtime with a stub `claude` (2026-11-28):
+
+- After the reboot orcad keeps each tab in its workspace session (`session.tabs.listAll`: `status: "pending-handle"`, no
+  terminal, the provider session Orca's own Claude hooks reported), but `terminal.list` lists none of them, and nothing
+  starts on its own. A tab comes back when a client opens it (`session.tabs.activate`; the desktop app does it for the tab
+  it shows); a headless orcad with no client attached brings nothing back.
+- Orca then resumes the Agent with its own command, built from the provider session its hooks reported:
+  `claude --plugin-dir <Orca's agent view plugin> --resume <id>`, in the session's directory, without the start's
+  environment. Persona's launcher (a gateway's credentials), `--settings`, `--mcp-config` and hooks are gone, as with a
+  bare herdr resume. Without Orca's Claude hooks in Claude Code's settings (Orca installs them when it finds `claude`),
+  Orca knows no session to resume and the tab opens as a plain shell.
+- `terminal.create` takes `launchAgent`, `launchToken` and `launchConfig {agentCommand, agentArgs, agentEnv}`, and Orca's
+  resume builder would run `<agentCommand> --resume <id>` from such a config. It uses only a launch config Orca holds as
+  its own launch evidence, which a create over the local socket never gets: a start typed after a create with those fields,
+  a start Orca typed itself (`command`), and either with `ORCA_AGENT_LAUNCH_TOKEN` in `env` were all resumed with Orca's
+  bare command, and no resume record with the config was kept. `resumeProviderSession`, `resumeOrigin: "saved"` and
+  `spawnIntent` ask Orca to resume a session now; none sets the command a later restore uses. `launchAgent` would also
+  hand the terminal Orca's Claude account environment, so Persona sends none of these fields.
+
+So the node keeps no resume command or launch record for Orca panes (`holdResume` is herdr's), and shows what happened instead:
+
+- Before the tab is opened again, a session Persona started in it is `interrupted` (above: a recorded pane, started before
+  this node, no live Agent) with Continue, which resumes it on its launcher in a new Orca terminal (`docs/protocol/agent-states.md`).
+- Once Orca has brought it back with its own command, it is listed in that tab with `off_launcher` (the scan of running
+  claudes sees no Persona `--mcp-config`); a switch to the launcher it was started on quits it and starts it again there, in
+  the same terminal, with the next message (#17040, `docs/protocol/protocol.md`, "Switching a running Agent to another provider").
+- Continue while Orca still holds the old tab: from Orca's bundle (not checked live), Orca does not resume a provider
+  session that runs in another pane it knows of, so opening the old tab afterwards should not start a second Claude on it.
+
 ## When an engine cannot be selected
 
 - **"Not detected"**: engine is not running on that computer. Start `herdr` once in a terminal; open Herdr App / Orca. After a short wait,
