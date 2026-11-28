@@ -530,14 +530,10 @@ var reasonKeys = map[string]map[string]string{
 	"unsupported":             {"engine_unsupported": "rpc-errors.engine_unsupported"},
 }
 
-// reasonWords is the key and arguments of a refusal reasonKeys words by its code and data reason; "" for any other.
-func reasonWords(code string, data map[string]any) (string, i18n.Args) {
+// reasonKey is the key reasonKeys words a refusal by, its code and data reason; "" for any other.
+func reasonKey(code string, data map[string]any) string {
 	reason, _ := data["reason"].(string)
-	key := reasonKeys[code][reason]
-	if key == "" {
-		return "", nil
-	}
-	return key, reasonArgs(data)
+	return reasonKeys[code][reason]
 }
 
 // reasonArgs are the arguments a refusal's data gives its words: detail (the engine's or Orca's own words), engine (its
@@ -712,7 +708,7 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 			key, args["engine"] = "rpc-errors.not_running_engine", engine
 		}
 	}
-	if k, _ := reasonWords(code, body); k != "" {
+	if k := reasonKey(code, body); k != "" {
 		key = k
 	}
 	if body["partial"] == true {
