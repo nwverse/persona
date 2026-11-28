@@ -662,9 +662,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				"archived only when idle and the user has been inactive for 10 minutes (their terminals stay). "+
 				"Tell the user only if they need to know.", t.ID), nil
 		}
-		completed := t
+		completed := completionOf(t)
 		if closing.row != nil {
-			completed.DoneAt, completed.ReopenedAt = closing.row.DoneAt, closing.row.ReopenedAt
+			completed = committedCompletion(t.ID, *closing.row)
 		}
 		s.autoSeeAcceptedTodo(ctx, completed, conclusion.Outcome, a.UserCheck)
 		authorized := isMain || background || t.Supervision != nil && t.Supervision.Supervisor == self ||
@@ -1057,10 +1057,7 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 		}
 		row = db.TodoRow{ID: t.ID, Title: t.Title, Notes: t.Notes, CreatedAt: t.CreatedAt, Origin: t.Origin, PlanID: t.PlanID,
 			ReopenedAt: t.ReopenedAt, Quiet: t.Quiet}
-		row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &now, db.DoneByReview, reason, now
-		if !accepted {
-			row.DoneBy = db.DoneByCancelled
-		}
+		reviewClose(&row, reason, accepted, now)
 		t.keepPlan(&row)
 	}
 	var before Todo
@@ -1094,6 +1091,16 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 		s.todoRowSet(ctx, doneKeys)
 		s.afterReviewClose(ctx, before, row, accepted)
 	}, nil
+}
+
+// reviewClose is a review's close of row without the database, the one place it is written: done at at for reason,
+// by the review when it accepted the work and cancelled when not. It only sets those four fields; storing the row and
+// what follows a close stay with its callers (reviewDoneTodoLocked, and mergeTodos closing its source).
+func reviewClose(row *db.TodoRow, reason string, accepted bool, at time.Time) {
+	row.DoneAt, row.DoneBy, row.DoneReason, row.UpdatedAt = &at, db.DoneByReview, reason, at
+	if !accepted {
+		row.DoneBy = db.DoneByCancelled
+	}
 }
 
 func (s *Service) afterReviewClose(ctx context.Context, before Todo, row db.TodoRow, accepted bool) {

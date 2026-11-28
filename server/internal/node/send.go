@@ -115,10 +115,7 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		return err
 	}
 	if n.externalCodex(id) {
-		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
-			return n.stoppedRefusal(id)
-		}
-		return n.sendCodex(ctx, id, text, images)
+		return n.sendCodexSession(ctx, id, text, images, opts)
 	}
 	selected, err := n.sessionSelectedSkills(ctx, id, text)
 	if err != nil {
@@ -141,9 +138,18 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
 		ctx = n.withResumeHost(ctx, id)
-	}
-	if err != nil && (n.codexPath(id) != "" || n.traexPath(id) != "") {
-		return n.stoppedRefusal(id) // a stopped Codex or TRAE CLI takes no messages (stopped.go, #4754)
+		if path := n.codexPath(id); path != "" {
+			if _, known := n.codexSource(id); !known {
+				n.registerCodex(n.codexHome(), id, path)
+			}
+			if n.externalCodex(id) {
+				return n.sendCodexSession(ctx, id, text, images, opts)
+			}
+			return n.stoppedRefusal(id)
+		}
+		if n.traexPath(id) != "" {
+			return n.stoppedRefusal(id)
+		}
 	}
 	kind := "claude"
 	if err == nil {
