@@ -7,7 +7,7 @@
 // Messages (iMessage) adds "Hand to Persona" and deleting what the hub kept (iOS MessagesConnectorView, /api/v1/imessage…).
 import { OwnerMark } from "./OwnerMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { errorText } from "../../lib/api";
+import { errorText, invalidateInFlightGets } from "../../lib/api";
 import { safeLink } from "../../lib/extension-auth";
 import { otherManager, ownedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
@@ -330,22 +330,31 @@ export function FeedsGroup({ c, a }: { c: HubConnector; a: Actions }) {
  * (the same as on the connector's page), and the way to the connector's page for the rest (persona#3178). `manager`: whose
  * extension it is (each manager has its own connectors, docs/assistant/managers.md "Clients"); none: the default's.
  */
-export function ExtensionConnectorInbox({ ids, manager, onOpen }: { ids: string[]; manager?: string; onOpen?: (id: string, manager?: string) => void }) {
+export function ExtensionConnectorInbox({ ids, manager, onOpen, refreshKey = 0 }: { ids: string[]; manager?: string; onOpen?: (id: string, manager?: string) => void; refreshKey?: number }) {
   const [list, setList] = useState<HubConnector[]>([]);
+  const sequence = useRef(0);
   const key = ids.join(",");
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
+    const read = ++sequence.current;
     try {
+      if (fresh) invalidateInFlightGets("/connectors");
       const all = await listConnectors();
+      if (sequence.current !== read) return;
       // the merged list has each manager's copy: this extension's manager's
       setList(key.split(",").flatMap((id) => all.find((c) => c.id === id && sameManager(c.manager, manager)) ?? []));
     } catch {
-      setList([]); // the connector page says what is wrong; this group just stays away
+      if (sequence.current === read && !fresh) setList([]); // the connector page says what is wrong; this group just stays away
     }
   }, [key, manager]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    void load(refreshKey > 0);
+    return () => {
+      sequence.current++;
+    };
+  }, [load, refreshKey]);
   return (
     <>
-      {list.map((c) => (c.inbox === undefined ? null : <ExtensionConnectorGroup key={`${c.manager ?? ""}:${c.id}`} c={c} reload={load} onOpen={onOpen} />))}
+      {list.map((c) => (c.inbox === undefined ? null : <ExtensionConnectorGroup key={`${c.manager ?? ""}:${c.id}`} c={c} reload={() => load(true)} onOpen={onOpen} />))}
     </>
   );
 }

@@ -13,7 +13,7 @@ import { canBind, isBound, settingsTarget, type ChannelDetail } from "../../lib/
 import {
   connectorBrand, connectorState, connectorTone, type ConnectorTone,
 } from "../../lib/connectors";
-import { getAuth, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
+import { shownPages, signInAsked, takeSignIn, type ExtensionAuth } from "../../lib/extension-auth";
 import { operations, operationsListed, opOf, watchOperations } from "../../lib/extension-operations";
 import { marketOf } from "../../lib/extension-market";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
@@ -27,9 +27,8 @@ import {
 } from "../../lib/extensions";
 import { defaultManager, ownerHeaders, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
-import { isResumed } from "../../lib/reconnect";
 import { navigate } from "../../lib/router";
-import { onHubEvent, useStore } from "../../lib/store";
+import { useStore } from "../../lib/store";
 import { Button, cx, Dialog, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { ChannelMark } from "../../ui/ChannelMark";
@@ -55,6 +54,7 @@ import { settingsHref } from "./href";
 import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
 import { integrationDraft, keepIntegrationDraft } from "./integrations/extensionDrafts";
 import { useDetailConnectors } from "./integrations/useDetailConnectors";
+import { useExtensionAuthSync } from "./integrations/useExtensionAuthSync";
 import { ChannelBindingBlock, ChannelDeliveryBlock, ChannelStateInline, useChannelController } from "./integrations/ChannelSection";
 import { ConnectorConnectionBlock, connectorHasInbox, ConnectorInboxBlock } from "./integrations/ConnectorSection";
 import { FeishuBotConnectionPanel, FeishuBotDeliveryPanel, useFeishuBotController } from "./integrations/FeishuBotSection";
@@ -335,10 +335,17 @@ function LastChannelEvent({ detail }: { detail: ChannelDetail | null }) {
     : null;
 }
 
-function ConnectorReadError({ error }: { error: string }) {
+function ConnectorReadError({ error, onRetry, loading = false }: { error: string; onRetry?: () => void; loading?: boolean }) {
   return (
     <Group>
       <SettingsHint alert>{t("settings-integrations.connector_unavailable", { error })}</SettingsHint>
+      {onRetry && (
+        <div className="px-4 py-2.5">
+          <Button tone="secondary" icon="retry" onClick={onRetry} busy={loading}>
+            {t("settings-hubconnector.recheck")}
+          </Button>
+        </div>
+      )}
     </Group>
   );
 }
@@ -386,7 +393,7 @@ function FeishuBotBuiltinDetail({
   const feishuCtl = useFeishuBotController(true, loadLarkcli, channelCtl.load);
 
   const refreshAll = () => {
-    void loadLarkcli();
+    void loadLarkcli({ fresh: true });
     void channelCtl.load();
     void feishuCtl.load();
   };
@@ -440,7 +447,7 @@ function FeishuBotBuiltinDetail({
 
       {/* 1. Account & Connection */}
       <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-        {connectorError && <ConnectorReadError error={connectorError} />}
+        {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadLarkcli({ fresh: true })} loading={connectorLoading} />}
         <FeishuBotConnectionPanel
           ctl={feishuCtl}
           larkcli={larkcli ?? null}
@@ -516,7 +523,7 @@ function BuiltinIntegrationDetail({
 
   const refreshAll = () => {
     if (isMail || isLarkGateway) setReloadKey((key) => key + 1);
-    void loadConnector();
+    void loadConnector({ fresh: true });
     if (channelId) void channelCtl.load();
   };
 
@@ -609,8 +616,8 @@ function BuiltinIntegrationDetail({
           {isLarkGateway && <Feishu reloadKey={reloadKey} manager={manager} />}
           {connectorId && (
             <>
-              {connectorError && <ConnectorReadError error={connectorError} />}
-              {connector && <ConnectorConnectionBlock connector={connector} reload={loadConnector} loading={connectorLoading} />}
+              {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnector({ fresh: true })} loading={connectorLoading} />}
+              {connector && <ConnectorConnectionBlock connector={connector} reload={() => loadConnector({ fresh: true })} loading={connectorLoading} />}
               {!connector && !connectorError && <Group><div className="px-4 py-3"><Loading /></div></Group>}
             </>
           )}
@@ -702,6 +709,32 @@ function ExtensionIntegrationDetail({
   draftNow.current = draft;
   typedNow.current = typed;
 
+  // Associated connectors (from explicit target override or extension's contributes.connectors).
+  const connectorIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (target.connectorId) ids.add(target.connectorId);
+    for (const cid of detail?.contributes?.connectors ?? []) {
+      if (cid.trim()) ids.add(cid);
+    }
+    return [...ids];
+  }, [target.connectorId, detail?.contributes?.connectors]);
+  const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
+
+  // Keep extension auth updates and associated connector snapshots synchronized under the owning assistant scope.
+  const applyAuth = useCallback((auth: ExtensionAuth) => {
+    setDetail((cur) => (cur ? { ...cur, auth } : cur));
+  }, []);
+  const syncConnectorsOnAuth = useCallback(() => {
+    void loadConnectors({ fresh: true });
+  }, [loadConnectors]);
+  const { authChanged, authVersion, reconcileDetail } = useExtensionAuthSync({
+    id,
+    manager,
+    auth: detail?.auth,
+    onAuth: applyAuth,
+    onSync: syncConnectorsOnAuth,
+  });
+
   const apply = useCallback((d: HubExtensionDetail, preserveEdits = true) => {
     const kept = preserveEdits && integrationDraft(draftKey);
     const config = d.config ?? {};
@@ -715,15 +748,16 @@ function ExtensionIntegrationDetail({
 
   const readDetail = useCallback((then: (d: HubExtensionDetail) => void, failed?: (e: unknown) => void) => {
     const n = ++order.current.asked;
+    const authAtStart = authVersion();
     return extensionDetail(id).then(
       (d) => {
         if (n <= order.current.shown) return;
         order.current.shown = n;
-        then(d);
+        then(reconcileDetail(d, authAtStart));
       },
       (e) => void (n > order.current.shown && failed?.(e)),
     );
-  }, [id]);
+  }, [id, authVersion, reconcileDetail]);
 
   const writing = () => ++order.current.asked;
   const wrote = (n: number, d: HubExtensionDetail, preserveEdits = true) => {
@@ -745,32 +779,10 @@ function ExtensionIntegrationDetail({
     load();
   }, [load]);
 
-  // Keep extension auth updates in sync.
-  useEffect(
-    () => onAuthChange((x, auth, from) => (manager || defaultManager()) === from && setDetail((cur) => (cur ? withAuth(cur, x, auth) : cur))),
-    [manager],
-  );
-  const authChanged = useCallback((a?: ExtensionAuth) => {
-    if (a) setDetail((cur) => (cur ? { ...cur, auth: a } : cur));
-    else void getAuth(id).then((v) => setDetail((cur) => (cur ? { ...cur, auth: v } : cur)), () => {});
-  }, [id]);
-  const signsIn = !!detail?.auth;
-  useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn, authChanged]);
-
   // Associated channel (from explicit target override or extension's contributes.channel).
   const channelId = target.channelId ?? (detail ? channelOf(detail) : null);
   const channelCtl = useChannelController(channelId, manager);
 
-  // Associated connectors (from explicit target override or extension's contributes.connectors).
-  const connectorIds = useMemo(() => {
-    const ids = new Set<string>();
-    if (target.connectorId) ids.add(target.connectorId);
-    for (const cid of detail?.contributes?.connectors ?? []) {
-      if (cid.trim()) ids.add(cid);
-    }
-    return [...ids];
-  }, [target.connectorId, detail?.contributes?.connectors]);
-  const { connectors, loading: connectorsLoading, error: connectorError, load: loadConnectors, onSaved } = useDetailConnectors(connectorIds, manager);
   useLayoutEffect(() => {
     const ids = new Set([...connectorIds, ...connectors.map((c) => c.id)]);
     const prefixes = [`/extensions/${enc(id)}`, `/plugins/${enc(id)}`];
@@ -1043,7 +1055,7 @@ function ExtensionIntegrationDetail({
   const refreshAll = () => {
     load();
     if (channelId) void channelCtl.load();
-    void loadConnectors();
+    void loadConnectors({ fresh: true });
   };
 
   return (
@@ -1129,13 +1141,14 @@ function ExtensionIntegrationDetail({
           {hasConnectionSection && (
             <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
               {p.auth && <AuthGroup id={p.id} auth={p.auth} enabled={p.enabled ?? true} start={startSignIn} onChange={authChanged} />}
-              {connectorError && <ConnectorReadError error={connectorError} />}
+              {connectorError && <ConnectorReadError error={connectorError} onRetry={() => void loadConnectors({ fresh: true })} loading={connectorsLoading} />}
               {connectors.map((c) => (
                 <ConnectorConnectionBlock
                   key={`${c.manager ?? ""}:${c.id}`}
                   connector={c}
-                  reload={loadConnectors}
+                  reload={() => loadConnectors({ fresh: true })}
                   loading={connectorsLoading}
+                  authManagedByHost={!!p.auth}
                 />
               ))}
               {channelId && <ChannelBindingBlock ctl={channelCtl} />}

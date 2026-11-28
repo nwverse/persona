@@ -37,8 +37,9 @@ import { ExtensionSettingsPage } from "./ExtensionSettingsPage";
 import { ExtensionInfoAccess } from "./ExtensionInfoAccess";
 import { ExtensionUI } from "./ExtensionView";
 import { ExtensionConnectorInbox } from "./HubConnector";
-import { getAuth, listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
+import { listAuthNote, onAuthChange, shownPages, signInAsked, takeSignIn, withAuth, type ExtensionAuth } from "../../lib/extension-auth";
 import { AuthGroup } from "./ExtensionAuth";
+import { useExtensionAuthSync } from "./integrations/useExtensionAuthSync";
 import { dependencyText, dependentError, type Contribution, type Dependent } from "../../lib/extension-model";
 import { Group, Pill, Row, Switch, SettingsHint } from "./SettingsParts";
 import { formatList, t } from "../../i18n";
@@ -492,6 +493,21 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   const [dependents, setDependents] = useState<Dependent[] | null>(null);
   // Switching a pack off takes its members along: they are named before anything changes (#1830).
   const [packOff, setPackOff] = useState(false);
+  const [connectorRefreshKey, setConnectorRefreshKey] = useState(0);
+
+  const applyAuth = useCallback((auth: ExtensionAuth) => {
+    setDetail((cur) => (cur ? { ...cur, auth } : cur));
+  }, []);
+  const syncConnectorsOnAuth = useCallback(() => {
+    setConnectorRefreshKey((k) => k + 1);
+  }, []);
+  const { authChanged, authVersion, reconcileDetail } = useExtensionAuthSync({
+    id,
+    manager,
+    auth: detail?.auth,
+    onAuth: applyAuth,
+    onSync: syncConnectorsOnAuth,
+  });
 
   const apply = (d: HubExtensionDetail) => {
     setDetail(d);
@@ -505,11 +521,12 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
   const order = useRef({ asked: 0, shown: 0 });
   const readDetail = (then: (d: HubExtensionDetail) => void, failed?: (e: unknown) => void) => {
     const n = ++order.current.asked;
+    const authAtStart = authVersion();
     return extensionDetail(id).then(
       (d) => {
         if (n <= order.current.shown) return;
         order.current.shown = n;
-        then(d);
+        then(reconcileDetail(d, authAtStart));
       },
       (e) => void (n > order.current.shown && failed?.(e)),
     );
@@ -528,19 +545,8 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
     void readDetail((d) => (apply(d), setTyped({}), setFieldErrors({})), (e) => setError(errorText(e))).finally(() => setLoading(false));
   };
   useEffect(load, [id]);
-  // its sign-in as the hub pushes it; an install whose next step is signing in opens the dialog once
-  useEffect(() => onAuthChange((x, auth, from) => (manager || defaultManager()) === from && setDetail((cur) => (cur ? withAuth(cur, x, auth) : cur))), [manager]);
   const [startSignIn] = useState(() => signInAsked(id));
   useEffect(() => void takeSignIn(id), [id]);
-  const authChanged = (a?: ExtensionAuth) => {
-    if (a) setDetail((cur) => (cur ? { ...cur, auth: a } : cur));
-    else void getAuth(id).then((v) => setDetail((cur) => (cur ? { ...cur, auth: v } : cur)), () => {});
-  };
-  // a reconnect the hub could not resume: an extension_auth push missed meanwhile is not replayed (#4954); only the
-  // sign-in is read again, so what is being typed into the settings stays. Only an extension one signs in to has a
-  // sign-in to read: the hub answers the others 404 (#8854)
-  const signsIn = !!detail?.auth;
-  useEffect(() => (signsIn ? onHubEvent("hello", (m) => !isResumed(m) && authChanged()) : undefined), [id, signsIn]);
 
   const problems = useMemo(() => numberProblems(typed), [typed]);
   const fields = detail?.form?.fields ?? [];
@@ -847,7 +853,7 @@ function ExtensionDetail({ id, manager, onBack: back, headerBack, onPage, onUpgr
             </Group>
           )}
 
-          {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} />}
+          {(p.enabled ?? true) && !!p.contributes?.connectors?.length && <ExtensionConnectorInbox ids={p.contributes.connectors} manager={manager} onOpen={onConnector} refreshKey={connectorRefreshKey} />}
           <ConnectorExternalSourceSettings
             ids={[...(p.contributes?.connectors ?? []), ...(p.contributes?.channel ?? [])]}
             manager={manager}
