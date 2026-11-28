@@ -24,8 +24,9 @@ ROOT = Path(__file__).resolve().parents[2]
 DESIGN = ROOT / "docs/extensions/telegram-mtproto-session-transport.md"
 CONTRACT = ROOT / "schema/extension/telegram-mtproto-session-transport.contract.json"
 MODEL = ROOT / "scripts/test/synthetic_mtproto_model.py"
-ALLOWED_CHANGES = {
-    "CLAUDE.md",
+# The Docs index lists this design among other docs: in CLAUDE.md, or in docs/README.md once it moves there (#10613).
+SHARED_INDEXES = {"CLAUDE.md", "docs/README.md"}
+ALLOWED_CHANGES = SHARED_INDEXES | {
     "docs/extensions/telegram-mtproto-session-transport.md",
     "schema/extension/telegram-mtproto-session-transport.contract.json",
     "scripts/test/synthetic_mtproto_model.py",
@@ -42,9 +43,11 @@ def load_contract():
 
 
 def telegram_index_entries(text):
-    # A CLAUDE.md table cell lists several documents on one line, separated by middle dots.
+    # A CLAUDE.md table cell lists several documents on one line, separated by middle dots; docs/README.md lists one
+    # per line as a list item, so the entry reads the same after it moves.
     design_path = DESIGN.relative_to(ROOT).as_posix()
-    return sorted(entry.strip() for entry in re.split(r"[|·\n]", text) if design_path in entry)
+    return sorted(re.sub(r"^[-*+]\s+", "", entry.strip())
+                  for entry in re.split(r"[|·\n]", text) if design_path in entry)
 
 
 def design_inventory_violations(root):
@@ -57,14 +60,21 @@ def design_inventory_violations(root):
     untracked = git("ls-files", "--others", "--exclude-standard", "-z")
     changed = set(filter(None, os.fsdecode(tracked + untracked).split("\0")))
     outside = changed - ALLOWED_CHANGES
-    if not outside or changed & (ALLOWED_CHANGES - {"CLAUDE.md"}):
+    if not outside or changed & (ALLOWED_CHANGES - SHARED_INDEXES):
         return outside
-    if "CLAUDE.md" in changed:
-        index = root / "CLAUDE.md"
-        in_base = git("ls-tree", "--name-only", base, "--", "CLAUDE.md")
-        before = git("show", f"{base}:CLAUDE.md").decode("utf-8") if in_base else ""
-        after = index.read_text(encoding="utf-8") if index.is_file() else ""
-        if telegram_index_entries(before) != telegram_index_entries(after):
+    if changed & SHARED_INDEXES:
+        def before(name):
+            in_base = git("ls-tree", "--name-only", base, "--", name)
+            return git("show", f"{base}:{name}").decode("utf-8") if in_base else ""
+
+        def after(name):
+            return (root / name).read_text(encoding="utf-8") if (root / name).is_file() else ""
+
+        # The entries of both index files together: moving the entry unchanged from one to the other is no change.
+        def entries(read):
+            return sorted(entry for name in sorted(SHARED_INDEXES) for entry in telegram_index_entries(read(name)))
+
+        if entries(before) != entries(after):
             return outside
     return set()
 
@@ -739,9 +749,10 @@ class DesignInventoryScopeTests(unittest.TestCase):
         isolated_git.start()
         self.addCleanup(isolated_git.stop)
         self.git("init", "-q")
-        for name in ALLOWED_CHANGES - {"CLAUDE.md"}:
+        for name in ALLOWED_CHANGES - SHARED_INDEXES:
             self.write(name, "original\n")
         self.write("CLAUDE.md", self.index)
+        self.write("docs/README.md", "# Documentation\n")
         self.write(self.outside, "original\n")
         self.git("add", ".")
         self.git("commit", "-qm", "fixture base")
@@ -769,7 +780,7 @@ class DesignInventoryScopeTests(unittest.TestCase):
         self.assertEqual(set(), design_inventory_violations(self.root), "committed")
 
     def test_each_dedicated_file_activates_the_inventory(self):
-        for name in sorted(ALLOWED_CHANGES - {"CLAUDE.md"}):
+        for name in sorted(ALLOWED_CHANGES - SHARED_INDEXES):
             with self.subTest(name=name):
                 self.write(name, "design change")
                 self.assertEqual(set(), design_inventory_violations(self.root))
@@ -785,6 +796,29 @@ class DesignInventoryScopeTests(unittest.TestCase):
             with self.subTest(entry=entry):
                 self.write("CLAUDE.md", self.index.replace(self.entry, entry))
                 self.assertEqual({self.outside}, design_inventory_violations(self.root))
+
+    def test_index_entry_may_move_to_docs_readme(self):
+        self.write(self.outside, "outside change")
+        neighbor_only = "| Extensions | `other.md` neighbor |\n"
+        readme = f"# Documentation\n\n## Docs index\n\n### Extensions\n\n- `other.md` neighbor\n- {self.entry}\n"
+        self.write("CLAUDE.md", neighbor_only)
+        self.write("docs/README.md", readme)
+        self.assertEqual(set(), design_inventory_violations(self.root), "moved unchanged")
+        self.write("docs/README.md", readme.replace("neighbor", "updated neighbor"))
+        self.assertEqual(set(), design_inventory_violations(self.root), "a neighbor changed after the move")
+        for case, claude, moved in (
+                ("changed on the way", neighbor_only, readme.replace(self.entry, self.entry + " v2")),
+                ("kept in both places", self.index, readme),
+                ("dropped from both", neighbor_only, "# Documentation\n")):
+            with self.subTest(case=case):
+                self.write("CLAUDE.md", claude)
+                self.write("docs/README.md", moved)
+                self.assertEqual({self.outside}, design_inventory_violations(self.root))
+
+    def test_docs_readme_edit_with_the_entry_in_claude_md_is_not_a_design_change(self):
+        self.write(self.outside, "outside change")
+        self.write("docs/README.md", "# Documentation\n\nAn unrelated edit.\n")
+        self.assertEqual(set(), design_inventory_violations(self.root))
 
     def test_committed_design_reports_an_untracked_path(self):
         self.write(CONTRACT.relative_to(ROOT), "design change")
