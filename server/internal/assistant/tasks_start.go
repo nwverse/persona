@@ -396,6 +396,8 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 			return nil, err
 		}
+	} else {
+		s.rememberPlannedWriteScopes(ctx, p)
 	}
 	s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, p)})
 	// Pre-claim workspaces that have a later queued sibling in this same plan so deterministic FIFO order holds

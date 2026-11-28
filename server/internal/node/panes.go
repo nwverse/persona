@@ -267,7 +267,7 @@ func (n *Node) newShell(ctx context.Context, kind, ws, dir string) (proto.NewShe
 	}
 	created, err := openShell(ctx, launch, target, cwd, tabLabel("shell", n.tabLabels(ctx, launch, ws)))
 	if err != nil {
-		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+		return proto.NewShellResult{}, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	return n.shellCreated(ctx, launch, created)
 }
@@ -299,7 +299,7 @@ func (n *Node) newShellSpace(ctx context.Context, kind, dir string) (proto.NewSh
 		return proto.NewShellResult{}, errors.New("no workspace")
 	}
 	if err != nil {
-		return proto.NewShellResult{}, fmt.Errorf("创建终端标签页失败：%w", err)
+		return proto.NewShellResult{}, hostFailure(ctx, "terminal_open_failed", err)
 	}
 	return n.shellCreated(ctx, launch, created)
 }
@@ -363,10 +363,13 @@ func (n *Node) launchSpaceHolding(ctx context.Context, dir string) (kind, ws str
 	return kind, ws
 }
 
+// errNoPaneCreated: the engine said a new tab was made but named no pane in it.
+var errNoPaneCreated = errors.New("the engine answered with no pane")
+
 // shellCreated answers with the new shell's pane once it is in the layout the terminal call checks.
 func (n *Node) shellCreated(ctx context.Context, launch host.Launcher, created *host.Created) (proto.NewShellResult, error) {
 	if created == nil || created.Pane.ID == "" {
-		return proto.NewShellResult{}, errors.New("创建终端标签页失败：宿主没有返回窗格")
+		return proto.NewShellResult{}, hostFailure(ctx, "terminal_open_failed", errNoPaneCreated)
 	}
 	pane := created.Pane.String()
 	_ = n.refreshHosts(ctx, launch.(host.Host))

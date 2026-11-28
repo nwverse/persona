@@ -31,17 +31,39 @@ func (t *PlanTask) usesPreparedWorkspace() bool {
 	return t.backendWorkspace() || t.nodeDispatchedWorkspace()
 }
 
+// capabilityUnsupported: the node answered that it prepares no task workspaces (an older node).
+func capabilityUnsupported(err error) bool {
+	problem, ok := errors.AsType[*taskworkspace.Problem](err)
+	return ok && problem.Code == "unsupported"
+}
+
+// nodePreparesTaskWorkspaces: the node prepares a new dispatch's workspace itself.
+func nodePreparesTaskWorkspaces(support taskworkspace.Capabilities) bool {
+	return support.Capability == taskworkspace.Capability && support.LocalGit && support.Start
+}
+
+// enginePathAllowed asks the node what previewDispatchedWorkspace will ask, before it, for a caller that would call the
+// engine early: only a negative answer allows the engine path. A positive answer or a failed lookup leaves the
+// decision to previewDispatchedWorkspace.
+func (s *Service) enginePathAllowed(ctx context.Context, t *PlanTask) bool {
+	support, err := s.backendWorkspaceCapabilities(ctx, t.Machine, "", t.Cwd)
+	if err != nil {
+		return capabilityUnsupported(err)
+	}
+	return !nodePreparesTaskWorkspaces(support)
+}
+
 // Preview a new dispatch without allocating a path. Only a negative capability
 // answer permits the engine path. A failed lookup can be retried on the same node.
 func (s *Service) previewDispatchedWorkspace(ctx context.Context, t *PlanTask, resolved *TaskWorkspaceResolved) (bool, error) {
 	support, err := s.backendWorkspaceCapabilities(ctx, t.Machine, "", t.Cwd)
 	if err != nil {
-		if problem, ok := errors.AsType[*taskworkspace.Problem](err); ok && problem.Code == "unsupported" {
+		if capabilityUnsupported(err) {
 			return false, nil
 		}
 		return false, err
 	}
-	if support.Capability != taskworkspace.Capability || !support.LocalGit || !support.Start {
+	if !nodePreparesTaskWorkspaces(support) {
 		return false, nil
 	}
 	naming, ok := s.store().(workspaceNamingStore)

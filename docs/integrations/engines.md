@@ -39,7 +39,7 @@ and that the web edits the set, sends a pick inside it as the set with a new def
   Retirement checks the session's own host under any default: it stops the agent and keeps its terminal,
   unless the user requests closing it. Runtime-owned sessions remain protected.
 - **The empty set**: no terminal host. Agents shows transcripts, runtimes (DSH, pi, opencode) and botmux sessions only; starting or continuing a
-  session from the phone is refused with "这台电脑没启用终端引擎" (`engine_missing`) and nothing is sent. This is the choice for a computer
+  session from the phone is refused (`engine_missing`, reason `none`, "Refusals in the reader's language" below) and nothing is sent. This is the choice for a computer
   whose sessions are only the desktop apps' (Claude's and Codex's, `docs/integrations/claude-integration.md`, `docs/integrations/codex.md`):
   they stay listed, and the node probes no engine. New Agent with the launcher `claude-desktop` still starts a session there, in Claude's
   desktop app (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"), and with `codex-app` a chat in the Codex App
@@ -773,6 +773,32 @@ Audience: everyone with Orca enabled on a computer (#17037). Orca is a desktop a
   incompatible is a warning saying what to do); a machine without Orca gets no line. The machine page's "Terminal and engine" stands on
   herdr's line where herdr is enabled and on Orca's where Orca is, so an Orca-only computer is not reported as having its engine off
   (web `lib/node-health.ts`, Android `NodeHealth.kt`).
+
+## Refusals in the reader's language
+
+Audience: everyone using Persona in English or Japanese with an Orca computer (#17057). Every refusal and error an Orca path returns
+carries a stable code, and the data the hub words it by (`server/internal/apierr`: `rpcFailureKeys`, `reasonKeys`,
+`engineMissingKeys`, `notDeliveredKeys`, `bridgeReasonKeys`) in each request's language (`rpc-errors.*` in
+`server/internal/i18n/locales`); the engine's or Orca's own words are the `detail`. The node's message stays what it was, for older
+hubs and logs (`docs/protocol/rolling-upgrade-compatibility.md`, "Orca refusals in the reader's language").
+
+| Code | Data `reason` | When |
+| --- | --- | --- |
+| `orca_not_registered`, `orca_workspace_unavailable` | | a start Orca could not place: no project open, or the chosen workspace gone (`node/hostorca_launch.go`) |
+| `runtime_session` | | a resume of a session another app's runtime owns, an Orca chat's (`node/control.go`) |
+| `codex_launch_preferences` | `unreadable`, `custom`, `shell`, `quoting` | Orca's Codex launch settings a stock Codex start cannot follow (`node/codex_orca_launch_defaults.go`) |
+| `engine_missing` | `not_running`, `not_installed`, `incompatible`, `unavailable`, `start_failed`, `resume_unavailable`, `not_enabled`, `none` | the engine could not take the start or resume; `engine` names it, except for `none` (no engine turned on) |
+| `not_running` | `engine`, `directory_gone`, `resume_timeout`, `agent_exited` | a message to a session that is not running (`node/sendsafe.go`, `node/pi.go`) |
+| `not_delivered` | `terminal_refused`, `terminal_finished`, `screen_unreadable` | nothing was typed |
+| `agent_busy` | `terminal_changed` | a Close of a stopped Agent whose terminal changed (`node/orca_terminal_close.go`) |
+| `terminal_open_failed`, `tab_close_failed`, `pane_close_failed`, `pane_split_failed` | | the engine would not open, close or split; its words in the summary (`detail`) |
+| `tab_name_invalid`, `tab_gone`, `pane_gone` | | the terminal browser's checks (`node/panes_actions.go`) |
+| `pane_has_agent`, `pane_not_at_prompt`, `pane_foreground_unknown`, `pane_directory_unknown` | `unreadable` (the last but one) | Run Agent Here's checks |
+| `close_not_in_terminal` | | a Close of an Agent that runs in no terminal of the computer |
+| `unsupported` | `engine_unsupported`, the bridge's `orca_*` | a capability the engine lacks (the words stay `unsupported: <engine> cannot do this`), or an Orca chat's |
+
+The New worktree dialog's refusals (`worktree-composer.*`) are worded by the node itself in the request's language, which the hub sends
+as `locale`.
 
 ## When an engine cannot be selected
 

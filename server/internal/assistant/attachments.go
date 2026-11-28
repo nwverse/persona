@@ -115,11 +115,11 @@ func (r attachmentRules) resolve(p string) string {
 // Path boundaries intentionally exclude Han/letter runes so paths like "/Users/张三/etc/passwd" or
 // "/home/me/.ssh/id_rsa备份" never falsely match "/etc/passwd" or "/home/me/.ssh/id_rsa".
 func isPathLeftBoundary(r rune) bool {
-	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：:，,。；;、=!?！？`", r)
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：:，,。；;、=!?！？`", r) // i18n-ignore: path delimiters in user messages, including Chinese punctuation
 }
 
 func isPathRightDelim(r rune) bool {
-	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：，。；、,;！？!?`", r)
+	return unicode.IsSpace(r) || strings.ContainsRune("\"'“”‘’()（）<>[]{}「」『』【】《》：，。；、,;！？!?`", r) // i18n-ignore: path delimiters in user messages, including Chinese punctuation
 }
 
 func isPathRightBoundary(rest string) bool {
