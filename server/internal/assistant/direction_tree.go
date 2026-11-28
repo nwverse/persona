@@ -561,7 +561,6 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 	}
 	projViews := projection.Views(facts, now)
 	if cfg.todosV2On() {
-		applyActiveBlockersToViews(all, projViews, nil)
 		tb.placed = make(map[string]todoTriage, len(all))
 		for i := range all {
 			tb.views[all[i].ID] = projViews[i]

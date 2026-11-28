@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 )
@@ -648,13 +649,12 @@ func TestTodosV2RepoGatePromotesBoundOpenPRToWaitingNotDraftOrRef(t *testing.T) 
 			},
 		},
 	}
-	views := []assistantwire.TodoSummary{
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
-		{Phase: assistantwire.TodoPhaseTodo, Section: assistantwire.TodoListSectionTodo, Reason: assistantwire.TodoReasonRest},
+	facts := make([]projection.Facts, len(list))
+	for i, row := range list {
+		facts[i] = projectionFacts(row, nil, nil)
+		facts[i].TodosV2 = true
 	}
-	waits := make([]*assistantwire.TodoWait, len(list))
-	applyRepoGateToViews(list, views, waits)
+	views, waits := projection.ViewsAndWaits(facts, base)
 
 	if views[0].Section != assistantwire.TodoListSectionWaiting || views[0].Reason != assistantwire.TodoReasonPrOpen {
 		t.Fatalf("open_pr_repo view = %+v, want waiting/pr_open", views[0])
