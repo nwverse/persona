@@ -48,6 +48,9 @@ final class CoreOnlyHubLiveUITests: XCTestCase {
         XCUIDevice.shared.appearance = appearance == "dark" ? .dark : .light
         let addButton = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
         XCTAssertTrue(addButton.waitForExistence(timeout: 40), "no composer + button:\n\(app.debugDescription)")
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: addButton)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 30), .completed,
+                       "the main session's composer stayed disabled:\n\(app.debugDescription)")
         addButton.press(forDuration: 1.0)
         let mention = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == %@ OR label == %@", "composer-menu-mention", "Mention a File or Session")).firstMatch

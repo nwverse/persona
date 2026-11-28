@@ -81,6 +81,7 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         self.assertIn("throw XCTSkip", source)
         self.assertIn("app.launchPinned()", source)
         self.assertIn("addButton.press(forDuration:", source)
+        self.assertIn('NSPredicate(format: "enabled == true")', source)
 
     def test_machine_fixture_never_starts_a_local_node(self):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
