@@ -588,6 +588,9 @@ targets:
         UIBackgroundModes: [audio]
         # Also PersonaWatch/InfoPlist.xcstrings (en identical, zh-Hans, ja).
         NSMicrophoneUsageDescription: "Persona records audio you start on Apple Watch, for example a meeting, a spoken note, or your whole day with All-Day Recording. The audio goes to your iPhone and is transcribed there; only the text is saved to the knowledge base on your hub, which can write a recap of your day from it."
+        # Keep these here too: xcodegen writes the Watch Info.plist from this map, replacing the standalone file.
+        NSHealthShareUsageDescription: "Persona lets you read health summaries on Apple Watch, for example steps, workouts and sleep. With rolling recording on, Persona checks heart rate, HRV, steps, workouts and moods to keep the minutes around them; the records stay in Apple Health on your paired iPhone."
+        NSHealthUpdateUsageDescription: "Persona saves health samples you confirm on Apple Watch to Apple Health on your paired iPhone. When you turn on sync, water and protein records are written there too."
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
     settings:

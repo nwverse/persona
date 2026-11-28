@@ -42,7 +42,7 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
     if (waits) add(s.manager, key);
   }
   for (const ix of interactions) {
-    if (supervisorHeld(ix)) continue;
+    if (ix.mirror_of || supervisorHeld(ix)) continue;
     if (!ix.session_id) {
       add(ix.manager, `card:${ix.id}`);
       continue;

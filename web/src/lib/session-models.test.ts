@@ -429,7 +429,7 @@ describe("reading the lists", () => {
     expect(modelList("m-forget", "gateway").list!.models.some((m) => m.id === "vendor/model-x")).toBe(false);
     expect(calls.at(-1)).toEqual({ method: "DELETE", url: expect.stringContaining("/machines/m-forget/launchers/gateway/models/custom?model=vendor%2Fmodel-x") });
     await answer("/models/custom", json({ error: "只读设备不能改" }, 403));
-    expect(await done).toMatch(/没能忘记「vendor\/model-x」：.*只读设备不能改/);
+    expect(await done).toMatch(/无法移除「vendor\/model-x」：.*只读设备不能改/);
     expect(modelList("m-forget", "gateway").list!.models.map((m) => m.id)).toEqual(["default", "opus", "haiku", "vendor/model-x"]);
   });
 });

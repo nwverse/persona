@@ -90,6 +90,7 @@ struct AssistantView: View {
     private static let listKey = "assistant.list"
     /// The history column as UIKit has it (`SplitColumnControl`).
     @State private var columnState = SplitColumnState()
+    @State private var replySpeechContext = ReplySpeechContext()
     #else
     /// Regular width: the sidebar is a column beside the conversation; Chat History shows or hides it.
     @State private var columns = SplitColumns.shown
@@ -289,6 +290,13 @@ struct AssistantView: View {
                     .id(key)
                     #if os(iOS)
                     .environment(\.messageLiftHost, liftHost)
+                    .background {
+                        if phonePage, atRoot, key == model.assistantMain, !activeDrawer.isOut, liftHost.menu?.lift == nil {
+                            Color.clear
+                                .background { ReplySpeechObserver(key: key) }
+                                .modifier(ReplySpeechInputObservation(context: replySpeechContext))
+                        }
+                    }
                     #endif
                     // The iPad draws the shell's composer too (`ChatComposerKind.padCard`): the assistant's, as on the iPhone.
                     // The Sidebar layout's phone page too: the iPhone's conversation, as in the shell (#6332).
@@ -392,6 +400,7 @@ struct AssistantView: View {
         #if os(iOS)
         // A message pressed in the conversation, over the bar too: the whole page dims (#3188).
         .overlay { MessageLiftHostLayer(host: liftHost) }
+        .environment(\.replySpeechContext, phonePage ? replySpeechContext : nil)
         #endif
     }
 
@@ -417,6 +426,15 @@ struct AssistantView: View {
                 TasksStore.shared.fullAgent = nil
                 navPath.wrappedValue.append(key)
             }
+            // A task's detail asked for (a "Sent to" line, a card's task, a dispatch link): in the Sidebar layout's page a
+            // value on its path, so it belongs to the root it was opened on (#13156). Pushed by view from the conversation
+            // (`detailPresentation`), a pick in the sidebar replaced the root under it and the page stayed in front.
+            .onChange(of: taskDetailByValue && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil),
+                      initial: true) { _, asked in
+                guard asked, let route = TasksStore.shared.takeDetail() else { return }
+                navPath.wrappedValue.append(route)
+            }
+            .environment(\.taskDetailByValue, taskDetailByValue)
             // On appear too (a cold launch onto Inbox asks before this page exists), but each request once: the root
             // appears again after every pop, and replaying the last request pushed the inbox right back.
             .onChange(of: request?.serial, initial: true) { _, serial in
@@ -562,6 +580,16 @@ struct AssistantView: View {
                 _ = await model.clearMainContext()
             }
             #endif
+    }
+
+    /// The Sidebar layout's page beside its column takes a task's detail on its path (#13156); elsewhere it is a sheet, or
+    /// in regular width pushed by view from the conversation as before (`detailPresentation`).
+    private var taskDetailByValue: Bool {
+        #if os(iOS)
+        embedded && widthClass == .regular
+        #else
+        false
+        #endif
     }
 
     /// The sidebar's places push by value (`ShellRoute`, `ShellDestinations`): the iPhone shell and the iPad's column.

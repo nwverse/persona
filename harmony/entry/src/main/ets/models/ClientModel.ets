@@ -47,6 +47,7 @@ import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } fro
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
 import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasRegisteredPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
+import { buildNextSuggestionsPayload, parseAssistantNextSuggestions, resolveAuthoritativeNextSuggestions } from '../core/NextSuggestions';
 
 
 
@@ -121,6 +122,11 @@ export class ClientModel {
   @Trace agentsDisplaySupported: boolean = false;
   @Trace agentsDisplaySaving: boolean = false;
   private agentsDisplayRevision: number = 0;
+  @Trace nextSuggestionsValue: boolean | null = null;
+  @Trace nextSuggestionsLoaded: boolean = false;
+  @Trace nextSuggestionsSaving: boolean = false;
+  @Trace nextSuggestionsError: string = '';
+  private nextSuggestionsRevision: number = 0;
   openXiaoYiRoute(routeJson: string): void {
     if (!routeJson || routeJson.length > 16384) return;
     this.pendingXiaoYiRoute = routeJson;
@@ -134,6 +140,9 @@ export class ClientModel {
   isRecordingModuleAllowed(): boolean {
     return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
   }
+  canPreviewDemoRecordings(): boolean {
+    return this.demo;
+  }
   mailModuleAllowed(): boolean {
     return this.demo || isHubModuleAllowed(MAIL_MODULE_FEATURE, this.features, this.rememberedHubModules);
   }
@@ -146,6 +155,9 @@ export class ClientModel {
   todosPageVisible(): boolean {
     const hidden = parseHiddenHubPages(this.sidebarConfig);
     return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
+  }
+  knowledgePageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('knowledge');
   }
   /**
    * Whether this device has a registered Hub background push route (#16783, PushHealth).
@@ -167,6 +179,7 @@ export class ClientModel {
   @Trace managers: ResourceRow[] = [];
   @Trace rosterDefaultId: string = '';
   @Trace features: string[] = [];
+  @Trace starredRevision: number = 0;
   @Trace private publishedImageLimits: Record<string, Object> = {};
   private helloHub: string = '';
   private helloScope: string = '';
@@ -180,6 +193,7 @@ export class ClientModel {
   @Trace private attentionOwner: string = '';
   private attentionReadRevision: number = 0;
   @Trace conversations: ResourceRow[] = [];
+  @Trace namingAgentKeys: string[] = [];
   @Trace machines: ResourceRow[] = [];
   @Trace directorySessions: ResourceRow[] = [];
   @Trace directoryMachines: ResourceRow[] = [];
@@ -629,7 +643,8 @@ export class ClientModel {
     if (this.detached) return;
     await this.local.put('profiles', JSON.stringify({ profiles: this.profiles, active: this.profile.id }));
   }
-  private async applyAppearance(change: DevicePreferenceChange): Promise<void> {
+  private async applyAppearance(change: DevicePreferenceChange): Promise<boolean> {
+    let saved = false;
     await this.changePreferences(async (): Promise<void> => {
       const mode = change.appearance === undefined ? this.appearance : change.appearance;
       const requested = change.style === undefined ? this.style : change.style;
@@ -639,9 +654,11 @@ export class ClientModel {
       catch (_) { this.error = 'cache_unavailable'; return; }
       this.appearance = mode; this.style = style; this.alerts = alerts;
       for (const view of this.views.values()) { view.appearance = mode; view.style = style; }
+      saved = true;
     });
+    return saved;
   }
-  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<void> { await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
+  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<boolean> { return await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
   async setStyle(style: string): Promise<void> { await this.applyAppearance({ style: style }); }
   async setAlerts(alerts: boolean): Promise<void> { await this.applyAppearance({ alerts: alerts }); }
   async setLanguage(language: string): Promise<void> {
@@ -745,7 +762,8 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.managers = []; this.rosterDefaultId = '';
+    this.namingAgentKeys = [];
     this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
@@ -908,7 +926,8 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.nextSuggestionsValue = null; this.nextSuggestionsLoaded = false; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++; this.error = '';
+      this.namingAgentKeys = [];
       this.publishedImageLimits = {};
     }
     this.publishDirectory();
@@ -976,6 +995,8 @@ export class ClientModel {
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
+      } else if (type === 'assistant_starred') {
+        this.starredRevision++;
       } else if (['interaction', 'interactions', 'interaction_resolved', 'session', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
         if (type === 'inbox') this.inboxRead.change++;
         if (type === 'todo') this.todoRead.change++;
@@ -1128,6 +1149,64 @@ export class ClientModel {
       return false;
     } finally {
       if (this.owns(generation, scope) && rev === this.agentsDisplayRevision) this.agentsDisplaySaving = false;
+    }
+  }
+  syncNextSuggestions(assistant: Record<string, Object>): void {
+    const parsed = parseAssistantNextSuggestions(assistant);
+    if (parsed !== null) {
+      this.nextSuggestionsValue = parsed;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+    }
+    const parent = this.directoryParent;
+    if (parsed !== null && parent && parent.scope() === this.scope() && parent.profile.hubId === this.profile.hubId) {
+      parent.nextSuggestionsValue = parsed;
+      parent.nextSuggestionsLoaded = true;
+      if (parent.demo) parent.refreshDemo();
+    }
+  }
+  async loadNextSuggestions(): Promise<void> {
+    if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsSaving) return;
+    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const rev = ++this.nextSuggestionsRevision;
+    this.nextSuggestionsError = '';
+    try {
+      const result = await repo.call('/api/v1/assistant');
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.nextSuggestionsRevision) return;
+      this.nextSuggestionsValue = parseAssistantNextSuggestions(result);
+      this.nextSuggestionsLoaded = true;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.nextSuggestionsRevision) {
+        this.nextSuggestionsError = error instanceof Error ? error.message : 'failed';
+      }
+    }
+  }
+  async setNextSuggestions(enabled: boolean): Promise<boolean> {
+    if ((!this.connected && !this.demo) || !this.repository || this.nextSuggestionsValue === null || this.nextSuggestionsSaving) return false;
+    const previous = this.nextSuggestionsValue;
+    if (previous === enabled) return true;
+    const generation = this.generation, scope = this.scope(), repo = this.repository;
+    const rev = ++this.nextSuggestionsRevision;
+    this.nextSuggestionsSaving = true;
+    this.nextSuggestionsError = '';
+    this.nextSuggestionsValue = enabled;
+    try {
+      const result = await repo.call('/api/v1/assistant', 'PUT', buildNextSuggestionsPayload(enabled));
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.nextSuggestionsRevision) return false;
+      const authoritative = resolveAuthoritativeNextSuggestions(result, enabled);
+      this.nextSuggestionsValue = authoritative;
+      this.nextSuggestionsLoaded = true;
+      if (this.demo) this.refreshDemo();
+      return authoritative === enabled;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.nextSuggestionsRevision) {
+        this.nextSuggestionsValue = previous;
+        this.nextSuggestionsError = error instanceof Error ? error.message : 'failed';
+        this.failure(error as Error);
+      }
+      return false;
+    } finally {
+      if (this.owns(generation, scope) && rev === this.nextSuggestionsRevision) this.nextSuggestionsSaving = false;
     }
   }
   private async refreshPhoneList(kind: string, repo: HubRepository, generation: number, scope: string, force: boolean): Promise<void> {
@@ -1465,8 +1544,8 @@ export class ClientModel {
         return;
       }
       const projection = projectToolTurn(group[0].id, group, running && index === turns.length - 1);
-      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
-      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.at = this.itemTime(item); messages.push(message); });
+      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
+      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.at = this.itemTime(item); messages.push(message); });
       if (projection.summaryVisible) {
         const summary = new ChatMessage(projection.workKey, 'work');
         summary.at = this.itemTime(group[0]);
@@ -1474,7 +1553,7 @@ export class ClientModel {
         summary.work = projection.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((value: string) => !!value).join('\n\n');
         summary.raw = JSON.stringify(group); messages.push(summary);
       }
-      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; messages.push(message); }
+      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; message.sourceFingerprint = typeof projection.visibleAssistantText['source_fingerprint'] === 'string' ? projection.visibleAssistantText['source_fingerprint'] as string : ''; message.at = this.itemTime(projection.visibleAssistantText); messages.push(message); }
     });
     return messages;
   }
@@ -1755,19 +1834,20 @@ export class ClientModel {
     const path = '/api/v1/sessions/' + encodeURIComponent(this.selected.machine) + '/' + encodeURIComponent(this.selected.session || this.selected.id) + '/interrupt';
     return this.canInterrupt() && this.turnWorking() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
   }
-  async stop(admission?: () => boolean): Promise<void> {
-    if (!this.canStop() || admission && !admission()) return;
+  async stop(admission?: () => boolean): Promise<boolean> {
+    if (!this.canStop() || admission && !admission()) return false;
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
     const feedback = this.sendAttempts.get(target);
     const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.canInterrupt() && this.turnWorking() && (!admission || admission());
     this.interruptPendingKey = pending;
     try { await repo.stop(row, admit); } catch (error) {
       if (this.owns(generation, scope) && this.target() === target && this.repository === repo) this.failure(error as Error);
-      return;
+      return false;
     } finally { if (this.interruptPendingKey === pending) this.interruptPendingKey = ''; }
     if (feedback && this.owns(generation,scope) && this.sendAttempts.get(target) === feedback) await this.endSendFeedback(scope,target,feedback);
-    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
+    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return false;
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
+    return true;
   }
   async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
     if (admit && !admit()) return;
@@ -2036,6 +2116,15 @@ export class ClientModel {
       !!session && this.capabilities(session).canApprove;
   }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
+  canInterruptSession(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session') return false;
+    if (row.group && row.group !== this.profile.id) return false;
+    if (row.manager && row.manager !== this.profile.manager) return false;
+    const session = this.sessions.find((item: ResourceRow) =>
+      item.machine === row.machine && (item.session || item.id) === (row.session || row.id)
+    );
+    return this.capabilities(session || row).canInterrupt;
+  }
   private serializeDraftContexts(refs: Record<string,Object>[]): string {
     if (!refs.length) return '';
     return JSON.stringify(refs.length===1 ? refs[0] : Wire.payload(['contexts'],[refs]));
@@ -2159,6 +2248,42 @@ export class ClientModel {
     const previous=this.sourceContext,target=this.target();this.sourceContext='';this.draftRevision=util.generateRandomUUID();
     this.persistDraft().then(()=>new ChatDraftStore(this.local).discardForwardMedia(target,previous,'')).catch(()=>this.error='failed');
   }
+  private autoRenameKey(row: ResourceRow): string {
+    const sid = row.session || row.id;
+    return JSON.stringify([this.scope(), this.connectionGeneration(), row.machine, sid]);
+  }
+  canAutoRenameAgent(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session' || Wire.bool(row.data(), 'assistant')) return false;
+    if (!this.demo && !this.features.includes('agent_autoname')) return false;
+    const sid = row.session || row.id;
+    return !!row.machine && !!sid;
+  }
+  isAutoRenamingRow(row: ResourceRow): boolean {
+    if (!row || row.kind !== 'session') return false;
+    return this.namingAgentKeys.includes(this.autoRenameKey(row));
+  }
+  async autoRenameAgent(row: ResourceRow): Promise<string> {
+    if (!this.canAutoRenameAgent(row)) return '';
+    const key = this.autoRenameKey(row);
+    if (this.namingAgentKeys.includes(key)) return '';
+    const machine = row.machine, sid = row.session || row.id;
+    const path = '/api/v1/sessions/' + segment(machine) + '/' + segment(sid) + '/autoname';
+    if (this.operationBlocked(path)) return 'pending_action';
+    const generation = this.generation, scope = this.scope();
+    this.namingAgentKeys = this.namingAgentKeys.concat([key]);
+    try {
+      await this.repo().call(path, 'POST', {}, '', () => this.owns(generation, scope));
+      if (!this.owns(generation, scope)) return '';
+      if (this.demo) await this.refresh();
+      return '';
+    } catch (error) {
+      if (!this.owns(generation, scope)) return '';
+      const msg = error instanceof Error ? error.message : 'failed';
+      return msg || 'failed';
+    } finally {
+      this.namingAgentKeys = this.namingAgentKeys.filter((entry: string) => entry !== key);
+    }
+  }
   async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = ''): Promise<ResourceRow> {
     if (machine.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), repo = this.repo();
@@ -2205,6 +2330,9 @@ export class ClientModel {
     const demo = this.demoRepository; if (!this.demo || !demo) return;
     const roster = demo.roster(); this.features = roster.features; this.mainId = roster.mainId;
     this.sessions = roster.sessions; this.sessionsReady = true; this.machines = roster.machines; this.conversations = roster.conversations; this.mainMachineId = roster.conversations.find((row: ResourceRow) => row.id === roster.mainId)?.machine || '';
+    if (roster.leaders.length > 0 || this.sidebarConfig !== '') {
+      this.acceptSidebarConfig(Wire.payload(['main', 'main_machine_id', 'leaders'], [roster.mainId, this.mainMachineId, roster.leaders]));
+    }
     this.todos = roster.todos; this.knowledge = roster.knowledge; this.inbox = roster.inbox;
     this.managers = [new ResourceRow('demo', tr('local_demo'), 'manager')];
     if (this.selected.kind === 'session') { const current = this.sessions.find((row: ResourceRow) => row.id === this.selected.id && row.machine === this.selected.machine); if (current) this.selected = current; }
@@ -2214,9 +2342,11 @@ export class ClientModel {
   useDemo(): void {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.publishedImageLimits = {};
+    this.namingAgentKeys = [];
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
     this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
     this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
+    this.nextSuggestionsValue = true; this.nextSuggestionsLoaded = true; this.nextSuggestionsSaving = false; this.nextSuggestionsError = ''; this.nextSuggestionsRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;

@@ -8,8 +8,7 @@ import (
 )
 
 // closeAfterExit finishes an explicit Close whose Agent exited before lookup.
-// Its caller holds the session's recovery and typing locks. Only Herdr's marked
-// retained shells are handled here; other engines keep their existing behavior.
+// Its caller holds the session's recovery and typing locks.
 func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState, beforeClose func() error) error {
 	pane := st.Pane
 	if pane == "" {
@@ -19,6 +18,18 @@ func (n *Node) closeAfterExit(ctx context.Context, id string, st sessionState, b
 	}
 	if pane == "" {
 		return nil // Preserve idempotent Close for older state with no terminal identity.
+	}
+	if host.ParsePane(pane).Kind == host.Orca {
+		h, ref, err := n.paneHost(pane)
+		if err != nil {
+			return err
+		}
+		o, ok := h.(*orcaHost)
+		if !ok {
+			return unsupported(h)
+		}
+		_, err = n.closeStoppedOrca(ctx, o, id, ref.String(), st, beforeClose)
+		return err
 	}
 	if host.ParsePane(pane).Kind != host.Herdr {
 		return nil

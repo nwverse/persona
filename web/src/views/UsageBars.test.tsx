@@ -137,7 +137,7 @@ describe("the sidebar's usage strip", () => {
       const dialog = document.querySelector<HTMLElement>("[role=dialog]")!;
       expect(dialog.parentElement).toBe(document.body);
       expect(dialog.getAttribute("data-state")).toBe("open");
-      expect(dialog.textContent).toContain("网关暂时读不到，显示的是上次的数字");
+      expect(dialog.textContent).toContain("暂时无法连接网关，当前显示的是上次获取的数据。");
 
       // Clicking inside the portaled dialog must not dismiss it
       await act(async () => {
@@ -178,7 +178,7 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
     const html = renderToStaticMarkup(<UsageBars accounts={[balanceAccount("ds", "0.00")]} now={NOW} />);
     expect(html).toContain("CNY 0.00");
     expect(html).toMatch(/text-orange[^>]*>CNY 0\.00/);
-    expect(html).not.toContain("余额无法读取");
+    expect(html).not.toContain("无法读取余额");
   });
   it("shows a failed read as no amount and keeps healthy window accounts", () => {
     const failed = balanceAccount("ds", "12.34", { balance: undefined, problem: "unreachable", stale: true });
@@ -187,7 +187,7 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
     expect(html).toContain("账号 a");
     expect(html.match(/role="progressbar"/g)).toHaveLength(1);
     expect(html).toContain("opacity-60");
-    expect(renderToStaticMarkup(<UsagePopover accounts={[failed]} now={NOW} />)).toContain("余额无法读取");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[failed]} now={NOW} />)).toContain("无法读取余额");
   });
   it("shows the amount, the sample age and both kinds of account in the popover (remaining percentages)", () => {
     const html = renderToStaticMarkup(<UsagePopover accounts={[balanceAccount("ds", "12.34"), account("a", 70, 10)]} now={NOW} />);
@@ -200,14 +200,14 @@ describe("a prepaid balance in the sidebar (#11825)", () => {
   });
   it("says in the popover why a balance is unavailable or is the last one", () => {
     const never = balanceAccount("ds", "12.34", { balance: undefined, problem: "unreachable" });
-    expect(renderToStaticMarkup(<UsagePopover accounts={[never]} now={NOW} />)).toContain("暂时连不上 DeepSeek");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[never]} now={NOW} />)).toContain("暂时无法连接 DeepSeek");
     const kept = balanceAccount("ds", "12.34", { problem: "unreachable" });
-    expect(renderToStaticMarkup(<UsagePopover accounts={[kept]} now={NOW} />)).toContain("上次的余额");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[kept]} now={NOW} />)).toContain("上次获取的余额");
     const refused = balanceAccount("ds", "12.34", { balance: undefined, problem: "rejected" });
     expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).toContain("Key");
-    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).not.toContain("上次的余额");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refused]} now={NOW} />)).not.toContain("上次获取的余额");
     const refusedKept = balanceAccount("ds", "12.34", { problem: "rejected" });
-    expect(renderToStaticMarkup(<UsagePopover accounts={[refusedKept]} now={NOW} />)).toContain("上次的余额");
+    expect(renderToStaticMarkup(<UsagePopover accounts={[refusedKept]} now={NOW} />)).toContain("上次获取的余额");
   });
 });
 
@@ -262,9 +262,9 @@ describe("the popover", () => {
     expect(tick5.classList.contains("w-px")).toBe(true);
     expect(tick5.classList.contains("bg-ink-3")).toBe(true);
 
-    // Bar shorter than tick (5h: 15% < 60%) -> running fast ("用得偏快"); bar longer than tick (7d: 90% > ~29%) -> no prompt
-    expect(row5.getAttribute("aria-label")).toContain("用得偏快");
-    expect(row7.getAttribute("aria-label")).not.toContain("用得偏快");
+    // Bar shorter than tick (5h: 15% < 60%) -> running fast ("消耗偏快"); bar longer than tick (7d: 90% > ~29%) -> no prompt
+    expect(row5.getAttribute("aria-label")).toContain("消耗偏快");
+    expect(row7.getAttribute("aria-label")).not.toContain("消耗偏快");
     expect(row7.getAttribute("aria-label")).not.toContain("用得偏慢");
 
     // Shared remainingTone thresholds match 20 and 5
@@ -282,12 +282,12 @@ describe("the popover", () => {
       const row5 = host.querySelector<HTMLButtonElement>('[data-window-row="5h"]')!;
       const row7 = host.querySelector<HTMLButtonElement>('[data-window-row="7d"]')!;
       expect(row5.tagName).toBe("BUTTON");
-      expect(row5.getAttribute("title")).not.toContain("用得偏快");
+      expect(row5.getAttribute("title")).not.toContain("消耗偏快");
       expect(row7.tagName).toBe("BUTTON");
       expect(row7.className).toContain("[@media(pointer:coarse)]:min-h-11");
       expect(row7.querySelector("[data-window-chevron]")).not.toBeNull();
       expect(row7.getAttribute("aria-expanded")).toBe("false");
-      expect(row7.getAttribute("aria-label")).toContain("用得偏快");
+      expect(row7.getAttribute("aria-label")).toContain("消耗偏快");
       expect(host.querySelector("[data-usage-pace-detail]")).toBeNull();
 
       row7.focus();
@@ -302,7 +302,7 @@ describe("the popover", () => {
       expect(row7.getAttribute("aria-expanded")).toBe("true");
       const detail = host.querySelector("[data-usage-pace-detail]")!;
       expect(detail.classList.contains("flex-wrap")).toBe(true);
-      expect(detail.textContent).toContain("用得偏快");
+      expect(detail.textContent).toContain("消耗偏快");
       expect(detail.textContent).toContain("2 天 3 小时后重置");
 
       await act(async () => row7.click());
@@ -319,7 +319,7 @@ describe("the popover", () => {
     expect(html).toContain("已过期");
     expect(html).toContain("30%");
     expect(html).toContain("2 天 3 小时后重置");
-    expect(html).not.toContain("用得偏快");
+    expect(html).not.toContain("消耗偏快");
     expect(html).not.toContain("data-pace-tick");
     const staleSection = host.querySelector('[data-usage-stale="true"]')!;
     expect(staleSection.classList.contains("opacity-70")).toBe(false);
@@ -355,15 +355,15 @@ describe("where the numbers came from (#2595)", () => {
   });
   it("says when the gateway could not be read and these are its last numbers", () => {
     const html = renderToStaticMarkup(<UsagePopover accounts={mixed()} now={NOW} />);
-    expect(html).toContain("网关暂时读不到，显示的是上次的数字");
-    expect(html.match(/网关暂时读不到/g)).toHaveLength(1);
+    expect(html).toContain("暂时无法连接网关，当前显示的是上次获取的数据。");
+    expect(html.match(/暂时无法连接网关/g)).toHaveLength(1);
   });
   it("says why a gateway's numbers are old: a refused key is not a network problem (#1902)", () => {
     const one = (problem: string) => renderToStaticMarkup(<UsagePopover accounts={[account("r", 1, 2, { name: "seat", sources: ["Relay"], stale: true, problem })]} now={NOW} />);
-    expect(one("rejected")).toContain("网关不认这把 Key，请到管理界面 → 用量来源更新");
-    expect(one("rejected")).not.toContain("网关暂时读不到");
-    expect(one("failed")).toContain("读网关出错，显示的是上次的数字");
-    expect(one("error")).toContain("网关读这个账号失败");
+    expect(one("rejected")).toContain("网关拒绝了当前 Key，请前往「管理界面 → 用量来源」更新");
+    expect(one("rejected")).not.toContain("暂时无法连接网关");
+    expect(one("failed")).toContain("读取网关数据失败，当前显示的是上次获取的数据。");
+    expect(one("error")).toContain("网关刚才未能读取此账号的数据");
     expect(one("something-newer")).not.toContain("text-orange");
     expect(one("something-newer")).toContain("opacity-70");
   });
@@ -382,7 +382,7 @@ describe("where the numbers came from (#2595)", () => {
   });
   it.each([
     ["en", "No quota data connected"],
-    ["zh-Hans", "未接额度数据"],
+    ["zh-Hans", "未接入额度数据"],
     ["ja", "利用量データ未連携"],
   ])("keeps the launcher row and names its missing quota data in %s", async (lang, label) => {
     await initI18n(lang);
@@ -401,7 +401,7 @@ describe("where the numbers came from (#2595)", () => {
     const strip = renderToStaticMarkup(<UsageBars accounts={live} unconnected={unconnected} now={NOW} />);
     expect(strip).toContain("Antigravity");
     expect(strip).toContain("剩 25%");
-    expect(strip).not.toContain("未接额度数据");
+    expect(strip).not.toContain("未接入额度数据");
   });
   it.each(["agy", "antigravity"])("matches %s usage and visibility for either Antigravity launcher alias", (provider) => {
     const launchers = [
@@ -425,10 +425,10 @@ describe("where the numbers came from (#2595)", () => {
         now={NOW}
       />,
     );
-    expect(html).toContain("还没读到 Claude Code 的额度");
-    expect(html).toContain("还没读到 Antigravity 的额度");
-    expect(html.match(/还没读到 Claude Code/g)).toHaveLength(1);
-    expect(html).toContain("不能直接读这家服务商的额度");
+    expect(html).toContain("尚未读取到 Claude Code 的额度数据");
+    expect(html).toContain("尚未读取到 Antigravity 的额度数据");
+    expect(html.match(/尚未读取到 Claude Code/g)).toHaveLength(1);
+    expect(html).toContain("无法直接读取此服务商的额度");
     expect(html).not.toMatch(/statusLine|网关/);
   });
   it("leaves out a provider the owner hid from the bars, as a row too (#13179)", () => {
@@ -458,7 +458,7 @@ describe("where the numbers came from (#2595)", () => {
     expect(strip).toContain("Codex Pro");
     expect(strip).toContain("Claude Code");
     expect(strip).toContain("Antigravity");
-    expect(strip).toContain("未接额度数据");
+    expect(strip).toContain("未接入额度数据");
 
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -912,7 +912,7 @@ describe("provider cards and single unified reset timeline (V2)", () => {
   });
 
   it.each([
-    ["zh-Hans", "剩余额度（按 7d 重置时间，近的在前）", ["现在", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"], ["5h 窗口恢复", "7d 窗口恢复", "30d 窗口恢复", "现在", "保护线"], "到此自动暂停调度"],
+    ["zh-Hans", "剩余额度（按 7d 重置时间由近到远）", ["现在", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4 小时", "4 天 16 小时", "6 天 24 小时"], ["5h 窗口恢复", "7d 窗口恢复", "30d 窗口恢复", "现在", "保护线"], "达到此阈值时将自动暂停调度"],
     ["en", "Remaining (by 7d reset, soonest first)", ["Now", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4h", "4d 16h", "6d 24h"], ["5h window resets", "7d window resets", "30d window resets", "Now", "Protection line"], "Scheduling pauses automatically at this limit"],
     ["ja", "残り（7d リセットが早い順）", ["今", "6h", "12h", "1d", "3d", "5d", "7d"], ["4.4時間", "4日16時間", "6日24時間"], ["5h 枠リセット", "7d 枠リセット", "30d 枠リセット", "今", "保護ライン"], "この上限に達すると自動で一時停止します"],
   ])("renders card header dot, remaining sort subtitle, short-unit ticks and dynamic legend in %s", async (lang, subtitle, ticks, countdowns, legendLabels, protectTitle) => {

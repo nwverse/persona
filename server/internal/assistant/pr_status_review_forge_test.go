@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -243,6 +244,7 @@ const (
 
 type feedbackTestForge struct {
 	mu            sync.Mutex
+	state         string
 	head          string
 	headAfterList string
 	draft         bool
@@ -273,7 +275,11 @@ func (f *feedbackTestForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body any
 	switch path := r.URL.Path; {
 	case path == feedbackTestPullPath:
-		body = map[string]any{"state": "open", "draft": f.draft, "head": map[string]string{"sha": f.head}, "user": map[string]string{"login": "pr-author"}}
+		state := cmp.Or(f.state, "open")
+		body = map[string]any{
+			"state": state, "merged": state == "merged", "draft": f.draft,
+			"head": map[string]string{"sha": f.head}, "user": map[string]string{"login": "pr-author"},
+		}
 	case path == feedbackTestPullPath+"/reviews":
 		body = feedbackTestPage(f.reviews, page)
 		if f.headAfterList != "" {
@@ -381,7 +387,7 @@ func TestPRFeedbackIssueCommentPaginationAndUpgradeBaseline(t *testing.T) {
 	source.mu.Unlock()
 	s.sweepPRStatuses(ctx, now.Add(3*deployRecheck))
 	s.sweepPRStatuses(ctx, now.Add(4*deployRecheck))
-	if got := sentToAgent(f)[before:]; len(got) != 2 || !strings.Contains(got[0], "#issuecomment-102") || !strings.Contains(got[1], "#issuecomment-103") {
+	if got := sentToAgent(f)[before:]; len(got) != 1 || strings.Count(got[0], "#issuecomment-102") != 1 || strings.Count(got[0], "#issuecomment-103") != 1 {
 		t.Fatalf("complete retry did not deliver both same-second comments once: %q", got)
 	}
 	cursors := feedbackTestCursors(t, st, task)

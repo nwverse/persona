@@ -61,7 +61,10 @@ func verifyReason(l i18n.Lang, delivery *TodoDelivery) string {
 	case deliveryMerged:
 		return i18n.T(l, "assistant-reports.verdict_verify_merged")
 	case deliveryOff:
-		return i18n.T(l, "assistant-reports.verdict_verify_off")
+		if hasDefaultOffGate(delivery.Gate) {
+			return i18n.T(l, "assistant-reports.verdict_verify_off")
+		}
+		return i18n.T(l, "assistant-reports.verdict_verify")
 	default:
 		return i18n.T(l, "assistant-reports.verdict_verify")
 	}
@@ -496,7 +499,7 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 			return cur.DoneAt == nil && !acceptAskStale(&a, cur)
 		}); err != nil {
 			s.logf("task %s: conclusion to agent: %v", id, err)
-			if a.ByDefault || !noAgentCanTake(err) {
+			if a.ByDefault || !decisionWaitsForSupervisor(err) {
 				return acceptResult{}, err // a retryable failure or an automatic default takes nothing
 			}
 			sendErr = err

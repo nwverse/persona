@@ -43,6 +43,7 @@ func TestAgentStartTierResolvesAsAgentStart(t *testing.T) {
 	h.mu.Lock()
 	h.zshrc["box"] = []proto.Launcher{{Name: "other", Source: "zshrc"}}
 	h.mu.Unlock()
+	s.invalidateLauncherListCache("box") // box's launchers changed (launcher_list_cache.go)
 	if _, err := s.agentStartTier(ctx, box, "review", "gateway"); !errors.As(err, &m) || m.Key != "assistant-tasks.launcher_not_on_machine" {
 		t.Fatalf("a tier whose launcher box lacks: %v", err)
 	}

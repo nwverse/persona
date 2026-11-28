@@ -101,6 +101,7 @@
   "step_mail_search": "查邮件",
   "step_mail_read": "读邮件",
   "step_mail_send": "发邮件",
+  "step_mail_move": "移动邮件",
   "step_kb": "查知识库",
   "step_kb_update": "更新知识库",
   "cot_tool_done": "✓ 已完成",
@@ -168,6 +169,7 @@
   "read_held_from": "来自你在群里的 /read：{ask}",
   "read_held_from_bare": "来自你在群里的 /read",
   "read_held_waiting": "只有你看得到。要把它回复到群里你那条 /read 下面吗？",
+  "read_working": "正在读群，并按群里的线索排查，查完把结论发到这里。发不发到群里，到时由你决定。",
   "read_held_post": "发到群里",
   "read_held_skip": "不发",
   "read_held_open": "打开群",
@@ -191,5 +193,8 @@
   "handoff_decision_drop_leads": "什么都不发，这个问题就此放下。",
   "handoff_decision_cost": "{sender} 还在等答复。",
   "handoff_reply_header": "{sender} 问：{question}",
-  "handoff_reply_footer": "由 {owner} 的 AI 助手代答，仅供参考。"
+  "handoff_reply_footer": "由 {owner} 的 AI 助手代答，仅供参考。",
+  "guest_cot_step": "正在使用 {tool}",
+  "guest_cot_done": "完成",
+  "guest_cot_failed": "失败"
 }

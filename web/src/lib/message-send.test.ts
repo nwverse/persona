@@ -123,6 +123,12 @@ describe("per-message hub feedback", () => {
     receiveMessageSend(event("invented", "2026-11-12T10:00:01Z"));
     expect(feedback()).toBe("processing");
   });
+  it("keeps normalized UTC ordering when Date.parse normalizes a noncanonical day", () => {
+    beginMessageSend("example", "chat", "message");
+    receiveMessageSend(event("processing", "2026-03-01T12:00:00Z"));
+    receiveMessageSend(event("failed", "2026-02-30T00:00:00Z"));
+    expect(feedback()).toBe("processing");
+  });
   it("ignores a late processing frame once that attempt ended", () => {
     beginMessageSend("example", "chat", "message");
     receiveMessageSend(event("failed"));

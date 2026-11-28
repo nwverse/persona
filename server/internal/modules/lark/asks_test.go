@@ -28,13 +28,17 @@ func TestAskWantedFollowsTheSwitchesAndTheRoute(t *testing.T) {
 		name               string
 		cards, all         bool
 		private, driven    bool
-		sensitive          bool
+		direct, sensitive  bool
 		want, askSensitive bool
 	}{
 		{name: "cards off", driven: true},
+		{name: "direct approval with cards off", direct: true},
 		{name: "a Just me card", cards: true, driven: true, private: true},
+		{name: "a private direct approval", cards: true, direct: true, private: true},
 		{name: "driven", cards: true, driven: true, sensitive: true, want: true},
 		{name: "not driven", cards: true},
+		{name: "direct approval", cards: true, direct: true, want: true, askSensitive: true},
+		{name: "direct sensitive approval", cards: true, direct: true, sensitive: true, askSensitive: true},
 		{name: "all cards", cards: true, all: true, want: true, askSensitive: true},
 		{name: "all cards, sensitive", cards: true, all: true, sensitive: true, askSensitive: true},
 	} {
@@ -48,6 +52,7 @@ func TestAskWantedFollowsTheSwitchesAndTheRoute(t *testing.T) {
 			s.chat().setBotCurrent(botTarget{Kind: targetAgent, MachineID: "server", SessionID: "other"})
 			asked := false
 			s.ch().route = func(proto.Interaction) assistantwire.AskRoute { return assistantwire.AskRoute{Driven: c.driven} }
+			s.ch().direct = func(proto.Interaction) bool { return c.direct }
 			s.ch().sensitive = func(proto.Interaction) bool { asked = true; return c.sensitive }
 			ix := askQuestion("ix_q")
 			ix.Private = c.private
@@ -88,6 +93,7 @@ func TestAskCardGoesWhereItsRunsAre(t *testing.T) {
 	for _, c := range []struct {
 		name          string
 		route         assistantwire.AskRoute
+		direct        bool
 		reply, chat   string
 		noDetour      bool
 		note, noteMsg string
@@ -95,12 +101,14 @@ func TestAskCardGoesWhereItsRunsAre(t *testing.T) {
 		{name: "no run"},
 		{name: "private", route: assistantwire.AskRoute{Private: private}, reply: "om_dm"},
 		{name: "topic", route: assistantwire.AskRoute{Topic: topic}, reply: "om_topic", chat: "oc_g", noDetour: true},
+		{name: "direct approval from a topic", route: assistantwire.AskRoute{Topic: topic}, direct: true, note: "oc_g", noteMsg: "om_topic"},
 		{name: "both", route: assistantwire.AskRoute{Private: private, Topic: topic}, reply: "om_dm", note: "oc_g", noteMsg: "om_topic"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, posts := feishuHub("ou_a", time.Unix(100, 0))
 			s := newTestService(t, f)
 			s.ch().route = func(proto.Interaction) assistantwire.AskRoute { return c.route }
+			s.ch().direct = func(proto.Interaction) bool { return c.direct }
 			s.layer.AskPost(context.Background(), askQuestion("ix_q"))
 			if len(*posts) != 1 {
 				t.Fatalf("posts %v", *posts)

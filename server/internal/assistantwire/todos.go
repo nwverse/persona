@@ -3,6 +3,7 @@ package assistantwire
 import (
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -111,3 +112,9 @@ const (
 	// id, or looks at the to-do, instead of sending the words again.
 	CodeSendInDoubt = "send_in_doubt"
 )
+
+// TodoHandoffMethod binds a to-do handoff to its prepared text and status.
+var TodoHandoffMethod = buswire.Method[TodoHandoff, TodoHandoffResult]{Name: MethodTodoHandoff}
+
+// TodoLinkMethod binds a to-do link request to the linked to-do's title.
+var TodoLinkMethod = buswire.Method[TodoLinkParams, TodoLinkResult]{Name: MethodTodoLink}

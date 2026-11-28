@@ -18,7 +18,9 @@ import (
 
 // modelExecution is non-secret per-turn execution metadata supplied by the hub.
 type modelExecution struct {
-	Source modelhttp.Source `json:"ModelSource,omitzero"`
+	ModelAliases  *proto.ModelAliases `json:"-"`
+	ExplicitModel string              `json:"-"`
+	Source        modelhttp.Source    `json:"ModelSource,omitzero"`
 
 	CodexEffortFallback string `json:"-"`
 	Strict              bool   `json:",omitempty"` // scheduled execution never substitutes another model or agent

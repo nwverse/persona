@@ -221,7 +221,8 @@ func validSessionID(id string) bool { return sessionIDRe.MatchString(id) }
 // --- messages between conversations ---
 
 type relayMsg struct {
-	// OnceID preserves a supervision relay's delivery identity when its queued text is refreshed.
+	// OnceID preserves a relay's delivery identity when its queued text is refreshed
+	// (supervision digest refresh or a consumed detached continuation).
 	OnceID string `json:"once_id,omitempty"`
 	// Signals is the structured JSON content of a queued supervision message. It stays comparable with the relay and lets
 	// /stop remove one task and regather the others after restart; older messages without it use their embedded task ids.
@@ -247,6 +248,11 @@ type relayMsg struct {
 	Title string `json:"title,omitempty"`
 	// Card identifies the card behind a quiet task's needs notice or a standalone permission relay.
 	Card string `json:"card,omitempty"`
+	// Internal marks a message meant only for the assistant, such as a card-ledger report or a card routed away
+	// from the owner. queuedRelays leaves it out of the queue shown above the composer; delivery is unchanged. A
+	// version that does not know it drops it on its next save: the relay then shows above the composer until it is
+	// consumed, as an Urgent message ranks as any other.
+	Internal bool `json:"internal,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
 	// not know it drops it on its next save: the message then ranks and waits as any other supervision message.
 	Urgent bool `json:"urgent,omitempty"`
@@ -267,6 +273,12 @@ type relayMsg struct {
 	// Private renews Just me when the message is actually dispatched, including
 	// a result that waited in the durable queue or across a manager restart.
 	Private bool `json:"private,omitempty"`
+	// Continuation marks a detached approval's one-time retry instruction. Its
+	// grant is checked again at the final drain, not only when it was queued.
+	Continuation bool `json:"continuation,omitempty"`
+	// ContinuationDigest binds that instruction to the exact journal occurrence,
+	// not to whichever grant later reuses the interaction ID.
+	ContinuationDigest string `json:"continuation_digest,omitempty"`
 	// Answer: it answers a request the receiver sent (hopLocked, #7391), so it starts no exchange of its own: what
 	// the receiver sends next costs a hop.
 	Answer bool `json:"answer,omitempty"`
@@ -353,6 +365,10 @@ type relayBook struct {
 	// role-change refusal instead holds every message (roleChange below): passing over the last failed message must not
 	// let another one retry that refusal on every session list (#10194, #13918). In memory: a restart tries at once.
 	failedAt map[string]time.Time
+	// msgFailedAt: by conversation and relayMsgID, when each queued message last failed with a retryable error. Keeps
+	// multi-message queues from ping-ponging past relayRetryGap once every eligible message has tried and failed (#17592),
+	// while still letting a never-failed message try once without waiting on an earlier failed head (#10194). In memory.
+	msgFailedAt map[string]map[string]time.Time
 	// roleChange: by conversation, a role-change busy refusal waits for the old process's work to end. The value says a
 	// session list has shown that work since the refusal. While shown, no message goes; the first later idle list releases
 	// at once. If no list ever shows it, failedAt remains the bounded fallback (#13918). In memory, like failedAt.
@@ -421,6 +437,16 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 	if rs.SupervisePending == nil {
 		rs.SupervisePending = map[string]superviseSignal{}
 	}
+	for to, q := range rs.Queue {
+		for i := range q {
+			if q[i].Continuation && q[i].OnceID == "" {
+				// Keep the ID an older manager may already have sent. New
+				// continuations are pinned before delivery in deliverApprovalResult.
+				q[i].OnceID = legacyRelayMsgID(to, q[i])
+			}
+		}
+		rs.Queue[to] = q
+	}
 	// Upgrade an old queue in place: structured signals are exact; a pre-signals message still carries its todo ids.
 	here := s.settings(ctx)
 	for conversation, queue := range rs.Queue {
@@ -457,6 +483,7 @@ func (s *Service) relayLocked(ctx context.Context) bool {
 		b.quoted, b.roundsFrom = map[string]time.Time{}, map[string]time.Time{}
 		b.stuck = map[string]relayMsg{}
 		b.failedAt = map[string]time.Time{}
+		b.msgFailedAt = map[string]map[string]time.Time{}
 		b.roleChange = map[string]bool{}
 		b.placeholderGone = map[string]int{}
 		b.placeholderWait = map[string]bool{}
@@ -894,6 +921,9 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	out := map[string][]string{}
 	for id, q := range b.st.Later { // kept without waking it (relay_later.go): they go in with its next message
 		for _, msg := range q {
+			if msg.Internal {
+				continue
+			}
 			if msg.DeferredWake {
 				out[id] = append(out[id], "来自「"+msg.FromTitle+"」（稍后唤醒）："+msg.Text) // i18n-ignore: the queue's label, as the others'
 				continue
@@ -903,6 +933,9 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
+			if msg.Internal {
+				continue
+			}
 			if msg.standalonePermission() || msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
@@ -923,6 +956,18 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 		}
 	}
 	return out, true
+}
+
+// relayWaitingFor reports whether a conversation has any relay waiting, including one kept only for the assistant.
+// Conversation deletion uses this rather than queuedRelays, whose labels leave internal relays out of the client UI.
+func (s *Service) relayWaitingFor(id string) (bool, bool) {
+	b := &s.relays
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.relayLocked(context.Background()) {
+		return false, false
+	}
+	return len(b.st.Queue[id]) > 0 || len(b.st.Later[id]) > 0, true
 }
 
 func (msg relayMsg) source() *proto.MessageSource {
@@ -965,6 +1010,9 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)
+	if block := s.agyRelayBlock(ctx, machine, to, msg); block != "" {
+		ctx = context.WithValue(ctx, agyRelayContextKey{}, agyRelayContext{machine: machine, session: to, onceID: onceID, block: block})
+	}
 	if strings.TrimSpace(text) != "" && relayWords(text) == "" {
 		text = prompts.RelayMessageText(text, source, onceID)
 	}
@@ -987,11 +1035,13 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+	} else if s.conversationModelPurpose(ctx, machine, to) == purposeMain {
+		s.relayMainModel(ctx, machine, to, params)
 	}
 	if msg.standalonePermission() {
 		cfg := s.settings(ctx)
 		ix, pending := s.pendingStandalonePermission(to, msg, time.Now())
-		if !pending || cfg.Main != to || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+		if !pending || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
 			return superviseRoundReply{}, false, errStandalonePermissionStale
 		}
 	}
@@ -1048,6 +1098,16 @@ func relayDeliveryText(msg relayMsg) string {
 // relayDelivered notes a message that went into conversation to: the hop it is working on, or the report turn a
 // notice starts.
 func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
+	if msg.standalonePermission() {
+		if ix, ok := s.pendingStandalonePermission(to, msg, time.Now()); ok {
+			s.fleet.mu.Lock()
+			if p := s.fleet.interactions[ix.ID]; p != nil && p.route != nil && p.route.routedAt.Equal(msg.At) {
+				p.route.delivered = true
+			}
+			s.fleet.mu.Unlock()
+			s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_delivered", map[string]any{"id": ix.ID, "to": to})
+		}
+	}
 	if msg.Tool == superviseTool {
 		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 		s.askRelayDelivered(to, msg)
@@ -1167,8 +1227,10 @@ func (s *Service) takeRelayHeadLocked(id string, msg relayMsg, replayOK bool) (r
 	msgID := relayMsgID(id, msg)
 	delete(b.doubted, msgID) // durable and in-memory delivery evidence leave only with the actual head
 	delete(b.placeholderGone, msgID)
+	b.clearMsgFailedLocked(id, msgID)
 	if len(b.st.Queue[id]) == 0 {
 		delete(b.st.Queue, id)
+		delete(b.msgFailedAt, id)
 	}
 	return replay
 }
@@ -1216,6 +1278,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 		if !placeholder && b.placeholderWait[id] {
 			delete(b.placeholderWait, id)
 			delete(b.failedAt, id)
+			delete(b.msgFailedAt, id)
 			delete(b.stuck, id)
 		}
 		background := backgroundRunning(c)
@@ -1232,6 +1295,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 		if waiting && sawWork {
 			delete(b.roleChange, id)
 			delete(b.failedAt, id) // work completion is the retry event; do not add another gap after it
+			delete(b.msgFailedAt, id)
 			waiting = false
 		}
 		i, wait := b.pickLocked(id, leads[id], now)
@@ -1324,7 +1388,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				}
 			}
 			if !stale && !keep && !landed {
-				msg, retry, err = s.tryQueuedRelay(ctx, machine, id, &original)
+				msg, retry, err = s.tryQueuedApprovalRelay(ctx, machine, id, &original)
 				keep = retry > 0
 				if relaySuppressed(err) { // restored after a restart or a reconnect, or left by a withdrawal that did not reach it
 					stale, suppressed, keep, retry, err = true, true, false, 0, nil // leaves unsent: nothing replayed, nobody pushed
@@ -1370,8 +1434,21 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			if leaves && err != nil && failure == relayFailedGone {
 				// Dropped: a hand-over it carried will not be tried again, marked before the queue without it is saved.
 				s.handoverEnded(msg.Handover, handoverGone)
-				if msg.Tool == "conversation_send" || msg.Tool == "conversation_new" {
+				switch {
+				case msg.Tool == "conversation_send" || msg.Tool == "conversation_new":
 					then = func(ctx context.Context) { s.tellRelayRefused(ctx, machine, id, msg, handoverGone) }
+				case msg.Tool == askAnswerTool && !strings.HasPrefix(msg.From, approvalResultFrom):
+					// Preserve an owner's card answer when a side conversation is gone by moving it to the main conversation,
+					// matching askTarget and relayRefused. When the main conversation itself is gone (or unset), drop it.
+					here := s.settings(context.Background())
+					if here.Main != "" && here.Main != id && s.moveRelay(here.Main, msg) {
+						then = func(ctx context.Context) {
+							s.publish(ctx)
+							if c, ok := s.session(ctx, here.MachineID, here.Main); ok && c.Status != proto.StatusWorking && !c.Starting {
+								s.drainRelays(here.MachineID, []proto.Session{c})
+							}
+						}
+					}
 				}
 			}
 			b.mu.Lock()
@@ -1391,8 +1468,13 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			delete(b.failedAt, id)
 			delete(b.roleChange, id)
 			delete(b.placeholderWait, id)
+			if (err == nil && !stale && !keep) || landed {
+				delete(b.msgFailedAt, id)
+			}
 			if err != nil && !keep && !leaves && failure != relayFailedInDoubt {
-				b.failedAt[id] = time.Now()
+				now := time.Now()
+				b.failedAt[id] = now
+				b.recordMsgFailedLocked(id, msg, now)
 				if placeholder {
 					if b.placeholderWait == nil {
 						b.placeholderWait = map[string]bool{}
@@ -2003,7 +2085,9 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 		b := &s.relays
 		b.mu.Lock()
 		if b.failedAt != nil && !relayInDoubt(err) {
-			b.failedAt[c.SessionID] = time.Now()
+			now := time.Now()
+			b.failedAt[c.SessionID] = now
+			b.recordMsgFailedLocked(c.SessionID, msg, now)
 		}
 		b.mu.Unlock()
 		n := s.queueRelay(c.SessionID, msg)

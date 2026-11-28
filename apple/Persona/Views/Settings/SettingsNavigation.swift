@@ -87,7 +87,9 @@ enum SettingsCatalog {
     /// The core's own entries.
     private static let coreEntries: [SettingsEntry] = {
         var rows: [SettingsEntry] = [
-            .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
+            .init(id: "templates", title: String(localized: "Templates"), symbol: Theme.Icon.style, group: .device, page: .templates,
+                  aliases: String(localized: "Agent console")),
+                        .init(id: "models", title: String(localized: "Models"), symbol: Theme.Icon.model, group: .assistant, page: .models,
                   aliases: String(localized: "settings.search.models")),
             .init(id: "assistant", title: String(localized: "Assistant Profile"), symbol: Theme.Icon.ai, group: .assistant, page: .assistant,
                   aliases: String(localized: "settings.search.assistant")),
@@ -181,6 +183,10 @@ enum SettingsCatalog {
     /// the iPhone) or whose condition is not met (`SettingsEntry.Shown`) is left out.
     @MainActor static func rows(_ tier: SettingsEntry.Tier, in group: SettingsEntry.Group, _ model: AppModel) -> [SettingsEntry] {
         let all = entries
+        if NativeTemplateStore.shared.shortSettings, tier == .advanced {
+            // The console's More Settings is the complete native Settings home's categories, not a second dead end.
+            return all.filter { $0.shows(in: model) && ($0.group == group || group == .hub) }
+        }
         return (tier == .core ? core : tier == .advanced ? advanced : []).compactMap { id in all.first { $0.id == id } }
             .filter { $0.group == group && $0.shows(in: model) }
     }

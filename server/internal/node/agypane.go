@@ -458,7 +458,7 @@ func (n *Node) agyConversation(id, pane string) string {
 		}
 		n.mu.Unlock()
 
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(raw)
 		var next agyPaneBinding
 		var result string
 		var keepBound bool
@@ -788,15 +788,26 @@ func (h agyHistory) pageWith(p agyPageParams, id string, tv *toolViewTracker) an
 	if p.ThroughSeq > 0 {
 		from, to := agyIndex(items, p.FromSeq), agyAfter(items, p.ThroughSeq)
 		items = items[min(from, to):to]
+		more := false
 		if len(items) > 1000 {
 			end := agyAfter(items, items[999].Seq)
-			light := agyLightItems(items[:end])
-			tv.attachWithUses(id, light, false, uses)
-			return map[string]any{"items": light, "more": end < len(items)}
+			more = end < len(items)
+			items = items[:end]
 		}
 		light := agyLightItems(items)
 		tv.attachWithUses(id, light, false, uses)
-		return map[string]any{"items": light, "more": false}
+		spanFrom := max(0, p.FromSeq-1)
+		spanTo := min(h.seq, p.ThroughSeq)
+		if more && len(items) > 0 {
+			spanTo = items[len(items)-1].Seq
+		} else if len(items) > 0 {
+			spanTo = max(spanTo, items[len(items)-1].Seq)
+		}
+		if spanTo < spanFrom {
+			spanFrom = spanTo
+		}
+		span := transcript.Span{History: h.token, From: spanFrom, To: spanTo}
+		return withSpan(map[string]any{"items": light, "more": more}, span, true)
 	}
 	if p.AfterSeq != nil {
 		page, span, more := h.after(*p.AfterSeq)
@@ -857,7 +868,7 @@ func (n *Node) agyEchoBase(id, pane string) echoAfter {
 	if n.agyConversation(id, pane) != conversation {
 		return echoAfter{in: echoInTranscript}
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootFor(conversation)
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
 		return echoAfter{in: echoInTranscript}
@@ -914,7 +925,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	conversation := n.agyConversation(id, pane)
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
@@ -1084,7 +1095,7 @@ func (n *Node) pollAgyPane(w *watch) {
 	var info *agyPaneFiles
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()

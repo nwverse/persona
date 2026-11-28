@@ -36,13 +36,23 @@ func (s *Service) Context(ctx context.Context, p ContextParams) ContextResult {
 	snapshot := ""
 	cleanRound := s.cleanRoundSession(p.SessionID)
 	if !cleanRound { // a granted schedule's round reads nothing from outside (schedule_grant.go)
-		if track := s.contextTrack(ctx, p, background); track != "" {
+		if track, suppressMain := s.contextTrack(ctx, p, background); track != "" || suppressMain {
 			// a conversation in a track other than the main space: its own short context, not the snapshot (space_context.go)
-			return s.contextResult(ctx, p, s.spaceContext(ctx, track), "", false)
+			text := ""
+			if track != "" {
+				text = s.spaceContext(ctx, track)
+			}
+			return s.contextResult(ctx, p, text, "", false)
 		}
 		snapshot = s.contextSnapshot(ctx, s.snapshotScope(ctx, p.SessionID), background)
 		// The memory extension's standing entries this conversation may use, a section of its own (memory_extension_source.go).
 		snapshot = s.withStandingMemory(ctx, p.MachineID, p.SessionID, snapshot)
+		// Main chat: deterministically attach <=1536B of non-sensitive local memory for high-discriminability entities mentioned in this turn.
+		if section := s.mainEntityMemorySection(ctx, p.MachineID, p.SessionID, p.Query); section != "" {
+			snapshot = appendSnapshotSection(snapshot, section)
+		}
+		// Leader sessions: attach bound-project extension memory and active scoped user decisions on start/resume/compaction.
+		snapshot = s.withLeaderMemory(ctx, p.MachineID, p.SessionID, snapshot)
 	}
 	c := prompts.AssistantContext{ScheduledWorkPlan: cleanRound && s.settings(ctx).workGuideOn(), Snapshot: snapshot, Owner: s.owner(ctx),
 		Main: s.isMain(ctx, p.SessionID), Leader: s.isLeader(ctx, p.SessionID), Background: background}

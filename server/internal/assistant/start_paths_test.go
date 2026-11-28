@@ -68,6 +68,7 @@ var startOptOuts = map[string]string{
 	"startRepairAgent":           "a launcher repair Agent: the launcher health checks follow it (launcher_repair.go)",
 	"a2aLaunch":                  "the persisted A2A task follows its Agent and returns questions, failures and results to the session that started it",
 	"StartHandoffGuest":          "a proxy reply's one-tool guest: the lark module's handoff book follows it and ends it on post, decline or expiry (modules/lark/handoff.go)",
+	"StartGroupGuest":            "a group teammate's isolated guest: the lark module's guest book follows it, ends an unanswered turn and starts the next question in a fresh session (modules/lark/guest.go)",
 	"startBackground":            "the background supervisor's own conversation: it is the supervisor of the tasks no leader supervises (supervise_background.go)",
 }
 

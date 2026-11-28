@@ -179,8 +179,8 @@ func TestTodoNeedsUserPushCarriesTodoIDAndWithdraws(t *testing.T) {
 		h.push.withdrawals.mu.Lock()
 		q := h.push.withdrawals.queue["phone"]
 		h.push.withdrawals.mu.Unlock()
-		if q != nil && len(q.ids) > 0 {
-			t.Fatalf("older app queued withdrawal ids: %v", q.ids)
+		if q != nil && len(q.cards) > 0 {
+			t.Fatalf("older app queued withdrawal ids: %v", q.cards)
 		}
 		h.push.flushWithdraw("phone")
 		h.push.sends.Wait()
@@ -207,7 +207,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		p.withdraw(todoCard)
 		p.withdrawals.mu.Lock()
 		defer p.withdrawals.mu.Unlock()
-		if q := p.withdrawals.queue["phone"]; q == nil || len(q.ids) != 1 || q.ids[0] != todoCard {
+		if q := p.withdrawals.queue["phone"]; q == nil || len(q.cards) != 1 || q.cards[0].ID != todoCard {
 			t.Fatalf("phone queue after 2h = %+v, want [%s]", q, todoCard)
 		}
 		for _, q := range p.withdrawals.queue {
@@ -237,7 +237,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		// Supersede round 1: withdrawal is queued for phone.
 		reportResolved(t, h, todoCard, "")
 		h.push.withdrawals.mu.Lock()
-		queuedBefore := len(h.push.withdrawals.queue["phone"].ids)
+		queuedBefore := len(h.push.withdrawals.queue["phone"].cards)
 		h.push.withdrawals.mu.Unlock()
 		if queuedBefore != 1 {
 			t.Fatalf("expected 1 queued withdrawal before round 2, got %d", queuedBefore)
@@ -248,7 +248,7 @@ func TestTodoPushWithdrawTTLAndNewRoundCancelsQueued(t *testing.T) {
 		}
 		f.wait(t, 2)
 		h.push.withdrawals.mu.Lock()
-		queuedAfter := len(h.push.withdrawals.queue["phone"].ids)
+		queuedAfter := len(h.push.withdrawals.queue["phone"].cards)
 		if q := h.push.withdrawals.queue["phone"]; q != nil && q.timer != nil {
 			q.timer.Stop()
 		}

@@ -40,5 +40,6 @@
   "recording_day_recap": "Day recap",
   "recording_transcript": "Transcript",
   "recording_photos": "Photos",
-  "recording_photo_label": "Photo {n}"
+  "recording_photo_label": "Photo {n}",
+  "recording_paused_module_off": "Meeting recording is turned off on the hub machine, so minutes and transcription are paused. Everything already stored stays readable."
 }

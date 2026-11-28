@@ -54,6 +54,8 @@ var Routes = []string{
 	"/api/v1/error-reports",
 	"/api/v1/subscriptions",
 	"/api/v1/subscriptions/",
+	"/api/v1/text-lookup",
+	"/api/v1/text-lookup/",
 	"/api/v1/avatars/", // AvatarsRoute
 }
 
@@ -74,14 +76,14 @@ const (
 	HeaderHub        = "X-Persona-Hub"
 	HeaderDevice     = "X-Persona-Device"      // the device token's id ("" for the master token)
 	HeaderDeviceName = "X-Persona-Device-Name" // its name
-	HeaderRole       = "X-Persona-Role"        // full | answer | extension | …
+	HeaderRole       = wire.HeaderRole         // full | answer | extension | … (the Go SDK has it too)
 	HeaderPaired     = "X-Persona-Paired"      // "1": a pairing token, not one of the user's own signed-in apps
 	HeaderExtension  = "X-Persona-Extension"   // an extension token's extension
 	HeaderScopes     = "X-Persona-Scopes"      // its scopes, comma-separated
 	HeaderOwner      = "X-Persona-Owner"       // "1": the master token over loopback (installing runs code here)
 	HeaderAdmin      = "X-Persona-Admin"       // "1": a signed-in admin session (the admin UI's routes)
 	HeaderRemote     = "X-Persona-Remote"      // the caller's address
-	HeaderLang       = "X-Persona-Lang"        // the language the hub would answer it in
+	HeaderLang       = wire.HeaderLang         // the language the hub would answer it in
 )
 
 // Hub → manager.
@@ -202,6 +204,22 @@ type Report struct {
 	// flag and their layers are left untouched across rolling upgrades.
 	PushGradingDeclared   bool     `json:"push_grading_declared,omitempty"`
 	PushGradingExtensions []string `json:"push_grading_extensions,omitempty"`
+	// Modules are the approved installed extensions that supply a module (modapi.ExtensionModules, #16254), each
+	// with whether it supplies module.<id> now. The hub reads them from the default manager only, while it is connected
+	// and its hello carries the modules marker: On adds module.<id> to the features, !On removes the built-in module's
+	// flag of the same id (the installed provider decides). An older manager sends none, and an older hub ignores them.
+	Modules []ModuleProvider `json:"modules,omitempty"`
+}
+
+// ModuleID is a module's id (module.<id> is its flag).
+type ModuleID string
+
+// ModuleProvider is one approved installed extension's module in Report.Modules.
+type ModuleProvider struct {
+	// ID is the module's id (and the extension's).
+	ID ModuleID `json:"id"`
+	// On: the extension is enabled, every contribution the module needs is on, and the modules setting leaves it on.
+	On bool `json:"on"`
 }
 
 // BotIdentity is a platform's stable identifier, not a display name or an authentication token.
