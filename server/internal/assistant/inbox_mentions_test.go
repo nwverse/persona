@@ -3,11 +3,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 type mentionCapturingConnector struct {
@@ -159,6 +162,71 @@ func TestInboxSuggestionConfirmForwardsAndPrunesMentions(t *testing.T) {
 			t.Fatalf("legacy actualReply mentions = %+v, want %+v", got, wantLegacy)
 		}
 	})
+}
+
+func TestInboxReplyPolicyConfigReadRetryPreservesMentions(t *testing.T) {
+	const draft = "@Alice and @Bob, please review."
+	all := []InboxMention{{ID: "101", Name: "Alice"}, {ID: "202", Name: "Bob"}}
+	for _, tc := range []struct {
+		name     string
+		text     string
+		mentions []InboxMention
+	}{
+		{name: "unedited", text: draft, mentions: all},
+		{name: "one mention removed", text: "@Alice, please review.", mentions: all[:1]},
+		{name: "all mentions removed", text: "Please review."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, lark, it := handledHub(t)
+			replyPolicyReview8OrdinaryItem(h, it)
+			if _, err := suggestOrdinaryReplyForFixture(t, h, `{"kind":"reply","text":"`+draft+`","mentions":[{"id":"101","name":"Alice"},{"id":"202","name":"Bob"}]}`); err != nil {
+				t.Fatal(err)
+			}
+			h.in.setModel(fakeModel(t, `{"category":"ordinary_coordination"}`))
+			reads := 0
+			h.in.mu.Lock()
+			h.in.configHook = func() {
+				h.in.mu.Lock()
+				defer h.in.mu.Unlock()
+				reads++
+				if reads == 2 {
+					h.in.configErr = errors.New("synthetic outage at the post-final-veto fresh read")
+				}
+			}
+			h.in.mu.Unlock()
+
+			request := suggestionReq{Version: 1, Action: suggestConfirm, ClientID: recoveryFirstID}
+			if tc.text != draft {
+				request.Text = &tc.text
+			}
+			_, err := h.actOnSuggestion(t.Context(), it.ID, request, true)
+			var rpcErr *rpc.Error
+			if !errors.As(err, &rpcErr) || rpcErr.Code != assistantwire.CodeInboxSendFailed || rpcErr.Message != "reply policy configuration unavailable" {
+				t.Fatalf("first confirmation error = %v, want a reply-policy configuration failure", err)
+			}
+			if len(lark.got) != 0 {
+				t.Fatalf("first confirmation reached the connector during the outage: %+v", lark.got)
+			}
+			attempt := recoveryAttempt(t, h, it, request.Version)
+			if attempt.Status != suggestionFailed || !attempt.Retryable {
+				t.Fatalf("configuration outage did not retain a retryable failure: %+v", attempt)
+			}
+			if !attempt.MentionsSet || !slices.Equal(attempt.Mentions, tc.mentions) {
+				t.Errorf("failed attempt recorded mentions %v (set=%t), want %v", attempt.Mentions, attempt.MentionsSet, tc.mentions)
+			}
+
+			h.in.mu.Lock()
+			h.in.configErr, h.in.configHook = nil, nil
+			h.in.mu.Unlock()
+			request.ClientID, request.Text = recoveryFreshID, nil
+			if _, err := h.actOnSuggestion(t.Context(), it.ID, request, true); err != nil {
+				t.Fatalf("retry after configuration recovery failed: %v", err)
+			}
+			if len(lark.got) != 1 || lark.got[0].Text != tc.text || !slices.Equal(lark.got[0].Mentions, tc.mentions) {
+				t.Fatalf("connector replies = %+v, want one reply with text %q and mentions %v", lark.got, tc.text, tc.mentions)
+			}
+		})
+	}
 }
 
 func TestInboxHandoffCardIncludesMentions(t *testing.T) {

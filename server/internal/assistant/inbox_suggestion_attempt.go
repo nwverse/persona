@@ -740,6 +740,8 @@ func (s *Service) recordReplyPolicySendFailureLocked(ctx context.Context, it *In
 		a = &InboxSuggestionAttempt{
 			Version:      g.Version,
 			Text:         text,
+			Mentions:     activeReplyMentions(text, g.Mentions),
+			MentionsSet:  true,
 			ClientID:     id,
 			Proposal:     copySuggestion(g),
 			Conversation: g.Conversation,
