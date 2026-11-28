@@ -15,6 +15,11 @@ export interface CalendarEntry {
   /** What tapping it opens. */
   todoId: string;
   title: string;
+  manager?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** The original date-only wire value, including leading zeros in the year. */
+  dueDate?: string;
   /** When it is, in ms: a to-do's due moment, or the local midnight of its due day when allDay. */
   start: number;
   /** When it ends: none for a to-do, which is due at a moment; an event's end. */
@@ -46,6 +51,10 @@ export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()):
     id: `todo:${todo.id}`,
     todoId: todo.id,
     title: todo.title,
+    manager: todo.manager,
+    createdAt: todo.created_at,
+    updatedAt: todo.updated_at || todo.created_at,
+    dueDate: allDay ? todo.due_date ?? undefined : undefined,
     start,
     allDay,
     status,
@@ -145,7 +154,8 @@ export function calendarDays(mode: CalendarMode, anchor: number, first: number):
 /** From the start of the first day shown to the end of the last, in ms. */
 export function calendarRange(mode: CalendarMode, anchor: number, first: number): [number, number] {
   const days = calendarDays(mode, anchor, first);
-  return [days[0], addDays(days[days.length - 1], 1)];
+  // A day that starts at 01:00 after a DST jump must not carry that hour to either boundary.
+  return [startOfDay(days[0]), startOfDay(addDays(days[days.length - 1], 1))];
 }
 
 /** The anchor a page later (n 1) or earlier (-1); a month later keeps the day where the month has it (Jan 31 → Feb 28). */
@@ -322,7 +332,7 @@ export function weekdayNames(first: number, narrow: boolean): string[] {
 /** A day as the address and the hub write it: "YYYY-MM-DD", local. */
 export function dayKey(ms: number): string {
   const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return `${String(d.getFullYear()).padStart(4, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /** A "YYYY-MM-DD" day's local midnight; undefined for anything else. */

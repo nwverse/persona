@@ -9375,6 +9375,302 @@
     {
       "name": "assistant",
       "value": "助手"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "Token 用量"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12 周热力图与项目分布"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "升级 Hub 后即可查看 Token 用量"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "近 12 周"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "缓存命中"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "输入"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "输出"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "缓存读取"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "缓存写入"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "Token 活跃度"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "点按日期查看明细"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "少"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "多"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "按项目统计"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "该时间范围内暂无项目用量"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "今天"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3天"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7天"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "按设备"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "按模型"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "占比"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "主目录"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "临时目录"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "助手对话"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "未知目录"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "等待中"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "来自步骤：{step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "等待对象"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "阻塞原因"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "详情"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "唤醒条件"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "计划唤醒"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "跟进已到期"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "截止时间"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "通过 {channel} 发送"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "打开消息"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "查看 PR"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "打开来源"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "自 {time} 起等待"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "等待回复"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "等待评审"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "等待合并"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "等待外部事件"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "等待指定日期"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "等待另一条待办"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "等待另一个 Agent"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "已达用量上限"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "设备离线"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "定时汇报"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "已搁置"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "需要评审"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "需要修改"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "检查运行中"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "检查失败"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "存在合并冲突"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} 已达用量上限"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "等待合并 {target}"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "正在等待 {target}"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "{time} 恢复"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "{time} 唤醒"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "跟进已到期（{time}）"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "至 {time}"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "始于 {time}"
+    },
+    {
+      "name": "personal_agents",
+      "value": "个人 Agents"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "移出列表"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "恢复"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "已移出（{count}）"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "分歧"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "未定"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "已定"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "结论"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "收件箱关联项"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} 项已完成"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "知识库页面"
     }
   ]
 }

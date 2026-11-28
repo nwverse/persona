@@ -129,8 +129,8 @@ export async function deliverLaunch(id: string, clearDraft?: string) {
           paths.push(quotePath(path));
         }
       }
-      if (spilled.count) toast(t("chat-composer.images_as_files", { max: limits.per_message, count: spilled.count }));
-      if (spilled.bytes) toast(t("chat-composer.images_bytes_as_files", { count: spilled.bytes }));
+      if (spilled.count) toast(t("chat-composeroverlays.images_as_files", { max: limits.per_message, count: spilled.count }));
+      if (spilled.bytes) toast(t("chat-composeroverlays.images_bytes_as_files", { count: spilled.bytes }));
       update({ outgoing: { text: [launch.text, ...paths].filter(Boolean).join("\n"), images } });
     }
     if (!getState().launches[id]) return;

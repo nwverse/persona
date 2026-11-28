@@ -6,7 +6,46 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/buswire"
+	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestCoreAssistantBusMethodsWire(t *testing.T) {
+	checkMethodWire[assistantwire.Snapshot, assistantwire.SnapshotResult](t, assistantwire.SnapshotMethod, "manager.snapshot",
+		`{"epoch":"test-epoch","seq":7,"at":"2026-01-02T00:00:00Z","sessions":[],`+
+			`"interactions":null,"tasks":null,"todos":null,"profile":null,"work":null,"channels":null}`,
+		`{"ok":true,"seq":7}`)
+	checkMethodWire[assistantwire.SessionRef, assistantwire.ToolsResult](t, assistantwire.ToolsMethod, "assistant.tools",
+		`{"machine_id":"box","session_id":"conversation"}`,
+		`{"tools":[{"name":"example","description":"Run an example","input_schema":{"type":"object"},"defer_loading":true}]}`)
+	checkJSONRoundTrip[assistantwire.ToolsResult](t, `{"tools":null}`)
+	checkJSONRoundTrip[assistantwire.ToolsResult](t, `{"tools":[]}`)
+	checkMethodWire[assistantwire.ToolCall, proto.ToolResult](t, assistantwire.ToolMethod, "assistant.tool",
+		`{"name":"example","arguments":{"query":"example"},"machine_id":"box","session_id":"conversation"}`,
+		`{"content":[{"type":"text","text":"Try again"}],"is_error":true,"error_kind":"rate_limited","retry_after":2}`)
+	checkMethodWire[assistantwire.ContextParams, assistantwire.ContextResult](t, assistantwire.ContextMethod, "assistant.context",
+		`{"session_id":"conversation","machine_id":"box","query":"What changed?"}`,
+		`{"text":"Live context","view_errors":"Missing summary","view_error_receipts":[{"item_id":"reply","digest":"check"}]}`)
+	checkMethodWire[assistantwire.Action, assistantwire.ActionResult](t, assistantwire.ActionMethod, "manager.action",
+		`{"action_id":"answer","session_id":"conversation","op":"answer","interaction_id":"prompt","interaction_version":2,"answer":{"allow":true}}`,
+		`{"ok":true,"seq":9}`)
+}
+
+func TestCoreAssistantRelayBusMethodsWire(t *testing.T) {
+	checkMethodWire[assistantwire.DeviceCall, json.RawMessage](t, assistantwire.DeviceMethod, "device.call",
+		`{"device":"box","method":"session.items","params":{"session_id":"conversation","turns":1}}`,
+		`{"items":[],"future_field":true}`)
+	checkMethodWire[assistantwire.DeviceCall, json.RawMessage](t, assistantwire.DeviceRetireMethod, "device.retire",
+		`{"device":"box","method":"session.stop_if_idle","params":{"session_id":"conversation","retire":true}}`,
+		`{"ok":true}`)
+	checkMethodWire[assistantwire.AppCall, json.RawMessage](t, assistantwire.AppMethod, "app.call",
+		`{"app_id":"notify","method":"notify.quiet","params":{},"timeout_ms":1500}`,
+		`{"quiet":false}`)
+	const reply = `{"status":201,"header":{"Content-Type":["text/plain"]},"body":"b2s="}`
+	checkMethodWire[assistantwire.HTTPRequest, assistantwire.HTTPResponse](t, assistantwire.HTTPMethod, "http.request",
+		`{"method":"POST","path":"/example","query":"x=1","header":{"Content-Type":["text/plain"]},"body":"eA=="}`, reply)
+	checkMethodWire[assistantwire.HTTPRequest, assistantwire.HTTPResponse](t, assistantwire.HTTPStreamedMethod, "http.request_streamed",
+		`{"method":"POST","path":"/example","query":"x=1","header":{"Content-Type":["text/plain"]},"body_stream":{"id":"relay","size":1}}`, reply)
+}
 
 func TestExtensionBusMethodsWire(t *testing.T) {
 	checkMethodWire(t, assistantwire.ExtensionIdentityMethod, "extensions.identity", `{}`, `{"supported":true}`)

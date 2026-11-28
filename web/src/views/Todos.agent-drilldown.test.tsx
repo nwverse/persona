@@ -95,7 +95,7 @@ describe("an Agent opened from a to-do's page (#12055)", () => {
     await act(async () => root.render(<TodosView selectedId="t1" />));
     await flush();
     await click(button("交给 Agent"));
-    await click(button("交给已有的 Agent"));
+    await click(button("已有 Agent"));
     const send = [...dialog().querySelectorAll<HTMLButtonElement>("button:not([role=radio])")].find((b) => b.textContent?.includes("发送") && !b.disabled);
     await click(send);
     expect(api).toHaveBeenCalledWith("/sessions/m1/s1/messages", expect.objectContaining({ method: "POST" }));

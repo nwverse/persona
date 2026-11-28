@@ -1,5 +1,21 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A delivery label does not prove a disabled feature (#16936)
+
+- A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
+  an explicit default-off statement in its missing or waiting gate before presenting that claim to the owner.
+- Apply the same guard to historical acceptance cards and model judgments. Preserve a deployed report when it gives
+  deployment evidence; without that evidence, keep an unverified delivery hold instead of inventing a disabled switch.
+- Exercise the closeout-to-title path and the judge's criterion checks together; a second assignment of the raw model
+  delivery can otherwise restore the unsupported state after normalization.
+
+## Inbox handoffs are not task ownership (#17119)
+
+- A conversation's historical handoff does not identify the source of every later task. Omitted sources must not
+  claim unrelated handoffs, and continuations skip source inference. A strongly matching handoff is still inferred:
+  retain its matching snapshot and recheck competing task ownership before admission. Explicit source selection is
+  a separate contract.
+
 ## Persona's own agy hooks: report only, own one key, prove the pane (#13729)
 
 - agy's global `hooks.json` is shared: herdr, Moshi and Orca each own a top-level group. Write only the `persona` key through the ordered-object editor (`editSettings`), never rewrite the others, and treat a changed command (moved binary) as stale, not as foreign.
@@ -73,6 +89,13 @@
 - A session id outlives its Claude Code process: the owner quits and resumes, Persona's Resume starts a new one, a crash is resumed. A queued restart into Full access, keyed by session id alone for a day, quit a claude that resumed the conversation later in Default and restarted it in Full access.
 - Bind anything that waits to act on "the agent" to the process it was decided for: pid plus start mark (`hookTurns.process`, else `sessions/<pid>.json` via `liveClaudes`), checked with `processAlive` at every look and again right before acting. Drop it once that process is gone or the hooks report another one; refuse it where the process cannot be told.
 - Keep the wait short. "Once this turn ends" is not "whenever this conversation next runs".
+
+## Approval occurrences must survive every asynchronous handoff (#11310)
+
+- A runtime interaction ID is not an occurrence. Carry its creation time (and the exact-call fingerprint for detached commands) through live announcements, delayed terminal events (including the public `interaction_resolved.created_at`), reconnect catch-up, text asks, Feishu posting placeholders and persisted ledgers, callbacks, and finalization. A stale A event must neither close nor suppress same-ID B; zero-time legacy records keep their ID-only behavior. Clients compare the original RFC3339 text or an exact instant, not a millisecond `Date`.
+- Restart-generated delivery text is not execution truth. If a live owner claim wins, its honest outcome replaces the unfinalized recovery result. Recovery must not write a competing terminal status while that claim runs; reload the journal after finalization before revoking a grant or delivering a result, and reconcile an already-durable terminal record rather than retrying a conflicting cancellation forever. An interrupted apply is different: its execution-uncertain `failed` outcome must not become a confident `cancelled` / "not started" when the restored owner claim reaches the journal's terminal-result guard.
+- A fresh retry interaction is not the original approval. Keep `ApprovalID` when retiring an edited command's original grant and when reporting the edited execution. Generate fallback delivery IDs from the durable operation identity: random per-attempt clarification IDs defeat receipt retry, while a pre-upgrade continuation's legacy queue identity must still deduplicate its journal redelivery after text rewriting.
+- A journal's terminal `Result` is complete delivery text, but `finishPrepared` accepts a detail and adds the standard prefix. Strip exactly that entry's own prefix when closing a restored live card, or recovery delivers the prefix twice. When a test backdates an occurrence, update the SQL `created_at`, JSON payload, owner book and Feishu ledger to the same instant and precision; otherwise the occurrence guards correctly reject the fixture as different operations.
 
 ## Create an agy ACP session before its role-scoped MCP (#15327)
 
@@ -480,7 +503,7 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   `worktree.ps` row `state` includes sub-Agents (working when the main turn has ended but background sub-Agents run); pane-local state is `mainAgent.state`;
   `agentIdentity` may remain after the Agent exits; decide "is an Agent" from claude / codex processes matching `ORCA_PANE_KEY`. node tests point `ORCA_USER_DATA_PATH`
   to an empty directory; never touch the live Orca (its socket fully controls Orca).
-  New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one) and a check that its last pane is closed; `orca_resume` (which also kept `openElsewhereRefusal` from ever running on Orca) now refuses only non-Claude agents. Send and retire share `orcaContinues`: retire must not close what a message cannot bring back. Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
+  New Orca terminals (#924): omit `presentation: "background"` in `terminal.create` to avoid an orphan PTY; after creation, check identity and generation via `terminal.list` using the exact handle; ordinary creation explicitly `cd`s to the target directory. Permission to create sessions isn't permission to resume ones still open elsewhere: since #5548 Orca resumes an exited Claude session like herdr, after `openElsewhereRefusal` (a live claude on the session, including a suspended one), and since #17044 Codex, TRAE CLI and pi sessions too, each kept from a second writer by its own check (a Codex holding the rollout, a TRAE CLI a pane still runs, the pi runtime); `orca_resume` refuses only omp. A stopped Agent leaves its shell in its last pane (`docs/integrations/engines.md`, "Agents run in a terminal"), so a resume must not take an open last pane for a suspended agent: only a message still checks it (`notRunningRefusal`), a resume checks the engine (`resumeEngineRefusal`). A bare Resume (the web sends only the id) of a TRAE CLI session needs its launcher from the node's record, or it starts Claude Code on that id (`traexResumeWith`). Orca's `terminal create --agent --resume` is a CLI of some builds only and drops the session's launcher.
   An Orca pane key is not a terminal's identity (#5547): a terminal made in a worktree Orca's window is not showing is not adopted by the UI, and about 2 s after `terminal.create` it turns `orphaned` with `tabId` / `leafId` rewritten to `pty:<worktreeId>@@…`, the same handle and incarnation. Starts from a directory in no worktree went to the first worktree listed, so the node lost the pane it had just typed into: `Run` said "replaced", the readiness wait said "is the machine busy?" for 3 minutes while claude had started in 2 s, and the empty tab was never closed. Fall back to the active worktree, and find a terminal the host made by handle + incarnation under the key creation gave (`orcaHost.made`); the opposite case, a new handle under the same key (#972), stays refused. `orcarttest.Fake.Orphan` reproduces it.
   Claude with background tasks (#5463): Orca's `terminal.agentStatus` says `isRunningAgent: false` while Claude Code has background Bash tasks, though its input box takes text; requiring it refused every send to such a session with nothing logged. The process scan is the foreground gate. A `tmux new-session -d` an agent runs inherits the pane's `ORCA_PANE_KEY`, and each process in it is "in front" of tmux's own pty: a `claude -p` worker with a lower pid took the pane and its manager dropped to interrupted. Without Orca's check, "in front" must mean in front of the pane's own pty: a candidate whose pty owner (first ancestor on another terminal) carries the same pane key is nested (tmux, zellij, script…) and not the pane's. Not by `TMUX=`: Orca's agent teams set it in a real pane. A refusal and a pane changing sessions are logged since.
   A pane variable is not ownership (2026-11-08): a claude whose environment carried `ORCA_PANE_KEY` was skipped as "its engine lists it" even on a node that did not enable Orca, or when the macOS scan missed it, so every running claude in Orca's terminals showed as offline. The outside-claude list now defers to an engine only when an engine in use lists that pane with a claude in it.
@@ -1464,8 +1487,10 @@ workspace sharing the probe prefix while it still exists.
 
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
 IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. ACP can
-also discard the selected model when a process restarts (#15537). Before the first prompt on the new connection, apply
-the configured default to an idle conversation unless the caller chose a model or the connection already applied one.
+also discard the selected model when a process restarts (#15537, #16458). Before the first prompt on the new connection,
+prefer the caller's model and then the remembered selection. An older idle session can recover a model from its last
+recorded turn when the catalog still advertises it. Use the configured default when there is no remembered selection.
+Retry persisting the accepted model after the turn because the native brain directory can appear after `session/new`.
 Leave history reads passive and announce a model only after ACP accepts it.
 
 ## A long-running agy acp keeps the account it saw (#10368)

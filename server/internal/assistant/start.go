@@ -437,6 +437,9 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 			purpose = purposeMain
 		}
 	}
+	if purpose == purposeAgent && p.Origin == OriginInbox {
+		ctx = context.WithValue(ctx, inboxAssistantFitKey{}, true)
+	}
 	if p.Launcher != "" && !p.RequireLauncher {
 		fit, refusal := s.mainChatFit(ctx, machine, p.Launcher)
 		if fit == mainChatRefused {
@@ -516,7 +519,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		return proto.Session{}, err
 	}
 	var res struct {
-		SessionID string `json:"session_id"`
+		SessionID      string `json:"session_id"`
+		PermissionMode string `json:"permission_mode"`
 	}
 	if p.GuestTools == nil {
 		s.putCacheKeepalive(ctx, machine, "", main, params)
@@ -538,7 +542,8 @@ func (s *Service) startOn(ctx context.Context, machine string, p StartParams, ma
 		}
 		return proto.Session{}, err
 	}
-	finalMode, _ := params["permission_mode"].(string)
+	requestedMode, _ := params["permission_mode"].(string)
+	finalMode := cmp.Or(res.PermissionMode, requestedMode)
 	sess := proto.Session{SessionID: res.SessionID, Cwd: cwd, Status: proto.StatusWorking, Launcher: used, PermissionMode: finalMode,
 		Effort: p.Effort, StartedByPersona: true, UpdatedAt: time.Now().UTC()}
 	sess.MachineID, sess.Assistant, sess.State, sess.Space = machine, true, proto.StateWorking, p.Space
@@ -572,7 +577,7 @@ func (s *Service) inboxPermissionMode(ctx context.Context, machine, used string)
 	}
 	mode := cmp.Or(record.Binding.PermissionMode, proto.ModeDefault)
 	if mode == proto.ModePlan || !slices.Contains(proto.PermissionModes, mode) ||
-		!s.startPermissionModeSupported(ctx, machine, used, mode) {
+		!s.startPurposePermissionModeSupported(ctx, machine, used, purposeAgent, mode) {
 		mode = proto.ModeDefault
 	}
 	return mode, nil
@@ -602,14 +607,18 @@ func (s *Service) putInboxPermissionMode(ctx context.Context, machine, session s
 // startPermissionModeSupported checks an inherited or saved mode against the launcher the start finally runs on.
 // Unknown launchers keep the existing behavior: the node validates the start rather than the manager guessing a type.
 func (s *Service) startPermissionModeSupported(ctx context.Context, machine, used, mode string) bool {
+	return s.startPurposePermissionModeSupported(ctx, machine, used, "", mode)
+}
+
+func (s *Service) startPurposePermissionModeSupported(ctx context.Context, machine, used, purpose, mode string) bool {
 	if used == "" || used == "claude" {
 		return true
 	}
 	if l, ok := s.targetMachineLauncher(ctx, machine, used); ok {
-		return permissionModeSupported(cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
+		return permissionModeSupportedForPurpose(purpose, cmp.Or(l.AgentType, l.Agent), l.PermissionModes, mode)
 	}
 	if agent := s.launcherAgent(withUnhidden(ctx, used), machine, used); agent != "" {
-		return permissionModeSupported(agent, 0, mode)
+		return permissionModeSupportedForPurpose(purpose, agent, 0, mode)
 	}
 	return true
 }
@@ -1355,6 +1364,8 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	delete(p.Params, "message_source")
 	approvalTarget, _ := p.Params["approval_reply_to"].(string)
 	delete(p.Params, "approval_reply_to") // approval metadata is never model input, including on a failed send
+	approvalCreatedAt, _ := p.Params["approval_reply_created_at"].(string)
+	delete(p.Params, "approval_reply_created_at")
 	if id, _ := p.Params["client_msg_id"].(string); id != "" {
 		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
 	}
@@ -1395,7 +1406,7 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		}
 	}
 	if err == nil && approvalTarget != "" && owner && p.Human && !p.ReplyInput && own && !marked {
-		handled, approvalErr := s.resolveAppOwnerReply(ctx, p.MachineID, p.SessionID, id, approvalTarget, text)
+		handled, approvalErr := s.resolveAppOwnerReply(ctx, p.MachineID, p.SessionID, id, approvalTarget, text, approvalCreatedAt)
 		if approvalErr != nil {
 			return nil, badRequest(approvalErr, s.appLang(ctx, p.Lang))
 		}
@@ -1467,6 +1478,9 @@ func (s *Service) sendParamsOwn(ctx context.Context, p SendParams) (map[string]a
 	origin, originKnown := s.managerOriginDecision(ctx, p.MachineID, p.SessionID, "", false)
 	if originKnown {
 		params["origin_known"] = true // an empty origin is an explicit ordinary decision, including on assistant.model
+	}
+	if originKnown && origin == OriginInbox {
+		ctx = context.WithValue(ctx, inboxAssistantFitKey{}, true)
 	}
 	if origin != "" {
 		// A node reload does not restore the node's in-memory origin field. Re-attest it on every later send so the
@@ -1672,7 +1686,8 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 		c, known := s.session(ctx, machine, sid)
 		if known && c.SourceKind == proto.SourceRuntime {
 			// Preserve existing runtime inheritance unless the main chat has its
-			// own binding. That binding still passes the execution identity check.
+			// own binding, or its inherited binding already targets this runtime
+			// launcher with a configured model or effort.
 			if p["is_main"] != true {
 				return nil
 			}
@@ -1681,7 +1696,13 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 				return err
 			}
 			if record.Binding == (ModelBinding{}) {
-				return nil
+				resolved, err := s.resolveModel(ctx, purposeMain)
+				if err != nil {
+					return err
+				}
+				if c.Launcher == "" || resolved.Provider != launcherProvider(c.Launcher) || (resolved.Model == "" && resolved.Effort == "") {
+					return nil
+				}
 			}
 		}
 		if known && !followsSetting {
@@ -1728,12 +1749,7 @@ func (s *Service) sendModel(ctx context.Context, machine, sid string, p map[stri
 	pickedLauncher := l != ""
 	// The background supervisor runs under its own purpose (which follows Main chat until it is set apart), whoever
 	// writes to it: the hub's relays already do (backgroundModel), so a message typed to it must too.
-	purpose := "assistant"
-	if p["is_main"] == true {
-		purpose = purposeMain
-	} else if s.isBackground(ctx, sid) {
-		purpose = purposeSupervise
-	}
+	purpose := s.conversationModelPurpose(ctx, machine, sid)
 	if pickedLauncher {
 		if err := s.applyPickedModel(ctx, p); err != nil {
 			return err
@@ -1783,7 +1799,18 @@ func (s *Service) sendOnPick(ctx context.Context, machine, sid string, p map[str
 	if err := s.otherKindPick(ctx, machine, sid, pick.Launcher); err != nil {
 		return err
 	}
-	return preservePermissionMode(p, func() error { return s.applyPick(ctx, p, pick) })
+	return preservePermissionMode(p, func() error { return s.applyPickFor(ctx, s.conversationModelPurpose(ctx, machine, sid), p, pick) })
+}
+
+func (s *Service) conversationModelPurpose(ctx context.Context, machine, sid string) string {
+	cfg := s.settings(ctx)
+	if cfg.Main != "" && cfg.Main == sid && cfg.mainRouteMachine() == machine {
+		return purposeMain
+	}
+	if s.isBackground(ctx, sid) {
+		return purposeSupervise
+	}
+	return "assistant"
 }
 
 // startedByTask: sid is a conversation a scheduled task started (origin task), also once it is no task's current

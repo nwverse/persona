@@ -828,12 +828,10 @@ func codexStartNotef(w io.Writer, format string, a ...any) {
 	fmt.Fprintf(w, codexStartNote+" "+format+"\n", a...)
 }
 
-// The rc file may change directory or export defaults. Restore the start's decisions without parsing them as code.
+// The rc file may export defaults. Restore the start's environment without parsing it as code.
 // Only the names of the saved environment entries reach argv; values can be secrets. Indirection never evals them.
 // A carrier holds the whole NAME=value assignment: even NAME= is nonempty and restores an explicitly empty value.
-const codexNativeStartScript = `
-builtin cd -- "$1" || exit
-shift
+const codexShellRestoreEnv = `
 while [ "$1" != -- ]; do
   if [ -n "${ZSH_VERSION-}" ]; then
     [ -n "${(P)1}" ] || exit 1
@@ -846,6 +844,22 @@ while [ "$1" != -- ]; do
   shift
 done
 shift
+`
+
+func codexShellEnvCarriers(assignments []string) (args, env []string) {
+	prefix := "__PERSONA_CODEX_START_" + rand.Text() + "_"
+	for i, assignment := range assignments {
+		name := prefix + strconv.Itoa(i)
+		args = append(args, name)
+		env = append(env, name+"="+assignment)
+	}
+	return append(args, "--"), env
+}
+
+const codexNativeStartScript = `
+builtin cd -- "$1" || exit
+shift
+` + codexShellRestoreEnv + `
 if [[ -n "${PERSONA_MODEL_SOURCE_BIN-}" && -n "${PERSONA_MODEL_SOURCE_HOSTS-}" ]]; then
   function __persona_source_codex { "${PERSONA_MODEL_SOURCE_BIN}" model-source codex "$@"; }
   if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
@@ -879,13 +893,10 @@ func codexStartExec(path string, argv, env, explicit []string) (string, []string
 		if shell, err := exec.LookPath(codexStartShellProgram()); err == nil {
 			// Resolve a same-name function after its rc file, without expanding aliases twice or parsing data as code.
 			run = []string{shell, shellFlag(shell), codexNativeStartScript, "persona-codex-start", cwd}
-			prefix := "__PERSONA_CODEX_START_" + rand.Text() + "_"
-			for i, assignment := range explicit {
-				name := prefix + strconv.Itoa(i)
-				env = append(env, name+"="+assignment)
-				run = append(run, name)
-			}
-			run = append(append(run, "--"), argv...)
+			carriers, extraEnv := codexShellEnvCarriers(explicit)
+			env = append(env, extraEnv...)
+			run = append(run, carriers...)
+			run = append(run, argv...)
 		}
 	}
 	logf := func(format string, a ...any) { codexStartNotef(os.Stderr, format, a...) }

@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -538,12 +539,11 @@ func (b *BusHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage,
 	if out, ok, err := b.localDeviceCall(ctx, p); ok { // the manager's own machines (devices.go)
 		return out, err
 	}
-	var out json.RawMessage
-	method := assistantwire.MethodDevice
+	method := assistantwire.DeviceMethod
 	if p.Method == nodeproto.StopIfIdle {
-		method = assistantwire.MethodDeviceRetire
+		method = assistantwire.DeviceRetireMethod
 	}
-	err := b.client.Call(ctx, method, p, &out)
+	out, err := buswire.Call(ctx, b.client, method, p)
 	return out, busError(err)
 }
 
@@ -554,8 +554,7 @@ func (b *BusHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, error
 	if out, ok, err := b.localAppCall(ctx, p); ok { // the manager's extensions, connectors and bots (extensions.go)
 		return out, err
 	}
-	var out json.RawMessage
-	err := b.client.Call(ctx, assistantwire.MethodApp, p, &out)
+	out, err := buswire.Call(ctx, b.client, assistantwire.AppMethod, p)
 	return out, busError(err)
 }
 
@@ -573,8 +572,7 @@ func (b *BusHub) Broadcast(ctx context.Context, m Broadcast) {
 
 func (b *BusHub) Snapshot(ctx context.Context, s Snapshot) (SnapshotResult, error) {
 	b.keepFromSnapshot(s) // what the nodes keep listing is the manager's to tell them (devices.go)
-	var out SnapshotResult
-	err := b.client.Call(ctx, assistantwire.MethodSnapshot, s, &out)
+	out, err := buswire.Call(ctx, b.client, assistantwire.SnapshotMethod, s)
 	return out, busError(err)
 }
 
@@ -650,6 +648,15 @@ func (b *BusHub) httpHandler(s *Service) http.Handler {
 	return b.httpH
 }
 
+// handleBusRequest binds a handler to its descriptor and uses the bus's existing decoder.
+func handleBusRequest[P, R any](ctx context.Context, _ buswire.Method[P, R], decode func(any) error, run func(context.Context, P) (R, error)) (any, error) {
+	var p P
+	if err := decode(&p); err != nil {
+		return nil, err
+	}
+	return run(ctx, p)
+}
+
 func (b *BusHub) request(ctx context.Context, method string, params json.RawMessage) (reply any, requestErr error) {
 	b.waitHello(ctx)
 	s := b.service()
@@ -661,76 +668,47 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	}
 	switch method {
 	case assistantwire.MethodHTTP:
-		var p assistantwire.HTTPRequest
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		defer memtrim.AfterLarge(len(p.Body)) // a large upload's buffers go back to the system after it
-		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		return handleBusRequest(ctx, assistantwire.HTTPMethod, decode, func(ctx context.Context, p assistantwire.HTTPRequest) (assistantwire.HTTPResponse, error) {
+			defer memtrim.AfterLarge(len(p.Body)) // a large upload's buffers go back to the system after it
+			return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		})
 	case assistantwire.MethodHTTPStreamed: // http.request with its body on a relay of its own (bus_body.go)
-		var p assistantwire.HTTPRequest
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		body, err := b.streamedBody(ctx, p.BodyStream)
-		if err != nil {
-			return nil, &rpc.Error{Code: assistantwire.CodeBodyIncomplete, Message: method + ": " + err.Error()}
-		}
-		p.Body, p.BodyStream = body, nil
-		defer memtrim.AfterLarge(len(p.Body))
-		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		return handleBusRequest(ctx, assistantwire.HTTPStreamedMethod, decode, func(ctx context.Context, p assistantwire.HTTPRequest) (assistantwire.HTTPResponse, error) {
+			body, err := b.streamedBody(ctx, p.BodyStream)
+			if err != nil {
+				return assistantwire.HTTPResponse{}, &rpc.Error{Code: assistantwire.CodeBodyIncomplete, Message: method + ": " + err.Error()}
+			}
+			p.Body, p.BodyStream = body, nil
+			defer memtrim.AfterLarge(len(p.Body))
+			return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
+		})
 	case assistantwire.MethodTools:
-		var target SessionRef
-		if err := decode(&target); err != nil {
-			return nil, err
-		}
-		return map[string]any{"tools": s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
+		return handleBusRequest(ctx, assistantwire.ToolsMethod, decode, func(ctx context.Context, target assistantwire.SessionRef) (assistantwire.ToolsResult, error) {
+			return assistantwire.ToolsResult{Tools: s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
+		})
 	case assistantwire.MethodTool:
-		var p ToolCall
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.Tool(ctx, p), nil
+		return handleBusRequest(ctx, assistantwire.ToolMethod, decode, func(ctx context.Context, p assistantwire.ToolCall) (proto.ToolResult, error) {
+			return s.Tool(ctx, p), nil
+		})
 	case assistantwire.MethodContext:
-		var p ContextParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.Context(ctx, p), nil
+		return handleBusRequest(ctx, assistantwire.ContextMethod, decode, func(ctx context.Context, p assistantwire.ContextParams) (assistantwire.ContextResult, error) {
+			return s.Context(ctx, p), nil
+		})
 	case assistantwire.MethodAction:
-		var p Action
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.Action(ctx, p)
+		return handleBusRequest(ctx, assistantwire.ActionMethod, decode, s.Action)
 	case assistantwire.MethodTodoHandoff:
-		var p TodoHandoff
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.TodoHandoff(ctx, p)
+		return handleBusRequest(ctx, assistantwire.TodoHandoffMethod, decode, s.TodoHandoff)
 	case assistantwire.MethodTodoLink:
-		var p TodoLinkParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.TodoLink(ctx, p)
+		return handleBusRequest(ctx, assistantwire.TodoLinkMethod, decode, s.TodoLink)
 	case assistantwire.MethodStart:
-		var p StartParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		sess, err := s.Start(ctx, p)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"session": sess}, nil
+		return handleBusRequest(ctx, assistantwire.StartMethod, decode, func(ctx context.Context, p assistantwire.StartParams) (assistantwire.StartResult, error) {
+			sess, err := s.Start(ctx, p)
+			return assistantwire.StartResult{Session: sess}, err
+		})
 	case assistantwire.MethodProjectReviewOwnerInput:
-		var p assistantwire.ProjectReviewOwnerInput
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return struct{}{}, s.projectReviewOwnerInput(ctx, p)
+		return handleBusRequest(ctx, assistantwire.ProjectReviewOwnerInputMethod, decode, func(ctx context.Context, p assistantwire.ProjectReviewOwnerInput) (buswire.None, error) {
+			return buswire.None{}, s.projectReviewOwnerInput(ctx, p)
+		})
 	case assistantwire.MethodSendParams:
 		var p SendParams
 		if err := decode(&p); err != nil {
@@ -768,15 +746,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		return map[string]any{"params": params}, nil
 	case assistantwire.MethodKeepUndelivered:
-		var p assistantwire.KeepUndeliveredParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		kept, err := s.KeepUndelivered(ctx, p)
-		if err != nil {
-			return nil, err
-		}
-		return map[string]any{"undelivered": kept}, nil
+		return handleBusRequest(ctx, assistantwire.KeepUndeliveredMethod, decode, func(ctx context.Context, p assistantwire.KeepUndeliveredParams) (assistantwire.KeepUndeliveredResult, error) {
+			kept, err := s.KeepUndelivered(ctx, p)
+			return assistantwire.KeepUndeliveredResult{Undelivered: &kept}, err
+		})
 	case assistantwire.MethodRename:
 		var p RenameParams
 		if err := decode(&p); err != nil {
@@ -819,13 +792,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:
-		var p struct {
-			Interaction proto.Interaction `json:"interaction"`
-		}
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.askHub(ctx, p.Interaction)
+		return handleBusRequest(ctx, assistantwire.FleetAskMethod, decode, func(ctx context.Context, p assistantwire.FleetAskParams) (proto.Resolution, error) {
+			return s.askHub(ctx, p.Interaction)
+		})
 	case assistantwire.MethodFleetAskPrepared:
 		var p struct {
 			Interaction proto.Interaction `json:"interaction"`

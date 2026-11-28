@@ -91,7 +91,7 @@ describe("a herdr tab with several panes", () => {
     act(() => upsertSession({ ...getState().sessions.mac.find((s) => s.session_id === "b1")!, title: "别的标签页 改" }));
     await flush();
 
-    const more = host.querySelector<HTMLButtonElement>('button[aria-label="标签页的操作"]');
+    const more = host.querySelector<HTMLButtonElement>('button[aria-label="标签页操作"]');
     expect(more).toBeTruthy();
     act(() => more!.click());
     await flush();

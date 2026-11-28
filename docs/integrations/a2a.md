@@ -112,6 +112,19 @@ while remaining allowed to receive messages, call `a2a_report`, and be observed
 on their own launch task.
 Reuse the same `message_id` when a tool reply is lost. The manager records the
 request and a reserved session ID before attempting the launch.
+A new Agent starts where `agent_start` would start one, since nobody sits at
+its pane either: when its launcher runs the Antigravity CLI (agy) and the
+target computer's Antigravity companion runs that launcher, it starts on the
+companion, which holds `plan` in agy's own plan mode.
+A launch in `plan` whose launcher has no read-only mode on that computer (pi,
+the Cursor CLI, or agy where only a terminal runs it) is refused when
+`a2a_send` is called, before the task is recorded, with `readonly_unsupported`
+naming that computer's Claude Code and Codex launchers. The launch is checked
+again when it goes out, since it can wait for its computer. If the companion
+went away meanwhile, a writable launch starts in the computer's default host
+and a read-only one fails. A launch that did not start fails with the reason,
+such as the node's refusal; only a launch whose outcome is unknown fails with
+`Persona could not confirm the Agent started.`
 
 ```sh
 personad tool a2a_send '{"machine_id":"box","cwd":"~/code/project","message_id":"request-002","text":"Inspect the failing integration test and explain the cause."}'
@@ -145,6 +158,9 @@ keeps the existing launcher, worktree and supervision options. It returns the
 new session and task IDs. Supply a stable `message_id` when retrying a launch.
 It takes `tier` too, resolved, refused and matched on retries the same way; the
 started Agent keeps the permission rule dispatch gives it.
+It chooses the companion for agy the same way and keeps its own permission
+mode. When Model configuration starts it in `plan`, a launcher that cannot
+start read-only there is refused before the task is recorded.
 `dispatch_read` without arguments lists each computer a task can go to with
 the presets it can run. It accepts either ID for new dispatches and can still
 read the dispatch history created earlier.

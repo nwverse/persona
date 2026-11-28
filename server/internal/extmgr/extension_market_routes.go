@@ -253,6 +253,10 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 			fail(w, err, "not_in_market")
 			return
 		}
+		if err := e.EngineProblem(h.build.Number); err != nil {
+			fail(w, err, "cant_run_here")
+			return
+		}
 		if err := h.cantRunHere(e.Parsed); err != nil { // before downloading it (#5639)
 			fail(w, err, "cant_run_here")
 			return

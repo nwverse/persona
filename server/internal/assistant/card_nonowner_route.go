@@ -74,11 +74,12 @@ func (s *Service) scheduleFailureTarget(ctx context.Context, t Task) (string, bo
 // supervisor or the main conversation instead of pushing them to the owner.
 //
 // Cards that genuinely belong to one of the owner's six classes — secrets/forms/elicitations,
-// outward writes (mail_send, comments, etc.), approvals matching userApproval, and unparsed or
-// user-only terminal dialogs (trust folder, delete risk, etc.) — return false so they still reach
-// the owner as before. So do the cards of the assistant's own supervising conversations (the main
-// conversation, the background supervisor, a leader), as askLadder leaves them (supervisorConversation):
-// handed on, such a card was parked where no conversation was woken for it or could hand it up (#15360).
+// outward writes (mail_send, comments, etc.), approvals matching userApproval, direct-routed
+// Assistant write approvals, and unparsed or user-only terminal dialogs (trust folder, delete
+// risk, etc.) — return false so they still reach the owner as before. So do the cards of the
+// assistant's own supervising conversations (the main conversation, the background supervisor,
+// a leader), as askLadder leaves them (supervisorConversation): handed on, such a card was
+// parked where no conversation was woken for it or could hand it up (#15360).
 func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	src := s.inputCardSource(ix, false)
 	if src != cardAgentPermission && src != cardAgentQuestion && src != cardExtensionApproval {
@@ -98,6 +99,11 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	defer cancel()
 	cfg := s.settings(ctx)
 	if cfg.supervisorConversation(ix.SessionID) {
+		return false
+	}
+	// The direct bot route is an explicit owner-decision path, not a non-owner
+	// delegation. Do not park an eligible write before tellUser announces it.
+	if ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
 		return false
 	}
 	to, standalone := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
@@ -166,6 +172,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		Tool:      src,
 		Text:      b.String(),
 		At:        now.UTC(),
+		Internal:  true,
 	}
 	if standalonePermission {
 		// The active queue waits for the main conversation to be free and retries under the same message ID.

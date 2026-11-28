@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -792,9 +793,8 @@ var lsBeginRefusal = map[string]string{
 func (r *linkSwitchRun) begin(ctx context.Context) (link, refused string, err error) {
 	cctx, cancel := context.WithTimeout(ctx, r.t.Begin)
 	defer cancel()
-	var out devicewire.LinkSwitchBegun
-	err = r.d.opts.Hub.Call(cctx, devicewire.MethodLinkSwitchBegin, devicewire.LinkSwitchBegin{MachineID: r.rec.MachineID,
-		Operation: r.rec.Operation, SSHHost: r.rec.SSHHost, By: r.rec.By}, &out)
+	out, err := buswire.Call(cctx, r.d.opts.Hub, devicewire.LinkSwitchBeginMethod, devicewire.LinkSwitchBegin{MachineID: r.rec.MachineID,
+		Operation: r.rec.Operation, SSHHost: r.rec.SSHHost, By: r.rec.By})
 	var re *rpc.Error
 	switch {
 	case errors.As(err, &re) && lsBeginRefusal[re.Code] != "":
@@ -977,8 +977,8 @@ const (
 func (r *linkSwitchRun) endOnce(ctx context.Context, outcome string) endAnswer {
 	cctx, cancel := context.WithTimeout(ctx, r.t.Begin)
 	defer cancel()
-	err := r.d.opts.Hub.Call(cctx, devicewire.MethodLinkSwitchEnd, devicewire.LinkSwitchEnd{MachineID: r.rec.MachineID,
-		Operation: r.rec.Operation, PairHash: r.rec.PairHash, Outcome: outcome}, nil)
+	_, err := buswire.Call(cctx, r.d.opts.Hub, devicewire.LinkSwitchEndMethod, devicewire.LinkSwitchEnd{MachineID: r.rec.MachineID,
+		Operation: r.rec.Operation, PairHash: r.rec.PairHash, Outcome: outcome})
 	var re *rpc.Error
 	switch {
 	case err == nil:

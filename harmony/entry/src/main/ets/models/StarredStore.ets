@@ -188,9 +188,11 @@ export class StarredStore {
 
   startReading(model: ClientModel): void {
     this.readers++;
-    this.configure(model);
-    void this.loadIndex(model);
-    void this.loadPage(model);
+    const changed = this.configure(model);
+    if (!changed) {
+      void this.loadIndex(model);
+      void this.loadPage(model);
+    }
   }
 
   stopReading(): void {

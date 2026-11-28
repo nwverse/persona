@@ -89,7 +89,11 @@ func (h *orcaHost) PaneShellAtRest(ctx context.Context, pane host.PaneRef) (bool
 	if !p.Known() {
 		return false, fmt.Errorf("%w in %s (%s)", errOrcaCannotTell, pane.ID, p.Unverified())
 	}
-	return p.IdleShell() && p.Foreground() == "" && !p.HasChildren(), nil
+	return orcaIdleShell(p), nil
+}
+
+func orcaIdleShell(p *orcart.Process) bool {
+	return p.Known() && p.IdleShell() && p.Foreground() == "" && !p.HasChildren()
 }
 
 // shellInFront: Orca reads t (the exact terminal and incarnation, no stale-handle retry) with only its shell in front;

@@ -54,6 +54,7 @@ export struct FoldInspectorPanel {
   @Event onStepRelay: (direction: 1 | -1) => void = () => {};
   @Event onInterruptSession: (row: ResourceRow) => void = () => {};
   @Event onOpenXiaoYi: () => void = () => {};
+  @Event onOpenTokenUsage: () => void = () => {};
   @Event onOpenLink: (address: string) => void = () => {};
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private liveView: NativeLiveView = nativeLiveView;
@@ -742,6 +743,57 @@ export struct FoldInspectorPanel {
     .id('fold.inspector.tools.xiaoyi')
   }
 
+  @Builder tokenUsageQuickCard() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: Tokens.spaceM }) {
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(Symbols.health)
+            .fontSize('16vp')
+            .fontColor([Colors.link])
+        }
+        .width(32)
+        .height(32)
+        .borderRadius(Tokens.radiusControl)
+        .backgroundColor(Colors.needsWash)
+        .flexShrink(0)
+
+        Column({ space: Tokens.spaceXxs }) {
+          Text(tr('token_usage_title'))
+            .fontSize(Tokens.typeCaption)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.ink)
+            .maxLines(1)
+          Text(tr('token_usage_quick_subtitle'))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+            .fontColor(Colors.secondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        SymbolGlyph(Symbols.expand)
+          .fontSize('12vp')
+          .fontColor([Colors.tertiary])
+      }
+      .width('100%')
+      .padding(14)
+    }
+    .width('100%')
+    .padding(0)
+    .backgroundColor(Colors.surface)
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
+    .shadow(PhoneStyle.cardElevation(this.env.dark))
+    .onClick(() => {
+      Haptics.tap();
+      this.onOpenTokenUsage();
+    })
+    .id('fold.workbench.token_usage')
+  }
+
   @Builder pulseTabContent() {
     Scroll() {
       Column({ space: Tokens.spaceM }) {
@@ -804,6 +856,7 @@ export struct FoldInspectorPanel {
           .shadow(PhoneStyle.cardElevation(this.env.dark))
         }
         this.fleetPulseCard()
+        this.tokenUsageQuickCard()
       }.width('100%').padding({ left: Tokens.spaceM, right: Tokens.spaceM, bottom: Tokens.spaceXl })
     }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
   }
@@ -1104,6 +1157,7 @@ export struct FoldInspectorPanel {
           .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
           .shadow(PhoneStyle.cardElevation(this.env.dark))
         }
+        this.tokenUsageQuickCard()
       }.width('100%').padding({ left: Tokens.spaceM, right: Tokens.spaceM, bottom: Tokens.spaceXl })
     }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
   }
