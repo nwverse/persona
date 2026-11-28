@@ -63,8 +63,13 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   }
   if (msg.method === 'authenticate') {
     authed = msg.params?.methodId || ''
+    if (authed === 'oauth-personal') writeFileSync(join(home, 'oauth-ready'), 'ready')
     record({ kind: 'auth', methodId: authed })
     send({ jsonrpc: '2.0', id: msg.id, result: {} })
+    return
+  }
+  if (msg.method.startsWith('session/') && existsSync(join(home, 'require-oauth')) && !existsSync(join(home, 'oauth-ready'))) {
+    send({ jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: 'Authentication required' } })
     return
   }
   if (msg.method === 'session/new') {
@@ -315,4 +320,25 @@ test('launchers.models isolates native OAuth catalog from managed channel catalo
   // Re-querying native models still returns the native catalog, completely unpolluted.
   const nativeAgain = await node.peer.call('launchers.models', { launcher: 'agy' })
   assert.deepEqual(nativeAgain.models.map((m) => m.id), ['native-oauth-model'])
+})
+
+
+test('runtime native pool recovers auth-required session creation with advertised personal OAuth', async t => {
+  const { home, node, events } = await poolFixture(t)
+  writeFileSync(join(home, 'require-oauth'), 'required')
+  const started = await node.peer.call('session.start', { cwd: home })
+  assert.ok(started.session.session_id)
+  assert.deepEqual(events().filter(event => event.kind === 'auth').map(event => event.methodId), ['oauth-personal'])
+  assert.equal(events().filter(event => event.kind === 'rpc' && event.method === 'session/new').length, 2)
+})
+
+test('runtime managed pool never uses personal OAuth when session creation requires authentication', async t => {
+  const { home, node, events } = await poolFixture(t)
+  writeFileSync(join(home, 'require-oauth'), 'required')
+  await assert.rejects(node.peer.call('session.start', { cwd: home, channel: {
+    id: 'managed-auth-required', auth_mode: 'gemini-api-key', rev: 'r1',
+    env: { GEMINI_API_KEY: 'mock-managed-key', PERSONA_AGY_MODEL_PROVIDER: 'gemini' },
+  } }), /Authentication required/)
+  assert.deepEqual(events().filter(event => event.kind === 'auth').map(event => event.methodId), ['gemini-api-key'])
+  assert.equal(events().filter(event => event.kind === 'rpc' && event.method === 'session/new').length, 1)
 })
