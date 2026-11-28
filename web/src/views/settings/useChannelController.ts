@@ -113,9 +113,10 @@ export function useChannelController(channelId: string | null, manager?: string)
       if (next) forgetChannels();
       if (!current() || (next && next.id !== channelId)) return null;
       if (next) {
-        // The response acknowledges a committed write. A read that overlapped it may have seen an older snapshot.
-        setDetail(next);
-        if (n !== seq.current) void load();
+        const overlapped = n !== seq.current;
+        // The routing form needs the accepted revision immediately. A fresh read reconciles any overlap.
+        if (!overlapped || what === "routing") setDetail(next);
+        if (overlapped) void load();
       }
       return { snapshot: next };
     } catch (error) {
