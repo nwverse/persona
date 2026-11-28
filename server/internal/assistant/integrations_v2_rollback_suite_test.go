@@ -107,10 +107,8 @@ func TestIntegrationsV2DualTopicRollback(t *testing.T) {
 			st := s.store().(*memStore)
 			const legacy = "oc_group:omt_topic"
 			topic := channelTopicRouteKey("oc_group", "omt_topic")
-			now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
-			s.chans.mu.Lock()
-			s.chans.now = func() time.Time { return now }
-			s.chans.mu.Unlock()
+			clock := &fakeClock{now: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)}
+			s.setChannelTestClock(clock.Now)
 			receive := func(id, text, thread string, structured bool) {
 				t.Helper()
 				m := channel.Message{ID: id, Text: text, Thread: thread}
@@ -151,9 +149,7 @@ func TestIntegrationsV2DualTopicRollback(t *testing.T) {
 				if i > 0 {
 					setIntegrationsV2ViaHTTP(t, s, v2, !v2)
 				}
-				s.chans.mu.Lock()
-				now = now.Add(45 * time.Minute)
-				s.chans.mu.Unlock()
+				clock.advance(45 * time.Minute)
 				receive(fmt.Sprintf("topic_%d", i), "follow-up in the same topic", legacy, true)
 				f.mu.Lock()
 				sends := len(f.sentOnce)
@@ -167,6 +163,7 @@ func TestIntegrationsV2DualTopicRollback(t *testing.T) {
 			if found, err := st.Setting(ctx, channelsKey, &stored); !found || err != nil {
 				t.Fatalf("read stored bindings: found=%t err=%v", found, err)
 			}
+			now := clock.Now()
 			for _, key := range []string{legacy, topic} {
 				got := stored["examplechat"].Threads[key]
 				if got == nil || got.SessionID != session || !got.At.Equal(now) {
@@ -232,11 +229,11 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		return map[string]any{}, nil
 	})
 
-	now := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
+	clock := &fakeClock{now: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)}
 	newReloadedService := func(t *testing.T) *Service {
 		t.Helper()
 		svc := newServiceOn(t, f, st)
-		svc.chans.now = func() time.Time { return now }
+		svc.setChannelTestClock(clock.Now)
 		return svc
 	}
 
@@ -308,7 +305,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		}
 		registerAssistantSession(f, legacyExSess)
 
-		now = now.Add(5 * time.Hour)
+		clock.advance(5 * time.Hour)
 		if err := s.channelForward(ctx, "examplechat", channel.Message{
 			ID: "s1_ex_leg_2", Text: "legacy thread 2", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup, Thread: "legacy:t1",
 		}); err != nil {
@@ -483,7 +480,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 
 		// 2c. Idle-timeout rotation on examplechat (thread_idle_hours=2):
 		// +1h30m continues groupSess1 (refreshing timestamp); +2h05m rotates to a new session.
-		now = now.Add(90 * time.Minute)
+		clock.advance(90 * time.Minute)
 		if err := s.channelForward(ctx, "examplechat", channel.Message{
 			ID: "s2_g1_keep", Text: "within 2h", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup,
 		}); err != nil {
@@ -493,7 +490,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 			t.Fatalf("s2_g1_keep: starts=%d session=%q want %q", f.sent(), lastSendOnceSession(f), groupSess1)
 		}
 
-		now = now.Add(2*time.Hour + 5*time.Minute)
+		clock.advance(2*time.Hour + 5*time.Minute)
 		if err := s.channelForward(ctx, "examplechat", channel.Message{
 			ID: "s2_g1_rotate", Text: "past 2h idle", ChatID: "oc_g1", ChatKind: channel.ChatKindGroup,
 		}); err != nil {
@@ -587,7 +584,7 @@ func TestIntegrationsV2CombinedRollbackSuite(t *testing.T) {
 		}
 
 		// Advance clock 10h (> examplechat's 2h idle timeout, < topicbot/legacybot's 24h, < 30d legacy TTL).
-		now = now.Add(10 * time.Hour)
+		clock.advance(10 * time.Hour)
 		starts := f.sent()
 
 		// Structured group without m.Thread reverts to channel default target m1.

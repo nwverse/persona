@@ -52,6 +52,12 @@ func boundThread(s *Service, thread string) string {
 	return boundThreadFor(s, "examplechat", thread)
 }
 
+func (s *Service) setChannelTestClock(now func() time.Time) {
+	s.chans.mu.Lock()
+	defer s.chans.mu.Unlock()
+	s.chans.now = now
+}
+
 func (s *Service) threadBindingForTest(ctx context.Context, id string, m channel.Message) (threadBindingRef, channel.View, error) {
 	v, _ := s.pluginChannel(ctx, id)
 	v2 := s.integrationsV2On(ctx)
@@ -267,9 +273,9 @@ func TestChannelThreadsPruned(t *testing.T) {
 	}
 
 	s, _, _ := threadsChannelService(t, true)
-	s.chans.now = func() time.Time { return now }
+	s.setChannelTestClock(func() time.Time { return now })
 	s.seedThreadBinding("examplechat", "old", "server", "s_old")
-	s.chans.now = func() time.Time { return now.Add(channelThreadsKeepFor + time.Minute) }
+	s.setChannelTestClock(func() time.Time { return now.Add(channelThreadsKeepFor + time.Minute) })
 	if boundThread(s, "old") != "" {
 		t.Fatal("a thread quiet for longer than it is kept still has its conversation")
 	}

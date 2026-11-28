@@ -40,7 +40,7 @@ func TestThreadBindingLookupPriorityAndExpiry(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			s := newTestService(t, newFakeHub())
-			s.chans.now = func() time.Time { return now }
+			s.setChannelTestClock(func() time.Time { return now })
 			stored := map[string]*channelThread{}
 			if tc.legacyAge != missing {
 				stored[testLegacyThreadKey] = &channelThread{MachineID: "server", SessionID: "legacy", At: now.Add(-time.Duration(tc.legacyAge) * time.Hour)}
@@ -68,8 +68,8 @@ func TestThreadBindingRefreshAndResetPersistence(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(t, newFakeHub())
 	store := s.store().(*memStore)
-	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	s.chans.now = func() time.Time { return now }
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+	s.setChannelTestClock(clock.Now)
 	var index threadBindingIndex
 	legacy := index.resolve("examplechat", channel.Message{Thread: testLegacyThreadKey}, "", false)
 	dual := testDualThreadMessage()
@@ -81,7 +81,8 @@ func TestThreadBindingRefreshAndResetPersistence(t *testing.T) {
 		t.Fatalf("the first structured delivery created a legacy binding: %+v", got)
 	}
 
-	now = now.Add(time.Hour)
+	clock.advance(time.Hour)
+	now := clock.Now()
 	if !s.refreshThreadBinding(index.resolve("examplechat", dual, "", false), "server", "second") {
 		t.Fatal("current binding did not accept the second delivery")
 	}
@@ -131,9 +132,7 @@ func TestThreadBindingFollowsDeliveryAfterRefreshFailure(t *testing.T) {
 	s, f, hub := admissionChannelService(t, true, store)
 	close(hub.release)
 	registerAssistantSession(f, "topic-session")
-	s.chans.mu.Lock()
-	s.chans.now = func() time.Time { return now }
-	s.chans.mu.Unlock()
+	s.setChannelTestClock(func() time.Time { return now })
 
 	m := testDualThreadMessage()
 	m.ID, m.Text = "delivered", "Continue the topic"
