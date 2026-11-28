@@ -414,7 +414,7 @@ function ExtensionResourceDetail({ binding, id, manager, onBack: back, headerBac
   const roster = useRoster();
   const offline = roster?.managers.find((m) => m.id === binding.client.managerId)?.online === false;
   const {
-    detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, dirty, editable,
+    detail, error, loading, draft, typed, fieldErrors, checkFailed, saving, toggling, saveBarLabel, editable,
     canSave, problems, load, reload, authChanged, connectorRefreshKey, mutate, remove: onBack, edit, type, revert, save, saveNow,
   } = useExtensionConfiguration(id, binding, prefill, back);
   const [removing, setRemoving] = useState(false);
@@ -651,10 +651,10 @@ function ExtensionResourceDetail({ binding, id, manager, onBack: back, headerBac
           )}
 
           </>}
-          saveBar={dirty && (
+          saveBar={saveBarLabel && (
             <Group>
               {checkFailed && <SettingsHint alert>{t("settings-extensions.not_saved", { error: checkFailed })}</SettingsHint>}
-              <Row label={Object.keys(problems).length ? t("settings-extensions.not_a_number") : t("settings-extensions.unsaved")}>
+              <Row label={saveBarLabel}>
                 <Button tone="quiet" onClick={revert} disabled={saving}>{t("settings-extensions.revert")}</Button>
                 <Button tone="accent" busy={saving} disabled={!canSave || offline} onClick={() => void save()}>{t("common.save")}</Button>
               </Row>

@@ -5,7 +5,7 @@ import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectModuleHub } from "../../core/module-host";
-import { t } from "../../i18n";
+import { initI18n, t } from "../../i18n";
 import { setPairedToken } from "../../lib/api";
 import { ago } from "../../lib/format";
 import { channelStateText, type ChannelDetail } from "../../lib/channels";
@@ -1266,6 +1266,78 @@ describe("integration detail parity", () => {
   const unloadWarns = () => !window.dispatchEvent(new Event("beforeunload", { cancelable: true }));
   const input = (name: string) => host.querySelector<HTMLInputElement>(`#extension-field-${name}`)!;
 
+  it.each(["classic", "unified"])("counts fields that need Save in the %s editor", async (editor) => {
+    currentExt.form!.fields!.push(
+      { name: "computers", type: "array", items: { name: "", type: "string", format: "machine" } },
+      { name: "minutes", type: "integer" },
+    );
+    currentExt.config = { ...currentExt.config, computers: ["demo"], minutes: 5 };
+    await act(async () => root.render(editor === "classic"
+      ? <Extensions open={extension.id} onOpen={() => {}} />
+      : <IntegrationDetail target={extension} />));
+    const save = () => [...host.querySelectorAll("button")].find((b) => b.textContent === t("common.save")
+      && b.parentElement?.textContent?.includes(t("settings-extensions.revert")));
+    const editField = (name: string, value: string) => act(() => setInputValue(input(name), value));
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#extension-field-computers [role="switch"][aria-label="demo"]')!.click());
+    expect(requests.some((r) => r.method === "PUT" && r.url.includes("/-/config"))).toBe(true);
+    expect(save()).toBeUndefined();
+
+    editField("display_alias", "First edit");
+    editField("display_alias", "Second edit");
+    editField("minutes", "10");
+    expect(host.textContent).toContain("还有 2 项待保存");
+    editField("minutes", "5");
+    expect(host.textContent).toContain("还有 1 项待保存");
+
+    editField("minutes", "invalid");
+    expect(host.textContent).toContain(t("settings-extensions.not_a_number"));
+    expect(save()?.disabled).toBe(true);
+    editField("minutes", "5");
+    editField("display_alias", "Team Lark");
+    expect(save()).toBeUndefined();
+
+    editField("display_alias", "Final edit");
+    await act(async () => save()!.click());
+    expect(currentExt.config?.display_alias).toBe("Final edit");
+    expect(save()).toBeUndefined();
+  });
+
+  it("excludes an in-flight machine switch while other fields are edited", async () => {
+    currentExt.form!.fields!.push({ name: "computers", type: "array", items: { name: "", type: "string", format: "machine" } });
+    currentExt.config = { ...currentExt.config, computers: ["demo"] };
+    const fetchNow = fetch;
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && url.includes("/-/config")) await pending;
+      return fetchNow(url, init);
+    });
+    await act(async () => root.render(<IntegrationDetail target={extension} />));
+    const bar = () => host.querySelector('[data-settings-group="integration-save-bar"]');
+    await act(async () => host.querySelector<HTMLButtonElement>('#extension-field-computers [role="switch"][aria-label="demo"]')!.click());
+    expect(bar()).toBeNull();
+    act(() => setInputValue(input("display_alias"), "Edited while saving"));
+    expect(bar()?.textContent).toContain("还有 1 项待保存");
+    await act(async () => release());
+    expect(bar()?.textContent).toContain("还有 1 项待保存");
+    expect(currentExt.config?.computers).toBeUndefined();
+  });
+
+  it.each([
+    ["en", "1 field to save", "2 fields to save"],
+    ["zh-Hans", "还有 1 项待保存", "还有 2 项待保存"],
+    ["ja", "未保存の項目：1 件", "未保存の項目：2 件"],
+  ])("names one and two pending fields in %s", async (language, one, two) => {
+    await initI18n(language);
+    try {
+      expect(t("settings-extensions.fields_to_save", { count: 1 })).toBe(one);
+      expect(t("settings-extensions.fields_to_save", { count: 2 })).toBe(two);
+    } finally {
+      await initI18n("zh-Hans");
+    }
+  });
+
   it("keeps a draft after settings_moved and retries on the refreshed configuration", async () => {
     const fetchNow = fetch;
     let fail!: (answer: ReturnType<typeof ok>) => void;
@@ -1293,6 +1365,7 @@ describe("integration detail parity", () => {
       ...ok({ code: "settings_moved", error: "Settings moved. Try again." }), ok: false, status: 409,
     }));
     expect(host.textContent).toContain("Settings moved. Try again.");
+    expect(host.textContent).toContain("还有 1 项待保存");
     expect(input("endpoint").value).toBe("https://newer.example.com");
     expect(input("display_alias").value).toBe("Changed elsewhere");
     await act(async () => save.click());
