@@ -172,12 +172,12 @@ func TestExtensionTrustThroughManagerRouting(t *testing.T) {
 			t.Fatalf("GET trust for %q = %s, want %+v (%v)", id, raw, want, err)
 		}
 	}
-	checkOwner := func(id, token string, want bool) {
+	checkOwner := func(id, token string, want extwire.OwnerVerdict) {
 		t.Helper()
 		var out extwire.Authorized
 		p := extwire.Authorize{Hash: hashToken(token), Pattern: "GET /api/v1/sessions", Method: http.MethodGet, Path: "/api/v1/sessions"}
 		if err := h.callBus(ctx, id, extwire.MethodAuthorize, p, &out); err != nil ||
-			out.Extension != trustExtension || !out.OK || out.Owner == nil || *out.Owner != want {
+			out.Extension != trustExtension || !out.OK || out.Owner != want {
 			t.Errorf("%s authorize: extension %q, route allowed %v, owner %v, want owner %v (%v)", id,
 				out.Extension, out.OK, out.Owner, want, err)
 		}
@@ -185,8 +185,8 @@ func TestExtensionTrustThroughManagerRouting(t *testing.T) {
 
 	checkTrust("", "", nil)
 	checkTrust(trustManager, "", nil)
-	checkOwner(builtin, aToken, false)
-	checkOwner(trustManager, bToken, false)
+	checkOwner(builtin, aToken, extwire.OwnerThirdParty)
+	checkOwner(trustManager, bToken, extwire.OwnerThirdParty)
 	const owner = `{"trust":"owner"}`
 	const thirdParty = `{"trust":"third_party","categories":["health"]}`
 	putPath := trustPath + "/" + trustExtension
@@ -194,8 +194,8 @@ func TestExtensionTrustThroughManagerRouting(t *testing.T) {
 	trustScopeRequest(t, srv, http.MethodPut, putPath, trustManager, full, thirdParty, http.StatusOK)
 	checkTrust("", assistantwire.ExtensionTrustOwner, []string{})
 	checkTrust(trustManager, assistantwire.ExtensionTrustThirdParty, []string{"health"})
-	checkOwner(builtin, aToken, true)
-	checkOwner(trustManager, bToken, false)
+	checkOwner(builtin, aToken, extwire.OwnerConfirmed)
+	checkOwner(trustManager, bToken, extwire.OwnerThirdParty)
 	if got := h.assistantProfileOf(builtin).ExtensionOwners; !slices.Equal(got, []string{trustExtension}) {
 		t.Errorf("profile for older hubs: owner list = %q", got)
 	}
@@ -213,12 +213,12 @@ func TestExtensionTrustThroughManagerRouting(t *testing.T) {
 	trustScopeRequest(t, srv, http.MethodPut, putPath, builtin, full, thirdParty, http.StatusOK)
 	checkTrust("", assistantwire.ExtensionTrustOwner, []string{})
 	checkTrust(builtin, assistantwire.ExtensionTrustThirdParty, []string{"health"})
-	checkOwner(trustManager, bToken, true)
-	checkOwner(builtin, aToken, false)
+	checkOwner(trustManager, bToken, extwire.OwnerConfirmed)
+	checkOwner(builtin, aToken, extwire.OwnerThirdParty)
 	bStore.unavailable.Store(true)
-	checkOwner(trustManager, bToken, false)
+	checkOwner(trustManager, bToken, extwire.OwnerThirdParty)
 	bStore.unavailable.Store(false)
-	checkOwner(trustManager, bToken, true)
+	checkOwner(trustManager, bToken, extwire.OwnerConfirmed)
 	if got := h.assistantProfileOf(builtin).ExtensionOwners; len(got) != 0 {
 		t.Errorf("profile for older hubs after revoke: owner list = %q", got)
 	}
@@ -328,17 +328,17 @@ func TestExtensionReadAuthorizationUsesCurrentAssistant(t *testing.T) {
 	}
 	assertScopedInfoAccessRoster(t, srv, h.cfg.Token, map[string]bool{builtin: false, trustManager: true})
 	read(bToken, "mb", false) // An announced capability with a missing verdict fails closed.
-	noOwner := &extwire.Authorized{OK: true, Extension: trustExtension, Owner: new(false)}
+	noOwner := &extwire.Authorized{OK: true, Extension: trustExtension, Owner: extwire.OwnerThirdParty}
 	reply.Store(noOwner)
 	read(bToken, "mb", false) // A false verdict wins over B's earlier affirmative profile.
 	snapshot(b, 7, &assistantwire.Profile{})
-	reply.Store(&extwire.Authorized{OK: true, Extension: trustExtension, Owner: new(true)})
+	reply.Store(&extwire.Authorized{OK: true, Extension: trustExtension, Owner: extwire.OwnerConfirmed})
 	read(bToken, "mb", true) // The verified reply can grant owner reads even without a matching profile.
 	read(aToken, "ma", true) // A still uses the legacy snapshot of its own current connection.
 	snapshot(b, 8, ownerProfile)
 	reply.Store(noOwner)
 	read(bToken, "mb", false)
-	reply.Store(&extwire.Authorized{Extension: trustExtension, Scope: extwire.ScopeAgentsRead, Owner: new(true)})
+	reply.Store(&extwire.Authorized{Extension: trustExtension, Scope: extwire.ScopeAgentsRead, Owner: extwire.OwnerConfirmed})
 	trustScopeRequest(t, srv, http.MethodGet, sessions+"mb", "", bToken, "", http.StatusForbidden)
 	disconnect()
 	assertScopedInfoAccessRoster(t, srv, h.cfg.Token, map[string]bool{builtin: false, trustManager: false})

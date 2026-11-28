@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -96,7 +97,7 @@ type principal struct {
 	extAt   time.Time
 	// extAuthConn binds the verdict (or its legacy snapshot) to the connection that validated the route and token.
 	extAuthConn *busConn
-	extOwner    *bool
+	extOwner    extwire.OwnerVerdict
 	// extOpens, extScope: an extension's token opens the request's route (the manager said), else the scope it lacks.
 	extOpens bool
 	extScope string

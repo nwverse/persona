@@ -7,6 +7,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -51,8 +52,8 @@ func (h *Hub) ownerExtension(r *http.Request) bool {
 		return false
 	default:
 	}
-	if p.extOwner != nil {
-		return *p.extOwner
+	if p.extOwner != extwire.OwnerUnreported {
+		return p.extOwner == extwire.OwnerConfirmed
 	}
 	if slices.Contains(c.presence.Capabilities, assistantwire.CapabilityExtensionInfoAccessScoped) {
 		return false

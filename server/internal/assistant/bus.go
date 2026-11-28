@@ -835,7 +835,10 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		if out, ok, err := e.Request(ctx, method, params); ok { // extensions.* (extensions.go)
 			if method == extwire.MethodAuthorize && err == nil {
 				if a, ok := out.(extwire.Authorized); ok && a.Extension != "" {
-					a.Owner = new(s.extensionIsOwner(ctx, a.Extension))
+					a.Owner = extwire.OwnerThirdParty
+					if s.extensionIsOwner(ctx, a.Extension) {
+						a.Owner = extwire.OwnerConfirmed
+					}
 					return a, nil
 				}
 			}
