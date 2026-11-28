@@ -94,6 +94,11 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         self.assertIn('"CLAUDE_CONFIG_DIR": str(paths["claude"])', source)
         self.assertIn("wait_for_main_fixture(base, master, main_session, nodes)", source)
 
+    def test_voice_check_uses_the_real_plugin_identifier(self):
+        source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
+        self.assertIn('find_on_page(ctl, element_id="plugin-voice")', source)
+        self.assertNotIn('element_id="extension-voice"', source)
+
     def test_connector_status_text_does_not_hide_visible_rows(self):
         class Tree:
             def call(self, command, **kwargs):

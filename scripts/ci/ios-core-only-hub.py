@@ -599,7 +599,7 @@ def exercise_app(ctl, base, code, edition, shots, master):
 
     settings(ctl, "openExtensions")
     require(ctl, label="Extensions")
-    voice = find_on_page(ctl, element_id="extension-voice") or find_on_page(ctl, label="Voice")
+    voice = find_on_page(ctl, element_id="plugin-voice")
     proof["entries"]["voice-extension"] = voice
     check(voice == full, f"{edition}: wrong Voice extension visibility")
     no_errors(ctl, "Extensions")
