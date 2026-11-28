@@ -49,6 +49,9 @@ func TestPermissionNoHandBackIsTheManagersWord(t *testing.T) {
 
 	askNode := func(ix proto.Interaction) proto.Interaction {
 		t.Helper()
+		if ix.Kind == proto.IxPermission {
+			ix.Secret = true // require the owner without forcing the connector-only NoHandBack rule
+		}
 		if ix.CreatedAt.IsZero() {
 			ix.CreatedAt = time.Now().UTC()
 		}

@@ -433,7 +433,7 @@ func TestAGYRuntimeAlwaysAllowLifecycleAndRevocation(t *testing.T) {
 
 	agyCard := func(id, tool string, keys ...string) proto.Interaction {
 		return proto.Interaction{
-			ID: id, MachineID: "mac", SessionID: agySid, Kind: proto.IxPermission,
+			ID: id, MachineID: "mac", SessionID: agySid, Kind: proto.IxPermission, OutwardWrite: true,
 			Agent: "antigravity", AgentLabel: "Antigravity", Cwd: m.assistantCwd(),
 			ToolName: tool, ExpiresAt: time.Now().Add(time.Hour), Resumable: true, AlwaysKeys: keys,
 		}

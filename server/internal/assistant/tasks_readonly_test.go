@@ -576,6 +576,9 @@ func testReusedWritableTaskKeepsApproval(t *testing.T, report bool) {
 				}
 				if backend == "restart" {
 					s, _ = newTaskServiceOn(t, store)
+					// newTaskServiceOn installs fresh fixture settings; restore the
+					// reviewer that was configured before this simulated restart.
+					setSettings(t, s, func(v *Settings) { v.Main = "reuse-chat" })
 				}
 				callCtx, cancel := context.WithCancel(ctx)
 				defer cancel()
@@ -636,6 +639,9 @@ func testReusedWritableTaskKeepsApproval(t *testing.T, report bool) {
 				})
 				if backend == "restart" {
 					s, _ = newTaskServiceOn(t, store)
+					// newTaskServiceOn installs fresh fixture settings; restore the
+					// reviewer that was configured before this simulated restart.
+					setSettings(t, s, func(v *Settings) { v.Main = "reuse-chat" })
 				}
 				denyCtx, stop := context.WithTimeout(ctx, time.Second)
 				defer stop()
