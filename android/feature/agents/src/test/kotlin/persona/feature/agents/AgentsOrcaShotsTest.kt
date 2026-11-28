@@ -159,26 +159,27 @@ class AgentsOrcaShotsTest {
             exists("Opened by hand")
             exists("Desktop app")
             exists("In a tab")
-            exists("Orca", substring = true)
+            // the host's name beside the place: Glass's row line (Brief and Board keep their facts line)
+            if (s == AppStyle.Glass) exists("Orca", substring = true)
             save(rule.onNodeWithTag("shot"), "orca-todo-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
     }
 
+    // 320dp wide: on this JVM a JDialog holding a JTextField never goes idle at 360dp and wider (FileEditsShotsTest).
+    @Config(sdk = [35], qualifiers = "en-w320dp-h800dp-xhdpi")
     @Test fun renamingAnOrcaTabNamesOrca() {
         val model = model()
         var style by mutableStateOf(AppStyle.Glass)
         var dark by mutableStateOf(false)
-        // The dialog's window never settles under native graphics with the clock running; step it by hand.
-        rule.mainClock.autoAdvance = false
         rule.setContent {
             PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
                 AgentOperationDialog(dialog = AgentOperationDialog.Rename(orcaTab), model = model, machineName = "MacBook Pro", dismiss = {})
             }
         }
-        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
         for (s in AppStyle.entries) for (d in listOf(false, true)) {
             rule.runOnIdle { style = s; dark = d }
-            rule.mainClock.advanceTimeBy(1_000)
+            rule.waitForIdle()
             exists("Tab name (Orca tab)")
             exists("The tab name syncs to Orca", substring = true)
             assertTrue(rule.onAllNodesWithText("herdr", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isEmpty())
