@@ -143,6 +143,7 @@ var extensionIDPattern = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,31}$`)
 
 // hubExtension is one plugin as the hub runs it now.
 type hubExtension struct {
+	recordUpdatedAt time.Time
 	contributionsMu sync.Mutex
 	contributions   map[string][]extension.ExportedContribution
 
@@ -503,7 +504,15 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	reg.PlanCandidates = h.extensionPlanCandidates
 	reg.PlanGuard = h.guardExtensionPlan
 	// The voice extension's key goes with its address (voice_extension.go).
-	reg.BoundSecrets, reg.SecretNeeds = ps.voiceKeyFollowsURL, ps.voiceKeyNeedsURL
+	reg.BoundSecrets = func(p *extension.Extension, old, next json.RawMessage) []string {
+		return append(ps.voiceKeyFollowsURL(p, old, next), directUsageKeysToClear(p, old, next)...)
+	}
+	reg.SecretNeeds = func(p *extension.Extension, name string, config json.RawMessage) error {
+		if err := ps.voiceKeyNeedsURL(p, name, config); err != nil {
+			return err
+		}
+		return directUsageKeyNeedsURL(p, name, config)
+	}
 	reg.SettingsCheck = ps.settingsCheck // settings_check (extension_settings_check.go)
 	var own []string
 	for _, c := range h.connectors.All() {
@@ -620,9 +629,11 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID)          // another version, removed, switched, set up again: ask again
-	ps.forgetSecretWords(c.ID)   // a provider's references may name other things now
-	ps.kept.forgetProvider(c.ID) // and give other values, or none
+	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
+	// The kept values and words go only with the provider, or with its claim on their scheme: an upgrade or a restart
+	// keeps them (secret_kept.go, secret_words.go).
+	ps.keptProviderChanged(ctx, c)
+	ps.wordsProviderChanged(ctx, c)
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
 		if c.Old != nil && c.Old.Full != nil && ps.h.avatars != nil {
@@ -849,7 +860,7 @@ func (ps *extensions) apply(ctx context.Context, id string) {
 		}
 		return
 	}
-	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id)}
+	hp := &hubExtension{id: id, kind: p.Manifest.Kind(), stats: ps.stats.of(id), recordUpdatedAt: p.Record.UpdatedAt}
 	if p.Manifest.Exports != nil {
 		hp.contributions = ps.reg.ContributionsToContext(ctx, id)
 	}

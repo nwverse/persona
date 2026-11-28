@@ -91,6 +91,33 @@ func TestCodexDaemonPaneJoinsAndSendsThroughTheProtocol(t *testing.T) {
 	}
 }
 
+func TestCodexDaemonJoinsActiveThreadsOutsidePanes(t *testing.T) {
+	n := remoteTestNode(t)
+	withFakeHub(t, n)
+	_, first := connectRemoteFixture(t, n, t.TempDir(), "first", remoteRaw)
+	f, second := connectRemoteFixture(t, n, t.TempDir(), "second", remoteRaw, remoteOther)
+	first.message(codexMessage{Method: "thread/status/changed", Params: json.RawMessage(`{"threadId":"` + remoteRaw + `","status":{"type":"active"}}`)})
+	external := threadOf(first, remoteRaw).publicID
+	second.mu.Lock()
+	child := second.threads[remoteRaw]
+	child.status, child.parent = proto.StatusBlocked, remoteOther
+	second.threads[remoteRaw] = child
+	second.mu.Unlock()
+	f.mu.Lock()
+	f.resumeRequest = true
+	f.mu.Unlock()
+	n.joinCodexPanes(context.Background())
+	waitFor(t, "external thread subscribed and child approval replayed", func() bool {
+		return n.codexJoined(external) && f.replyCount() == 1
+	})
+	if n.codexJoined(threadOf(second, remoteOther).publicID) || len(n.codexInventory().Joined) != 0 {
+		t.Fatal("automatic join subscribed to the idle thread or persisted a join")
+	}
+	if err := n.attachCodex(context.Background(), child.publicID); err == nil {
+		t.Fatal("explicit join of a subagent succeeded")
+	}
+}
+
 // A join the app-server refuses leaves the pane on the terminal, with the reason, and is tried again only later.
 func TestCodexDaemonJoinFailure(t *testing.T) {
 	n, f, _, _ := daemonPane(t)

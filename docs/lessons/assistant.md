@@ -1,5 +1,9 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- A channel topic may have two routing keys during a Labs rollback (#17664). Reserve both keys at admission, use the active
+  binding under the other key on a lookup miss, and refresh both known bindings after delivery. A `/new` can supply only one
+  key. Clear the other bindings for the same conversation so the next message starts fresh.
+
 - Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
   and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
   receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real
@@ -966,6 +970,14 @@ snapshot. Fixed delays hide this ordering and grow the sleep ratchet; keep bound
   the shell it left. Exercise the setting on and off, including input arriving during terminal inspection.
 
 - A terminal task review must commit its closure before publishing review effects (#6819). Activity can arrive after the initial guard, while another writer holds the ledger or task lock, or during a database write. Validate on a private ledger, save the ledger and closure in one transaction, and recheck activity immediately before commit so a refusal rolls both back. Only then record the brief result, review feed, decision changes and supervision signals; apply the same boundary to a task leader's review and tasks without a ledger.
+
+## To-do topology writes share the review lock order (#17693)
+
+Reopen, terminal review, guarded park and topology writes take the to-do writer before the supervision writer.
+An idle-close fence waits with both writers free. Reorganize, split and merge validate the graph before any
+side effects, commit the rows and their related records in PostgreSQL, then publish one in-memory batch.
+A split retry uses the existing child identities, and a merge's source closes only after its target's changes.
+Auto-seen checks both the completion and reopen timestamps. A reopen clears the previous round's seen and Undo marks.
 
 ## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
 

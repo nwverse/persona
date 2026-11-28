@@ -71,6 +71,7 @@ type PlanTask struct {
 	// at Start, and once more at admission from the folder that actually runs, saved with the admitted Cwd; never what
 	// a tool call or an edit says.
 	Repo              string                 `json:"repo,omitempty"`
+	WriteScope        *planWriteScope        `json:"write_scope,omitempty"` // the structured task_plan declaration, kept through owner approval
 	Workspace         *TaskWorkspace         `json:"workspace,omitempty"`
 	WorkspaceResolved *TaskWorkspaceResolved `json:"workspace_resolved,omitempty"`
 	// Hub-owned identity for the default branch's preview, before a todo exists.
@@ -413,8 +414,9 @@ type tasksState struct {
 	// planEdits: a plan's lock, by its id, while one of its started tasks changes (patchPlanTask; kept only while held or
 	// waited on, as a card's). The tasks are one blob that movePlan writes whole, so two tasks changing at once (their
 	// starts failing together) would each write back the other's old fields.
-	planEdits cardLocks
-	reviews   cardLocks
+	planEdits   cardLocks
+	reviews     cardLocks
+	writeScopes map[string]plannedWriteAssignment // by open task ID, guarded by mu
 	// trustMu serializes the read-modify-writes of tasks.trust (trustKinds, forgetTrust), so that two plans
 	// remembered at once, or a forget racing a remember, do not drop each other's kinds.
 	trustMu sync.Mutex

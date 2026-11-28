@@ -356,6 +356,20 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 			}
 			return s.larkModule().HandoffToolCall(ctx, id, p.Name, p.Args), true, nil
 		}
+		// A group guest's reply tool is answered here; its other tools run with a sanitized step (bot_guest.go).
+		if key, group, err := s.groupGuestOf(ctx, machine, p.SessionID); err == nil && group {
+			if s.isWorkMachine(machine) {
+				return proto.TextResult("unknown tool "+p.Name, true), true, nil
+			}
+			lark := s.larkModule()
+			if res, own := lark.GuestToolCall(ctx, key, p.SessionID, p.Name, p.Args); own {
+				return res, true, nil
+			}
+			done := lark.GuestToolStep(ctx, key, p.Name)
+			res := s.mcpCallWithOrigin(ctx, machine, p.SessionID, p.Name, p.Args, false, p.Origin)
+			done(res.IsError)
+			return res, true, nil
+		}
 		if rec, room, err := s.roomOf(ctx, machine, p.SessionID); err == nil && room {
 			if s.isWorkMachine(machine) {
 				return proto.TextResult("unknown tool "+p.Name, true), true, nil

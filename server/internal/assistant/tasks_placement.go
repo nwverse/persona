@@ -419,6 +419,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err != nil {
 		return "", "", err
 	}
+	if t.Parent != "" && params["host"] == nil && s.taskWorktreeKind(ctx, t) == proto.EngineOrca {
+		params["host"] = proto.EngineOrca
+	}
 	// On the computer it landed on (a flexible task may have moved): a default it lacks gives way to one it has, a
 	// launcher the plan named that it lacks is refused before any tab opens (#2640). Before the health check below,
 	// which is then about the launcher that will run.

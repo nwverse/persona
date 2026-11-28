@@ -54,6 +54,9 @@ type Options struct {
 	AgentDirs AgentDirs
 	// HerdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go): the devices; nil: none.
 	HerdrSessions HerdrSessions
+	// OrcaChats says which computers start a person's New Agents as Orca chats (orca_chat_default.go): the devices;
+	// nil: none does.
+	OrcaChats OrcaChats
 	// SecretKey is the path of the key the model providers' keys are sealed with (the manager's own secret.key,
 	// models_launchers.go); "" makes one for this run only (tests).
 	SecretKey string
@@ -110,6 +113,8 @@ type Service struct {
 	projectReview *projectReview
 	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
 	herdrSessions HerdrSessions
+	// orcaChats says which computers start a person's New Agents as Orca chats (orca_chat_default.go); nil: none.
+	orcaChats OrcaChats
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
 	remoteImages *remoteimage.Fetcher
 	// channelPicture fetches an answer's pictures for a channel that sends them (channels_images.go): remoteImages.Get,
@@ -212,6 +217,9 @@ type Service struct {
 	// todoAskAfter is how long a linked to-do goes without progress before its recurring check asks the owner (0:
 	// scheduleAskAfter's floor; tests shorten it, schedule_todo_evidence.go).
 	todoAskAfter time.Duration
+	// logicalInputClock is the clock a logical input's delivery deadline is checked against (logical_undelivered.go;
+	// nil: time.Now, tests set it).
+	logicalInputClock func() time.Time
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
 	// machineNow is the clock collectMachineSnapshots checks sample freshness and silent-node age against (nil: time.Now, tests set it).
@@ -267,6 +275,7 @@ type Service struct {
 	agentNames       agentNamingBook        // agent_naming.go
 	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
 	taskCloseStops   taskCloseStopBook      // tasks_close_stops.go: stopped Agents of completed tasks
+	spawnedDone      spawnedDoneBook        // tasks_spawned_close.go: completed task_spawn sessions on open to-dos
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
@@ -305,6 +314,11 @@ type Service struct {
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
+	// execChannels caches the managed channels for reads (execution_channels.go); lastGood is the conversations'
+	// last known good execution (execution_lastgood.go).
+	execChannels execChannelBook
+	// lastGood: see execChannels.
+	lastGood lastGoodBook
 	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
 	// own tasks' signals. Only the tests of what the main conversation's own supervision does set it; the hub never does.
 	noBackground bool
@@ -457,7 +471,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, orcaChats: o.OrcaChats, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	bootEpoch := "boot_" + randomHex(8)
 	s.todosV2BootEpoch.Store(&bootEpoch)
@@ -479,6 +493,8 @@ func New(o Options) *Service {
 	s.logicalSwitchRoutes()
 	s.conversationSwitchRoutes()
 	s.modelPickRoutes()
+	s.lastGoodRoutes()  // execution_lastgood.go
+	s.executionRoutes() // execution_routes.go
 	s.agentArchiveRoutes()
 	s.idleArchiveRoutes()
 	s.agentNamingRoutes()  // agent_naming_request.go
@@ -872,7 +888,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		defer unlock()
 	}
 	assignmentAt := time.Now().UTC()
-	raw, err := json.Marshal(params)
+	ctx, wireParams := agyRelayWireParams(ctx, device, method, params)
+	raw, err := json.Marshal(wireParams)
 	if err != nil {
 		return beforeNodeWrite(method, err)
 	}
@@ -1172,6 +1189,12 @@ func (s *Service) snapshot(ctx context.Context) Snapshot {
 			v.Undelivered = append(v.Undelivered, k.wire()) // the owner's messages that could not go in (undelivered.go)
 		}
 	}
+	logicalKept, ok := s.logicalUndeliveredViews(ctx)
+	snap.Partial = snap.Partial || !ok
+	for key, q := range logicalKept {
+		v := view(key[1], key[0])
+		v.Undelivered = append(v.Undelivered, q...) // a logical conversation's input that has not gone in (logical_undelivered.go)
+	}
 	for _, id := range s.heldConversations() {
 		view(id, here).Supervising = true // a supervision message started its turn: not pushed (supervise_digest.go)
 	}
@@ -1213,6 +1236,7 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
 	s.rememberTaskCloseExcerpt(r, text)
 	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
+	s.clearSpawnedDone(r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
@@ -1297,6 +1321,8 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	}
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
+	// A turn that ended well keeps what it ran on as the conversation's last known good (execution_lastgood.go).
+	s.afterSettle(context.WithoutCancel(ctx), s.lastGoodTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
 		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)

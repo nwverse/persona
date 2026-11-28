@@ -3,6 +3,8 @@
 // messages (LarkReadReceipts), reactions (LarkReactionsMoments), profile cards (LarkPeople), drafts per chat
 // (LarkDrafts), and the chat's pictures for the viewer. The pure parts are tested without a DOM; the hub calls are thin.
 import { api, ApiError, enc, getToken } from "./api";
+import { safeWebURL } from "./format";
+import { safeApiPath } from "./safe-media-url";
 import { comparePosition, mergeMessages, type LarkMessage, type LarkPage, type LarkPart } from "./inbox";
 import { larkPath } from "./lark-accounts";
 import { withManager } from "./manager-choice";
@@ -36,32 +38,26 @@ function nodeText(n: Record<string, unknown>): string {
 
 const ICON_TAGS = new Set(["standard_icon", "custom_icon", "ud_icon"]);
 
+function safeIconImage(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  return safeApiPath(raw) ?? safeWebURL(raw, true);
+}
+
 function iconOf(n: Record<string, unknown>): CardButton["icon"] {
   const kids = Array.isArray(n.children) ? (n.children as unknown[]) : [];
   const k = kids.find((c): c is Record<string, unknown> => Boolean(c) && typeof c === "object" && ICON_TAGS.has(String((c as { tag?: unknown }).tag)));
   if (!k) return undefined;
   const token = typeof k.token === "string" && k.token ? k.token : undefined;
   const img = k.image && typeof k.image === "object" ? (k.image as { url?: unknown }).url : undefined;
-  const image = typeof img === "string" && (img.startsWith("/api/") || /^https:/i.test(img)) ? img : undefined;
+  const image = safeIconImage(img);
   return { token, image };
 }
 
 function safeCardLink(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
   const trimmed = raw.trim();
-  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return undefined;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed.charCodeAt(i);
-    if (c <= 0x1f || c === 0x7f) return undefined;
-  }
-  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
-  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
-  try {
-    const u = new URL(trimmed);
-    return (u.protocol === "https:" || u.protocol === "http:") && u.hostname && !u.username && !u.password ? u.href : undefined;
-  } catch {
-    return undefined;
-  }
+  if (!trimmed || /\s/.test(trimmed)) return undefined;
+  return safeWebURL(trimmed);
 }
 
 /** The card's buttons in order (the `overflow` menu's options too), as iOS draws them: an icon-only one is kept, one
@@ -397,7 +393,7 @@ export function profileRows(p: LarkProfile, labels: Record<string, string>): { l
     const value = typeof f.value === "string" ? f.value : typeof f.value === "number" ? String(f.value) : "";
     const label = f.label || labels[f.key] || "";
     if (!value.trim() || !label) continue;
-    out.push({ label, value, url: f.url && /^https?:/i.test(f.url) ? f.url : undefined });
+    out.push({ label, value, url: safeWebURL(f.url) });
   }
   return out;
 }
