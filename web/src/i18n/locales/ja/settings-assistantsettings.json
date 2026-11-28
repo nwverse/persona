@@ -193,7 +193,7 @@
   "owner_approval_save_phrases": "フレーズを保存",
   "owner_approval_unconfirmed": "アシスタントが完全一致承認の設定を確認しませんでした。再読み込みしてからもう一度お試しください。",
   "standing_memory": "すべてのチャットに含めるメモリ",
-  "standing_memory_hint": "メモリ拡張の常駐メモリを、各チャットにどれだけ含めるかを選びます。",
+  "standing_memory_hint": "メモリ拡張の常駐メモリを、Persona が各チャットにどれだけ含めるかを選びます。",
   "standing_memory_4kb": "4 KB（既定）",
   "standing_memory_8kb": "8 KB",
   "standing_memory_16kb": "16 KB",
