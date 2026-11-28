@@ -841,14 +841,19 @@ available in both editions. Each hub declares only a synthetic offline computer 
 core-page checks, the driver inserts a clearly marked synthetic idle main-session
 record into the real manager's Postgres store and opens it through the app's real assistant route for the composer comparison;
 a short-lived real Link/node pair, in its own short-path temporary home and without any service installation, keeps that
-computer online while the app reads the session. The driver stops both processes and removes the node home. The composer's
+computer online while the app reads the session. The node has an independent state root and `PERSONA_NODE_SESSION_DIR`,
+`CLAUDE_CONFIG_DIR` and `CODEX_HOME` inside it, so it cannot discover the OS user's other Agent sessions. Before opening
+the composer, the driver requires both real projections to contain the synthetic main session and fails if either contains
+any additional session. The driver stops both processes and removes the node home. The composer's
 `PersonaUITests/CoreOnlyHubLiveUITests` uses XCTest's real press-and-hold and skips when `PERSONA_IOS_CORE_HUB_FIXTURE` is absent;
 a malformed fixture fails. This does not claim model or Agent execution.
 
 Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
 `evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
-written below `--shots`; credentials are never included. A failed app phase also leaves a screenshot and a credential-free
-state/accessibility diagnostic there. Inspect every PNG. `--keep` retains the temporary source snapshot,
+written below `--shots`; credentials are never included. Each heavy build checks the idle reading again: from 07:00 through
+22:59 it starts only when the reading is greater than 900 seconds; below 120 seconds it stops
+before that build for a clean retry later; the owner's 23:00–07:00 window remains allowed. A failed app phase also leaves
+a screenshot and a credential-free state/accessibility diagnostic there. Inspect every PNG. `--keep` retains the temporary
 hub homes and logs for diagnosis; without it the driver removes them. Every run ends with one `PASS`, `FAIL` or `TIMEOUT` line.
 A failed build or assertion, a missing proof, or a missing capture is never a pass.
 

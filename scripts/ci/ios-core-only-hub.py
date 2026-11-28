@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import signal
@@ -69,6 +70,12 @@ def idle_reading():
             seconds = int(line.rsplit("=", 1)[1].strip()) // 1_000_000_000
     reading = {"local_time": now, "idle_seconds": seconds}
     print(f"build-reading: local_time={now} idle_seconds={seconds}", flush=True)
+    check(seconds is not None, "could not read HIDIdleTime; refusing a heavy build")
+    hour = int(now[11:13])
+    if 7 <= hour < 23:
+        if seconds < 120:
+            raise Failed(f"Mac idle time fell to {seconds}s before a daytime build; stopping before the build")
+        check(seconds > 900, f"daytime heavy builds need idle time >900s, currently {seconds}s; rerun when idle")
     return reading
 
 
@@ -134,9 +141,10 @@ def core_reads(base, token):
     return out
 
 
-def seed_main(container):
+def seed_main(container, cwd):
     """Seed a synthetic idle main session in the real manager store, after the fresh-empty page evidence is complete."""
-    machine, session = "fixture-machine", "main-fixture"
+    check(cwd.isascii() and "'" not in cwd, "the fixture cwd must be a safe ASCII path")
+    machine, session = "fixture-machine", "11111111-1111-4111-8111-111111111111"
     dbs = run([smoke.DOCKER, "exec", container, "psql", "-U", "persona", "-d", "persona", "-Atc",
                "select datname from pg_database where not datistemplate"], 30).stdout.split()
     wrote = []
@@ -145,7 +153,7 @@ def seed_main(container):
                       "select to_regclass('public.node_sessions') is not null, to_regclass('public.settings') is not null"], 30).stdout.strip()
         if tables != "t|t":
             continue
-        session_sql = (f"insert into node_sessions (machine_id, session_id, launcher, cwd) values ('{machine}', '{session}', '', '/tmp') "
+        session_sql = (f"insert into node_sessions (machine_id, session_id, launcher, cwd) values ('{machine}', '{session}', 'claude', '{cwd}') "
                        f"on conflict (machine_id, session_id) do update set updated_at = now()")
         settings_sql = ("insert into settings (key, value) values ('assistant', jsonb_build_object("
                         f"'machine_id', '{machine}', 'main', '{session}', 'main_machine_id', '{machine}')) "
@@ -156,15 +164,73 @@ def seed_main(container):
             check(result.returncode == 0, f"seeding the synthetic main fixture in {name}: {result.stderr}")
         wrote.append(name)
     check(wrote, "no manager database accepted the synthetic main fixture")
-    return machine + "/" + session
+    return session
 
 
-def start_fixture_node(base, bindir, work, master):
+def fixture_node_paths(node_home):
+    """An unshared OS home and a separately scoped node state root (PERSONA_NODE_SESSION_DIR's contract)."""
+    state = node_home / "state"
+    # This Link pairs to the built-in assistant manager, so the scope is that manager's own directory, not assistant-m-*.
+    return {"home": node_home / "home", "state": state, "assistant": state / "assistant",
+            "claude": state / "claude", "codex": state / "codex"}
+
+
+def write_main_transcript(claude_home, cwd, session):
+    """Give the scoped real node a minimal synthetic offline transcript, never a copy of a user's session."""
+    check(session == "11111111-1111-4111-8111-111111111111", "the fixture transcript needs its synthetic UUID")
+    project = re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    path = claude_home / "projects" / project / f"{session}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Path(cwd).mkdir(parents=True, exist_ok=True)
+    line = {"parentUuid": None, "isSidechain": False, "type": "user",
+            "message": {"role": "user", "content": "Synthetic core-edition fixture"},
+            "uuid": "11111111-1111-4111-8111-111111111111", "timestamp": "2026-01-01T00:00:00Z",
+            "userType": "external", "entrypoint": "cli", "cwd": cwd, "sessionId": session, "version": "2.1.0"}
+    title = {"type": "custom-title", "customTitle": "Synthetic core-edition fixture", "sessionId": session}
+    path.write_text(json.dumps(line, separators=(",", ":")) + "\n" +
+                    json.dumps(title, separators=(",", ":")) + "\n" + (" " * 4096) + "\n")
+
+
+def wait_for_main_fixture(base, master, session, processes):
+    """Fail closed on discovery outside the scope, then require the manager's real main-conversation projection."""
+    def listed():
+        check(all(process.poll() is None for process in processes), "the scoped sandbox Link/node exited")
+        status, answer = request(base, "/api/v1/sessions", master)
+        check(status == 200, f"listing the scoped fixture sessions returned {status}")
+        rows = answer.get("sessions") or []
+        check(all(row.get("session_id") == session for row in rows),
+              f"the scoped fixture exposed {len(rows)} non-fixture or additional sessions")
+        matching = [row for row in rows if row.get("session_id") == session]
+        if matching:
+            check(matching[0].get("assistant") is True, "the synthetic main session is listed but not as an assistant conversation")
+            return rows
+        return None
+
+    wait_for(None, "the synthetic main session in the real session projection", 45, listed)
+
+    def conversation():
+        check(all(process.poll() is None for process in processes), "the scoped sandbox Link/node exited")
+        status, answer = request(base, "/api/v1/assistant", master)
+        check(status == 200, f"reading the fixture assistant returned {status}")
+        rows = answer.get("conversations") or []
+        check(all(row.get("session_id") == session for row in rows),
+              "the fixture assistant exposed a non-fixture conversation")
+        return answer if answer.get("main") == session and any(row.get("session_id") == session for row in rows) else None
+
+    wait_for(None, "the synthetic main conversation in the assistant projection", 45, conversation)
+
+
+def start_fixture_node(base, bindir, work, master, node_home):
     """Pair a short-lived real Link/node into the sandbox, with a short socket path and no service installation."""
-    node_home = Path("/tmp") / f"pn-{secrets.token_hex(5)}"
-    node_home.mkdir()
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(node_home),
-           "PERSONA_HOME": str(node_home / ".persona"), "LANG": "C.UTF-8"}
+    node_home.mkdir(exist_ok=True)
+    paths = fixture_node_paths(node_home)
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    # An ordinary node discovers other Claude processes' config dirs. Scope this disposable node so it can neither
+    # list nor read the owner's sessions, even though both run under the same OS account.
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(paths["home"]),
+           "PERSONA_HOME": str(paths["state"]), "PERSONA_NODE_SESSION_DIR": str(paths["assistant"]),
+           "CLAUDE_CONFIG_DIR": str(paths["claude"]), "CODEX_HOME": str(paths["codex"]), "LANG": "C.UTF-8"}
     prefix = ["env", "-i"] + [f"{key}={value}" for key, value in env.items()]
     status, answer = request(base, "/api/v1/auth/pair-codes", master, "POST", {"machine": "fixture-machine"})
     check(status == 200 and answer.get("pair_url"), f"node pair-code returned {status}")
@@ -183,6 +249,7 @@ def start_fixture_node(base, bindir, work, master):
         wait_for(None, "the synthetic computer online", 45, lambda: any(
             row.get("id") == "fixture-machine" and row.get("online") is True
             for row in (request(base, "/api/v1/machines", master)[1].get("machines") or [])) or None)
+        check(all(process.poll() is None for process in processes), "the scoped sandbox Link/node exited during startup")
         return processes, node_home
     except Exception:
         for process in processes:
@@ -648,8 +715,12 @@ def run_phase(parent, app, client_env, simulator, shots, edition, run_id, readin
         proof = exercise_app(ctl, base, pair_code(base, master), edition, shots, master)
         proof["hub_id"] = health["hub_id"]
         proof["module_flags"] = sorted(f for f in features if f == "modules" or f.startswith("module."))
-        main_session = seed_main(container)
-        nodes, node_home = start_fixture_node(base, bindir, work, master)
+        node_home = Path("/tmp") / f"pn-{run_id}-{edition}"
+        paths = fixture_node_paths(node_home)
+        main_session = seed_main(container, str(paths["assistant"]))
+        write_main_transcript(paths["claude"], str(paths["assistant"]), main_session)
+        nodes, _ = start_fixture_node(base, bindir, work, master, node_home)
+        wait_for_main_fixture(base, master, main_session, nodes)
         proof["main_session"] = main_session
         proof["main_fixture"] = "synthetic-idle-record-in-real-postgres"
         proof["fixture_node"] = "real sandbox Link/node online; no model execution"

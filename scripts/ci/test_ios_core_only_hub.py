@@ -3,7 +3,10 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
+import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("ios_core_only_hub", ROOT / "scripts/ci/ios-core-only-hub.py")
@@ -87,6 +90,53 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
         self.assertIn('"kind": "link"', source)
         self.assertNotIn('"kind": "local"', source)
+        self.assertIn('"PERSONA_NODE_SESSION_DIR"', source)
+        self.assertIn('"CLAUDE_CONFIG_DIR": str(paths["claude"])', source)
+        self.assertIn("wait_for_main_fixture(base, master, main_session, nodes)", source)
+
+    def test_main_session_is_a_uuid_with_a_directly_discoverable_transcript(self):
+        def database(*args, **kwargs):
+            query = args[0][-1]
+            if "select datname" in query:
+                return SimpleNamespace(stdout="persona\n", returncode=0, stderr="")
+            if "select to_regclass" in query:
+                return SimpleNamespace(stdout="t|t\n", returncode=0, stderr="")
+            return SimpleNamespace(stdout="", returncode=0, stderr="")
+
+        with patch.object(DRIVER, "run", side_effect=database):
+            session = DRIVER.seed_main("fixture-database", str(self.shots / "assistant"))
+        self.assertEqual(str(uuid.UUID(session)), session)
+        paths = DRIVER.fixture_node_paths(self.shots)
+        cwd = paths["assistant"]
+        DRIVER.write_main_transcript(paths["claude"], str(cwd), session)
+        project = DRIVER.re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+        transcript = paths["claude"] / "projects" / project / f"{session}.jsonl"
+        self.assertTrue(transcript.is_file())
+        first = json.loads(transcript.read_text().splitlines()[0])
+        self.assertEqual(first["sessionId"], session)
+
+    def test_builds_require_the_owner_idle_window(self):
+        def reading_at(local_time, seconds):
+            def outputs(args, *unused):
+                if args[0] == "date":
+                    return SimpleNamespace(stdout=local_time + "\n")
+                return SimpleNamespace(stdout=f'  "HIDIdleTime" = {seconds * 1_000_000_000}\n')
+            with patch.object(DRIVER, "run", side_effect=outputs):
+                return DRIVER.idle_reading()
+
+        self.assertEqual(reading_at("2026-11-28T09:00:00+0800", 901)["idle_seconds"], 901)
+        self.assertEqual(reading_at("2026-11-28T23:00:00+0800", 1)["idle_seconds"], 1)
+        for seconds in (119, 900):
+            with self.subTest(seconds=seconds), self.assertRaises(DRIVER.Failed):
+                reading_at("2026-11-28T09:00:00+0800", seconds)
+
+    def test_fixture_scope_uses_the_builtin_assistant_and_independent_root(self):
+        paths = DRIVER.fixture_node_paths(self.shots)
+        self.assertEqual(paths["assistant"], paths["state"] / "assistant")
+        self.assertNotEqual(paths["state"], paths["home"] / ".persona")
+        for name in ("assistant", "claude", "codex"):
+            self.assertTrue(paths[name].is_relative_to(paths["state"]))
+            self.assertNotEqual(paths[name], paths["state"])
 
     def test_proof_contains_no_credentials(self):
         encoded = json.dumps(self.proof("core-only"))
