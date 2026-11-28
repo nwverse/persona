@@ -493,13 +493,15 @@ var notFoundKeys = map[string]string{
 
 // bridgeReasonKeys word the refusals of the node's Orca chat bridge by their reason (node/orcabridge.go): Orca is not
 // running, turned the request down, may or may not have done it, or no longer has the chat; a chat it closed takes no
-// mode change.
+// mode change; a permission mode the chat's provider does not take; an Orca that cannot rename chats.
 var bridgeReasonKeys = map[string]string{
-	"orca_away":         "rpc-errors.orca_away",
-	"orca_refused":      "rpc-errors.orca_refused",
-	"orca_unknown":      "rpc-errors.orca_unknown",
-	"orca_session_gone": "rpc-errors.orca_session_gone",
-	"orca_closed":       "rpc-errors.orca_closed",
+	"orca_away":               "rpc-errors.orca_away",
+	"orca_refused":            "rpc-errors.orca_refused",
+	"orca_unknown":            "rpc-errors.orca_unknown",
+	"orca_session_gone":       "rpc-errors.orca_session_gone",
+	"orca_closed":             "rpc-errors.orca_closed",
+	"orca_mode_unsupported":   "rpc-errors.orca_mode_unsupported",
+	"orca_rename_unsupported": "rpc-errors.orca_rename_unsupported",
 }
 
 // openElsewhereKeys word the node's open_elsewhere refusal by where the session is open (node/openelsewhere.go

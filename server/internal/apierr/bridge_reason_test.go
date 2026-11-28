@@ -19,6 +19,8 @@ func TestOrcaBridgeRefusalsAreWordedByReason(t *testing.T) {
 		{"unknown", "orca_unknown", ""},
 		{"session_gone", "orca_session_gone", ""},
 		{"unsupported", "orca_closed", ""},
+		{"unsupported", "orca_mode_unsupported", "acceptEdits"},
+		{"unsupported", "orca_rename_unsupported", ""},
 	} {
 		for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 			data, _ := json.Marshal(map[string]any{"reason": tc.reason, "detail": tc.detail})

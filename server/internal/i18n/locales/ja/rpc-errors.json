@@ -146,5 +146,7 @@
   "orca_refused": "Orca が受け付けなかったため、何も変わっていません：{detail}",
   "orca_unknown": "Orca が実行したかどうかわかりません。もう一度試す前に、そのコンピュータの Orca でこのチャットを確認してください。",
   "orca_session_gone": "このチャットはもう Orca にありません。",
-  "orca_closed": "このチャットは Orca で閉じられています。メッセージを送ってもう一度開いてから、設定を変えてください。"
+  "orca_closed": "このチャットは Orca で閉じられています。メッセージを送ってもう一度開いてから、設定を変えてください。",
+  "orca_mode_unsupported": "Orca のこの種類のチャットはその権限モード（{detail}）に対応していないため、何も変えていません。",
+  "orca_rename_unsupported": "このバージョンの Orca では Persona からチャットの名前を変えられません。Orca で名前を変えるか、Orca を更新してください。"
 }

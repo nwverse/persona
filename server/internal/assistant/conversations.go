@@ -1005,6 +1005,9 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)
+	if block := s.agyRelayBlock(ctx, machine, to, msg); block != "" {
+		ctx = context.WithValue(ctx, agyRelayContextKey{}, agyRelayContext{machine: machine, session: to, onceID: onceID, block: block})
+	}
 	if strings.TrimSpace(text) != "" && relayWords(text) == "" {
 		text = prompts.RelayMessageText(text, source, onceID)
 	}
