@@ -28,8 +28,7 @@ export function OrcaChatStarts({ machine }: { machine: Machine }) {
     setOn(next);
     try {
       const r = await api<{ on: boolean }>(`/machines/${enc(machine.id)}/orca-chat-starts`, { method: "PUT", json: { on: next } });
-      setOn(r.on);
-      setSeen(r.on);
+      setOn(r.on); // until the machine's push says so too
       // only this field: the rest of the machine stays as the latest push has it
       applyMachine({ id: machine.id, orca_chat_starts: r.on } as Machine);
     } catch (e) {

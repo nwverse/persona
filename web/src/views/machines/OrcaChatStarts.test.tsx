@@ -79,7 +79,9 @@ describe("OrcaChatStarts", () => {
     await flush();
     expect(toggle()?.getAttribute("aria-checked")).toBe("true");
     expect(mocks.applyMachine).toHaveBeenCalledWith({ id: "box", orca_chat_starts: true });
-    // another device turns it off: the push moves the switch
+    // the machine's push says so too; later another device turns it off, and that push moves the switch
+    await render(machine(["orca"], true));
+    expect(toggle()?.getAttribute("aria-checked")).toBe("true");
     await render(machine(["orca"], false));
     expect(toggle()?.getAttribute("aria-checked")).toBe("false");
   });
