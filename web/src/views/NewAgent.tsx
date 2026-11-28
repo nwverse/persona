@@ -66,6 +66,7 @@ import { LauncherBlockedHelp } from "./LauncherBlockedHelp";
 import { launcherTitle, namedLauncher, namesFromProviders, providerIdNote, providerLabel, providerTitle, type Named } from "../lib/provider-names";
 import { WorkSessionForm } from "./WorkSessionForm";
 import { NewAgentModel, useModelList } from "./NewAgentModel";
+import { ExecutionCheck } from "./execution/ExecutionCheck";
 import { ProjectDocumentContext, ProjectDocumentSource, projectDocumentText, type ProjectDocumentSnapshot } from "./NewAgentProjectDocument";
 
 const PROJECT_DOCUMENT_HOSTS = new Set(["herdr", "herdr-core", "tern", "rex"]);
@@ -152,6 +153,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // effort as picking them by hand would; a pick by hand after it unmarks it. Never saved.
   const [tiers, setTiers] = useState<PickerTier[]>([]);
   const [tier, setTier] = useState<PickerTier | null>(null);
+  // the four dimensions' check of what this start runs (views/execution/ExecutionCheck.tsx): blocked disables Start
+  const [execBlocked, setExecBlocked] = useState(false);
   // a launcher picked on the computer chosen before that this one can't run (#5104): the form went back to the default
   const [dropped, setDropped] = useState<{ name: string; computer: string } | null>(null);
   // the lists read again in this opening (once each: a list read since stays as it is)
@@ -1003,7 +1006,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
+            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || execBlocked || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
               {runCount > 1 ? t("newagent.start_runs", { count: runCount }) : t("newagent.start")}
             </Button>
           </>
@@ -1404,6 +1407,16 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                 </Note>
               )}
             </ModelNotes>
+            <div data-testid="new-agent-execution" className="mt-1.5 empty:hidden">
+              <ExecutionCheck
+                machine={mid}
+                launcher={runs}
+                model={model}
+                effort={effort}
+                onBlocked={setExecBlocked}
+                onPick={(p) => pickModel({ launcher: p.launcher, model: p.model ?? "", effort: p.effort ?? "" })}
+              />
+            </div>
             {helpLauncher && helpBlock && (
               <LauncherBlockedHelp
                 launcher={helpLauncher}
