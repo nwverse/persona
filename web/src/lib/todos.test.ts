@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { repoGatePRLook } from "../features/todos/repo-gate";
 import { hasRequestPieces } from "./request-pieces";
 import type { Interaction, Machine, Session } from "./types";
 import {
@@ -1258,16 +1259,17 @@ describe("open PR, parked, and concern status labels when no active agent runs",
       ...base,
       repo_gate: { state, target_count: 1, ready_count: 0, reference_count: 0, reason },
     });
-    expect(todoStatusLabel(withGate("blocked_conflict", "merge_conflicts"), "not_started", now)).toBe("存在合并冲突");
-    expect(todoStatusLabel(withGate("blocked_changes", "changes_requested"), "not_started", now)).toBe("需要修改");
-    expect(todoStatusLabel(withGate("blocked_ci", "ci_failed"), "not_started", now)).toBe("检查未通过");
-    expect(todoStatusLabel(withGate("awaiting_review", "review_required"), "not_started", now)).toBe("评审中");
-    expect(todoStatusLabel(withGate("checks_pending", "checks_pending"), "not_started", now)).toBe("检查中");
-    expect(todoStatusLabel(withGate("checks_pending", "pr_open"), "not_started", now)).toBe("待合入");
-    expect(todoStatusLabel(withGate("awaiting_review", "draft_pr"), "not_started", now)).toBe("未开始");
-    expect(todoStatusLabel(withGate("missing_pr", "missing_pr"), "not_started", now)).toBe("未开始");
-    expect(todoStatusLabel({ ...base, repo_gate: { state: "reference_only", target_count: 0, ready_count: 0, reference_count: 1 } }, "not_started", now)).toBe("未开始");
-    expect(todoStatusLabel({ ...base, repo_gate: { state: "ready", target_count: 1, ready_count: 1, reference_count: 0 } }, "not_started", now)).toBe("未开始");
+    expect(todoStatusLabel(withGate("blocked_conflict", "merge_conflicts"), "not_started", now)).toBe("未开始");
+    expect(todoStatusLabel(withGate("blocked_conflict", "merge_conflicts"), "not_started", now, repoGatePRLook)).toBe("存在合并冲突");
+    expect(todoStatusLabel(withGate("blocked_changes", "changes_requested"), "not_started", now, repoGatePRLook)).toBe("需要修改");
+    expect(todoStatusLabel(withGate("blocked_ci", "ci_failed"), "not_started", now, repoGatePRLook)).toBe("检查未通过");
+    expect(todoStatusLabel(withGate("awaiting_review", "review_required"), "not_started", now, repoGatePRLook)).toBe("评审中");
+    expect(todoStatusLabel(withGate("checks_pending", "checks_pending"), "not_started", now, repoGatePRLook)).toBe("检查中");
+    expect(todoStatusLabel(withGate("checks_pending", "pr_open"), "not_started", now, repoGatePRLook)).toBe("待合入");
+    expect(todoStatusLabel(withGate("awaiting_review", "draft_pr"), "not_started", now, repoGatePRLook)).toBe("未开始");
+    expect(todoStatusLabel(withGate("missing_pr", "missing_pr"), "not_started", now, repoGatePRLook)).toBe("未开始");
+    expect(todoStatusLabel({ ...base, repo_gate: { state: "reference_only", target_count: 0, ready_count: 0, reference_count: 1 } }, "not_started", now, repoGatePRLook)).toBe("未开始");
+    expect(todoStatusLabel({ ...base, repo_gate: { state: "ready", target_count: 1, ready_count: 1, reference_count: 0 } }, "not_started", now, repoGatePRLook)).toBe("未开始");
   });
 
   it("uses Tracking for open concerns without an active agent and preserves higher-priority states", () => {

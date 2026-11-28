@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -673,9 +674,9 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		}
 	}
 	reconcileEarlyTerminal := func() {
-		if terminalState && s.settings(ctx).todosV2On() {
-			reconcileTerminalBlockers()
+		if terminalState {
 			s.onPRStatusMergeTrain(ctx, t, status)
+			reconcileTerminalBlockers()
 		}
 	}
 	current, ok := s.todoNow(t.ID)
@@ -694,8 +695,11 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	}
 	t = current
 	checksReason := ""
+	var completionMode assistantwire.CompletionMode
 	if t.hasTaskRuntime() {
 		checksReason = i18n.T(s.lang(ctx), "assistant-reports.pr_checks_pending")
+		brief, _ := s.committedBriefOfTodo(t.ID)
+		completionMode = brief.CompletionModeNow
 	}
 	// Returning from a known open PR (or a legacy PR-stage hold) wakes the same supervisor once no other PR of the task
 	// is still open (#7935). A merged PR alone is never acceptance, and unrelated later parks stay put.
@@ -755,7 +759,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	}
 	if t.hasTaskRuntime() && (previous == nil || !status.sameRuntimeFacts(*previous) ||
 		previous.CheckedAt.Before(cur.RuntimeAt) && !status.CheckedAt.Before(cur.RuntimeAt)) {
-		cur.refreshRuntimeFromProviders(status.CheckedAt, checksReason)
+		cur.refreshRuntimeFromProviders(status.CheckedAt, checksReason, completionMode)
 	}
 	if err := s.keepTodoStageLocked(ctx, t.ID, cur); err != nil {
 		b.mu.Unlock()
@@ -773,7 +777,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	}
 	b.stageWriting.Unlock()
 	s.discardStalePRFeedback(ctx, t.ID, prevPR, status)
-	s.todosChanged(ctx)
+	defer s.todosChanged(ctx)
 	parkWoke := false
 	preStage := t.Stage
 	needsUserMergeHandled := false
@@ -857,6 +861,16 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 	if status.URL == t.PRURL && status.State == "merged" && stageIndex(t.Stage) < stageIndex("merge") {
 		s.setTaskStageOn(ctx, t.ID, "merge", "", "", false, status.URL)
 	}
+	s.onPRStatusMergeTrain(ctx, t, status)
+	if terminalState {
+		reconcileTerminalBlockers()
+	}
+	if s.settings(ctx).todosV2On() {
+		// Stage/contract after edges can become ready when the tracked PR changes.
+		if _, err := s.ReconcileTodoBlockers(ctx, t.ID); err != nil {
+			s.logf("task %s: reconcile PR stage prerequisites: %v", t.ID, err)
+		}
+	}
 	if strings.EqualFold(status.State, "merged") {
 		if parkWoke || needsUserMergeHandled {
 			s.prMergeWakeTold(ctx, []superviseSignal{{Todo: t.ID, Kind: sigPRMerged, PRURL: status.URL, Key: prMergeSignalKey(status.URL)}})
@@ -874,10 +888,6 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			s.maybeEmitUnparkedPRMerged(ctx, t.ID, u, held, parkWoke, newlyClosed, preStage)
 		}
 	}
-	if terminalState && s.settings(ctx).todosV2On() {
-		reconcileTerminalBlockers()
-	}
-	s.onPRStatusMergeTrain(ctx, t, status)
 	return nil
 }
 

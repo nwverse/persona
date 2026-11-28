@@ -2,37 +2,54 @@
 // by scene", GET / PUT /api/v1/assistant/extension-trust): "This is my own extension" lets it read everything (the user's
 // own memory extension, say); otherwise it reads personal information only of the kinds turned on here. Shown on the
 // extension's page; an assistant without these grants (an older one) shows nothing.
-import { useCallback, useEffect, useState } from "react";
-import { errorText } from "../../lib/api";
-import { INFO_CATEGORIES, listExtensionTrust, setExtensionTrust, trustOf, type ExtensionTrust } from "../../lib/tracks";
+import { useEffect, useState } from "react";
+import { errorText, isAbort } from "../../lib/api";
+import { ownedAssistant, type ScopedAssistantClient } from "../../lib/scoped-assistant-api";
+import { listScopedExtensionTrust, setScopedExtensionTrust } from "../../lib/scoped-extension-trust";
+import { INFO_CATEGORIES, trustOf, type ExtensionTrust } from "../../lib/tracks";
 import { Switch, toast } from "../../ui/atoms";
 import { categoryLabel } from "../spaces/labels";
 import { Group, Row } from "./SettingsParts";
 import { t } from "../../i18n";
+import { useOpeningDefaultAssistant, useScopedAssistant } from "./integrations/useScopedAssistant";
 
-export function ExtensionInfoAccess({ extension, editable = true }: { extension: string; editable?: boolean }) {
+type Props = { extension: string; editable?: boolean };
+
+export function ExtensionInfoAccess(props: Props) {
+  const managerId = useOpeningDefaultAssistant(props.extension);
+  return managerId === undefined ? null : <ScopedGrantCard {...props} managerId={managerId} />;
+}
+
+function ScopedGrantCard({ managerId, ...props }: Props & { managerId: string }) {
+  const { client, routing } = useScopedAssistant(ownedAssistant(managerId), "extension-trust", props.extension);
+  return <GrantCard key={client.key} {...props} client={client} routing={routing} />;
+}
+
+function GrantCard({ extension, editable = true, client, routing }: Props & { client: ScopedAssistantClient; routing: string }) {
   const [trust, setTrust] = useState<ExtensionTrust | null>(null);
   const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try {
-      const items = await listExtensionTrust();
-      setTrust(items ? trustOf(items, extension) : null);
-    } catch {
-      setTrust(null);
-    }
-  }, [extension]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    let active = true;
+    const load = () => void listScopedExtensionTrust(client).then((items) => {
+      if (active) setTrust(items ? trustOf(items, extension) : null);
+    }, (e: unknown) => {
+      if (active && !isAbort(e)) setTrust(null);
+    });
+    load();
+    const stop = client.subscribe(load);
+    return () => { active = false; stop(); };
+  }, [client, extension, routing]);
 
   const save = async (next: ExtensionTrust) => {
     const was = trust;
     setTrust(next); // shown at once; put back when the hub refuses
     setBusy(true);
     try {
-      const r = await setExtensionTrust(extension, next);
+      const r = await setScopedExtensionTrust(client, extension, next);
       setTrust({ trust: r.trust === "owner" ? "owner" : "third_party", categories: r.categories ?? [] });
     } catch (e) {
       setTrust(was);
-      toast(t("settings-extensioninfoaccess.save_failed", { error: errorText(e) }), "error");
+      if (!isAbort(e)) toast(t("settings-extensioninfoaccess.save_failed", { error: errorText(e) }), "error");
     } finally {
       setBusy(false);
     }

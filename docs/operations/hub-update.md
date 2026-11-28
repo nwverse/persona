@@ -253,8 +253,11 @@ a recovery point in the configured backup folder (the recommended default is
   in `managers/*/manager.json` (shared databases deduplicated), plus `extra_databases`.
 - The runtime tree's configuration, encryption keys, knowledge/history, attachments and other
   ordinary data files, plus configured external knowledge directories and `extra_roots`.
-  The runtime's top-level `update`, `bin`, `cache` and `logs`, the snapshot store, sockets and
-  FIFOs are omitted. The top-level `web.prev/` directory is a previous standalone Web bundle.
+  The runtime's top-level `update`, `bin`, `cache` and `logs`, the snapshot store, sockets,
+  FIFOs, and ephemeral hub-transcribed meeting audio under `<kb>/recordings/<id>/attachments/audio/`
+  in inventoried knowledge-base directories are omitted (recording metadata, transcripts, minutes,
+  meeting photos under `recordings/<id>/attachments/`, and non-recording attachments remain included).
+  The top-level `web.prev/` directory is a previous standalone Web bundle.
   Recovery uses the captured active `web/` override or the saved program's embedded Web.
   The previous bundle is kept if the active override resolves into it or it contains an explicitly
   inventoried knowledge directory or extra root. A nested directory named `web.prev` stays in

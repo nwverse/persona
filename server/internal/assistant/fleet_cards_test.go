@@ -28,7 +28,8 @@ import (
 // The cards the manager makes itself: a TUI dialog read off the screen (fleet_ix_screen.go), the Codex cards a node
 // lists (fleet_ix_codex.go), a plan answered in the terminal (fleet_ix_terminal.go). Moved from the hub's tests with them.
 
-// Screens with a dialog the manager can read (screen.ParseDialog).
+// Screens with a dialog the manager can read (screen.ParseDialog). Raw node UI
+// questions run before Assistant setup; permission fixtures explicitly require the owner.
 const (
 	pickModel    = "  Pick a model\n\n› 1. gpt-6\n  2. gpt-6-mini\n\n  Press enter to confirm or esc to go back\n"
 	pickEffort   = "  Pick a reasoning level\n\n› 1. low\n  2. high\n\n  Press enter to confirm or esc to go back\n"
@@ -60,6 +61,7 @@ func newCardFleet(t *testing.T, store bool) (*fleetTest, *cardNode) {
 	if store {
 		ft = newFleetTest(t)
 	}
+	setSettings(t, ft.s, func(v *Settings) { v.Main = "" }) // raw node UI protocol, before Assistant setup
 	c := &cardNode{}
 	ft.d.mu.Lock()
 	ft.d.machines["mac"].call = func(method string, params json.RawMessage) (any, error) {
@@ -889,7 +891,7 @@ func TestCodexCardsFollowTheNodesList(t *testing.T) {
 	ended := endedCards(s)
 	q := proto.Interaction{ID: "cxq_1", SessionID: "s1", Kind: proto.IxQuestion, Agent: "codex", ExpiresAt: time.Now().Add(time.Hour),
 		Questions: []proto.Question{{Question: "Which color?", Options: []proto.QuestionOption{{Label: "Red"}}}}}
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "curl -sI https://example.com",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "curl -sI https://example.com",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	listCodex(s, q, a)
 	if got := pendingIDs(s); len(got) != 2 || got["cxq_1"] != proto.IxQuestion || got["cxa_1"] != proto.IxPermission {
@@ -1257,12 +1259,12 @@ func TestTerminalPermissionResultClearsTheCard(t *testing.T) {
 	}
 	ft := planFleet(t, true, func(int) ([]proto.Item, bool, error) { return items, false, nil })
 	s := ft.s
-	ix := proto.Interaction{ID: "perm", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, ToolName: "Bash",
+	ix := proto.Interaction{ID: "perm", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		ToolUseID: "bash-call", CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
 	p := &pending{ix: ix, done: make(chan proto.Resolution, 1)}
 	putPending(s, p)
 	s.record(ix)
-	noID := &pending{ix: proto.Interaction{ID: "perm-no-id", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+	noID := &pending{ix: proto.Interaction{ID: "perm-no-id", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "Bash", CreatedAt: at}, done: make(chan proto.Resolution, 1)}
 	putPending(s, noID)
 	ft.sessions("mac", proto.Session{SessionID: "session", Status: proto.StatusWorking})
@@ -1290,19 +1292,19 @@ func TestTerminalPermissionResultClearsTheCard(t *testing.T) {
 func TestPermissionCallIsNeverGuessed(t *testing.T) {
 	at := time.Now()
 	// A plan's call and result right before and after the card: a plan without an id takes them, a permission does not.
-	if planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", CreatedAt: at}, planItems(at)) {
+	if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", CreatedAt: at}, planItems(at)) {
 		t.Fatal("a permission card without its tool call's id was ended by another call's result")
 	}
-	withExactInput := &pending{ix: proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash",
+	withExactInput := &pending{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash",
 		ToolInput: json.RawMessage(`{"command":"synthetic"}`), Resumable: true}}
 	if !terminalReconciled(withExactInput) {
 		t.Fatal("a Claude Code permission with exact input was not eligible for reconciliation")
 	}
 	for _, p := range []*pending{
-		{ix: proto.Interaction{Kind: proto.IxPermission, ToolUseID: "c", Resumable: true, Agent: "codex"}},
-		{ix: proto.Interaction{Kind: proto.IxPermission, ToolUseID: "c"}},
-		{ix: proto.Interaction{Kind: proto.IxPermission, Resumable: true}},
-		{ix: proto.Interaction{Kind: proto.IxPermission, ToolUseID: "c", Resumable: true}, prepared: &preparedApproval{}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolUseID: "c", Resumable: true, Agent: "codex"}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolUseID: "c"}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, Resumable: true}},
+		{ix: proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolUseID: "c", Resumable: true}, prepared: &preparedApproval{}},
 	} {
 		if terminalReconciled(p) {
 			t.Fatalf("a permission without a safe Claude Code call identity was reconciled: %+v", p.ix)
@@ -1325,10 +1327,10 @@ func TestNonFinalApprovalResultsNeverFinishPermissionCall(t *testing.T) {
 			{ID: "text#0", Seq: 12, TS: at.Add(2 * time.Second), Role: "assistant", Kind: proto.KindText,
 				Text: "Please confirm the pending card."},
 		}
-		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input, CreatedAt: at}, items) {
+		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input, CreatedAt: at}, items) {
 			t.Fatalf("non-final result finished call with ToolUseID: %q", msg)
 		}
-		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: input, CreatedAt: at}, items) {
+		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}, items) {
 			t.Fatalf("non-final result finished call matched by ToolInput: %q", msg)
 		}
 		// checkPlanInteraction concatenates pages newest first: newer-page assistant text must not win before the older
@@ -1338,7 +1340,7 @@ func TestNonFinalApprovalResultsNeverFinishPermissionCall(t *testing.T) {
 			items[0],
 			items[1],
 		}
-		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: input, CreatedAt: at}, newestFirst) {
+		if planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}, newestFirst) {
 			t.Fatalf("newest-page-first assistant text bypassed older non-final result: %q", msg)
 		}
 	}
@@ -1349,7 +1351,7 @@ func TestNonFinalApprovalResultsNeverFinishPermissionCall(t *testing.T) {
 		{ID: "result#0", Seq: 11, TS: at.Add(time.Second), Role: "user", Kind: proto.KindToolResult,
 			ToolUseID: "bash-call", Text: `server/internal/approval/approval.go:51:const WaitingText = "` + approvalops.WaitingText + `"`},
 	}
-	if !planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input, CreatedAt: at}, grepItems) {
+	if !planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolUseID: "bash-call", ToolInput: input, CreatedAt: at}, grepItems) {
 		t.Fatal("ordinary stdout quoting WaitingText was misclassified as a non-final hook release")
 	}
 }
@@ -1366,7 +1368,7 @@ func terminalPermissionItems(at time.Time, input json.RawMessage) []proto.Item {
 func TestTerminalPermissionWithoutIDMatchesExactCall(t *testing.T) {
 	at := time.Now()
 	input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*","description":"Remove synthetic test output"}`)
-	ix := proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: input, CreatedAt: at}
+	ix := proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}
 	for _, tc := range []struct {
 		name  string
 		input json.RawMessage
@@ -1426,7 +1428,7 @@ func TestTerminalPermissionWithoutIDClearsBuiltInDenial(t *testing.T) {
 	items := terminalPermissionItems(at, input)
 	ft := planFleet(t, false, func(int) ([]proto.Item, bool, error) { return items, false, nil })
 	s := ft.s
-	ix := proto.Interaction{ID: "builtin-denial", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+	ix := proto.Interaction{ID: "builtin-denial", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "Bash", ToolInput: input, CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
 	p := &pending{ix: ix, done: make(chan proto.Resolution, 1), route: &askRoute{routedAt: at}}
 	putPending(s, p)
@@ -1465,11 +1467,11 @@ func TestPermissionContinuedPastCallClearsCard(t *testing.T) {
 			input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*"}`)
 			later.TS = at.Add(2 * time.Minute)
 			items := append(terminalPermissionItems(at, input)[:1], later)
-			if !planCallFinished(proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: input, CreatedAt: at}, items) {
+			if !planCallFinished(proto.Interaction{Kind: proto.IxPermission, OutwardWrite: true, ToolName: "Bash", ToolInput: input, CreatedAt: at}, items) {
 				t.Fatal("later session activity did not finish the obsolete permission call")
 			}
 			ft := planFleet(t, false, func(int) ([]proto.Item, bool, error) { return items, false, nil })
-			ix := proto.Interaction{ID: "continued-" + later.Kind, MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+			ix := proto.Interaction{ID: "continued-" + later.Kind, MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
 				ToolName: "Bash", ToolInput: input, CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
 			p := &pending{ix: ix, done: make(chan proto.Resolution, 1)}
 			putPending(ft.s, p)
@@ -1494,7 +1496,7 @@ func TestTerminalPermissionWithoutIDKeepsWaitingCard(t *testing.T) {
 	input := json.RawMessage(`{"command":"rm -f /tmp/persona-stale-permission-test/*"}`)
 	items := terminalPermissionItems(at, input)[:1]
 	ft := planFleet(t, false, func(int) ([]proto.Item, bool, error) { return items, false, nil })
-	ix := proto.Interaction{ID: "really-waiting", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission,
+	ix := proto.Interaction{ID: "really-waiting", MachineID: "mac", SessionID: "session", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "Bash", ToolInput: input, CreatedAt: at, ExpiresAt: at.Add(time.Hour), Resumable: true}
 	p := &pending{ix: ix, done: make(chan proto.Resolution, 1), route: &askRoute{routedAt: at}}
 	putPending(ft.s, p)
@@ -1635,7 +1637,7 @@ func TestCodexCardAskedAgainIsAnnounced(t *testing.T) {
 	t.Cleanup(func() { codexAskedAgain = old })
 	ft, _ := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 {
@@ -1676,7 +1678,7 @@ func TestCodexCardAnsweredOnThePhoneAskedAgainIsAnnounced(t *testing.T) {
 	t.Cleanup(func() { codexAskedAgain = old })
 	ft, _ := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	yes := true
 	listCodex(s, a)
@@ -1700,7 +1702,7 @@ func TestCodexCardAnsweredOnThePhoneAskedAgainIsAnnounced(t *testing.T) {
 func TestCodexApprovalAskedAgainAtOnceIsAnnounced(t *testing.T) {
 	ft, _ := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	q := proto.Interaction{ID: "cxq_1", SessionID: "s3", Kind: proto.IxQuestion, Agent: "codex", ExpiresAt: time.Now().Add(time.Hour),
 		Questions: []proto.Question{{Question: "Which?", Options: []proto.QuestionOption{{Label: "A"}}}}}
@@ -1931,7 +1933,7 @@ func TestCodexCardPromptChangedAskedAgainIsAnnounced(t *testing.T) {
 	t.Cleanup(func() { codexAskedAgain = old })
 	ft, n := newCardFleet(t, false)
 	s := ft.s
-	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, Agent: "codex", Summary: "npm test",
+	a := proto.Interaction{ID: "cxa_1", SessionID: "s2", Kind: proto.IxPermission, OutwardWrite: true, Agent: "codex", Summary: "send project update",
 		ExpiresAt: time.Now().Add(time.Hour)}
 	listCodex(s, a)
 	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 {

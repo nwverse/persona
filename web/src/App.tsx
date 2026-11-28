@@ -735,7 +735,7 @@ function Shell() {
             )}
             style={leavingSidebar === "expanded" || (sidebarAnimating && sidebarMode === "expanded") ? { width: "var(--sidebar-w, 284px)" } : undefined}
           >
-            <Sidebar active={narrow ? drawer : sidebarMode === "expanded"} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />
+            <Sidebar active={narrow ? drawer : sidebarMode === "expanded" || leavingSidebar === "expanded"} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} hideCollapse={macWindowed} />
           </div>
         )}
         {!narrow && (sidebarMode === "rail" || leavingSidebar === "rail") && (

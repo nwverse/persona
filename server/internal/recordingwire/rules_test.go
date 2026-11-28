@@ -18,3 +18,35 @@ func TestRecordingIDIsAUUID(t *testing.T) {
 		}
 	}
 }
+
+func TestIsMeetingAudioPath(t *testing.T) {
+	cases := []struct {
+		rel  string
+		want bool
+	}{
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments/audio", true},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments/audio/", true},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments/audio/0.pcm", true},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments/audio/index.json", true},
+		{"recordings/sample-meeting/attachments/audio/nested/chunk.pcm", true},
+		{"./recordings/sample-meeting/attachments/audio/0.pcm", true},
+		{"/recordings/sample-meeting/attachments/audio/0.pcm", true},
+		{"recordings/../recordings/sample-meeting/attachments/audio/0.pcm", true},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments/p1.jpg", false},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments/audio.jpg", false},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/attachments", false},
+		{"recordings/0f8fad5b-d9cb-469f-a165-70867728950e/hub_segments.json", false},
+		{"recordings/attachments/audio/0.pcm", false},
+		{"recordings/./attachments/audio/0.pcm", false},
+		{"recordings/../chats/c1/attachments/audio/0.pcm", false},
+		{"../recordings/sample-meeting/attachments/audio/0.pcm", false},
+		{"chats/c1/attachments/audio/note.ogg", false},
+		{"", false},
+		{".", false},
+	}
+	for _, tc := range cases {
+		if got := IsMeetingAudioPath(tc.rel); got != tc.want {
+			t.Errorf("IsMeetingAudioPath(%q) = %v, want %v", tc.rel, got, tc.want)
+		}
+	}
+}

@@ -36,8 +36,12 @@ func (s *Service) reconcileLogicalInput(ctx context.Context, st logicalSwitchSto
 	if !ok {
 		return logicalRefusal(ctx, "unavailable")
 	}
+	// Uncertain is bounded: past its deadline the same attempt expires (CAS) and the queue goes on.
 	blocked := func(reason string) error {
-		return delivery.NoteConversationInputBlocked(ctx, c.MachineID, c.SessionID, c.Epoch, input, reason)
+		if err := delivery.NoteConversationInputBlocked(ctx, c.MachineID, c.SessionID, c.Epoch, input, reason); err != nil {
+			return err
+		}
+		return s.expireLogicalInput(ctx, st, c, input, reason)
 	}
 	if input.DispatchSegment == "" || input.DispatchMachine == "" || input.DispatchSession == "" || input.DispatchEpoch <= 0 {
 		return blocked("original dispatch identity unknown; explicit audited resolution required")
@@ -81,6 +85,7 @@ func (s *Service) reconcileLogicalInput(ctx context.Context, st logicalSwitchSto
 	}
 	s.logicalRebind(ctx, next)
 	s.logicalChanged()
+	s.publishSoon()
 	s.historyWake()
 	return nil
 }

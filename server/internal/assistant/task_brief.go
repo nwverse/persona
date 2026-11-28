@@ -97,8 +97,9 @@ type BriefRequest struct {
 
 // taskContract is the original contract on a brief or the fields changed by one scope event.
 type taskContract struct {
-	WorkMode       assistantwire.WorkMode       `json:"work_mode,omitempty"`
-	CompletionMode assistantwire.CompletionMode `json:"completion_mode,omitempty"`
+	WorkMode         assistantwire.WorkMode       `json:"work_mode,omitempty"`
+	CompletionMode   assistantwire.CompletionMode `json:"completion_mode,omitempty"`
+	WorkModeDeclared bool                         `json:"work_mode_declared,omitempty"`
 }
 
 func (c taskContract) withDefaultWorkMode(readonly bool) taskContract {
@@ -107,6 +108,8 @@ func (c taskContract) withDefaultWorkMode(readonly bool) taskContract {
 		if readonly {
 			c.WorkMode = assistantwire.WorkModeResearch
 		}
+	} else {
+		c.WorkModeDeclared = true
 	}
 	return c
 }
@@ -262,6 +265,14 @@ type TaskBrief struct {
 	ClockAt             time.Time             `json:"clock_at"`
 	DueAt               time.Time             `json:"due_at"`
 	Overdue             *time.Time            `json:"overdue_at,omitempty"`
+}
+
+// workModeDeclared distinguishes a work mode the supervisor set from the mode inferred from the launch permission.
+// Older briefs already distinguish coordinate and explicit scope changes. An initial execute or research mode with
+// no declaration record could have been the default.
+func (b TaskBrief) workModeDeclared() bool {
+	return b.WorkModeNow.Valid() && (b.WorkModeDeclared || b.WorkMode == assistantwire.WorkModeCoordinate ||
+		slices.ContainsFunc(b.Log, func(e BriefEvent) bool { return e.Kind == briefEventScope && e.WorkMode.Valid() }))
 }
 
 // LineageStep is one to-do of a brief's lineage: who worked on it, from when to when, and why it stopped ("" while it

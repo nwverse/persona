@@ -85,7 +85,7 @@ export interface TodoCreateOptions {
 }
 
 /** What the hub last read of a PR on GitHub (pr_status.go). */
-export interface PRFacts { url: string; title?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
+export interface PRFacts { url: string; title?: string; head_oid?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
 /** Server-computed weakest-link ("barrel rule") Target Repo delivery gate summary under todos_v2 (#15699). */
 export interface TodoRepoGate {
@@ -128,11 +128,14 @@ export interface TodoChildSummary {
 /** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
 export type TodoBoardSectionKey =
   | "needs_you"
+  | "can_wait"
   | "in_progress"
   | "pending_review"
   | "waiting"
+  | "todo"
   | "someday"
   | "done"
+  | "cancelled"
   | (string & {});
 
 /** One top-level entry in a server-computed status group, with optional folded/surfaced child IDs (#15774). */
@@ -185,11 +188,14 @@ export interface TodoBoardSidebarNode {
 /** Global section and open totals in `board.counts` (#15774). */
 export interface TodoBoardCounts {
   needs_you: number;
+  can_wait?: number;
   in_progress: number;
   pending_review: number;
   waiting: number;
+  todo?: number;
   someday: number;
   done: number;
+  cancelled?: number;
   open_total: number;
 }
 
@@ -321,6 +327,11 @@ export interface Todo {
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
 export function isCancelled(todo: Pick<Todo, "cancelled_at" | "done_at" | "done_by" | "supervision">): boolean {
   return Boolean(todo.cancelled_at) || todo.done_by === "cancelled" || (todo.done_by === "review" && reviewState(todo) === "cancelled");
+}
+
+/** Match the hub's closed cursor window, where a failed start is still open for retry. */
+export function isClosedForHistory(todo: Todo): boolean {
+  return Boolean(todo.done_at) && (!todo.start_error || isCancelled(todo));
 }
 
 /** "Nobody is working on this" and why ("closed after an error"), for an open to-do the hub found orphaned; undefined
@@ -636,43 +647,24 @@ function openPRFactsLook(prs: readonly PRFacts[]): { label: string; tone: TodoTo
   return { label: t("todos.status_pr_waiting_merge"), tone: "idle" };
 }
 
-function repoGatePRLook(gate: TodoRepoGate | undefined): { label: string; tone: TodoTone } | undefined {
-  if (!gate || gate.target_count <= 0 || gate.reason === "draft_pr") return undefined;
-  switch (gate.state) {
-    case "blocked_conflict":
-      return { label: t("todos.status_pr_conflicts"), tone: "red" };
-    case "blocked_changes":
-      return { label: t("todos.status_pr_changes_requested"), tone: "amber" };
-    case "blocked_ci":
-      return { label: t("todos.status_pr_checks_failed"), tone: "red" };
-    case "awaiting_review":
-      return { label: t("todos.status_pr_in_review"), tone: "idle" };
-    case "checks_pending":
-      return {
-        label: gate.reason === "checks_pending" ? t("todos.status_pr_checks_pending") : t("todos.status_pr_waiting_merge"),
-        tone: "idle",
-      };
-    default:
-      return undefined;
-  }
-}
+export type TodoRepoGateLook = (gate: TodoRepoGate | undefined) => { label: string; tone: TodoTone } | undefined;
 
 /** Accurate label and tone for an open to-do with a non-draft open PR (projected wait, fresh PR facts, or target repo gate). */
-export function openPRLook(todo: Todo, now = Date.now()): { label: string; tone: TodoTone } | undefined {
+export function openPRLook(todo: Todo, now = Date.now(), repoGateLook?: TodoRepoGateLook): { label: string; tone: TodoTone } | undefined {
   if (todo.done_at) return undefined;
   if (todo.wait?.kind === "pr_merge") {
     return prBlockerLook(todo.wait.pr_blockers) ?? openPRFactsLook(openMergePRs(todo, now)) ?? { label: t("todos.status_pr_waiting_merge"), tone: "idle" };
   }
-  return openPRFactsLook(openMergePRs(todo, now)) ?? repoGatePRLook(todo.repo_gate);
+  return openPRFactsLook(openMergePRs(todo, now)) ?? repoGateLook?.(todo.repo_gate);
 }
 
 /** Display label and tone when an open to-do has no active agent handling it: open non-draft PR state, parked hold,
  *  or an open main-chat concern ("Tracking") instead of a misleading "Not started". */
-export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now()): { label: string; tone: TodoTone } | undefined {
+export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now(), repoGateLook?: TodoRepoGateLook): { label: string; tone: TodoTone } | undefined {
   if (todo.done_at || isCancelled(todo)) return undefined;
   if (todo.supervision?.state === "user_check" || acceptedAtRest(todo, status) || waitsForOwner(todo) || awaitsReview(todo, status)) return undefined;
   if (status !== "not_started" && status !== "follow_up") return undefined;
-  const pr = openPRLook(todo, now);
+  const pr = openPRLook(todo, now, repoGateLook);
   if (pr) return pr;
   if (todo.supervision?.state === "parked" && !openAsk(todo)) {
     if (todo.supervision.parked?.handoff) return { label: TODO_STATUS_INFO.waiting.label, tone: "idle" };
@@ -689,7 +681,7 @@ export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now()): 
 
 /** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
  *  (or accepted and nothing runs again), open PR / parked state, or "Tracking" for an open concern with no active agent. */
-export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now()): string {
+export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now(), repoGateLook?: TodoRepoGateLook): string {
   if (isCancelled(todo)) return t("lib-todos.review_cancelled");
   if (!todo.done_at && todo.supervision?.state === "user_check") return t("assistant-tasks.review_user_check");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
@@ -697,10 +689,10 @@ export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now()
   if (awaitsReview(todo, status)) return t("assistant-tasks.review_pending");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
   if (!todo.done_at && todo.wait != null && (status === "not_started" || status === "follow_up")) {
-    if (todo.wait.kind === "pr_merge") return openPRLook(todo, now)?.label ?? t("todos.status_pr_waiting_merge");
+    if (todo.wait.kind === "pr_merge") return openPRLook(todo, now, repoGateLook)?.label ?? t("todos.status_pr_waiting_merge");
     return waitName(serverWaitReason(todo.wait));
   }
-  const rest = todoRestLook(todo, status, now);
+  const rest = todoRestLook(todo, status, now, repoGateLook);
   if (rest) return rest.label;
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
