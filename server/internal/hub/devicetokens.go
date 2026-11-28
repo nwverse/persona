@@ -290,24 +290,38 @@ func (h *Hub) lookupToken(ctx context.Context, tok string) (principal, bool, err
 		}
 	}
 	touch := time.Since(t.touched[c.p.ID]) > 5*time.Minute
+	t.mu.Unlock()
 	if touch {
-		// Account for the async last_seen write under the quiescer before
-		// spawning: paused snapshots skip the touch (without stamping touched,
-		// so the next request after resume updates it), and already-started
-		// touches finish before pause returns.
+		// Account for the async last_seen write under the quiescer without holding
+		// t.mu (t.mu is a leaf lock; quiesce.beginOrDefer can acquire h.mesh.mu):
+		// paused snapshots skip the touch (without stamping touched, so the next
+		// request after resume updates it), and already-started touches finish
+		// before pause returns.
 		if h.quiesce.begin() {
-			t.touched[c.p.ID] = time.Now()
+			t.mu.Lock()
+			if t.isRevoked(c.p.ID) {
+				t.mu.Unlock()
+				h.quiesce.end()
+				return principal{}, false, nil
+			}
+			if t.touched == nil {
+				t.touched = map[string]time.Time{}
+			}
+			if time.Since(t.touched[c.p.ID]) > 5*time.Minute {
+				t.touched[c.p.ID] = time.Now()
+				t.mu.Unlock()
+				go func(id string) {
+					defer h.quiesce.end()
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					_ = h.store.TouchDeviceToken(ctx, id)
+				}(c.p.ID)
+				return *c.p, true, nil
+			}
 			t.mu.Unlock()
-			go func(id string) {
-				defer h.quiesce.end()
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = h.store.TouchDeviceToken(ctx, id)
-			}(c.p.ID)
-			return *c.p, true, nil
+			h.quiesce.end()
 		}
 	}
-	t.mu.Unlock()
 	return *c.p, true, nil
 }
 

@@ -22,7 +22,7 @@ checkout is: built frameworks are shared by every worktree through a cache under
 (#10713, `docs/operations/testing.md` "Development builds").
 Run the builder before XcodeGen/Xcode package resolution on a clean checkout.
 
-On Linux, with a Linux Apple toolchain such as [nwverse/apple-build](https://github.com/nwverse/apple-build), the same
+On Linux, with a Linux Apple toolchain (one that builds the iOS app without Xcode), the same
 command builds the iOS device and arm64 simulator slices as static libraries, writes the XCFramework without
 `xcodebuild`, and leaves out the macOS slice, so `swift test` still needs a Mac (#16944). Its cache is under
 `${XDG_CACHE_HOME:-~/.cache}/persona/app-core`, and its key takes the SDK build versions from the toolchain's copy of the

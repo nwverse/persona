@@ -13,6 +13,7 @@ import { confirmedDefaultManager, onDefaultManager } from "../../lib/manager-cho
 import { uuid } from "../../lib/format";
 import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
+import { safeWebURL } from "../../lib/format";
 import { openLink } from "../../lib/links";
 import { wideView } from "../../lib/code-view";
 import { currentLanguage, t } from "../../i18n";
@@ -105,7 +106,10 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
           // other answer's URL opens as a link.
           const prompt = composeText(result.open_url);
           if (prompt) composeAssistant(prompt);
-          else openLink(result.open_url);
+          else {
+            const safe = safeWebURL(result.open_url, true);
+            if (safe) openLink(safe);
+          }
         }
         if (result.push) callbacks.current.push(result.push);
         if (result.pop) callbacks.current.pop();
@@ -155,7 +159,7 @@ function HostConfirmation({ adapter, active }: { adapter: AppUIStreamPage; activ
   const ix = active ? Object.values(interactions).find((ix) => adapter.ownsHostConfirmation(ix as NativePagePermission)) : undefined;
   return ix ? <PagePermission key={ix.id} adapter={adapter} ix={ix as NativePagePermission} /> : null;
 }
-function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
+export function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
   const [busy, setBusy] = useState(false);
   const answer = async (allow: boolean) => {
     if (busy || !adapter.ownsHostConfirmation(ix)) return;
@@ -163,8 +167,9 @@ function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativeP
     try {
       // The existing hub endpoint routes this pending ID to its owning manager and rechecks auth.
       // Do not manufacture an Agent session or bypass the generic Agent approval guard.
-      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow } });
-      endInteraction(ix.id);
+      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow },
+        headers: ix.created_at ? { "X-Persona-Interaction-Created-At": ix.created_at } : undefined });
+      endInteraction(ix.id, undefined, ix.created_at);
     } catch (error) { toast(t("settings-extensionview.action_failed", { error: errorText(error) }), "error"); }
     finally { setBusy(false); }
   };

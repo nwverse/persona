@@ -305,6 +305,11 @@ type Service struct {
 	conversationWrites   sync.RWMutex
 
 	modelPicks modelPickBook // model_pick.go
+	// execChannels caches the managed channels for reads (execution_channels.go); lastGood is the conversations'
+	// last known good execution (execution_lastgood.go).
+	execChannels execChannelBook
+	// lastGood: see execChannels.
+	lastGood lastGoodBook
 	// noBackground: there is no background supervisor whatever the setting says, so the main conversation gets its
 	// own tasks' signals. Only the tests of what the main conversation's own supervision does set it; the hub never does.
 	noBackground bool
@@ -406,10 +411,13 @@ type Service struct {
 	fleetEnded func(ix proto.Interaction, r *proto.Resolution)
 	// ixResolved, when set, sees every answered card the assistant is told of (tests).
 	ixResolved func(InteractionResolved)
-	models     modelsState   // models.go: the model configuration
-	health     healthBook    // launcher_health.go: each machine's launchers
-	trust      trustBook     // machine_trust.go: the computers waiting to be confirmed
-	ready      readinessBook // readiness.go: the main conversation's readiness
+	// postCardHook runs after a Feishu post's first terminal/occurrence check and
+	// before it claims the ledger (tests: an older in-flight post racing a replacement).
+	postCardHook func(proto.Interaction)
+	models       modelsState   // models.go: the model configuration
+	health       healthBook    // launcher_health.go: each machine's launchers
+	trust        trustBook     // machine_trust.go: the computers waiting to be confirmed
+	ready        readinessBook // readiness.go: the main conversation's readiness
 
 	// pieceWriteHook, when set, runs as a write of part_of/after (editTodo, insertTodo) has passed its caller's check
 	// and is about to take todoBook.writing (tests: two writes held there both passed against the same graph).
@@ -476,6 +484,8 @@ func New(o Options) *Service {
 	s.logicalSwitchRoutes()
 	s.conversationSwitchRoutes()
 	s.modelPickRoutes()
+	s.lastGoodRoutes()  // execution_lastgood.go
+	s.executionRoutes() // execution_routes.go
 	s.agentArchiveRoutes()
 	s.idleArchiveRoutes()
 	s.agentNamingRoutes()  // agent_naming_request.go
@@ -1294,6 +1304,8 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 	}
 	// A usage limit marks the launcher there until it resets (launcher_health.go).
 	s.afterSettle(context.WithoutCancel(ctx), s.launcherLimitTurnSettled, r.MachineID, r.SessionID)
+	// A turn that ended well keeps what it ran on as the conversation's last known good (execution_lastgood.go).
+	s.afterSettle(context.WithoutCancel(ctx), s.lastGoodTurnSettled, r.MachineID, r.SessionID)
 	if !meeting {
 		// An assistant turn that failed is logged; a conversation conversation_new opened tells its parent (spawned.go).
 		s.afterSettle(context.WithoutCancel(ctx), s.assistantTurnSettled, r.MachineID, r.SessionID)

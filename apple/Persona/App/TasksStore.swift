@@ -376,7 +376,7 @@ final class TasksStore {
     /// What the task's agents are asking the user, oldest first.
     func interactions(_ todo: TodoItem) -> [Interaction] {
         let keys = Set(sessions(todo).map(\.key))
-        return AppModel.shared.pendingInteractions.filter { keys.contains($0.sessionKey) }
+        return AppModel.shared.aggregatePendingInteractions.filter { keys.contains($0.sessionKey) }
     }
 
     /// The main conversation's Today card, once a day: the hub makes it on the first ask and answers it after that.

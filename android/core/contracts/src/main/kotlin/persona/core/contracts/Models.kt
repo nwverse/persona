@@ -1423,8 +1423,12 @@ data class Interaction(
     @SerialName("delegate") val delegate: Delegate? = null,
     /** True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps "Leave to computer". */
     @SerialName("no_hand_back") val noHandBack: Boolean = false,
+    /** The authoritative interaction whose display-only copy this is; absent on the authoritative card. Last to keep positional callers source-compatible. */
+    @SerialName("mirror_of") val mirrorOf: String? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** Aggregate surfaces count the authoritative request; conversation views still show both cards. */
+    val isDisplayMirror: Boolean get() = !mirrorOf.isNullOrEmpty()
     /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
     val ownerApprovalPhrase: String?
         get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {

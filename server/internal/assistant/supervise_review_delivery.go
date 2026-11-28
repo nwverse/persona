@@ -11,18 +11,19 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
-// A supervisor's accepted closes a task. The three-tier delivery gate (assistant.delivery_gate, default "merged";
-// legacy assistant.done_needs_delivery maps true -> "live" and explicit false -> "off") controls how far a
-// PR/Issue-backed task must go before task_review accepted can close it:
+// A supervisor's accepted closes a task. Draft and ready completion use the task's acceptance criteria.
+// Landed and verified completion select the merged and live gates respectively. An inherited or omitted
+// completion mode uses assistant.delivery_gate (defaults to merged).
 //
 //   - off: close strictly on done_when with no delivery gate.
 //   - merged (default): tasks with linked PR(s) (t.PRURL, review link, or repository pull_request links) or linked
 //     issue(s) (repository issue links) stay open until every PR is merged and every linked issue is closed, unless
-//     outcome is "cannot", the task is read-only, or the brief explicitly scopes it as PR-only/draft-only.
+//     outcome is "cannot". A brief without a completion mode keeps the legacy read-only and PR-only exceptions.
 //   - live (legacy done_needs_delivery=true): in addition to merged + linked issue closure, a GitHub PR must also be
 //     contained in the running hub (the deploy check, deploy_check.go), or at least merged where the running hub cannot
 //     be checked against. PR-only criteria do not override live (#6428).
@@ -37,20 +38,34 @@ var (
 	mergeCloseCriterionRe = lazyre.New(`(?i)\b(?:merged?|close[sd]?\s+(?:the\s+)?(?:linked\s+)?issue|issue\s+closed)\b|合入|合并|关闭\s*(?:关联\s*)?issue|issue\s*(?:已)?关闭`)                                                                                                                            // i18n-ignore: matches merge/issue criteria text
 )
 
+func (s *Service) deliveryGateForMode(ctx context.Context, mode assistantwire.CompletionMode) string {
+	switch mode {
+	case assistantwire.CompletionModeDraft, assistantwire.CompletionModeReady:
+		return deliveryGateOff
+	case assistantwire.CompletionModeLanded:
+		return deliveryGateMerged
+	case assistantwire.CompletionModeVerified:
+		return deliveryGateLive
+	default:
+		return s.deliveryGate(ctx)
+	}
+}
+
 // acceptedDeliveryError refuses accepting task t while its delivery gate (off / merged / live) is not satisfied;
 // nil when nothing holds it. note, when set, is what the reply adds about a delivery that could not be checked.
 func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outcome string) (note string, err error) {
 	if outcome == outcomeCannot || t.DoneAt != nil {
 		return "", nil
 	}
-	gate := s.deliveryGate(ctx)
+	brief, hasBrief := s.committedBriefOfTodo(t.ID)
+	gate := s.deliveryGateForMode(ctx, brief.CompletionModeNow)
 	if gate == deliveryGateOff {
 		return "", nil
 	}
-	if gate == deliveryGateMerged {
+	if gate == deliveryGateMerged && brief.CompletionModeNow == "" {
 		var briefPtr *TaskBrief
-		if b, ok := s.briefOfTodo(t.ID); ok {
-			briefPtr = &b
+		if hasBrief {
+			briefPtr = &brief
 		}
 		if s.taskIsReadonly(ctx, t) && !hasMergeCloseCriterion(briefPtr, t) {
 			return "", nil
@@ -140,6 +155,9 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		}
 	}
 
+	if current, _ := s.committedBriefOfTodo(t.ID); current.CompletionModeNow != brief.CompletionModeNow {
+		return "", fmt.Errorf("task %s changed its completion mode during delivery verification. Read its current brief and retry the review", t.ID)
+	}
 	return strings.Join(notes, ""), nil
 }
 
@@ -467,8 +485,12 @@ func prOnlyScoped(brief *TaskBrief, t Todo) bool {
 		}
 	}
 	for _, text := range texts {
-		if prOnlyScopeRe.MatchString(text) {
-			return true
+		for _, sentence := range kindSentences(text) {
+			for _, clause := range kindClauses(sentence) {
+				if firstUnnegated(prOnlyScopeRe, clause) >= 0 {
+					return true
+				}
+			}
 		}
 	}
 	return false
@@ -477,7 +499,7 @@ func prOnlyScoped(brief *TaskBrief, t Todo) bool {
 // notMergedError refuses accepting t under delivery_gate=merged while its PR is not merged yet.
 func notMergedError(s *Service, t Todo, pr string) error {
 	s.logf("task %s: accepted refused (merged gate): %s: unmerged", t.ID, pr)
-	return fmt.Errorf("task %s is not accepted: %s is not merged yet, and the delivery gate (delivery_gate=merged) "+
+	return fmt.Errorf("task %s is not accepted: %s is not merged yet, and this task's delivery gate "+
 		"keeps PR/Issue tasks open until the PR is merged and linked issues are closed. Keep it open: park it with "+
 		"waiting_on external_event (evidence.kind=external_event, url=%s, pr_event=terminal) or waiting_on someone_else "+
 		"(evidence.kind=merge_review) until merge, send what is missing to its agent (rework / agent_send), or cancel it "+
@@ -509,8 +531,8 @@ func notLiveError(s *Service, t Todo, pr string, r deployResult) error {
 		why += " (" + r.Err.Error() + ")"
 	}
 	s.logf("task %s: accepted refused: %s: %s", t.ID, pr, cmp.Or(r.State, "held"))
-	return fmt.Errorf("task %s is not accepted: %s is not live: %s, and the user's to-dos close only once their work is "+
-		"live (done_needs_delivery). Keep it open: send what is missing to its agent (rework, or agent_send to merge and "+
+	return fmt.Errorf("task %s is not accepted: %s is not live: %s. This task's delivery gate requires a live result. "+
+		"Keep it open: send what is missing to its agent (rework, or agent_send to merge and "+
 		"deploy), park it with waiting_on external_event until the merge or deploy, or cancel it if the work is dropped. "+
 		"If nothing could be delivered at all, accept it with outcome cannot", t.ID, pr, why)
 }
