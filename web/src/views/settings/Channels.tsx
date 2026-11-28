@@ -15,7 +15,7 @@ import { canSendStep, fieldInput } from "../../lib/connectors";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { otherManager, ownedSub, useChosenManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
-import { ago } from "../../lib/format";
+import { ago, safeWebURL } from "../../lib/format";
 import { useStore } from "../../lib/store";
 import { Button, copyText, cx, Dialog, EASE, IconButton, Loading, Spinner, toast } from "../../ui/atoms";
 import { ChannelMark } from "../../ui/ChannelMark";
@@ -579,6 +579,7 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
     );
   }
   const canSend = canSendStep(prompt, values) && !busy;
+  const promptLink = safeWebURL(prompt.link);
   return (
     <Group title={title ?? bindTitle(c)}>
       {(prompt.hint || prompt.error) && (
@@ -587,15 +588,15 @@ export function BindSteps({ c, onDone, title, footer: startFooter, startLabel }:
           {prompt.error && <p role="alert" className="text-[12px] text-red">{prompt.error}</p>}
         </div>
       )}
-      {prompt.link && (
+      {promptLink && (
         <div className="px-4 pb-2.5 pt-0.5">
           <a
-            href={prompt.link}
+            href={promptLink}
             target="_blank"
             rel="noopener noreferrer"
             className="touch-hit inline-flex items-center gap-1 self-start whitespace-nowrap text-[12.5px] font-medium text-accent hover:underline"
           >
-            {prompt.link_text || prompt.link}
+            {prompt.link_text || promptLink}
             <Icon name="logout" size={12} />
           </a>
         </div>

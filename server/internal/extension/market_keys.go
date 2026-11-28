@@ -19,8 +19,9 @@ import (
 const MarketKeysMost = 8
 
 // NormalizeMarketKeys checks keys, writes each one canonically ("ed25519:<standard base64>") and drops repeats (the
-// same key id), keeping the first order. Empty input is no keys. The official key is refused: it is compiled in, and
-// a private market claiming it would read as official provenance.
+// same key id), keeping the first order. Empty input is no keys. The official key, current or retired
+// (Official.PreviousSigningKeys), is refused: it is compiled in, and a private market claiming it would read as
+// official provenance (a module's flag trusts either one: internal/extmgr module_providers.go).
 func NormalizeMarketKeys(keys []string) ([]string, error) {
 	out := []string{}
 	seen := map[string]bool{}
@@ -37,7 +38,7 @@ func NormalizeMarketKeys(keys []string) ([]string, error) {
 			continue
 		}
 		canonical := FormatSigningKey(pub)
-		if Official.SigningKey != "" && canonical == Official.SigningKey {
+		if officialKeyID(id) {
 			return nil, i18n.Err("extension-market_security.official_key")
 		}
 		seen[id] = true
@@ -47,6 +48,16 @@ func NormalizeMarketKeys(keys []string) ([]string, error) {
 		return nil, i18n.Err("extension-market_security.too_many_keys", i18n.Args{"most": MarketKeysMost})
 	}
 	return out, nil
+}
+
+// officialKeyID: id is the key id of the official market's signing key, current or retired.
+func officialKeyID(id string) bool {
+	for _, k := range append([]string{Official.SigningKey}, Official.PreviousSigningKeys...) {
+		if k != "" && MarketKeyID(k) == id {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatSigningKey is k as markets, configuration and the command line write it.

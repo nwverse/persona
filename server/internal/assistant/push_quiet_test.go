@@ -453,7 +453,7 @@ func TestQuietPleaseVerifyPostsNoCard(t *testing.T) {
 	s.ownerVerifiesAll = true
 	f.judge = `{"changed":"设置里多了开关","link":"https://hub.example.com/settings","how":"打开设置看开关"}`
 	agentTurn(s, f, proto.StatusWorking, "", 0)
-	agentTurn(s, f, proto.StatusDone, deployedReply, 0)
+	turnWithRecordedDeployment(t, s, f)
 	waitFor(t, "the ask", func() bool { a := askOf(s, todo.ID); return a != nil && !a.AskedAt.IsZero() })
 	waitFor(t, "the cardless ask", func() bool { a := askOf(s, todo.ID); return a != nil && a.NoCard && a.MessageID == "" })
 	if n := countAcceptCards(posts()); n != 0 {
@@ -570,14 +570,14 @@ func TestLeaderReportLevel(t *testing.T) {
 	}
 }
 
-// A plan waiting for the owner's Start is P1 (23:12 ruling): its push names no level, so the hub holds it for the
-// briefing with the switch on; a task that failed to start is P1 as well.
-func TestPlanWaitingForStartIsNotP0(t *testing.T) {
+// A real owner-step plan keeps the existing P1 priority. Missing ordinary dispatch authority alone
+// no longer produces a phone notification; it is covered by TestNonOwnerPlanWaitsDoNotPush.
+func TestOwnerPlanWaitingForStartIsNotP0(t *testing.T) {
 	ctx := context.Background()
 	s, f := newTaskService(t)
 	f.hello.Assistant.MachineID = "box"
 	setSettings(t, s, func(v *Settings) { v.Main, v.MachineID = "main1", "box" })
-	if _, err := s.toolTaskPlan(ctx, "side1", planArgs(false)); err != nil {
+	if _, err := s.toolTaskPlan(ctx, "side1", planArgsWithStep(t, ownerStepMoney)); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, "the push", func() bool { return len(f.pushed()) == 1 })

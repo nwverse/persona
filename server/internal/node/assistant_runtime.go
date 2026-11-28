@@ -179,12 +179,23 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	if supportsPolicy && id != "" && known && st.SupervisionInstructions != policy && n.runtimeStatus(h, id) == proto.StatusWorking {
 		return "", refusal(assistantwire.CodeConversationBusy, i18n.T(i18n.From(ctx), "rpc-errors.assistant_supervision_busy"), nil)
 	}
+	var agyChannel *agyChannelSpec
+	if h.agent() == agyAgent {
+		var err error
+		agyChannel, err = n.agyChannelFor(ctx, launcher)
+		if err != nil {
+			return "", err
+		}
+	}
 	n.assistantRuntimeSkillsForSend(cwd)
 	memDir := n.memoryForUse(cwd)
 	environment, releaseEnv, bindEnv := n.assistantEnvForRuntimeLease(h, cwd, id)
 	turn := map[string]any{"assistant": true, "memory_dir": memDir}
 	if environment != nil {
 		turn["env"] = environment
+	}
+	if agyChannel != nil {
+		turn["channel"] = agyChannel
 	}
 	if pickedModel != "" {
 		turn["model"] = pickedModel
@@ -197,6 +208,9 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		startParams := map[string]any{"cwd": cwd, "assistant": true}
 		if environment != nil {
 			startParams["env"] = environment
+		}
+		if agyChannel != nil {
+			startParams["channel"] = agyChannel
 		}
 		if pickedModel != "" {
 			startParams["model"] = pickedModel
@@ -211,9 +225,17 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 			startParams["supervision_instructions"] = policy
 		}
 		s, err := n.runtimeStartWith(ctx, h, startParams)
+		if err != nil && h.agent() == agyAgent && mode == "auto" && isAgyAutoModeUnavailableErr(err) {
+			mode = proto.ModeBypass
+			startParams["permission_mode"] = mode
+			s, err = n.runtimeStartWith(ctx, h, startParams)
+		}
 		if err != nil {
 			releaseEnv()
 			return "", n.localizeSupervisionRefusal(ctx, err)
+		}
+		if s.PermissionMode != "" {
+			mode = s.PermissionMode
 		}
 		id = s.SessionID
 		if id == "" {
@@ -269,7 +291,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	live, commit := "", func() {}
 	if !command {
 		if !public {
-			live, commit = n.turnContext(id, n.assistantContext(id))
+			live, commit = n.turnContext(id, n.assistantContextFor(id, text))
 		}
 		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
 		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.
@@ -325,6 +347,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	}
 	finishAgy := n.runtimes.agyWorkBegin(h, "session.send", id)
 	err := h.peer.Call(cctx, "session.send", params, &said)
+	if err != nil && h.agent() == agyAgent && params["mode"] == "auto" && isAgyAutoModeUnavailableErr(err) {
+		mode = proto.ModeBypass
+		params["mode"] = mode
+		n.noteModes(id, mode, pickedEffort)
+		n.persistModes(id, mode, pickedEffort, modeExplicit)
+		rctx, rcancel := context.WithTimeout(ctx, runtimeCallTimeout)
+		err = h.peer.Call(rctx, "session.send", params, &said)
+		rcancel()
+	}
 	finishAgy(err, false)
 	if err != nil {
 		if !command && !maybeDelivered(err) {
@@ -399,6 +430,29 @@ func withClientMsgID(ctx context.Context, id string) context.Context {
 func clientMsgIDFrom(ctx context.Context) string {
 	id, _ := ctx.Value(clientMsgIDKey{}).(string)
 	return id
+}
+
+// isAgyAutoModeUnavailableErr reports whether an older Antigravity runtime rejected permission_mode=auto because OS
+// terminal sandbox auto mode is unavailable. Updated runtimes degrade to bypassPermissions inside the runtime itself.
+func isAgyAutoModeUnavailableErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "auto mode") &&
+		(strings.Contains(msg, "not available") || strings.Contains(msg, "unavailable") || strings.Contains(msg, "unsupported") || strings.Contains(msg, "sandbox"))
+}
+
+// assistantSendResult builds the assistant.send RPC payload, including the settled permission_mode when known so the
+// hub reflects runtime-side mode degradation (for example agy falling back from auto to bypassPermissions).
+func (n *Node) assistantSendResult(id string) map[string]any {
+	res := map[string]any{"session_id": id}
+	if id != "" {
+		if m := n.assistantModeOf(id); m != "" {
+			res["permission_mode"] = m
+		}
+	}
+	return res
 }
 
 // assistantModeOf is the permission mode the conversation was last set to (session.modes, or a message's),

@@ -765,7 +765,7 @@ stated above; #15088 lists the ones known.
 | `out-conversion` | no conversion to a core's or the kit's type outside it | the core |
 | `out-wire-ref` | no `.Wire` outside adapters and testkit, called or not | the package it is in |
 | `out-parse-call` | a core's `Parse` and `Restore` only from it, its tests, adapters and testkit | the core |
-| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
+| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, a parameterless `Visit` method matching an imported core's or the kit's visitor interface, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
 | `out-clock-read` | `instant.ReadClock` only in `domainkit/clock` and its testkit | `domainkit/instant` |
 | `out-slot-mint` | `slot.NewSlot` only in adapters and testkit | `domainkit/slot` |
 | `out-code-mint` | `fail.NewCode` and `fail.NewPart` only in cores, the kit and testkit | `domainkit/fail` |

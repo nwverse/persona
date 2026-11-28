@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
@@ -66,6 +67,36 @@ const (
 	gateSeverityBlockedConflict = 5
 	gateSeverityBlockedCI       = 6
 )
+
+// snapshotRepoGate keeps same-repository observations in the legacy task snapshot when todos_v2 is off.
+func snapshotRepoGate(t Todo, bound []repository.TaskRepository, todosV2 bool) *repoGate {
+	if todosV2 {
+		return aggregateRepoGate(buildRepoGateInputs(t, bound))
+	}
+
+	prByURL := repoGatePRObservations(t)
+	repos := linkedRepoGateInputs(bound, prByURL)
+	for i, binding := range bound {
+		repo := &repos[i]
+		repoURL := normalizeRepoGateURL(binding.SourceSnapshot.Identity.CanonicalURL)
+		if !repo.IsTarget || repoURL == "" {
+			continue
+		}
+		linked := make(map[string]bool, len(binding.Links))
+		for _, link := range binding.Links {
+			if link.Kind == "pull_request" || strings.TrimSpace(link.Role) == repository.LinkRoleReference {
+				linked[normalizeRepoGateURL(link.CanonicalURL)] = true
+			}
+		}
+		prefix := repoURL + "/"
+		for key, obs := range prByURL {
+			if !linked[key] && strings.HasPrefix(key, prefix) {
+				repo.PRs = append(repo.PRs, toRepoGatePR(obs.URL, obs))
+			}
+		}
+	}
+	return aggregateRepoGate(repos)
+}
 
 // aggregateRepoGate computes a deterministic weakest-link ("barrel rule") delivery gate summary
 // across a to-do's bound repositories. Reference-only repositories (IsTarget == false) are counted

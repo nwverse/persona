@@ -936,8 +936,9 @@ nonisolated enum WatchInteractions {
     /// like the phone's Agents badge and inbox. The hub stamps `muted`; an older hub leaves it false. A question the
     /// assistant is still looking at stays off too (#544): it buzzes once it is handed to the user. So does a card its
     /// task's supervisor holds (`Interaction.supervisorHeld`): the watch would answer it with a tap.
+    /// A display copy also stays out: its authoritative card is the watch's one row and one buzz.
     static func leavingMuted(_ interactions: [Interaction]) -> [Interaction] {
-        interactions.filter { !$0.muted && !$0.isDelegating && $0.answerableHere }
+        interactions.filter { !$0.isDisplayMirror && !$0.muted && !$0.isDelegating && $0.answerableHere }
     }
 
     /// Cards passed to `WatchPet.status`: keeps non-muted pending cards (including delegating questions, which stay
@@ -1354,7 +1355,11 @@ nonisolated extension APIClient {
                 case askedAt = "asked_at"
             }
         }
-        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept", body: Body(askedAt: askedAt, option: option, response: response))
+        // Plain acceptance (`acceptTryFromApp`) can block up to 45 s on `confirmOwnerTaskClose` while waiting for the
+        // owner to confirm closing active Agent work, so wait past the server's confirmation window.
+        _ = try await post("/api/v1/todos/\(Self.pathPart(id))/accept",
+                           body: Body(askedAt: askedAt, option: option, response: response),
+                           timeout: Self.todoCloseConfirmWait)
     }
 
     /// Don't handle on a decision row (`decision_review`, docs/protocol/protocol.md): the round `reviewAt` stays hidden from

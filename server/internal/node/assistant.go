@@ -539,7 +539,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 				return "", errAssistantRecoveryTasks
 			}
 			// A successful explicit empty list is the only proof that a restart kills no background work.
-			if p.agent == "codex" && p.cx != nil {
+			if p.cx != nil {
 				p.cx.syncTasks()
 			} else if p.agent == "claude" {
 				p.syncClaudeTasks(ctx)
@@ -858,6 +858,12 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if err != nil {
 		return "", err
 	}
+	if agent == traexAgent {
+		if origin != originInbox || !originKnown {
+			return "", errTraexAssistantOrigin
+		}
+		mode = inboxPermissionMode(mode, "", false)
+	}
 	if startTier != "" && agent != "codex" {
 		return "", serviceTierRefusal(ctx, "assistant_service_tier_unsupported")
 	}
@@ -951,10 +957,10 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if guest != nil || !hasInput || execution.Public {
 		snapc <- contextAnswer{} // guests and public mentions get no owner state; empty starts leave it for the first real message
 	} else {
-		go func(id string) { snapc <- n.assistantContext(id) }(id)
+		go func(id, query string) { snapc <- n.assistantContextFor(id, query) }(id, text)
 	}
-	if id == "" { // a new Codex conversation: the thread's id is Codex's to pick
-		if p, err = n.spawnCodexWithMode("", cwd, launcher, false, false, mode, execution); err != nil {
+	if id == "" { // a new app-server conversation: the server picks the thread ID
+		if p, err = n.spawnAssistantAppServer(agent, "", cwd, launcher, false, false, mode, execution); err != nil {
 			return "", err
 		}
 		id = p.id
@@ -1147,7 +1153,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	}
 	fresh := p == nil
 	if p == nil {
-		if p, err = n.spawnAssistantWith(id, cwd, launcher, resume && n.transcriptPath(id) != "", false, round, execution); err != nil {
+		if p, err = n.spawnAssistantWith(id, cwd, launcher, resume && (agent == traexAgent || n.transcriptPath(id) != ""), false, round, execution); err != nil {
 			if execution.PersistedModel && execution.Model != "" && assistantModelRouteUnavailable(err.Error()) {
 				n.noteModelRouteUnavailable(id, launcher, execution.Model)
 				n.clearStalePersistedModel(id, launcher, execution.Model)
@@ -1211,7 +1217,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 		return "", err
 	}
 	n.noteAssistantRecoveryProcess(ctx, p)
-	if !hasInput && p.agent == "codex" {
+	if !hasInput && p.cx != nil {
 		// Codex has no startup settings controls; do not allocate a turn for an empty start.
 		err := n.syncAssistantModes(ctx, p)
 		awaitList(n.notifySessionsSoon())
@@ -1257,7 +1263,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 	if hasInput {
 		live, commit = n.turnContext(id, <-snapc)
 	}
-	if p.agent == "codex" {
+	if p.cx != nil {
 		p.mu.Lock()
 		wasBusy := p.busy
 		p.busy = true
@@ -1279,7 +1285,7 @@ func (n *Node) assistantSend(ctx context.Context, id, cwd, launcher, text string
 				n.noteModelRouteUnavailable(id, launcher, execution.Model)
 				n.clearStalePersistedModel(id, launcher, execution.Model)
 			}
-			return "", fmt.Errorf("send to codex: %w", err)
+			return "", fmt.Errorf("send to %s: %w", p.agent, err)
 		}
 		n.state.clearStopAfterAssistantInput(id, previousStopAt)
 		n.commitModelChoice(id, execution)
@@ -1970,8 +1976,8 @@ func (n *Node) assistantSessions() []proto.Session {
 		}
 		s := proto.Session{SessionID: p.id, Cwd: p.cwd, Status: status, Launcher: p.launcher, UpdatedAt: updated.UTC(),
 			Queued: queued}
-		if p.agent == "codex" {
-			s.Agent = "codex"
+		if p.cx != nil {
+			s.Agent = p.agent
 		}
 		var record turnFailure // the transcript's word on a failed turn
 		if path := n.transcriptPath(p.id); path != "" {

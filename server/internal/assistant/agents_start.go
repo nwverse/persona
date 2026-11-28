@@ -3,6 +3,7 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -56,6 +57,9 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 		}
 		clearStandardSpeed(params)
 	} else {
+		if model, _ := params["model"].(string); model != "" {
+			params["explicit_model"] = model
+		}
 		tierCtx, _ := withTierStart(ctx, p.MachineID)
 		own, err := s.resolveStart(tierCtx, params, false)
 		if err != nil {
@@ -77,6 +81,24 @@ func (s *Service) AgentStartParams(ctx context.Context, p AgentStartParams) (map
 			}
 			if err := checkStartSpeed(params, agent, ""); err != nil {
 				return nil, badRequest(err, s.appLang(ctx, p.Lang))
+			}
+			if params["model_aliases"] != nil {
+				raw, err := json.Marshal(params["model_aliases"])
+				var aliases proto.ModelAliases
+				if err != nil || json.Unmarshal(raw, &aliases) != nil {
+					return nil, badRequest(fmt.Errorf("model_aliases must be an object of model IDs"), s.appLang(ctx, p.Lang))
+				}
+				if err := aliases.Validate(); err != nil {
+					return nil, badRequest(err, s.appLang(ctx, p.Lang))
+				}
+				if err := checkAliasAgent(aliases, agent); err != nil {
+					return nil, badRequest(err, s.appLang(ctx, p.Lang))
+				}
+			}
+			if own.tier != "" {
+				if err := checkHostLauncher(params, agent); err != nil {
+					return nil, badRequest(err, s.appLang(ctx, p.Lang))
+				}
 			}
 			if mode, _ := params["permission_mode"].(string); mode != "" && own.permission == "" && !agent.supportsPermissionMode(mode) {
 				delete(params, "permission_mode")
@@ -165,17 +187,28 @@ func (s *Service) tabNameWithTimeout(ctx context.Context, prompt string, timeout
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	// Reasoning models think first: 20 tokens came back empty.
-	text, err := s.purposeModel("agent.title").Complete(cctx, prompts.RenderTabName(), prompt, 200)
+	// Reasoning models think first: 20 tokens came back empty. Thinking is off for this short tab name, and a
+	// cut-off chain-of-thought line is rejected before tabSlug turns it into "we-need-answer-title".
+	r, err := s.purposeModel("agent.title").Chat(cctx, ai.Request{
+		System:          prompts.RenderTabName(),
+		Messages:        []ai.Message{{Role: ai.RoleUser, Content: prompt}},
+		MaxTokens:       200,
+		DisableThinking: true,
+	})
 	if err != nil {
 		if !ai.IsPaused(err) {
 			s.logf("tab name: %v", err)
 		}
 		return ""
 	}
-	name := tabSlug(text)
+	cleaned := stripTitleThinking(r.Text)
+	if titleReplyIsThinkingLeak(cleaned) {
+		s.logf("tab name: dropped thinking leakage %q", clip(oneLine(r.Text), 80))
+		return ""
+	}
+	name := tabSlug(cleaned)
 	if name == "" {
-		s.logf("tab name: nothing usable in %q", clip(oneLine(text), 80))
+		s.logf("tab name: nothing usable in %q", clip(oneLine(r.Text), 80))
 	}
 	return name
 }

@@ -5,6 +5,7 @@ import { appSocketReady, applyMachine, checkSocket, connect, disconnect, getStat
 import { offlineNow } from "./feedback";
 import { liveEntry, resetLive } from "./live";
 import { messageFeedback } from "./message-send";
+import { clientInstance } from "./device-id";
 
 class FakeSocket {
   static OPEN = 1;
@@ -137,12 +138,12 @@ describe("reconnecting", () => {
   });
   it("first connect sends no resume point; reconnects resume from the last broadcast seen", () => {
     const s = online();
-    expect(s.url).toBe("ws://hub/api/v1/ws?token=tok&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1"); // the session list comes as deltas; status lines are pushed
+    expect(s.url).toBe("ws://hub/api/v1/ws?token=tok&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1,approval_mirrors"); // the session list comes as deltas; status lines are pushed
     s.push({ type: "todos", event_seq: 6 });
     s.push({ type: "items", machine_id: "m", session_id: "x", items: [] });
     s.drop();
     vi.advanceTimersByTime(600);
-    expect(last().url).toBe("ws://hub/api/v1/ws?token=tok&event_stream=s1&event_seq=6&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1");
+    expect(last().url).toBe("ws://hub/api/v1/ws?token=tok&event_stream=s1&event_seq=6&features=sessions_list,sessions_list_changes,sessions_delta,session_live,extension_ui_stream_v1,persona_contracts_v1,approval_mirrors");
   });
 
   it("an ordinary drop stays invisible for 8 s, then shows as before", () => {
@@ -557,6 +558,14 @@ describe("client_hello heartbeat", () => {
     const hello = last().sent.map((m) => JSON.parse(m)).find((m) => m.type === "client_hello");
     expect(hello.device_id).toBeTruthy();
     expect(hello.device_id).toBe(localStorage.getItem("persona.notifyDevice"));
+  });
+
+  it("names this tab's instance, matching the REST capability binding", () => {
+    connect();
+    last().open();
+    const hello = last().sent.map((m) => JSON.parse(m)).find((m) => m.type === "client_hello");
+    expect(hello.instance).toBeTruthy();
+    expect(hello.instance).toBe(clientInstance);
   });
 });
 

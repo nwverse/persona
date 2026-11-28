@@ -56,12 +56,16 @@ type sessionState struct {
 	Cwd                     string          `json:"cwd"`
 	TaskID                  string          `json:"task_id,omitempty"`
 	WorkspaceID             string          `json:"workspace_id,omitempty"`
+	WorkspaceHost           string          `json:"workspace_host,omitempty"`
 	WorkspaceLabel          string          `json:"workspace_label,omitempty"`
 	IsMain                  bool            `json:"is_main,omitempty"`
 	SupervisionInstructions string          `json:"supervision_instructions,omitempty"`
 	StartedAt               time.Time       `json:"started_at"`
 	StopCause               proto.StopCause `json:"stop_cause,omitempty"`
 	StopCauseAt             int64           `json:"stop_cause_at,omitempty"`
+
+	// OrcaTerminal records the original terminal receipt for a Persona-opened Agent tab.
+	OrcaTerminal *orcaTerminalOwner `json:"orca_terminal,omitempty"`
 	// RanAt: when a node last saw the Agent run (unix seconds, written at most every ranAtEvery). A session whose agent
 	// ran until shortly before this node started and is gone now was stopped by the restart (interrupted.go, #11441).
 	RanAt int64 `json:"ran_at,omitempty"`
@@ -472,6 +476,7 @@ func (s *stateFile) setPane(id, pane string) {
 			return false
 		}
 		v.Pane = pane
+		v.OrcaTerminal = nil
 		return true
 	})
 }
@@ -492,6 +497,7 @@ func (s *stateFile) forgetPane(pane string) {
 				return false // bound to another pane since
 			}
 			v.Pane = ""
+			v.OrcaTerminal = nil
 			return true
 		})
 	}
@@ -516,6 +522,9 @@ func (s *stateFile) put(id string, v sessionState) bool {
 		// Owned by state.update: older process snapshots cannot replace the
 		// idle clock or the latest compaction result.
 		v.IdleCompaction, v.Compaction = old.IdleCompaction, old.Compaction
+		if v.OrcaTerminal == nil && v.Pane == old.Pane {
+			v.OrcaTerminal = old.OrcaTerminal
+		}
 		if old.CreationID != "" {
 			v.CreationID, v.Incarnation = old.CreationID, old.Incarnation
 		}

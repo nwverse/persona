@@ -235,6 +235,31 @@ func (n *Node) closeFinished(ctx context.Context, only string, preview bool) (ma
 				release := n.recovery.lock(t.SessionID)
 				defer release()
 			}
+			st, _ := n.state.get(t.SessionID)
+			if h, ok := c.h.(*orcaHost); ok && st.OrcaTerminal != nil {
+				var closedOrVerified bool
+				var err error
+				if preview {
+					target, _, checkErr := n.orcaStoppedTarget(ctx, h, t.SessionID, t.Pane, st)
+					closedOrVerified, err = target.Handle != "", checkErr
+				} else {
+					unlock := n.typing.lock(t.SessionID)
+					defer unlock()
+					closedOrVerified, err = n.closeStoppedOrca(ctx, h, t.SessionID, t.Pane, st, func() error {
+						return n.saveStopCause(ctx, t.SessionID, proto.StopUser)
+					})
+				}
+				if closedOrVerified {
+					closed = append(closed, t)
+					return
+				}
+				if err == nil {
+					err = orcaTerminalRefusal()
+				}
+				t.Why = err.Error()
+				kept = append(kept, t)
+				return
+			}
 			fg, ok := c.h.(host.ForegroundNamer)
 			org, ok2 := c.h.(host.Organizer)
 			if !ok || !ok2 {

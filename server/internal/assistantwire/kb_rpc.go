@@ -1,11 +1,12 @@
 package assistantwire
 
 import (
-	"github.com/nwverse/persona/server/internal/wireids"
-
 	"encoding/json"
 
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Extension-facing knowledge-base calls. The hub checks the extension's granted scope before forwarding these.
@@ -27,6 +28,20 @@ const (
 	// CodeKBConflict: an extension's kb.update touches fields the user or another extension holds; data is
 	// KBConflict.
 	CodeKBConflict = "conflict"
+)
+
+var (
+	KBListMethod            = buswire.Method[KBListParams, KBListResult]{Name: MethodKBList}
+	KBRecentMethod          = buswire.Method[KBRecentParams, KBRecentResult]{Name: MethodKBRecent}
+	KBGetMethod             = buswire.Method[KBGetParams, KBGetResult]{Name: MethodKBGet}
+	KBDayMethod             = buswire.Method[KBDayParams, KBDayResult]{Name: MethodKBDay}
+	KBExtensionDayMethod    = buswire.Method[KBDayParams, KBDayResult]{Name: MethodKBExtensionDay}
+	KBSearchMethod          = buswire.Method[KBSearchParams, KBSearchResult]{Name: MethodKBSearch}
+	KBUpdateMethod          = buswire.Method[KBUpdateParams, KBUpdateResult]{Name: MethodKBUpdate}
+	KBExtensionUpdateMethod = buswire.Method[KBExtensionUpdate, KBUpdateResult]{Name: MethodKBExtensionUpdate}
+
+	KBProviderCheckpointMethod  = buswire.Method[KBProviderRequest, wire.KBImportCheckpointResult]{Name: MethodKBProviderCheckpoint}
+	KBProviderSentMarkersMethod = buswire.Method[KBProviderRequest, wire.KBSentMarkersResult]{Name: MethodKBProviderSentMarkers}
 )
 
 // KBProviderRequest is the manager's authenticated installation and its bounded query.
