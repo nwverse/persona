@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -191,6 +192,26 @@ func TestOrcaChatDefaultCodexAndWrappers(t *testing.T) {
 	}
 	if o := defaultOpens(t, s, "box", ""); o != nil {
 		t.Fatalf("the form, a wrapper: %v", o)
+	}
+}
+
+// A chat launcher the computer's Orca no longer offers (Orca refused Codex's chat there, its chat runtime not installed,
+// #17684) is not routed to: Codex's default start opens a terminal and the form names no chat, while Claude Code's
+// default, whose chat Orca still offers, goes on opening as one.
+func TestOrcaChatDefaultStaysInATerminalWithoutTheChatLauncher(t *testing.T) {
+	s, f, on := orcaChatHub(t)
+	on["box"] = true
+	f.zshrc["box"] = slices.DeleteFunc(slices.Clone(f.zshrc["box"]), func(l proto.Launcher) bool { return l.Name == "orca-codex" })
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.codex"})
+	if params, note := startOn(t, s, "box", map[string]any{"cwd": "/home/me/code", "launcher": ""}); params["launcher"] != "codex" || note != "" {
+		t.Fatalf("codex without its chat launcher: %v %q", params, note)
+	}
+	if o := defaultOpens(t, s, "box", ""); o != nil {
+		t.Fatalf("the form, codex without its chat launcher: %v", o)
+	}
+	setModel(t, s, "agent.new", ModelBinding{Provider: "launcher.claude"})
+	if params, _ := startOn(t, s, "box", map[string]any{"cwd": "/home/me/code", "launcher": ""}); params["launcher"] != "orca-claude" {
+		t.Fatalf("claude, its chat launcher still offered: %v", params)
 	}
 }
 
