@@ -71,6 +71,7 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 		targets = all
 	}
 	type outcome struct {
+		traex  traexHostEvidence
 		kind   string
 		agents []host.Agent
 		full   bool
@@ -82,8 +83,9 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 		wg.Add(1)
 		go func(i int, h host.Host) {
 			defer wg.Done()
-			agents, full, err := n.lookAtSnapshot(ctx, h, epoch, strict, "")
-			outs[i] = outcome{kind: h.Kind(), agents: agents, full: full, err: err}
+			o := &outs[i]
+			o.kind = h.Kind()
+			o.agents, o.full, o.err = n.lookAtSnapshot(ctx, h, epoch, strict, "", &o.traex)
 		}(i, h)
 	}
 	wg.Wait()
@@ -138,13 +140,11 @@ func (n *Node) refreshHostInventoryWithFailures(ctx context.Context, strict bool
 		} else {
 			answered, snapped = true, snapped || o.full
 			n.hostAgents[o.kind] = o.agents
+			n.saveTraexHostEvidence(o.kind, o.traex)
 			heard[o.kind] = true
 		}
 	}
-	union := make([]host.Agent, 0)
-	for _, agents := range n.hostAgents { // hosts not in this partial refresh keep what they gave last
-		union = append(union, agents...)
-	}
+	union := n.mergedHostAgents()
 	n.mu.Unlock()
 
 	if !answered {
@@ -180,7 +180,8 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 	n.mu.Lock()
 	epoch := n.engEpoch
 	n.mu.Unlock()
-	agents, full, err := n.lookAtSnapshot(ctx, h, epoch, true, paneID)
+	var proof traexHostEvidence
+	agents, full, err := n.lookAtSnapshot(ctx, h, epoch, true, paneID, &proof)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -202,10 +203,8 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 		n.hostAgents = map[string][]host.Agent{}
 	}
 	n.hostAgents[h.Kind()] = agents
-	union := make([]host.Agent, 0)
-	for _, list := range n.hostAgents {
-		union = append(union, list...)
-	}
+	n.saveTraexHostEvidence(h.Kind(), proof)
+	union := n.mergedHostAgents()
 	n.mu.Unlock()
 	if !n.setAgentsAt(union, epoch, map[string]bool{h.Kind(): true}) {
 		return errEngineChanged
@@ -215,13 +214,24 @@ func (n *Node) refreshHostForPaneStrict(ctx context.Context, h host.Host, paneID
 	return nil
 }
 
+// mergedHostAgents reconciles the same pane and writer snapshots, including
+// hosts retained across partial refreshes. Caller holds n.mu.
+func (n *Node) mergedHostAgents() []host.Agent {
+	var union []host.Agent
+	for _, agents := range n.hostAgents {
+		union = append(union, agents...)
+	}
+	traexDropConflictingFresh(union, n.traexEvidence)
+	return union
+}
+
 // lookAt is one host's agents: from a snapshot (full), which also gives the space / slot names; a host that cannot
 // snapshot (older herdr without `api snapshot`) gives its agent list instead.
 func (n *Node) lookAt(ctx context.Context, h host.Host, epoch uint64) (agents []host.Agent, full bool, err error) {
-	return n.lookAtSnapshot(ctx, h, epoch, false, "")
+	return n.lookAtSnapshot(ctx, h, epoch, false, "", &traexHostEvidence{})
 }
 
-func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch uint64, strict bool, targetPane string) (agents []host.Agent, full bool, err error) {
+func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch uint64, strict bool, targetPane string, evidence *traexHostEvidence) (agents []host.Agent, full bool, err error) {
 	var (
 		snap *host.Layout
 		serr error
@@ -270,7 +280,7 @@ func (n *Node) lookAtSnapshot(ctx context.Context, h host.Host, epoch uint64, st
 	n.layouts[h.Kind()] = l
 	n.mu.Unlock()
 	// Panes running an agent the host does not detect (a compatible CLI) become agents of our own.
-	agents = append(snap.Agents, n.traexAgents(ctx, snap.Panes, snap.Agents)...)
+	agents = append(snap.Agents, n.traexSnapshotAgents(ctx, snap.Panes, snap.Agents, evidence)...)
 	n.enrichAgyPresence(ctx, h, agents)
 	// Retain active Claude agents when Herdr temporarily drops agent detection during tool or subshell execution (#1641).
 	return append(agents, n.claudeGraceAgents(snap.Panes, agents)...), true, nil
@@ -403,6 +413,7 @@ func (n *Node) setAgents(agents []host.Agent) {
 	n.mu.Lock()
 	epoch := n.engEpoch
 	n.mu.Unlock()
+	traexDropConflictingFresh(agents, nil)
 	n.setAgentsAt(agents, epoch, nil)
 }
 

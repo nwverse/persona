@@ -390,7 +390,8 @@ type Node struct {
 	previewOnce sync.Once
 
 	// hostAgents: each host's agents in its last answer (refreshHosts), kept for a host that does not answer.
-	hostAgents map[string][]host.Agent
+	hostAgents    map[string][]host.Agent
+	traexEvidence map[string]traexHostEvidence // same host snapshots, retained across partial refreshes
 	// paneClaudes: when the outside-claude list first saw each claude whose environment names an engine pane, by pid
 	// (claudeInPane's grace while its engine has not reported it yet).
 	paneClaudes map[int]paneClaudeSeen

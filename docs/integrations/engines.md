@@ -124,6 +124,8 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
+**Fresh TRAE CLI conversations in Herdr and Herdr App** use the terminal's own lifecycle state. A plain start can be matched by its exact conversation title and a same-thread log from its own foreground client. The [TRAE CLI integration](codex.md#trae-cli) describes the process-start and ambiguity checks.
+
 **Antigravity CLI panes** show chat history once the pane's conversation ID is known. Two sources report it, and either is
 enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. On Linux the
 node also reads it from the `presence/<conversation>.lock` the pane's foreground agy holds open, in herdr, Herdr App and
