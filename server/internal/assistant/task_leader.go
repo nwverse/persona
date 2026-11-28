@@ -790,6 +790,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		}
 	}
 	if a.Verdict == reviewAccepted && t.DoneAt == nil {
+		if err := s.closeoutFollowUpError(ctx, t, ""); err != nil {
+			return "", err
+		}
 		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
 			return "", errors.New("accepted refused: " + why + ". Send the instruction back with rework, or ask the " +
 				"conversation above to collect the owner's explicit confirmation")

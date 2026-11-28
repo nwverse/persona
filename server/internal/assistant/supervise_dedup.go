@@ -96,7 +96,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 	if keyIsNews(g.Kind) || (g.Kind == sigOrphaned && strings.HasPrefix(g.Key, nodeRecoveryKeyPrefix)) {
 		fields = append(fields, g.Key)
 	}
-	if g.Kind == sigAllStopped {
+	if g.Kind == sigAllStopped || g.Kind == sigLoopNoop {
 		fields = []any{g.Key} // reworded triage on the same stopped turn is not a new period of inactivity
 	}
 	payload, _ := json.Marshal(fields)
@@ -111,7 +111,7 @@ func digestFingerprint(e prompts.SuperviseEntry, g superviseSignal) (string, str
 // words stay the same.
 func keyIsNews(kind string) bool {
 	switch kind {
-	case sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigReviewNudge, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigRecovered,
+	case sigLoopNoop, sigParkedDue, sigParkDecided, sigInbox, sigOwnerCannot, sigRecheck, sigUndecidable, sigDeliveryHold, sigFailed, sigStarted, sigAllStopped, sigDecisionReply, sigHandoffResult, sigEstimateDue, sigOverdue, sigTimedOut, sigCardlessWait, sigReviewNudge, sigTodoReady, sigPRMerged, sigParentCloseout, sigNeedsUserExternalInfo, sigOutageRecovery, sigRecovered,
 		sigCheck: // a check's run, or the owner's answer to its decision: an Agent that only runs tools says the same all along
 		return true
 	}
@@ -127,7 +127,7 @@ func keptUntilChange(g superviseSignal) bool {
 	switch g.Kind {
 	case sigReport:
 		return g.Report != upReportQuestion && g.Report != upReportBlocked
-	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigReview, sigOrphaned, sigInterrupted, sigOverdue, sigTimedOut:
+	case sigIdle, sigUnjudged, sigStalled, sigNoProgress, sigLoopNoop, sigReview, sigOrphaned, sigInterrupted, sigOverdue, sigTimedOut:
 		return true
 	}
 	return false
