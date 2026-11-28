@@ -146,3 +146,75 @@ the Mac app is frozen and has none of it.
 - **Tests**: `PreviewLogicTests` / `PreviewModelTests` (the web's cases, and Start against `FakeHub`); `PreviewUITests` against
   `MOCK_PREVIEW=1`, whose running ports forward to the mock's own page server with the made-up app (`mock_preview.forward`).
 
+## Isolated preview origin
+
+When `preview.domain` is configured in `hub.json` (off by default; [config.md](../operations/config.md), [network.md](../operations/network.md) "Wildcard preview origins"), the hub can also proxy a machine's dev server directly over HTTP and WebSocket (Vite / Next HMR) on a dedicated wildcard subdomain so the web app can embed the live page in an `<iframe>` with native rendering, native `<select>` controls, and zero screencast latency, while keeping the hub's `localStorage` token and APIs isolated in a separate origin.
+
+```
+web panel (hub origin)
+  ├─ 1. POST /api/v1/machines/{mid}/preview/grant {port, path?}  (Bearer full device token)
+  │     ◀─ {url: "https://<label>.<preview.domain>/__persona_preview_auth?code=…", origin, expires_at}
+  └─ 2. <iframe src={url}>
+        │  GET /__persona_preview_auth?code=…  ──▶ hub consumes code, sets __Host-persona_preview, 302 to path
+        ▼
+      preview origin (https://<label>.<preview.domain>[:port])
+        └─ HTTP + WS (HMR) ──▶ hub preview proxy ──▶ port.dial + streams.Mux ──▶ node ──▶ localhost:<port>
+```
+
+### Capability advertisement
+
+- The hub adds `preview_origin` to WebSocket `hello.features` and trusted `GET /api/v1/health` only when `preview.domain` is validly configured (extension reports cannot add it).
+- When `preview_origin` is absent, web clients stay on the headless browser stream (`GET /api/v1/machines/{mid}/preview/connect`).
+
+### Grant, redemption, and session lifecycle (`server/internal/hub/preview_origin.go`)
+
+1. **Grant (`POST /api/v1/machines/{mid}/preview/grant`)**:
+   - Request JSON: `{"port": 5173, "path": "/optional/path?q=1#hash"}` (`path` defaults to `"/"`; must start with a single `/` and cannot target `/__persona_preview_auth` or `/api`).
+   - Requires a full device credential (read-only, answer, scoped, extension, and pairing credentials get `403`). Enforces the same `portAllowed` rule as `GET /api/v1/machines/{mid}/ports/{port}/connect` (a port in some session's `ports`, or opened via `POST …/ports/{port}/open` within 24 hours; otherwise `403 port_not_allowed`). Returns `404 preview_origin_disabled` when `preview.domain` is unset, `400` on invalid port or path, and `503` when the machine is offline.
+   - Response JSON (`200 OK`): `{"url", "origin", "expires_at"}`.
+   - Each `(machine_id, port)` maps to a deterministic, opaque DNS label `p-<24 lowercase base32 chars>` computed with HMAC-SHA256 from a key derived via HKDF-SHA256 from the hub's persistent `secret.key`. Different ports and machines get distinct labels, isolating browser storage (`localStorage`, cookies, IndexedDB) between ports while keeping the label stable across restarts.
+   - The redemption `code` is 256 bits of random entropy held in hub memory for 30 seconds and bound to `(device, machine, port, label, path, verified hub origin)`.
+2. **Redemption (`GET https://<label>.<preview.domain>[:port]/__persona_preview_auth?code=…`)**:
+   - Consumes the code atomically on first use (replay, expiry, or wrong label returns `401` with `auth_failed`).
+   - Seals a self-contained AES-256-GCM session token (12-hour TTL, authenticated with AAD bound to `label`) using a separate HKDF key derived from `secret.key`, so active sessions survive hub restarts without keeping session state in memory.
+   - Sets host-only cookie `__Host-persona_preview` with `HttpOnly; Secure; SameSite=None; Partitioned; Path=/` (no `Domain` attribute).
+   - Responds `302 Found` to `Location: <path>` with `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and `Content-Security-Policy: frame-ancestors <hub web origins>`. The redemption code never remains in `location.href` or `document.referrer`.
+3. **Revocation**:
+   - Every proxied request verifies the owning credential is still active (fast in-memory revocation fence + short cache evicted on revocation + database lookup on cold cache / after restart).
+   - Active proxied HTTP requests and HMR WebSockets are tracked under the owning device credential and aborted immediately when that device token is revoked.
+   - Grants minted with the master token (loopback / LAN only) are rejected if redeemed or used from a public source.
+
+### Proxying and security boundaries
+
+- **Host isolation**: Any request whose `Host` matches `<preview.domain>` or `*.<preview.domain>` is dispatched exclusively to the preview handler and never reaches hub API, admin, sharing, or web routes. Bare `<preview.domain>` and multi-level subdomains return `404`. On preview hosts, `/api` and `/api/*` always return `404` regardless of authentication or upstream dev-server routes.
+- **Hub credential boundary**: Hub APIs accept only Bearer tokens (never ambient cookies) and never emit `Access-Control-Allow-Origin` for preview origins. Admin routes keep `SameSite=Strict`, `Sec-Fetch-Site: same-origin`, `Origin` verification, and `X-Persona-CSRF`. Because `__Host-persona_preview` has no `Domain`, is `HttpOnly`, and is `Partitioned`, sibling subdomains cannot toss cookies and scripts in the preview page cannot read it.
+- **Upstream sanitization & transparent relay**: Reuses `port.dial` + `streams.Mux` with the same `portAllowed` check and `64` concurrent streams per machine (`maxPortStreams`). Paths, query strings, `Location` redirects, dev-server cookies, and response bodies pass through unrewritten. Before forwarding to the dev server, the hub strips `Authorization`, `Proxy-Authorization`, `X-Persona-*` / `X-Jarvis-*`, `__Host-persona_preview`, and Persona admin cookies, rewrites `Host` to `localhost:<port>`, verifies incoming WebSocket `Origin` matches the preview origin (rejecting cross-origin WebSockets with `403`), and rewrites the upstream WebSocket `Origin` to `http://localhost:<port>`. Upstream `Set-Cookie` headers attempting to overwrite `__Host-persona_preview` are dropped.
+- **Framing policy**: Upstream `X-Frame-Options` and upstream CSP `frame-ancestors` directives are stripped (other upstream CSP directives stay intact), and the hub adds `Content-Security-Policy: frame-ancestors <hub web origins>` combining `public_url`, `public.advertise`, `preview.allowed_ancestors`, and the verified same-host `Origin` of the grant request.
+
+### Fallback signal (`postMessage`)
+
+When an `<iframe>` or document navigation (`GET` with `Sec-Fetch-Dest: iframe|document` or `Accept: text/html`) cannot be served, the hub returns a small self-contained HTML error page (strict nonce CSP, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `frame-ancestors` restricted to the hub web origins) that posts a secret-free fallback message to each allowed hub parent origin (never `"*"`):
+
+```json
+{ "persona_preview": "unreachable", "code": "<reason>" }
+```
+
+Non-HTML subresources and non-GET requests receive a JSON error body `{"error": "…", "code": "<reason>"}` instead.
+
+| `code` | HTTP status | Meaning |
+| --- | --- | --- |
+| `port_gone` | 502 | Nothing is listening on the target port (`port.dial` returned `port_gone`) |
+| `offline` | 503 | Target machine is offline or disconnected (or device store temporarily unavailable) |
+| `timeout` | 504 | Dialing the target port through the node timed out |
+| `too_many_connections` | 429 | Machine reached the 64-stream port-forwarding limit |
+| `port_not_allowed` | 403 | Port is no longer in any session's `ports` and was not opened with `POST …/ports/{port}/open` |
+| `bad_gateway` | 502 | Upstream connection error or reset while proxying |
+| `auth_failed` | 401 / 403 | Redemption code expired / replayed / invalid, preview cookie expired, or device revoked |
+
+Web clients (PR 5) should verify `event.origin === grant.origin` (and `event.source === iframe.contentWindow`) and `event.data?.persona_preview === "unreachable"` before acting: e.g., re-granting once on `auth_failed` if the device is still signed in, or falling back automatically to the headless browser stream (`GET /api/v1/machines/{mid}/preview/connect`) on `port_gone`, `timeout`, `bad_gateway`, or `too_many_connections`.
+
+### Verification
+
+- Go unit and integration tests live in `server/internal/hub/preview_origin_test.go`.
+- Real-browser isolation E2E test: `node scripts/test/preview_origin_isolation_e2e.mjs` (runs a throwaway Go hub + SNI wildcard TLS + dev server via `TestPreviewOriginE2EHarness` and launches Chromium with `--host-resolver-rules` to prove parent `localStorage` / `document`, `document.cookie`, cross-origin hub API fetches, same-origin `/api/v1/*`, `document.referrer`, `location.href`, and cross-origin framing are all blocked while ES modules, native `<select>`, dev cookies/redirects, HMR WebSocket, and `unreachable` `postMessage` work).
+

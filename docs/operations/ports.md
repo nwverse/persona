@@ -62,10 +62,10 @@ WKWebView ─ http://localhost:5173 ─▶ local 127.0.0.1:5173 (App listens)
 
 | Option | Problem | Verdict |
 | --- | --- | --- |
-| One subdomain per port (`p5173-mac.<hub domain>`) | Needs wildcard DNS and a wildcard certificate, so DNS has to change | Rejected (a change the user would have to sign off on) |
+| One subdomain per port (`p5173-mac.<hub domain>`) | Needs wildcard DNS and a wildcard certificate, so DNS has to change | Optional opt-in for web previews (`preview.domain`, [preview.md](../web/preview.md) "Isolated preview origin"); not required for the App |
 | hub opens a separate port per forward | New public ports, each one has to be allowed through the firewall | Rejected |
 | Path prefix + rewriting (`/api/v1/…/ports/5173/…`) | SPA absolute paths (`/@vite/client`, `/_next/…`), the HMR ws address, Cookie Path and redirect Location all need rewriting; rewriting HTML / JS is unreliable | Rejected |
-| **The App listens on the phone's 127.0.0.1 / ::1, one WebSocket to the hub per connection** | Only the App (iOS, Mac) can do it, not the web version (browsers can't listen) | **Chosen** |
+| **The App listens on the phone's 127.0.0.1 / ::1, one WebSocket to the hub per connection** | Only the App (iOS, Mac) can do it, not the web version (browsers can't listen) | **Chosen (zero-config default for mobile)** |
 
 Same as Moshi: on the phone the page is `http://localhost:5173/`, exactly as on the computer. Bytes are forwarded untouched, so HTTP / WebSocket (HMR) /
 redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the hub address and device token the App already has.
@@ -111,5 +111,5 @@ redirects / cookies need no rewriting. No DNS changes, no new ports: it uses the
 - Exception: when the `cua` plugin is on for a Mac, that Mac's 5900 (macOS Screen Sharing) is permanently allowed, for "VNC" (see [computer-use.md](../extensions/computer-use.md), "Live view"); the WebSocket accepts the `binary` subprotocol (noVNC may send it).
 ## Not done yet
 
-- The web version can't use it (see the trade-off above); it shows a dev server through a headless browser on the computer instead ([preview.md](../web/preview.md)).
+- Without `preview.domain` configured on the hub, the web version still shows a dev server through a headless browser on the computer ([preview.md](../web/preview.md)). When `preview.domain` is configured, the hub's isolated preview-origin proxy (`server/internal/hub/preview_origin.go`) reuses the same `port.dial` + `streams.Mux` tunnel, `portAllowed` rules, and 64-stream cap to serve HTTP and WebSocket (HMR) directly to an isolated web `<iframe>` ([preview.md](../web/preview.md) "Isolated preview origin").
 - https dev servers: bytes are forwarded, but WKWebView rejects their self-signed certificates, so the page won't open.
