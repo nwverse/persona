@@ -37,9 +37,9 @@ export function BotmuxOwnerField({ saved, disabled }: { saved: string; disabled:
   return <>
     <Row label={label} hint={t("settings.botmux_owner_hint")} wrapHint stackOnNarrow anchor="botmux-owner-union-id">
       <input value={draft} placeholder="on_…" aria-label={label} aria-invalid={!valid} spellCheck={false} autoComplete="off" disabled={disabled}
-        data-testid="botmux-owner-input" className={`${settingsInputClass} font-mono sm:w-64`}
+        data-testid="botmux-owner-input" className={`${settingsInputClass} font-mono sm:w-72`}
         onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && valid && id !== saved) save(draft); }} />
-      {suggestion && <Button tone="accent" disabled={disabled} title={suggestion.union_id} testId="botmux-owner-fill" onClick={() => setDraft(suggestion.union_id)}>
+      {suggestion && <Button disabled={disabled} title={suggestion.union_id} testId="botmux-owner-fill" onClick={() => setDraft(suggestion.union_id)}>
         {t("settings.botmux_owner_fill")}
       </Button>}
       <Button tone="primary" disabled={disabled || !valid || id === saved} testId="botmux-owner-save" onClick={() => save(draft)}>{t("settings.botmux_owner_save")}</Button>
