@@ -51,6 +51,11 @@ type channelThread struct {
 	At        time.Time `json:"at"`
 }
 
+func (t *channelThread) isSameConversation(other *channelThread) bool {
+	return t != nil && other != nil && t.SessionID != "" &&
+		t.MachineID == other.MachineID && t.SessionID == other.SessionID
+}
+
 // A thread nobody wrote in for channelThreadsKeepFor starts a new conversation; past channelThreadsKeep the oldest go.
 const (
 	channelThreadsKeep    = 500
@@ -293,7 +298,7 @@ func (s *Service) bindChannelThread(id string, keys channelThreadKeys, machine, 
 	return true
 }
 
-// unbindChannelThread forgets both keys for the topic so /new cannot fall back to the old conversation.
+// unbindChannelThread forgets the topic's bindings so /new cannot fall back to the old conversation.
 func (s *Service) unbindChannelThread(id string, keys channelThreadKeys, generation uint64) error {
 	c := &s.chans
 	c.mu.Lock()
@@ -306,14 +311,16 @@ func (s *Service) unbindChannelThread(id string, keys channelThreadKeys, generat
 		return errChannelsUnread
 	}
 	p := c.prefsForUpdate(id)
-	if p.Threads[keys.primary] == nil && p.Threads[keys.alternate] == nil {
+	primary, alternate := p.Threads[keys.primary], p.Threads[keys.alternate]
+	if primary == nil && alternate == nil {
 		return nil
 	}
 	p.Threads = maps.Clone(p.Threads)
-	delete(p.Threads, keys.primary)
-	if keys.alternate != "" {
-		delete(p.Threads, keys.alternate)
-	}
+	// A command may carry only one routing format. Clear the other keys for the same conversation too.
+	maps.DeleteFunc(p.Threads, func(key string, binding *channelThread) bool {
+		return key == keys.primary || (keys.alternate != "" && key == keys.alternate) ||
+			binding.isSameConversation(primary) || binding.isSameConversation(alternate)
+	})
 	return s.saveChannelsLocked(id, p)
 }
 

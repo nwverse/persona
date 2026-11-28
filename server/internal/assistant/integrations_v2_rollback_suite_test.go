@@ -174,7 +174,12 @@ func TestIntegrationsV2DualTopicRollback(t *testing.T) {
 				}
 			}
 
-			receive("reset", "/new", legacy, true)
+			// A plugin can send /new using only its current routing format.
+			resetThread := legacy
+			if startOn {
+				resetThread = ""
+			}
+			receive("reset", "/new", resetThread, startOn)
 			setIntegrationsV2ViaHTTP(t, s, !startOn, startOn)
 			receive("after_reset", "start fresh", legacy, true)
 			if f.sent() != 2 {
