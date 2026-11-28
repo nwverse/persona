@@ -14,6 +14,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import persona.core.contracts.Session
 import persona.core.contracts.api.AgentWorkspace
+import persona.core.domain.engines.Engines
 import persona.core.domain.sort.SessionRename
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.closeConfirmation
@@ -94,7 +95,8 @@ internal fun AgentOperationDialog(
             val unifiedEdit = if (unified) SessionRename.unifiedChanges(session, tab) else SessionRename()
             JDialog(
                 onDismiss = dismiss, title = stringResource(if (space) R.string.agents_dialog_rename_space else R.string.agents_action_rename),
-                text = renameNote(session, space, unified)?.let { stringResource(it) },
+                // the engine the tab or workspace is in, by name (#17054): herdr, Orca, Herdr App
+                text = renameNote(session, space, unified)?.let { stringResource(it, Engines.sessionEngineName(session)) },
                 confirmEnabled = if (unified) unifiedEdit.changed else newName != null || newTab != null,
                 confirm = stringResource(R.string.agents_dialog_save) to {
                     when {
@@ -108,7 +110,7 @@ internal fun AgentOperationDialog(
                         if (unified) {
                             JTextField(tab, { tab = it }, singleLine = true, label = stringResource(R.string.agents_dialog_name))
                         } else {
-                            if (hasTab) JTextField(tab, { tab = it }, singleLine = true, label = stringResource(tabNameLabel(session)))
+                            if (hasTab) JTextField(tab, { tab = it }, singleLine = true, label = stringResource(tabNameLabel(session), Engines.sessionEngineName(session)))
                             JTextField(name, { name = it }, singleLine = true, label = stringResource(if (space) R.string.agents_dialog_space_name else R.string.agents_dialog_session_name))
                         }
                     }
@@ -120,8 +122,9 @@ internal fun AgentOperationDialog(
 
 /**
  * The note of a rename dialog: what else the new name renames (iOS `SpaceRenameForm.note`, `SessionRenameForm.tabNote`). A
- * space is a herdr workspace, or in Tern one of its sessions (Tern's spaces are its sessions); a pane's tab is herdr's or
- * Tern's. None for a session without a terminal (a runtime's, #6294): it has no tab, and no Claude's /rename.
+ * space is its engine's workspace (herdr's, an Orca worktree), or in Tern or Rex one of its sessions (their spaces are their
+ * sessions); a pane's tab is its engine's. The generic notes take the engine's name (`Engines.sessionEngineName`, #17054).
+ * None for a session without a terminal (a runtime's, #6294): it has no tab, and no Claude's /rename.
  */
 @StringRes
 internal fun renameNote(session: Session, space: Boolean, unified: Boolean = false): Int? = when {
@@ -137,7 +140,7 @@ internal fun renameNote(session: Session, space: Boolean, unified: Boolean = fal
     else -> R.string.agents_dialog_rename_text
 }
 
-/** The tab field of a session's rename: a Tern or Rex pane's tab is renamed in that engine. */
+/** The tab field of a session's rename: the tab is renamed in its engine, named by the generic label's argument. */
 @StringRes
 internal fun tabNameLabel(session: Session): Int = when {
     session.isTern -> R.string.agents_dialog_tab_name_tern
