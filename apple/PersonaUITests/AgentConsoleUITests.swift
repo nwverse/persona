@@ -45,7 +45,7 @@ import XCTest
             XCTAssertTrue(segments.waitForExistence(timeout: 30), app.debugDescription)
             segments.buttons.element(boundBy: 1).tap()
             XCTAssertTrue(app.staticTexts["周报助手"].waitForExistence(timeout: 20), app.debugDescription)
-            XCTAssertTrue(app.staticTexts["周报草稿好了"].waitForExistence(timeout: 20), app.debugDescription)
+            XCTAssertTrue(app.staticTexts["旅行规划"].exists, app.debugDescription)
             XCTAssertFalse(app.descendants(matching: .any)["feishu-conversations"].exists)
             if let dir = ProcessInfo.processInfo.environment["PERSONA_SHOTS"] {
                 try? XCUIScreen.main.screenshot().pngRepresentation
