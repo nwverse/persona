@@ -32,6 +32,9 @@ import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { SavedPrompts } from "./settings/SavedPrompts";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
+import { RuntimesCard } from "./settings/RuntimesCard";
+import { ExecutionChannelsCard } from "./settings/ExecutionChannelsCard";
+import { ChannelAliasNote, ChannelAliasPill, launcherWriteFailed } from "./settings/ChannelAliasNote";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { HerdrSessions } from "./settings/HerdrSessions";
 import { AgentSettings } from "./settings/AgentSettings";
@@ -106,6 +109,8 @@ interface LauncherView extends ProviderView {
   agent?: "claude" | "codex" | "agy" | string;
   /** Managed: pi can use it too on the computers in its scope (docs/integrations/pi.md "Persona's model providers"). */
   pi?: boolean;
+  /** A managed channel's read-only alias (docs/assistant/execution-spec.md): edited on the Channels card. */
+  channel?: string;
   machines?: string[];
   hidden?: boolean;
   /** zshrc: the rc files it was found in; absent from older hubs (all ~/.zshrc). */
@@ -486,6 +491,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
                   <Models />
                 </section>
+                {/* the four dimensions (docs/assistant/execution-spec.md): the engines, then the channels they run on */}
+                <section id="settings-runtimes" className="scroll-mt-4"><RuntimesCard /></section>
+                <section id="settings-execution-channels" className="scroll-mt-4"><ExecutionChannelsCard /></section>
                 <section id="settings-model-config" className="scroll-mt-4">
                   {/* no section: the row is on the page in view, which stays where it is (#4282) */}
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
@@ -1068,6 +1076,7 @@ function Models() {
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px] font-medium text-ink", !l.display_name && providerTitle(l) === l.name && "font-mono")}>{providerTitle(l)}</span>
           {managedProvider(l.source) && <Pill tone="accent">Persona</Pill>}
+          {l.channel && <ChannelAliasPill channel={l.channel} />}
           {managedProvider(l.source) && l.pi && <span title={t("settings.pi_too_title")}><Pill>{t("settings.pi_too")}</Pill></span>}
           {l.source === "agy" && <Pill>Antigravity Runtime</Pill>}
           {l.kind === "api" && <Pill>{t("settings.direct_api")}</Pill>}
@@ -1277,7 +1286,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       onChanged();
       onClose();
     } catch (e) {
-      toast(errorText(e), "error");
+      launcherWriteFailed(e, l.channel);
     }
   };
   const restore = async () => {
@@ -1303,7 +1312,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       footer={
         l && (
           <>
-            {l.hidden ? (
+            {l.channel ? null : l.hidden ? (
               <Button tone="secondary" onClick={() => void restore()}>
                 {t("settings.restore")}
               </Button>
@@ -1333,7 +1342,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
                 )}
               </>
             )}
-            {managedProvider(l.source) && (
+            {managedProvider(l.source) && !l.channel && (
               <Button tone="secondary" onClick={() => onEdit(l)}>
                 {t("settings.edit")}
               </Button>
@@ -1349,6 +1358,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       {error && <p className="text-[13px] text-red">{error}</p>}
       {l && (
         <div className="flex max-h-[62vh] flex-col gap-4 overflow-y-auto pr-1">
+          {l.channel && <ChannelAliasNote channel={l.channel} onLeave={onClose} />}
           <div className="flex flex-wrap items-center gap-1.5">
             <Pill tone={managedProvider(l.source) ? "accent" : undefined}>{managedProvider(l.source) ? t("settings.managed") : l.source === "agy" ? "Antigravity Runtime (agy acp)" : l.source === "path" ? t("settings.path_script") : t("settings.zshrc_function", { file: rcFilesOf(l).join(" / ") })}</Pill>
             {(l.machines ?? []).map((id) => (
