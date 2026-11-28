@@ -54,6 +54,9 @@ type Options struct {
 	AgentDirs AgentDirs
 	// HerdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go): the devices; nil: none.
 	HerdrSessions HerdrSessions
+	// OrcaChats says which computers start a person's New Agents as Orca chats (orca_chat_default.go): the devices;
+	// nil: none does.
+	OrcaChats OrcaChats
 	// SecretKey is the path of the key the model providers' keys are sealed with (the manager's own secret.key,
 	// models_launchers.go); "" makes one for this run only (tests).
 	SecretKey string
@@ -110,6 +113,8 @@ type Service struct {
 	projectReview *projectReview
 	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
 	herdrSessions HerdrSessions
+	// orcaChats says which computers start a person's New Agents as Orca chats (orca_chat_default.go); nil: none.
+	orcaChats OrcaChats
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
 	remoteImages *remoteimage.Fetcher
 	// channelPicture fetches an answer's pictures for a channel that sends them (channels_images.go): remoteImages.Get,
@@ -466,7 +471,7 @@ var _ Handler = (*Service)(nil)
 // New makes the assistant; nothing runs until the hub calls it.
 func New(o Options) *Service {
 	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
-		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
+		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, orcaChats: o.OrcaChats, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
 	bootEpoch := "boot_" + randomHex(8)
 	s.todosV2BootEpoch.Store(&bootEpoch)

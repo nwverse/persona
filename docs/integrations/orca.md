@@ -184,9 +184,11 @@ runtime protocol (`docs/integrations/runtimes.md`), like the Paseo bridge but in
     them and names their files in the prompt.
   - Never doubled: the Orca session id is `persona-<the id the hub named>` (the book maps it back, above). A start asked for again finds the chat it made
     (the row it answered with stands until Orca lists the chat, at most a minute, else Orca's `agentSession.history` knows the id) and launches nothing.
-  - A per-computer default ("New Agent starts Orca chats") routes New Agent's Claude Code and Codex starts on that computer to `orca-claude` /
-    `orca-codex`: decided in #17650 and being built there (PR #17710, not merged when this was written). The assistant's task Agents stay in
-    terminals either way: an Orca chat carries none of Persona's launcher, hooks or MCP config.
+  - The per-computer default "Start new Agents as Orca chats" (#17650, off by default) routes a person's New Agent start that keeps the default plain
+    Claude Code or Codex to `orca-claude` / `orca-codex`. It is decided in the manager (`assistant/orca_chat_default.go`, `agents.start_params`), which
+    rewrites the start's launcher as an explicit pick would name it, so the node and the bridge need nothing new; the rules and what is never routed are in
+    `docs/integrations/engines.md` ("Orca chats as New Agent's default"). The assistant's task Agents stay in terminals either way: an Orca chat carries
+    none of Persona's launcher, hooks or MCP config.
 - **Cards**: when blocked, read `agentSession.currentRequests`, mapping pending approvals to permission cards (if `detail` is tool-input JSON,
   show commands/files like hook cards), plan approvals to plan cards, and questions to question cards. Return answers with Orca option IDs and `expectedRevision`.
   Cards disappear from the phone if answered on the computer first. Every answer of a question goes: Orca 1.4.277 takes at most four in one reply and refuses more, which
