@@ -232,8 +232,8 @@ func TestTodosV2BlockersProjectionWaitingAndBoard(t *testing.T) {
 	if gotBlocked.View.Reason != assistantwire.TodoReasonParked || gotBlocked.View.Line == nil || gotBlocked.View.Line.Key != assistantwire.TodoLineKeyParked {
 		t.Fatalf("plainBlocked.View reason/line = %+v, want parked with line", gotBlocked.View)
 	}
-	if reason := gotBlocked.View.Line.Args[assistantwire.TodoLineArgReason]; !strings.Contains(reason, "example/upstream#101") {
-		t.Fatalf("plainBlocked wait reason = %q, want to name example/upstream#101", reason)
+	if target := gotBlocked.View.Line.Args[assistantwire.TodoLineArgReason]; target != "example/upstream#101" {
+		t.Fatalf("plainBlocked wait target = %q, want example/upstream#101", target)
 	}
 
 	// Needs-you task must stay in needs_you even when it also has an active blocker.
@@ -270,6 +270,55 @@ func TestTodosV2BlockersProjectionWaitingAndBoard(t *testing.T) {
 	}
 	if !foundInWaiting {
 		t.Fatalf("expected plainBlocked %s in board waiting group, got %+v", plainBlocked.ID, resp.Board.StatusGroups)
+	}
+}
+
+func TestTodosV2BlockersProjectionRanksAndRechecks(t *testing.T) {
+	st := newMemBlockerStore()
+	s, f := newQuietServiceOn(t, st)
+	setBlockersTodosV2Flag(t, s, true, false)
+	e := &todoEnv{t: t, s: s, f: f}
+	first := e.create("Wait for upstream work").ID
+	second := e.create("Wait for another change").ID
+	plain := e.create("Personal to-do").ID
+	closed := e.create("Finished task").ID
+	for _, id := range []string{first, second, closed} {
+		if _, err := s.AddTodoBlocker(t.Context(), id, todoBlockerKindExternalPR, "https://github.com/example/upstream/pull/101", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.must("PATCH", "/api/v1/todos/"+closed, `{"done":true}`)
+
+	list, full, err := s.todosViewed(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := full.byID()
+	ranks := []int{byID[first].Rank, byID[second].Rank}
+	if byID[first].Section != assistantwire.TodoListSectionWaiting || byID[second].Section != assistantwire.TodoListSectionWaiting ||
+		ranks[0]+ranks[1] != 1 || ranks[0] == ranks[1] {
+		t.Errorf("waiting section ranks = %v for views %+v and %+v; want 0 and 1", ranks, byID[first], byID[second])
+	}
+	if got := byID[plain]; got.Section != assistantwire.TodoListSectionTodo || got.Rank != 0 {
+		t.Errorf("only personal to-do in its section = %+v; want rank 0", got)
+	}
+	for _, row := range list {
+		if row.ID == closed && (row.View.Phase != assistantwire.TodoPhaseDone || row.Wait != nil || len(row.ActiveBlockers) != 0) {
+			t.Errorf("closed task still has active blocker evidence: view=%+v wait=%+v blockers=%+v", row.View, row.Wait, row.ActiveBlockers)
+		}
+	}
+
+	gen := s.todoViewGen()
+	ids := map[string]bool{first: true}
+	recheck, err := s.todoViewsOf(t.Context(), ids, s.todoViewNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recheck.waits) != 1 || recheck.waits[0] == nil || recheck.waits[0].Kind != assistantwire.TodoWaitKindPrMerge {
+		t.Errorf("recheck lost the blocker wait: %+v", recheck.waits)
+	}
+	if s.todoViewsSeen(gen, recheck, ids) {
+		t.Errorf("rechecking an unchanged blocker changed the published class: %+v", recheck.views)
 	}
 }
 
