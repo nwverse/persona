@@ -840,8 +840,8 @@ select:not([multiple], [size], .appearance-none) {
 :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
   background: transparent;
 }
-/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter inside <main> to prevent double-compositing focus flashes (electron#39529). */
-:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [data-app-shell] > main :is(.backdrop-blur, .backdrop-blur-sm, .backdrop-blur-md) {
+/* Over native NSVisualEffectView, disable Chromium CSS backdrop-filter across the document (main, split panel <aside>, portals, and arbitrary utilities) to prevent vibrancy alpha-clearing ghosting and double-compositing focus flashes (electron#39529). */
+:root[data-surface-style="liquid-glass"][data-desktop-glass="1"] [class*="backdrop-"] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
