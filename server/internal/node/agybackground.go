@@ -19,6 +19,7 @@ const (
 	agyTaskPrefix           = "Tool is running as a background task with task id:"
 	agyBackgroundEndedLimit = 20
 	agyEmptyTaskList        = "No background tasks are currently running."
+	agyTimerExpiryGrace     = time.Minute
 )
 
 var (
@@ -56,8 +57,9 @@ func agyToolString(raw json.RawMessage) string {
 }
 
 type agyBackgroundTasks struct {
-	running []proto.BackgroundTask
-	ended   []proto.BackgroundTask
+	running    []proto.BackgroundTask
+	ended      []proto.BackgroundTask
+	nextExpiry time.Time
 }
 
 func (b agyBackgroundTasks) apply(s *proto.Session) {
@@ -74,6 +76,9 @@ type agyTaskRecord struct {
 	lastSeenOrder int
 	inferred      bool
 	oneShot       bool
+	condition     string
+	conditionEnd  agyReconcileEvent
+	deadline      time.Time
 }
 
 func (r *agyTaskRecord) recordSeen(at time.Time, order int) {
@@ -125,7 +130,7 @@ func agyRestartAfterTask(restart agyReconcileEvent, lastSeen time.Time, lastSeen
 	return restart.order > lastSeenOrder
 }
 
-func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root) agyBackgroundTasks {
+func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root, now time.Time) agyBackgroundTasks {
 	byID := make(map[string]*agyTaskRecord)
 	var ordered []*agyTaskRecord
 	pending := make(map[int]agyBackgroundCall)
@@ -174,15 +179,27 @@ func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root) ag
 			}
 			if m != nil {
 				sender := agyQualifiedTaskID(conversation, m[2])
+				message := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[3]), "</SYSTEM_MESSAGE>"))
+				heartbeat := agyTaskHeartbeat.MatchString(message)
 				if record := byID[sender]; record != nil {
 					record.recordSeen(at, i)
 					if end == nil && record.oneShot {
-						message := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(m[3]), "</SYSTEM_MESSAGE>"))
 						if agyCronIteration.MatchString(message) {
 							record.oneShot = false
-						} else if !agyTaskHeartbeat.MatchString(message) {
+						} else if !heartbeat {
 							record.finish(proto.WorkflowCompleted, at, false)
 						}
+					}
+				}
+				if heartbeat || at.IsZero() {
+					continue
+				}
+				for _, record := range ordered {
+					if record.oneShot && record.task.ID != sender && record.condition != "" &&
+						(record.condition == "any" || record.condition == sender) && !at.Before(record.task.StartedAt) &&
+						(record.deadline.IsZero() || at.Before(record.deadline)) &&
+						(record.conditionEnd.at.IsZero() || at.Before(record.conditionEnd.at)) {
+						record.conditionEnd = agyReconcileEvent{at: at, order: i}
 					}
 				}
 			}
@@ -225,7 +242,11 @@ func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root) ag
 				if call != nil {
 					setAgyTaskKind(&task, call.Name, call.Args)
 				}
-				record = &agyTaskRecord{task: task, lastSeenOrder: i, oneShot: agyOneShotSchedule(task.Description, call)}
+				oneShot, condition, duration := agyOneShotSchedule(task.Description, call)
+				record = &agyTaskRecord{task: task, lastSeenOrder: i, oneShot: oneShot, condition: agyQualifiedTaskID(conversation, condition)}
+				if duration > 0 && !at.IsZero() {
+					record.deadline = at.Add(duration)
+				}
 				byID[id] = record
 				ordered = append(ordered, record)
 			}
@@ -254,13 +275,13 @@ func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root) ag
 					lastSeen, lastSeenOrder = listed.at, listed.order
 				}
 			}
-			var restart *agyReconcileEvent
+			var stop *agyReconcileEvent
 			for j := range restarts {
 				if !agyRestartAfterTask(restarts[j], lastSeen, lastSeenOrder) {
 					continue
 				}
-				if restart == nil || compareAgyReconcileEvents(restarts[j], *restart) < 0 {
-					restart = &restarts[j]
+				if stop == nil || compareAgyReconcileEvents(restarts[j], *stop) < 0 {
+					stop = &restarts[j]
 				}
 			}
 			var inventory *agyReconcileEvent
@@ -271,17 +292,25 @@ func agyBackground(steps []agyStep, conversation, dir string, brain *os.Root) ag
 					inventory = &inventories[j]
 				}
 			}
+			// Both a restart and a matching timer condition stop work. Use the earlier event.
+			if conditionEnd := &record.conditionEnd; !conditionEnd.at.IsZero() &&
+				(stop == nil || compareAgyReconcileEvents(*conditionEnd, *stop) < 0) {
+				stop = conditionEnd
+			}
 			switch {
-			case restart != nil && inventory != nil:
-				if compareAgyReconcileEvents(*inventory, *restart) < 0 {
-					record.finish(proto.WorkflowCompleted, inventory.at, true)
-				} else {
-					record.finish(proto.WorkflowKilled, restart.at, true)
-				}
-			case restart != nil:
-				record.finish(proto.WorkflowKilled, restart.at, true)
-			case inventory != nil:
+			case inventory != nil && (stop == nil || compareAgyReconcileEvents(*inventory, *stop) < 0):
 				record.finish(proto.WorkflowCompleted, inventory.at, true)
+			case stop != nil:
+				record.finish(proto.WorkflowKilled, stop.at, true)
+			}
+		}
+		if record.task.EndedAt == nil && record.oneShot && !record.deadline.IsZero() {
+			// Allow time for the timer's own completion message to reach the export.
+			expiry := record.deadline.Add(agyTimerExpiryGrace)
+			if !now.Before(expiry) {
+				record.finish(proto.WorkflowCompleted, record.deadline, true)
+			} else if result.nextExpiry.IsZero() || expiry.Before(result.nextExpiry) {
+				result.nextExpiry = expiry
 			}
 		}
 		if record.task.EndedAt != nil {
@@ -403,22 +432,32 @@ func agyTaskInventory(step *agyStep, slot agyBackgroundCall, calledAt, at time.T
 	return ids, len(ids) == count
 }
 
-// agyOneShotSchedule recognizes timers from either the tool arguments or the task description.
-// A cron expression or description takes precedence when both forms are present.
-func agyOneShotSchedule(description string, call *agyToolCall) bool {
+// agyOneShotSchedule recognizes timers from the tool arguments or task description.
+// Cron takes precedence. Only the tool arguments supply a condition or duration.
+func agyOneShotSchedule(description string, call *agyToolCall) (oneShot bool, condition string, duration time.Duration) {
 	if strings.HasPrefix(description, "Cron:") {
-		return false
+		return false, "", 0
 	}
 	var args map[string]json.RawMessage
 	if call != nil && call.Name == "schedule" && json.Unmarshal(call.Args, &args) == nil {
 		if strings.TrimSpace(agyToolString(args["CronExpression"])) != "" {
-			return false
+			return false, "", 0
 		}
-		if duration := args["DurationSeconds"]; duration != nil && string(duration) != "null" {
-			return true
+		raw := args["DurationSeconds"]
+		oneShot = raw != nil && string(raw) != "null"
+		if oneShot || strings.HasPrefix(description, "Timer:") {
+			condition = strings.TrimSpace(agyToolString(args["TimerCondition"]))
+			if condition == "never" {
+				condition = ""
+			}
+			seconds, err := strconv.ParseFloat(firstNonEmpty(agyToolString(raw), string(raw)), 64)
+			if nanos := seconds * float64(time.Second); err == nil && nanos > 0 && nanos < 1<<63 {
+				duration = time.Duration(nanos)
+			}
+			return true, condition, duration
 		}
 	}
-	return strings.HasPrefix(description, "Timer:")
+	return strings.HasPrefix(description, "Timer:"), "", 0
 }
 
 func setAgyTaskKind(task *proto.BackgroundTask, tool string, raw json.RawMessage) {

@@ -126,7 +126,8 @@ func TestAgyBackgroundScheduleMessages(t *testing.T) {
 			message := fmt.Sprintf("<SYSTEM_MESSAGE>\n[Message] timestamp=%s sender=%s priority=MESSAGE_PRIORITY_HIGH content=%s\n</SYSTEM_MESSAGE>", started, tc.sender, tc.message)
 			notice := fmt.Sprintf(`{"step_index":2,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", fired, message)
 			steps, _ := parseAgySteps([]byte(planner+agyBackgroundStep(1, "RUNNING", started, 1, tc.description, "")+notice), agyTestID)
-			tasks := agyBackground(steps, agyTestID, "", nil)
+			now, _ := time.Parse(time.RFC3339, fired)
+			tasks := agyBackground(steps, agyTestID, "", nil, now)
 			if tc.completed {
 				if len(tasks.running) != 0 || len(tasks.ended) != 1 {
 					t.Fatalf("expected one ended timer: %+v", tasks)
@@ -137,6 +138,50 @@ func TestAgyBackgroundScheduleMessages(t *testing.T) {
 				}
 			} else if len(tasks.running) != 1 || tasks.running[0].ID != id || len(tasks.ended) != 0 {
 				t.Fatalf("expected the task to keep running: %+v", tasks)
+			}
+		})
+	}
+}
+
+func TestAgyBackgroundTimerCondition(t *testing.T) {
+	const started = "2026-06-01T10:00:00Z"
+	const received = "2026-06-01T10:00:02Z"
+	const id = agyTestID + "/task-1"
+	const sender = agyTestID + "/task-2"
+	for _, tc := range []struct {
+		name, condition, sender, message, at string
+		canceled                             bool
+	}{
+		{"any sender", `,"TimerCondition":"any"`, "subagent", "Ready", received, true},
+		{"specific sender", fmt.Sprintf(`,"TimerCondition":%q`, sender), sender, "Ready", received, true},
+		{"short task ID", `,"TimerCondition":"task-2"`, sender, "Ready", received, true},
+		{"explicit end in message", `,"TimerCondition":"any"`, sender, fmt.Sprintf(`Task id "%s" finished.`, sender), received, true},
+		{"different sender", fmt.Sprintf(`,"TimerCondition":%q`, sender), sender + "0", "Ready", received, false},
+		{"never", `,"TimerCondition":"never"`, sender, "Ready", received, false},
+		{"omitted", "", sender, "Ready", received, false},
+		{"before start", `,"TimerCondition":"any"`, sender, "Ready", "2026-06-01T09:59:59Z", false},
+		{"after deadline", `,"TimerCondition":"any"`, sender, "Ready", "2026-06-01T10:01:01Z", false},
+		{"own heartbeat", `,"TimerCondition":"any"`, id, "Task is still running", received, false},
+		{"heartbeat from any sender", `,"TimerCondition":"any"`, sender, "Task is still running", received, false},
+		{"heartbeat from watched sender", `,"TimerCondition":"task-2"`, sender, "Task is STILL RUNNING", received, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			planner := `{"step_index":0,"type":"PLANNER_RESPONSE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":"60"` + tc.condition + `}}]}` + "\n"
+			message := fmt.Sprintf("<SYSTEM_MESSAGE>\n[Message] timestamp=%s sender=%s priority=MESSAGE_PRIORITY_HIGH content=%s\n</SYSTEM_MESSAGE>", tc.at, tc.sender, tc.message)
+			notice := fmt.Sprintf(`{"step_index":2,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", tc.at, message)
+			steps, _ := parseAgySteps([]byte(planner+agyBackgroundStep(1, "RUNNING", started, 1, "Timer: 60s", "")+notice), agyTestID)
+			now, _ := time.Parse(time.RFC3339, "2026-06-01T10:01:10Z")
+			tasks := agyBackground(steps, agyTestID, "", nil, now)
+			if tc.canceled {
+				if len(tasks.running) != 0 || len(tasks.ended) != 1 {
+					t.Fatalf("expected a canceled timer: %+v", tasks)
+				}
+				ended := tasks.ended[0]
+				if ended.ID != id || ended.Status != proto.WorkflowKilled || ended.EndedAt.Format(time.RFC3339) != received {
+					t.Fatalf("unexpected timer outcome: %+v", ended)
+				}
+			} else if len(tasks.running) != 1 || tasks.running[0].ID != id || len(tasks.ended) != 0 {
+				t.Fatalf("expected the timer to keep running: %+v", tasks)
 			}
 		})
 	}
@@ -162,7 +207,7 @@ func TestAgyBackgroundServerRestartNotice(t *testing.T) {
 			doneStep + restartStep + plannerAfter +
 			agyBackgroundStep(6, "RUNNING", resumed, 4, "Build after restart", "")
 		steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-		tasks := agyBackground(steps, agyTestID, "", nil)
+		tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-4" {
 			t.Fatalf("expected only post-restart task running: %+v", tasks.running)
 		}
@@ -186,7 +231,7 @@ func TestAgyBackgroundServerRestartNotice(t *testing.T) {
 		bare := "The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\n[Notice] All your subagents and background tasks have been stopped due to server restart.\n</SYSTEM_MESSAGE>"
 		steps, _ := parseAgySteps([]byte(agyBackgroundStep(0, "RUNNING", started, 1, "Prior task", "")+
 			fmt.Sprintf(`{"step_index":1,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", restarted, bare)), agyTestID)
-		tasks := agyBackground(steps, agyTestID, "", nil)
+		tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 0 || len(tasks.ended) != 1 || tasks.ended[0].Status != proto.WorkflowKilled || tasks.ended[0].EndedAt.Format(time.RFC3339) != restarted {
 			t.Fatalf("unexpected bare restart outcome: %+v", tasks)
 		}
@@ -194,7 +239,7 @@ func TestAgyBackgroundServerRestartNotice(t *testing.T) {
 		wrapped := fmt.Sprintf("<SYSTEM_MESSAGE>\n[Message] timestamp=%s sender=system priority=MESSAGE_PRIORITY_LOW content=[Notice] All your subagents and background tasks have been stopped due to server restart.\n</SYSTEM_MESSAGE>", restarted)
 		steps, _ = parseAgySteps([]byte(agyBackgroundStep(0, "RUNNING", started, 1, "Prior task", "")+
 			fmt.Sprintf(`{"step_index":1,"type":"SYSTEM_MESSAGE","content":%q}`+"\n", wrapped)), agyTestID)
-		tasks = agyBackground(steps, agyTestID, "", nil)
+		tasks = agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 0 || len(tasks.ended) != 1 || tasks.ended[0].Status != proto.WorkflowKilled || tasks.ended[0].EndedAt.Format(time.RFC3339) != restarted {
 			t.Fatalf("unexpected fallback timestamp outcome: %+v", tasks)
 		}
@@ -210,7 +255,7 @@ func TestAgyBackgroundServerRestartNotice(t *testing.T) {
 			fmt.Sprintf(`{"step_index":3,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", secondRestart, msg(secondRestart)) +
 			agyBackgroundStep(4, "RUNNING", afterSecond, 3, "After second restart", "")
 		steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-		tasks := agyBackground(steps, agyTestID, "", nil)
+		tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-3" {
 			t.Fatalf("expected only task-3 running: %+v", tasks.running)
 		}
@@ -229,7 +274,7 @@ func TestAgyBackgroundServerRestartNotice(t *testing.T) {
 			fmt.Sprintf(`{"step_index":2,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", restarted, fromTask) +
 			fmt.Sprintf(`{"step_index":3,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", restarted, fromSubagent)
 		steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-		tasks := agyBackground(steps, agyTestID, "", nil)
+		tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 2 || len(tasks.ended) != 0 {
 			t.Fatalf("false-positive restart notice killed running tasks: %+v", tasks)
 		}
@@ -284,7 +329,7 @@ func TestAgyBackgroundTaskListReconciliation(t *testing.T) {
 			steps, _ := parseAgySteps([]byte(agyBackgroundStep(0, "RUNNING", started, 1, "Wait for input", "")+
 				agyBackgroundStep(1, "RUNNING", started, 2, "Check status", "")+planner+result+
 				agyBackgroundStep(3, "RUNNING", later, 3, "Started after list", "")), agyTestID)
-			tasks := agyBackground(steps, agyTestID, "", nil)
+			tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 			if len(tasks.ended) != tc.wantEnded || len(tasks.running) != 3-tc.wantEnded || tasks.running[len(tasks.running)-1].ID != agyTestID+"/task-3" {
 				t.Fatalf("unexpected inventory reconciliation: %+v", tasks)
 			}
@@ -333,7 +378,7 @@ func TestAgyBackgroundTaskListOwnership(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			transcript := agyBackgroundStep(0, "RUNNING", started, 1, "Wait for input", "") + tc.transcript
 			steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-			tasks := agyBackground(steps, agyTestID, "", nil)
+			tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 			if tc.endedAt == "" {
 				if len(tasks.running) != 1 || len(tasks.ended) != 0 {
 					t.Fatalf("expected the task to keep running: %+v", tasks)
@@ -361,7 +406,7 @@ func TestAgyBackgroundTaskListUsesCallTimeAndLatestTaskUpdate(t *testing.T) {
 		agyBackgroundStep(2, "RUNNING", started, 3, "Task with later heartbeat", "") + planner +
 		agyBackgroundStep(4, "RUNNING", changed, 4, "Started after the list call", "") + result + message + update
 	steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-	tasks := agyBackground(steps, agyTestID, "", nil)
+	tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 	if len(tasks.ended) != 1 || tasks.ended[0].ID != agyTestID+"/task-1" || tasks.ended[0].Status != proto.WorkflowCompleted ||
 		tasks.ended[0].EndedAt.Format(time.RFC3339Nano) != called {
 		t.Fatalf("expected only the older, unchanged task to end at the list call: %+v", tasks)
@@ -388,7 +433,7 @@ func TestAgyBackgroundRestartAndTaskListOrdering(t *testing.T) {
 			agyBackgroundStep(3, "RUNNING", afterList, 2, "Running at restart", "") +
 			fmt.Sprintf(`{"step_index":4,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", restartTime, restartMsg)
 		steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-		tasks := agyBackground(steps, agyTestID, "", nil)
+		tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 0 || len(tasks.ended) != 2 {
 			t.Fatalf("unexpected tasks: %+v", tasks)
 		}
@@ -404,7 +449,7 @@ func TestAgyBackgroundRestartAndTaskListOrdering(t *testing.T) {
 			fmt.Sprintf(`{"step_index":2,"type":"PLANNER_RESPONSE","created_at":%q,"tool_calls":[%s]}`+"\n", laterListTime, listCall) +
 			fmt.Sprintf(`{"step_index":3,"type":"GENERIC","status":"DONE","created_at":%q,"content":"No background tasks are currently running."}`+"\n", laterListTime)
 		steps, _ := parseAgySteps([]byte(transcript), agyTestID)
-		tasks := agyBackground(steps, agyTestID, "", nil)
+		tasks := agyBackground(steps, agyTestID, "", nil, time.Time{})
 		if len(tasks.running) != 0 || len(tasks.ended) != 1 {
 			t.Fatalf("unexpected tasks: %+v", tasks)
 		}
@@ -412,6 +457,59 @@ func TestAgyBackgroundRestartAndTaskListOrdering(t *testing.T) {
 			t.Fatalf("unexpected outcome: %+v", tasks.ended[0])
 		}
 	})
+}
+
+func TestAgyBackgroundRestartAndTimerConditionOrdering(t *testing.T) {
+	const started = "2026-06-01T10:00:00Z"
+	const beforeRestart = "2026-06-01T10:01:00Z"
+	const restartTime = "2026-06-01T10:02:00Z"
+	const afterRestart = "2026-06-01T10:03:00Z"
+	planner := `{"step_index":0,"type":"PLANNER_RESPONSE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":600,"TimerCondition":"early"}},{"name":"schedule","args":{"DurationSeconds":600,"TimerCondition":"late"}}]}` + "\n"
+	message := func(index int, at, sender, content string) string {
+		body := fmt.Sprintf("<SYSTEM_MESSAGE>\n[Message] timestamp=%s sender=%s priority=MESSAGE_PRIORITY_HIGH content=%s\n</SYSTEM_MESSAGE>", at, sender, content)
+		return fmt.Sprintf(`{"step_index":%d,"type":"SYSTEM_MESSAGE","created_at":%q,"content":%q}`+"\n", index, at, body)
+	}
+	transcript := planner + agyBackgroundStep(1, "RUNNING", started, 1, "Timer: 600s", "") +
+		agyBackgroundStep(2, "RUNNING", started, 2, "Timer: 600s", "") +
+		message(3, beforeRestart, "early", "Ready") +
+		message(4, restartTime, "system", "[Notice] All your subagents and background tasks have been stopped due to server restart.") +
+		message(5, afterRestart, "late", "Ready")
+	steps, _ := parseAgySteps([]byte(transcript), agyTestID)
+	now, _ := time.Parse(time.RFC3339, afterRestart)
+	tasks := agyBackground(steps, agyTestID, "", nil, now)
+	if len(tasks.running) != 0 || len(tasks.ended) != 2 ||
+		tasks.ended[0].ID != agyTestID+"/task-1" || tasks.ended[0].Status != proto.WorkflowKilled || tasks.ended[0].EndedAt.Format(time.RFC3339) != beforeRestart ||
+		tasks.ended[1].ID != agyTestID+"/task-2" || tasks.ended[1].Status != proto.WorkflowKilled || tasks.ended[1].EndedAt.Format(time.RFC3339) != restartTime {
+		t.Fatalf("unexpected timer outcomes: %+v", tasks)
+	}
+}
+
+func TestAgyBackgroundTimerExpiryWithoutTranscriptUpdate(t *testing.T) {
+	n := &Node{home: t.TempDir()}
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	start := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	started := start.Format(time.RFC3339)
+	deadline := start.Add(time.Minute)
+	expiry := deadline.Add(agyTimerExpiryGrace)
+	planner := `{"step_index":0,"type":"PLANNER_RESPONSE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":60}},{"name":"schedule","args":{"DurationSeconds":60,"CronExpression":"0 * * * *"}}]}` + "\n"
+	path := agyTestFile(t, n.agyDataRoot(), agyTestID, planner+
+		agyBackgroundStep(1, "RUNNING", started, 1, "Timer: 60s", "")+
+		agyBackgroundStep(2, "RUNNING", started, 2, "Cron: 0 * * * *", ""))
+	if err := os.Chtimes(path, start, start); err != nil {
+		t.Fatal(err)
+	}
+	meta, ok := n.agyTranscriptMetaAt(agyTestID, expiry.Add(-time.Nanosecond))
+	if tasks := meta.background; !ok || len(tasks.running) != 2 || len(tasks.ended) != 0 || !tasks.nextExpiry.Equal(expiry) {
+		t.Fatalf("unexpected state during grace period: %+v", tasks)
+	}
+	meta, ok = n.agyTranscriptMetaAt(agyTestID, expiry)
+	tasks := meta.background
+	if !ok || len(tasks.running) != 1 || tasks.running[0].ID != agyTestID+"/task-2" || len(tasks.ended) != 1 || !tasks.nextExpiry.IsZero() {
+		t.Fatalf("expected only the cron schedule to keep running: %+v", tasks)
+	}
+	if ended := tasks.ended[0]; ended.ID != agyTestID+"/task-1" || ended.Status != proto.WorkflowCompleted || !ended.EndedAt.Equal(deadline) {
+		t.Fatalf("unexpected timer outcome: %+v", ended)
+	}
 }
 
 func TestAgyBackgroundSessionListMerge(t *testing.T) {
