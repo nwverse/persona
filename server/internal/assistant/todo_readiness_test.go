@@ -15,9 +15,20 @@ func TestTodoReadinessPostgresProtectsApprovedPRWaitAfterLabsRollback(t *testing
 	ctx := t.Context()
 	setBlockersTodosV2Flag(t, s, true, false)
 	const prURL = "https://github.com/example/upstream/pull/62"
+	existing, err := s.createTodo(ctx, "Follow up once the upstream PR closes", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.AddTodoBlocker(ctx, existing.ID, todoBlockerKindExternalPR, prURL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.CancelTodoBlocker(ctx, old.ID, s.todoViewNow()); err != nil {
+		t.Fatal(err)
+	}
 	_, plan := planWorkspaceQueueTask(t, s, "conv1", map[string]any{
 		"title": "Follow up once the upstream PR closes", "prompt": "Run post-merge checks",
-		"readonly": true, "blocked_by_pr": []string{prURL},
+		"readonly": true, "todo_id": existing.ID, "blocked_by_pr": []string{prURL},
 	})
 	if plan.State == planOpen {
 		var err error
@@ -31,7 +42,7 @@ func TestTodoReadinessPostgresProtectsApprovedPRWaitAfterLabsRollback(t *testing
 		t.Fatalf("approved task did not wait on the PR: %+v", task.Queue)
 	}
 	rows, err := database.ListTodoBlockersByTodo(ctx, task.TodoID)
-	if err != nil || len(rows) != 1 || rows[0].State != db.TodoBlockerStateActive {
+	if err != nil || len(rows) != 1 || rows[0].ID != old.ID || rows[0].State != db.TodoBlockerStateActive {
 		t.Fatalf("persisted blockers = %+v, %v", rows, err)
 	}
 

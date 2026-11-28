@@ -24,9 +24,9 @@ type todoStartBlocked struct {
 	err   error
 }
 
-// ensureApprovedPRBlockers retries any missing writes from an approved plan. The plan records
-// the owner's prerequisites across a restart or a Labs setting change.
-func (s *Service) ensureApprovedPRBlockers(ctx context.Context, todoID string, refs []string) {
+// saveApprovedPRBlockers starts a new wait on approval. Recovery inserts only missing
+// rows so that repeating a queue check cannot undo a resolution or dismissal.
+func (s *Service) saveApprovedPRBlockers(ctx context.Context, todoID string, refs []string, approval bool) {
 	if len(refs) == 0 {
 		return
 	}
@@ -34,9 +34,13 @@ func (s *Service) ensureApprovedPRBlockers(ctx context.Context, todoID string, r
 	if st == nil {
 		return
 	}
+	save := st.EnsureTodoBlocker
+	if approval {
+		save = st.UpsertTodoBlocker
+	}
 	changed := false
 	for _, ref := range refs {
-		row, err := st.EnsureTodoBlocker(ctx, db.TodoBlockerRow{
+		row, err := save(ctx, db.TodoBlockerRow{
 			ID: todoBlockerID(todoID, todoBlockerKindExternalPR, ref), TodoID: todoID,
 			Kind: todoBlockerKindExternalPR, TargetRef: ref, State: db.TodoBlockerStateActive,
 		})

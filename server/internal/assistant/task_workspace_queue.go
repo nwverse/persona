@@ -355,7 +355,7 @@ func (s *Service) drainWorkspaceQueue(ctx context.Context, machine, cwd string) 
 			continue
 		}
 		if !readiness.ready() {
-			s.ensureApprovedPRBlockers(dctx, w.todo.ID, readiness.missingPRs)
+			s.saveApprovedPRBlockers(dctx, w.todo.ID, readiness.missingPRs, false)
 			blockers := readiness.refs()
 			if len(readiness.after) == 0 {
 				q := s.blockerWaitQueue(dctx, blockers)

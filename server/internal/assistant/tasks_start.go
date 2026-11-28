@@ -315,7 +315,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			continue
 		}
 		t.TodoID = todo.ID
-		s.ensureApprovedPRBlockers(ctx, todo.ID, t.BlockedByPR)
+		s.saveApprovedPRBlockers(ctx, todo.ID, t.BlockedByPR, true)
 		if s.settings(ctx).todosV2On() {
 			afterIDs := cleanIDs(slices.Concat(t.After, todo.After))
 			if len(afterIDs) > 0 {

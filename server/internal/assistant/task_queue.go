@@ -178,7 +178,7 @@ func (s *Service) sweepAdmissionQueue(ctx context.Context) {
 				continue
 			}
 			if len(readiness.missingPRs) > 0 {
-				s.ensureApprovedPRBlockers(cctx, todo.ID, readiness.missingPRs)
+				s.saveApprovedPRBlockers(cctx, todo.ID, readiness.missingPRs, false)
 				continue
 			}
 			if pt.RequestGate != "" {
