@@ -165,6 +165,9 @@ type busConn struct {
 	// here only, never stored.
 	proofKey string
 
+	// extensionOwnerProfile is the latest accepted profile on this connection for legacy extension authorization.
+	extensionOwnerProfile atomic.Pointer[assistantwire.Profile]
+
 	// guarded by busState.mu
 	presence busPresence
 	replaced bool // a newer connection of the identity took over
@@ -724,15 +727,20 @@ func (h *Hub) callBusAsIs(ctx context.Context, id, method string, params, out an
 	if c == nil {
 		return fmt.Errorf("%s: %w", id, errBusOffline)
 	}
+	return c.Call(ctx, method, params, out)
+}
+
+// Call uses this exact connection and the caller's deadline.
+func (c *busConn) Call(ctx context.Context, method string, params, out any) error {
 	if params == nil {
 		params = map[string]any{}
 	}
 	err := c.peer.Call(ctx, method, params, out)
 	switch {
 	case errors.Is(err, rpc.ErrDropped):
-		return fmt.Errorf("%s: %w", id, errBusDropped)
+		return fmt.Errorf("%s: %w", c.ident.ID, errBusDropped)
 	case errors.Is(err, rpc.ErrClosed):
-		return fmt.Errorf("%s: %w", id, errBusOffline)
+		return fmt.Errorf("%s: %w", c.ident.ID, errBusOffline)
 	}
 	return err
 }

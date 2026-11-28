@@ -48,7 +48,7 @@ vi.mock("../../lib/inbox-sources", async (original) => ({
 import { connectModuleHub, resetModulesForTest } from "../../core/module-host";
 import { forgetModuleSwitches } from "../../core/module-switch";
 import { initI18n } from "../../i18n";
-import { resetInboxForTests } from "../../lib/inbox";
+import { KIND_FILTERS, resetInboxForTests } from "../../lib/inbox";
 import { resetMailForTests } from "../../lib/mail";
 import { resetManagerChoice, settleRosterDefault } from "../../lib/manager-choice";
 import { reset, getState } from "../../lib/store";
@@ -59,6 +59,10 @@ let root: Root;
 const listeners = new Set<() => void>();
 const flush = async () => { for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); }); };
 const larkChip = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Lark");
+// KIND_FILTERS labels are captured when the module loads (the zh-Hans test setup), so use that same label.
+const mailKindLabel = KIND_FILTERS.find((k) => k.key === "mail")?.label ?? "Mail";
+const mailChip = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === mailKindLabel);
+const agentChip = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === "Agent");
 const hint = () => host.querySelector("[data-inbox-empty-hint]")?.textContent;
 const sourceKindDivider = () => host.querySelector("[data-source-kind-divider]");
 
@@ -111,46 +115,69 @@ describe("Inbox source availability", () => {
     {
       name: "offered without stored items",
       features: ["modules", "lark", "module.lark", "module.mail"], stored: { lark: false, mail: false },
-      chip: true, words: "New Lark messages and mail will show up here.",
+      chip: true, mailChip: true, words: "New Lark messages and mail will show up here.",
     },
     {
       name: "offered and stored",
       features: ["modules", "lark", "module.lark", "module.mail"], stored: { lark: true, mail: true },
-      chip: true, words: "New Lark messages and mail will show up here.",
+      chip: true, mailChip: true, words: "New Lark messages and mail will show up here.",
     },
     {
       name: "stored Lark without a capability",
       features: ["modules"], stored: { lark: true, mail: false },
-      chip: true, words: "New Lark messages will show up here.",
+      chip: true, mailChip: false, words: "New Lark messages will show up here.",
     },
     {
       name: "stored mail without a capability",
       features: ["modules"], stored: { lark: false, mail: true },
-      chip: false, words: "New mail will show up here.",
+      chip: false, mailChip: true, words: "New mail will show up here.",
     },
     {
       name: "neither capability nor stored items",
       features: ["modules"], stored: { lark: false, mail: false },
-      chip: false, words: "New items will show up here.",
+      chip: false, mailChip: false, words: "New items will show up here.",
     },
     {
       name: "missing stored sources is unknown on an old or mixed hub",
       features: ["modules"], stored: undefined,
-      chip: true, words: "New Lark messages and mail will show up here.",
+      chip: true, mailChip: true, words: "New Lark messages and mail will show up here.",
     },
     {
       name: "an explicit merged null is unknown too",
       features: ["modules"], stored: null,
-      chip: true, words: "New Lark messages and mail will show up here.",
+      chip: true, mailChip: true, words: "New Lark messages and mail will show up here.",
     },
-  ])("$name", async ({ features, stored, chip, words }) => {
+  ])("$name", async ({ features, stored, chip, mailChip: mailChipShown, words }) => {
     hub.features = features;
     hub.stored = stored;
     await show();
     expect(Boolean(larkChip())).toBe(chip);
+    // #17814: the Mail kind chip follows the same offered/retained decision.
+    expect(Boolean(mailChip())).toBe(mailChipShown);
+    // The other kind chips stay: hiding Mail never removes the whole kind row.
+    expect(agentChip()).toBeTruthy();
     // No source chip precedes the kind filters in these fixtures, so a divider must not dangle before @Me.
     expect(Boolean(sourceKindDivider())).toBe(chip);
     expect(hint()).toBe(words);
+  });
+
+  it("clears a persisted Mail kind selection when its chip becomes unavailable", async () => {
+    localStorage.setItem("inbox.kind", "mail");
+    hub.stored = { lark: false, mail: false };
+    await show();
+    expect(mailChip()).toBeUndefined();
+    expect(sourceKindDivider()).toBeNull();
+    expect(localStorage.getItem("inbox.kind")).toBeNull();
+    expect(host.querySelector("[data-inbox-filtered-empty]")).toBeNull();
+    expect(hint()).toBe("New items will show up here.");
+  });
+
+  it("keeps a persisted Mail kind selection while mail stays unknown", async () => {
+    localStorage.setItem("inbox.kind", "mail");
+    hub.stored = undefined;
+    await show();
+    expect(mailChip()).toBeTruthy();
+    expect(localStorage.getItem("inbox.kind")).toBe("mail");
   });
 
   it("clears a persisted Lark selection when its chip becomes unavailable", async () => {
