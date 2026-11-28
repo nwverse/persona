@@ -51,6 +51,25 @@ describe("coding-agent-avatar resolvers", () => {
     expect(customWithModel.label).toBe("Kimi");
   });
 
+  it("resolves summary rows without launcher using agent, agent_label, model, and host", () => {
+    const paseoClaude = resolveCodingAgentAvatar({ agent: "paseo", agent_label: "Claude Code", host: "paseo" });
+    expect(paseoClaude.mark).toBe("claude");
+    expect(paseoClaude.label).toBe("Claude Code");
+    expect(resolveHostingEngine({ agent: "paseo", agent_label: "Claude Code", host: "paseo" })?.id).toBe("paseo");
+
+    const paseoCursor = resolveCodingAgentAvatar({ agent: "paseo", agent_label: "Cursor", host: "paseo" });
+    expect(paseoCursor.mark).toBe("cursor");
+    expect(paseoCursor.label).toBe("Cursor");
+
+    const paseoModel = resolveCodingAgentAvatar({ agent: "paseo", model: "gpt-5.4", host: "paseo" });
+    expect(paseoModel.mark).toBe("codex");
+    expect(paseoModel.label).toBe("OpenAI");
+
+    const orcaSummary = { agent: "claude", model: "claude-opus-5-5", host: "orca" };
+    expect(resolveCodingAgentAvatar(orcaSummary).mark).toBe("claude");
+    expect(resolveHostingEngine(orcaSummary)?.id).toBe("orca");
+  });
+
   it("degrades unknown agents and models gracefully to a single uppercase letter", () => {
     const unknown = resolveCodingAgentAvatar({ agent: "acme-bot", agent_label: "Acme Bot", model: "internal-v2" });
     expect(unknown.mark).toBeNull();

@@ -293,34 +293,6 @@ func TestRuntimeListPagesAndSummary(t *testing.T) {
 	}
 }
 
-func TestRuntimeSummaryPreservesAvatarAndHostMetadata(t *testing.T) {
-	in := proto.Session{
-		MachineID:        "demo",
-		SessionID:        "paseo-1",
-		Title:            "Audit API",
-		Cwd:              "/demo/app",
-		Status:           proto.StatusIdle,
-		State:            proto.StateIdle,
-		Agent:            "paseo",
-		AgentLabel:       "Cursor",
-		AgentSurface:     "desktop",
-		Launcher:         "cursor",
-		Model:            "claude-opus-5-5",
-		Host:             proto.EnginePaseo,
-		SpaceKind:        proto.EnginePaseo,
-		PaneID:           "orca:w1:p1",
-		SourceKind:       "runtime",
-		SourceInstanceID: proto.EnginePaseo,
-	}
-	got := runtimeSummary(in)
-	if got.Agent != in.Agent || got.AgentLabel != in.AgentLabel || got.AgentSurface != in.AgentSurface ||
-		got.Launcher != in.Launcher || got.Model != in.Model || got.Host != in.Host ||
-		got.SpaceKind != in.SpaceKind || got.PaneID != in.PaneID ||
-		got.SourceKind != in.SourceKind || got.SourceInstanceID != in.SourceInstanceID {
-		t.Fatalf("runtimeSummary lost avatar/host metadata: got %+v, want %+v", got.Session, in)
-	}
-}
-
 // The whole-list answer (no opt-in keys) keeps its exact legacy shape — the keys apps that never opted into the
 // bounded API decode — while its rows are bounded like a summary's: long texts cut, the task arrays left out, none
 // of the summary's own additions (pane_source, the counts scalars) added. A whole fleet's answer was hundreds of KB

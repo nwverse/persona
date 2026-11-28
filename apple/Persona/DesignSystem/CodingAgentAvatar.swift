@@ -54,7 +54,10 @@ nonisolated struct CodingAgentIdentity: Equatable, Sendable {
             return
         }
 
-        if let brand = kind.brand, rawAgent != MachineEngine.paseo.rawValue || AgentKind.brand(named: session.launcher) != nil {
+        if let brand = kind.brand,
+            rawAgent != MachineEngine.paseo.rawValue
+                || AgentKind.brand(named: session.launcher) != nil
+                || AgentKind.brand(named: session.agentLabelHint) != nil {
             self.brand = brand
             self.name = kind.name
             self.letter = Self.firstLetter(of: kind.name)

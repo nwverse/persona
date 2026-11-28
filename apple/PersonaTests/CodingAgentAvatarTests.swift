@@ -45,6 +45,24 @@ struct CodingAgentAvatarTests {
         #expect(custom.brand == Theme.Brand.kimi && custom.name == "Kimi")
     }
 
+    @Test func resolvesSummaryRowsWithoutLauncher() {
+        let paseoClaude = CodingAgentAvatarModel(Self.session(#","agent":"paseo","agent_label":"Claude Code","host":"paseo""#))
+        #expect(paseoClaude.identity.brand == Theme.Brand.claude)
+        #expect(paseoClaude.engine == .paseo)
+
+        let paseoCursor = CodingAgentAvatarModel(Self.session(#","agent":"paseo","agent_label":"Cursor","host":"paseo""#))
+        #expect(paseoCursor.identity.brand == Theme.Brand.cursor)
+        #expect(paseoCursor.engine == .paseo)
+
+        let paseoModel = CodingAgentAvatarModel(Self.session(#","agent":"paseo","model":"gpt-5.4","host":"paseo""#))
+        #expect(paseoModel.identity.brand == Theme.Brand.openAI)
+        #expect(paseoModel.engine == .paseo)
+
+        let orcaSummary = CodingAgentAvatarModel(Self.session(#","agent":"claude","model":"claude-opus-5-5","host":"orca""#))
+        #expect(orcaSummary.identity.brand == Theme.Brand.claude)
+        #expect(orcaSummary.engine == .orca)
+    }
+
     @Test func degradesUnknownAgentAndModelToSingleUppercaseLetter() {
         let unknown = CodingAgentIdentity(Self.session(#","agent":"acme-bot","agent_label":"Acme Bot","model":"internal-v2""#))
         #expect(unknown.brand == nil && unknown.letter == "A" && unknown.name == "Acme Bot")
