@@ -115,7 +115,9 @@ type superviseSignal struct {
 	Generation  time.Time `json:"generation,omitzero"`
 	failedClaim string
 	Detail, Ask string
-	Minutes     int
+	// Unlinked identifies the unreadable panes. Candidate conversations are resolved only for the final recipient.
+	Unlinked []unlinkedPane `json:"unlinked,omitempty"`
+	Minutes  int
 	// A report's (sigReport): its kind (progress, question, blocked, done), evidence and the step it is on.
 	SourcePermission proto.SourcePermission
 	Report           string

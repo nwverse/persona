@@ -671,6 +671,7 @@ func (s *Service) storeManagedWithKeys(ctx context.Context, list []storedLaunche
 		}
 	}
 	s.invalidateLauncherListCache("")
+	s.retainLauncherSecrets(ctx, list, keys) // a key that changed or went is not kept any more (launcher_secrets.go)
 	if publicationErr != nil {
 		s.logf("launchers: saved providers; node publication deferred: %v", publicationErr)
 		return nil

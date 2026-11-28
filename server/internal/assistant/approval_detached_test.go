@@ -141,9 +141,11 @@ func putTerminalOccurrenceJournal(t *testing.T, ft *fleetTest, ix proto.Interact
 	return entry
 }
 
+// Detached transport fixtures exercise owner-only approval; internal command
+// routing has separate source and supervisor lifecycle regressions.
 func detachedTestCard(id string) proto.Interaction {
 	return proto.Interaction{ID: id, MachineID: "mac", SessionID: "s1", Cwd: "/home/u/.persona/assistant",
-		ExecutionCwd: "/home/u/.persona/assistant", Kind: proto.IxPermission,
+		ExecutionCwd: "/home/u/.persona/assistant", Kind: proto.IxPermission, OutwardWrite: true,
 		ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"printf approved"}`), Detachable: true, Resumable: true,
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(time.Hour).UTC()}
 }

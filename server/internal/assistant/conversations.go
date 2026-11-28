@@ -1005,6 +1005,9 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	}
 	text := relayDeliveryText(msg)
 	source, onceID := msg.source(), relayMsgID(to, msg)
+	if block := s.agyRelayBlock(ctx, machine, to, msg); block != "" {
+		ctx = context.WithValue(ctx, agyRelayContextKey{}, agyRelayContext{machine: machine, session: to, onceID: onceID, block: block})
+	}
 	if strings.TrimSpace(text) != "" && relayWords(text) == "" {
 		text = prompts.RelayMessageText(text, source, onceID)
 	}
@@ -1033,7 +1036,7 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	if msg.standalonePermission() {
 		cfg := s.settings(ctx)
 		ix, pending := s.pendingStandalonePermission(to, msg, time.Now())
-		if !pending || cfg.Main != to || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+		if !pending || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
 			return superviseRoundReply{}, false, errStandalonePermissionStale
 		}
 	}
@@ -1090,6 +1093,16 @@ func relayDeliveryText(msg relayMsg) string {
 // relayDelivered notes a message that went into conversation to: the hop it is working on, or the report turn a
 // notice starts.
 func (s *Service) relayDelivered(ctx context.Context, to string, msg relayMsg) {
+	if msg.standalonePermission() {
+		if ix, ok := s.pendingStandalonePermission(to, msg, time.Now()); ok {
+			s.fleet.mu.Lock()
+			if p := s.fleet.interactions[ix.ID]; p != nil && p.route != nil && p.route.routedAt.Equal(msg.At) {
+				p.route.delivered = true
+			}
+			s.fleet.mu.Unlock()
+			s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_delivered", map[string]any{"id": ix.ID, "to": to})
+		}
+	}
 	if msg.Tool == superviseTool {
 		s.backgroundRoundDelivered(ctx, to, msg, time.Now())
 		s.askRelayDelivered(to, msg)

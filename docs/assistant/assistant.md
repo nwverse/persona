@@ -564,6 +564,14 @@ With over ten Agents running, most mid-task questions concern internal choices t
 
 ## Asking without holding the turn (#4928)
 
+Decision rights apply before either wait mode publishes a card. Internal execution questions name
+`decision_scope: "internal"` and actively wake their designated supervisor. Owner-only questions supply `why_owner`
+or `owner_action`; a personal unlock uses `owner_action: "personal_unlock"`, without asking for the credential itself.
+Calls with no decision-right metadata are rejected for clarification. Both modes keep that metadata in `ToolInput`;
+asynchronous records restore the same routing after restart. Supervisor answers are attributed to the assistant in
+the receipt, never to the owner. An internal cancellation or expiry returns unanswered and takes no default or
+owner to-do. The owner-card lifecycle below applies to questions explicitly addressed to the owner.
+
 `ask_user` takes `wait`, a boolean that defaults to true (hold the turn until the answer, as described under "Ask on the phone" above). With `wait: false` the card is raised and the tool returns at once; the turn ends, and whatever ends the card reaches the asking conversation as one message. Step Q1 of `docs/design/proposals/main-chat-availability.md` (3c); code in `assistant/ask_later.go`.
 
 - **The card is the same card**: the same `question` interaction (`tool_name: ask_user`), push, Lark / channel cards, 2-hour expiry (`askUserWait`), `deadline` / `reversible` / `recommend` handling and duplicate-question check. The one difference is `resumable: true`, which the queue already knows from hook cards: nothing waits on it in memory, so it must outlive a manager restart and its node's connection.
@@ -2393,6 +2401,8 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
 ## Guest conversations (2026-11-06, #5195)
 
 A proxy reply the bot writes for a group is one of these too: the hub starts it itself, with a single hub-owned tool, `bot_group_reply`, and the question never enters a conversation of the owner's (`docs/extensions/bots.md`).
+
+A teammate's question that group access lets through is a third kind the hub starts itself (`bot_group`, `docs/extensions/bots.md` "Group access for teammates"). It is one conversation per chat and thread, registered before the node starts it, and it lists `bot_group_reply` plus the connector tools the owner named (`guest_tools`), nothing else: no snapshot, no memory, no skills, no knowledge-base tools, and never a work machine. The question is another person's words and is not stored with the owner's.
 
 A conversation an extension opens to answer **someone else** for the user (for example a Lark extension's opt-in auto replies to @-mentions). Someone else's message goes into it and its answer goes out as the user, so it must have none of the assistant's powers.
 An ordinary extension conversation is an assistant conversation (the assistant directory, its CLAUDE.md and memory, every `mcp__persona` tool allowed up front, `agent_start` / `agent_send` asking the phone only in the health space), where only the prompt stands between the message and those tools; hence this kind.
