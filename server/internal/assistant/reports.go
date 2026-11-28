@@ -472,6 +472,14 @@ func keptPRs(prs []string, pr string) []string {
 	return out[max(0, len(out)-stagePRsKept):]
 }
 
+// stageRecords reports whether u is pr or one of earlier, the PRs a task's stage tracks. setTaskStage mirrors each of
+// them into a default-role saved link, so such a link repeats the legacy record rather than binding a delivery.
+func stageRecords(pr string, earlier []string, u string) bool {
+	key := normalizePRKey(u)
+	same := func(p string) bool { return normalizePRKey(p) == key }
+	return key != "" && (same(pr) || slices.ContainsFunc(earlier, same))
+}
+
 // forgetTaskPR removes a non-delivery record and installs only an explicitly recovered delivery, never an
 // unproven historical reference. A confirmed no-PR result also discards that reference history and its hold.
 func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) error {
@@ -485,7 +493,7 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 	}
 	cur := b.stages[id]
 	if replacement == "" {
-		if err := s.forgetReportedPRLinks(ctx, id); err != nil {
+		if err := s.forgetReportedPRLinks(ctx, id, cur); err != nil {
 			b.mu.Unlock()
 			return err
 		}
@@ -544,8 +552,9 @@ func (s *Service) forgetTaskPR(ctx context.Context, id, pr, replacement string) 
 }
 
 // forgetReportedPRLinks removes the pull-request links imported from the task's reports, while preserving issue links
-// and every other kind of evidence. Revision-checked writes fail closed if the catalog changed meanwhile.
-func (s *Service) forgetReportedPRLinks(ctx context.Context, id string) error {
+// and every other kind of evidence. It refuses while a delivery PR outside stage's own record is saved, and its
+// revision-checked writes fail closed if the catalog changed meanwhile.
+func (s *Service) forgetReportedPRLinks(ctx context.Context, id string, stage todoStage) error {
 	st, ok := s.store().(todoRepositoryStore)
 	if !ok {
 		return nil
@@ -553,6 +562,15 @@ func (s *Service) forgetReportedPRLinks(ctx context.Context, id string) error {
 	set, err := st.TodoRepositories(ctx, id)
 	if err != nil {
 		return fmt.Errorf("task %s: read repository links to remove a non-PR: %w", id, err)
+	}
+	for _, row := range set.Repositories {
+		if slices.ContainsFunc(row.Links, func(link repository.TaskLink) bool {
+			role, _ := repository.NormalizeLinkRole(link.Role)
+			return link.Kind == "pull_request" && role == repository.LinkRoleDelivery &&
+				!stageRecords(stage.PR, stage.PRs, link.CanonicalURL)
+		}) {
+			return fmt.Errorf("task %s: its delivery links changed during verification; retry the review", id)
+		}
 	}
 	for _, row := range set.Repositories {
 		kept := make([]repository.LinkInput, 0, len(row.Links))
@@ -641,6 +659,11 @@ func (s *Service) writeTaskStage(ctx context.Context, id, stage, pr, kind string
 			}
 		}
 	}
+	var completionMode assistantwire.CompletionMode
+	if pr != "" {
+		brief, _ := s.committedBriefOfTodo(id)
+		completionMode = brief.CompletionModeNow
+	}
 	b := &s.reports
 	b.stageWriting.Lock()
 	defer b.stageWriting.Unlock()
@@ -702,7 +725,7 @@ func (s *Service) writeTaskStage(ctx context.Context, id, stage, pr, kind string
 	if cur.bindPR(pr) {
 		changed = true
 		if cur.hasTaskRuntime() {
-			cur.refreshRuntimeDelivery(time.Now())
+			cur.refreshRuntimeDelivery(time.Now(), completionMode)
 		}
 	}
 	if changed {

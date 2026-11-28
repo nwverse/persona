@@ -29,7 +29,7 @@ and that the web edits the set, sends a pick inside it as the set with a new def
   `node.info` (for "Detected"). An engine that is not installed or not running does not slow the others down.
 - **Hosts do not hold each other up.** Each host refreshes in parallel with its own timeout, and its events refresh only itself. A host that is down
   (unreachable, `not_running`) clears only its own sessions; the others are listed and driven as usual. This is the same mechanism as herdr-both
-  (`docs/plans/plan-orca-support.md` "Side-by-side engines").
+  (`docs/integrations/herdr-core.md` "Combined engine").
 - **Default engine**: new sessions, offline sessions without a remembered terminal host and the mode menus go to the default engine; renaming a space goes to the
   enabled host that lists it, the default one first (`spaceOrganizer` in `node/rename.go`: space ids carry no host kind). Per-pane
   operations (reading the screen, sending, keys, closing) still go to the host the pane belongs to. Changing only the default resets nothing; changing
@@ -39,7 +39,7 @@ and that the web edits the set, sends a pick inside it as the set with a new def
   Retirement checks the session's own host under any default: it stops the agent and keeps its terminal,
   unless the user requests closing it. Runtime-owned sessions remain protected.
 - **The empty set**: no terminal host. Agents shows transcripts, runtimes (DSH, pi, opencode) and botmux sessions only; starting or continuing a
-  session from the phone is refused with "这台电脑没启用终端引擎" (`engine_missing`) and nothing is sent. This is the choice for a computer
+  session from the phone is refused (`engine_missing`, reason `none`, "Refusals in the reader's language" below) and nothing is sent. This is the choice for a computer
   whose sessions are only the desktop apps' (Claude's and Codex's, `docs/integrations/claude-integration.md`, `docs/integrations/codex.md`):
   they stay listed, and the node probes no engine. New Agent with the launcher `claude-desktop` still starts a session there, in Claude's
   desktop app (`docs/integrations/claude-integration.md`, "New sessions in the desktop app"), and with `codex-app` a chat in the Codex App
@@ -72,7 +72,7 @@ and that the web edits the set, sends a pick inside it as the set with a new def
   every host, herdr's refresh ran Orca's process scan whenever an Orca pane was due for a look (p95 174 ms on the fakes, 1.6 ms now), and
   Orca's poll asked herdr about every herdr pane due for one.
 
-"Engine" below means this choice. APIs, storage, and node switching: `docs/protocol/protocol.md` ("Engines"); design / trade-offs: `docs/plans/plan-orca-support.md`.
+"Engine" below means this choice. APIs, storage, and node switching: `docs/protocol/protocol.md` ("Engines"); design: "The host layer" below, `docs/integrations/herdr-core.md` and `docs/integrations/orca.md`.
 
 ## Engines
 
@@ -105,6 +105,59 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 - Agents immediately shows new-engine sessions; old-engine sessions become Not running, with history retained.
 - Live terminal / phone takeover disconnects; reopen in a new-engine session.
 - No running Claude in any engine is closed or modified.
+
+## The host layer
+
+Audience: contributors adding or changing an engine. Every terminal engine is a **host** behind one interface
+(`server/internal/host/host.go`); herdr was moved behind it first, without changing its behaviour (2026-11-01), then Orca,
+Herdr App, botmux, Tern, Rex and tmux's approvals came in as more hosts. How each one is driven: herdr-core in
+[herdr-core.md](herdr-core.md), Orca in [orca.md](orca.md), Tern, Rex and T3 Code below.
+
+### Two concepts
+
+- **Host**: where the terminal runs, such as herdr or Orca. The host lists panes, reads screens, sends input, and opens and closes panes.
+- **Agent**: what runs in the pane, such as Claude Code, Codex, or TRAE CLI. The Agent determines transcript location, session-ID recognition,
+  state detection, and dialog appearance. "Codex in Orca" and "TRAE CLI in herdr" are combinations from the two tables, hosts and Agents.
+
+### Host interface
+
+`server/internal/host` holds the interfaces, `PaneRef` and the kind-keyed host `Registry`; each host's implementation is in
+`server/internal/node/host<kind>*.go` (herdr: `hostherdr.go`, the only node file that talks to the herdr client). Every host implements the core,
+`Host`: its kind and version, a snapshot of spaces, slots and panes, its agent panes and one pane's agent, a screen read (visible, recent,
+recent-unwrapped; plain or ANSI), text, Persona-wide key names (each host translates them), a prompt submitted the host's way (`ErrNoAgent` when
+no supported Agent is in front: the node then types the text and Enter itself), a pane's foreground processes, and the environment variable that
+names a pane (`HERDR_PANE_ID`, `ORCA_PANE_KEY`…). Everything else is an optional capability, asked for with a Go interface assertion, so a host
+that lacks one is refused as `unsupported` and the apps hide what it cannot do (`host.go` lists them: `Watcher` for pushed changes,
+`Launcher` / `EnvLauncher` to start sessions, `Organizer` to rename and close, `Splitter` and `SlotCloser`, `Worktreer`, `ForegroundNamer`,
+`PlainScreen`, `Scrollbacker`, `QuickScreen`, `TextTyper`, `Streamer` / `Controller` for the live terminal, and more).
+
+- **Pane reference `PaneRef`**: host kind + host-local ID. Stored and transmitted as `<kind>:<id>`; herdr panes have no prefix (herdr IDs already
+  contain colons, such as `w1:p2`). A prefix not in `host.Kinds` (the fixed known kinds, independent of local registrations) is treated as herdr. A
+  known kind with no local host reports "no <kind> host on this machine" on lookup and never sends to herdr, so the hub's database,
+  `proto.Session` and the hook's pane values needed no migration. The node always stores this string (`n.panes`, `Agent.PaneID`), and
+  `Registry.Pane` resolves host and ID at call time.
+- **Session model**: the node keeps `map[string]host.Agent` (`PaneID` is a `PaneRef` string); panes in a host's `Agent` and `Created` already use
+  that host's `PaneRef`.
+- **Key names**: the apps' herdr notation (`shift+tab`, `ctrl+c`, `enter`…) is Persona's; herdr forwards it unchanged, Orca converts it to bytes
+  (`shift+tab` → `\x1b[Z`).
+- **Errors**: hosts mark their errors with `ErrNoAgent`, `ErrNotDelivered`, `ErrDialogOpen`, `ErrAttachBusy`, `ErrTakenOver` and the like using
+  `host.Mark` (tested with `errors.Is`), keeping the text. A missing capability is `ErrUnsupported` from the node, with text beginning
+  `unsupported` (the hub falls back to screen reads on that prefix) and a code the hub words in the reader's language ("Refusals in the reader's
+  language" below).
+- **Listing**: a snapshot from each enabled host, in parallel with each host's own timeout; a host that does not answer keeps its last Agents, and
+  only a total failure counts as one ("Host sets" above).
+
+### Shared layer above hosts
+
+| Shared layer | Responsibility |
+| --- | --- |
+| Session recognition | Prefer a session ID supplied by the host; otherwise scan claude / codex process environments, find the pane via each host's `PaneEnv()`, then read `sessions/<pid>.json` (Codex uses thread names, TRAE CLI uses an owner file). `personad hook` reads pane variables for every host |
+| State detection | Use host-reported state when available; otherwise infer from the screen (as for TRAE CLI), keep corrections such as `codexTurnOver`, then let the hub map to unified states (`docs/protocol/agent-states.md`) |
+| Pre-send checks | If the host reads colored screens: full draft / gray-text detection and extra Enter (`checkPane`, `ensureSubmitted`); plain text only (`host.PlainScreen`): dialogs, and drafts where the host hands back the input box (Orca) |
+| Capability reporting | Each session carries what its host and runtime can do, and the terminal browser gets each host's `abilities` (#17053); the apps hide what is not offered |
+
+Space ids carry no host kind, so a session's row names its host (`space_kind`), and a space rename goes to the enabled host that lists it
+(`spaceOrganizer` in `node/rename.go`).
 
 ## Capabilities by engine
 
@@ -193,9 +246,10 @@ screen reads, keys, or live terminal. A Claude chat reads as its Claude transcri
 and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
 running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card.
 New Agent also offers an "Orca chat · <provider>" launcher for each provider Orca has installed (while Orca runs and can start
-chats): picking one starts an Orca chat, in the background, in the Orca worktree holding the folder, with the first message; New
-Agent's default launcher still opens a terminal. See `docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the
-closed chats, the cards, the controls and starts.
+chats), except one whose chat Orca refused to open because its chat runtime isn't installed there (until Orca shows a new chat
+of that provider, or restarts; #17684): picking one starts an Orca chat, in the background, in the Orca worktree holding the
+folder, with the first message; New Agent's default launcher opens a terminal unless the computer starts new Agents as Orca chats
+("Orca chats as New Agent's default" below). See `docs/integrations/orca.md` ("Structured sessions") for the ids, the closed chats, the cards, the controls and starts.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with the Agent not in front, saying it may be suspended and nothing was sent (`agent_not_in_front`), or asking to reopen it on the computer (`not_running`).
@@ -252,6 +306,44 @@ Selecting `herdr-both` attaches both herdr and herdr-core hosts:
 - Available only when both herdr and herdr-core are detected (can preselect offline, effective on reconnect; if only one exists,
   it works normally while the other list is empty).
 - Orca next to herdr goes through "Host sets" above; there are no more combination options.
+
+### Orca chats as New Agent's default
+
+Who it serves: Agents users who prefer Orca's chat view to a terminal (#17650). A computer whose engine set includes Orca has a
+switch under its Engine, **Start new Agents as Orca chats**, off by default (web: the machine page's Engine section; Android: the
+computer's Engine page; iOS follows in #17056). The manager keeps it per computer in settings (`machine_orca_chat_starts`), answers
+`GET` / `PUT /api/v1/machines/{mid}/orca-chat-starts`, and sends it on the machine as `orca_chat_starts` (`"on"` / `"off"`) only while Orca is in the set
+(`docs/protocol/protocol.md`, "Engines"); the clients show the switch exactly where it is sent. Taking Orca out of the set keeps the
+switch's value but stops it applying.
+
+With it on, the manager (`server/internal/assistant/orca_chat_default.go`, in `agents.start_params`, the step every New Agent start an
+app makes goes through) sends a start to the computer's Orca chat launcher of the same provider (`orca-claude` / `orca-codex`,
+"Starting a chat" in `docs/integrations/orca.md`) when all of these hold:
+
+- the person kept New Agent's default: no launcher, preset or model picked, and no host but Orca;
+- that default runs the plain Claude Code or Codex CLI (`claude` / `codex`). A wrapper or a provider kept in Persona stays in a
+  terminal: Orca's chat runs the plain CLI, so it would answer on another model or account;
+- the computer's Orca offers that chat launcher now (Orca running, able to start chats, the provider installed there and its chat
+  not refused for a missing chat runtime, the launcher neither hidden nor out of the computer's scope), and the computer's default
+  host is not an engine runtime (Paseo, Cindy);
+- the chat takes the start: not plan mode (an Orca chat promises no read-only start), a permission mode Orca takes for the provider
+  (Codex's chats take no Accept edits), and none of the options only a terminal takes (a faster speed, ultracode, a goal, model aliases).
+
+The chat runs the default's model when Orca's chats of that provider list it, with its effort when that model lists it; otherwise
+Orca's own, and the start's note says so. A start Orca refuses is refused as an explicit Orca chat start is, with nothing started: a
+folder no Orca worktree holds and no Git repository Orca can add (`orca_start_folder`), or a provider whose chat runtime Orca has not
+installed on that computer yet (`orca_chat_runtime_missing`: start it in a terminal, or install it from a new chat tab in Orca).
+Orca says the latter only when asked to open the chat, so the first such start is refused; the bridge then withdraws that chat
+launcher (`docs/integrations/orca.md`, "Structured sessions"), and the next default starts open a terminal until Orca can open
+the chat. Picking a terminal launcher starts it there.
+
+Never routed: the assistant's starts (`agent_start`, `dispatch_start`, `task_plan`, reviewers, follow-ups, which never go through
+`agents.start_params`; an Orca chat carries none of Persona's launcher, hooks or MCP config that a supervised task needs), resumes,
+and any start that names a launcher. New Agent says where a start will go: `GET /api/v1/machines/{mid}/launchers` carries
+`default_opens` (the chat, the permission modes with which a default start opens there, and whether the default's model goes with
+it), worked out by the same rule; web and Android show one line under the start while the form keeps the default
+(`web/src/lib/orca-chat.ts`, Android `NewAgentState.opensAsOrcaChat`), and the line goes as soon as the person picks a launcher,
+a preset, a model, plan mode or another host.
 
 ## Task workspaces (#4786)
 
@@ -737,6 +829,32 @@ Audience: everyone with Orca enabled on a computer (#17037). Orca is a desktop a
   incompatible is a warning saying what to do); a machine without Orca gets no line. The machine page's "Terminal and engine" stands on
   herdr's line where herdr is enabled and on Orca's where Orca is, so an Orca-only computer is not reported as having its engine off
   (web `lib/node-health.ts`, Android `NodeHealth.kt`).
+
+## Refusals in the reader's language
+
+Audience: everyone using Persona in English or Japanese with an Orca computer (#17057). Every refusal and error an Orca path returns
+carries a stable code, and the data the hub words it by (`server/internal/apierr`: `rpcFailureKeys`, `reasonKeys`,
+`engineMissingKeys`, `notDeliveredKeys`, `bridgeReasonKeys`) in each request's language (`rpc-errors.*` in
+`server/internal/i18n/locales`); the engine's or Orca's own words are the `detail`. The node's message stays what it was, for older
+hubs and logs (`docs/protocol/rolling-upgrade-compatibility.md`, "Orca refusals in the reader's language").
+
+| Code | Data `reason` | When |
+| --- | --- | --- |
+| `orca_not_registered`, `orca_workspace_unavailable` | | a start Orca could not place: no project open, or the chosen workspace gone (`node/hostorca_launch.go`) |
+| `runtime_session` | | a resume of a session another app's runtime owns, an Orca chat's (`node/control.go`) |
+| `codex_launch_preferences` | `unreadable`, `custom`, `shell`, `quoting` | Orca's Codex launch settings a stock Codex start cannot follow (`node/codex_orca_launch_defaults.go`) |
+| `engine_missing` | `not_running`, `not_installed`, `incompatible`, `unavailable`, `start_failed`, `resume_unavailable`, `not_enabled`, `none` | the engine could not take the start or resume; `engine` names it, except for `none` (no engine turned on) |
+| `not_running` | `engine`, `directory_gone`, `resume_timeout`, `agent_exited` | a message to a session that is not running (`node/sendsafe.go`, `node/pi.go`) |
+| `not_delivered` | `terminal_refused`, `terminal_finished`, `screen_unreadable` | nothing was typed |
+| `agent_busy` | `terminal_changed` | a Close of a stopped Agent whose terminal changed (`node/orca_terminal_close.go`) |
+| `terminal_open_failed`, `tab_close_failed`, `pane_close_failed`, `pane_split_failed` | | the engine would not open, close or split; its words in the summary (`detail`) |
+| `tab_name_invalid`, `tab_gone`, `pane_gone` | | the terminal browser's checks (`node/panes_actions.go`) |
+| `pane_has_agent`, `pane_not_at_prompt`, `pane_foreground_unknown`, `pane_directory_unknown` | `unreadable` (the last but one) | Run Agent Here's checks |
+| `close_not_in_terminal` | | a Close of an Agent that runs in no terminal of the computer |
+| `unsupported` | `engine_unsupported`, the bridge's `orca_*` | a capability the engine lacks (the words stay `unsupported: <engine> cannot do this`), or an Orca chat's |
+
+The New worktree dialog's refusals (`worktree-composer.*`) are worded by the node itself in the request's language, which the hub sends
+as `locale`.
 
 ## When an engine cannot be selected
 

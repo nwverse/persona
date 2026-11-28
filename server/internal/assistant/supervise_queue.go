@@ -305,7 +305,18 @@ func (s *Service) recheckQueuedDigestAtDetailed(ctx context.Context, to string, 
 				}
 			}
 		}
-		if e, ok := s.digestEntryRecheck(ctx, g, web, tried); ok {
+		var e prompts.SuperviseEntry
+		var ok bool
+		if g.todoV2Wake() {
+			var retry bool
+			e, ok, retry = s.todoV2WakeDigestEntry(ctx, g, web)
+			if retry {
+				return msg, false, true, false
+			}
+		} else {
+			e, ok = s.digestEntryRecheck(ctx, g, web, tried)
+		}
+		if ok {
 			if g.Kind == sigAsk {
 				g.Cards = e.Asks
 			}

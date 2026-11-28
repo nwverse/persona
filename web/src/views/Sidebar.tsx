@@ -50,7 +50,6 @@ import { SESSIONS_SIDE_FOLD_FEATURE } from "../lib/side-fold";
 import { conversationTitle } from "./assistant/conversations";
 import { sameManager, useShownManager } from "../lib/manager-choice";
 import { agentGroupLabel, agentTreeState, buildTodoTree, shareTree, worstTreeState, type TodoTree } from "../lib/todo-tree";
-import { consumeBoardSidebarTree } from "../features/todos/board-sidebar-tree";
 import { openTodoFromTag, sortTodos, TODO_STATUS_INFO, type TodoStatus } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { Collapse, cx, EASE, Kbd, Menu, sidebarFoldMotion, useMenu, useNow, type MenuItem } from "../ui/atoms";
@@ -93,6 +92,7 @@ import { CollapseButton, PagesTally } from "./SidebarRail";
 import type { PageSection } from "../lib/sidebar-pages";
 import { WindowedRows } from "./WindowedRows";
 import { scoped, useScope, useScoped, useScopedInteractions, useScopedMachines, useScopedTodos } from "../lib/current-assistant";
+import { useTodoBoard } from "../lib/todo-owner-needs";
 import { AssistantSwitcher } from "./AssistantSwitcher";
 import { sidebarPending } from "./sidebar-pending";
 import { usePendingWorkSessions } from "./sidebar-pending-sessions";
@@ -1205,9 +1205,12 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const todosLoaded = useStore((s) => s.todosLoaded);
   const todosUnread = useTodosUnread();
   const shownManagerName = useShownManager();
-  const todosV2 = useStore((s) => Boolean(s.assistant && sameManager(s.assistant.manager ?? shownManagerName, shownManagerName) && s.assistant.todos_v2 === true));
-  const rawTodoBoard = useStore((s) => s.todoBoard);
-  const serverBoard = todosV2 ? rawTodoBoard : null;
+  const foldPreference = useStore((s) => {
+    const a = s.assistant;
+    return a && sameManager(a.manager ?? shownManagerName, shownManagerName) && a.todos_v2 === true
+      ? a.todos_v2_fold_children !== false : undefined;
+  });
+  const todosV2 = foldPreference !== undefined;
   // the Filter menu's choices and the words ⌘K's "Filter Agents list" put on it (#6589): the list has no field of its own
   // (both come from AgentsBlock: off in Settings › Agents, the Filter is not drawn and holds nothing)
   const setDimFilters = setAgentListFilters;
@@ -1228,6 +1231,21 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : todosFailed ? "state" : grouping;
   const catalog = useWorkspaceCatalog(shownGrouping === "repo");
   const agentRepos = useAgentReposModule(shownGrouping === "repo");
+  const wantsV2Tree = todosV2 && shownGrouping === "todo" && !chatList;
+  const [v2Sidebar, setV2Sidebar] = useState<typeof import("../features/todos/board-sidebar-tree")>();
+  useEffect(() => {
+    if (!wantsV2Tree || v2Sidebar) return;
+    let active = true;
+    void import("../features/todos/board-sidebar-tree").then(
+      (mod) => { if (active) setV2Sidebar(mod); },
+      (err: unknown) => {
+        if (active && !reloadForStaleChunk(err)) reportBoundary(err, "sidebar_todo_tree", isChunkError(err));
+      },
+    );
+    return () => { active = false; };
+  }, [wantsV2Tree, v2Sidebar]);
+  const serverBoard = useTodoBoard(scope, wantsV2Tree);
+  const olderClosed = useStore((s) => wantsV2Tree ? s.olderClosedTodos : undefined);
   const availableGroupings = useGroupings();
   // the title row's ⋯ (#2812): the archived Agents
 
@@ -1348,11 +1366,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const keepEmptyGroups = !filtered && live.length + offline.length > 0;
   const todoTree = useMemo(() => {
     if (shownGrouping !== "todo" || !todosLoaded) return undefined;
-    const built = serverBoard
-      ? consumeBoardSidebarTree(unpinned, machines, todos, serverBoard, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder })
-      : buildTodoTree(unpinned, machines, todos, mutes, Date.now(), { keepEmpty: keepEmptyGroups, compareSessions: rowOrder, todosV2 });
+    const options = { keepEmpty: keepEmptyGroups, compareSessions: rowOrder };
+    const now = Date.now();
+    const built = wantsV2Tree && v2Sidebar
+      ? v2Sidebar.buildV2SidebarTree(unpinned, machines, todos, mutes, now, { ...options, board: serverBoard, foldChildren: foldPreference !== false, olderClosed })
+      : buildTodoTree(unpinned, machines, todos, mutes, now, options);
     return shareTree(lastTodoTree.current, byUpdate ? activity.todoTreeByUpdate(built) : built);
-  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, todosV2, serverBoard]);
+  }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, wantsV2Tree, v2Sidebar, foldPreference, serverBoard, olderClosed]);
   lastTodoTree.current = todoTree;
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo" || !agentRepos.mod) return [];
