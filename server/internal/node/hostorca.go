@@ -18,7 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// orcaHost is the Orca desktop app (docs/plans/plan-orca-support.md "Orca source"), through its runtime's unix socket. A pane
+// orcaHost is the Orca desktop app (docs/integrations/orca.md "Orca source"), through its runtime's unix socket. A pane
 // is one of Orca's terminals, its id Orca's pane key "<tabId>:<leafId>" — what worktree.ps names agents by and what
 // Orca puts in the terminal's processes as ORCA_PANE_KEY; the terminal's handle and incarnation (what the runtime's
 // terminal.* calls take) are looked up from it. Spaces are worktrees, slots their tabs.

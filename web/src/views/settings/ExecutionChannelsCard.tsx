@@ -1,4 +1,4 @@
-// Settings › Models › Channels (docs/web/web.md "Engines and channels"): the managed channels a model is reached through
+// Settings › Models › Channels (docs/web/web.md "Four dimensions in the Web"): the managed channels a model is reached through
 // — a gateway or an API, its Base URL, key and headers (write-only: a view says only whether there are any), which
 // engines run on it under which launcher names, which computers may use it — and the last ten changes, each one a
 // point to go back to. GET / PUT / DELETE /execution/channels carry the catalog's revision: a change made on an older

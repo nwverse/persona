@@ -11,7 +11,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A chat's controls (#17046, docs/plans/plan-orca-support.md "Structured sessions"): its permission mode, plan mode
+// A chat's controls (#17046, docs/integrations/orca.md "Structured sessions"): its permission mode, plan mode
 // (Orca's interactionMode), effort and model (agentSession.setOption), its name (agentSession.rename), a rewind
 // (agentSession.rewind) and its read mark (agentSession.acknowledgeAttention). An Orca without the method a control
 // needs (status.get's capabilities) refuses it, and says so in the user's words.

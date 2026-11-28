@@ -72,6 +72,10 @@ func scanTodoBlockerRows(rows pgx.Rows) ([]TodoBlockerRow, error) {
 
 // UpsertTodoBlocker inserts or updates a persistent blocker edge by its primary key id.
 func (d *DB) UpsertTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBlockerRow, error) {
+	return upsertTodoBlocker(ctx, d.pool, r)
+}
+
+func upsertTodoBlocker(ctx context.Context, q queryRower, r TodoBlockerRow) (*TodoBlockerRow, error) {
 	r.ID = strings.TrimSpace(r.ID)
 	r.TodoID = strings.TrimSpace(r.TodoID)
 	r.Kind = strings.TrimSpace(r.Kind)
@@ -97,7 +101,7 @@ func (d *DB) UpsertTodoBlocker(ctx context.Context, r TodoBlockerRow) (*TodoBloc
 		r.UpdatedAt = r.CreatedAt
 	}
 
-	return scanTodoBlocker(d.pool.QueryRow(ctx, `INSERT INTO todo_blockers (
+	return scanTodoBlocker(q.QueryRow(ctx, `INSERT INTO todo_blockers (
 		id, todo_id, kind, target_ref, condition_json, state, attempts, created_at, updated_at, resolved_at
 	) VALUES (
 		$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
@@ -129,9 +133,15 @@ func (d *DB) ListActiveTodoBlockers(ctx context.Context) ([]TodoBlockerRow, erro
 
 // ListTodoBlockersByTodo returns all blocker edges (any state) attached to todoID.
 func (d *DB) ListTodoBlockersByTodo(ctx context.Context, todoID string) ([]TodoBlockerRow, error) {
-	rows, err := d.pool.Query(ctx,
-		`SELECT `+todoBlockerCols+` FROM todo_blockers WHERE todo_id = $1 ORDER BY created_at ASC, id ASC`,
-		strings.TrimSpace(todoID))
+	return listTodoBlockersByTodo(ctx, d.pool, todoID, false)
+}
+
+func listTodoBlockersByTodo(ctx context.Context, q rowQuerier, todoID string, lock bool) ([]TodoBlockerRow, error) {
+	query := `SELECT ` + todoBlockerCols + ` FROM todo_blockers WHERE todo_id = $1 ORDER BY created_at ASC, id ASC`
+	if lock {
+		query += ` FOR UPDATE`
+	}
+	rows, err := q.Query(ctx, query, strings.TrimSpace(todoID))
 	if err != nil {
 		return nil, err
 	}
@@ -174,10 +184,14 @@ func (d *DB) ResolveTodoBlocker(ctx context.Context, id string, at time.Time) (*
 // CancelTodoBlocker marks blocker id as cancelled and sets resolved_at when unset.
 // Returns nil, nil when id does not exist.
 func (d *DB) CancelTodoBlocker(ctx context.Context, id string, at time.Time) (*TodoBlockerRow, error) {
+	return cancelTodoBlocker(ctx, d.pool, id, at)
+}
+
+func cancelTodoBlocker(ctx context.Context, q queryRower, id string, at time.Time) (*TodoBlockerRow, error) {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	row, err := scanTodoBlocker(d.pool.QueryRow(ctx, `UPDATE todo_blockers
+	row, err := scanTodoBlocker(q.QueryRow(ctx, `UPDATE todo_blockers
 		SET state = $2,
 		    updated_at = $3,
 		    resolved_at = COALESCE(resolved_at, $3)

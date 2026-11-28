@@ -10,7 +10,7 @@ import (
 // background with the first message and options, as Orca's own New chat does; agentSession.create (CreateSupport) is
 // the structured way, whose first message can carry pictures. Both take the session id the caller names, so a start
 // tried again finds the chat it made instead of making another. Checked on Orca 1.4.277
-// (docs/plans/plan-orca-support.md "Structured sessions").
+// (docs/integrations/orca.md "Structured sessions").
 
 // CapChatLaunch: agent.launch takes surface "chat".
 const CapChatLaunch = "agent.launch.surface.v1"
