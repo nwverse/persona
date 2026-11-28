@@ -1,4 +1,4 @@
-import { deleteConversation } from "./conversation-delete-action";
+import { deleteConversation, readDashboardCount } from "./conversation-delete-action";
 import { afterEach, expect, it, vi } from "vitest";
 import { applyCompleteSessions, getSession, getState, markConversationDeleted, refreshAssistant, reset, upsertSession } from "./store";
 import { conversationDeleteAllowed } from "./conversation-delete";
@@ -69,4 +69,15 @@ it("uses the row's manager and machine and keeps linked tasks when another devic
   expect(new Headers(fetcher.mock.calls[0][1]?.headers).get("X-Persona-Manager")).toBe("manager-other");
   expect(getSession("hub", "chat")?.deleted).toBe(true);
   expect(getState().todos).toBe(tasks);
+});
+
+it("previews the count on the selected manager and machine with a read-only request", async () => {
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ dashboard_count: 2 }));
+  vi.stubGlobal("fetch", fetcher);
+  expect(await readDashboardCount(row({ manager: "manager-other" }))).toBe(2);
+  const [[url, init]] = fetcher.mock.calls;
+  expect(String(url)).toContain("/assistant/conversations/chat/delete-preview?machine_id=hub");
+  expect(init?.method ?? "GET").toBe("GET");
+  expect(new Headers(init?.headers).get("X-Persona-Manager")).toBe("manager-other");
 });

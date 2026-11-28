@@ -925,6 +925,17 @@ func (d *DB) ExpireAssistantDrafts(ctx context.Context, now time.Time) ([]Assist
 	return out, err
 }
 
+const conversationPageRemovalFilter = `status <> 'removed' AND (owner_kind = 'conversation' AND owner_machine = $1 AND owner_ref = $2
+	OR status = 'draft' AND created_machine = $1 AND created_session = $2)`
+
+// CountConversationAssistantPages previews the same saved pages and drafts as the deletion transaction.
+func (d *DB) CountConversationAssistantPages(ctx context.Context, machine, conversation string) (int, error) {
+	var count int
+	err := d.pool.QueryRow(ctx, `SELECT count(*) FROM assistant_pages WHERE `+conversationPageRemovalFilter,
+		machine, conversation).Scan(&count)
+	return count, err
+}
+
 // RemoveConversationAssistantPages is RemoveConversationAssistantPagesTx in a transaction of its own.
 func (d *DB) RemoveConversationAssistantPages(ctx context.Context, machine, conversation string, at time.Time) ([]AssistantPageRow, error) {
 	var out []AssistantPageRow
@@ -950,8 +961,7 @@ func RemoveConversationAssistantPagesTx(ctx context.Context, tx pgx.Tx, machine,
 	at = at.UTC().Truncate(time.Microsecond)
 	out, err := collectAssistantPages(tx.Query(ctx, `UPDATE assistant_pages SET status = 'removed', removed_at = $3,
 		removed_by = 'conversation_deleted', pinned = false, pinned_at = NULL, updated_at = $3
-		WHERE status <> 'removed' AND (owner_kind = 'conversation' AND owner_machine = $1 AND owner_ref = $2
-			OR status = 'draft' AND created_machine = $1 AND created_session = $2)
+		WHERE `+conversationPageRemovalFilter+`
 		RETURNING `+assistantPageSummary, machine, conversation, at))
 	if err != nil || len(out) == 0 {
 		return out, err

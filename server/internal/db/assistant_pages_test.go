@@ -740,8 +740,30 @@ func TestConversationDeletionRemovesItsPages(t *testing.T) {
 	theirs := draft(13, "c2", "Theirs", pagesBase)
 	theirs.OwnerKind, theirs.OwnerMachine, theirs.OwnerRef = AssistantPageOwnerConversation, "m1", "c2"
 	other := mustKeep(t, d, mustCreate(t, d, theirs), pagesBase)
+	elsewhere := draft(14, "c1", "Other machine", pagesBase)
+	elsewhere.OwnerKind, elsewhere.OwnerMachine, elsewhere.OwnerRef = AssistantPageOwnerConversation, "m2", "c1"
+	elsewhere.CreatedMachine = "m2"
+	foreign := mustKeep(t, d, mustCreate(t, d, elsewhere), pagesBase)
+	gone := draft(15, "c1", "Already removed", pagesBase)
+	gone.OwnerKind, gone.OwnerMachine, gone.OwnerRef = mine.OwnerKind, mine.OwnerMachine, mine.OwnerRef
+	previous := mustKeep(t, d, mustCreate(t, d, gone), pagesBase)
+	if _, _, err := d.RemoveAssistantPage(ctx, previous.ID, AssistantPageRemovedByOwner, pagesBase); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := d.CountConversationAssistantPages(ctx, "m1", "c1"); err != nil || n != 2 {
+		t.Fatalf("preview: got %d, %v; want the kept dashboard and draft", n, err)
+	}
+	if p, err := d.AssistantPage(ctx, waiting.ID); err != nil || p.Status != AssistantPageDraft {
+		t.Fatalf("preview changed the draft: %+v %v", p, err)
+	}
 	if err := d.PutConversationDeletion(ctx, "m1", "c1", json.RawMessage(`{"session_id":"c1"}`)); err != nil {
 		t.Fatal(err)
+	}
+	if n, err := d.CountConversationAssistantPages(ctx, "m1", "c1"); err != nil || n != 0 {
+		t.Fatalf("after deletion: got %d, %v; want zero", n, err)
+	}
+	if p, err := d.AssistantPage(ctx, foreign.ID); err != nil || p.Status != AssistantPageActive {
+		t.Fatalf("other machine's dashboard: %+v %v", p, err)
 	}
 	if p, err := d.AssistantPage(ctx, owned.ID); err != nil || p.RemovedBy != AssistantPageRemovedByConversation || !p.Listed() {
 		t.Fatalf("its kept page: %+v %v", p, err)

@@ -98,6 +98,26 @@ func applyDeletionReply(t *testing.T, h *Hub, machine, id string) {
 	}
 }
 
+func TestConversationDeletePreviewFencesOnlyItsMachine(t *testing.T) {
+	h := newTestHub(t)
+	mirrorManagerRequests(t, h)
+	const id = "same-0002"
+	for _, mid := range []string{"first", "second"} {
+		m := newMachine(h, MachineConfig{ID: mid})
+		registerMachine(h, m)
+		reportSessions(h, m, proto.Session{SessionID: id, Assistant: true})
+	}
+	applyDeletionReply(t, h, "first", id)
+	for mid, want := range map[string]int{"first": http.StatusGone, "second": http.StatusOK} {
+		r := httptest.NewRequest("GET", "/api/v1/assistant/conversations/"+id+"/delete-preview?machine_id="+mid, nil)
+		w := httptest.NewRecorder()
+		h.relayHTTP(w, r, assistantwire.AssistantID, false, false)
+		if w.Code != want {
+			t.Errorf("preview for %s: %d %s, want %d", mid, w.Code, w.Body, want)
+		}
+	}
+}
+
 func TestPersonaDeleteReplyFencesBeforeFleetNotification(t *testing.T) {
 	h, n := conversationsHub(t)
 	const id = "trip-0002"

@@ -295,8 +295,18 @@ func TestDeletePersonaPostgresRoundTrip(t *testing.T) {
 	f := healthHub()
 	s := newServiceOn(t, f, database)
 	ctx := context.Background()
+	const preview = "/api/v1/assistant/conversations/work-0000-0000/delete-preview?machine_id=server"
+	if w := serve(s, "GET", preview, ""); w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"dashboard_count":0}` {
+		t.Fatalf("preview: %d %s", w.Code, w.Body.String())
+	}
+	if w := serveAs(s, roleAnswer, "GET", preview, ""); w.Code != 403 {
+		t.Fatalf("restricted preview: %d %s", w.Code, w.Body.String())
+	}
 	if err := s.deleteConversation(ctx, "server", "work-0000-0000"); err != nil {
 		t.Fatal(err)
+	}
+	if w := serve(s, "GET", strings.Replace(preview, "machine_id=server", "machine_id=other", 1), ""); w.Code != 200 {
+		t.Fatalf("another machine with the same session ID: %d %s", w.Code, w.Body.String())
 	}
 	s2 := newServiceOn(t, f, database)
 	if err := s2.conversationAvailable(ctx, "server", "work-0000-0000"); convCode(err) != "conversation_deleted" {

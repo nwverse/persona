@@ -1,9 +1,9 @@
-import { deleteConversation } from "../lib/conversation-delete-action";
+import { deleteConversation, readDashboardCount } from "../lib/conversation-delete-action";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../i18n";
 import { errorText } from "../lib/api";
 import { isBackgroundSupervisor } from "../lib/background-supervisor";
-import { conversationDeleteAllowed, CONVERSATION_DELETE_FEATURE } from "../lib/conversation-delete";
+import { conversationDeleteAllowed, CONVERSATION_DELETE_FEATURE, CONVERSATION_DELETE_PREVIEW_FEATURE } from "../lib/conversation-delete";
 import { getSession, getState, useStore } from "../lib/store";
 import { sessionTitle } from "../lib/format";
 import type { Session } from "../lib/types";
@@ -18,6 +18,7 @@ export interface DeleteConversationDialogDeps {
   isDeleted?: boolean;
   /** Determine whether deletion is allowed for `current` (defaults to `store.getState()` + `conversationDeleteAllowed`). */
   canDelete?: (current: Session) => boolean;
+  readDashboardCount?: typeof readDashboardCount;
   /** Perform the deletion request (defaults to `lib/conversation-delete-action.ts`'s `deleteConversation`). */
   deleteConversation?: (current: Session) => Promise<void>;
   /** Format thrown errors for display (defaults to `api.errorText`). */
@@ -33,6 +34,7 @@ export interface DeleteConversationDialogProps {
 export interface DeleteConversationDialogViewProps {
   s: Session;
   busy: boolean;
+  dashboardCount?: number | null | "loading";
   error: string;
   onClose: () => void;
   onConfirm: () => void;
@@ -49,12 +51,17 @@ function defaultCanDelete(current: Session, target: Session): boolean {
 }
 
 /** Pure presentational view for the conversation deletion confirmation dialog. */
-export function DeleteConversationDialogView({ s, busy, error, onClose, onConfirm }: DeleteConversationDialogViewProps) {
+export function DeleteConversationDialogView({ s, busy, error, dashboardCount, onClose, onConfirm }: DeleteConversationDialogViewProps) {
   return <Dialog open title={t("conversation-delete.delete_title", { title: sessionTitle(s) })} onClose={() => !busy && onClose()} footer={<>
     <Button tone="quiet" disabled={busy} onClick={onClose}>{t("common.cancel")}</Button>
-    <Button tone="danger" icon="trash" busy={busy} onClick={onConfirm}>{t("conversation-delete.delete_confirm")}</Button>
+    <Button tone="danger" icon="trash" busy={busy} disabled={dashboardCount === "loading"} onClick={onConfirm}>{t("conversation-delete.delete_confirm")}</Button>
   </>}>
     <p className="text-meta leading-relaxed text-ink-2">{t("conversation-delete.delete_body")}</p>
+    {dashboardCount !== undefined && <p role="status" className="mt-3 text-meta leading-relaxed text-ink-2">
+      {dashboardCount === "loading" ? t("conversation-delete.dashboards_loading") :
+        dashboardCount === null ? t("conversation-delete.dashboards_unavailable") :
+        t("conversation-delete.dashboards_removed", { count: dashboardCount })}
+    </p>}
     {error && <p role="alert" className="mt-3 text-meta text-red">{error}</p>}
   </Dialog>;
 }
@@ -74,7 +81,9 @@ export function DeleteConversationDialog({ s, onClose, deps }: DeleteConversatio
 
 function DefaultStoreDeleteConversationDialog({ s, onClose, deps }: DeleteConversationDialogProps) {
   const deleted = useStore(() => getSession(s.machine_id, s.session_id)?.deleted === true);
-  return <DeleteConversationDialogBody s={s} onClose={onClose} deps={deps} deleted={deleted} />;
+  const supportsPreview = useStore((state) => state.features.includes(CONVERSATION_DELETE_PREVIEW_FEATURE));
+  return <DeleteConversationDialogBody s={s} onClose={onClose} deps={deps} deleted={deleted}
+    readCount={deps?.readDashboardCount ?? (supportsPreview ? readDashboardCount : undefined)} />;
 }
 
 function SubscribedDeleteConversationDialog({ s, onClose, deps, subscribe }: DeleteConversationDialogProps & { subscribe: (listener: () => void) => () => void }) {
@@ -87,13 +96,15 @@ function SubscribedDeleteConversationDialog({ s, onClose, deps, subscribe }: Del
   return <DeleteConversationDialogBody s={s} onClose={onClose} deps={deps} deleted={deleted} />;
 }
 
-function DeleteConversationDialogBody({ s, onClose, deps, deleted }: DeleteConversationDialogProps & { deleted: boolean }) {
+function DeleteConversationDialogBody({ s, onClose, deps, deleted, readCount = deps?.readDashboardCount }: DeleteConversationDialogProps & { deleted: boolean; readCount?: typeof readDashboardCount }) {
   const scopeKey = JSON.stringify([s.machine_id, s.session_id, s.manager ?? ""]);
   const [scope, setScope] = useState<{ key: string; epoch: number }>(() => ({ key: scopeKey, epoch: 1 }));
   const [busyEpoch, setBusyEpoch] = useState<number | null>(null);
   const [errorState, setErrorState] = useState<{ epoch: number; message: string } | null>(null);
+  const [dashboardCount, setDashboardCount] = useState<number | null | "loading">("loading");
   if (scope.key !== scopeKey) {
     setScope({ key: scopeKey, epoch: scope.epoch + 1 });
+    setDashboardCount("loading");
     setBusyEpoch(null);
     setErrorState(null);
   }
@@ -110,6 +121,17 @@ function DeleteConversationDialogBody({ s, onClose, deps, deleted }: DeleteConve
     };
   }, [scope.epoch]);
   useEffect(() => { if (deleted) onCloseRef.current(); }, [deleted, scope.epoch]);
+
+  const { machine_id, session_id, manager } = s;
+  useEffect(() => {
+    if (deleted || !readCount) return;
+    let current = true;
+    readCount({ machine_id, session_id, manager }).then(
+      (count) => { if (current) setDashboardCount(count); },
+      () => { if (current) setDashboardCount(null); },
+    );
+    return () => { current = false; };
+  }, [deleted, machine_id, session_id, manager, readCount]);
 
   const busy = busyEpoch === scope.epoch;
   const error = errorState?.epoch === scope.epoch ? errorState.message : "";
@@ -148,5 +170,5 @@ function DeleteConversationDialogBody({ s, onClose, deps, deleted }: DeleteConve
     }
   };
 
-  return <DeleteConversationDialogView s={s} busy={busy} error={error} onClose={onClose} onConfirm={() => void remove()} />;
+  return <DeleteConversationDialogView s={s} dashboardCount={readCount ? dashboardCount : undefined} busy={busy} error={error} onClose={onClose} onConfirm={() => void remove()} />;
 }

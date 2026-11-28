@@ -167,6 +167,7 @@ assistant.ask        GET /api/v1/assistant/capabilities
 -                    GET /api/v1/assistant/conversation-switches/{batch}
 -                    GET /api/v1/assistant/conversations/{id}/always
 spaces               GET /api/v1/assistant/conversations/{id}/categories
+-                    GET /api/v1/assistant/conversations/{id}/delete-preview
 assistant.ask        GET /api/v1/assistant/conversations/{id}/feed
 -                    GET /api/v1/assistant/conversations/{id}/model/last-good
 -                    GET /api/v1/assistant/conversations/{id}/segments

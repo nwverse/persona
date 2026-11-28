@@ -5,6 +5,14 @@ import { conversationManager, stampedHeaders } from "./manager-choice";
 import { markConversationDeleted } from "./store";
 import type { Session } from "./types";
 
+export async function readDashboardCount(s: Pick<Session, "session_id" | "manager" | "machine_id">) {
+  const preview = await api<{ dashboard_count: number }>(`/assistant/conversations/${enc(s.session_id)}/delete-preview`, {
+    query: { machine_id: s.machine_id }, headers: stampedHeaders(s.manager ?? conversationManager(s.session_id)),
+  });
+  const count = preview.dashboard_count;
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
 export async function deleteConversation(s: Session) {
   const owner = credentialOwner();
   const scope = conversationDeletionScope();

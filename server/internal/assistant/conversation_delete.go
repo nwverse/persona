@@ -386,6 +386,30 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 }
 
 func (s *Service) conversationDeleteRoutes() {
+	s.handle(assistantwire.ConversationDeletePreviewRoute, func(w http.ResponseWriter, r *http.Request) {
+		if !fullRole(r) {
+			apierr.Write(w, http.StatusForbidden, i18n.Err("http-status.forbidden"))
+			return
+		}
+		id, machine := r.PathValue("id"), r.URL.Query().Get("machine_id")
+		if !validSessionID(id) || machine == "" {
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-conversation_delete.invalid"))
+			return
+		}
+		st, ok := s.store().(interface {
+			CountConversationAssistantPages(context.Context, string, string) (int, error)
+		})
+		if !ok {
+			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		count, err := st.CountConversationAssistantPages(r.Context(), s.canonicalMachine(machine), id)
+		if err != nil {
+			apierr.Call(w, err)
+			return
+		}
+		apierr.WriteJSON(w, map[string]int{"dashboard_count": count})
+	})
 	s.handle("DELETE /api/v1/assistant/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, i18n.Err("assistant-model_pick.err_role"))
@@ -424,6 +448,9 @@ func (s *Service) deletedConversationRequest(r *http.Request) error {
 		return nil
 	}
 	id, rest, _ := strings.Cut(path, "/")
+	if r.Method == "GET" && rest == "delete-preview" {
+		return s.conversationAvailable(r.Context(), r.URL.Query().Get("machine_id"), id)
+	}
 	if r.Method == "DELETE" && rest == "" {
 		return nil
 	}

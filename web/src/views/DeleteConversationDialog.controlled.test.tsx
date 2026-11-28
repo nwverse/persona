@@ -8,6 +8,7 @@ import type { Session } from "../lib/types";
 import type { DeleteConversationDialogDeps } from "./DeleteConversationDialog";
 
 const mocks = vi.hoisted(() => ({
+  readDashboardCount: vi.fn(async () => 0),
   deleteConversation: vi.fn(),
   errorText: vi.fn((e: unknown) => (e instanceof Error ? e.message : String(e))),
   getSession: vi.fn(),
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/conversation-delete-action", () => ({
+  readDashboardCount: mocks.readDashboardCount,
   deleteConversation: mocks.deleteConversation,
 }));
 vi.mock("../lib/api", () => ({
@@ -89,6 +91,30 @@ afterEach(() => {
 });
 
 describe("DeleteConversationDialog controlled deps, view separation, and race guards", () => {
+  it.each([0, 1, 2])("shows %i dashboards including drafts and cancels without deleting", async (count) => {
+    const onClose = vi.fn();
+    const deps = { isDeleted: false, readDashboardCount: vi.fn(async () => count), deleteConversation: vi.fn() };
+    await act(async () => root.render(<DeleteConversationDialog s={makeChat()} onClose={onClose} deps={deps} />));
+    expect(document.querySelector('[role="status"]')?.textContent).toContain(`Dashboards to be removed (including drafts): ${count}.`);
+    await act(async () => dialogButton(t("common.cancel"))!.click());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(deps.deleteConversation).not.toHaveBeenCalled();
+  });
+
+  it("keeps deletion available when a preview fails and ignores an older conversation's preview", async () => {
+    const first = deferred<number>();
+    const deps = { isDeleted: false, canDelete: () => true, deleteConversation: vi.fn(),
+      readDashboardCount: vi.fn().mockReturnValueOnce(first.promise).mockRejectedValueOnce(new Error("not found")) };
+    const render = (s: Session) => act(async () => root.render(<DeleteConversationDialog s={s} onClose={() => {}} deps={deps} />));
+    await render(makeChat());
+    await render(makeChat({ manager: "other-manager" }));
+    await act(async () => first.resolve(9));
+    expect(document.querySelector('[role="status"]')?.textContent).toBe(t("conversation-delete.dashboards_unavailable"));
+    expect(deps.deleteConversation).not.toHaveBeenCalled();
+    await act(async () => dialogButton(t("conversation-delete.delete_confirm"))!.click());
+    expect(deps.deleteConversation).toHaveBeenCalledOnce();
+  });
+
   it("runs fully controlled via deps without touching store or delete-action singletons", async () => {
     const s = makeChat();
     const fresher = makeChat({ title: "Chat A (fresh)" });
@@ -286,7 +312,7 @@ describe("DeleteConversationDialog controlled deps, view separation, and race gu
     const onClose = vi.fn();
     const onConfirm = vi.fn();
     await act(async () => root.render(
-      <DeleteConversationDialogView s={makeChat({ title: "Pure view chat" })} busy={false} error="View alert" onClose={onClose} onConfirm={onConfirm} />,
+      <DeleteConversationDialogView s={makeChat({ title: "Pure view chat" })} busy={false} dashboardCount={0} error="View alert" onClose={onClose} onConfirm={onConfirm} />,
     ));
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Pure view chat");
     expect(alertText()).toBe("View alert");

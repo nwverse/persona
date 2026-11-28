@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
-import { CONVERSATION_DELETE_FEATURE } from "../lib/conversation-delete";
+import { CONVERSATION_DELETE_FEATURE, CONVERSATION_DELETE_PREVIEW_FEATURE } from "../lib/conversation-delete";
 import { getState, markConversationDeleted, reset, upsertSession } from "../lib/store";
 import type { Session } from "../lib/types";
 import { ConversationRowMenu } from "./ConversationRowMenu";
@@ -44,9 +44,17 @@ describe("confirmed conversation deletion", () => {
   it("confirms from the sidebar, explains retained work, and cancels without a request", async () => {
     await menu(); await click('[role="menuitem"]', t("conversation-menu.delete"));
     await vi.waitFor(async () => { await flush(); expect(document.querySelector('[role="dialog"]')?.textContent).toContain(t("conversation-delete.delete_body")); });
+    expect(fetcher.mock.calls.some(([url]) => String(url).includes("/delete-preview"))).toBe(false);
     expect(deletedCalls()).toHaveLength(0);
     await click('[role="dialog"] button', t("common.cancel"));
     expect(deletedCalls()).toHaveLength(0); expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+  it("allows deletion after a capable hub returns an empty preview", async () => {
+    getState().features.push(CONVERSATION_DELETE_PREVIEW_FEATURE);
+    await menu(); await click('[role="menuitem"]', t("conversation-menu.delete"));
+    await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toBe(t("conversation-delete.dashboards_unavailable")));
+    await click('[role="dialog"] button', t("conversation-delete.delete_confirm"));
+    expect(deletedCalls()).toHaveLength(1);
   });
   it("sends once, locks pending controls, and removes only after success", async () => {
     let release!: (r: Response) => void; hold = new Promise((r) => { release = r; });

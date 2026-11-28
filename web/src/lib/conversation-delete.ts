@@ -2,6 +2,7 @@ import { getSession, useStore } from "./store";
 import type { Session } from "./types";
 
 export const CONVERSATION_DELETE_FEATURE = "assistant_conversation_delete";
+export const CONVERSATION_DELETE_PREVIEW_FEATURE = "assistant_conversation_delete_preview";
 export function conversationDeleteAllowed(s: Session, options: { supported: boolean; main?: boolean; builtIn?: boolean; pending?: boolean }): boolean {
   return options.supported && !!s.assistant && !options.main && !options.builtIn && !options.pending && !s.deleted
     && !s.starting && !s.waiting && !s.pending_interactions && !s.queued?.length && s.compaction?.state !== "running" && !s.background_working && !s.background_waiting

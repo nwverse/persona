@@ -224,8 +224,13 @@ func (h *Hub) relayHTTP(w http.ResponseWriter, r *http.Request, id string, send,
 	if path, ok := strings.CutPrefix(r.URL.Path, "/api/v1/assistant/conversations/"); ok {
 		sid, child, _ := strings.Cut(path, "/")
 		if sid != "" && (r.Method != http.MethodDelete || child != "") {
-			for _, m := range h.machinesNow() {
-				if h.machineOwner(m.cfg.ID) == id {
+			machines := h.machinesNow()
+			if r.Method == http.MethodGet && child == "delete-preview" {
+				// The same session ID on another computer has its own deletion state.
+				machines = []*Machine{h.localMachine(r.URL.Query().Get("machine_id"))}
+			}
+			for _, m := range machines {
+				if m != nil && h.machineOwner(m.cfg.ID) == id {
 					if _, known := m.session(sid); known {
 						w = &conversationResponseWriter{ResponseWriter: w, machine: m, id: sid, header: w.Header().Clone()}
 						break
