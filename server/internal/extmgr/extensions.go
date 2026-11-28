@@ -620,11 +620,11 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID)        // another version, removed, switched, set up again: ask again
-	ps.forgetSecretWords(c.ID) // a provider's references may name other things now
-	// The kept launcher keys go only with the provider, or with its claim on their scheme: an upgrade or a restart
-	// keeps them (secret_kept.go).
+	ps.forgetAuth(c.ID) // another version, removed, switched, set up again: ask again
+	// The kept values and words go only with the provider, or with its claim on their scheme: an upgrade or a restart
+	// keeps them (secret_kept.go, secret_words.go).
 	ps.keptProviderChanged(ctx, c)
+	ps.wordsProviderChanged(ctx, c)
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
 		if c.Old != nil && c.Old.Full != nil && ps.h.avatars != nil {

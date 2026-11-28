@@ -3,7 +3,7 @@
 // events can be another later (an entry with an end), and nothing here needs to change for it. iOS / Mac:
 // apple/Shared/TodoCalendar.swift, the same rules.
 import { formatDate } from "../i18n";
-import { isOverdue, todoDueDay, todoStatus, type SessionLookup, type Todo, type TodoStatus, type TodoTone } from "./todos";
+import { isOverdue, todoDueDay, todoStatus, type SessionLookup, type Todo, type TodoRepoGateLook, type TodoStatus, type TodoTone } from "./todos";
 import { todoLook, waitOf } from "./todo-wait-reason";
 
 export type CalendarMode = "day" | "week" | "month";
@@ -38,14 +38,14 @@ export interface CalendarEntry {
 }
 
 /** A to-do on the calendar: at its due moment, or all day on its due day; undefined without either. */
-export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()): CalendarEntry | undefined {
+export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now(), repoGateLook?: TodoRepoGateLook): CalendarEntry | undefined {
   const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
   const day = todoDueDay(todo);
   const allDay = Number.isNaN(at);
   const start = allDay ? day : at;
   if (start === undefined) return undefined;
   const status = todoStatus(todo, lookup);
-  const look = todoLook(todo, status, waitOf(todo, status, lookup), status);
+  const look = todoLook(todo, status, waitOf(todo, status, lookup), status, now, repoGateLook);
   const done = Boolean(todo.done_at);
   return {
     id: `todo:${todo.id}`,
@@ -71,12 +71,12 @@ export function todoEntry(todo: Todo, lookup?: SessionLookup, now = Date.now()):
  * pages its to-dos) would be asked for the same range. */
 export function calendarEntries(
   todos: readonly Todo[],
-  opts: { lookup?: SessionLookup; showDone: boolean; from: number; to: number; now?: number },
+  opts: { lookup?: SessionLookup; showDone: boolean; from: number; to: number; now?: number; repoGateLook?: TodoRepoGateLook },
 ): CalendarEntry[] {
   const out: CalendarEntry[] = [];
   for (const t of todos) {
     if (!opts.showDone && t.done_at) continue;
-    const e = todoEntry(t, opts.lookup, opts.now);
+    const e = todoEntry(t, opts.lookup, opts.now, opts.repoGateLook);
     if (e && e.start >= opts.from && e.start < opts.to) out.push(e);
   }
   return out;

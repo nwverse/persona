@@ -26,8 +26,6 @@ var (
 	// secretResolvesMost resolutions per provider per secretResolveWindow; more are refused before reaching it.
 	secretResolvesMost  = 60
 	secretResolveWindow = time.Minute
-	// secretDescribeKeep is how long a reference's words (item and field names) are kept.
-	secretDescribeKeep = 10 * time.Minute
 )
 
 // SecretError is why a reference did not resolve. Code is for callers (no_provider, provider_off, not_found,
@@ -70,16 +68,23 @@ type SecretDescription struct {
 	Title, Detail          string
 }
 
-// secretWords keeps references' descriptions for a while: settings pages and cards show them often, and asking the
-// provider each time costs its service a request.
+// secretWords keeps references' descriptions (secret_words.go): settings pages and cards show them often, and asking
+// the provider each time costs its service a request, or the user an authorization.
 type secretWords struct {
 	mu   sync.Mutex
 	kept map[string]keptWords
+	// gen counts the edits: words described while one happened are not kept (their provider may have just gone).
+	gen uint64
+	// loaded: the sealed words were read from the database; nothing is written before.
+	loaded bool
+	saveMu sync.Mutex
 }
 
 type keptWords struct {
 	d  SecretDescription
 	at time.Time
+	// stale: the provider stored a secret since: asked again at the next describe, answering while it cannot be.
+	stale bool
 }
 
 // ResolveSecret is reference's value for purpose, from the provider that claims its scheme. approvedBy is who approved
@@ -87,10 +92,16 @@ type keptWords struct {
 // approved its hand-off card); it goes into the record of the use with the reference and the purpose. Errors are
 // *SecretError.
 func (h *Manager) ResolveSecret(ctx context.Context, reference string, purpose wire.SecretPurpose, approvedBy string) (string, error) {
+	return h.resolveSecret(ctx, reference, purpose, approvedBy, false)
+}
+
+// resolveSecret is ResolveSecret; quiet: the caller still holds an earlier value and uses it if this fails, so the
+// provider must not ask the user (SecretsResolveParams.Quiet).
+func (h *Manager) resolveSecret(ctx context.Context, reference string, purpose wire.SecretPurpose, approvedBy string, quiet bool) (string, error) {
 	if h.extensions == nil || !h.ready(ctx) {
 		return "", secretErr("provider_off", i18n.Args{"provider": schemeOf(reference)})
 	}
-	return h.extensions.resolveSecret(ctx, reference, purpose, approvedBy)
+	return h.extensions.resolveSecret(ctx, reference, purpose, approvedBy, quiet)
 }
 
 // DescribeSecret is reference in words (cards, settings), from its provider. Errors are *SecretError.
@@ -138,7 +149,7 @@ func (ps *extensions) secretProvider(reference string) (extension.SecretProvider
 	return prov, hp, nil
 }
 
-func (ps *extensions) resolveSecret(ctx context.Context, reference string, purpose wire.SecretPurpose, approvedBy string) (string, error) {
+func (ps *extensions) resolveSecret(ctx context.Context, reference string, purpose wire.SecretPurpose, approvedBy string, quiet bool) (string, error) {
 	prov, hp, err := ps.secretProvider(reference)
 	if prov.Extension == "" {
 		ps.forgetReference(ctx, reference) // no provider claims it (secret_kept.go)
@@ -163,7 +174,7 @@ func (ps *extensions) resolveSecret(ctx context.Context, reference string, purpo
 	cctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
 	defer cancel()
 	res, err := buswire.Call(cctx, hp.proc, extwire.SecretsResolveMethod,
-		wire.SecretsResolveParams{Contribution: prov.Contribution, Reference: reference, Purpose: purpose})
+		wire.SecretsResolveParams{Contribution: prov.Contribution, Reference: reference, Purpose: purpose, Quiet: quiet})
 	switch {
 	case err != nil:
 		return fail(providerError(prov, err, cctx.Err() != nil && ctx.Err() == nil))
@@ -185,17 +196,23 @@ func (ps *extensions) describeSecret(ctx context.Context, reference string) (Sec
 	if err != nil {
 		return SecretDescription{}, err
 	}
+	ps.loadWords(ctx)
 	ps.words.mu.Lock()
 	k, ok := ps.words.kept[reference]
+	gen := ps.words.gen
 	ps.words.mu.Unlock()
-	if ok && time.Since(k.at) < secretDescribeKeep && k.d.Provider == prov.Extension {
-		return k.d, nil
+	ok = ok && k.d.Provider == prov.Extension
+	if ok && !k.stale {
+		return k.d, nil // kept at any age: the words of a reference do not lapse (secret_words.go)
 	}
 	cctx, cancel := context.WithTimeout(ctx, secretCallTimeout)
 	defer cancel()
 	res, err := buswire.Call(cctx, hp.proc, extwire.SecretsDescribeMethod,
 		wire.SecretsDescribeParams{Contribution: prov.Contribution, Reference: reference})
 	if err != nil {
+		if ok {
+			return k.d, nil // stale, and the provider cannot say otherwise now
+		}
 		return SecretDescription{}, providerError(prov, err, cctx.Err() != nil && ctx.Err() == nil)
 	}
 	d := SecretDescription{Provider: prov.Extension, ProviderName: prov.Name, Title: providerWords(res.Title, 200),
@@ -203,24 +220,8 @@ func (ps *extensions) describeSecret(ctx context.Context, reference string) (Sec
 	if d.Title == "" {
 		d.Title = reference
 	}
-	ps.words.mu.Lock()
-	if ps.words.kept == nil {
-		ps.words.kept = map[string]keptWords{}
-	}
-	ps.words.kept[reference] = keptWords{d: d, at: time.Now()}
-	ps.words.mu.Unlock()
+	ps.keepWords(ctx, reference, d, gen)
 	return d, nil
-}
-
-// forgetSecretWords drops the kept descriptions of provider's references (it was switched off, upgraded or removed).
-func (ps *extensions) forgetSecretWords(provider string) {
-	ps.words.mu.Lock()
-	defer ps.words.mu.Unlock()
-	for ref, k := range ps.words.kept {
-		if k.d.Provider == provider {
-			delete(ps.words.kept, ref)
-		}
-	}
 }
 
 // providerError is a provider's failure as a SecretError: its code when it is one the protocol names, its words (one

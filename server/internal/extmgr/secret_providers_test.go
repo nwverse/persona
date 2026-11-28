@@ -25,7 +25,8 @@ const secretValueForTest = "synthetic-secret-value-7f3a9c"
 
 // serveSecretProviderExtensionForTest resolves exv:// references by their last segment (ok, missing, signed_out,
 // limited, refuse, big, boom), and writes each call's method and params, and each secrets.used event, as a line of
-// JSON to SECRETS_OUT.
+// JSON to SECRETS_OUT. While SECRETS_OUT.locked exists it answers every resolve and describe not_signed_in, as op on a
+// computer does when it would have the user authorize it again.
 func serveSecretProviderExtensionForTest() {
 	out := os.Getenv("SECRETS_OUT")
 	var mu sync.Mutex
@@ -47,6 +48,10 @@ func serveSecretProviderExtensionForTest() {
 				}
 				_ = json.Unmarshal(params, &p)
 				last := p.Reference[strings.LastIndex(p.Reference, "/")+1:]
+				if _, err := os.Stat(out + ".locked"); err == nil && (method == "resolve" || method == "describe") {
+					// As 1Password's op on a computer whose authorization lapsed: it would have the user approve it.
+					return nil, &rpc.Error{Code: "not_signed_in", Message: "authorize op in the 1Password app"}
+				}
 				switch method {
 				case "used":
 					return nil, nil
@@ -608,7 +613,8 @@ func TestLauncherSecretsRevokedOrKept(t *testing.T) {
 		t.Fatal("another provider removed")
 	}
 
-	// An extension's secret and an Agent's hand-off resolve each time and are never kept.
+	// ResolveSecret itself keeps nothing: an Agent's hand-off resolves after each card (an extension's secret is kept
+	// by the start that resolves it, extensionSecret, not here).
 	var before json.RawMessage
 	_, _ = h.store.Setting(ctx, launcherKeptKey, &before)
 	for _, p := range []wire.SecretPurpose{{Kind: "agent_run", ID: "run-1"}, {Kind: "extension", ID: "example-user"}} {
