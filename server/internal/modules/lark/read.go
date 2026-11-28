@@ -14,14 +14,15 @@ import (
 // Reading a group with /read (#11803, docs/extensions/bots.md "Reading a group with /read"). The owner writes
 // "@bot /read <task>" in an alert or problem group; the main conversation reads the group as the owner with lark-cli
 // on its own computer (the last readGroupDefault messages, or the range the task names), downloads its images and
-// files into a directory of their own, does the task, and the answer goes back as a reply under that message.
+// files into a directory of their own, checks the leads it found with the computer's read-only tools before it
+// concludes (#16808), does the task, and the answer goes back as a reply under that message.
 //
 // The bot is given no way to read a group's history: the owner is in the group, and lark-cli reads as the owner, so no
 // sensitive "read every group message" permission is needed. The hub let the message through (extmgr/bots_read.go);
 // this is the second line of checks.
 //
 // The run is quiet in the group: the message gets OnIt while it works and DONE at the end, and no progress card, steps
-// or web link go there. The answer goes to the owner's private chat first, and into the group only when the owner
+// or web link go there; a held one that works past a minute tells the owner privately (readWorking). The answer goes to the owner's private chat first, and into the group only when the owner
 // presses its button (read_held.go, #14437); with the read_group_direct switch on when the owner asked
 // (readDirectKey), it goes straight under the message as before. Where it goes is kept in the run's own keys
 // (readChatKey, readThreadKey), not a topic's ("chat", "thread"): a topic's progress card, agent message and question
@@ -40,6 +41,15 @@ const (
 	readImages  = 20
 	// readDirRoot is where the downloads go on the conversation's computer, one directory per /read message.
 	readDirRoot = "~/.persona/lark-read/"
+	// readInvestigateMinutes and readInvestigateCalls bound the investigation after the read (#16808): the model
+	// checks the group's leads (log IDs, errors, attachments) with the computer's read-only tools before it concludes,
+	// and past these it stops and answers with what it has. Far inside the run's own limit (channel.RunMost), so the
+	// answer is a staged conclusion, not a run that never ends.
+	readInvestigateMinutes = 20
+	readInvestigateCalls   = 40
+	// readWorkingAfter is how long a held /read works before the owner's private chat is told it is on it
+	// (readWorking): a quick answer needs no note, a long investigation must not look like no response.
+	readWorkingAfter = time.Minute
 
 	// readAskKey is the run's channel value of the owner's words, clipped to readAskRunes, for the line on the held
 	// answer's card (read_held.go).
@@ -143,7 +153,8 @@ func (s core) readSend(ctx context.Context, ev botcard.MessageEvent, task string
 func readPrompt(owner, lang, chat, message, thread, task string, direct bool) prompts.BotReadGroup {
 	return prompts.BotReadGroup{Owner: owner, Language: lang, ChatID: chat, MessageID: message, ThreadID: thread, Task: task,
 		Dir: readDirRoot + readDirName.ReplaceAllString(message, "_"), Default: readGroupDefault, Most: readGroupMost,
-		FileMB: readFileMB, TotalMB: readTotalMB, Images: readImages, Direct: direct}
+		FileMB: readFileMB, TotalMB: readTotalMB, Images: readImages, Minutes: readInvestigateMinutes,
+		Calls: readInvestigateCalls, Direct: direct}
 }
 
 // channelProbe is what of a /read to look for in the transcript: the task's first line, else the message id the

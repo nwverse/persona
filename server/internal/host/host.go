@@ -87,6 +87,25 @@ type PlainScreen interface {
 	PlainScreen() bool
 }
 
+// Scrollbacker is a host whose "recent" read is the screen alone but which keeps a pane's earlier output apart from it
+// (Orca: terminal.read's output tail, and its log by cursor beyond that). The node pages what a client shows above
+// the screen from it (session.screen.before, session.screen "recent"); the node's own checks of a pane keep reading
+// its screen, which is what the pane shows.
+type Scrollbacker interface {
+	// Scrollback is up to lines (0: all it has) of the pane's output, oldest first, ending with what the program writes
+	// now; rows it redrew in place appear as they ended. None when nothing is above the screen (a program on the
+	// alternate screen). dropped: the pane wrote output older than the first line that is not available: the host let
+	// it go, or keeps it only in a form that does not line up with these lines.
+	Scrollback(ctx context.Context, pane PaneRef, lines int) (output []string, dropped bool, err error)
+}
+
+// QuickScreen is a host whose screen read is cheap enough to repeat several times a second while someone watches a
+// pane it cannot stream (Orca: one request on its local socket, answered from its own terminal emulator).
+// ScreenRefresh is the shortest gap a client should leave between reads then; a host without it is read once a second.
+type QuickScreen interface {
+	ScreenRefresh() time.Duration
+}
+
 // ScreenDriver is a host that may not drive its panes' terminals at all: when CanDriveScreen is false, Read, SendText
 // and SendKeys fail (ErrUnsupported) and only Prompt reaches the agent, as a message of its own (botmux). The node
 // then offers nothing that has to read a screen back or type a command (ultracode). A host without it can.

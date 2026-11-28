@@ -24,8 +24,8 @@ func TestMCPLegacyBytes(t *testing.T) {
 	if err := json.Unmarshal(raw, &expected); err != nil {
 		t.Fatal(err)
 	}
-	// Tools added after the legacy inventory was frozen include to-do split and merge and browser_fetch_download.
-	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download"}
+	// These tools were introduced after the legacy inventory was frozen.
+	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_profile_deactivate", "model_profile_clear", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download", "mail_move"}
 	for _, name := range newTools {
 		if _, exists := expected[name]; exists {
 			t.Fatalf("%s is not a legacy tool", name)
@@ -39,7 +39,7 @@ func TestMCPLegacyBytes(t *testing.T) {
 			tool := Tool(name, lang)
 			digest := sha256.Sum256([]byte(tool.Description + "\x00" + string(tool.InputSchema)))
 			if got := hex.EncodeToString(digest[:]); got != want {
-				t.Errorf("%s/%s: legacy bytes changed", name, lang)
+				t.Errorf("%s/%s: legacy digest = %s, want %s", name, lang, got, want)
 			}
 		}
 	}

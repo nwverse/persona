@@ -138,7 +138,7 @@ func (n *Node) takeoverSource(id string) (codexSource, bool) {
 	if (!o.cli && !o.desktop && !o.interactive()) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return codexSource{}, false
 	}
-	if o.cli && (src.path == "" || src.thread != id) {
+	if o.cli && (src.path == "" || !n.codices.matchesSourceID(id, src)) {
 		return codexSource{}, false
 	}
 	if o.desktop && src.path == "" {
@@ -174,17 +174,20 @@ func codexHomeArgv(argv []string, srcHome, defaultHome string) []string {
 	return append([]string{"CODEX_HOME=" + srcHome}, argv...)
 }
 
-// takeoverHost selects an enabled non-Orca terminal host.Launcher (herdr, herdr-core, tern, ...).
+// takeoverHost selects an enabled terminal host.Launcher (herdr, herdr-core, Orca, tern, ...): the start's host first,
+// then the engine set's. Orca resumes a Codex thread as herdr does since #17044 (resumeCodex: a new terminal in the
+// worktree holding the thread's directory); before that a takeover never went to Orca, and an Orca-only computer had no
+// terminal engine for it.
 func (n *Node) takeoverHost(ctx context.Context) (context.Context, error) {
 	if n == nil || n.hosts == nil {
 		return ctx, noEngineRefusal()
 	}
 	var candidates []string
-	if start := n.startKind(ctx); start != "" && start != host.Orca && !proto.RuntimeEngine(start) {
+	if start := n.startKind(ctx); start != "" && !proto.RuntimeEngine(start) {
 		candidates = append(candidates, start)
 	}
 	for _, kind := range n.engineChoice().Hosts {
-		if kind == "" || kind == host.Orca || proto.RuntimeEngine(kind) || slices.Contains(candidates, kind) {
+		if kind == "" || proto.RuntimeEngine(kind) || slices.Contains(candidates, kind) {
 			continue
 		}
 		candidates = append(candidates, kind)
@@ -240,7 +243,7 @@ func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, runni
 	if (!o.cli && !o.desktop && !o.interactive()) || o.exec || o.sub || o.parent != "" || o.guardian {
 		return nil
 	}
-	if o.cli && (src.thread != id || src.path == "") {
+	if o.cli && (src.path == "" || !n.codices.matchesSourceID(id, src)) {
 		return nil
 	}
 	desktop := o.desktopThread(src, pass)
@@ -283,6 +286,7 @@ func (n *Node) codexTakeoverRowIn(id string, src codexSource, m quickMeta, runni
 				state.CanResume, state.Reason = false, "unavailable"
 			}
 		}
+		// App takeover, like ordinary terminal resume, is supported only in the legacy home.
 		if state.CanResume && (src.path == "" || src.thread != id || n.codexTurnRunning(src, m) || n.codexWriterLockHeld(src)) {
 			state.CanResume, state.Reason = false, "unavailable"
 		}
@@ -414,7 +418,7 @@ func (n *Node) commitCodexTakeover(ctx context.Context, id, token string, confir
 		return nil, takeoverRefusal("confirmation_required")
 	}
 	src, ok := n.takeoverSource(id)
-	if !ok || src != p.source || src.path == "" || src.thread != id {
+	if !ok || src != p.source || src.path == "" || !n.codices.matchesSourceID(id, src) {
 		return nil, takeoverRefusal("changed")
 	}
 	o := readCodexOrigin(src.path)

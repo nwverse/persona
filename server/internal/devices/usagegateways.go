@@ -455,6 +455,5 @@ func uniqueSorted(list []string) []string {
 	return slices.Compact(out)
 }
 
-// UsageGatewayAccounts is devicewire.MethodUsageGatewayAccounts: the gateway sources' account lists, as the hub's
-// last read of each had them (usageGateways.gatewayAccounts).
+// UsageGatewayAccounts returns the last-read gateway account lists for the bus and the local extension manager.
 func (d *Devices) UsageGatewayAccounts() proto.GatewayAccounts { return d.usageGW.gatewayAccounts() }

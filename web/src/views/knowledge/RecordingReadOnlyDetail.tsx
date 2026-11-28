@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import type { ModuleKBDetailProps } from "../../core/module-host";
 import { t } from "../../i18n";
 import { api, apiBlob, enc, isAbort } from "../../lib/api";
-import { knownZone, wallClock, type KBSegment, type RecordingPhoto } from "../../lib/kb";
+import { knownZone, recordingPaused, wallClock, type KBSegment, type RecordingPhoto } from "../../lib/kb";
+import { Icon } from "../../ui/icons";
 import { Markdown } from "../../ui/Markdown";
 import { Card, Marked, SectionTitle } from "./KBParts";
 
@@ -14,8 +15,15 @@ type Auth = Props["auth"];
 
 /** Stored content only: no record, upload, rename, transcription, regeneration, live view or handoff actions. */
 export function RecordingReadOnlyDetail({ detail: d, query, auth, current, children }: Props) {
+  const paused = d ? recordingPaused(d.paused) : null;
   return <>{children({
     hideProfile: !!d?.recap,
+    lead: paused === "module_off" ? (
+      <p className="flex items-start gap-2 rounded-control bg-inset px-3 py-2 text-label leading-relaxed text-ink-2 shadow-hairline" role="note" data-recording-paused="module_off">
+        <Icon name="info" size={13} className="mt-0.5 shrink-0 text-ink-3" />
+        <span className="min-w-0">{t("knowledge-kbdetail.recording_paused_module_off")}</span>
+      </p>
+    ) : undefined,
     sections: d && (
       <>
         <StoredMarkdown title={t("knowledge-kbdetail.recording_minutes")} markdown={d.minutes?.markdown} />
@@ -81,22 +89,26 @@ function offsetClock(seconds: number): string {
 
 /** A missing photo list (including a hub that has not moved this read into Core yet) hides only this section. */
 function StoredPhotos({ id, kind, auth, current }: { id: string; kind: unknown; auth: Auth; current: () => boolean }) {
-  const [photos, setPhotos] = useState<RecordingPhoto[]>([]);
+  const [state, setState] = useState<{ id: string; items: RecordingPhoto[] }>({ id, items: [] });
   const meeting = kind === "meeting";
   useEffect(() => {
-    if (!meeting) {
-      setPhotos([]);
-      return;
-    }
+    setState({ id, items: [] });
+    if (!meeting) return;
+    let live = true;
     const ac = new AbortController();
     api<{ photos?: RecordingPhoto[] | null }>(`/recordings/${enc(id)}/photos`, { ...auth, signal: ac.signal }).then((r) => {
-      if (ac.signal.aborted || !current()) return;
-      setPhotos((r.photos ?? []).filter((p) => p && Number.isInteger(p.n) && p.n > 0 && typeof p.id === "string" && p.id));
+      if (!live || ac.signal.aborted || !current()) return;
+      const items = (r.photos ?? []).filter((p) => p && Number.isInteger(p.n) && p.n > 0 && typeof p.id === "string" && p.id);
+      setState({ id, items });
     }, () => {
-      if (!ac.signal.aborted && current()) setPhotos([]);
+      if (live && !ac.signal.aborted && current()) setState({ id, items: [] });
     });
-    return () => ac.abort();
+    return () => {
+      live = false;
+      ac.abort();
+    };
   }, [id, meeting, auth, current]);
+  const photos = meeting && state.id === id ? state.items : [];
   if (!photos.length) return null;
   return (
     <section>
@@ -104,7 +116,7 @@ function StoredPhotos({ id, kind, auth, current }: { id: string; kind: unknown; 
       <Card>
         <ol className="grid gap-4 p-4 sm:grid-cols-2">
           {photos.map((photo) => (
-            <li key={photo.n} className="min-w-0">
+            <li key={`${id}:${photo.n}`} className="min-w-0">
               <PhotoImage id={id} photo={photo} auth={auth} current={current} />
               {(photo.caption || photo.note) && <p className="mt-2 break-words text-meta leading-relaxed text-ink select-text">{photo.caption || photo.note}</p>}
               {photo.text && <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-control bg-field px-3 py-2 font-sans text-meta leading-relaxed text-ink-2 select-text">{photo.text}</pre>}
@@ -117,22 +129,27 @@ function StoredPhotos({ id, kind, auth, current }: { id: string; kind: unknown; 
 }
 
 function PhotoImage({ id, photo, auth, current }: { id: string; photo: RecordingPhoto; auth: Auth; current: () => boolean }) {
-  const [url, setUrl] = useState<string>();
+  const key = `${id}:${photo.n}`;
+  const [loaded, setLoaded] = useState<{ key: string; url?: string }>({ key });
   useEffect(() => {
+    setLoaded({ key });
+    let live = true;
     const ac = new AbortController();
     let made: string | undefined;
     apiBlob(`/recordings/${enc(id)}/photos/${photo.n}`, { ...auth, signal: ac.signal }).then((blob) => {
-      if (ac.signal.aborted || !current()) return;
+      if (!live || ac.signal.aborted || !current()) return;
       made = URL.createObjectURL(blob);
-      setUrl(made);
+      setLoaded({ key, url: made });
     }, (err) => {
-      if (!isAbort(err) && current()) setUrl(undefined);
+      if (live && !ac.signal.aborted && !isAbort(err) && current()) setLoaded({ key });
     });
     return () => {
+      live = false;
       ac.abort();
       if (made) URL.revokeObjectURL(made);
     };
-  }, [id, photo.n, auth, current]);
+  }, [key, id, photo.n, auth, current]);
+  const url = loaded.key === key ? loaded.url : undefined;
   if (!url) return null;
   const alt = photo.caption || photo.note || t("knowledge-kbdetail.recording_photo_label", { n: photo.n });
   return <img src={url} alt={alt} className="h-48 w-full rounded-control bg-field object-contain" />;

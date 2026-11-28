@@ -435,12 +435,12 @@ The modules of this kind:
 
 **Controlling changes to the core (#14916).** Persona Core has no UI: it is the hub API and data model for Agents, sessions,
 tasks and to-dos, with the clients' headless code and the foundation interfaces. The clients' interface code is the default
-panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict: label + reason, owner review, no module
-references) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
+panel built on Core. `schema/core-paths.txt` has two tiers: `core` (strict review, owner review, no module
+references; the label is recommended, not required since #17195) and `panel` (only no module references); modules are free. The guards below keep modules and core apart; three
 more pieces control changes to tier core itself, in this order of strength. The merge check: `scripts/hooks/core-change-check.py`, run by
-`scripts/hooks/merge-pr.sh`, refuses a PR that changes a tier-core path of `schema/core-paths.txt` (read by `scripts/test/core_paths.py`:
+`scripts/hooks/merge-pr.sh`, is advisory (#17195): it reports which tier-core paths of `schema/core-paths.txt` a PR changes (read by `scripts/test/core_paths.py`:
 the server units this file's classification calls `core`, the clients' headless directories and the foundation interfaces
-and guards named one by one; panel files and tests-only changes do not count) unless it has the label `core-change` and a `## Why this must change the core` section. CODEOWNERS:
+and guards named one by one; panel files and tests-only changes do not count) and whether a `core-change` label and a `## Why this must change the core` section are present, but no longer refuses the merge — Core changes get strict review instead of a required label. CODEOWNERS:
 the core block of `.github/CODEOWNERS` is generated from tier core of the same list (`scripts/hooks/codeowners.py --write`) and requests
 the owners' review; whether the review is required is a branch ruleset the administrator sets. The reference guard:
 `scripts/test/test_core_references_no_module.py` needs no toolchain and checks on every platform that the four guards'
@@ -542,6 +542,31 @@ module it claims.
 - **Reserved features**: the marker `modules` and any `module.<id>` are never an extension's own feature. The manifest
   schema cannot declare `module.<id>`, the manager drops both from the `api.features` it reports (logged once), and the
   hub drops them from every report's features.
+- **Rows nothing may serve** (#16263, `server/internal/extension/dormant.go`): before it loads the registry the manager
+  names every listed id with whether the `modules` row switched it off (`Registry.HoldModule`). Load then sets aside,
+  in a private dormant table, the rows of a listed id that nothing may serve: a built-in's row on a build without that
+  built-in (an orphan, such as `volc` on a `persona_without_volc` or core-only build), and any row of a module the
+  `modules` row switched off, installed packages included. A dormant row is not listed, nothing runs it, it supplies no
+  flag, and nothing in it changes: its settings, switches, sealed secrets and files stay as they were. Load never fails
+  because of one. Switching the module back on and restarting reads the row again as it was.
+- **Adopting an orphan**: the catalog offers the official package of an orphan's id as an install. The registry's
+  commit (`validatePlan`, which every install entry point goes through: the catalog, a bundle, an upload, the command
+  line) takes the orphan's row over in place only for a package from the official market verified with its current
+  signing key that provides every contribution the built-in's stored manifest names, and only while the module is on.
+  The installed row keeps the owner's settings, switch, switched-off contributions and installation time, and is the
+  built-in's verified successor (`BuiltinPredecessor`, `PreviousOrigin: builtin:<id>`), so its storage key, sealed
+  secrets, data and the transcription pinned to the built-in stay; the write is pinned to the row as Load read it, so a
+  row that changed meanwhile is refused. Anything else over an orphan (a local upload, a private market, a missing
+  contribution, a module switched off) is refused with the identity error and writes nothing. Once adopted it is an
+  ordinary installed package: it can be upgraded, rolled back to the built-in on a build that has it, or uninstalled.
+- **Rollback across builds**: a package rolled back to its first version on a build without the built-in has no
+  built-in to name as its previous version. On a build with the built-in again, rollback still returns to it
+  (`Registry.Rollback`), with the owner's settings, switches and secrets. On a build without it, rolling back to the
+  built-in is refused and nothing changes.
+- **The stream contract in the SDK**: the transcription point's job wire (`TranscriptionInfo`, `TranscriptionFrame`,
+  the frame and code names, `F`) and the `X-Persona-Role` and `X-Persona-Lang` header names are in the Go SDK
+  (`sdk/go/wire/transcription.go`, hand-written, not generated from the schemas) so a package outside personad speaks
+  them; `server/internal/extwire` keeps its names as aliases of these.
 
 ### Voice
 

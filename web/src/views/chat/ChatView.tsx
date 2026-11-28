@@ -658,7 +658,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const opening = Boolean(assistant) && !tr.items.length && outgoing > 0;
 
   // ── the middle of an agent's page: its conversation, or its terminal in place (lib/session-view.ts) ──
-  const switchable = Boolean(inPage && terminalAvailable !== false && !assistant && canShowTerminal(session));
+  const hasCurrentTerminal = terminalAvailable !== false && !assistant && canShowTerminal(session);
+  const switchable = Boolean(inPage && hasCurrentTerminal);
   const openFiles = () => session && togglePanel({ kind: "files", mid, sid, cwd: session.cwd });
   const [view, setView] = useSessionView(mid, sid, switchable);
   // The terminal connects when first shown and stays connected while the page is on screen (the chat is hidden under it,
@@ -1726,7 +1727,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
       // a worker's conversation in a Team panel, and an Agent's in a task's or an Agent's side panel, leave Esc to the
       // panel (it closes it) and to the page beside it
       if (embedded || inPanel) return;
-      if (e.key === "Escape" && !e.defaultPrevented) {
+      if (e.key === "Escape" && !e.defaultPrevented && !e.isComposing && e.keyCode !== 229) {
         if (e.target instanceof Element && e.target.closest("[data-session-overview]")) return;
         if ((state === "working" || awaiting) && view !== "term" && !document.querySelector("[role=dialog],[role=menu]")) {
           e.preventDefault();
@@ -1791,9 +1792,12 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // reloads, #16214), or keeps it when the read failed: its unanswered last turn may have a reply the page has not read
   // yet, and Retry there sent the question again (#16286).
   const stale = !detached && (!live.firstRead || Boolean(live.error));
+  const hasOwnPendingInteraction = (session?.pending_interactions ?? 0) > 0 ||
+    interactions.some((ix) => ix.machine_id === mid && ix.session_id === sid);
+  const waitingOnUser = !detached && (state === "needs_you" || hasOwnPendingInteraction);
   const allLines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, needsYou: waitingOnUser })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale, waitingOnUser],
   );
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
@@ -1862,7 +1866,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const placed = useMemo(() => placeFailed(lines, visibleOutbox), [lines, visibleOutbox]);
   const failedBefore = (id: string) => {
     const list = placed.before.get(id);
-    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} />] : [];
+    return list ? [<OutboxBubbles key={`failed:${id}`} mid={mid} sid={sid} entries={list} canRetry={!refusedNoRow} hasCurrentTerminal={hasCurrentTerminal} />] : [];
   };
   const lastTasks = useRef<TaskIndex | undefined>(undefined);
   const tasks = useMemo(() => stableValue(lastTasks.current, buildTaskIndex(tr.items)), [tr.items]);
@@ -2288,7 +2292,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     await deliver(resolved.payload, uuid());
     return true;
   }, [deliver, mid, sid]);
-  const emptyAction = canCompose && !working && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
+  const emptyAction = canCompose && !working && !waitingOnUser && !gate.blocked && !stoppedLine ? retryEmpty : undefined;
   // the failure notice "Retry" was pressed on: kept here, not in the note, so it stays gone while the session goes through
   // needs-you and back before the hub clears it (iOS ChatView @State retried)
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
@@ -2888,7 +2892,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               <div key={p.id} className="flex flex-col gap-3">
                 <UserBubble msg={p.msg} mid={mid} sid={sid} pending={Boolean(p.posting)} sendState={p.posting ? "sending" : "sent"} />
               </div>
-            ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
+            ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} hasCurrentTerminal={hasCurrentTerminal} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
                 <PageBoundary key={`undelivered:${m.id}`} page="undelivered">
                   <Suspense fallback={<UserBubble msg={keptBubble(m)} mid={mid} sid={sid} sendState="failed" />}>
@@ -3783,7 +3787,7 @@ function TitleEditor({ session, title, onDone }: { session: Session; title: stri
       onChange={(e) => setValue(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.nativeEvent.isComposing) return;
+        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
         if (e.key === "Enter") {
           e.preventDefault();
           commit();

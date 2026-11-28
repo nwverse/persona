@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -681,7 +682,7 @@ func (h *Hub) updateNodes(ctx context.Context) {
 			continue
 		}
 		call, cancel := context.WithTimeout(ctx, updateRequestLimit)
-		err := h.callBus(call, p.ID, devicewire.MethodUpdateNodes, map[string]any{}, nil)
+		_, err := buswire.Call(call, h.managerCaller(p.ID), devicewire.UpdateNodesMethod, buswire.None{})
 		cancel()
 		if err != nil {
 			h.logf("update: [%s] checks its node packages: %v", p.ID, err)

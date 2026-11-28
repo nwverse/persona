@@ -56,6 +56,19 @@ type orcaBridgeState struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+	// instance is the runtime.hello instance of the bridge's current connection ("" between connections): the update
+	// inventory tells the built-in bridge from any other runtime by it (orcaBridgeInstance).
+	instance string
+}
+
+// orcaBridgeInstance is the hello instance of the built-in Orca bridge's current connection, "" when none runs.
+func (rh *RuntimeHost) orcaBridgeInstance() string {
+	if rh == nil {
+		return ""
+	}
+	rh.orca.mu.Lock()
+	defer rh.orca.mu.Unlock()
+	return rh.orca.instance
 }
 
 // setOrcaBridge runs the bridge (on) or stops it (off). Called whenever a hub connection says which engine the
@@ -113,6 +126,16 @@ func (rh *RuntimeHost) runOrcaBridge(ctx context.Context, c *orcart.Client) erro
 		cancel()
 	}()
 	b := newOrcaBridge(c, bridgeEnd, rh.logger.Printf)
+	rh.orca.mu.Lock()
+	rh.orca.instance = b.instance
+	rh.orca.mu.Unlock()
+	defer func() {
+		rh.orca.mu.Lock()
+		if rh.orca.instance == b.instance {
+			rh.orca.instance = ""
+		}
+		rh.orca.mu.Unlock()
+	}()
 	return b.run(ctx, rh.version)
 }
 
@@ -122,6 +145,8 @@ type orcaBridge struct {
 	conn io.ReadWriteCloser
 	peer *rpc.Peer
 	logf func(format string, args ...any)
+	// instance is its runtime.hello instance (orcaBridgeState.instance).
+	instance string
 
 	mu      sync.Mutex
 	treesID string
@@ -163,7 +188,7 @@ type orcaAsk struct {
 }
 
 func newOrcaBridge(c *orcart.Client, conn io.ReadWriteCloser, logf func(string, ...any)) *orcaBridge {
-	return &orcaBridge{c: c, conn: conn, logf: logf, orcaOf: map[string]string{}, closed: map[string]bool{},
+	return &orcaBridge{c: c, conn: conn, logf: logf, instance: newUUID(), orcaOf: map[string]string{}, closed: map[string]bool{},
 		heads: map[string]*orcaHead{}, asks: map[string]*orcaAsk{}, sends: map[string]time.Time{}, book: loadOrcaBook("")}
 }
 
@@ -179,7 +204,7 @@ func (b *orcaBridge) run(ctx context.Context, version string) error {
 	served := make(chan error, 1)
 	go func() { served <- b.peer.Serve(ctx, b.conn) }()
 	hello := map[string]any{"runtime": orcaRuntimeID, "name": proto.EngineNames[proto.EngineOrca], "agent": "claude",
-		"version": version, "instance": newUUID(),
+		"version": version, "instance": b.instance,
 		"caps": map[string]any{"send": true, "interrupt": true, "close": true, "modes": true, "model": true, "rename": true,
 			"rewind": true, "seen": true}}
 	if err := b.peer.Call(ctx, "runtime.hello", hello, nil); err != nil {

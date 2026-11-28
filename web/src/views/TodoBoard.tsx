@@ -272,7 +272,7 @@ export function TodoBoard({
       }
       const named: BoardGroup[] = [...buckets].map(([key, bucketRows]) => ({
         key,
-        name: key ? (labels.get(key) ?? key) : t("lib-todo-tree.secretary"),
+        name: key ? (labels.get(key) ?? key) : t("todos.direction_uncategorized"),
         rows: bucketRows,
         waiting: bucketRows.filter((row) => row.waiting).length,
         stale: bucketRows.filter((row) => row.stale).length,
@@ -384,7 +384,7 @@ export function TodoBoard({
           <header className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-2">
             <span className="flex min-w-0 items-center gap-1.5 text-card-title font-semibold text-ink">
               <Icon
-                name={activeGrouping === "direction" ? (group.key ? "target" : "person") : "folder"}
+                name={activeGrouping === "direction" ? (group.key ? "target" : "inbox") : "folder"}
                 size={13}
                 className="shrink-0 text-ink-3"
               />

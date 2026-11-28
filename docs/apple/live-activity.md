@@ -224,6 +224,7 @@ Go `hub.FleetState` and Swift `FleetState` (`apple/Shared/FleetState.swift`) mat
 ```
 
 - **Times are always Unix seconds (numbers)**: ActivityKit decodes a push's `content-state` with the default JSONDecoder, which interprets a `Date` as seconds since 2001.
+- An actionable item's optional `interactionCreatedAt` is the exact RFC3339Nano occurrence its Allow / Deny / Approve button answers. The App Intents pass it to the resolve header, and a stale answer removes only that occurrence locally; older hubs omit it and retain ID-only behavior. Hiding details clears it together with `interaction`.
 - For background-work items (`background: true`), `since` uses the earliest `started_at` among running workflows with a known start time (#3433), so time spent waiting after the main turn ended isn't counted as workflow duration. If no such workflow exists, fall back to the turn start time, then the session update time. Foreground turns still use their own start time; the one-line `detail` text is unchanged.
 - `progress` `{done, started}` (#3437) is the `agents_done` / `agents_started` of the workflow `detail` names: the first running one (`Session.workflows` is newest first, as the web's workflow line picks it), so the bar and the line beside it never disagree.
   With one workflow running (the usual case) that is also the one the timer measures; with several, the timer covers the oldest, the line and bar the newest. `done` is capped at `started`; no `progress` before the workflow has started an agent, nor for background shell commands / Monitors / subagents.

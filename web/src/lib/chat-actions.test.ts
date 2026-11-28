@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyDraft, onDraftEvent, parseQuote, replaceNeedsConfirm, sendDraft, splitQuote, storedQuotes, withAppended, withQuote, withQuoteBlock, withUnsent } from "./drafts";
-import { browseTarget, byPrefix, chatFiles, displayTitle, mentionAt, nameMatches, otherSessions, pageSessions, relPath, replaceToken, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions";
+import { chatFiles, displayTitle, mentionAt, replaceToken } from "./mentions";
+import { browseTarget, byPrefix, nameMatches, otherSessions, pageSessions, relPath, sessionDetail, sessionQuote, workspaceContext, workspaceMatches, workspaceTitle } from "./mentions-panel";
 import { contextXML } from "./links";
 import type { Workspace } from "./workspace-board";
 import { keepAllBut, moved, movedTo } from "./queue";

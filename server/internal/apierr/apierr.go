@@ -455,6 +455,13 @@ var rpcFailureKeys = map[string]string{
 	"agy_in_terminal": "rpc-errors.agy_in_terminal",
 	// a message to an omp session the node cannot resume: no usable session file (node/ompresume.go)
 	"omp_resume_unknown": "rpc-errors.omp_resume_unknown",
+	// a resume Orca does not carry out from the phone: an omp session's (node/ompresume.go), and an older node's refusal of
+	// every agent but Claude Code (#17044)
+	"orca_resume": "rpc-errors.orca_resume",
+	// a launcher resume of a pi, Cursor or agy session (node/control.go)
+	"work_agent_resume": "rpc-errors.work_agent_resume",
+	// a message to a session whose last pane is still open with its agent not in front (node/sendsafe.go notRunningRefusal)
+	"agent_not_in_front": "rpc-errors.agent_not_in_front",
 	// a resume of a conversation the computer has nothing of (node/control.go resumeKnown, #10941)
 	proto.CodeResumeUnknown: "rpc-errors.resume_unknown",
 	// a call a stopped omp has nothing to answer with: rename, interrupt, modes, queue, close (node/ompcalls.go)
@@ -570,6 +577,15 @@ func localizeFailure(body map[string]any, status int, err error, l i18n.Lang) {
 	if code == "open_elsewhere" {
 		where, _ := body["where"].(string)
 		key = openElsewhereKeys[where]
+	}
+	if code == "not_running" {
+		// Only the node's refusal that names the engine (node/sendsafe.go notRunningRefusal, #17044): not_running's other
+		// words (a runtime's, a resume that never came up) stay as the node wrote them.
+		reason, _ := body["reason"].(string)
+		engine, _ := body["engine"].(string)
+		if reason == proto.NotRunningEngine && engine != "" {
+			key, args["engine"] = "rpc-errors.not_running_engine", engine
+		}
 	}
 	if body["partial"] == true {
 		switch code {

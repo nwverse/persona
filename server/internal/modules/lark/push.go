@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -222,8 +223,32 @@ func (s core) postMirror(ctx context.Context, m mirrorSend, attempt int) {
 		kind = "sync"
 	}
 	ctx = s.sendAs(ctx, kind, m.to.MachineID, m.to.SessionID)
-	// A scheduled task's result can go to a notifications companion. Main turns stay in the chat where a reply continues them.
-	if !m.to.Main && s.divertAnswer(ctx, assistantwire.NoticeTask(), m.cards) {
+	threadChat := string(m.to.ThreadChatID)
+	threadID := string(m.to.ThreadID)
+	threadDelivery := threadChat != "" && threadID != ""
+	postTo := feishuTarget{}
+	replyTo := ""
+	if threadDelivery {
+		st, err := s.feishuStatusKept(ctx)
+		if err != nil || !st.Ready {
+			s.logf("bots: mirror to thread %s/%s: bot is not ready (%v)", threadChat, threadID, err)
+			return
+		}
+		if !slices.Contains(st.Chats, threadChat) {
+			s.logf("bots: mirror to thread %s/%s: chat is not opted in", threadChat, threadID)
+			return
+		}
+		replyTo = s.topicMessage(ctx, threadChat, threadID)
+		if replyTo == "" && strings.HasPrefix(threadID, "om_") {
+			replyTo = threadID
+		}
+		if replyTo == "" {
+			s.logf("bots: mirror to thread %s/%s: no anchor message known to reply to", threadChat, threadID)
+			return
+		}
+		postTo = feishuTarget{ChatID: threadChat, InThread: true, NoDetour: true}
+	} else if !m.to.Main && s.divertAnswer(ctx, assistantwire.NoticeTask(), m.cards) {
+		// A scheduled task's result can go to a notifications companion. Main turns stay in the chat where a reply continues them.
 		if m.sent != nil {
 			m.sent()
 		}
@@ -232,9 +257,13 @@ func (s core) postMirror(ctx context.Context, m mirrorSend, attempt int) {
 	target := botTarget{Kind: targetPersona, MachineID: m.to.MachineID, SessionID: m.to.SessionID}
 	var missing []int
 	for i, ac := range m.cards {
-		mid, err := s.botPostTo(ctx, feishuTarget{}, "", ac.card, ac.fallback, m.key+strconv.Itoa(i))
+		mid, err := s.botPostTo(ctx, postTo, replyTo, ac.card, ac.fallback, m.key+strconv.Itoa(i))
 		if err != nil {
 			s.logf("bots: mirror: %v", err)
+			if threadDelivery && botcard.MessageGone(err) {
+				s.forgetTopicMessage(ctx, threadChat, threadID, replyTo)
+				return
+			}
 			if i == 0 {
 				// The rest would read as an answer without its beginning.
 				if botcard.Refused(err) || attempt >= mirrorRetries {
@@ -248,12 +277,22 @@ func (s core) postMirror(ctx context.Context, m mirrorSend, attempt int) {
 			continue
 		}
 		s.rememberBotThread(mid, target, m.to.Label) // a reply to any of them goes to this conversation
+		if threadDelivery {
+			s.rememberTopicMessage(ctx, threadChat, threadID, mid)
+			if i == 0 {
+				s.rememberTopicSession(ctx, threadChat, threadID, target, m.to.Label)
+			}
+		}
 		if i == 0 && m.sent != nil {
 			m.sent()
 		}
 	}
 	if len(missing) > 0 {
-		s.botSay(ctx, missingPiecesNote(m.lang, missing))
+		if threadDelivery {
+			s.botNoteTo(ctx, postTo, replyTo, missingPiecesNote(m.lang, missing))
+		} else {
+			s.botSay(ctx, missingPiecesNote(m.lang, missing))
+		}
 	}
 }
 
@@ -271,10 +310,11 @@ func (s core) retryMirror(m mirrorSend, attempt int) {
 			return
 		}
 		f := st.Features
-		if !st.Ready || m.to.Main && !f.Sync || !m.to.Main && !f.Pushes {
+		threadDelivery := m.to.ThreadChatID != "" && m.to.ThreadID != ""
+		if !st.Ready || m.to.Main && !f.Sync || !m.to.Main && !f.Pushes && !threadDelivery {
 			return
 		}
-		if m.to.StillDue(ctx, f.Pushes) {
+		if m.to.StillDue(ctx, f.Pushes || threadDelivery) {
 			s.postMirror(ctx, m, attempt)
 		}
 	})
