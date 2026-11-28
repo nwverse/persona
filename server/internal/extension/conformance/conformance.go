@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/serve"
+	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -211,8 +213,8 @@ func Check(t T, m *extension.Manifest, run Run, init extension.InitializeParams)
 				if k == imageRefsChecked {
 					break
 				}
-				var img wire.UIImage
-				err := hub.Call(ctx, "ui.image", wire.UIImageParams{Contribution: u.ID, Ref: ref, Width: 640, Placement: u.Placement}, &img)
+				img, err := buswire.Call(ctx, hub, extwire.UIImageMethod,
+					wire.UIImageParams{Contribution: u.ID, Ref: ref, Width: 640, Placement: u.Placement})
 				switch c := code(err); {
 				case c == extension.CodeUnknownMethod || c == extension.CodeNoContribution:
 					t.Fatalf("ui %s: it draws ref %q, and ui.image answered %v", u.ID, ref, err)

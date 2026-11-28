@@ -27,7 +27,7 @@ export type Tab = CoreTab | ModuleTab;
 export const TABS: CoreTab[] = ["general", "persona", "prompts", "notifications", "models", "agents", "integrations", "channels", "connectors", "sources", "extensions", "shortcuts", "advanced", "devices", "hub", "managers", "knowledge", "avatar", "labs"];
 export const AGENT_KINDS = ["claude", "codex", "agy", "omp", "grok"] as const;
 export type AgentTab = (typeof AGENT_KINDS)[number];
-export type SettingsSection = "providers" | "model-config" | "translation" | "seen-rows" | "repositories" | "knowledge-items" | AgentTab;
+export type SettingsSection = "providers" | "model-config" | "runtimes" | "execution-channels" | "translation" | "seen-rows" | "repositories" | "knowledge-items" | AgentTab;
 /** A host-owned secondary page, not a connector ID. */
 export const SENT_SUB = "-sent";
 
@@ -256,7 +256,7 @@ function sectionOfHash(hash: string, tab: Tab): SettingsSection | null {
   if (tab === "persona" && hash === "#repositories") return "repositories";
   if (tab === "knowledge" && hash === "#knowledge-items") return "knowledge-items";
   const section = hash.startsWith("#settings-") ? hash.slice("#settings-".length) : "";
-  if (tab === "models" && (section === "providers" || section === "model-config")) return section;
+  if (tab === "models" && (section === "providers" || section === "model-config" || section === "runtimes" || section === "execution-channels")) return section;
   if (tab === "agents" && (AGENT_KINDS as readonly string[]).includes(section)) return section as AgentTab;
   if (tab === "general" && (section === "translation" || section === "seen-rows")) return section;
   return null;

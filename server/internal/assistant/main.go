@@ -584,6 +584,12 @@ func readHubConfig() (hubConfig, error) {
 	if v := identity.Getenv("PERSONA_LISTEN"); v != "" {
 		cfg.Listen = v
 	}
+	// How long a logical conversation's input may wait for its receipt before it expires (logical_undelivered.go).
+	if v := identity.Getenv("PERSONA_INPUT_DELIVERY_DEADLINE"); v != "" {
+		if d, ok := logicalInputDeadlineFrom(v); ok {
+			logicalInputDeliveryDeadline = d
+		}
+	}
 	return cfg, nil
 }
 

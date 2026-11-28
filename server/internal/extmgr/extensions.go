@@ -34,6 +34,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -531,6 +532,11 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
 	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
+	// The rows of a module an installed extension may supply wait unread while nothing may serve them: a built-in's
+	// row on a build without it, or any row of a module the modules setting switched off (module_providers.go).
+	for _, m := range modapi.ExtensionModules() {
+		reg.HoldModule(string(m.ID), !h.modules().On(string(m.ID)))
+	}
 	if err := reg.Load(ctx); err != nil {
 		h.logf("plugins: %v", err)
 	}
@@ -614,9 +620,11 @@ func (ps *extensions) changed(c extension.Change) {
 			}
 		}
 	}
-	ps.forgetAuth(c.ID)          // another version, removed, switched, set up again: ask again
-	ps.forgetSecretWords(c.ID)   // a provider's references may name other things now
-	ps.kept.forgetProvider(c.ID) // and give other values, or none
+	ps.forgetAuth(c.ID)        // another version, removed, switched, set up again: ask again
+	ps.forgetSecretWords(c.ID) // a provider's references may name other things now
+	// The kept launcher keys go only with the provider, or with its claim on their scheme: an upgrade or a restart
+	// keeps them (secret_kept.go).
+	ps.keptProviderChanged(ctx, c)
 	// A removed provider's Always rules for hand-offs go with it (secret_handoff_rules.go).
 	if c.Kind == "removed" {
 		if c.Old != nil && c.Old.Full != nil && ps.h.avatars != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // TodoPRStatus keeps forge observations beside the existing stage/delivery. A ready,
@@ -32,6 +33,11 @@ type TodoPRStatus struct {
 	submittedReview  prSubmittedReview  // consumed by the park in the same pass, separate from the stage's review summary
 	actionableReview prActionableReview // current-head changes_requested for opt-in Agent routing
 	failingCheck     prFailingCheck     // current-head failing CI summary for opt-in Agent routing
+}
+
+func (p TodoPRStatus) sameRuntimeFacts(o TodoPRStatus) bool {
+	return p.State == o.State && p.HeadOID == o.HeadOID && p.Draft == o.Draft &&
+		p.Checks == o.Checks && p.Review == o.Review && p.Conflicts == o.Conflicts
 }
 
 type prSubmittedReview struct {
@@ -687,6 +693,10 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		return nil
 	}
 	t = current
+	checksReason := ""
+	if t.hasTaskRuntime() {
+		checksReason = i18n.T(s.lang(ctx), "assistant-reports.pr_checks_pending")
+	}
 	// Returning from a known open PR (or a legacy PR-stage hold) wakes the same supervisor once no other PR of the task
 	// is still open (#7935). A merged PR alone is never acceptance, and unrelated later parks stay put.
 	old := prFacts(t, status.URL)
@@ -743,28 +753,19 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 		reconcileEarlyTerminal()
 		return nil // a new Agent reply replaced the PR while the request was in flight
 	}
-	store := s.store()
-	if store != nil {
-		stages := make(map[string]todoStage, len(b.stages))
-		for id, stage := range b.stages {
-			stages[id] = stage
-		}
-		stages[t.ID] = cur
-		if err := store.PutSetting(ctx, reportStagesKey, stages); err != nil {
-			b.mu.Unlock()
-			b.stageWriting.Unlock()
-			return err
-		}
+	if t.hasTaskRuntime() && (previous == nil || !status.sameRuntimeFacts(*previous) ||
+		previous.CheckedAt.Before(cur.RuntimeAt) && !status.CheckedAt.Before(cur.RuntimeAt)) {
+		cur.refreshRuntimeFromProviders(status.CheckedAt, checksReason)
 	}
-	b.stages[t.ID] = cur
+	if err := s.keepTodoStageLocked(ctx, t.ID, cur); err != nil {
+		b.mu.Unlock()
+		b.stageWriting.Unlock()
+		return err
+	}
 	b.mu.Unlock()
-	s.todos.mu.Lock()
-	if todo := s.todos.todos[t.ID]; todo != nil && todo.PRURL == cur.PR {
-		todo.PRStatus, todo.OtherPRs = cur.PRStatus, cur.otherPRFacts()
-	}
-	s.todos.mu.Unlock()
+	s.publishRuntimeStage(t.ID, cur)
 	// Keep title writes in observation order, even if two polls for the same PR finish together.
-	if st, ok := store.(todoPRLinkTitleStore); ok && status.Title != "" {
+	if st, ok := s.store().(todoPRLinkTitleStore); ok && status.Title != "" {
 		if err := st.SetTodoPRLinkTitle(ctx, t.ID, triageNormalizePRURL(status.URL), status.Title); err != nil {
 			// A link metadata error can retry on the next poll without delaying delivery or supervision.
 			s.logf("task %s: save PR link title: %v", t.ID, err)

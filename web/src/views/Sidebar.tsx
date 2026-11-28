@@ -21,6 +21,7 @@ import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentList
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
+import { engineName } from "../lib/engine-names";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
 import { reportBoundary } from "../lib/error-reports";
 import { isChunkError, reloadForStaleChunk, reloadPage } from "./PageBoundary";
@@ -399,9 +400,11 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // the main row sits above the pages, so"Persona chats"waits for the assistant (a hub without it has none)
   const chats = !!assistant;
   // a conversation row's ⋯ / right click (iOS: its long press)
-  const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt } | null>(null);
+  const [convMenu, setConvMenu] = useState<{ s: Session; anchor: HTMLElement; at?: MenuAt; main?: boolean } | null>(null);
   // one function for the sidebar's life: the conversation rows and the main row keep their memo across pushes
   const onConvMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at })), []);
+  const onMainMenu = useCallback<RowMenuFn>((s, anchor, at) => setConvMenu((m) => (!at && m?.anchor === anchor ? null : { s, anchor, at, main: true })), []);
+  if (convMenu?.main && convMenu.s.session_id !== assistant?.main) setConvMenu(null);
   const [personaFolded, togglePersona] = useFolded("persona", false, { holds: activeKey === "history" || activeKey === "j:new" || directions.some((d) => activeKey === `j:${d.id}`) || recent.some((c) => activeKey === `j:${c.session_id}`) });
   // 最近 folds on its own too (#6228): the choice is kept in this browser, and it opens by itself while it holds the
   // open conversation, so folding never hides where a message lands. The Agents block's Recent uses another key.
@@ -470,7 +473,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the scrollable rows */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex shrink-0 flex-col gap-px bg-canvas pt-1">
-          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
+          <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={assistant?.main ? (conversationOf(assistant.main) ?? mainConversation) : mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onMainMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
         <div ref={track} data-row-scroller data-sidebar-scroller className="relative min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
@@ -558,7 +561,24 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
       </div>
-      {convMenu && <Suspense fallback={null}><ConversationRowMenu s={convMenu.s} main={convMenu.s.session_id === assistant?.main} leader={isLeader(convMenu.s.session_id)} builtIn={isBackgroundSupervisor(assistant, convMenu.s.session_id)} anchor={convMenu.anchor} at={convMenu.at} onClose={() => setConvMenu(null)} onArrange={ownChats.includes(convMenu.s) ? () => setArranging(true) : undefined} /></Suspense>}
+      {convMenu && (() => {
+        const activeSession = conversationOf(convMenu.s.session_id) ?? convMenu.s;
+        return (
+          <Suspense fallback={null}>
+            <ConversationRowMenu
+              s={activeSession}
+              main={activeSession.session_id === assistant?.main}
+              leader={isLeader(activeSession.session_id)}
+              builtIn={isBackgroundSupervisor(assistant, activeSession.session_id)}
+              anchor={convMenu.anchor}
+              at={convMenu.at}
+              onClose={() => setConvMenu(null)}
+              onNavigate={onNavigate}
+              onArrange={ownChats.includes(activeSession) ? () => setArranging(true) : undefined}
+            />
+          </Suspense>
+        );
+      })()}
       {/* subscription rate-limit windows (#2432): nothing is drawn without data */}
       <SidebarUsage />
       <NodePrompt />
@@ -1693,7 +1713,7 @@ function AgentSection({ group, byTodo, showHost, reg, hover, activeKey, go, onRo
   const [folded, toggle] = useFolded(group.key, group.folded, { follow: true, holds: holdsRow(group.sessions, activeKey) });
   const row = (s: Session) => {
     const key = `s:${s.machine_id}/${s.session_id}`;
-    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" ? sessionHost(s) : undefined} showTodoTag={!byTodo} onMenu={onRowMenu} />;
+    return <SessionRow key={key} s={s} k={key} reg={reg} hover={hover} active={activeKey === key} to={{ name: "session", mid: s.machine_id, sid: s.session_id }} go={go} host={showHost && sessionHost(s) !== "herdr" ? engineName(sessionHost(s)) : undefined} showTodoTag={!byTodo} onMenu={onRowMenu} />;
   };
 
   const statusInfo = group.todoStatus ? TODO_STATUS_INFO[group.todoStatus as TodoStatus] : undefined;

@@ -7,7 +7,7 @@ import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "..
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type InputHTMLAttributes, type ReactNode, type RefObject } from "react";
 import { api, apiBlob, credentialOwner, enc, errorText, getToken, subscribeCredentialOwner } from "../lib/api";
-import { ago, clock, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
+import { ago, clock, safeWebURL, sessionCan, shortPath, activityOf, tabLabel, uuid } from "../lib/format";
 import { foldedState } from "../lib/child-sessions";
 import { sessionCard } from "../lib/folded-rows";
 import { byTime } from "../lib/times";
@@ -60,7 +60,9 @@ import {
   shownStatus,
   strikesThrough,
   todoRestLook,
+  todoAgentState,
   todoStatus,
+  todoSupervisorLabel,
   unlinkAgentFromTodo,
   unlinkSpaceFromTodo,
   unseeTodo,
@@ -1118,8 +1120,8 @@ function TodoListView({
     if (!detailOnNarrow) return;
     const onKey = (e: KeyboardEvent) => {
       const list = listColumn.current;
-      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || !list || list.getClientRects().length) return;
-      if (document.querySelector("[role=menu],[role=dialog]") || (e.target as Element | null)?.closest?.("input,textarea,select,[contenteditable=true]")) return;
+      if (e.key !== "Escape" || e.defaultPrevented || e.isComposing || e.keyCode === 229 || !list || list.getClientRects().length) return;
+      if ([...document.querySelectorAll("[role=menu],[role=dialog],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]")) || (e.target as Element | null)?.closest?.("input,textarea,select,[contenteditable=true]")) return;
       e.preventDefault();
       back.current();
     };
@@ -2989,6 +2991,7 @@ export type TodoRowView = {
   section?: TriageSection;
   /** What it waits on while its status is Waiting (#11090, lib/todo-wait-reason.ts waitOf): its label says so. */
   wait?: WaitReason;
+  supervisorLabel?: string;
   /** Why the sidebar's To-dos badge counts it (#11838, lib/todo-owner-needs.ts), unset when it does not: its mark. */
   owner?: OwnerNeed;
   /** Under todos_v2 (#14642), the resolved project name when assigned; undefined when unset or todos_v2 is off. */
@@ -3045,7 +3048,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   const status = todoStatus(todo, lookup);
   const urgent = mostUrgentAgent(todo, lookup);
   const activeCount = (todo.agents ?? []).filter((a) => !a.released_at).length;
-  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup) };
+  const view: TodoRowView = { status, dotState: DOT_STATE[shownStatus(todo, status)], age: lastMoved(todo, lookup), activeCount, urgentLine: false, urgentLead: "", urgentText: "", orphaned: false, ultracode: todoUltracode(todo, lookup), wait: waitOf(todo, status, lookup), supervisorLabel: todoSupervisorLabel(todo, status, lookup) };
   if (todo.wait != null || todo.done_at || !urgent?.session) return view;
   const limit = status === "usage_limit" ? usageLimitLabel(urgent.session) : undefined;
   if (limit) {
@@ -3055,7 +3058,7 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   }
   const urgentNow = taskNow(urgent.session, foldedState(urgent.session) === "working");
   // its own card, else one of its child sessions' (#5120: their cards wait on its page)
-  const urgentIx = sessionCard(interactions, urgent.agent.machine_id, urgent.agent.session_id);
+  const urgentIx = urgent.status === "needs_you" ? ownerCard(interactions, urgent.agent, lookup) : undefined;
   // what it waits on, from its card (#4111): the question, the command; not its last words
   const urgentAsk = urgent.status === "needs_you" ? askText(urgentIx) : "";
   if (!urgentAsk && !urgentNow) return view;
@@ -3064,6 +3067,12 @@ function agentRowView(todo: Todo, lookup: SessionLookup, interactions: Interacti
   if (urgent.status === "needs_you") view.urgentLead = t("todos.urgent_line", { name: urgent.agent.title || urgent.session.title || "Agent", kicker });
   view.urgentText = urgentAsk || (urgentNow ? (urgentNow.kind === "words" ? plainMarkdown(urgentNow.text) : urgentNow.text) : "");
   return view;
+}
+
+function ownerCard(interactions: Interaction[], agent: TodoAgent, lookup: SessionLookup): Interaction | undefined {
+  const { machine_id: mid, session_id: sid } = agent;
+  const pending = lookup.pendingCards ? lookup.pendingCards(mid, sid) ?? [] : interactions;
+  return sessionCard(pending.filter((ix) => !ix.delegating && !ix.mirror_of), mid, sid);
 }
 
 /** Every todo's row view by id, with its status section and why the sidebar's badge counts it (`needs`, its own set). */
@@ -3138,9 +3147,7 @@ function mergeTrainBadgeText(badge: MergeTrainTodoBadge): string {
 }
 
 function safeHttpUrl(raw?: string): string | undefined {
-  const s = raw?.trim();
-  if (!s) return undefined;
-  return /^https?:\/\//i.test(s) ? s : undefined;
+  return safeWebURL(raw);
 }
 
 const TodoListItem = memo(function TodoListItem({
@@ -3715,7 +3722,7 @@ const TodoListItem = memo(function TodoListItem({
         {!parkedRow && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[12px]" data-testid="todo-status-line">
             {open && <StatusMark state={dotState} size="sm" />}
-            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? look.label}</span>
+            <span className={cx("shrink-0 whitespace-nowrap font-medium", TONE_CLASS[look.tone])} data-testid="todo-status">{steps?.label ?? view.supervisorLabel ?? look.label}</span>
             {!todo.done_at && activeCount > 0 && (
               <>
                 <span className="text-ink-3">·</span>
@@ -3832,10 +3839,25 @@ function SeenButton({ onClick }: { onClick: () => void }) {
 const PLAN_FIELD = "rounded-control border border-line bg-canvas px-2 py-1 text-[12.5px] text-ink outline-none focus:border-accent";
 
 /** "YYYY-MM-DD", "HH:MM" and "YYYY-MM-DDTHH:MM" of a moment in local time, as date / time inputs take them. */
-function localParts(ms: number): { day: string; time: string } {
+export function localParts(ms: number): { day: string; time: string } {
   const d = new Date(ms);
+  if (!Number.isFinite(d.getTime())) return { day: "", time: "" };
+  const y = d.getFullYear();
+  if (y < 0 || y > 9999) return { day: "", time: "" };
   const p = (n: number) => String(n).padStart(2, "0");
-  return { day: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+  return { day: `${String(y).padStart(4, "0")}-${p(d.getMonth() + 1)}-${p(d.getDate())}`, time: `${p(d.getHours())}:${p(d.getMinutes())}` };
+}
+
+const LOCAL_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
+/** Validates a 4-digit calendar YYYY-MM-DD string, rejecting rollover dates (e.g. 2026-02-30) and out-of-range years. */
+export function validDay(day: string): boolean {
+  const ms = parseDayKey(day);
+  if (ms === undefined) return false;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
+  if (!m) return false;
+  const d = new Date(ms);
+  return d.getFullYear() === Number(m[1]) && d.getMonth() + 1 === Number(m[2]) && d.getDate() === Number(m[3]);
 }
 
 /**
@@ -3845,8 +3867,26 @@ function localParts(ms: number): { day: string; time: string } {
  * changes save when the field is left or on Enter; a change made without typing (a pick in the browser's picker) saves
  * at once. What was typed shows until the save is through.
  */
+export function safeISO(raw: string): string | undefined {
+  const s = raw.trim();
+  const m = LOCAL_DATETIME_RE.exec(s);
+  if (!m) return undefined;
+  const y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]), hh = Number(m[4]), mi = Number(m[5]), ss = Number(m[6] ?? "0");
+  if (hh > 23 || mi > 59 || ss > 59) return undefined;
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime()) || d.getFullYear() !== y || d.getMonth() + 1 !== mo || d.getDate() !== da) return undefined;
+  return d.toISOString();
+}
+
 function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (value: string) => Promise<void> } & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
   const [draft, setDraft] = useState<string>();
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   // the change comes from the keyboard: it waits to be committed
   const typed = useRef(false);
   // the value on its way to the hub: Enter, then the field left before the save is through, sends it once
@@ -3862,8 +3902,8 @@ function PlanField({ value, onCommit, ...field }: { value: string; onCommit: (va
       await onCommit(next);
     } finally {
       if (saving.current === next) saving.current = undefined;
+      if (mountedRef.current) setDraft((d) => (d === next ? undefined : d));
     }
-    setDraft((d) => (d === next ? undefined : d));
   };
   return (
     <input
@@ -3898,10 +3938,11 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
     }
   };
   const at = todo.due_at ? Date.parse(todo.due_at) : NaN;
-  const due = Number.isNaN(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
+  const due = !Number.isFinite(at) ? { day: todoDueDay(todo) === undefined ? "" : (todo.due_date ?? ""), time: "" } : localParts(at);
   const remindAt = todo.remind_at ? Date.parse(todo.remind_at) : NaN;
-  const remind = Number.isNaN(remindAt) ? "" : `${localParts(remindAt).day}T${localParts(remindAt).time}`;
-  const moment = (day: string, time: string) => new Date(`${day}T${time}`).toISOString();
+  const remindParts = Number.isFinite(remindAt) ? localParts(remindAt) : undefined;
+  const remind = remindParts?.day ? `${remindParts.day}T${remindParts.time}` : "";
+  const moment = (day: string, time: string) => safeISO(`${day}T${time}`);
   return (
     <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2.5 text-[12.5px] text-ink-2" data-testid="todo-plan" aria-busy={busy}>
       <span className="inline-flex items-center gap-1.5">
@@ -3911,7 +3952,14 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           type="date"
           aria-label={t("todos.due_label")}
           value={due.day}
-          onCommit={(day) => save(!day ? { due_at: null } : due.time ? { due_at: moment(day, due.time) } : { due_date: day })}
+          onCommit={async (day) => {
+            if (!day) return save({ due_at: null });
+            if (!validDay(day)) return;
+            if (!due.time) return save({ due_date: day });
+            const iso = moment(day, due.time);
+            if (!iso) return;
+            return save({ due_at: iso });
+          }}
           data-testid="todo-plan-due"
         />
         {due.day && (
@@ -3919,7 +3967,12 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
             type="time"
             aria-label={t("todos.due_time")}
             value={due.time}
-            onCommit={(time) => save(time ? { due_at: moment(due.day, time) } : { due_date: due.day })}
+            onCommit={async (time) => {
+              if (!time) return save({ due_date: due.day });
+              const iso = moment(due.day, time);
+              if (!iso) return;
+              return save({ due_at: iso });
+            }}
             data-testid="todo-plan-due-time"
           />
         )}
@@ -3931,7 +3984,12 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
           type="datetime-local"
           aria-label={t("todos.remind_label")}
           value={remind}
-          onCommit={(v) => save({ remind_at: v ? new Date(v).toISOString() : null })}
+          onCommit={async (v) => {
+            if (!v) return save({ remind_at: null });
+            const iso = safeISO(v);
+            if (!iso) return;
+            return save({ remind_at: iso });
+          }}
           data-testid="todo-plan-remind"
         />
       </span>
@@ -4208,16 +4266,10 @@ function activeBlockerKindLabel(kind: string): string {
   }
 }
 
-function activeBlockerLink(raw: string): { url: string; label: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed.startsWith("https://")) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:") return null;
+export function activeBlockerLink(raw: string): { url: string; label: string } | null {
+  const safe = safeWebURL(raw, true);
+  if (!safe) return null;
+  const u = new URL(safe);
   const ghPr = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(u.pathname);
   if (ghPr) return { url: u.href, label: `${ghPr[1]}/${ghPr[2]}#${ghPr[3]}` };
   const ghIssue = /^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/.exec(u.pathname);
@@ -4228,17 +4280,8 @@ function activeBlockerLink(raw: string): { url: string; label: string } | null {
   return { url: u.href, label: path ? `${u.host}${path}` : u.host };
 }
 
-function validateExternalPRUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  let u: URL;
-  try {
-    u = new URL(trimmed);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:" || !u.hostname) return null;
-  return u.href;
+export function validateExternalPRUrl(raw: string): string | null {
+  return safeWebURL(raw, true) ?? null;
 }
 
 /** Compact inline form to add an external PR blocker edge under todos_v2 (#16199). */
@@ -4278,7 +4321,7 @@ function TodoAddPRBlockerForm({
           placeholder={t("todos.active_blocker_pr_placeholder")}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Escape" && !busy) {
+            if (e.key === "Escape" && !busy && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) {
               e.preventDefault();
               onCancel();
             }
@@ -4694,6 +4737,7 @@ function TodoDetail({
   const status = todoStatus(todo, lookup);
   // its state word and tone; a waiting one's say what it waits on, attention only on the owner (#11090)
   const look = todoLook(todo, status, waitOf(todo, status, lookup));
+  const statusLabel = todoSupervisorLabel(todo, status, lookup) ?? look.label;
   // its steps as the hub counts them (#11858), as its row says them
   const steps = stepsWords(todo, status);
   const responsible = responsibleOf(todo);
@@ -4882,7 +4926,7 @@ function TodoDetail({
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <StatusMark state={dotState} size="sm" />
               <span data-testid="todo-detail-summary-status" className="font-semibold text-ink">
-                {steps?.label ?? look.label}
+                {steps?.label ?? statusLabel}
               </span>
               {activeAgents.length > 0 && (
                 <>
@@ -5030,7 +5074,7 @@ function TodoDetail({
       <div className="mt-2.5 flex flex-wrap items-center gap-2.5 text-[12.5px] text-ink-2">
         <span className={cx("inline-flex h-5.5 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold", toneClass)}>
           <StatusMark state={dotState} size="sm" />
-          <span data-testid="todo-detail-status">{steps?.label ?? look.label}</span>
+          <span data-testid="todo-detail-status">{steps?.label ?? statusLabel}</span>
         </span>
         {steps?.tail && (
           <>
@@ -5270,7 +5314,7 @@ function TodoDetail({
                 data-testid="todo-detail-subtask-status"
                 className={cx("shrink-0 text-submeta whitespace-nowrap", TONE_CLASS[childLook.tone])}
               >
-                {childLook.label}
+                {todoSupervisorLabel(child, childStatus, lookup) ?? childLook.label}
               </span>
               <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
             </button>
@@ -5384,7 +5428,7 @@ function TodoDetail({
           <div className="flex flex-col gap-2">
             {activeAgents.map((agent) => {
               const session = lookup(agent.machine_id, agent.session_id);
-              const st = session ? foldedState(session) : "offline";
+              const st = todoAgentState(agent, session, lookup);
               const now = taskNow(session, st === "working");
               const isExpired = !session && !agent.start_error;
               const displayTitle = session?.title || agent.title || t("lib-format.untitled_session");
@@ -5396,7 +5440,7 @@ function TodoDetail({
                 ? `${mName} · ${spaceTab}`
                 : `${mName} · ${shortPath(session?.cwd || agent.cwd)}`;
 
-              const ix = sessionCard(interactions, agent.machine_id, agent.session_id);
+              const ix = st === "needs_you" ? ownerCard(interactions, agent, lookup) : undefined;
               const kicker = ix?.kind === "plan" ? t("todos.kicker_plan") : ix?.kind === "permission" ? t("todos.kicker_permission") : ix?.kind === "screen" ? t("todos.kicker_screen") : ix?.kind === "elicitation" ? t("todos.kicker_elicitation") : t("todos.kicker_question");
               const sourceLabel = formatAgentSource(agent, todo.spaces, lookup);
 
@@ -6503,6 +6547,22 @@ export function HandoverDialog({
   const [tab, setTab] = useState<"new" | "existing">("new");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const mountedRef = useRef(true);
+  const sessionGenRef = useRef(0);
+  const inFlightGenRef = useRef(-1);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      sessionGenRef.current += 1;
+      inFlightGenRef.current = -1;
+    };
+  }, []);
+  useEffect(() => {
+    sessionGenRef.current += 1;
+    inFlightGenRef.current = -1;
+    setBusy(false);
+  }, [open, todo.id]);
   const phone = useMedia(SHEET_QUERY);
   const pickLabel = useId();
 
@@ -6587,10 +6647,14 @@ export function HandoverDialog({
   };
 
   const submitNew = async () => {
-    if (!machine) return;
+    const gen = sessionGenRef.current;
+    if (!machine || inFlightGenRef.current === gen) return;
+    inFlightGenRef.current = gen;
     setBusy(true);
+    let succeeded = false;
     try {
       await reopenFailed();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       // It only queues the start and opens the new agent's page, which says how it went: no success toast before the hub
       // has answered (#1856).
@@ -6606,20 +6670,28 @@ export function HandoverDialog({
         todoId: todo.id,
         ...inline,
       });
+      succeeded = true;
       onClose();
     } catch (e) {
-      toast(t("todos.launch_failed", { error: errorText(e) }), "error");
+      if (mountedRef.current && sessionGenRef.current === gen) toast(t("todos.launch_failed", { error: errorText(e) }), "error");
     } finally {
-      setBusy(false);
+      if (!succeeded) {
+        if (inFlightGenRef.current === gen) inFlightGenRef.current = -1;
+        if (mountedRef.current && sessionGenRef.current === gen) setBusy(false);
+      }
     }
   };
 
   const submitExisting = async () => {
+    const gen = sessionGenRef.current;
     const s = eligibleSessions.find((x) => `${x.machine_id}/${x.session_id}` === selectedKey);
-    if (!s) return;
+    if (!s || inFlightGenRef.current === gen) return;
+    inFlightGenRef.current = gen;
     setBusy(true);
+    let succeeded = false;
     try {
       await reopenFailed();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
       const fullText = [previewCard, prompt.trim()].filter(Boolean).join("\n\n");
       const clientMsgId = uuid();
       await api(`/sessions/${enc(s.machine_id)}/${enc(s.session_id)}/messages`, {
@@ -6632,13 +6704,18 @@ export function HandoverDialog({
       });
       await refreshTodos();
       await refresh();
+      if (!mountedRef.current || sessionGenRef.current !== gen) return;
+      succeeded = true;
       toast(t("todos.sent"), "ok");
       onClose();
       openFromPage({ name: "session", mid: s.machine_id, sid: s.session_id });
     } catch (e) {
-      toast(t("todos.send_failed", { error: errorText(e) }), "error");
+      if (mountedRef.current && sessionGenRef.current === gen) toast(t("todos.send_failed", { error: errorText(e) }), "error");
     } finally {
-      setBusy(false);
+      if (!succeeded) {
+        if (inFlightGenRef.current === gen) inFlightGenRef.current = -1;
+        if (mountedRef.current && sessionGenRef.current === gen) setBusy(false);
+      }
     }
   };
 

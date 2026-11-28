@@ -23,6 +23,7 @@ import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { FontRows, PhoneNavRow, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
+import { setNeedsYouAutoOpen, useNeedsYouAutoOpen } from "../lib/needs-you-auto-open";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
 import { setSidebarTerminals, useSidebarTerminals } from "../lib/sidebar-terminals";
@@ -32,6 +33,9 @@ import { KnowledgeSelection } from "./settings/KnowledgeSelection";
 import { SavedPrompts } from "./settings/SavedPrompts";
 import { useInboxSourcesShown } from "../lib/subscriptions";
 import { ModelConfiguration } from "./settings/ModelConfiguration";
+import { RuntimesCard } from "./settings/RuntimesCard";
+import { ExecutionChannelsCard } from "./settings/ExecutionChannelsCard";
+import { ChannelAliasNote, ChannelAliasPill, launcherWriteFailed } from "./settings/ChannelAliasNote";
 import { HiddenAgentDirs } from "./settings/HiddenAgentDirs";
 import { HerdrSessions } from "./settings/HerdrSessions";
 import { AgentSettings } from "./settings/AgentSettings";
@@ -106,6 +110,8 @@ interface LauncherView extends ProviderView {
   agent?: "claude" | "codex" | "agy" | string;
   /** Managed: pi can use it too on the computers in its scope (docs/integrations/pi.md "Persona's model providers"). */
   pi?: boolean;
+  /** A managed channel's read-only alias (docs/assistant/execution-spec.md): edited on the Channels card. */
+  channel?: string;
   machines?: string[];
   hidden?: boolean;
   /** zshrc: the rc files it was found in; absent from older hubs (all ~/.zshrc). */
@@ -279,10 +285,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const k = resolved.tab;
     const id = resolved.sub;
     const state: unknown = history.state;
+    const hasIntegrationParent = typeof (state as Record<string, unknown> | null)?.integrationParent === "string";
     // Out of an item's page opened on its category's page: back to that page's entry, as Back does, so neither a copy of
     // it nor the item is left to go back to. A sheet open over the item has an entry of its own on top: off with both,
     // its marker taken first so its close does not go back once more.
-    if (k === tab && sub && !id && openedFromSub(state)) {
+    if (k === tab && sub && !id && openedFromSub(state) && !hasIntegrationParent) {
       setAt({ tab: k, sub: null, section: section ?? null });
       if (!takeOverlayEntry()) return history.back();
       history.replaceState(null, "", location.href);
@@ -299,14 +306,22 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
     // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else if (phone && options?.drillDown && sub && id && sub !== id) {
+    else if (k === tab && options?.drillDown && sub && id && sub !== id) {
       const child = { ...itemState(state), integrationParent: sub };
       if (takeOverlayEntry()) history.replaceState(child, "", BASE + to);
       else history.pushState(child, "", BASE + to);
     } else if (k === tab && !sub && id && itemIsPage(k)) {
       if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
       else history.pushState(itemState(state), "", BASE + to);
-    } else history.replaceState(k === tab && sub && id && openedFromSub(state) ? state : categoryState(state), "", BASE + to);
+    } else {
+      let nextState: unknown = categoryState(state);
+      if (k === tab && sub && id && openedFromSub(state)) {
+        const kept = { ...(state as Record<string, unknown>) };
+        delete kept.integrationParent;
+        nextState = kept;
+      }
+      history.replaceState(nextState, "", BASE + to);
+    }
   };
   const toList = () => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
@@ -320,7 +335,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // or the market's, that page; from a category it goes to the list. The Lark bot's settings are a dialog over the
   // Connectors list, not a page, so its address leaves the top bar going to the list.
   const itemOpen = phone && !!sub && itemIsPage(tab) && !(tab === "connectors" && sub === "feishu-bot");
-  const parent = tab === "integrations" ? history.state?.integrationParent : null;
+  const parent = tab === "integrations" && typeof history.state?.integrationParent === "string"
+    ? history.state.integrationParent
+    : null;
   const up = itemOpen && sub ? itemParent(tab, sub, parent) : null;
   const goBack = () => {
     if (!up) toList();
@@ -486,6 +503,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                   <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{TAB_INFO.models.label}</h2>
                   <Models />
                 </section>
+                {/* the four dimensions (docs/assistant/execution-spec.md): the engines, then the channels they run on */}
+                <section id="settings-runtimes" className="scroll-mt-4"><RuntimesCard /></section>
+                <section id="settings-execution-channels" className="scroll-mt-4"><ExecutionChannelsCard /></section>
                 <section id="settings-model-config" className="scroll-mt-4">
                   {/* no section: the row is on the page in view, which stays where it is (#4282) */}
                   <ModelConfiguration open={sub} onOpen={(id) => pick("models", id)} onProviders={() => pick("models", null, "providers")} />
@@ -501,6 +521,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                     open={sub}
                     twoCol={integrationsSplit}
                     headerBack={phone}
+                    parentSub={parent}
+                    onBackParent={parent ? () => history.back() : undefined}
                     onOpen={(id, drillDown) => pick("integrations", id, undefined, { drillDown })}
                     onPageWide={setExtensionPageWide}
                     onSettings={openSettingsUrl}
@@ -775,6 +797,7 @@ function General({ onModel }: { onModel: () => void }) {
   const theme = useTheme();
   const replyMotion = useReplyMotionSetting();
   const starred = useStarredSetting();
+  const autoOpenNeedsYou = useNeedsYouAutoOpen();
   const features = moduleFeaturesSource();
 
   const themes: { k: Theme; label: string; icon: IconName }[] = [
@@ -813,6 +836,9 @@ function General({ onModel }: { onModel: () => void }) {
           <Switch on={starred} onChange={setStarredEnabled} label={t("settings.starred_messages")} />
         </Row>
         <SidebarUsageRow />
+        <Row label={t("settings.needs_you_auto_open")} hint={t("settings.needs_you_auto_open_hint")} wrapHint stackOnNarrow anchor="needs-you-auto-open">
+          <Switch on={autoOpenNeedsYou} onChange={setNeedsYouAutoOpen} label={t("settings.needs_you_auto_open")} />
+        </Row>
       </Group>
 
       <DesktopSettings />
@@ -1068,6 +1094,7 @@ function Models() {
         <div className="flex items-center gap-2">
           <span className={cx("truncate text-[13px] font-medium text-ink", !l.display_name && providerTitle(l) === l.name && "font-mono")}>{providerTitle(l)}</span>
           {managedProvider(l.source) && <Pill tone="accent">Persona</Pill>}
+          {l.channel && <ChannelAliasPill channel={l.channel} />}
           {managedProvider(l.source) && l.pi && <span title={t("settings.pi_too_title")}><Pill>{t("settings.pi_too")}</Pill></span>}
           {l.source === "agy" && <Pill>Antigravity Runtime</Pill>}
           {l.kind === "api" && <Pill>{t("settings.direct_api")}</Pill>}
@@ -1277,7 +1304,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       onChanged();
       onClose();
     } catch (e) {
-      toast(errorText(e), "error");
+      launcherWriteFailed(e, l.channel);
     }
   };
   const restore = async () => {
@@ -1303,7 +1330,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       footer={
         l && (
           <>
-            {l.hidden ? (
+            {l.channel ? null : l.hidden ? (
               <Button tone="secondary" onClick={() => void restore()}>
                 {t("settings.restore")}
               </Button>
@@ -1333,7 +1360,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
                 )}
               </>
             )}
-            {managedProvider(l.source) && (
+            {managedProvider(l.source) && !l.channel && (
               <Button tone="secondary" onClick={() => onEdit(l)}>
                 {t("settings.edit")}
               </Button>
@@ -1349,6 +1376,7 @@ export function LauncherDetailDialog({ name, onClose, onChanged, onEdit, onCopyL
       {error && <p className="text-[13px] text-red">{error}</p>}
       {l && (
         <div className="flex max-h-[62vh] flex-col gap-4 overflow-y-auto pr-1">
+          {l.channel && <ChannelAliasNote channel={l.channel} onLeave={onClose} />}
           <div className="flex flex-wrap items-center gap-1.5">
             <Pill tone={managedProvider(l.source) ? "accent" : undefined}>{managedProvider(l.source) ? t("settings.managed") : l.source === "agy" ? "Antigravity Runtime (agy acp)" : l.source === "path" ? t("settings.path_script") : t("settings.zshrc_function", { file: rcFilesOf(l).join(" / ") })}</Pill>
             {(l.machines ?? []).map((id) => (

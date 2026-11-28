@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -142,6 +143,20 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			if err := s.planPieces(task); err != nil {
 				return nil, planInvalid{err}
 			}
+		}
+		if task.scratchWorkspace() && task.Cwd != "" && (task.WorkspaceResolved == nil || (!task.WorkspaceResolved.Created && !task.WorkspaceResolved.Reused)) {
+			if identity.IsAssistantDir(task.Cwd) {
+				return nil, planInvalid{i18n.Err("rpc-errors.agent_assistant_workspace")}
+			}
+			if task.Machine != "" {
+				if m, ok := s.machineByName(ctx, task.Machine); ok && assistantWorkspace(m, proto.ExpandHome(task.Cwd, m.Home)) {
+					return nil, planInvalid{i18n.Err("rpc-errors.agent_assistant_workspace")}
+				}
+			}
+			return nil, planInvalid{fmt.Errorf("workspace %q cannot be combined with cwd; omit cwd to use a managed scratch directory", workspaceScratch)}
+		}
+		if strings.TrimSpace(task.Cwd) == "" && !task.backendWorkspace() && !s.canInferContainerWorkspace(ctx, *task) && !task.scratchWorkspace() {
+			return nil, planInvalid{errors.New("title, prompt and cwd are required")}
 		}
 		if p.Tasks[i].Machine != "" {
 			if err := s.resolveTaskWorkspace(ctx, &p.Tasks[i]); err != nil {

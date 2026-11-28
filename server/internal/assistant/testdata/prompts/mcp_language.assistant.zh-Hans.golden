@@ -15,13 +15,43 @@
   },
   {
     "name": "ask_user",
-    "description": "Ask the user one or more multiple-choice questions on their iPhone (a card in this conversation plus a push notification) and wait for the answers. Use it to confirm anything risky (sending messages / email for them, deleting, changing live systems) or to let them pick between options. AskUserQuestion does not work here; use this. They can also type a free-form answer. Waits up to 2 hours; if the user writes in this conversation instead of picking an option, the question is withdrawn and the tool returns at once, with their message following. If nobody answers in time, the question becomes a to-do that waits for the user's call (in their to-do list and the next briefing), and their answer comes to this conversation later as a new message. With a deadline (each question then recommends one of its options): if nobody answers by it and you marked it reversible, the recommended options are taken by default and recorded on the question's to-do; one that cannot be undone is only reminded again and keeps waiting. With wait false the card goes up the same way but the call returns at once: end the turn without guessing the answer; it comes later as a new message quoting the question and the answer (or saying the card was closed unanswered, or expired and became a to-do). Use wait false only where your instructions say to; a confirmation this same turn needs (approving a message before it is sent) keeps the default. A waiting call holds this turn, so anything else sent to this conversation waits behind it: once such a message waits and the question has been up for a couple of minutes, the call returns without the answer and the card stays up as with wait false; end the turn then.",
+    "description": "Ask multiple-choice questions with explicit decision rights. Use decision_scope=internal for execution choices or recommendations: a designated supervisor is woken and answers as the assistant. Owner decisions require why_owner or owner_action. For a personal unlock, use owner_action=personal_unlock and let the owner act in their own app; never request a password or private key. Owners can also type an answer. Default wait=true holds this turn; a user message withdraws a waiting question, and a queued message can release the turn after two minutes. With wait=false, return at once, end the turn without guessing, and receive one later receipt with the answer, cancellation or expiry, including after restart. Questions wait up to two hours, or until deadline. An unanswered internal question authorizes nothing. Owner deadline defaults require reversible=true and recommend on every question; outward, spending, personal and irreversible actions never take a default.",
     "input_schema": {
       "type": "object",
       "required": [
         "questions"
       ],
       "properties": {
+        "decision_scope": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "owner"
+          ],
+          "description": "Internal execution questions go to a supervisor. Owner questions require why_owner or owner_action. Omitting all decision-right metadata is rejected."
+        },
+        "why_owner": {
+          "type": "string",
+          "enum": [
+            "priority",
+            "acceptance",
+            "only_owner_knows",
+            "visible_to_others",
+            "irreversible"
+          ],
+          "description": "Why this decision requires the owner; omit for internal execution questions"
+        },
+        "owner_action": {
+          "type": "string",
+          "enum": [
+            "personal_unlock",
+            "login",
+            "second_factor",
+            "experience_check",
+            "spending"
+          ],
+          "description": "An action only the owner can perform; never include credentials"
+        },
         "wait": {
           "type": "boolean",
           "description": "default true: hold this turn until the user answers. false: put the card up and return at once; the answer arrives later as a new message in this conversation"
@@ -1090,7 +1120,7 @@
   },
   {
     "name": "interaction_answer",
-    "description": "Answer another agent's card for the user when they said what to answer or told you to decide: each question by its own wording with an option label it offers (multi-select: an array); no free text (use agent_send). A card a 督办 message handed you is yours: answer a question or terminal dialog (an option's label or number), or allow/deny a permission, plan or dialog's Yes/No with allow, giving reason; kept as the task's decision, not the user's. You may always deny permissions/plans. Forms, secrets, allowing a message/reply as the user, spending or deletion, and folder-trust/Bypass Permissions dialogs are the user's: ask_escalate. Never other approvals or assistant questions.",
+    "description": "Answer a card handed to you as supervisor or internal reviewer. Use exact machine/session_id/interaction_id from the wake-up; maintenance session_id may be empty. Internal cards may belong to assistant chats; never answer your own. Questions use offered labels (arrays for multi-select), terminal dialogs use labels/numbers, permissions/plans use allow and reason. The answer is the assistant's and becomes a task decision. Secrets/forms, outward messages, spending, irreversible and trust/Bypass approvals need the owner (ask_escalate for task cards). Other assistant cards stay unavailable.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2609,7 +2639,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.",
+    "description": "Plan multi-step work. Check machines_list, KB, agents_list and preferences. Main/lead, readonly, user_requested and preapproved tasks start now. Others and owner_step need 开始. Queued means dispatched. Reuse suitable Agents via agent_send. Keep reminders and events separate.\n\nAn explicit machine is fixed by default. Use flexible for portable work or omit machine for automatic placement. Leads own their tasks and escalate needs_user to main. Main can select a lead (agent_transfer persists). Use supervision_policy for incompatible leads. Match open issue or PR work with continues, todo_id or distinct_from. Other duplicate hints are advisory.\n\nWritable tasks need done_when and read-only tasks need goal. Set completion_mode for draft or review-ready delivery. Use continues and continues_why to carry work on, task_retry for failed starts and task_scope with scope_revision for scope changes.\n\nEdits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.\n\nUse repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. Scratch uses a managed isolated dir (omit cwd). None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2644,6 +2674,20 @@
                 "required": [
                   "cwd"
                 ]
+              },
+              {
+                "type": "object",
+                "required": [
+                  "workspace"
+                ],
+                "properties": {
+                  "workspace": {
+                    "type": "string",
+                    "enum": [
+                      "scratch"
+                    ]
+                  }
+                }
               },
               {
                 "type": "object",
@@ -2747,20 +2791,21 @@
               },
               "cwd": {
                 "type": "string",
-                "description": "Abs or ~/ dir, unless workspace.backend/container supplies it."
+                "description": "Abs or ~/ dir; omit for scratch/backend/container."
               },
               "workspace": {
                 "type": [
                   "string",
                   "object"
                 ],
-                "description": "workspace policy; omit for default; existing: path or workspace id",
+                "description": "policy; existing: path/id",
                 "oneOf": [
                   {
                     "type": "string",
                     "enum": [
                       "new",
-                      "none"
+                      "none",
+                      "scratch"
                     ]
                   },
                   {

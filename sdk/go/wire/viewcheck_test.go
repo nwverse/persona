@@ -219,3 +219,97 @@ func TestAssistantVersionSafeAcrossLanguages(t *testing.T) {
 		t.Fatalf("%+v, %v", v, err)
 	}
 }
+
+func TestAvatarURLRequiresSafeHTTPS(t *testing.T) {
+	badURLs := []struct {
+		name string
+		url  string
+	}{
+		{"userinfo_credentials", "https://user:pass@evil.example/a.png"},
+		{"userinfo_host_spoof", "https://github.com@evil.example/a.png"},
+		{"userinfo_empty", "https://@evil.example/a.png"},
+		{"backslash_host_spoof", `https://evil.example\@trusted.example/a.png`},
+		{"scheme_relative_path", "https:/admin"},
+		{"empty_host_port", "https://:443/a.png"},
+		{"malformed_host", "https://[invalid/a.png"},
+		{"crlf_control", "https://evil.example\r\nX: 1"},
+		{"http_scheme", "http://evil.example/a.png"},
+		{"javascript_scheme", "javascript:alert(1)"},
+	}
+	slots := []struct {
+		name string
+		item func(u string) Component
+	}{
+		{"row", func(u string) Component {
+			return Component{Type: "row", Title: "r", Avatar: &Avatar{URL: u}}
+		}},
+		{"header", func(u string) Component {
+			return Component{Type: "header", Title: "h", Avatar: &Avatar{URL: u}}
+		}},
+		{"comment_thread", func(u string) Component {
+			return Component{Type: "comment_thread", Comments: []Comment{{ID: "c1", Author: "a", Body: "ok", Avatar: &Avatar{URL: u}}}}
+		}},
+		{"diff_thread_comment", func(u string) Component {
+			return Component{Type: "diff", Path: "a.go", Hunks: []Hunk{{Header: "@@ -1 +1 @@", Lines: []string{"+x"}}}, Threads: []Thread{{Side: "new", Line: 1, Comments: []Comment{{ID: "c1", Author: "a", Body: "ok", Avatar: &Avatar{URL: u}}}}}}
+		}},
+	}
+	for _, slot := range slots {
+		for _, bad := range badURLs {
+			t.Run(slot.name+"/"+bad.name, func(t *testing.T) {
+				v := &View{Sections: []Section{{Items: []Component{slot.item(bad.url)}}}}
+				if err := CheckView(v); err == nil {
+					t.Errorf("CheckView accepted unsafe avatar URL %q in %s", bad.url, slot.name)
+				}
+				raw, err := json.Marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := CheckViewJSON(raw); err == nil {
+					t.Errorf("CheckViewJSON accepted unsafe avatar URL %q in %s", bad.url, slot.name)
+				}
+			})
+		}
+		t.Run(slot.name+"/valid_https", func(t *testing.T) {
+			v := &View{Sections: []Section{{Items: []Component{slot.item("https://example.com/avatar.png")}}}}
+			if err := CheckView(v); err != nil {
+				t.Errorf("CheckView rejected valid avatar URL in %s: %v", slot.name, err)
+			}
+		})
+	}
+}
+
+func TestCodeLineURLRequiresSafeHTTPS(t *testing.T) {
+	badURLs := []struct {
+		name string
+		url  string
+	}{
+		{"userinfo_host_spoof", "https://github.com@evil.example/blob/main/a.go#L{start}-L{end}"},
+		{"userinfo_credentials", "https://user:pass@evil.example/a.go#L{start}"},
+		{"userinfo_empty", "https://@evil.example/a.go#L{start}"},
+		{"backslash_host_spoof", `https://evil.example\@trusted.example/a.go#L{start}`},
+		{"scheme_relative_path", "https:/admin#L{start}"},
+		{"empty_host_port", "https://:443/a.go#L{start}"},
+		{"malformed_host", "https://[invalid/a.go#L{start}"},
+		{"crlf_control", "https://evil.example\r\n/a.go#L{start}"},
+		{"http_scheme", "http://example.com/a.go#L{start}"},
+	}
+	for _, bad := range badURLs {
+		t.Run("reject/"+bad.name, func(t *testing.T) {
+			v := &View{Sections: []Section{{Items: []Component{{Type: "code", Text: "x", LineURL: bad.url}}}}}
+			if err := CheckView(v); err == nil {
+				t.Errorf("CheckView accepted unsafe line_url %q", bad.url)
+			}
+			raw, err := json.Marshal(v)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckViewJSON(raw); err == nil {
+				t.Errorf("CheckViewJSON accepted unsafe line_url %q", bad.url)
+			}
+		})
+	}
+	valid := &View{Sections: []Section{{Items: []Component{{Type: "code", Text: "x", LineURL: "https://example.com/org/repo/blob/main/a.go#L{start}-L{end}"}}}}}
+	if err := CheckView(valid); err != nil {
+		t.Errorf("CheckView rejected valid line_url: %v", err)
+	}
+}

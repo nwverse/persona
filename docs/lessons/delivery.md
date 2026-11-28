@@ -43,6 +43,11 @@ A pending plan-approval card is reliable; `working` and a reply mentioning a pla
 
 Every path that closes a task has to apply the delivery rule, not only the judge's finish: a supervisor's `task_review accepted` used to close a task with an open draft PR while `done_needs_delivery` was on and the stage ledger already said "not in the running hub" (#6428). Acceptance criteria that only ask for a PR do not override the switch.
 
+Keep a reported wait independent from delivery evidence (#17256). A PR can merge while a task still waits for a
+decision, translation or publication window. Match the exact linked PR (and check its observed head) before treating
+an external wait as CI. Apply build observations to the linked PR under the stage lock so a delayed comparison
+cannot mark a different delivery live.
+
 ## Not done yet
 
 - The iOS / Mac to-do cards do not yet show where delivery is stuck (web and Android already do).
