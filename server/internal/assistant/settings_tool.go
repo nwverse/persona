@@ -156,7 +156,8 @@ func (s *Service) allOwnSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.startRequestedTasks(ctx)), nil },
 			set: s.setStartRequestedTasks},
 		{Setting: Setting{Key: "assistant.idle_auto_compact", Title: "Compact idle conversations", Actions: getSet,
-			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached",
+			About: "on (the default): compact an idle conversation when the idle time and context size thresholds are both reached. " +
+				"Antigravity assistant chats (the main chat and leader chats among them) follow it and the two settings below too",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompact(ctx)), nil },
 			set: s.setIdleAutoCompact},
@@ -173,17 +174,21 @@ func (s *Service) allOwnSettings() []ownSetting {
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
 		{Setting: Setting{Key: "assistant.agy_idle_auto_compact", Title: "Compact idle Antigravity sessions", Actions: getSet,
-			About: "on (the default): proactively compact Persona-managed Antigravity sessions (task Agents and AGY assistant/direction chats) once both idle time and context size thresholds are reached",
+			About: "on (the default): proactively compact Persona-managed Antigravity sessions once both their idle time and context size thresholds are reached. " +
+				"Task agents use assistant.agy_idle_auto_compact_minutes and _tokens. Antigravity assistant chats (including the main chat and leader chats) " +
+				"use assistant.idle_auto_compact, assistant.idle_auto_compact_minutes and _tokens, like other main chats. Off stops both",
 			Value: "true or false"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompact(ctx)), nil },
 			set: s.setAgyIdleAutoCompact},
-		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_minutes", Title: "Antigravity idle time before compaction", Actions: getSet,
-			About: "minimum idle time before automatic Antigravity session compaction; 10 minutes by default",
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_minutes", Title: "Antigravity task agent idle time before compaction", Actions: getSet,
+			About: "An Antigravity task agent must be idle for at least this long before automatic compaction. The default is 10 minutes. " +
+				"Antigravity assistant chats use assistant.idle_auto_compact_minutes instead",
 			Value: "a whole number from 1 to 1440"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactMinutes(ctx)), nil },
 			set: s.setAgyIdleAutoCompactMinutes},
-		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_tokens", Title: "Antigravity context size before compaction", Actions: getSet,
-			About: "minimum context size before automatic Antigravity session compaction; 200000 tokens by default",
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_tokens", Title: "Antigravity task agent context size before compaction", Actions: getSet,
+			About: "An Antigravity task agent needs at least this much context before automatic compaction. The default is 200,000 tokens. " +
+				"Antigravity assistant chats use assistant.idle_auto_compact_tokens instead",
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactTokens(ctx)), nil },
 			set: s.setAgyIdleAutoCompactTokens},
@@ -936,7 +941,7 @@ func (s *Service) setIdleAutoCompact(ctx context.Context, raw json.RawMessage) (
 	return s.setBoolSetting(ctx, raw, s.idleAutoCompact, i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_unchanged"), func(l i18n.Lang, before, after string) string {
 		return i18n.T(l, "assistant-settings_tool.change_idle_auto_compact", i18n.Args{"before": before, "after": after})
 	}, func(v *Settings) **bool { return &v.IdleAutoCompact },
-		"Idle compaction setting saved (%v); applies from the next unattended message.")
+		"Idle compaction setting saved (%v).")
 }
 
 func (s *Service) setIdleAutoCompactMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
