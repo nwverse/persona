@@ -397,6 +397,13 @@ def find_on_page(ctl, element_id=None, label=None, label_prefix=None):
             pass
 
 
+def edition_entry(ctl, full, what, **match):
+    """A positive control waits for asynchronously loaded rows; a negative check runs only after its page's anchor."""
+    if full:
+        return bool(wait_for(ctl, what, 30, lambda: find_on_page(ctl, **match) or None))
+    return find_on_page(ctl, **match)
+
+
 def ensure_active(ctl):
     """Dismiss a SpringBoard permission/notice alert on this run's synthetic simulator, never on a physical device."""
     state = ctl.call("state")
@@ -575,10 +582,11 @@ def exercise_app(ctl, base, code, edition, shots, master):
 
     settings(ctl, "openConnectors")
     require(ctl, element_id="connectors-list")
+    require(ctl, element_id="connectors.sent")
     # Connector rows use visible titles, not registry accessibility identifiers.
-    mail = find_on_page(ctl, label_prefix="Mail")
+    mail = edition_entry(ctl, full, "the Mail connector", label_prefix="Mail")
     lark = find_on_page(ctl, label="Lark")
-    bot = find_on_page(ctl, label_prefix="Lark Bot")
+    bot = edition_entry(ctl, full, "the Lark Bot connector", label_prefix="Lark Bot")
     proof["entries"]["settings-mail"] = mail
     proof["entries"]["connector-lark"] = lark
     proof["entries"]["connector-lark-bot"] = bot
@@ -591,7 +599,8 @@ def exercise_app(ctl, base, code, edition, shots, master):
 
     settings(ctl, "openChannels")
     require(ctl, label="Channels")
-    channel = find_on_page(ctl, element_id="channel-feishu")
+    require(ctl, element_id="channel-app")
+    channel = edition_entry(ctl, full, "the Lark channel", element_id="channel-feishu")
     proof["entries"]["channel-feishu"] = channel
     check(channel == full, f"{edition}: wrong Lark channel visibility")
     no_errors(ctl, "Channels")
@@ -599,7 +608,8 @@ def exercise_app(ctl, base, code, edition, shots, master):
 
     settings(ctl, "openExtensions")
     require(ctl, label="Extensions")
-    voice = find_on_page(ctl, element_id="plugin-voice")
+    require(ctl, element_id="plugin-iphone")
+    voice = edition_entry(ctl, full, "the Voice extension", element_id="plugin-voice")
     proof["entries"]["voice-extension"] = voice
     check(voice == full, f"{edition}: wrong Voice extension visibility")
     no_errors(ctl, "Extensions")

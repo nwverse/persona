@@ -96,8 +96,17 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
 
     def test_voice_check_uses_the_real_plugin_identifier(self):
         source = (ROOT / "scripts/ci/ios-core-only-hub.py").read_text()
-        self.assertIn('find_on_page(ctl, element_id="plugin-voice")', source)
+        self.assertIn('edition_entry(ctl, full, "the Voice extension", element_id="plugin-voice")', source)
+        self.assertIn('require(ctl, element_id="plugin-iphone")', source)
         self.assertNotIn('element_id="extension-voice"', source)
+
+    def test_positive_module_controls_wait_but_negative_checks_use_loaded_anchors(self):
+        with (patch.object(DRIVER, "wait_for", return_value=True) as waiting,
+              patch.object(DRIVER, "find_on_page", return_value=False) as finding):
+            self.assertTrue(DRIVER.edition_entry(None, True, "Voice", element_id="plugin-voice"))
+            self.assertFalse(DRIVER.edition_entry(None, False, "Voice", element_id="plugin-voice"))
+            waiting.assert_called_once()
+            finding.assert_called_once()
 
     def test_connector_status_text_does_not_hide_visible_rows(self):
         class Tree:
