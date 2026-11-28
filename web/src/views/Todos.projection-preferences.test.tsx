@@ -223,13 +223,16 @@ describe("the Web To-dos projection and saved views", () => {
       { id: "assistant", name: "Personal", online: true },
       { id: "work", name: "Work", online: true },
     ] });
-    getState().todoBoard = { ...board, counts: { ...board.counts, needs_you: 20 } };
-    api.mockImplementation(async (path, init) =>
-      path === "/todos" && new Headers(init?.headers).get("X-Persona-Manager") === "assistant" ? { board } : {});
+    const merged = { ...board, counts: { ...board.counts, needs_you: 20 } };
+    api.mockImplementation(async (path, init) => path === "/todos" ? {
+      todos,
+      board: new Headers(init?.headers).get("X-Persona-Manager") === "assistant" ? board : merged,
+    } : {});
+    await act(async () => refreshTodos());
     await mount();
     await act(async () => { await vi.dynamicImportSettled(); });
     expect(find("sidebar-todos-count")?.textContent).toBe("2");
     expect(find("todos-header-attention")?.dataset.count).toBe("2");
-    expect(api.mock.calls.filter(([path]) => path === "/todos")).toHaveLength(1);
+    expect(api.mock.calls.filter(([path]) => path === "/todos")).toHaveLength(2);
   });
 });

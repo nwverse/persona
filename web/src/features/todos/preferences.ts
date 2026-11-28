@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 export function pref(key: string): string | null {
   try {
@@ -20,8 +20,9 @@ export function setPref(key: string, value: string | null) {
 export function useTodoPreference<T extends string | null>(key: string, read: (stored: string | null) => T) {
   const [saved, setSaved] = useState(() => ({ key, value: read(pref(key)) }));
   const value = saved.key === key ? saved.value : read(pref(key));
-  return [value, (next: T) => {
+  const change = useCallback((next: T) => {
     setSaved({ key, value: next });
     setPref(key, next);
-  }] as const;
+  }, [key]);
+  return [value, change] as const;
 }

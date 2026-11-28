@@ -949,12 +949,12 @@ function TodoListView({
 
   const directionDoneFold = todosV2 && grouping === "direction";
   const doneOpen = directionDoneFold ? doneDirectionOpen === "1" : showDone;
-  const reviewDirectionCompleted = (directionKey: string) => {
+  const reviewDirectionCompleted = useCallback((directionKey: string) => {
     setDoneDirectionFilter(directionKey);
     setDoneDirectionOpen("1");
     if (closedHistory.hasMore && !closedHistory.loading) closedHistory.onLoad();
     setDoneScrollSeq((n) => n + 1);
-  };
+  }, [setDoneDirectionFilter, setDoneDirectionOpen, closedHistory]);
 
   useEffect(() => {
     if (doneScrollSeq === 0) return;
