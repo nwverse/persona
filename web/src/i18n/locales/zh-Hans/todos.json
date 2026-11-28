@@ -476,5 +476,6 @@
   "causal_trace_cat_blocker": "阻塞",
   "causal_trace_cat_recovery": "恢复",
   "causal_trace_cat_review": "验收",
-  "causal_trace_cat_pr": "PR"
+  "causal_trace_cat_pr": "PR",
+  "ask_resend": "重新发送"
 }

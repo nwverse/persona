@@ -35,8 +35,8 @@ func (d *DB) ConversationUnresolvedInput(ctx context.Context, machine, session s
 	}
 	var row ConversationInput
 	var raw []byte
-	err = d.pool.QueryRow(ctx, `SELECT client_msg_id,position,epoch,payload,state,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch,delivery_version,blocked_reason,last_reconciled_at FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND state IN ('sending','in_doubt') ORDER BY position LIMIT 1`, machine, session).
-		Scan(&row.ClientMsgID, &row.Position, &row.Epoch, &raw, &row.State, &row.DispatchSegment, &row.DispatchMachine, &row.DispatchSession, &row.DispatchEpoch, &row.Version, &row.BlockedReason, &row.LastReconciledAt)
+	err = d.pool.QueryRow(ctx, `SELECT client_msg_id,position,epoch,payload,state,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch,delivery_version,blocked_reason,last_reconciled_at,coalesce(claimed_at,created_at) FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND state IN ('sending','in_doubt') ORDER BY position LIMIT 1`, machine, session).
+		Scan(&row.ClientMsgID, &row.Position, &row.Epoch, &raw, &row.State, &row.DispatchSegment, &row.DispatchMachine, &row.DispatchSession, &row.DispatchEpoch, &row.Version, &row.BlockedReason, &row.LastReconciledAt, &row.ClaimedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

@@ -906,6 +906,7 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 	if err != nil || input == nil {
 		return err
 	}
+	defer s.publishSoon() // its row's undelivered bubble moves on: awaiting its receipt, then gone or expired
 	// Until the input call is attempted, local validation/restore failures prove
 	// no message was sent. Do not strand that input as an ambiguous crash claim.
 	dispatched := false

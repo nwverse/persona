@@ -55,6 +55,7 @@ import { BADGE_CLASS, CURRENT_ROW, type GoFn, GroupCount, pageIconStyle, type Re
 import { sidebarRowHover } from "./SidebarRowHover";
 import { requestDirectWaiting } from "../lib/direct-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
+import { deliverySummary } from "../lib/undelivered";
 
 // The main conversation uses the home symbol (Back to main chat's) and one Main conversation line.
 // The assistant's identity belongs to the sidebar head; a left draft keeps its existing second line.
@@ -375,6 +376,11 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const now = useNow(60_000, showsAge || runningWorkflows(s).length > 0 || s.turn_error_kind === "usage_limit" || Boolean(s.background_stalled_since));
   // background commands that look stuck (#13744): it is still Working, the row says they are quiet
   const stall = showState && !s.assistant ? backgroundStall(s, now) : null;
+  // a logical conversation's input that has not gone in (#17431): said on its row, never an idle row that swallowed it
+  const delivery = deliverySummary(s.undelivered);
+  const undelivered = delivery.expired.length
+    ? { expired: true, text: t("sidebar.undelivered_expired", { count: delivery.expired.length }) }
+    : delivery.waiting ? { expired: false, text: t("sidebar.undelivered_waiting", { count: delivery.waiting }) } : null;
   const detail = withDetail ? rowDetail(s, now) : [];
   const workflow = showState && !s.assistant && st !== "offline" ? workflowShortLine(s) : "";
   const workflowTitle = workflow ? workflowLine(s, now) : "";
@@ -464,7 +470,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
       {holdSides && <HoldSides mid={row.machine_id} sid={row.session_id} />}
-      {ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall ? (
+      {ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall || undelivered ? (
         <span className={cx("flex flex-1 flex-col", titleMin, titleFirst)}>
           {ultra ? (
             <span className="flex min-w-0 items-center gap-1">
@@ -509,6 +515,13 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
             <span data-bg-stalled title={stall.title} className="flex h-4 min-w-0 items-center gap-1 text-submeta leading-4 text-ink-3">
               <Icon name="clock" size={10} stroke={2.2} className="shrink-0" />
               <span className="truncate">{stall.text}</span>
+            </span>
+          )}
+          {undelivered && (
+            <span data-undelivered-line={undelivered.expired ? "expired" : "waiting"} role={undelivered.expired ? "alert" : "status"} title={undelivered.text}
+              className={cx("flex h-4 min-w-0 items-center gap-1 text-submeta leading-4", undelivered.expired ? "font-medium text-red" : "text-orange")}>
+              <Icon name={undelivered.expired ? "warning" : "clock"} size={10} stroke={2.2} className="shrink-0" />
+              <span className="truncate tabular-nums">{undelivered.text}</span>
             </span>
           )}
           {plan && (

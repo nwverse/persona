@@ -424,7 +424,7 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 			return cur.DoneAt == nil && !acceptAskStale(a, cur)
 		}); err != nil {
 			s.logf("task %s: decision to agent: %v", id, err)
-			if !noAgentCanTake(err) {
+			if !decisionWaitsForSupervisor(err) {
 				return acceptResult{}, err
 			}
 			sendErr = err
@@ -528,7 +528,7 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 		return cur.DoneAt == nil && !acceptAskStale(a, cur)
 	})
 	if sendErr != nil {
-		if !undeliverable || !noAgentCanTake(sendErr) {
+		if !undeliverable || !decisionWaitsForSupervisor(sendErr) {
 			return FeedItem{}, acceptResult{}, sendErr
 		}
 		s.logf("task %s: decision in words to agent: %v", id, sendErr)
