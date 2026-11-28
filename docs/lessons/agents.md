@@ -1,5 +1,12 @@
 # Lessons: Claude Code, Codex, and herdr
 
+## A held Codex rollout needs its engine's pane identity (#17406)
+
+- A no-daemon Codex in herdr-core, Tern or Orca holds its own rollout. Resolve the process's engine-specific pane
+  through `host.PaneRef` before recording ownership; an empty owner rejects even the waiting pane's own thread as
+  another writer's. Exercise both direct held-rollout selection and new-thread filtering, including a different pane
+  that must still be refused. Open-file fixture paths may be canonicalized by the OS; resolve symlinks in assertions.
+
 ## A delivery label does not prove a disabled feature (#16936)
 
 - A structured closeout can mistakenly say `delivery: off` while its missing work is unrelated data backfill. Require
